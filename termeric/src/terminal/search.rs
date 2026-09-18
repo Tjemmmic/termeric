@@ -201,6 +201,8 @@ pub struct Search {
     /// In-progress full/candidate scan. Work is consumed in bounded slices by
     /// the event-driven render loop so keyboard dispatch never walks all history.
     pending_search: Option<PendingSearch>,
+    /// Identity of the matching-row set. Scrolling that set does not change it.
+    result_generation: u64,
 }
 
 impl Default for Search {
@@ -228,6 +230,7 @@ impl Search {
             filter_row_offset: 0,
             row_scope: None,
             pending_search: None,
+            result_generation: 0,
         }
     }
 
@@ -250,6 +253,7 @@ impl Search {
     }
 
     fn start_with_scope(&mut self, row_scope: Option<RangeInclusive<i32>>) {
+        self.result_generation = self.result_generation.wrapping_add(1);
         self.active = true;
         self.query.clear();
         self.matches.clear();
@@ -267,6 +271,7 @@ impl Search {
 
     /// Cancel the search
     pub fn cancel(&mut self) {
+        self.result_generation = self.result_generation.wrapping_add(1);
         self.active = false;
         self.filter_mode = false; // Disable filter when canceling
         self.query.clear();
@@ -306,6 +311,7 @@ impl Search {
 
     /// Toggle filter mode (show only matching lines)
     pub fn toggle_filter(&mut self) {
+        self.result_generation = self.result_generation.wrapping_add(1);
         self.filter_mode = !self.filter_mode;
         if self.filter_mode {
             self.sync_filter_to_current();
@@ -315,6 +321,20 @@ impl Search {
     /// Is filter mode enabled?
     pub fn is_filter_mode(&self) -> bool {
         self.filter_mode
+    }
+
+    /// Exact ordered source rows for an active, completed filter projection.
+    /// Borrow the existing index; selections must not clone full history indexes.
+    pub fn filtered_matching_rows(&self) -> &[i32] {
+        if self.filter_mode && !self.is_searching() {
+            &self.matching_rows
+        } else {
+            &[]
+        }
+    }
+
+    pub fn filter_generation(&self) -> Option<u64> {
+        (!self.filtered_matching_rows().is_empty()).then_some(self.result_generation)
     }
 
     /// Get the number of matching lines (distinct rows with matches)
@@ -589,6 +609,7 @@ impl Search {
     }
 
     fn begin_update(&mut self, grid: &Grid, candidate_rows: Option<Vec<i32>>) {
+        self.result_generation = self.result_generation.wrapping_add(1);
         self.matches.clear();
         self.retained_match_start = 0;
         self.total_match_count = 0;

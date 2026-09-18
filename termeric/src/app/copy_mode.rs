@@ -86,6 +86,8 @@ impl App {
         terminal.set_selection(None);
         self.copy_mode_target = target;
         self.mouse_state.clear_selection();
+        self.mouse_selection_source = None;
+        self.mouse_pressed = false;
         self.toasts
             .info("Copy mode: move, v select, y copy, / search, Esc exit");
     }

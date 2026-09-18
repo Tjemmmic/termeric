@@ -3,6 +3,166 @@ use crate::plugin::hooks::{HookResponse, Plugin, PluginCommand};
 
 #[cfg(unix)]
 #[test]
+fn filtered_selection_points_follow_noncontiguous_displayed_rows() {
+    use termeric_core::Point;
+    let mut app = scrollbar_owner_fixture();
+    let terminal = app.active_terminal_mut().unwrap();
+    terminal.resize(16, 5);
+    terminal.process(b"\x1bc\x1b[3Jmatch one\r\nSECRET\r\nmatch two");
+    app.search.start();
+    app.with_search_and_active_grid(|search, grid| {
+        search.set_query("match", grid);
+        search.finish(grid);
+    });
+    app.search.toggle_filter();
+    assert_eq!(
+        app.native_selection_point(Point::new(1, 0)),
+        Some(Point::new(2, 0))
+    );
+    assert!(app.native_selection_point(Point::new(2, 0)).is_none());
+    app.begin_native_selection(MouseButton::Left, Point::new(0, 0));
+    app.extend_native_selection(Point::new(1, 8));
+    app.finish_native_selection();
+    assert_eq!(
+        app.native_selection_text()
+            .unwrap()
+            .lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>(),
+        ["match one", "match two"]
+    );
+    for (previous_clicks, expected) in [(1, "match"), (2, "match two")] {
+        app.mouse_state.click_count = previous_clicks;
+        app.mouse_state.last_click_pos = Some(Point::new(2, 1));
+        app.mouse_state.last_click_time = Instant::now();
+        app.begin_native_selection(MouseButton::Left, Point::new(1, 1));
+        app.finish_native_selection();
+        assert_eq!(app.native_selection_text().as_deref(), Some(expected));
+    }
+    app.modifiers = ModifiersState::ALT;
+    app.begin_native_selection(MouseButton::Left, Point::new(1, 8));
+    app.extend_native_selection(Point::new(0, 6));
+    app.finish_native_selection();
+    assert_eq!(app.native_selection_text().as_deref(), Some("one\ntwo"));
+    app.enter_copy_mode();
+    assert!(app.mouse_selection_source.is_none());
+    app.move_copy_cursor(crate::terminal::copy_mode::CopyMotion::Top);
+    app.copy_mode
+        .toggle_selection(termeric_core::SelectionType::Simple);
+    app.move_copy_cursor(crate::terminal::copy_mode::CopyMotion::LineEnd);
+    assert!(!app.reconcile_mouse_selection_presentation());
+    assert_eq!(app.copy_mode_selection_text().as_deref(), Some("match one"));
+}
+
+#[cfg(unix)]
+#[test]
+fn filtered_selection_scrolls_across_result_pages_without_copying_hidden_rows() {
+    use termeric_core::Point;
+    for split in [false, true] {
+        let mut app = if split {
+            divider_owner_fixture()
+        } else {
+            scrollbar_owner_fixture()
+        };
+        let terminal = app.active_terminal_mut().unwrap();
+        terminal.resize(12, 3);
+        terminal.process(b"\x1bc\x1b[3J");
+        for index in 0..10 {
+            terminal.process(format!("hit{index}\r\nSECRET{index}\r\n").as_bytes());
+        }
+        app.search.start();
+        app.with_search_and_active_grid(|search, grid| {
+            search.set_query("hit", grid);
+            search.finish(grid);
+        });
+        app.search.toggle_filter();
+        let index_ptr = app.search.filtered_matching_rows().as_ptr();
+        let index_bytes = app.search.result_index_memory_bytes();
+        let generation = app.search.filter_generation();
+        app.begin_native_selection(MouseButton::Left, Point::new(0, 0));
+        app.search.scroll_filter(-4.0, 3);
+        assert_eq!(app.search.filter_generation(), generation);
+        app.extend_native_selection(Point::new(2, 3));
+        app.finish_native_selection();
+        let text = app.native_selection_text().unwrap();
+        assert_eq!(
+            text.lines().map(str::trim_end).collect::<Vec<_>>(),
+            ["hit0", "hit1", "hit2", "hit3", "hit4", "hit5", "hit6"]
+        );
+        assert_eq!(app.search.filtered_matching_rows().as_ptr(), index_ptr);
+        assert_eq!(app.search.result_index_memory_bytes(), index_bytes);
+        app.search.cancel();
+        assert!(app.native_selection_text().is_none());
+        assert!(app.reconcile_mouse_selection_presentation());
+        assert!(app.active_terminal().unwrap().selection().is_none());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn filtered_selection_invalidates_on_query_restart_toggle_or_focus_change() {
+    use termeric_core::Point;
+    for change in ["query", "toggle", "focus"] {
+        let mut app = divider_owner_fixture();
+        app.active_terminal_mut()
+            .unwrap()
+            .process(b"\x1bc\x1b[3Jhit one\r\nSECRET\r\nhit two");
+        app.search.start();
+        app.with_search_and_active_grid(|search, grid| {
+            search.set_query("hit", grid);
+            search.finish(grid);
+        });
+        app.search.toggle_filter();
+        let owner = app.focused_pointer_terminal().unwrap();
+        app.begin_native_selection(MouseButton::Left, Point::new(0, 0));
+        app.extend_native_selection(Point::new(1, 6));
+        assert!(app.native_selection_text().is_some());
+        match change {
+            "query" => {
+                app.with_search_and_active_grid(|search, grid| {
+                    search.set_query("hit", grid);
+                    search.finish(grid);
+                });
+            }
+            "toggle" => {
+                app.search.toggle_filter();
+                app.search.toggle_filter();
+            }
+            "focus" => {
+                let panes = app
+                    .tabs
+                    .as_mut()
+                    .unwrap()
+                    .active_tab_mut()
+                    .unwrap()
+                    .pane_manager
+                    .as_mut()
+                    .unwrap();
+                let other = panes
+                    .pane_ids()
+                    .into_iter()
+                    .find(|id| *id != panes.focused_id())
+                    .unwrap();
+                panes.focus(other);
+            }
+            _ => unreachable!(),
+        }
+        assert!(app.native_selection_text().is_none(), "{change}");
+        assert!(app.reconcile_mouse_selection_presentation(), "{change}");
+        assert!(!app.mouse_pressed);
+        let tabs = app.tabs.as_ref().unwrap();
+        let origin = tabs.origin_for_pane(owner.tab_id, owner.pane_id).unwrap();
+        assert!(
+            tabs.terminal_for_origin(origin)
+                .unwrap()
+                .selection()
+                .is_none(),
+            "{change}"
+        );
+    }
+}
+#[cfg(unix)]
+#[test]
 fn native_selection_release_clears_plain_clicks_but_keeps_one_cell_explicit_selections() {
     use termeric_core::Point;
     let mut app = scrollbar_owner_fixture();

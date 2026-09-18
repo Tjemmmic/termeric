@@ -98,8 +98,8 @@ deferred. Native selection follows the contract below.
 
 ## Mouse selection presentation
 
-Native drag, word, line, and rectangular selection in the unfiltered terminal
-viewport read the presented grid. During synchronized output the terminal keeps
+Native drag, word, line, and rectangular selection read the presented grid,
+including the matching-row projection when search is filtered. During synchronized output the terminal keeps
 one small selection record alongside its existing frozen viewport; neither
 text nor scrollback is cloned again. Rendering, accessible selection reporting,
 word/line expansion, and clipboard text extraction read this same selection.
@@ -122,9 +122,39 @@ Core and headless app regressions cover hidden replacement text, clipped and
 reversed scrollback selections, word/line/block behavior, single/split panes,
 timeout/restart/resize/focus invalidation, and no hidden-coordinate fallback.
 Tests do not write the desktop clipboard. Native painting/clipboard acceptance
-remains deferred. Noncontiguous filtered-search-row selection and selection
-tracking during ordinary live-output drags retain their separate existing
-policies and are not established by these tests.
+remains deferred. Selection tracking during ordinary live-output drags retains
+its separate existing policy and is not established by these tests.
+
+## Filtered selection and accessible text
+
+When a completed search filter displays matches, mouse rows map through the
+same virtualized row window as rendering. Blank space below the matches does
+not select hidden source rows; dragging below them clamps to the last displayed
+match. Word/line expansion uses that source row, and rectangular selections
+keep their columns across noncontiguous matching rows.
+
+Clipboard extraction borrows the existing full matching-row index and visits
+only matching rows inside the selected range. There is no cloned history or
+second result index. Scrolling the filtered window preserves the result-set
+identity, so a drag can span multiple pages. New queries, rescans, filter
+toggles, or source changes invalidate that identity and clear the original
+terminal's projected selection; stale copy attempts fail before reconciliation.
+Skipped source rows always create a newline. Adjacent soft-wrapped rows still
+join for stream/semantic selection; line/block selection retains physical rows.
+
+The accessibility subtree now reads the presentation grid too, not hidden live
+text. Its focused pane uses exactly the displayed filter rows and maps selection
+endpoints into those visual line nodes; other panes retain their independent
+unfiltered presentation. Wide and combining Unicode text keeps cell-to-character
+mapping, including reversed selections. Pending/empty filters retain the
+renderer's existing ordinary-viewport fallback rather than inventing a second
+display policy for selection or accessibility.
+
+Hermetic tests cover row mapping, word/line/reversed-block selection, multi-page
+drag/copy, index-storage reuse, query/toggle/focus invalidation, Unicode wrapping,
+and frozen filtered accessibility nodes. Native painting, clipboard, and Orca
+acceptance remain deferred. Ordinary-output search refresh and drag tracking,
+and filtered-view link activation, are separate concerns.
 
 ## Regression evidence
 

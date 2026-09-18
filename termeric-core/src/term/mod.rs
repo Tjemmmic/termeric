@@ -5416,7 +5416,33 @@ impl Terminal {
         Self::selection_text(self.presentation_grid(), selection)
     }
 
+    /// Extract only selected rows from a sorted, unique projection index. Gaps
+    /// always separate lines, even if the preceding source row was soft-wrapped.
+    pub fn presentation_selection_text_in_rows(
+        &self,
+        selection: &Selection,
+        rows: &[i32],
+    ) -> String {
+        let (start, end) = selection.bounds();
+        let first = rows.partition_point(|row| *row < start.row);
+        let last = rows.partition_point(|row| *row <= end.row);
+        Self::selection_text_rows(
+            self.presentation_grid(),
+            selection,
+            rows[first..last].iter().copied(),
+        )
+    }
+
     fn selection_text(grid: &Grid, selection: &Selection) -> String {
+        let (start, end) = selection.bounds();
+        Self::selection_text_rows(grid, selection, start.row..=end.row)
+    }
+
+    fn selection_text_rows(
+        grid: &Grid,
+        selection: &Selection,
+        rows: impl Iterator<Item = i32>,
+    ) -> String {
         let (start, end) = selection.bounds();
 
         let max_col = grid.cols().saturating_sub(1);
@@ -5426,7 +5452,8 @@ impl Terminal {
             SelectionType::Simple | SelectionType::Semantic
         );
 
-        for row in start.row..=end.row {
+        let mut rows = rows.peekable();
+        while let Some(row) = rows.next() {
             let Some(grid_row) = grid.row_at_offset(row) else {
                 continue;
             };
@@ -5477,7 +5504,9 @@ impl Terminal {
                 }
             }
 
-            if row != end.row && (!logical_text || !grid_row.is_wrapped()) {
+            if let Some(next) = rows.peek()
+                && (!logical_text || !grid_row.is_wrapped() || row.checked_add(1) != Some(*next))
+            {
                 text.push('\n');
             }
         }
@@ -5997,6 +6026,41 @@ mod tests {
             term.word_at(Point::new(0, 6)),
             (Point::new(0, 0), Point::new(0, 6))
         );
+    }
+
+    #[test]
+    fn projected_selection_skips_rows_and_joins_only_adjacent_soft_wraps() {
+        let mut term = Terminal::new(3, 4);
+        term.process("ab界Zqqq".as_bytes());
+        for ty in [
+            SelectionType::Simple,
+            SelectionType::Semantic,
+            SelectionType::Lines,
+            SelectionType::Block,
+        ] {
+            for reversed in [false, true] {
+                let (start, end) = (Point::new(0, 0), Point::new(2, 2));
+                let mut selection = Selection::new(if reversed { end } else { start }, ty);
+                selection.update(if reversed { start } else { end });
+                let logical = matches!(ty, SelectionType::Simple | SelectionType::Semantic);
+                assert_eq!(
+                    term.presentation_selection_text_in_rows(&selection, &[0, 2]),
+                    if logical { "ab\nqqq" } else { "ab \nqqq" }
+                );
+                assert_eq!(
+                    term.presentation_selection_text_in_rows(&selection, &[0, 1, 2]),
+                    if logical {
+                        "ab界Zqqq"
+                    } else {
+                        "ab \n界Z\nqqq"
+                    }
+                );
+                assert_eq!(
+                    term.presentation_selection_text_in_rows(&selection, &[]),
+                    ""
+                );
+            }
+        }
     }
 
     #[test]

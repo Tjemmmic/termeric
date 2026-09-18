@@ -1994,6 +1994,9 @@ impl App {
             }
         }
 
+        // Completing a filter scan may replace the displayed row projection.
+        self.reconcile_mouse_selection_presentation();
+
         // Smooth hover animation progress for tab bar icons unless the user
         // requested static application chrome.
         if reduced_motion {
@@ -3918,8 +3921,7 @@ impl App {
         let Some(text) = (if self.copy_mode.is_active() {
             self.copy_mode_selection_text()
         } else {
-            self.active_terminal()
-                .and_then(termeric_core::Terminal::get_selection_text)
+            self.native_selection_text()
         }) else {
             return false;
         };

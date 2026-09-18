@@ -2967,6 +2967,12 @@ impl App {
                         ),
                         cell_width,
                         cell_height,
+                        if pane.id == focused {
+                            self.search
+                                .filtered_rows(pane.terminal.presentation_grid().rows())
+                        } else {
+                            &[]
+                        },
                     );
                 }
             } else if let Some(terminal) = tab.focused_terminal() {
@@ -2991,6 +2997,8 @@ impl App {
                     ),
                     cell_width,
                     cell_height,
+                    self.search
+                        .filtered_rows(terminal.presentation_grid().rows()),
                 );
             }
         }
@@ -5575,13 +5583,23 @@ fn append_terminal_nodes(
     bounds: Rect,
     cell_width: f32,
     cell_height: f32,
+    filtered_rows: &[i32],
 ) {
-    let grid = terminal.grid();
+    let grid = terminal.presentation_grid();
     let mut line_ids = Vec::with_capacity(grid.rows());
     let mut lines = Vec::with_capacity(grid.rows());
-    for row in 0..grid.rows() {
+    let row_count = if filtered_rows.is_empty() {
+        grid.rows()
+    } else {
+        filtered_rows.len()
+    };
+    for row in 0..row_count {
         let line_id = line_node(pane_id, row);
-        let line = accessible_line(grid, row);
+        let line = if filtered_rows.is_empty() {
+            accessible_line(grid, row)
+        } else {
+            accessible_source_line(grid, filtered_rows[row])
+        };
         let mut node = Node::new(Role::TextRun);
         node.set_value(line.value.clone());
         node.set_character_lengths(line.character_lengths.clone());
@@ -5614,7 +5632,7 @@ fn append_terminal_nodes(
         None => {}
     }
     node.set_label(label);
-    node.set_description("Visible terminal text; scrollback is not exposed");
+    node.set_description("Visible terminal text; off-screen rows are not exposed");
     node.set_bounds(bounds);
     node.set_children(line_ids);
     node.set_live(Live::Polite);
@@ -5625,10 +5643,14 @@ fn append_terminal_nodes(
         let selection = terminal
             .selection()
             .and_then(|selection| {
-                accessible_selection(selection, pane_id, &lines, grid.scroll_offset())
+                if filtered_rows.is_empty() {
+                    accessible_selection(selection, pane_id, &lines, grid.scroll_offset())
+                } else {
+                    accessible_filtered_selection(selection, pane_id, &lines, filtered_rows)
+                }
             })
             .or_else(|| {
-                if grid.scroll_offset() != 0 {
+                if grid.scroll_offset() != 0 || !filtered_rows.is_empty() {
                     return None;
                 }
                 let cursor = grid.cursor();
@@ -5669,12 +5691,19 @@ impl AccessibleLine {
 }
 
 fn accessible_line(grid: &Grid, row: usize) -> AccessibleLine {
+    let source =
+        (row as i32).saturating_sub(i32::try_from(grid.scroll_offset()).unwrap_or(i32::MAX));
+    accessible_source_line(grid, source)
+}
+
+fn accessible_source_line(grid: &Grid, row: i32) -> AccessibleLine {
     let mut value = String::new();
     let mut character_lengths = Vec::new();
     let mut column_to_character = Vec::with_capacity(grid.cols() + 1);
+    let source = grid.row_at_offset(row);
     for col in 0..grid.cols() {
         column_to_character.push(character_lengths.len());
-        if let Some(cell) = grid.cell_scrolled(row, col) {
+        if let Some(cell) = source.as_ref().and_then(|row| row.get(col)) {
             append_accessible_cell(&cell, &mut value, &mut character_lengths);
         } else {
             value.push(' ');
@@ -5710,6 +5739,38 @@ fn append_accessible_cell(cell: &Cell, value: &mut String, lengths: &mut Vec<u8>
         value.push(character);
         lengths.push(character.len_utf8() as u8);
     }
+}
+
+fn accessible_filtered_selection(
+    selection: &Selection,
+    pane_id: PaneId,
+    lines: &[AccessibleLine],
+    rows: &[i32],
+) -> Option<TextSelection> {
+    let (start, end) = selection.bounds();
+    let first = rows.partition_point(|row| *row < start.row);
+    let after_last = rows.partition_point(|row| *row <= end.row);
+    if first >= after_last {
+        return None;
+    }
+    let last = after_last - 1;
+    let start_col = if rows[first] == start.row {
+        start.col
+    } else {
+        0
+    };
+    let end_col = if rows[last] == end.row {
+        end.col
+    } else {
+        lines.get(last)?.column_to_character.len().saturating_sub(2)
+    };
+    let start_point = termeric_core::Point::new(first as i32, start_col);
+    let end_point = termeric_core::Point::new(last as i32, end_col);
+    let mut projected = selection.clone();
+    let forward = selection.start <= selection.end;
+    projected.start = if forward { start_point } else { end_point };
+    projected.end = if forward { end_point } else { start_point };
+    accessible_selection(&projected, pane_id, lines, 0)
 }
 
 fn accessible_selection(
@@ -5932,6 +5993,7 @@ mod tests {
             rect(0.0, 0.0, 160.0, 40.0),
             10.0,
             20.0,
+            &[],
         );
         let semantic_text = nodes
             .iter()
@@ -5953,6 +6015,83 @@ mod tests {
         let selection = terminal_node.1.text_selection().unwrap();
         assert_eq!(selection.anchor.character_index, 0);
         assert_eq!(selection.focus.character_index, 7);
+    }
+
+    #[test]
+    fn terminal_tree_uses_frozen_filtered_rows_and_projected_unicode_selection() {
+        let mut terminal = termeric_core::Terminal::new(16, 4);
+        terminal
+            .process("hit界\r\nSECRET\r\nhit e\u{301}\x1b[?2026h\x1b[H\x1b[2KREPLACED".as_bytes());
+        for reversed in [false, true] {
+            let (start, end) = (
+                termeric_core::Point::new(0, 0),
+                termeric_core::Point::new(2, 4),
+            );
+            terminal.set_selection(Some(Selection {
+                start: if reversed { end } else { start },
+                end: if reversed { start } else { end },
+                ty: termeric_core::SelectionType::Simple,
+                active: false,
+            }));
+            let mut nodes = Vec::new();
+            append_terminal_nodes(
+                &mut nodes,
+                pane_node(PaneId(0)),
+                PaneId(0),
+                &terminal,
+                true,
+                None,
+                false,
+                false,
+                rect(0.0, 0.0, 160.0, 80.0),
+                10.0,
+                20.0,
+                &[0, 2],
+            );
+            let text = nodes
+                .iter()
+                .filter_map(|(_, node)| node.value())
+                .collect::<Vec<_>>();
+            assert_eq!(text, ["hit界", "hit e\u{301}"]);
+            let selection = nodes
+                .iter()
+                .find(|(id, _)| *id == pane_node(PaneId(0)))
+                .unwrap()
+                .1
+                .text_selection()
+                .unwrap();
+            let (start, end) = if reversed {
+                (selection.focus, selection.anchor)
+            } else {
+                (selection.anchor, selection.focus)
+            };
+            assert_eq!(start.node, line_node(PaneId(0), 0));
+            assert_eq!(start.character_index, 0);
+            assert_eq!(end.node, line_node(PaneId(0), 1));
+            assert_eq!(end.character_index, 6);
+        }
+        let mut nodes = Vec::new();
+        append_terminal_nodes(
+            &mut nodes,
+            pane_node(PaneId(0)),
+            PaneId(0),
+            &terminal,
+            true,
+            None,
+            false,
+            false,
+            rect(0.0, 0.0, 160.0, 80.0),
+            10.0,
+            20.0,
+            &[],
+        );
+        let text = nodes
+            .iter()
+            .filter_map(|(_, node)| node.value())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("hit界"));
+        assert!(!text.contains("REPLACED"));
     }
 
     #[test]
@@ -5979,6 +6118,7 @@ mod tests {
             rect(0.0, 0.0, 80.0, 40.0),
             10.0,
             20.0,
+            &[],
         );
 
         let terminal_node = nodes
