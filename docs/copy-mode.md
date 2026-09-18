@@ -97,14 +97,35 @@ a hidden local report; the opener's existing no-directory fallback is unchanged.
 One bounded OSC 7 metadata record is retained with the synchronized snapshot;
 this is not a second scrollback model.
 
-Hints are tied to that synchronized snapshot's lifetime. Beginning, releasing,
-timing out, or replacing the snapshot invalidates existing hints at render/input
-boundaries, with feedback, rather than rebinding a partly typed label. Resize
-within the same snapshot rebuilds coordinates while retaining its action and
-captured directory. The quick-select cursor marks a presented hint.
+Hints are tied to the captured grid and synchronized snapshot lifetime.
+Beginning, releasing, timing out, or replacing the snapshot invalidates existing
+hints at render/input boundaries, with feedback. Live content revisions,
+viewport scrolling, and resize revalidate targets before painting or accepting
+hint input. Surviving targets keep their labels, action, and captured directory,
+while their positions update. A label never transfers to a different payload or
+source. Identical targets are paired in display order; this promises stable
+actions, not persistent identity for indistinguishable text occurrences.
+
+Targets that disappear are removed, and retired labels are not reused or
+resurrected. Newly arriving targets require a fresh quick-select invocation.
+If no captured targets remain, or a partial prefix no longer names any surviving
+target, quick select closes with feedback; the input that detects this closure
+is consumed without activating another target. Copy mode remains available.
+Resize follows this same label policy instead of relabeling the new match list.
+The quick-select cursor marks a presented surviving hint.
+
+An unchanged grid revision/viewport check is constant-time and retains the
+match allocation. Changed sources rescan only the presented viewport and use a
+borrowed-key lookup over the existing bounded match list, not a history scan or
+quadratic target search. The 4,096-match cap remains in force. Hidden output
+behind a synchronized snapshot does not trigger a visible rescan. This is a
+resource bound, not a native latency measurement.
+
 Tests cover frozen OSC/regex targets, local/remote/absent directory metadata,
-single and split panes, resize and lifetime invalidation without opening links
-or writing to the desktop clipboard. Native acceptance remains deferred.
+single and split panes, live replacement, viewport movement, stable partial
+labels, duplicate targets at the cap, resize and lifetime invalidation without
+opening links or writing to the desktop clipboard. Native acceptance remains
+deferred.
 
 Ordinary copy mode also navigates, selects, searches, and extracts text from the
 presented grid. During synchronized output this is only the captured viewport:

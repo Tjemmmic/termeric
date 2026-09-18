@@ -345,21 +345,35 @@ impl App {
         true
     }
 
-    /// Never rebind a partly typed label across a synchronized presentation
-    /// boundary. Called before rendering and before consuming hint input.
+    /// Revalidate targets before rendering or consuming hint input. If a
+    /// pending target disappears, consume that input rather than rebinding it.
     pub(super) fn reconcile_quick_select_presentation(&mut self) -> bool {
         if self.copy_mode.quick_select().is_none() {
             return false;
         }
-        let current = self
-            .active_terminal()
-            .is_some_and(|terminal| self.copy_mode.quick_select_presentation_matches(terminal));
-        if current {
+        if self.copy_mode_target == self.active_copy_target() {
+            let (copy_mode, tabs, patterns) = (
+                &mut self.copy_mode,
+                &self.tabs,
+                &self.compiled_copy_patterns,
+            );
+            if let Some(terminal) = tabs
+                .as_ref()
+                .and_then(crate::tabs::TabManager::active_tab)
+                .and_then(crate::tabs::Tab::focused_terminal)
+            {
+                copy_mode.refresh_quick_select(terminal, patterns);
+            } else {
+                copy_mode.cancel_quick_select();
+            }
+        } else {
+            self.copy_mode.cancel_quick_select();
+        }
+        if self.copy_mode.quick_select().is_some() {
             return false;
         }
-        self.copy_mode.cancel_quick_select();
         self.toasts
-            .info("Quick select closed because the displayed snapshot changed");
+            .info("Quick select closed because its displayed targets changed");
         true
     }
 

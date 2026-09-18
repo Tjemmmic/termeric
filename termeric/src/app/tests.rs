@@ -3,6 +3,45 @@ use crate::plugin::hooks::{HookResponse, Plugin, PluginCommand};
 
 #[cfg(unix)]
 #[test]
+fn quick_select_reconciles_live_targets_and_viewport_before_render_or_activation() {
+    let patterns = vec![("path".into(), regex::Regex::new(r"/\w+").unwrap())];
+    for split in [false, true] {
+        let mut app = if split {
+            divider_owner_fixture()
+        } else {
+            scrollbar_owner_fixture()
+        };
+        app.compiled_copy_patterns = patterns.clone();
+        let terminal = app.active_terminal_mut().unwrap();
+        terminal.resize(40, 3);
+        terminal.process(b"\x1bc\x1b[3J/one /two");
+        app.begin_quick_select();
+        let label = app.copy_mode.quick_select().unwrap().matches[1]
+            .label
+            .clone();
+        app.active_terminal_mut()
+            .unwrap()
+            .process(b"\r\x1b[2K/two /new");
+        assert!(!app.reconcile_quick_select_presentation());
+        let quick = app.copy_mode.quick_select().unwrap();
+        assert_eq!(quick.matches.len(), 1);
+        assert_eq!(quick.matches[0].value, "/two");
+        assert_eq!(quick.matches[0].label, label);
+        assert_eq!(app.copy_mode_render_info().unwrap().hints[0].col, 0);
+        app.active_terminal_mut().unwrap().process(b"\x1b[2J");
+        assert!(app.reconcile_quick_select_presentation());
+        assert!(app.copy_mode.quick_select().is_none());
+        assert!(
+            app.copy_mode
+                .push_hint_key(label.chars().next().unwrap())
+                .is_none()
+        );
+        assert!(app.copy_mode.is_active());
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn copy_mode_follows_live_output_before_navigation_with_or_without_selection() {
     use crate::terminal::copy_mode::CopyMotion;
     use termeric_core::{Point, SelectionType};
