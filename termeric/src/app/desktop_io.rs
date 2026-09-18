@@ -700,7 +700,19 @@ impl App {
         }
     }
 
-    /// Handle a terminal event
+    /// Hyperlink actions use their own displayed owner's local report, never
+    /// another focused pane, hidden live metadata, or process-cwd fallback.
+    pub(super) fn hyperlink_open_directory(
+        &self,
+        origin: crate::tabs::TerminalEventOrigin,
+    ) -> Option<String> {
+        self.tabs
+            .as_ref()?
+            .terminal_for_origin(origin)
+            .and_then(crate::tabs::presentation_working_directory)
+    }
+
+    /// Handle a terminal event.
     pub(super) fn handle_terminal_event(&mut self, routed: RoutedTerminalEvent) {
         let RoutedTerminalEvent { origin, event } = routed;
         match event {
@@ -856,7 +868,11 @@ impl App {
                 }
             }
             TerminalEvent::HyperlinkActivated(url) => {
-                if let Err(e) = crate::terminal::url::UrlDetector::open_url(&url) {
+                let directory = self.hyperlink_open_directory(origin);
+                if let Err(e) = crate::terminal::url::UrlDetector::open_url_in_directory(
+                    &url,
+                    directory.as_deref().map(std::path::Path::new),
+                ) {
                     log::error!("Failed to open URL: {}", e);
                     self.toasts.error(format!("Could not open {url:?}: {e}"));
                 }
@@ -928,7 +944,7 @@ impl App {
         ))
     }
 
-    fn active_terminal_origin(&self) -> Option<crate::tabs::TerminalEventOrigin> {
+    pub(super) fn active_terminal_origin(&self) -> Option<crate::tabs::TerminalEventOrigin> {
         let tab = self.tabs.as_ref().and_then(TabManager::active_tab)?;
         Some(if let Some(panes) = &tab.pane_manager {
             crate::tabs::TerminalEventOrigin::Pane {

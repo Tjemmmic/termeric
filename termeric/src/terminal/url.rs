@@ -158,14 +158,10 @@ impl UrlDetector {
         trimmed.len()
     }
 
-    /// Open a URL using the system default handler
-    pub fn open_url(url: &str) -> std::io::Result<()> {
-        Self::open_url_in_directory(url, None)
-    }
-
     /// Open a URL or path relative to the focused terminal's trusted local
     /// working directory. The target remains one argument and is never parsed
-    /// by a command shell.
+    /// by a command shell. Relative filesystem targets require an absolute
+    /// trusted directory; they never inherit the application's directory.
     pub fn open_url_in_directory(
         url: &str,
         working_directory: Option<&Path>,
@@ -182,6 +178,12 @@ impl UrlDetector {
         url: &str,
         working_directory: Option<&Path>,
     ) -> std::io::Result<std::process::Command> {
+        if url.is_empty() || url.contains('\0') {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "opener target must be nonempty and contain no NUL",
+            ));
+        }
         // A single argument is not an option boundary. xdg-open has no
         // portable end-of-options contract; do not let terminal-controlled
         // text select a helper flag instead of a resource.
@@ -191,6 +193,28 @@ impl UrlDetector {
                 "opener target must not start with '-'; use an explicit path such as './-name'",
             ));
         }
+        let directory = if Self::is_relative_path(url) {
+            let directory = working_directory.ok_or_else(|| std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "relative path requires a trusted local terminal directory; enable local OSC 7 reporting or use an absolute path/file URI",
+            ))?;
+            if !directory.is_absolute() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "trusted terminal directory must be absolute",
+                ));
+            }
+            #[cfg(target_os = "windows")]
+            if url.as_bytes().get(1) == Some(&b':') {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "drive-relative opener paths are ambiguous; use an absolute path",
+                ));
+            }
+            Some(directory)
+        } else {
+            None
+        };
         #[cfg(target_os = "linux")]
         let mut command = std::process::Command::new("xdg-open");
 
@@ -201,18 +225,28 @@ impl UrlDetector {
         let mut command = std::process::Command::new("explorer.exe");
 
         command.arg(url);
-        if let Some(working_directory) = working_directory
-            && Self::is_explicit_relative_path(url)
-        {
-            command.current_dir(working_directory);
+        if let Some(directory) = directory {
+            command.current_dir(directory);
         }
         Ok(command)
     }
 
-    fn is_explicit_relative_path(target: &str) -> bool {
-        ["./", "../", ".\\", "..\\"]
-            .iter()
-            .any(|prefix| target.starts_with(prefix))
+    fn is_relative_path(target: &str) -> bool {
+        if Path::new(target).is_absolute() {
+            return false;
+        }
+        #[cfg(target_os = "windows")]
+        if target.as_bytes().get(1) == Some(&b':') {
+            return true;
+        }
+        // A scheme is ASCII alpha followed by ASCII alphanumeric/+/./-.
+        // URI interpretation remains the desktop handler's responsibility.
+        !target.split_once(':').is_some_and(|(scheme, _)| {
+            let mut bytes = scheme.bytes();
+            bytes.next().is_some_and(|byte| byte.is_ascii_alphabetic())
+                && bytes
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'.' | b'-'))
+        })
     }
 }
 
@@ -867,6 +901,75 @@ mod tests {
     }
 
     #[test]
+    fn relative_opener_targets_require_a_trusted_absolute_terminal_directory() {
+        for target in [
+            "./file",
+            "../file",
+            ".",
+            "..",
+            "report.txt",
+            "src/main.rs",
+            ".\\file",
+            "..\\file",
+            "界.txt",
+        ] {
+            let error = UrlDetector::opener_command(target, None).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+            // Public rejection must happen before launching a desktop helper.
+            assert_eq!(
+                UrlDetector::open_url_in_directory(target, None)
+                    .unwrap_err()
+                    .kind(),
+                std::io::ErrorKind::PermissionDenied
+            );
+            assert!(
+                error
+                    .to_string()
+                    .contains("trusted local terminal directory")
+            );
+            let error =
+                UrlDetector::opener_command(target, Some(Path::new("relative/cwd"))).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        }
+    }
+
+    #[test]
+    fn opener_rejects_empty_targets_and_keeps_absolute_targets_context_free() {
+        for target in ["", "bad\0target"] {
+            assert_eq!(
+                UrlDetector::open_url_in_directory(target, None)
+                    .unwrap_err()
+                    .kind(),
+                std::io::ErrorKind::InvalidInput
+            );
+        }
+        let absolute = if cfg!(target_os = "windows") {
+            r"C:\absolute\file.txt"
+        } else {
+            "/absolute/file.txt"
+        };
+        let command = UrlDetector::opener_command(absolute, None).unwrap();
+        assert!(command.get_current_dir().is_none());
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            [std::ffi::OsStr::new(absolute)]
+        );
+        for target in [
+            "mailto:user@example.test",
+            "custom+app.v2:payload",
+            "https://example.test",
+            "file:///tmp/a%20b",
+        ] {
+            let command = UrlDetector::opener_command(target, None).unwrap();
+            assert!(command.get_current_dir().is_none());
+            assert_eq!(
+                command.get_args().collect::<Vec<_>>(),
+                [std::ffi::OsStr::new(target)]
+            );
+        }
+    }
+
+    #[test]
     fn opener_rejects_option_shaped_targets() {
         for target in [
             "-",
@@ -924,10 +1027,17 @@ mod tests {
     }
 
     #[test]
-    fn opener_keeps_literal_arguments_and_only_rebases_explicit_relative_paths() {
-        let cwd = Path::new("/trusted/cwd");
+    fn opener_keeps_literal_arguments_and_only_rebases_relative_paths() {
+        let cwd = if cfg!(target_os = "windows") {
+            Path::new(r"C:\trusted\cwd")
+        } else {
+            Path::new("/trusted/cwd")
+        };
         for target in [
             "./a b;$(not-a-command).txt",
+            "report.txt",
+            "src/main.rs",
+            "a b;$(not-a-command).txt",
             "./-report.txt",
             "../--help",
             ".\\-report.txt",
@@ -946,7 +1056,7 @@ mod tests {
             );
             assert_eq!(
                 command.get_current_dir(),
-                UrlDetector::is_explicit_relative_path(target).then_some(cwd)
+                UrlDetector::is_relative_path(target).then_some(cwd)
             );
             #[cfg(target_os = "linux")]
             assert_eq!(command.get_program(), "xdg-open");
@@ -958,17 +1068,31 @@ mod tests {
     }
 
     #[test]
-    fn only_explicit_relative_paths_inherit_the_terminal_directory() {
-        for target in ["./file", "../file", ".\\file", "..\\file"] {
-            assert!(UrlDetector::is_explicit_relative_path(target));
+    fn all_filesystem_relative_paths_require_the_terminal_directory() {
+        for target in [
+            "./file",
+            "../file",
+            ".\\file",
+            "..\\file",
+            "PROJ-17",
+            "src/main.rs",
+            "report.txt",
+            ".",
+            "..",
+            "./name:stream",
+            "dir/name:stream",
+            "界:note",
+        ] {
+            assert!(UrlDetector::is_relative_path(target), "{target}");
         }
         for target in [
-            "/tmp/file",
             "https://example.test",
             "file:///tmp/file",
-            "PROJ-17",
+            "mailto:user@example.test",
+            "ssh://example.test",
+            "custom+app.v2:payload",
         ] {
-            assert!(!UrlDetector::is_explicit_relative_path(target));
+            assert!(!UrlDetector::is_relative_path(target), "{target}");
         }
     }
 }

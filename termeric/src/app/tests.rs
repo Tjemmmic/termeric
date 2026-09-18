@@ -3,6 +3,103 @@ use crate::plugin::hooks::{HookResponse, Plugin, PluginCommand};
 
 #[cfg(unix)]
 #[test]
+fn hyperlink_open_context_uses_presented_local_directory_without_hidden_fallback() {
+    use termeric_core::Point;
+    for split in [false, true] {
+        let mut app = if split {
+            divider_owner_fixture()
+        } else {
+            scrollbar_owner_fixture()
+        };
+        for (report, expected) in [
+            (
+                b"\x1b]7;file:///tmp/presented\x07".as_slice(),
+                Some("/tmp/presented"),
+            ),
+            (
+                b"\x1b]7;file://remote.invalid/tmp/remote\x07".as_slice(),
+                None,
+            ),
+            (b"".as_slice(), None),
+        ] {
+            let terminal = app.active_terminal_mut().unwrap();
+            *terminal = termeric_core::Terminal::new(40, 4);
+            terminal.process(report);
+            terminal.process(b"\x1b]8;;./relative.txt\x1b\\link\x1b]8;;\x1b\\\x1b[?2026h\x1b]7;file:///tmp/hidden\x07");
+            let origin = app.active_terminal_origin().unwrap();
+            let (target, directory) = app
+                .focused_hyperlink_open_context(Point::new(0, 0))
+                .unwrap();
+            assert_eq!(target, "./relative.txt");
+            assert_eq!(directory.as_deref(), expected);
+            assert_eq!(app.hyperlink_open_directory(origin).as_deref(), expected);
+            app.active_terminal_mut().unwrap().process(b"\x1b[?2026l");
+            assert_eq!(
+                app.hyperlink_open_directory(origin).as_deref(),
+                Some("/tmp/hidden")
+            );
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn routed_hyperlink_directory_does_not_follow_focus_to_another_pane() {
+    use termeric_core::Point;
+    let mut app = divider_owner_fixture();
+    let original = app.active_terminal_origin().unwrap();
+    app.active_terminal_mut()
+        .unwrap()
+        .process(b"\x1bc\x1b]7;file:///tmp/original\x07");
+    let panes = app
+        .tabs
+        .as_mut()
+        .unwrap()
+        .active_tab_mut()
+        .unwrap()
+        .pane_manager
+        .as_mut()
+        .unwrap();
+    let other = panes
+        .pane_ids()
+        .into_iter()
+        .find(|id| *id != panes.focused_id())
+        .unwrap();
+    panes.focus(other);
+    app.active_terminal_mut().unwrap().process(
+        b"\x1bc\x1b]7;file:///tmp/focused\x07\x1b]8;;./relative.txt\x1b\\link\x1b]8;;\x1b\\",
+    );
+    assert_eq!(
+        app.hyperlink_open_directory(original).as_deref(),
+        Some("/tmp/original")
+    );
+    assert_eq!(
+        app.focused_hyperlink_open_context(Point::new(0, 0))
+            .unwrap()
+            .1
+            .as_deref(),
+        Some("/tmp/focused")
+    );
+    assert!(
+        app.hyperlink_open_directory(TerminalEventOrigin::Tab { tab_id: usize::MAX })
+            .is_none()
+    );
+}
+
+#[test]
+fn relative_hyperlink_without_trusted_directory_is_refused_before_launch() {
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.handle_terminal_event(RoutedTerminalEvent {
+        origin: TerminalEventOrigin::Tab { tab_id: 0 },
+        event: TerminalEvent::HyperlinkActivated("./file.txt".into()),
+    });
+    let toast = app.toasts.iter().last().unwrap();
+    assert_eq!(toast.severity, crate::ui::toast::ToastSeverity::Error);
+    assert!(toast.message.contains("trusted local terminal directory"));
+}
+
+#[cfg(unix)]
+#[test]
 fn quick_select_reconciles_live_targets_and_viewport_before_render_or_activation() {
     let patterns = vec![("path".into(), regex::Regex::new(r"/\w+").unwrap())];
     for split in [false, true] {

@@ -93,7 +93,8 @@ Quick-select hints scan the presented grid, including the frozen viewport during
 synchronized output. They retain their matched values and the presented trusted
 local OSC 7 directory for relative-path actions; hidden text and cwd changes do
 not replace those targets. An absent or remote directory report does not borrow
-a hidden local report; the opener's existing no-directory fallback is unchanged.
+a hidden local report or the application's directory: relative-path opening is
+refused with feedback, while copying the target remains available.
 One bounded OSC 7 metadata record is retained with the synchronized snapshot;
 this is not a second scrollback model.
 
@@ -149,8 +150,21 @@ remain deferred.
 
 The explicit hint keystroke is the user's open action. Opening delegates to the
 same argument-safe desktop opener used by Ctrl+click; no match text is evaluated
-by a shell. Relative paths use the focused terminal's trusted local OSC 7
-working directory; remote-host reports are never converted into local paths.
+by a shell. Filesystem-relative targets, including bare filenames, `src/file`,
+`.`/`..`, and explicit `./`/`../` forms, require a trusted **absolute** local OSC 7
+working directory. Quick select uses its captured presented directory;
+Ctrl+click uses the clicked pane's presented directory, and routed activation
+events use their originating terminal's presented directory. Missing, remote,
+or invalid relative directory reports never fall back to the application cwd or
+another pane. The error suggests enabling local OSC 7 reporting or using an
+absolute path/file URI. Copying is unaffected. Paths remain literal: no shell,
+environment-variable, or tilde expansion is performed.
+
+Absolute filesystem targets and targets with a URI scheme do not need a terminal
+directory. URI schemes remain delegated to the desktop handler; use an explicit
+`./` prefix when a colon-bearing filename should be treated as a relative path.
+On Windows, drive-relative paths are rejected rather than using an implicit
+per-drive directory; native Windows opener acceptance remains separate.
 File URI targets are passed unchanged to the desktop opener: their authority
 and percent escapes are not stripped or decoded by Termeric. Termeric no longer
 silently turns a remote file URI into the same pathname on the local machine. The
@@ -159,7 +173,9 @@ remote-file mounting or access. This preserves the host distinction in
 [RFC 8089](https://www.rfc-editor.org/rfc/rfc8089.html#section-3), and Linux's
 [xdg-open](https://portland.freedesktop.org/doc/xdg-open.html) accepts file URIs.
 Side-effect-free tests inspect the actual launch command's single target
-argument and cwd; native file-handler acceptance remains deferred.
+argument and cwd, exercise pre-launch rejection, and verify local/remote/absent
+and frozen owner routing in single and split panes. No successful test launches
+a desktop handler; native file-handler acceptance remains deferred.
 Bare targets beginning with `-` are refused before launching an opener so a
 link or custom hint cannot become a helper option such as `--help`. Use an
 explicit relative path (`./-report.txt`) or an absolute path/file URI for such

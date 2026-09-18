@@ -679,9 +679,12 @@ impl App {
 
                 // Ctrl+Click opens links from the pane selected by this click.
                 if self.modifiers.control_key() {
-                    if let Some(url) = self.focused_hyperlink_at(grid_pos) {
+                    if let Some((url, directory)) = self.focused_hyperlink_open_context(grid_pos) {
                         log::info!("Opening hyperlink: {}", url);
-                        if let Err(error) = crate::terminal::url::UrlDetector::open_url(url) {
+                        if let Err(error) = crate::terminal::url::UrlDetector::open_url_in_directory(
+                            &url,
+                            directory.as_deref().map(std::path::Path::new),
+                        ) {
                             log::error!("Failed to open URL: {}", error);
                             let message = format!("Could not open {url:?}: {error}");
                             self.toasts.error(message);
@@ -1435,6 +1438,17 @@ impl App {
             padding,
             scroll_offset,
         )
+    }
+
+    pub(super) fn focused_hyperlink_open_context(
+        &mut self,
+        point: termeric_core::Point,
+    ) -> Option<(String, Option<String>)> {
+        let url = self.focused_hyperlink_at(point)?.to_owned();
+        let directory = self
+            .active_terminal_origin()
+            .and_then(|origin| self.hyperlink_open_directory(origin));
+        Some((url, directory))
     }
 
     /// Input points use live scrollback coordinates. Convert back to a visual
