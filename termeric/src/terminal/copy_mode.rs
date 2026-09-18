@@ -65,6 +65,7 @@ pub struct CopyMode {
     pending_g: bool,
     quick_select: Option<QuickSelect>,
     reflow_bookmark: Option<(LogicalPoint, Option<LogicalPoint>)>,
+    synchronized_output_deadline: Option<std::time::Instant>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -84,6 +85,7 @@ impl Default for CopyMode {
             pending_g: false,
             quick_select: None,
             reflow_bookmark: None,
+            synchronized_output_deadline: None,
         }
     }
 }
@@ -116,6 +118,17 @@ impl CopyMode {
             Point::new(viewport_bottom, 0)
         };
         self.clamp(grid);
+        self.preferred_col = self.cursor.col;
+    }
+
+    pub fn enter_presentation(&mut self, terminal: &Terminal) {
+        self.enter(terminal.presentation_grid());
+        self.reflow_bookmark = None;
+        self.synchronized_output_deadline = terminal.synchronized_output_deadline();
+    }
+
+    pub fn presentation_matches(&self, terminal: &Terminal) -> bool {
+        self.synchronized_output_deadline == terminal.synchronized_output_deadline()
     }
 
     pub fn exit(&mut self) {
@@ -210,7 +223,7 @@ impl CopyMode {
         working_directory: Option<String>,
     ) {
         if !self.active {
-            self.enter(terminal.grid());
+            self.enter_presentation(terminal);
         }
         self.quick_select = Some(QuickSelect {
             matches: semantic_matches(terminal, patterns),

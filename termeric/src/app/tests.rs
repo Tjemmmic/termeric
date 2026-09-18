@@ -3,6 +3,128 @@ use crate::plugin::hooks::{HookResponse, Plugin, PluginCommand};
 
 #[cfg(unix)]
 #[test]
+fn copy_mode_enters_at_the_presented_cursor_during_synchronized_output() {
+    let mut app = scrollbar_owner_fixture();
+    app.active_terminal_mut()
+        .unwrap()
+        .process(b"\x1bcvisible\x1b[H\x1b[?2026h\x1b[2Khidden\x1b[3;9H");
+    app.enter_copy_mode();
+    assert_eq!(app.copy_mode.cursor(), termeric_core::Point::new(0, 0));
+}
+
+#[cfg(unix)]
+#[test]
+fn copy_mode_keeps_live_selection_scroll_tracking_outside_synchronized_output() {
+    use crate::terminal::copy_mode::CopyMotion;
+    let mut app = scrollbar_owner_fixture();
+    let terminal = app.active_terminal_mut().unwrap();
+    terminal.resize(12, 3);
+    terminal.process(b"\x1bc\x1b[3Jvisible\r\nnext\r\nthird");
+    app.enter_copy_mode();
+    app.move_copy_cursor(CopyMotion::Top);
+    app.copy_mode
+        .toggle_selection(termeric_core::SelectionType::Simple);
+    app.move_copy_cursor(CopyMotion::LineEnd);
+    assert_eq!(app.copy_mode_selection_text().as_deref(), Some("visible"));
+    app.active_terminal_mut().unwrap().process(b"\r\nfourth");
+    assert_eq!(
+        app.active_terminal()
+            .unwrap()
+            .selection()
+            .unwrap()
+            .start
+            .row,
+        -1
+    );
+    assert_eq!(app.copy_mode_selection_text().as_deref(), Some("visible"));
+}
+
+#[cfg(unix)]
+#[test]
+fn copy_mode_selection_search_and_reflow_use_the_frozen_view_in_each_pane_layout() {
+    use crate::terminal::copy_mode::CopyMotion;
+    for split in [false, true] {
+        let mut app = if split {
+            divider_owner_fixture()
+        } else {
+            scrollbar_owner_fixture()
+        };
+        let terminal = app.active_terminal_mut().unwrap();
+        terminal.resize(12, 4);
+        terminal.process(b"\x1bcvisible\x1b[H\x1b[?2026h\x1b[2Khidden\x1b[3;9H");
+        app.enter_copy_mode();
+        app.copy_mode
+            .toggle_selection(termeric_core::SelectionType::Simple);
+        app.move_copy_cursor(CopyMotion::LineEnd);
+        assert_eq!(app.copy_mode_selection_text().as_deref(), Some("visible"));
+        assert!(app.active_terminal().unwrap().selection().is_none());
+        assert_eq!(app.active_terminal().unwrap().grid().cursor().row, 2);
+        app.with_search_and_active_grid(|search, grid| {
+            search.set_query("hidden", grid);
+            search.finish(grid);
+        });
+        assert!(!app.search.has_results());
+        app.with_search_and_active_grid(|search, grid| {
+            search.set_query("visible", grid);
+            search.finish(grid);
+        });
+        assert!(app.search.has_results());
+        app.prepare_copy_mode_reflow();
+        app.active_terminal_mut().unwrap().resize(4, 6);
+        app.finish_copy_mode_reflow();
+        assert_eq!(app.copy_mode_selection_text().as_deref(), Some("visible"));
+        assert!(!app.reconcile_copy_mode_presentation());
+        app.active_terminal_mut().unwrap().process(b"\x1b[?2026l");
+        // Copy itself refuses stale coordinates even before render/input reconciliation.
+        assert!(app.copy_mode_selection_text().is_none());
+        assert!(app.reconcile_copy_mode_presentation());
+        assert!(app.copy_mode.is_active());
+        assert!(app.copy_mode.selection().is_none());
+        assert!(!app.search.has_results());
+        assert!(!app.reconcile_copy_mode_presentation());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn copy_mode_snapshot_boundaries_reset_selection() {
+    use crate::terminal::copy_mode::CopyMotion;
+    for transition in ["begin", "timeout", "restart", "alternate"] {
+        let mut app = scrollbar_owner_fixture();
+        let terminal = app.active_terminal_mut().unwrap();
+        terminal.process(b"\x1bcvisible\x1b[H");
+        if transition != "begin" {
+            terminal.process(b"\x1b[?2026h\x1b[2Khidden");
+        }
+        app.enter_copy_mode();
+        app.copy_mode
+            .toggle_selection(termeric_core::SelectionType::Lines);
+        app.move_copy_cursor(CopyMotion::LineEnd);
+        assert_eq!(app.copy_mode_selection_text().as_deref(), Some("visible"));
+        let terminal = app.active_terminal_mut().unwrap();
+        match transition {
+            "begin" => terminal.process(b"\x1b[?2026h"),
+            "timeout" => {
+                terminal
+                    .expire_synchronized_output(terminal.synchronized_output_deadline().unwrap());
+            }
+            "restart" => terminal.process(b"\x1b[?2026l\x1b[?2026h"),
+            "alternate" => {
+                terminal.process(b"\x1b[?1049hsecret");
+                assert_eq!(app.copy_mode_selection_text().as_deref(), Some("visible"));
+                app.active_terminal_mut().unwrap().process(b"\x1b[?2026l");
+            }
+            _ => unreachable!(),
+        }
+        assert!(app.copy_mode_selection_text().is_none(), "{transition}");
+        assert!(app.reconcile_copy_mode_presentation(), "{transition}");
+        assert!(app.copy_mode.selection().is_none(), "{transition}");
+        assert!(app.copy_mode.quick_select().is_none(), "{transition}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn quick_select_pins_presented_targets_and_cwd_and_expires_without_activation() {
     let patterns = vec![("path".into(), regex::Regex::new(r"\./[^ ]+").unwrap())];
     for split in [false, true] {

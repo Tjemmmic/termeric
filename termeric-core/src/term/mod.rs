@@ -1213,6 +1213,19 @@ impl Terminal {
             .map_or_else(|| self.grid(), |snapshot| &snapshot.grid)
     }
 
+    /// Mutable displayed grid for user navigation only. Parser/output updates
+    /// must use `grid_mut()` so synchronized output remains isolated. The
+    /// frozen grid contains just the captured viewport, not hidden history.
+    pub fn presentation_grid_mut(&mut self) -> &mut Grid {
+        if let Some(ref mut snapshot) = self.synchronized_output_snapshot {
+            &mut snapshot.grid
+        } else if self.alt_screen_active {
+            &mut self.alt_grid
+        } else {
+            &mut self.grid
+        }
+    }
+
     /// Whether the terminal is currently presenting its alternate screen.
     pub fn alternate_screen_active(&self) -> bool {
         self.alt_screen_active
@@ -5349,9 +5362,19 @@ impl Terminal {
     /// - Block: rectangular region (one newline between rows).
     pub fn get_selection_text(&self) -> Option<String> {
         let selection = self.selection.as_ref()?;
+        Some(Self::selection_text(self.grid(), selection))
+    }
+
+    /// Extract an explicit selection in presentation-grid coordinates without
+    /// reading or changing the live terminal's selection.
+    pub fn presentation_selection_text(&self, selection: &Selection) -> String {
+        Self::selection_text(self.presentation_grid(), selection)
+    }
+
+    fn selection_text(grid: &Grid, selection: &Selection) -> String {
         let (start, end) = selection.bounds();
 
-        let max_col = self.cols.saturating_sub(1);
+        let max_col = grid.cols().saturating_sub(1);
         let mut text = String::new();
         let logical_text = matches!(
             selection.ty,
@@ -5359,7 +5382,7 @@ impl Terminal {
         );
 
         for row in start.row..=end.row {
-            let Some(grid_row) = self.grid().row_at_offset(row) else {
+            let Some(grid_row) = grid.row_at_offset(row) else {
                 continue;
             };
 
@@ -5414,7 +5437,7 @@ impl Terminal {
             }
         }
 
-        Some(text.trim_end().to_string())
+        text.trim_end().to_string()
     }
 }
 
@@ -5893,6 +5916,26 @@ mod tests {
             selection.update(end);
             term.set_selection(Some(selection));
             assert_eq!(term.get_selection_text().as_deref(), Some(expected));
+        }
+    }
+
+    #[test]
+    fn explicit_presentation_selection_preserves_unicode_and_physical_row_semantics() {
+        let mut term = Terminal::new(3, 4);
+        term.process("ab界Z\x1b[?2026h\x1b[?1049hsecret".as_bytes());
+        for (ty, expected) in [
+            (SelectionType::Simple, "ab界Z"),
+            (SelectionType::Semantic, "ab界Z"),
+            (SelectionType::Lines, "ab \n界Z"),
+            (SelectionType::Block, "ab \n界Z"),
+        ] {
+            for reverse in [false, true] {
+                let (start, end) = (Point::new(0, 0), Point::new(1, 2));
+                let mut selection = Selection::new(if reverse { end } else { start }, ty);
+                selection.update(if reverse { start } else { end });
+                assert_eq!(term.presentation_selection_text(&selection), expected);
+                assert!(term.selection().is_none());
+            }
         }
     }
 

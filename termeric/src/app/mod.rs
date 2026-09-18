@@ -1957,6 +1957,7 @@ impl App {
             return false;
         }
 
+        self.reconcile_copy_mode_presentation();
         self.reconcile_quick_select_presentation();
         self.reconcile_broadcast_state();
 
@@ -2084,6 +2085,11 @@ impl App {
             self.update_cursor_animation(0, 0, false, None)
         };
         let copy_mode_info = self.copy_mode_render_info();
+        let copy_mode_selection = self.copy_mode.selection();
+        let frozen_copy_selection = copy_mode_info.is_some()
+            && self
+                .active_terminal()
+                .is_some_and(|term| term.synchronized_output_deadline().is_some());
         let ime_preedit_info = self.ime_preedit_render_info(&pane_info);
         let chrome_focus_target = self.chrome_focus_render_target();
         let broadcast_render = self.broadcast_render_targets();
@@ -2605,7 +2611,11 @@ impl App {
                     PaneRenderData {
                         terminal_key,
                         grid: term.presentation_grid(),
-                        selection: term.selection(),
+                        selection: if *focused && frozen_copy_selection {
+                            copy_mode_selection.as_ref()
+                        } else {
+                            term.selection()
+                        },
                         dynamic_colors: term.presentation_dynamic_colors(),
                         extra_cursors: term.presentation_extra_cursors(),
                         rect: *rect,
@@ -2740,7 +2750,11 @@ impl App {
         let presented = match renderer.render(
             terminal as *const _ as usize,
             terminal.presentation_grid(),
-            terminal.selection(),
+            if frozen_copy_selection {
+                copy_mode_selection.as_ref()
+            } else {
+                terminal.selection()
+            },
             terminal.presentation_dynamic_colors(),
             terminal.presentation_extra_cursors(),
             cursor_opacity,
@@ -2859,14 +2873,19 @@ impl App {
             .unwrap_or_default()
     }
 
-    /// Mutate search state using the focused live grid without extending a
-    /// whole-App borrow across the caller's remaining input handling.
+    /// Mutate search using copy mode's presented grid or the focused live grid,
+    /// without extending a whole-App borrow across the caller's input handling.
     fn with_search_and_active_grid<R>(
         &mut self,
         update: impl FnOnce(&mut Search, &termeric_core::Grid) -> R,
     ) -> Option<R> {
         let search = &mut self.search;
-        let grid = self.tabs.as_ref()?.active_tab()?.focused_terminal()?.grid();
+        let terminal = self.tabs.as_ref()?.active_tab()?.focused_terminal()?;
+        let grid = if self.copy_mode.is_active() {
+            terminal.presentation_grid()
+        } else {
+            terminal.grid()
+        };
         Some(update(search, grid))
     }
 
@@ -3886,10 +3905,12 @@ impl App {
     /// Copy selection to clipboard. Returns true if anything was copied so
     /// the caller can decide whether to consume the keybinding.
     fn copy_selection(&mut self) -> bool {
-        let Some(text) = self
-            .active_terminal()
-            .and_then(termeric_core::Terminal::get_selection_text)
-        else {
+        let Some(text) = (if self.copy_mode.is_active() {
+            self.copy_mode_selection_text()
+        } else {
+            self.active_terminal()
+                .and_then(termeric_core::Terminal::get_selection_text)
+        }) else {
             return false;
         };
         if text.is_empty() {
@@ -4067,6 +4088,9 @@ impl App {
 
     fn handle_search_key(&mut self, key: &winit::keyboard::Key) -> bool {
         use winit::keyboard::{Key, NamedKey};
+        if self.reconcile_copy_mode_presentation() {
+            return true;
+        }
         if !self.search.is_active() {
             return false;
         }
@@ -4169,6 +4193,10 @@ impl App {
 
     /// Scroll the terminal view to show the current search match
     fn scroll_to_current_match(&mut self) {
+        if self.copy_mode.is_active() {
+            self.jump_copy_cursor_to_search();
+            return;
+        }
         let Some(search_match) = self.search.current() else {
             return;
         };

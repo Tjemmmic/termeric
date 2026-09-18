@@ -64,9 +64,10 @@ they become eligible for ordinary collection. Regressions cover hidden target
 replacement, collection, scrolled snapshots, alternate-screen switching,
 timeout/release, and single-terminal/split-pane target resolution. These tests
 resolve targets without opening them and do not establish native click/opener
-acceptance. Quick select's separate snapshot/action contract is documented in
-[copy mode and quick select](copy-mode.md); ordinary copy-mode navigation is not
-converted into a frozen text model.
+acceptance. Keyboard selection and quick select's separate snapshot/action
+contracts are documented in [copy mode and quick select](copy-mode.md). They
+reuse the existing presentation grid rather than cloning a second scrollback
+model; ordinary mouse selection and standalone search remain separate policies.
 
 URL scan scratch mapping coalesces contiguous one-byte/one-cell text into one
 span per ASCII run. Row edges, skipped columns, wide glyphs, combining sequences,

@@ -70,11 +70,29 @@ Hints are tied to that synchronized snapshot's lifetime. Beginning, releasing,
 timing out, or replacing the snapshot invalidates existing hints at render/input
 boundaries, with feedback, rather than rebinding a partly typed label. Resize
 within the same snapshot rebuilds coordinates while retaining its action and
-captured directory. The quick-select cursor marks a presented hint; ordinary
-copy-mode navigation/selection continues to use its existing live-grid policy.
+captured directory. The quick-select cursor marks a presented hint.
 Tests cover frozen OSC/regex targets, local/remote/absent directory metadata,
 single and split panes, resize and lifetime invalidation without opening links
 or writing to the desktop clipboard. Native acceptance remains deferred.
+
+Ordinary copy mode also navigates, selects, searches, and extracts text from the
+presented grid. During synchronized output this is only the captured viewport:
+hidden new output and off-viewport history are not accessible until release.
+Navigation reuses that grid without cloning scrollback; its selection remains
+owned by copy mode and is not installed on the hidden live grid. Single and
+split panes render that same selection. Reflow within a snapshot restores its
+logical selection bookmarks, including wrapped text.
+
+Beginning, releasing, timing out, or replacing the synchronized snapshot resets
+copy mode onto the new displayed grid and clears selection, hints, and search.
+Copy extraction rejects stale snapshot coordinates even before the next render.
+Exiting during a frozen snapshot does not retain its selection on the live grid.
+Ordinary mouse selection and search outside copy mode retain their existing
+live-grid policies; this change does not claim to make those paths snapshot-aware.
+Automated tests cover cursor entry, text extraction, Unicode/physical selection
+semantics, copy-mode search, reflow, and lifecycle transitions. Native keyboard,
+selection painting, and clipboard acceptance of this synchronized-output path
+remain deferred.
 
 The explicit hint keystroke is the user's open action. Opening delegates to the
 same argument-safe desktop opener used by Ctrl+click; no match text is evaluated

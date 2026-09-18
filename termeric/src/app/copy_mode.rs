@@ -69,7 +69,7 @@ impl App {
     }
 
     pub(super) fn enter_copy_mode(&mut self) {
-        // Copy mode and search share one real grid. Clear any previously
+        // Copy mode and search share the presented grid. Clear any previously
         // confirmed filter projection so modal coordinates always refer to
         // the terminal's scrollback-aware rows.
         self.search.cancel();
@@ -82,7 +82,7 @@ impl App {
         else {
             return;
         };
-        copy_mode.enter(terminal.grid());
+        copy_mode.enter_presentation(terminal);
         terminal.set_selection(None);
         self.copy_mode_target = target;
         self.mouse_state.clear_selection();
@@ -102,6 +102,7 @@ impl App {
     }
 
     pub(super) fn begin_quick_select(&mut self) {
+        self.reconcile_copy_mode_presentation();
         if !self.copy_mode.is_active() {
             self.enter_copy_mode();
         }
@@ -137,23 +138,72 @@ impl App {
     fn sync_copy_mode_selection(&mut self) {
         let selection = self.copy_mode.selection();
         if let Some(terminal) = self.active_terminal_mut() {
-            terminal.set_selection(selection);
+            // Frozen viewport coordinates must never be installed on the live
+            // grid. The copy-mode overlay owns this selection until release.
+            terminal.set_selection(if terminal.synchronized_output_deadline().is_some() {
+                None
+            } else {
+                selection
+            });
         }
     }
 
+    pub(super) fn copy_mode_selection_text(&self) -> Option<String> {
+        if !self.copy_mode.is_active() || self.copy_mode_target != self.active_copy_target() {
+            return None;
+        }
+        let terminal = self.active_terminal()?;
+        if !self.copy_mode.presentation_matches(terminal) {
+            return None;
+        }
+        if terminal.synchronized_output_deadline().is_some() {
+            Some(terminal.presentation_selection_text(&self.copy_mode.selection()?))
+        } else {
+            // The live terminal shifts its selection as output scrolls. Keep
+            // that established behavior outside a frozen viewport.
+            terminal.get_selection_text()
+        }
+    }
+
+    /// Reset modal coordinates, hints and search rather than applying them to
+    /// a different presentation after begin/release/timeout/restart.
+    pub(super) fn reconcile_copy_mode_presentation(&mut self) -> bool {
+        if !self.copy_mode.is_active() {
+            return false;
+        }
+        if self.copy_mode_target != self.active_copy_target() {
+            self.leave_copy_mode(false);
+            return true;
+        }
+        if self
+            .active_terminal()
+            .is_some_and(|term| self.copy_mode.presentation_matches(term))
+        {
+            return false;
+        }
+        self.enter_copy_mode();
+        self.toasts
+            .info("Copy selection reset because the displayed snapshot changed");
+        true
+    }
+
     pub(super) fn prepare_copy_mode_reflow(&mut self) {
+        self.reconcile_copy_mode_presentation();
         let (copy_mode, tabs) = (&mut self.copy_mode, &self.tabs);
         if let Some(grid) = tabs
             .as_ref()
             .and_then(crate::tabs::TabManager::active_tab)
             .and_then(crate::tabs::Tab::focused_terminal)
-            .map(termeric_core::Terminal::grid)
+            .map(termeric_core::Terminal::presentation_grid)
         {
             copy_mode.prepare_reflow(grid);
         }
     }
 
     pub(super) fn finish_copy_mode_reflow(&mut self) {
+        if self.reconcile_copy_mode_presentation() {
+            return;
+        }
         if !self.copy_mode.is_active() {
             return;
         }
@@ -167,19 +217,22 @@ impl App {
             .and_then(crate::tabs::TabManager::active_tab_mut)
             .and_then(crate::tabs::Tab::focused_terminal_mut)
         {
-            copy_mode.finish_reflow(terminal.grid_mut());
+            copy_mode.finish_reflow(terminal.presentation_grid_mut());
             copy_mode.refresh_quick_select(terminal, patterns);
         }
         self.sync_copy_mode_selection();
     }
 
-    fn move_copy_cursor(&mut self, motion: CopyMotion) {
+    pub(super) fn move_copy_cursor(&mut self, motion: CopyMotion) {
+        if self.reconcile_copy_mode_presentation() {
+            return;
+        }
         let (copy_mode, tabs) = (&mut self.copy_mode, &mut self.tabs);
         if let Some(grid) = tabs
             .as_mut()
             .and_then(crate::tabs::TabManager::active_tab_mut)
             .and_then(crate::tabs::Tab::focused_terminal_mut)
-            .map(termeric_core::Terminal::grid_mut)
+            .map(termeric_core::Terminal::presentation_grid_mut)
         {
             copy_mode.move_cursor(motion, grid);
         }
@@ -187,6 +240,9 @@ impl App {
     }
 
     pub(super) fn jump_copy_cursor_to_search(&mut self) {
+        if self.reconcile_copy_mode_presentation() {
+            return;
+        }
         let point = self
             .search
             .current()
@@ -197,7 +253,7 @@ impl App {
             .as_mut()
             .and_then(crate::tabs::TabManager::active_tab_mut)
             .and_then(crate::tabs::Tab::focused_terminal_mut)
-            .map(termeric_core::Terminal::grid_mut)
+            .map(termeric_core::Terminal::presentation_grid_mut)
         {
             copy_mode.jump_to(point, grid);
         }
@@ -285,6 +341,9 @@ impl App {
         if self.copy_mode_target != self.active_copy_target() {
             self.leave_copy_mode(false);
             return false;
+        }
+        if self.reconcile_copy_mode_presentation() {
+            return true;
         }
         if self.handle_quick_select_input(event) {
             return true;
