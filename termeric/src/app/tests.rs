@@ -3,6 +3,38 @@ use crate::plugin::hooks::{HookResponse, Plugin, PluginCommand};
 
 #[cfg(unix)]
 #[test]
+fn native_selection_follows_grapheme_growth_collision_and_skip_policy() {
+    use termeric_core::Point;
+    for split in [false, true] {
+        for skipped in [false, true] {
+            let mut app = if split {
+                divider_owner_fixture()
+            } else {
+                scrollbar_owner_fixture()
+            };
+            let terminal = app.active_terminal_mut().unwrap();
+            terminal.resize(12, 4);
+            terminal.process(b"\x1bc\x1b[3J\x1b[1;2H\x1b]66;s=2:w=2;old\x07");
+            terminal.process(if skipped { b"\x1b[2;1H" } else { b"\x1b[1;1H" });
+            terminal.process("❤".as_bytes());
+            app.begin_native_selection(MouseButton::Left, Point::new(0, 1));
+            app.extend_native_selection(Point::new(0, 4));
+            app.active_terminal_mut()
+                .unwrap()
+                .process("\u{fe0f}".as_bytes());
+            app.extend_native_selection(Point::new(0, 4));
+            app.finish_native_selection();
+            assert_eq!(
+                app.native_selection_text().as_deref(),
+                skipped.then_some("old")
+            );
+            assert_eq!(app.mouse_state.selection.is_some(), skipped);
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn native_selection_cannot_restore_glyphs_erased_outside_vertical_edit_region() {
     use termeric_core::Point;
     for split in [false, true] {

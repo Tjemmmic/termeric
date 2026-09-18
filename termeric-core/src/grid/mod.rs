@@ -339,24 +339,6 @@ impl Grid {
     /// rectangle. The rectangle is clipped to the grid; malformed descriptors
     /// inside it are cleared individually and never authorize neighboring
     /// mutations.
-    pub(crate) fn erase_multicells_intersecting(
-        &mut self,
-        top: usize,
-        bottom: usize,
-        left: usize,
-        right: usize,
-        blank: &Cell,
-        preserve_protected: bool,
-    ) -> usize {
-        self.erase_multicells_with_damage(
-            top..bottom,
-            left..right,
-            blank,
-            preserve_protected,
-            |_, _| {},
-        )
-    }
-
     /// Report complete blocks (or individual malformed descriptors) that the
     /// existing erase policy removes, without retaining a second damage list.
     pub(crate) fn erase_multicells_with_damage(

@@ -2493,61 +2493,7 @@ impl Terminal {
         }
         // If not autowrap, cursor stays at last column (overwrite mode)
 
-        // Normal text cannot split a valid multicell block. Lower rows are
-        // skipped, while the leader and other top-row cells use Kitty's
-        // erase-versus-space overwrite distinction.
-        loop {
-            let cursor = self.grid().cursor();
-            let (current_left, current_right) =
-                self.write_horizontal_bounds(cursor.row, cursor.col);
-            if width == 2 && cursor.col + 1 >= current_right {
-                if self.mode.contains(TerminalMode::AUTOWRAP) && current_right - current_left >= 2 {
-                    if let Some(row) = self.grid_mut().row_mut(cursor.row) {
-                        row.set_wrapped(current_left == 0 && current_right == cols);
-                        row.mark_wide_wrap_padding();
-                    }
-                    self.grid_mut().set_cursor(cursor.row, current_left);
-                    self.linefeed();
-                    continue;
-                }
-                // A one-column grid cannot represent a wide pair. Keep the
-                // grapheme visible in the sole cell without creating an orphan.
-                width = 1;
-            }
-            let collision = (cursor.col..cursor.col.saturating_add(width).min(current_right))
-                .find_map(|col| {
-                    self.grid()
-                        .multicell_region_at(cursor.row, col)
-                        .map(|region| (col, region))
-                });
-            let Some((collision_col, region)) = collision else {
-                break;
-            };
-            let descriptor = self
-                .grid()
-                .cell(cursor.row, collision_col)
-                .expect("resolved multicell collision is in bounds")
-                .multicell;
-            if descriptor.relative_row() > 0 {
-                if region.right() + width <= current_right {
-                    self.grid_mut().set_cursor(cursor.row, region.right());
-                } else {
-                    self.multicell_wrap_to_next_line(false);
-                }
-                continue;
-            }
-            let blank = self.erase_cell();
-            self.invalidate_selection_in_region(
-                region.top..region.bottom(),
-                region.left..region.right(),
-            );
-            self.grid_mut().clear_multicell_at(
-                cursor.row,
-                collision_col,
-                &blank,
-                !descriptor.is_leader(),
-            );
-        }
+        width = self.prepare_normal_text_position(width);
         let cursor = self.grid().cursor();
         let (_, right) = self.write_horizontal_bounds(cursor.row, cursor.col);
 
@@ -2561,16 +2507,18 @@ impl Terminal {
         let blank = self.erase_cell();
         if self.mode.contains(TerminalMode::INSERT) {
             self.invalidate_selection_for_write(cursor.row, cursor.col, right);
-            self.grid_mut().erase_multicells_intersecting(
-                cursor.row,
-                cursor.row + 1,
-                cursor.col,
-                right,
+            let (grid, mut damage) = self.grid_with_selection_damage();
+            grid.erase_multicells_with_damage(
+                cursor.row..cursor.row + 1,
+                cursor.col..right,
                 &blank,
                 false,
+                &mut damage,
             );
-            if let Some(row) = self.grid_mut().row_mut(cursor.row) {
-                row.insert_cells_bounded(cursor.col, right, width, &blank);
+            if let Some(row) = grid.row_mut(cursor.row) {
+                row.insert_cells_bounded_with_damage(cursor.col, right, width, &blank, |cols| {
+                    damage(cursor.row..cursor.row + 1, cols)
+                });
             }
         }
 
@@ -2656,6 +2604,65 @@ impl Terminal {
         self.remember_last_graphic(grapheme, charset);
     }
 
+    fn prepare_normal_text_position(&mut self, mut width: usize) -> usize {
+        let cols = self.cols;
+        // Normal text cannot split a valid multicell block. Lower rows are
+        // skipped, while the leader and other top-row cells use Kitty's
+        // erase-versus-space overwrite distinction.
+        loop {
+            let cursor = self.grid().cursor();
+            let (current_left, current_right) =
+                self.write_horizontal_bounds(cursor.row, cursor.col);
+            if width == 2 && cursor.col + 1 >= current_right {
+                if self.mode.contains(TerminalMode::AUTOWRAP) && current_right - current_left >= 2 {
+                    if let Some(row) = self.grid_mut().row_mut(cursor.row) {
+                        row.set_wrapped(current_left == 0 && current_right == cols);
+                        row.mark_wide_wrap_padding();
+                    }
+                    self.grid_mut().set_cursor(cursor.row, current_left);
+                    self.linefeed();
+                    continue;
+                }
+                // A one-column grid cannot represent a wide pair. Keep the
+                // grapheme visible in the sole cell without creating an orphan.
+                width = 1;
+            }
+            let collision = (cursor.col..cursor.col.saturating_add(width).min(current_right))
+                .find_map(|col| {
+                    self.grid()
+                        .multicell_region_at(cursor.row, col)
+                        .map(|region| (col, region))
+                });
+            let Some((collision_col, region)) = collision else {
+                return width;
+            };
+            let descriptor = self
+                .grid()
+                .cell(cursor.row, collision_col)
+                .expect("resolved multicell collision is in bounds")
+                .multicell;
+            if descriptor.relative_row() > 0 {
+                if region.right() + width <= current_right {
+                    self.grid_mut().set_cursor(cursor.row, region.right());
+                } else {
+                    self.multicell_wrap_to_next_line(false);
+                }
+                continue;
+            }
+            let blank = self.erase_cell();
+            self.invalidate_selection_in_region(
+                region.top..region.bottom(),
+                region.left..region.right(),
+            );
+            self.grid_mut().clear_multicell_at(
+                cursor.row,
+                collision_col,
+                &blank,
+                !descriptor.is_leader(),
+            );
+        }
+    }
+
     fn remember_last_graphic(&mut self, grapheme: &str, charset: CharacterSet) {
         if grapheme.len() > MAX_REPEAT_GRAPHEME_BYTES {
             self.last_graphic = None;
@@ -2672,8 +2679,6 @@ impl Terminal {
 
     fn try_extend_previous_grapheme(&mut self, next: char) -> bool {
         let cursor = self.grid().cursor();
-        let cols = self.cols;
-        let (left, right) = self.write_horizontal_bounds(cursor.row, cursor.col);
         let candidate_col = if cursor.wrap_pending {
             Some(cursor.col)
         } else {
@@ -2734,59 +2739,24 @@ impl Terminal {
         let requested_width = crate::unicode::grapheme_width(&combined).max(1);
         let template = cell.clone();
 
-        if requested_width == 2
-            && col + 1 >= right
-            && right - left >= 2
-            && self.mode.contains(TerminalMode::AUTOWRAP)
-        {
-            self.invalidate_selection_for_write(cursor.row, col, col + old_width);
-            if let Some(row) = self.grid_mut().row_mut(cursor.row) {
-                row.clear_grapheme_at(col);
-                row.set_wrapped(left == 0 && right == cols);
-                row.mark_wide_wrap_padding();
-            }
-            self.grid_mut().set_cursor(cursor.row, left);
-            self.linefeed();
-            let destination = self.grid().cursor();
-            self.invalidate_selection_for_write(destination.row, left, left + 2);
-            if let Some(row) = self.grid_mut().row_mut(destination.row) {
-                row.clear_grapheme_at(left);
-                row.clear_grapheme_at(left + 1);
-                if let Some(leader) = row.get_mut(left) {
-                    *leader = template.clone();
-                    leader.set_grapheme(&combined);
-                    leader.flags.remove(CellFlags::WIDE_CHAR_SPACER);
-                    leader.flags.insert(CellFlags::WIDE_CHAR | CellFlags::DIRTY);
-                }
-                if let Some(spacer) = row.get_mut(left + 1) {
-                    *spacer = template;
-                    spacer.content = CellContent::Empty;
-                    spacer.flags.remove(CellFlags::WIDE_CHAR);
-                    spacer
-                        .flags
-                        .insert(CellFlags::WIDE_CHAR_SPACER | CellFlags::DIRTY);
-                }
-                row.repair_wide_cells();
-            }
-            if right - left == 2 {
-                self.grid_mut().set_cursor(destination.row, right - 1);
-                self.grid_mut().set_wrap_pending(true);
-            } else {
-                self.grid_mut().set_cursor(destination.row, left + 2);
-            }
-            self.remember_last_graphic(&combined, charset);
-            return true;
-        }
-
-        let new_width = if requested_width == 2 && col + 1 >= right {
-            1
-        } else {
-            requested_width
-        };
-
-        self.invalidate_selection_for_write(cursor.row, col, col + old_width.max(new_width));
+        // Remove the old cluster before resolving its new placement. Growth
+        // can collide with a top-row multicell, skip lower rows, or wrap/scroll;
+        // all of those paths must use the same atomic rules as normal text.
+        self.invalidate_selection_for_write(cursor.row, col, col + old_width);
         if let Some(row) = self.grid_mut().row_mut(cursor.row) {
-            if old_width != new_width {
+            row.clear_grapheme_at(col);
+        }
+        self.grid_mut().set_cursor(cursor.row, col);
+        let new_width = self.prepare_normal_text_position(requested_width);
+        let destination = self.grid().cursor();
+        let (_, right) = self.write_horizontal_bounds(destination.row, destination.col);
+        let col = destination.col;
+        self.invalidate_selection_for_write(destination.row, col, col + new_width);
+        if let Some(row) = self.grid_mut().row_mut(destination.row) {
+            // Atomic clearing handles old ordinary wide pairs without a
+            // full-row repair scan, including a neighbor outside the write.
+            row.clear_grapheme_at(col);
+            if new_width == 2 {
                 row.clear_grapheme_at(col + 1);
             }
             if let Some(leader) = row.get_mut(col) {
@@ -2805,14 +2775,12 @@ impl Terminal {
                     .flags
                     .insert(CellFlags::WIDE_CHAR_SPACER | CellFlags::DIRTY);
             }
-            row.repair_wide_cells();
         }
-
         if col + new_width >= right {
-            self.grid_mut().set_cursor(cursor.row, right - 1);
+            self.grid_mut().set_cursor(destination.row, right - 1);
             self.grid_mut().set_wrap_pending(true);
         } else {
-            self.grid_mut().set_cursor(cursor.row, col + new_width);
+            self.grid_mut().set_cursor(destination.row, col + new_width);
         }
         self.remember_last_graphic(&combined, charset);
         true
@@ -8221,6 +8189,124 @@ mod tests {
         assert_eq!(term.get_selection_text().as_deref(), Some("changed"));
         term.process(b"\x1b[?2026l");
         assert!(term.selection().is_none());
+    }
+
+    #[test]
+    fn grapheme_growth_erases_top_row_collisions_and_preserves_original_rendition() {
+        for selected in [Point::new(0, 0), Point::new(1, 2), Point::new(3, 11)] {
+            let mut term = Terminal::new(12, 4);
+            term.process("\x1b[1;31;44m\x1b[1\"q❤".as_bytes());
+            let original = term.grid().cell(0, 0).unwrap().clone();
+            term.process(b"\x1b[0m\x1b[0\"q\x1b]66;s=2:w=2;old\x07\x1b[1;2H");
+            term.set_selection(Some(Selection::new(selected, SelectionType::Block)));
+            term.process("\u{fe0f}".as_bytes());
+            assert_eq!(term.selection().is_some(), selected.row == 3);
+            let grown = term.grid().cell(0, 0).unwrap();
+            assert_eq!(grown.content.to_text(), "❤\u{fe0f}");
+            assert_eq!(
+                (grown.fg_spec, grown.bg_spec, grown.attrs),
+                (original.fg_spec, original.bg_spec, original.attrs)
+            );
+            assert!(grown.flags.contains(CellFlags::PROTECTED));
+            assert!((0..4).all(|row| {
+                (0..12).all(|col| !term.grid().cell(row, col).unwrap().multicell.is_present())
+            }));
+            assert_wide_invariants(&term);
+        }
+    }
+
+    #[test]
+    fn grapheme_growth_skips_lower_multicell_rows_without_invalidating_them() {
+        for cols in [6, 12] {
+            for autowrap in [false, true] {
+                for selected_block in [false, true] {
+                    let mut term = Terminal::new(cols, 4);
+                    term.process(b"\x1b[1;2H\x1b]66;s=2:w=2;old\x07\x1b[2;1H");
+                    term.process("❤".as_bytes());
+                    if !autowrap {
+                        term.process(b"\x1b[?7l");
+                    }
+                    let destination = if cols == 6 {
+                        Point::new(2, 0)
+                    } else {
+                        Point::new(1, 5)
+                    };
+                    let selected = if selected_block {
+                        Point::new(0, 1)
+                    } else {
+                        destination
+                    };
+                    term.set_selection(Some(Selection::new(selected, SelectionType::Block)));
+                    term.process("\u{fe0f}".as_bytes());
+                    assert_eq!(term.selection().is_some(), selected_block);
+                    if selected_block {
+                        assert_eq!(term.get_selection_text().as_deref(), Some("old"));
+                    }
+                    assert!(term.grid().multicell_region_at(0, 1).is_some());
+                    assert!(term.grid().cell(1, 0).unwrap().content.is_empty());
+                    assert_eq!(
+                        term.grid()
+                            .cell(destination.row as usize, destination.col)
+                            .unwrap()
+                            .content
+                            .to_text(),
+                        "❤\u{fe0f}"
+                    );
+                    assert_wide_invariants(&term);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn grapheme_growth_wrap_collisions_preserve_erase_space_and_frozen_selection_rules() {
+        for covered_top in [false, true] {
+            for frozen in [false, true] {
+                let mut term = Terminal::new(12, 4);
+                term.process(b"\x1b[?1049h\x1b[2;1H\x1b]66;s=2:w=2;old\x07");
+                if covered_top {
+                    term.process(b"\x1b[?69h\x1b[2;11s\x1b[1;11H");
+                } else {
+                    term.process(b"\x1b[1;12H");
+                }
+                term.process("❤".as_bytes());
+                term.set_selection(Some(Selection::new(Point::new(1, 0), SelectionType::Block)));
+                if frozen {
+                    term.process(b"\x1b[?2026h");
+                }
+                term.process("\u{fe0f}".as_bytes());
+                let left = usize::from(covered_top);
+                assert_eq!(
+                    term.grid().cell(1, left).unwrap().content.to_text(),
+                    "❤\u{fe0f}"
+                );
+                assert!(!term.grid().cell(2, 3).unwrap().multicell.is_present());
+                assert_eq!(
+                    term.grid().cell(2, 3).unwrap().content.char(),
+                    covered_top.then_some(' ')
+                );
+                if frozen {
+                    assert_eq!(term.get_selection_text().as_deref(), Some("old"));
+                    term.process(b"\x1b[?2026l");
+                }
+                assert!(term.selection().is_none());
+                assert_wide_invariants(&term);
+            }
+        }
+    }
+
+    #[test]
+    fn grapheme_width_growth_cannot_leave_partial_multicell_descriptors() {
+        let mut term = Terminal::new(12, 4);
+        term.process("❤\x1b]66;s=2:w=2;old\x07\x1b[1;2H".as_bytes());
+        term.process("\u{fe0f}".as_bytes());
+        assert_wide_invariants(&term);
+        for (row, col, cell) in term.grid().iter_cells() {
+            assert!(
+                !cell.multicell.is_present() || term.grid().multicell_region_at(row, col).is_some(),
+                "orphan descriptor at {row},{col}"
+            );
+        }
     }
 
     #[test]

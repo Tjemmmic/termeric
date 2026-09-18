@@ -274,9 +274,20 @@ Hermetic tests cover SU/SD/IL/DL and scrolling LF/RI, both wide-character margin
 vacated rows, early and final multicell repair, surviving wide/multicell glyphs,
 history, frozen alternate screens, and single/split-pane drag reconciliation.
 
-Other mutation paths, including resize/reflow and print-time boundary cleanup,
-still need a complete selection-damage audit; this is not a claim that every
-grid mutation is covered. Native desktop acceptance remains deferred.
+Print-time grapheme extension now uses the ordinary text placement/collision
+path after removing its old cluster. Width growth can erase a whole top-row
+multicell collision, replace a covered top-row collision with spaces, or skip
+lower rows without damaging that block or its selection. This fixes orphaned
+descriptors previously left by a variation-selector expansion. Original
+rendition/protection is retained through relocation and wrapping. Atomic wide
+pair clearing replaces the previous whole-row repair scans in this extension
+path; insert-mode printing also forwards actual erase/repair damage. Hermetic
+tests cover growth, wrapping, margins, no-autowrap skips, frozen alternate
+screens, descriptor/wide invariants, and single/split-pane drag reconciliation.
+The collision policy follows [Kitty's text-sizing rules](https://sw.kovidgoyal.net/kitty/text-sizing-protocol/#wrapping-and-overwriting-behavior).
+
+Resize/reflow still needs a complete selection-damage audit; this is not a claim
+that every grid mutation is covered. Native desktop acceptance remains deferred.
 
 ## Filtered selection and accessible text
 
