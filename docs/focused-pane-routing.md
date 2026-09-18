@@ -153,8 +153,31 @@ display policy for selection or accessibility.
 Hermetic tests cover row mapping, word/line/reversed-block selection, multi-page
 drag/copy, index-storage reuse, query/toggle/focus invalidation, Unicode wrapping,
 and frozen filtered accessibility nodes. Native painting, clipboard, and Orca
-acceptance remain deferred. Ordinary-output search refresh and drag tracking,
-and filtered-view link activation, are separate concerns.
+acceptance remain deferred. Ordinary-output search refresh and drag tracking
+remain separate concerns.
+
+## Filtered link presentation
+
+Detected-URL underlines and Ctrl+click targets use the same displayed matching-row
+slice as the focused pane. Visual rows resolve to their original signed source
+rows, including compact history; blank space below the results has no target.
+OSC 8 targets retain priority over detected URL text. Unfocused panes keep their
+ordinary presentation caches, and pending/empty filters use the renderer's
+ordinary-viewport fallback.
+
+Detection can join a soft wrap only when the next displayed row is also the next
+source row. Omitting an intervening row must not stitch unrelated text into a
+new target. Caches keep visual-row coordinates, share wrapped URL payloads, and
+reuse the borrowed filter window without copying the full matching-row index.
+Activation reconciles the search source and refreshes the focused cache, so a
+filter scroll, toggle, or query change does not require an intervening render to
+discard old targets. Synchronized output still resolves only presented cells.
+
+Hermetic regressions cover semantic-link priority, hidden intervening targets,
+history/Unicode mapping, contiguous and omitted wraps, cache reuse and shrink,
+filter scrolling/query/toggle changes, and frozen single/split-pane targets with
+a different live scroll offset. They inspect targets without launching a desktop
+handler. Native filtered underline/click/opener acceptance remains deferred.
 
 ## Regression evidence
 

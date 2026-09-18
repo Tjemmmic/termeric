@@ -54,11 +54,23 @@ resize, and compact history scrolled into view. Viewport edges still bound URL
 recognition; this does not establish complete URLs continuing beyond the view
 or change supported URL characters, schemes, or opener policy.
 
+Completed nonempty search filters project the focused pane's URL cache through
+the same borrowed matching-row window used for painting. Cached row coordinates
+are visual, while text comes from the original signed source rows. Soft wraps
+join only across adjacent source rows; omitted rows force a boundary. Shrinking
+the window drops old tail entries, and unchanged projected text/geometry retains
+detector reuse. Unfocused panes and pending/empty filters keep ordinary viewport
+scans. This adds no full result-index copy or persistent text model.
+
 Ctrl+click resolves OSC 8 targets against the presented viewport, not live cells
 hidden behind synchronized output. Live scrollback input coordinates are first
 converted back to visual rows; frozen presentation grids have no history of
 their own. Focus changes likewise rebuild detected-URL caches from presentation
-state. Hyperlink collection retains IDs referenced by the frozen viewport in
+state. In filtered views, visual rows map through the displayed result window
+before semantic lookup, and blank rows below it cannot activate hidden links.
+Activation refreshes the focused cache after reconciling the search source,
+including filter scrolling/toggling/query changes before the next render.
+Hyperlink collection retains IDs referenced by the frozen viewport in
 the existing bounded registry, without cloning a second URL table; after release
 they become eligible for ordinary collection. Regressions cover hidden target
 replacement, collection, scrolled snapshots, alternate-screen switching,

@@ -340,17 +340,43 @@ impl UrlCache {
     /// Scan only visible logical lines, sharing wrapped URL payloads between
     /// their row indices. Hard breaks and viewport edges bound each scan.
     pub fn update_grid(&mut self, grid: &termeric_core::Grid, detector: &UrlDetector) {
-        self.resize(grid.rows());
+        self.update_projected_grid(grid, &[], detector);
+    }
+
+    /// Index displayed source rows by visual row. An empty projection uses the
+    /// ordinary viewport, matching search's pending/empty-filter fallback.
+    /// Only adjacent source rows may continue a soft-wrapped URL.
+    pub fn update_projected_grid(
+        &mut self,
+        grid: &termeric_core::Grid,
+        projected_rows: &[i32],
+        detector: &UrlDetector,
+    ) {
+        let rows = if projected_rows.is_empty() {
+            grid.rows()
+        } else {
+            projected_rows.len().min(grid.rows())
+        };
+        self.resize(rows);
         let offset = i32::try_from(grid.scroll_offset()).unwrap_or(i32::MAX);
+        let source_row = |visual_row: usize| {
+            projected_rows
+                .get(visual_row)
+                .copied()
+                .unwrap_or_else(|| (visual_row as i32).saturating_sub(offset))
+        };
         let mut text = String::new();
         let mut spans = Vec::new();
         let mut first = 0;
-        for visual_row in 0..grid.rows() {
-            let row = grid.row_at_offset((visual_row as i32).saturating_sub(offset));
+        for visual_row in 0..rows {
+            let source = source_row(visual_row);
+            let row = grid.row_at_offset(source);
             if let Some(row) = &row {
                 append_url_row(row, visual_row, &mut text, &mut spans);
             }
-            if row.is_none_or(|row| !row.is_wrapped()) || visual_row + 1 == grid.rows() {
+            let adjacent =
+                visual_row + 1 < rows && source.checked_add(1) == Some(source_row(visual_row + 1));
+            if row.is_none_or(|row| !row.is_wrapped()) || !adjacent {
                 self.update_logical_line(first, visual_row, &text, &spans, detector);
                 first = visual_row + 1;
                 text.clear();
@@ -559,6 +585,63 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn projected_url_cache_maps_history_and_unicode_to_visual_rows() {
+        let detector = UrlDetector::new();
+        let mut terminal = termeric_core::Terminal::new(40, 6);
+        terminal.process(
+            "界e\u{301} https://first.test\r\nhttps://hidden.test\r\nhttps://last.test".as_bytes(),
+        );
+        terminal.process(b"\r\n".repeat(10).as_slice());
+        let first = -(terminal.grid().scrollback_len() as i32);
+        assert!(first < 0);
+        let projection = [first, first + 2];
+        let mut cache = UrlCache::new(0);
+        cache.update_projected_grid(terminal.grid(), &projection, &detector);
+        assert!(cache.url_at(0, 3).is_none());
+        let first_url = cache.url_at(0, 4).unwrap();
+        assert_eq!(first_url.url, "https://first.test");
+        assert_eq!((first_url.start_row, first_url.start_col), (0, 4));
+        assert_eq!(cache.url_at(1, 0).unwrap().url, "https://last.test");
+        assert!(cache.url_at(2, 0).is_none());
+        let (scans, hits) = cache.metrics();
+        cache.update_projected_grid(terminal.grid(), &projection, &detector);
+        assert_eq!(cache.metrics(), (scans, hits + 2));
+
+        cache.update_projected_grid(terminal.grid(), &[first + 2], &detector);
+        assert_eq!(cache.url_at(0, 0).unwrap().url, "https://last.test");
+        assert!(cache.url_at(1, 0).is_none());
+        // Empty/pending filters return to the ordinary viewport, not old hits.
+        cache.update_projected_grid(terminal.grid(), &[], &detector);
+        assert!((0..6).all(|row| cache.url_at(row, 0).is_none()));
+        terminal.grid_mut().set_scroll_offset((-first) as usize);
+        cache.update_grid(terminal.grid(), &detector);
+        assert_eq!(cache.url_at(1, 0).unwrap().url, "https://hidden.test");
+    }
+
+    #[test]
+    fn projected_url_cache_joins_only_adjacent_source_wraps() {
+        let detector = UrlDetector::new();
+        let mut terminal = termeric_core::Terminal::new(8, 5);
+        let target = "https://a.test/omitted/tail";
+        terminal.process(target.as_bytes());
+        let mut cache = UrlCache::new(0);
+        cache.update_projected_grid(terminal.grid(), &[0, 1, 2, 3], &detector);
+        assert_eq!(cache.url_at(0, 0).unwrap().url, target);
+        assert!(Arc::ptr_eq(
+            &cache.urls_by_row[0][0],
+            &cache.urls_by_row[3][0]
+        ));
+        // Omitting row one must not create the synthetic https://mitted/tail.
+        cache.update_projected_grid(terminal.grid(), &[0, 2, 3], &detector);
+        assert!((0..5).all(|row| cache.url_at(row, 0).is_none()));
+        cache.update_projected_grid(terminal.grid(), &[0, 1, 2, 3], &detector);
+        assert_eq!(cache.url_at(3, 0).unwrap().url, target);
+        // Projection is still bounded to viewport height.
+        cache.update_projected_grid(terminal.grid(), &[0, 1, 2, 3, 4, 0], &detector);
+        assert!(cache.url_at(5, 0).is_none());
     }
 
     #[test]

@@ -1438,9 +1438,14 @@ impl App {
     }
 
     /// Input points use live scrollback coordinates. Convert back to a visual
-    /// row before consulting the presentation, whose frozen grid has no
-    /// scrollback. Semantic links retain priority over detected URL text.
-    pub(super) fn focused_hyperlink_at(&self, point: termeric_core::Point) -> Option<&str> {
+    /// row before consulting the presentation and its filter projection.
+    /// Semantic links retain priority over detected URL text. Refresh at the
+    /// action boundary so scrolling/toggling a filter cannot reuse stale targets.
+    pub(super) fn focused_hyperlink_at(&mut self, point: termeric_core::Point) -> Option<&str> {
+        if self.reconcile_search_presentation() {
+            return None;
+        }
+        self.refresh_focused_url_cache();
         let terminal = self.active_terminal()?;
         let offset = i32::try_from(terminal.grid().scroll_offset()).ok()?;
         let row = usize::try_from(point.row.checked_add(offset)?).ok()?;
@@ -1448,13 +1453,39 @@ impl App {
         if row >= grid.rows() || point.col >= grid.cols() {
             return None;
         }
-        terminal
-            .presentation_hyperlink_at(row, point.col)
+        let projected = self.search.filtered_rows(grid.rows());
+        let source_row = if projected.is_empty() {
+            (row as i32).saturating_sub(i32::try_from(grid.scroll_offset()).ok()?)
+        } else {
+            *projected.get(row)?
+        };
+        grid.row_at_offset(source_row)
+            .and_then(|row| row.get(point.col).and_then(|cell| cell.hyperlink_id))
+            .and_then(|id| terminal.get_hyperlink_url(id))
             .or_else(|| {
                 self.url_cache
                     .url_at(row, point.col)
                     .map(|url| url.url.as_str())
             })
+    }
+
+    pub(super) fn refresh_focused_url_cache(&mut self) {
+        let Some(terminal) = self
+            .tabs
+            .as_ref()
+            .and_then(TabManager::active_tab)
+            .and_then(crate::tabs::Tab::focused_terminal)
+        else {
+            self.url_cache = UrlCache::new(0);
+            return;
+        };
+        let grid = terminal.presentation_grid();
+        update_visible_url_cache(
+            &mut self.url_cache,
+            grid,
+            &self.url_detector,
+            self.search.filtered_rows(grid.rows()),
+        );
     }
 
     /// Toggle the armed broadcast membership of the pane under a content click.
@@ -1564,16 +1595,7 @@ impl App {
             tab.update_title();
         }
 
-        if let Some(grid) = self
-            .tabs
-            .as_ref()
-            .and_then(TabManager::active_tab)
-            .and_then(crate::tabs::Tab::focused_terminal)
-            .map(termeric_core::Terminal::presentation_grid)
-        {
-            self.url_cache = UrlCache::new(grid.rows());
-            update_visible_url_cache(&mut self.url_cache, grid, &self.url_detector);
-        }
+        self.refresh_focused_url_cache();
         self.git_watcher.invalidate();
         self.reset_cursor_blink();
         self.refresh_terminal_pointer_cursor();

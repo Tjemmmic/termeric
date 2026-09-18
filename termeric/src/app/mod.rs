@@ -2578,7 +2578,12 @@ impl App {
         // Scan visible rows for auto-detected URLs (reuse cached storage)
         {
             let grid = terminal.presentation_grid();
-            update_visible_url_cache(&mut self.url_cache, grid, &self.url_detector);
+            update_visible_url_cache(
+                &mut self.url_cache,
+                grid,
+                &self.url_detector,
+                self.search.filtered_rows(grid.rows()),
+            );
             log::trace!("URL cache metrics: {:?}", self.url_cache.metrics());
         }
 
@@ -2591,14 +2596,23 @@ impl App {
                 .collect();
             self.pane_url_caches
                 .retain(|terminal_id, _| active_terminal_ids.contains(terminal_id));
-            for (_, pane_terminal, _, _) in &pane_grids {
+            for (_, pane_terminal, _, focused) in &pane_grids {
                 let grid = pane_terminal.presentation_grid();
                 let terminal_id = *pane_terminal as *const _ as usize;
                 let cache = self
                     .pane_url_caches
                     .entry(terminal_id)
                     .or_insert_with(|| UrlCache::new(grid.rows()));
-                update_visible_url_cache(cache, grid, &self.url_detector);
+                update_visible_url_cache(
+                    cache,
+                    grid,
+                    &self.url_detector,
+                    if *focused {
+                        self.search.filtered_rows(grid.rows())
+                    } else {
+                        &[]
+                    },
+                );
             }
 
             // Build per-pane render data with animated cursor for focused pane
@@ -4393,8 +4407,13 @@ fn update_visible_url_cache(
     cache: &mut UrlCache,
     grid: &termeric_core::Grid,
     detector: &UrlDetector,
+    projected_rows: &[i32],
 ) {
-    cache.update_grid(grid, detector);
+    if projected_rows.is_empty() {
+        cache.update_grid(grid, detector);
+    } else {
+        cache.update_projected_grid(grid, projected_rows, detector);
+    }
 }
 
 fn cursor_opacity_at(blink: bool, elapsed_seconds: f32, period_seconds: f32) -> f32 {

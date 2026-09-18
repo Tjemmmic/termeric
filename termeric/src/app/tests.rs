@@ -3,6 +3,133 @@ use crate::plugin::hooks::{HookResponse, Plugin, PluginCommand};
 
 #[cfg(unix)]
 #[test]
+fn filtered_links_resolve_the_displayed_semantic_target_not_an_intervening_row() {
+    let mut app = scrollbar_owner_fixture();
+    let terminal = app.active_terminal_mut().unwrap();
+    terminal.resize(40, 5);
+    terminal.process(b"\x1bc\x1b[3Jkeep https://a.test\r\n\x1b]8;;https://hidden.test\x1b\\secret link\x1b]8;;\x1b\\\r\n\x1b]8;;https://shown.test\x1b\\keep https://label.test\x1b]8;;\x1b\\");
+    app.search.start();
+    app.with_search_and_active_grid(|search, grid| {
+        search.set_query("keep", grid);
+        search.finish(grid);
+    });
+    app.search.toggle_filter();
+    assert_eq!(
+        app.focused_hyperlink_at(termeric_core::Point::new(1, 6)),
+        Some("https://shown.test")
+    );
+    assert_eq!(
+        app.url_cache.url_at(1, 6).unwrap().url,
+        "https://label.test"
+    );
+    assert!(
+        app.focused_hyperlink_at(termeric_core::Point::new(2, 6))
+            .is_none()
+    );
+    assert!(app.url_cache.url_at(2, 6).is_none());
+    app.search.toggle_filter();
+    assert_eq!(
+        app.focused_hyperlink_at(termeric_core::Point::new(1, 6)),
+        Some("https://hidden.test")
+    );
+    app.search.toggle_filter();
+    assert_eq!(
+        app.focused_hyperlink_at(termeric_core::Point::new(1, 6)),
+        Some("https://shown.test")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn filtered_detected_links_refresh_at_activation_after_scrolling_or_query_change() {
+    use termeric_core::Point;
+    for split in [false, true] {
+        let mut app = if split {
+            divider_owner_fixture()
+        } else {
+            scrollbar_owner_fixture()
+        };
+        let terminal = app.active_terminal_mut().unwrap();
+        terminal.resize(40, 3);
+        terminal.process(b"\x1bc\x1b[3J");
+        for index in 0..10 {
+            terminal.process(
+                format!("hit https://shown{index}.test\r\nsecret https://hidden{index}.test\r\n")
+                    .as_bytes(),
+            );
+        }
+        app.search.start();
+        app.with_search_and_active_grid(|search, grid| {
+            search.set_query("hit", grid);
+            search.finish(grid);
+        });
+        app.search.toggle_filter();
+        assert_eq!(
+            app.focused_hyperlink_at(Point::new(1, 5)),
+            Some("https://shown1.test")
+        );
+        let index_ptr = app.search.filtered_matching_rows().as_ptr();
+        app.search.scroll_filter(-4.0, 3);
+        // No render/cache refresh between the scroll and this action.
+        assert_eq!(
+            app.focused_hyperlink_at(Point::new(1, 5)),
+            Some("https://shown5.test")
+        );
+        assert_eq!(
+            app.url_cache.url_at(1, 5).unwrap().url,
+            "https://shown5.test"
+        );
+        assert_eq!(app.search.filtered_matching_rows().as_ptr(), index_ptr);
+        app.with_search_and_active_grid(|search, grid| {
+            search.set_query("secret", grid);
+            search.finish(grid);
+        });
+        assert_eq!(
+            app.focused_hyperlink_at(Point::new(0, 8)),
+            Some("https://hidden0.test")
+        );
+        assert!(app.focused_hyperlink_at(Point::new(3, 8)).is_none());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn filtered_links_use_frozen_rows_despite_hidden_replacements_and_live_scroll() {
+    use termeric_core::Point;
+    for split in [false, true] {
+        let mut app = if split {
+            divider_owner_fixture()
+        } else {
+            scrollbar_owner_fixture()
+        };
+        let terminal = app.active_terminal_mut().unwrap();
+        terminal.resize(40, 5);
+        terminal.process(b"\x1bc\x1b[3Jkeep https://first.test\r\nsecret\r\n\x1b]8;;https://shown.test\x1b\\keep https://label.test\x1b]8;;\x1b\\\x1b[?2026h\x1b[H\x1b[2Jkeep https://hidden.test\r\n\r\n\r\n\r\n\r\n\r\n\r\n");
+        terminal.grid_mut().set_scroll_offset(3);
+        app.search.start();
+        app.with_search_and_active_grid(|search, grid| {
+            search.set_query("keep", grid);
+            search.finish(grid);
+        });
+        app.search.toggle_filter();
+        assert_eq!(
+            app.focused_hyperlink_at(Point::new(-3, 6)),
+            Some("https://first.test")
+        );
+        assert_eq!(
+            app.focused_hyperlink_at(Point::new(-2, 6)),
+            Some("https://shown.test")
+        );
+        assert!(app.focused_hyperlink_at(Point::new(-1, 6)).is_none());
+        assert_eq!(
+            app.url_cache.url_at(1, 6).unwrap().url,
+            "https://label.test"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn filtered_selection_points_follow_noncontiguous_displayed_rows() {
     use termeric_core::Point;
     let mut app = scrollbar_owner_fixture();
@@ -11925,7 +12052,7 @@ fn detected_url_cache_joins_soft_wrapped_visible_rows() {
     terminal.process(b"xx https://example.test/x yy");
     let mut cache = UrlCache::new(0);
     let detector = UrlDetector::new();
-    update_visible_url_cache(&mut cache, terminal.grid(), &detector);
+    update_visible_url_cache(&mut cache, terminal.grid(), &detector, &[]);
     for (row, col) in [(0, 3), (0, 7), (1, 0), (1, 7), (2, 0), (2, 7), (3, 0)] {
         assert_eq!(
             cache.url_at(row, col).map(|url| url.url.as_str()),
