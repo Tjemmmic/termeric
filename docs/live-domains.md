@@ -272,8 +272,23 @@ closure instead disconnects, without claiming the close frame was delivered.
 Socket-only tests reproduce failed initial publication without a later topology
 edit, check repeated slot reuse, exercise overflow/receiver-loss/full-close
 shutdown, and join real subscription workers after exact detach and normal
-domain closure while another subscriber remains live. Individual established
-socket writes have a five-second timeout; this is not a total frame deadline.
+domain closure while another subscriber remains live. Complete outbound frames
+now have one elapsed-time budget spanning serialization, header, body, and flush:
+ten seconds for negotiation replies and five seconds for established responses
+and stream frames. Partial-write progress does not renew the budget. All daemon
+send paths use the bounded writer, including errors, shutdown acknowledgement,
+upload replies, attachment snapshots, graphics fragments, and topology frames.
+Per-call nonblocking sends plus deadline-bounded readiness waits keep a single
+large write from continuing internally beyond its budget. The writer leaves
+the socket timeout and shared blocking mode unchanged, including on the
+concurrent reader's cloned descriptor. A failed frame
+shuts down both socket directions, so callers cannot append an error reply to
+a partially transmitted frame. A response timeout does not roll back a domain
+action or upload already committed; clients must inspect resulting state.
+Separate frames get fresh budgets, so this is not a whole-session, snapshot-batch,
+or transfer deadline. Socket-only tests reproduce timeout renewal under a slowly
+draining peer, then verify bounded failure, connection shutdown, unchanged wire
+bytes on success, and preservation of socket policy on success/failure.
 Bounded queues and eviction keep slow clients from blocking PTY draining or
 retaining unbounded output. A topology subscriber retains at most one pending
 lightweight snapshot before eviction; revision frames omit command argv, cwd,

@@ -21,6 +21,10 @@ use termeric_core::pty::{PtyHandle, PtySize, default_pty_size};
 use termeric_core::term::{TerminalMode, XtermKeyboardType};
 use termeric_core::{Pty, Terminal, TerminalEvent};
 
+#[path = "server_frame_io.rs"]
+mod frame_io;
+use frame_io::write_server_frame;
+
 const MAX_CLIENTS: usize = 64;
 const MAX_CONCURRENT_UPLOADS: usize = 4;
 const UPLOAD_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -577,7 +581,7 @@ pub fn run_foreground(
                 if clients.fetch_add(1, Ordering::AcqRel) >= MAX_CLIENTS {
                     clients.fetch_sub(1, Ordering::AcqRel);
                     let mut stream = stream;
-                    let _ = protocol::write_frame(
+                    let _ = write_server_frame(
                         &mut stream,
                         &ServerFrame::Error {
                             message: "domain client limit reached".into(),
@@ -682,17 +686,17 @@ fn handle_client_with_setup_timeout(
         read_client_setup_frame(&mut stream, setup_timeout)?,
         expected_token,
     ) {
-        protocol::write_frame(&mut stream, &ServerFrame::Error { message })?;
+        write_server_frame(&mut stream, &ServerFrame::Error { message })?;
         return Ok(());
     }
-    protocol::write_frame(
+    write_server_frame(
         &mut stream,
         &ServerFrame::Hello {
             version: protocol::PROTOCOL_VERSION,
         },
     )?;
-    // Bound individual blocked writes. Streaming queues separately enforce
-    // capacity and eviction; this is not an absolute whole-frame deadline.
+    // The server-frame writer uses this as one complete-frame budget and
+    // preserves it between sends. Streaming queues also enforce capacity.
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
 
     let ClientFrame::Request { request } = read_client_setup_frame(&mut stream, setup_timeout)?
@@ -735,8 +739,8 @@ fn handle_client_with_setup_timeout(
     }
     let response = process_request(&state, request);
     match response {
-        Ok(response) => protocol::write_frame(&mut stream, &ServerFrame::Response { response }),
-        Err(error) => protocol::write_frame(
+        Ok(response) => write_server_frame(&mut stream, &ServerFrame::Response { response }),
+        Err(error) => write_server_frame(
             &mut stream,
             &ServerFrame::Error {
                 message: format!("{error:#}"),
@@ -750,7 +754,7 @@ fn serve_shutdown(mut stream: UnixStream, state: SharedState) -> anyhow::Result<
         let state = state.lock().unwrap();
         if !state.domains.is_empty() {
             drop(state);
-            protocol::write_frame(
+            write_server_frame(
                 &mut stream,
                 &ServerFrame::Error {
                     message: "refusing to stop the server while live domains exist".into(),
@@ -762,7 +766,7 @@ fn serve_shutdown(mut stream: UnixStream, state: SharedState) -> anyhow::Result<
         // Keep the empty-domain state boundary until the complete response is
         // in the socket. Publishing shutdown first can let the daemon process
         // exit and terminate this handler midway through the frame.
-        protocol::write_frame(
+        write_server_frame(
             &mut stream,
             &ServerFrame::Response {
                 response: Response::Ok {
@@ -808,8 +812,8 @@ fn serve_file_upload(
         resume_only,
     );
     match result {
-        Ok(response) => protocol::write_frame(&mut stream, &ServerFrame::Response { response }),
-        Err(error) => protocol::write_frame(
+        Ok(response) => write_server_frame(&mut stream, &ServerFrame::Response { response }),
+        Err(error) => write_server_frame(
             &mut stream,
             &ServerFrame::Error {
                 message: format!("{error:#}"),
@@ -1067,7 +1071,7 @@ fn receive_file_upload(
         }
     };
     let prefix_sha256 = sha256_prefix(&mut temporary.file, offset)?;
-    if let Err(error) = protocol::write_frame(
+    if let Err(error) = write_server_frame(
         stream,
         &ServerFrame::Response {
             response: Response::UploadReady {
@@ -2531,7 +2535,7 @@ fn serve_attachment(
         )
     };
     let initial_write = (|| -> anyhow::Result<()> {
-        protocol::write_frame(
+        write_server_frame(
             &mut stream,
             &ServerFrame::Response {
                 response: Response::Attached { snapshot, sequence },
@@ -2544,7 +2548,7 @@ fn serve_attachment(
                     return false;
                 }
                 if let Err(error) =
-                    protocol::write_frame(&mut stream, &ServerFrame::SnapshotOutput { data })
+                    write_server_frame(&mut stream, &ServerFrame::SnapshotOutput { data })
                 {
                     snapshot_write_error = Some(error);
                     false
@@ -2556,7 +2560,7 @@ fn serve_attachment(
         if let Some(error) = snapshot_write_error {
             return Err(error);
         }
-        protocol::write_frame(&mut stream, &ServerFrame::SnapshotComplete)
+        write_server_frame(&mut stream, &ServerFrame::SnapshotComplete)
     })();
     if let Err(error) = initial_write {
         remove_attachment(&state, &domain_id, pane_id, attachment_id);
@@ -2593,7 +2597,7 @@ fn serve_attachment(
 
     for frame in receiver {
         let closed = matches!(frame, ServerFrame::Closed { .. });
-        if protocol::write_frame(&mut stream, &frame).is_err() || closed {
+        if write_server_frame(&mut stream, &frame).is_err() || closed {
             break;
         }
     }
@@ -2641,7 +2645,7 @@ fn serve_topology_subscription(
         domain_id: domain_id.clone(),
         subscription_id,
     };
-    protocol::write_frame(
+    write_server_frame(
         &mut stream,
         &ServerFrame::Response {
             response: Response::TopologySubscribed {
@@ -2663,7 +2667,7 @@ fn serve_topology_subscription(
 
     for frame in receiver {
         let closed = matches!(frame, ServerFrame::DomainClosed { .. });
-        if protocol::write_frame(&mut stream, &frame).is_err() || closed {
+        if write_server_frame(&mut stream, &frame).is_err() || closed {
             break;
         }
     }
