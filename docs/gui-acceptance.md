@@ -165,7 +165,15 @@ attributable. Renderer recreation cannot replay an already consumed trigger.
 
 The native harness now creates two same-process windows and drives F11 into one
 of them under an EWMH-capable Openbox X11 session and a headless Sway Wayland
-session. It requires the target window/PTY to expand on at least one pixel axis
+session. The private Sway fixture first requires both PTYs to report their
+post-mapping, equal tiled geometry, then proves native keyboard delivery with a
+fixture token before recording the baseline and sending F11. Equal initial PTY
+spawn sizes alone are not readiness: the compositor may still be mapping,
+focusing, and resizing the windows. The expanded PTY must be the same owner
+that received the token; a toggle is never retried to hide uncertain delivery.
+Deterministic tests cover the observed startup resize ordering and reject
+missing, duplicate, extra, or zero-sized owners.
+It requires the target window/PTY to expand on at least one pixel axis
 without shrinking the other, return to its exact character and pixel geometry
 on exit, and leave its sibling window/PTY
 unchanged. Request diagnostics and two-window close behavior are retained with

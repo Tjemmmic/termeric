@@ -719,6 +719,19 @@ def latest_terminal_geometry(
     return terminal_geometry(candidates[-1])
 
 
+def wayland_fullscreen_pair_ready(records: list[dict[str, object]]) -> bool:
+    """Wait for this private Sway fixture's two equally tiled PTYs, not spawn sizes."""
+    starts = [record for record in records if record.get("event") == "started"]
+    pids = {int(record["pid"]) for record in starts}
+    if len(starts) != 2 or len(pids) != 2:
+        return False
+    if any(not any(record.get("event") == "winsize" and record.get("pid") == pid
+                   for record in records) for pid in pids):
+        return False
+    geometries = [latest_terminal_geometry(records, pid) for pid in pids]
+    return geometries[0] == geometries[1] and min(geometries[0]) > 0
+
+
 def pid_receiving_token(records: list[dict[str, object]], token: bytes) -> int | None:
     for pid, stream in input_streams(records).items():
         if token in stream:
@@ -1374,11 +1387,17 @@ def run_wayland_fullscreen_scenario(
     try:
         app.wait_ready("wayland")
         wait_until(
-            "two native Wayland fullscreen fixture PTYs",
-            lambda: sum(
-                record.get("event") == "started" for record in read_records(transcript)
-            )
-            >= 2,
+            "two equally tiled native Wayland fullscreen fixture PTYs",
+            lambda: wayland_fullscreen_pair_ready(read_records(transcript)),
+        )
+        # PTY spawn precedes compositor mapping, focus, and the final tiled resize.
+        # Prove native input delivery before taking the fullscreen baseline or
+        # pressing F11; never retry a toggle whose delivery is unknown.
+        ready_token = b"WAYLAND_FULLSCREEN_READY_171"
+        app.wayland_type(ready_token.decode("ascii"))
+        wait_until(
+            "Wayland fullscreen native input readiness",
+            lambda: len(pids_receiving_token(read_records(transcript), ready_token)) == 1,
         )
         starts = [
             record
@@ -1386,6 +1405,9 @@ def run_wayland_fullscreen_scenario(
             if record.get("event") == "started"
         ][-2:]
         settled = read_records(transcript)
+        if not wayland_fullscreen_pair_ready(settled):
+            raise AcceptanceError("Wayland fullscreen layout changed during input readiness")
+        focused_pid = pid_receiving_token(settled, ready_token)
         initial = {
             int(record["pid"]): latest_terminal_geometry(settled, int(record["pid"]))
             for record in starts
@@ -1418,6 +1440,8 @@ def run_wayland_fullscreen_scenario(
 
         wait_until("Wayland compositor fullscreen PTY geometry", one_wayland_target_grew)
         assert target_pid is not None
+        if target_pid != focused_pid:
+            raise AcceptanceError("Wayland fullscreen resized a different PTY than native input")
         sibling_pid = next(pid for pid in initial if pid != target_pid)
         changed_pids = {
             int(record["pid"])

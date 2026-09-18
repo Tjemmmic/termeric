@@ -805,6 +805,34 @@ esac
         self.assertNotIn("timg", fullscreen)
         self.assertNotIn("kitten", fullscreen)
 
+    def test_wayland_fullscreen_waits_for_both_post_mapping_tiled_sizes(self) -> None:
+        def record(event, pid, width):
+            return dict(event=event, pid=pid, rows=42, cols=width // 8,
+                        pixel_width=width, pixel_height=714)
+
+        records = [record("started", 41, 944), record("started", 73, 944)]
+        # Equal spawn sizes do not establish compositor mapping or input focus.
+        self.assertFalse(gui_acceptance.wayland_fullscreen_pair_ready(records))
+        records.append(record("winsize", 41, 1008))
+        self.assertFalse(gui_acceptance.wayland_fullscreen_pair_ready(records))
+        records.append(record("winsize", 73, 496))
+        self.assertFalse(gui_acceptance.wayland_fullscreen_pair_ready(records))
+        records.append(record("winsize", 41, 496))
+        self.assertTrue(gui_acceptance.wayland_fullscreen_pair_ready(records))
+        records.append(record("winsize", 41, 1008))
+        self.assertFalse(gui_acceptance.wayland_fullscreen_pair_ready(records))
+
+    def test_wayland_fullscreen_pair_rejects_missing_duplicate_and_extra_owners(self) -> None:
+        for pids in ([], [41], [41, 41], [41, 73, 99]):
+            records = [dict(event=event, pid=pid, rows=42, cols=62,
+                            pixel_width=496, pixel_height=714)
+                       for pid in pids for event in ("started", "winsize")]
+            self.assertFalse(gui_acceptance.wayland_fullscreen_pair_ready(records))
+        records = [dict(event=event, pid=pid, rows=0, cols=62,
+                        pixel_width=496, pixel_height=714)
+                   for pid in (41, 73) for event in ("started", "winsize")]
+        self.assertFalse(gui_acceptance.wayland_fullscreen_pair_ready(records))
+
     def test_external_graphics_and_clipboard_tools_are_workspace_scoped(self) -> None:
         workspace = gui_acceptance.required_tools(
             "x11",
