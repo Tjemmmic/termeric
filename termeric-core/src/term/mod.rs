@@ -5318,7 +5318,7 @@ impl Terminal {
     }
 
     /// Get text content for selection. Honors the selection type:
-    /// - Simple/Semantic: contiguous range, newline between rows.
+    /// - Simple/Semantic: contiguous logical text, joining soft-wrapped rows.
     /// - Lines: full rows from start to end.
     /// - Block: rectangular region (one newline between rows).
     pub fn get_selection_text(&self) -> Option<String> {
@@ -5327,6 +5327,10 @@ impl Terminal {
 
         let max_col = self.cols.saturating_sub(1);
         let mut text = String::new();
+        let logical_text = matches!(
+            selection.ty,
+            SelectionType::Simple | SelectionType::Semantic
+        );
 
         for row in start.row..=end.row {
             let Some(grid_row) = self.grid().row_at_offset(row) else {
@@ -5360,7 +5364,11 @@ impl Terminal {
                 start_col = start_col.saturating_sub(cell.multicell.relative_col());
             }
 
+            let skip_wrap_padding = logical_text && grid_row.has_wide_wrap_padding();
             for col in start_col..=end_col {
+                if skip_wrap_padding && col + 1 == grid_row.len() {
+                    continue;
+                }
                 if let Some(cell) = grid_row.get(col) {
                     if cell.is_wide_char_spacer()
                         || (cell.multicell.is_present() && !cell.multicell.is_leader())
@@ -5375,7 +5383,7 @@ impl Terminal {
                 }
             }
 
-            if row != end.row {
+            if row != end.row && (!logical_text || !grid_row.is_wrapped()) {
                 text.push('\n');
             }
         }
@@ -5806,6 +5814,92 @@ mod tests {
         one_column.resize(4, 4);
         assert!(one_column.rows_text(0, 3).contains('界'));
         assert_wide_invariants(&one_column);
+    }
+
+    #[test]
+    fn stream_selection_joins_soft_wraps_and_skips_synthetic_wide_padding() {
+        for ty in [SelectionType::Simple, SelectionType::Semantic] {
+            for reversed in [false, true] {
+                for history in [false, true] {
+                    let mut term = Terminal::new(3, 2);
+                    term.process("ab界Z".as_bytes());
+                    let row = if history {
+                        term.process(b"\r\nx");
+                        -1
+                    } else {
+                        0
+                    };
+                    let (start, end) = (Point::new(row, 0), Point::new(row + 1, 2));
+                    let (start, end) = if reversed { (end, start) } else { (start, end) };
+                    let mut selection = Selection::new(start, ty);
+                    selection.update(end);
+                    term.set_selection(Some(selection));
+                    assert_eq!(
+                        term.get_selection_text().as_deref(),
+                        Some("ab界Z"),
+                        "type={ty:?} reversed={reversed} history={history}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn stream_selection_preserves_hard_breaks_and_partial_bounds() {
+        let mut term = Terminal::new(3, 4);
+        term.process(b"abcdef\r\nghi");
+        for (start, end, expected) in [
+            (Point::new(0, 0), Point::new(2, 2), "abcdef\nghi"),
+            (Point::new(0, 1), Point::new(1, 1), "bcde"),
+            (Point::new(1, 1), Point::new(2, 1), "ef\ngh"),
+        ] {
+            let mut selection = Selection::new(start, SelectionType::Simple);
+            selection.update(end);
+            term.set_selection(Some(selection));
+            assert_eq!(term.get_selection_text().as_deref(), Some(expected));
+        }
+    }
+
+    #[test]
+    fn physical_selections_keep_rows_and_stream_selections_keep_edited_padding() {
+        let mut term = Terminal::new(3, 3);
+        term.process("ab界Z".as_bytes());
+        for ty in [SelectionType::Block, SelectionType::Lines] {
+            let mut selection = Selection::new(Point::new(0, 0), ty);
+            selection.update(Point::new(1, 2));
+            term.set_selection(Some(selection));
+            assert_eq!(term.get_selection_text().as_deref(), Some("ab \n界Z"));
+        }
+        for styled in [false, true] {
+            let mut term = Terminal::new(3, 3);
+            term.process("ab界Z".as_bytes());
+            let cell = term.grid_mut().cell_mut(0, 2).unwrap();
+            if styled {
+                cell.bg_spec = ColorSpec::Indexed(4);
+            } else {
+                cell.set_char(' ');
+            }
+            let mut selection = Selection::new(Point::new(0, 0), SelectionType::Simple);
+            selection.update(Point::new(1, 2));
+            term.set_selection(Some(selection));
+            assert_eq!(term.get_selection_text().as_deref(), Some("ab 界Z"));
+        }
+    }
+
+    #[test]
+    fn stream_selection_after_resize_keeps_logical_unicode_text() {
+        let mut term = Terminal::new(5, 4);
+        term.process("ab界Z".as_bytes());
+        term.resize(3, 4);
+        let mut selection = Selection::new(Point::new(0, 0), SelectionType::Simple);
+        selection.update(Point::new(1, 2));
+        term.set_selection(Some(selection));
+        assert_eq!(term.get_selection_text().as_deref(), Some("ab界Z"));
+        // Starting on a wide spacer still copies the complete grapheme once.
+        let mut selection = Selection::new(Point::new(1, 1), SelectionType::Simple);
+        selection.update(Point::new(1, 2));
+        term.set_selection(Some(selection));
+        assert_eq!(term.get_selection_text().as_deref(), Some("界Z"));
     }
 
     #[test]

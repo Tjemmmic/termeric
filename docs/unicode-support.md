@@ -60,6 +60,14 @@ round trips, archived and scrolled snapshot rows, cursor placement, and edits;
 this is in-memory grid/history evidence, not native compositor or saved-session
 replay acceptance.
 
+Normal drag and semantic selections copy logical text: soft-wrapped rows join
+without a newline, and known synthetic wide-wrap padding is omitted. Hard line
+breaks remain newlines, and explicit or styled blank cells remain content.
+Rectangular and full-row selections retain their existing physical-row
+boundaries and padding. Core tests cover forward/reverse ranges, partial rows,
+compact history, post-resize selection, and wide-spacer endpoints; native
+clipboard delivery is a separate acceptance layer.
+
 The renderer sends complete multi-scalar clusters through advanced
 `cosmic-text` shaping even when optional programming ligatures are disabled.
 Native color-font glyphs retain RGBA pixels in a separate bounded atlas; mask
