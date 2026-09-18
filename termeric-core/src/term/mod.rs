@@ -5807,6 +5807,25 @@ mod tests {
     }
 
     #[test]
+    fn resize_round_trip_retains_background_color_erasure_cells() {
+        let mut term = Terminal::new(5, 4);
+        term.process(b"A\x1b[44m\x1b[K\x1b[0m");
+        for cols in [3, 5] {
+            term.resize(cols, 4);
+            assert_eq!(term.grid().cell(0, 0).unwrap().content.to_text(), "A");
+            for offset in 1..5 {
+                let cell = term.grid().cell(offset / cols, offset % cols).unwrap();
+                assert!(cell.content.is_empty());
+                assert_eq!(cell.bg_spec, ColorSpec::Indexed(4));
+            }
+            assert_eq!(
+                term.grid().cell(1, cols - 1).unwrap().bg_spec,
+                ColorSpec::Default
+            );
+        }
+    }
+
+    #[test]
     fn resize_keeps_cursor_on_text_after_wide_character_reflow() {
         for (cols, expected) in [(3, (1, 2)), (1, (3, 0))] {
             let mut term = Terminal::new(5, 4);

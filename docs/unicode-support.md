@@ -39,6 +39,15 @@ logical lines and blank tails, plus `ab界Z` shrinking from five columns to thre
 or one followed by a write that must replace `Z`, not the wide grapheme. Native
 shell/IME resize behavior is not inferred from these parser/grid tests.
 
+Reflow trims only genuinely default padding, using the same lossless omission
+rule as compact history. A text-empty cell can still carry a background,
+rendition, underline color, protection, or hyperlink identity and must survive
+width changes. Height reduction likewise does not classify styled or
+soft-wrapped rows as disposable merely because their text is empty; normal
+cursor-preserving archival/clipping rules apply instead. Tests cover visible
+and compact-history tails, colored/protected bottom rows, default-padding
+trimming, and a background-color-erasure narrow/wide round trip.
+
 The renderer sends complete multi-scalar clusters through advanced
 `cosmic-text` shaping even when optional programming ligatures are disabled.
 Native color-font glyphs retain RGBA pixels in a separate bounded atlas; mask

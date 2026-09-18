@@ -428,7 +428,8 @@ impl Default for Cell {
 }
 
 impl Cell {
-    /// Whether this cell can be omitted from immutable scrollback storage.
+    /// Whether this cell can be omitted from history or reflow padding without
+    /// losing durable presentation state. Render dirtiness is not durable.
     pub(crate) fn is_history_default(&self) -> bool {
         self.content.is_empty()
             && self.fg == Color::default_fg()

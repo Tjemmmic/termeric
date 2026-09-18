@@ -798,7 +798,7 @@ impl GridStorage {
             if self
                 .rows
                 .last()
-                .map(|r| r.to_string().is_empty())
+                .map(|r| !r.is_wrapped() && r.iter().all(Cell::is_history_default))
                 .unwrap_or(false)
             {
                 self.rows.pop();
@@ -1013,11 +1013,10 @@ impl GridStorage {
         use super::cell::CellFlags;
         let mut mapped_cursor = cursor;
 
-        // Trim trailing empty cells so padding doesn't inflate the line
-        while cells
-            .last()
-            .is_some_and(|c| c.is_empty() && !c.is_wide_char_spacer() && !c.multicell.is_present())
-        {
+        // Only default padding is disposable. Text-empty cells can still own
+        // backgrounds, rendition, protection, hyperlinks, or block geometry.
+        // Use the same lossless omission rule as compact scrollback.
+        while cells.last().is_some_and(Cell::is_history_default) {
             cells.pop();
         }
 
@@ -1445,6 +1444,67 @@ mod tests {
         assert_eq!(output[2].get(0).unwrap().content.to_text(), "Q");
         let (_, cursor) = GridStorage::reflow_rows_with_cursor(vec![Row::new(5)], 0, Some((0, 4)));
         assert_eq!(cursor, Some((0, 0)));
+    }
+
+    #[test]
+    fn reflow_retains_styled_empty_tail_in_visible_and_compact_rows() {
+        let mut variants = vec![Cell::default(); 7];
+        variants[0].bg = Color::rgb(3, 5, 7);
+        variants[1].bg_spec = ColorSpec::Indexed(0);
+        variants[2].fg_spec = ColorSpec::Indexed(2);
+        variants[3].attrs = CellAttrs::INVERSE;
+        variants[4].underline_color_spec = Some(ColorSpec::Indexed(3));
+        variants[5].flags = CellFlags::PROTECTED;
+        variants[6].hyperlink_id = Some(17);
+        variants[6].flags = CellFlags::HYPERLINK;
+        for (case, cell) in variants.into_iter().enumerate() {
+            let mut row = Row::new(5);
+            row.get_mut(0).unwrap().set_char('A');
+            *row.get_mut(4).unwrap() = cell.clone();
+            let (visible, _) = GridStorage::reflow_rows_with_cursor(vec![row.clone()], 3, None);
+            assert_eq!(visible.len(), 2, "case={case}");
+            assert_eq!(visible[1].get(1), Some(&cell), "case={case}");
+            let compact =
+                GridStorage::reflow_scrollback(VecDeque::from([CompactRow::from_row(row)]), 3);
+            assert_eq!(compact.len(), 2, "case={case}");
+            assert_eq!(compact[1].get(1), Some(cell), "case={case}");
+        }
+    }
+
+    #[test]
+    fn height_shrink_archives_content_instead_of_dropping_styled_empty_bottom_row() {
+        let mut storage = GridStorage::new(3, 3);
+        fill_row(&mut storage, 0, "top");
+        fill_row(&mut storage, 1, "mid");
+        let blank = Cell {
+            bg: Color::rgb(3, 5, 7),
+            bg_spec: ColorSpec::Indexed(4),
+            flags: CellFlags::PROTECTED,
+            ..Cell::default()
+        };
+        *storage.row_mut(2).unwrap().get_mut(2).unwrap() = blank.clone();
+        let cursor = storage.resize(3, 2, 2, 0);
+        assert_eq!(cursor, (1, 0));
+        assert_eq!(storage.scrollback_len(), 1);
+        assert_eq!(storage.scrollback_row(0).unwrap().to_string(), "top");
+        assert_eq!(row_text(&storage, 0), "mid");
+        assert_eq!(storage.row(1).unwrap().get(2), Some(&blank));
+    }
+
+    #[test]
+    fn height_shrink_trims_only_unwrapped_default_padding() {
+        for wrapped in [false, true] {
+            let mut storage = GridStorage::new(3, 3);
+            fill_row(&mut storage, 0, "top");
+            fill_row(&mut storage, 1, "mid");
+            let row = storage.row_mut(2).unwrap();
+            row.get_mut(2).unwrap().flags.insert(CellFlags::DIRTY);
+            row.set_wrapped(wrapped);
+            storage.resize(3, 2, 2, 0);
+            assert_eq!(storage.scrollback_len(), usize::from(wrapped));
+            assert_eq!(row_text(&storage, 0), if wrapped { "mid" } else { "top" });
+            assert_eq!(storage.row(1).unwrap().is_wrapped(), wrapped);
+        }
     }
 
     #[test]
