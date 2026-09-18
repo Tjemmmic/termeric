@@ -79,8 +79,19 @@ impl UrlDetector {
 
         for scheme in &self.schemes {
             let mut search_start = 0;
+            let first = scheme.as_bytes()[0] as char;
 
-            while let Some(start) = text[search_start..].find(scheme) {
+            // URI schemes are ASCII case-insensitive (RFC 3986 §3.1).
+            // Search original bytes: lowercasing the line would allocate and
+            // could change Unicode lengths or case-sensitive paths/queries.
+            while let Some((start, _)) = text[search_start..]
+                .match_indices([first, first.to_ascii_uppercase()])
+                .find(|(start, _)| {
+                    text.as_bytes()[search_start + start..]
+                        .get(..scheme.len())
+                        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(scheme.as_bytes()))
+                })
+            {
                 let abs_start = search_start + start;
 
                 // Find the end of the URL
@@ -931,6 +942,87 @@ mod tests {
         terminal.grid_mut().set_scroll_offset(0);
         cache.update_grid(terminal.grid(), &detector);
         assert!(cache.url_at(0, 0).is_none());
+    }
+
+    #[test]
+    fn detected_scheme_casing_preserves_every_target_byte() {
+        let detector = UrlDetector::new();
+        for scheme in &detector.schemes {
+            let letters = scheme.bytes().filter(u8::is_ascii_alphabetic).count();
+            for mask in 0..(1 << letters) {
+                let mut bit = 0;
+                let variant: String = scheme
+                    .chars()
+                    .map(|ch| {
+                        if !ch.is_ascii_alphabetic() {
+                            return ch;
+                        }
+                        let upper = mask & (1 << bit) != 0;
+                        bit += 1;
+                        if upper { ch.to_ascii_uppercase() } else { ch }
+                    })
+                    .collect();
+                let target = format!("{variant}Example.test/Case/界/%2f?q=VaLue#Frag");
+                let text = format!("界 ({target}). after");
+                let urls = detector.detect_in_line(&text, 7);
+                assert_eq!(urls.len(), 1, "{text}");
+                assert_eq!(urls[0].url, target);
+                assert_eq!((urls[0].start_row, urls[0].end_row), (7, 7));
+                assert_eq!(urls[0].start_col, "界 (".len());
+                assert_eq!(urls[0].end_col, "界 (".len() + target.len() - 1);
+            }
+        }
+    }
+
+    #[test]
+    fn detected_scheme_casing_is_ascii_only_and_requires_the_existing_separator() {
+        let detector = UrlDetector::new();
+        for text in [
+            "HTTP:example.test",
+            "HTTPS:/example.test",
+            "HTTPＳ://example.test",
+            "ＦTP://example.test",
+            "MAİLTO:user@example.test",
+            "unknown://example.test",
+            "HTTP://",
+            "MAILTO:",
+            "H界HTTP:/",
+            "界F",
+        ] {
+            assert!(detector.detect_in_line(text, 0).is_empty(), "{text}");
+        }
+    }
+
+    #[test]
+    fn mixed_case_wrapped_url_cache_preserves_outer_target_and_reuses_rows() {
+        let detector = UrlDetector::new();
+        let mut terminal = termeric_core::Terminal::new(20, 8);
+        let target = "HtTpS://例.test/Case?next=HTTP://Inner.test/%2f";
+        terminal.process(format!("界 {target} END").as_bytes());
+        let mut cache = UrlCache::new(0);
+        cache.update_grid(terminal.grid(), &detector);
+        let url = cache.url_at(0, 3).unwrap();
+        assert_eq!(url.url, target);
+        assert!(url.end_row > 0);
+        for row in url.start_row..=url.end_row {
+            let start = if row == url.start_row {
+                url.start_col
+            } else {
+                0
+            };
+            let end = if row == url.end_row { url.end_col } else { 19 };
+            for col in start..=end {
+                assert_eq!(cache.url_at(row, col).unwrap().url, target);
+            }
+        }
+        assert!(cache.url_at(0, 2).is_none());
+        assert!(cache.url_at(url.end_row, url.end_col + 1).is_none());
+        let scans = cache.metrics().0;
+        cache.update_grid(terminal.grid(), &detector);
+        assert_eq!(cache.metrics().0, scans);
+        terminal.resize(16, 8);
+        cache.update_grid(terminal.grid(), &detector);
+        assert_eq!(cache.url_at(0, 3).unwrap().url, target);
     }
 
     #[test]

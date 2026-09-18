@@ -1223,7 +1223,7 @@ fn filtered_links_resolve_the_displayed_semantic_target_not_an_intervening_row()
 
 #[cfg(unix)]
 #[test]
-fn unicode_detected_targets_use_filtered_and_frozen_display_cells() {
+fn mixed_case_unicode_detected_targets_use_filtered_and_frozen_display_cells() {
     use termeric_core::Point;
     for split in [false, true] {
         let mut app = if split {
@@ -1234,7 +1234,7 @@ fn unicode_detected_targets_use_filtered_and_frozen_display_cells() {
         let terminal = app.active_terminal_mut().unwrap();
         terminal.resize(40, 3);
         terminal
-            .process("\x1bc\x1b[3Jother https://other.test\r\nhit https://例.test/界]".as_bytes());
+            .process("\x1bc\x1b[3Jother https://other.test\r\nhit HtTpS://例.test/界]".as_bytes());
         app.search.start();
         app.with_search_and_active_grid(|search, grid| {
             search.set_query("hit", grid);
@@ -1244,7 +1244,7 @@ fn unicode_detected_targets_use_filtered_and_frozen_display_cells() {
         for col in [4, 12, 13, 20, 21] {
             assert_eq!(
                 app.focused_hyperlink_at(Point::new(0, col)),
-                Some("https://例.test/界")
+                Some("HtTpS://例.test/界")
             );
         }
         assert!(app.focused_hyperlink_at(Point::new(0, 22)).is_none());
@@ -1258,7 +1258,7 @@ fn unicode_detected_targets_use_filtered_and_frozen_display_cells() {
         app.with_search_and_active_grid(|search, grid| search.finish(grid));
         assert_eq!(
             app.focused_hyperlink_at(Point::new(0, 21)),
-            Some("https://例.test/界")
+            Some("HtTpS://例.test/界")
         );
         assert!(app.focused_hyperlink_at(Point::new(0, 22)).is_none());
         app.active_terminal_mut().unwrap().process(b"\x1b[?2026l");

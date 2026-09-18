@@ -358,8 +358,15 @@ selection rather than applying ordinary contiguous-range scroll tracking to it.
 ## Detected Unicode links
 
 Automatic URL detection preserves Unicode hosts, paths, query text, and
-fragments for the existing lowercase scheme list (`http`, `https`, `ftp`,
-`ftps`, `file`, `mailto`, `ssh`, and `git`). It retains the original UTF-8,
+fragments for the existing scheme list (`http`, `https`, `ftp`,
+`ftps`, `file`, `mailto`, `ssh`, and `git`). Scheme matching is ASCII
+case-insensitive as required by [RFC 3986 §3.1](https://www.rfc-editor.org/rfc/rfc3986.html#section-3.1);
+the complete target retains its original case, including its scheme, path,
+query, and percent escapes. Detection scans original bytes without allocating
+a lowercase copy of each logical line. Exhaustive scheme-case permutations,
+negative Unicode lookalikes, nested/wrapped Unicode cache mapping and reflow,
+and an isolated allocation probe cover this boundary without launching a handler.
+It retains the original UTF-8,
 including combining sequences and ZWNJ/ZWJ, without normalization, IDNA
 conversion, percent encoding, or decoding. The desktop handler remains
 responsible for interpreting the target; detection is not validation or a
@@ -378,7 +385,7 @@ Matched ASCII parentheses and square brackets remain part of a target,
 including IPv6 hosts; an unmatched closing delimiter is excluded rather than
 passed to the opener. Existing trailing ASCII sentence-punctuation trimming
 is unchanged. Ambiguous prose, Unicode punctuation adjacent to a URL, unmatched
-opening delimiters, and scheme casing remain heuristic boundaries; use explicit
+opening delimiters remain heuristic boundaries; use explicit
 OSC 8 metadata when the target cannot be inferred unambiguously.
 
 Detection tracks UTF-8 byte boundaries in one forward scan, then the existing

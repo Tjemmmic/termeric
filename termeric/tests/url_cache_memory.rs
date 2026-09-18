@@ -73,6 +73,22 @@ fn measure(f: impl FnOnce()) -> (usize, usize) {
 }
 
 #[test]
+fn mixed_case_scheme_scanning_does_not_allocate_a_normalized_line() {
+    let detector = url::UrlDetector::new();
+    let text = format!("{} HtTpS://example.test/Case/%2f", "hF界mSg".repeat(10_000));
+    let (calls, bytes) = measure(|| {
+        let urls = detector.detect_in_line(black_box(&text), 0);
+        assert_eq!(urls.len(), 1);
+        assert_eq!(urls[0].url, "HtTpS://example.test/Case/%2f");
+    });
+    assert!(calls > 0, "the probe must observe the result allocations");
+    assert!(
+        bytes < 1024,
+        "scanning scratch must not scale with line size: {bytes}"
+    );
+}
+
+#[test]
 fn hot_wrapped_ascii_url_mapping_has_a_small_allocation_budget() {
     let mut terminal = termeric_core::Terminal::new(100, 30);
     let target = format!(
