@@ -3119,11 +3119,11 @@ mod unix {
                 })?;
                 let target = self.resolve_link_target(&id, &path, &target_data, is_symlink)?;
                 if is_symlink {
-                    std::os::unix::fs::symlink(&target, &path).map_err(|error| {
-                        TransactionError::io(&id, "create symbolic link", error)
-                    })?;
-                    record_created(&path, CreatedKind::Symlink, created)
-                        .map_err(|error| TransactionError::io(&id, "record link", error))?;
+                    PublicationTarget::open(&path)
+                        .and_then(|destination| destination.create_symlink(&target, created))
+                        .map_err(|error| {
+                            TransactionError::io(&id, "create symbolic link", error)
+                        })?;
                 } else {
                     create_hard_link(&target, &path, created)
                         .map_err(|error| TransactionError::io(&id, "create hard link", error))?;
@@ -3416,6 +3416,7 @@ mod unix {
         #[cfg(target_os = "linux")]
         parent: File,
         path: PathBuf,
+        original_path: PathBuf,
     }
 
     impl PublicationTarget {
@@ -3471,14 +3472,32 @@ mod unix {
                 }
                 // SAFETY: the successful syscall's descriptor has no other owner.
                 let parent = unsafe { File::from_raw_fd(descriptor as _) };
+                let original_path = path.to_owned();
                 let path =
                     PathBuf::from(format!("/proc/self/fd/{}", parent.as_raw_fd())).join(name);
-                Ok(Self { parent, path })
+                Ok(Self {
+                    parent,
+                    path,
+                    original_path,
+                })
             }
             // Actual host transfers are Linux-only. Preserve the internal Unix
             // transaction test implementation without claiming equivalent safety.
             #[cfg(not(target_os = "linux"))]
-            Ok(Self { path: path.into() })
+            Ok(Self {
+                path: path.into(),
+                original_path: path.into(),
+            })
+        }
+
+        fn create_symlink(self, target: &Path, created: &mut Vec<CreatedPath>) -> io::Result<()> {
+            // Keep the pinned parent alive through both creation and identity
+            // capture. The original path is only a rollback lookup key, never
+            // a fallback if the trusted procfs reference fails.
+            std::os::unix::fs::symlink(target, &self.path)?;
+            record_created(&self.path, CreatedKind::Symlink, created)?;
+            created.last_mut().expect("link was recorded").path = self.original_path;
+            Ok(())
         }
 
         fn publish(self, temporary: impl Into<StagedFile>) -> io::Result<File> {
@@ -4662,6 +4681,133 @@ mod unix {
                     fs::metadata(&hardlink).unwrap().ino()
                 );
                 assert_eq!(fs::read_link(&symlink).unwrap(), PathBuf::from("file"));
+            }
+        }
+
+        #[test]
+        #[cfg(target_os = "linux")]
+        fn symbolic_link_publication_preserves_literal_targets_and_rollback_keys() {
+            let root = tempdir().unwrap();
+            for target in [
+                PathBuf::from("missing-relative"),
+                PathBuf::from("../outside"),
+                root.path().join("missing-absolute"),
+            ] {
+                let path = root.path().join("link");
+                let mut created = Vec::new();
+                PublicationTarget::open(&path)
+                    .unwrap()
+                    .create_symlink(&target, &mut created)
+                    .unwrap();
+                assert_eq!(fs::read_link(&path).unwrap(), target);
+                assert_eq!(created[0].path, path);
+                let before = fs::symlink_metadata(&path).unwrap();
+                let error = PublicationTarget::open(&path)
+                    .unwrap()
+                    .create_symlink(Path::new("different"), &mut created)
+                    .unwrap_err();
+                assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+                assert_eq!(created.len(), 1);
+                let after = fs::symlink_metadata(&path).unwrap();
+                assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+                assert_eq!(fs::read_link(&path).unwrap(), target);
+                rollback_paths(&created);
+                assert!(fs::symlink_metadata(&path).is_err());
+            }
+        }
+
+        #[test]
+        #[cfg(target_os = "linux")]
+        fn symbolic_link_publication_never_replaces_existing_entries() {
+            for directory in [false, true] {
+                let root = tempdir().unwrap();
+                let path = root.path().join("existing");
+                if directory {
+                    fs::create_dir(&path).unwrap();
+                } else {
+                    fs::write(&path, b"keep").unwrap();
+                }
+                let before = fs::symlink_metadata(&path).unwrap();
+                let mut created = Vec::new();
+                let error = PublicationTarget::open(&path)
+                    .unwrap()
+                    .create_symlink(Path::new("elsewhere"), &mut created)
+                    .unwrap_err();
+                assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+                assert!(created.is_empty());
+                let after = fs::symlink_metadata(&path).unwrap();
+                assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+                assert_eq!(after.file_type(), before.file_type());
+                if !directory {
+                    assert_eq!(fs::read(&path).unwrap(), b"keep");
+                }
+            }
+        }
+
+        #[test]
+        #[cfg(target_os = "linux")]
+        fn symbolic_link_creation_retains_parent_after_ancestor_replacement() {
+            for symbolic in [false, true] {
+                for replace_ancestor in [false, true] {
+                    let root = tempdir().unwrap();
+                    let ancestor = root.path().join("ancestor");
+                    let parent = ancestor.join("parent");
+                    fs::create_dir_all(&parent).unwrap();
+                    let path = parent.join("link");
+                    let destination = PublicationTarget::open(&path).unwrap();
+                    let replaced = if replace_ancestor { &ancestor } else { &parent };
+                    let moved = root.path().join("moved");
+                    fs::rename(replaced, &moved).unwrap();
+                    let outside = root.path().join("outside");
+                    let replacement = if symbolic { &outside } else { replaced };
+                    fs::create_dir(replacement).unwrap();
+                    let replacement_parent = if replace_ancestor {
+                        let nested = replacement.join("parent");
+                        fs::create_dir(&nested).unwrap();
+                        nested
+                    } else {
+                        replacement.clone()
+                    };
+                    if symbolic {
+                        std::os::unix::fs::symlink(&outside, replaced).unwrap();
+                    }
+                    let before = fs::metadata(&replacement_parent).unwrap();
+                    let target = root.path().join("target");
+                    fs::write(&target, b"keep target").unwrap();
+                    let target_before = fs::metadata(&target).unwrap();
+                    let mut created = Vec::new();
+                    destination.create_symlink(&target, &mut created).unwrap();
+                    let moved_link = if replace_ancestor {
+                        moved.join("parent/link")
+                    } else {
+                        moved.join("link")
+                    };
+                    assert_eq!(fs::read_link(&moved_link).unwrap(), target);
+                    assert!(fs::symlink_metadata(replacement_parent.join("link")).is_err());
+                    assert_eq!(created.len(), 1);
+                    assert_eq!(created[0].path, path);
+                    apply_link_mtime(&created[0], Some(-1)).unwrap();
+                    let linked = fs::symlink_metadata(&moved_link).unwrap();
+                    assert_eq!(
+                        (linked.dev(), linked.ino()),
+                        (created[0].device, created[0].inode)
+                    );
+                    assert_eq!((linked.mtime(), linked.mtime_nsec()), (-1, 999_999_999));
+                    let after = fs::metadata(&replacement_parent).unwrap();
+                    assert_eq!(
+                        (after.mtime(), after.mtime_nsec()),
+                        (before.mtime(), before.mtime_nsec())
+                    );
+                    let target_after = fs::metadata(&target).unwrap();
+                    assert_eq!(
+                        (target_after.mtime(), target_after.mtime_nsec()),
+                        (target_before.mtime(), target_before.mtime_nsec())
+                    );
+                    assert_eq!(fs::read(&target).unwrap(), b"keep target");
+                    rollback_paths(&created);
+                    assert!(fs::symlink_metadata(&moved_link).is_ok());
+                    assert!(fs::symlink_metadata(replaced).is_ok());
+                }
             }
         }
 

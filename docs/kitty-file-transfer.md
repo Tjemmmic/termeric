@@ -120,8 +120,7 @@ Missing, foreign, wrong-type, and unlinked source handles fail without a path
 fallback or new rollback authority. Regressions cover replaced file/symlink
 source names, unchanged replacement timestamps/content, invalid handles,
 existing destinations, symbolic-link ancestors, and rollback preservation.
-This does not close races in symbolic-link or directory creation, or make
-rollback unlink atomic.
+This does not make rollback unlink atomic.
 
 Symbolic links
 support Kitty's `fid:`, `fid_abs:`, and `path:` forms. `fid` targets must name an
@@ -133,7 +132,21 @@ may intentionally point outside
 the transfer so ordinary relative, absolute, and broken symlinks can be
 preserved; the approval dialog calls out that the remote side controls symbolic
 link targets. The link destination itself remains subject to every path and
-no-overwrite check.
+no-overwrite check. On Linux, symbolic-link creation and subsequent no-follow
+identity capture use the pinned destination parent through its trusted procfs
+reference. Replacing an immediate parent or higher ancestor after pinning
+cannot redirect either operation. The original destination is retained only as
+the rollback lookup key; a moved original directory may therefore retain its
+new link after best-effort rollback. Missing `openat2`/procfs support fails
+without falling back to the original pathname.
+
+Regressions replace parent/ancestor paths with directories and symlinks, check
+that creation and timestamps stay on the original link, preserve target content
+and metadata, retain literal relative/absolute/dangling targets, refuse existing
+file/directory/link destinations, and exercise ordinary rollback. This does not
+make link creation and identity capture atomic: same-type leaf substitutions
+between those operations, directory-creation races, and check-then-unlink
+cleanup remain separate limitations.
 
 Linux rollback bookkeeping retains created entry identities through file
 handles; symlink identities use metadata-only, no-follow handles.
