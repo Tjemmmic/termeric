@@ -30,7 +30,8 @@ pub enum TerminalEvent {
     /// A terminal-local xterm dynamic color operation.
     DynamicColor(DynamicColorOperation),
 
-    /// A hyperlink was activated
+    /// UI-originated hyperlink activation. Terminal output must not be treated
+    /// as an activation request; the parser does not produce this event.
     HyperlinkActivated(String),
 
     /// The cursor visibility changed

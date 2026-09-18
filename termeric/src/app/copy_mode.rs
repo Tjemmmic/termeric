@@ -300,9 +300,10 @@ impl App {
         match action {
             HintAction::Copy => self.copy_to_clipboard(value, "Copied quick-select match"),
             HintAction::Open => {
-                if let Err(error) = crate::terminal::url::UrlDetector::open_url_in_directory(
+                if let Err(error) = self.open_hyperlink_for_origin(
+                    self.active_terminal_origin(),
                     &value,
-                    working_directory.as_deref().map(std::path::Path::new),
+                    working_directory.as_deref(),
                 ) {
                     self.toasts
                         .error(format!("Could not open {value:?}: {error}"));

@@ -176,6 +176,23 @@ Side-effect-free tests inspect the actual launch command's single target
 argument and cwd, exercise pre-launch rejection, and verify local/remote/absent
 and frozen owner routing in single and split panes. No successful test launches
 a desktop handler; native file-handler acceptance remains deferred.
+
+Ctrl+click, quick-select opening, and routed hyperlink activation share one
+last pre-launch owner check. The tab must still exist and be neither closed nor
+closing; a pane route must still name an open pane. Dormant tab routes in split
+mode and obsolete pane routes after collapse are rejected rather than redirected
+to a survivor or the newly focused terminal. A live inactive or read-only owner
+remains eligible: those states do not substitute or revoke the originating
+route. Failure produces feedback before target validation or helper launch.
+
+`HyperlinkActivated` is a UI-originated event, not an escape-sequence command;
+the parser has no producer for it. OSC 8 metadata alone does not open anything.
+This gate validates the current synchronous route, not a durable asynchronous
+user-consent token or a terminal-instance generation captured by an event.
+Tests cover missing/closed/closing owners, closed panes, obsolete layout routes,
+live inactive/read-only owners, and parser non-activation without launching a
+desktop helper. Native desktop acceptance remains deferred.
+
 Bare targets beginning with `-` are refused before launching an opener so a
 link or custom hint cannot become a helper option such as `--help`. Use an
 explicit relative path (`./-report.txt`) or an absolute path/file URI for such

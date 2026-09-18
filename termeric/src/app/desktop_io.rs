@@ -700,6 +700,38 @@ impl App {
         }
     }
 
+    /// Validate immediately before a desktop launch. Event routes are mode-
+    /// specific: obsolete tab/pane routes cannot follow a different survivor.
+    pub(super) fn validate_hyperlink_origin(
+        &self,
+        origin: Option<crate::tabs::TerminalEventOrigin>,
+    ) -> std::io::Result<()> {
+        let live = origin.and_then(|origin| self.tabs.as_ref()?.identity_for_origin(origin));
+        if live.is_none() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "originating terminal is no longer available for hyperlink activation",
+            ));
+        }
+        Ok(())
+    }
+
+    /// All GUI hyperlink launch paths share this last side-effect gate. A
+    /// directory argument may be a captured quick-select context, so do not
+    /// replace it with metadata from a newly focused terminal.
+    pub(super) fn open_hyperlink_for_origin(
+        &self,
+        origin: Option<crate::tabs::TerminalEventOrigin>,
+        target: &str,
+        directory: Option<&str>,
+    ) -> std::io::Result<()> {
+        self.validate_hyperlink_origin(origin)?;
+        crate::terminal::url::UrlDetector::open_url_in_directory(
+            target,
+            directory.map(std::path::Path::new),
+        )
+    }
+
     /// Hyperlink actions use their own displayed owner's local report, never
     /// another focused pane, hidden live metadata, or process-cwd fallback.
     pub(super) fn hyperlink_open_directory(
@@ -869,10 +901,9 @@ impl App {
             }
             TerminalEvent::HyperlinkActivated(url) => {
                 let directory = self.hyperlink_open_directory(origin);
-                if let Err(e) = crate::terminal::url::UrlDetector::open_url_in_directory(
-                    &url,
-                    directory.as_deref().map(std::path::Path::new),
-                ) {
+                if let Err(e) =
+                    self.open_hyperlink_for_origin(Some(origin), &url, directory.as_deref())
+                {
                     log::error!("Failed to open URL: {}", e);
                     self.toasts.error(format!("Could not open {url:?}: {e}"));
                 }
