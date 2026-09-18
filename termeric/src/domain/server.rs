@@ -4684,13 +4684,33 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(matches!(
-            protocol::read_frame::<ServerFrame>(&mut closing_attachment).unwrap(),
-            ServerFrame::Response {
-                response: Response::Attached { .. }
-            }
-        ));
+        let ServerFrame::Response {
+            response: Response::Attached { sequence, .. },
+        } = protocol::read_frame::<ServerFrame>(&mut closing_attachment).unwrap()
+        else {
+            panic!("expected closing attachment snapshot");
+        };
         read_graphics_attachment_snapshot(&mut closing_attachment);
+        // Make outstanding PTY output deterministic: SendText acknowledges
+        // queueing input, not draining its echo to every attachment.
+        const CLOSURE_MARKER: &str = "closure-output-barrier";
+        client
+            .request(Request::SendText {
+                domain: domain_id.clone(),
+                pane: 1,
+                data: CLOSURE_MARKER.as_bytes().to_vec(),
+            })
+            .unwrap();
+        assert!(wait_for(Duration::from_secs(2), || {
+            matches!(
+                client.request(Request::GetText {
+                    domain: domain_id.clone(),
+                    pane: 1,
+                    max_bytes: 4096,
+                }).unwrap(),
+                Response::Text { text, .. } if text.contains(CLOSURE_MARKER)
+            )
+        }));
         let Response::Domain { domain } = client
             .request(Request::ClosePane {
                 domain: domain_id.clone(),
@@ -4713,10 +4733,41 @@ mod tests {
                 domain
             } if domain.tabs[0].panes.len() == 1
         ));
-        assert!(matches!(
-            protocol::read_frame::<ServerFrame>(&mut closing_attachment).unwrap(),
-            ServerFrame::Closed { exit_message } if exit_message.contains("control request")
-        ));
+        // Close is ordered after already-published output, not a replacement
+        // for it. Check that contract rather than assuming the queue is empty.
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let mut next_sequence = sequence.wrapping_add(1);
+        let mut pending_output = Vec::new();
+        loop {
+            let remaining = deadline
+                .checked_duration_since(std::time::Instant::now())
+                .expect("attachment did not close before the deadline");
+            closing_attachment
+                .set_read_timeout(Some(remaining))
+                .unwrap();
+            match protocol::read_frame::<ServerFrame>(&mut closing_attachment).unwrap() {
+                ServerFrame::Output { sequence, data } => {
+                    assert_eq!(sequence, next_sequence, "output must remain ordered");
+                    next_sequence = next_sequence.wrapping_add(1);
+                    assert!(pending_output.len() + data.len() <= 4096);
+                    pending_output.extend(data);
+                }
+                ServerFrame::Closed { exit_message } => {
+                    assert_eq!(exit_message, "pane was closed by a domain control request");
+                    break;
+                }
+                frame => panic!("unexpected closing attachment frame: {frame:?}"),
+            }
+        }
+        assert!(
+            pending_output
+                .windows(CLOSURE_MARKER.len())
+                .any(|bytes| bytes == CLOSURE_MARKER.as_bytes())
+        );
+        closing_attachment
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        assert_eq!(closing_attachment.read(&mut [0; 1]).unwrap(), 0);
         for request in [
             Request::SwapPaneNext {
                 domain: domain_id.clone(),

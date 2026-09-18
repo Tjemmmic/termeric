@@ -253,6 +253,15 @@ mutation.
 
 ## Failure and test coverage
 
+The local control-surface fixture deliberately queues PTY echo after an
+attachment's snapshot, observes that output in daemon state, and then closes
+the pane without first draining the attachment. It requires contiguous output
+sequence numbers, the complete marker before the exact control-close reason,
+and socket EOF. Reads have timeouts and retained fixture output is capped at
+4 KiB. This removes the former race in which valid output preceding `Closed`
+was mistaken for a closure failure; it does not change runtime behavior or
+the separate slow-subscriber eviction policy.
+
 Deterministic tests cover wire round trips, invalid/truncated/oversized frames,
 seeded byte mutation, unsafe paths, descriptor-verified directories, token
 permissions and fixed-size reads, disclosure-free temporary names, split and
