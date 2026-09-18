@@ -221,6 +221,55 @@ Real desktop policy, vendor GPUs, IME/Orca, subjective rendering, actual graphic
 clients, and hosted CI acceptance remain outstanding. No real AI-provider
 workflow was invoked, and no capability status is promoted by these results.
 
+## Native regression refresh and fullscreen readiness at `5a7c308`
+
+On 2026-09-18 UTC (2026-09-17 US/Central), the release executable with SHA-256
+`ac8c5c1bbe2ad3104f8ddda23d0bb97f41a49d3bd7efd00671c8ba679577d751`
+passed the private-Sway interaction scenario at clean source `290df5b`.
+All three renderer-failure injections recovered. The seventeen palette cases,
+eleven Settings cases, six held-button mouse-owner cases, clipboard/paste,
+pane routing/closure, and native close passed. Independent offline palette and
+Settings reconstruction revalidated their five artifact seals. The strict
+schema-6 record is candidate-eligible; that is a local harness result, not a
+release qualification or acceptance of untested visual behavior.
+
+The initial fullscreen run at that same source **failed**, timing out before
+any `Fullscreen request` diagnostic. Its transcript shows the baseline was
+taken during startup: two initial 944-pixel PTYs subsequently became two
+496-pixel tiled PTYs. The harness had treated process startup as input/layout
+readiness. Commit `5a7c308` adds the readiness and focused-owner checks described
+above, without changing application code. Two separate clean fullscreen runs
+then passed with the **same executable digest**: exact geometry restoration,
+unchanged sibling geometry, and both native window closes. The original failure
+is retained, not replaced by the successful reruns.
+
+All four runs used private D-Bus/Sway sessions, headless pixman compositing,
+OpenGL llvmpipe, and isolated configuration/home directories. They did not use
+the operator's compositor or invoke AI providers. Private-session desktop portal
+backends failed to launch without a desktop display; these runs do not validate
+portal policy. The harness requested DejaVu Sans Mono, absent on this host;
+`fc-match` substituted Noto Sans Mono, and renderer logs reported a missing
+U+754C glyph. No font-equivalence, CJK visual-completeness, screenshot, hardware
+GPU, X11, IME/Orca, or real-desktop acceptance claim follows from these semantic
+checks. Deferred user testing remains open and nonblocking.
+
+Retained local records and SHA-256 digests:
+
+| Directory under `/tmp` | `results.json` SHA-256 |
+| --- | --- |
+| `termeric-wayland-interaction-290df5b` | `b2882eaab332646d73bc1a5a64f0566242e2492e28fa32696db4543e87b87ebd` |
+| `termeric-wayland-fullscreen-290df5b` (failed) | `a208492b42207b1b4fec009973f28eed68e87788108edd1979caa8642fb9ee9a` |
+| `termeric-wayland-fullscreen-5a7c308` | `6edebe8a13ec7fe641348470e755ed289db3bfd0fb2dbfb77b48d125b644e680` |
+| `termeric-wayland-fullscreen-5a7c308-repeat` | `865a07c63278f540339a82486fe236c9d55e2eee0e1dfb0b0a3fd4849d433ff2` |
+
+The ignored local archive
+`target/terminal-comparison/2026-09-18-5a7c308-gui-readiness.tar.gz`
+retains all four run directories and the fullscreen launcher logs, excluding
+disposable XDG caches/data/state. Its SHA-256 is
+`ce519aa5909e3adf892c51e45cc605806261a5ca4011a906a61fabbd65060f1c`;
+archived regular files were byte-compared against their originals. It is not
+uploaded CI evidence. No capability status is promoted by this refresh.
+
 ## Visual evidence
 
 Native-window captures are retained as diagnostic artifacts. GPU-presented
