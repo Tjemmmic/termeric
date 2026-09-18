@@ -35,6 +35,11 @@ and failure paths have hermetic coverage; native client acceptance is deferred.
 - Mode bits limited to `0777`; setuid, setgid, and sticky bits are stripped.
   Directories use private `0700` assembly permissions, even with a restrictive
   umask, then receive the requested mode without adding owner permissions.
+  On Linux, unreadable newly created directories are pinned with `O_PATH` and
+  recovered through their trusted `/proc/self/fd` references, never through the
+  original destination path. This recovery requires accessible procfs; failure
+  does not fall back to a pathname chmod. Missing or mismatched handles fail
+  without changing replacement directories or symlink targets.
   Final directory modes and modification times are applied deepest-first after
   their contents. Signed nanoseconds since the Unix epoch, including pre-1970
   times, are passed to the filesystem; its supported

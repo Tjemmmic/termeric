@@ -3465,27 +3465,83 @@ mod unix {
             .open(path)
     }
 
+    fn open_directory_identity(path: &Path) -> io::Result<File> {
+        let result = open_directory(path);
+        #[cfg(target_os = "linux")]
+        if result
+            .as_ref()
+            .is_err_and(|error| error.kind() == io::ErrorKind::PermissionDenied)
+        {
+            // O_PATH can pin a directory whose initial permissions were
+            // removed by umask, without reading it or following a symlink.
+            return fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_PATH | libc::O_DIRECTORY | libc::O_NOFOLLOW)
+                .open(path);
+        }
+        result
+    }
+
     fn create_directory(path: &Path, created: &mut Vec<CreatedPath>) -> io::Result<()> {
         fs::DirBuilder::new().mode(0o700).create(path)?;
         record_created(path, CreatedKind::Directory, created)?;
         let entry = created.last_mut().expect("created directory was recorded");
-        if let Some(directory) = &entry._identity_guard {
-            directory.set_permissions(Permissions::from_mode(0o700))?;
-        } else {
-            // A restrictive umask can prevent opening the new directory.
-            // Record it first so failure still enters transaction rollback.
-            fs::set_permissions(path, Permissions::from_mode(0o700))?;
-            let directory = open_directory(path)?;
-            let metadata = directory.metadata()?;
-            if metadata.dev() != entry.device || metadata.ino() != entry.inode {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "created directory changed identity",
-                ));
-            }
-            entry._identity_guard = Some(directory);
+        ensure_directory_access(entry)
+    }
+
+    fn ensure_directory_access(entry: &mut CreatedPath) -> io::Result<()> {
+        let directory = entry._identity_guard.as_ref().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "directory handle is missing",
+            )
+        })?;
+        let metadata = directory.metadata()?;
+        if entry.kind != CreatedKind::Directory
+            || !metadata.is_dir()
+            || metadata.dev() != entry.device
+            || metadata.ino() != entry.inode
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "directory handle does not match its recorded identity",
+            ));
         }
-        Ok(())
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::fd::AsRawFd;
+            // SAFETY: directory owns a live descriptor; F_GETFL takes no
+            // additional argument and does not mutate descriptor state.
+            let flags = unsafe { libc::fcntl(directory.as_raw_fd(), libc::F_GETFL) };
+            if flags < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            if flags & libc::O_PATH != 0 {
+                // This trusted procfs magic link names the retained inode,
+                // even if the destination/ancestor pathname was replaced.
+                // Keep directory borrowed until reopening is complete. If
+                // procfs is unavailable, fail without a destination fallback.
+                let proc_path = format!("/proc/self/fd/{}", directory.as_raw_fd());
+                fs::set_permissions(&proc_path, Permissions::from_mode(0o700))?;
+                let upgraded = fs::OpenOptions::new()
+                    .read(true)
+                    .custom_flags(libc::O_DIRECTORY | libc::O_NONBLOCK)
+                    .open(&proc_path)?;
+                let metadata = upgraded.metadata()?;
+                if !metadata.is_dir()
+                    || metadata.dev() != entry.device
+                    || metadata.ino() != entry.inode
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "reopened directory does not match its recorded identity",
+                    ));
+                }
+                entry._identity_guard = Some(upgraded);
+                return Ok(());
+            }
+        }
+        directory.set_permissions(Permissions::from_mode(0o700))
     }
 
     fn prepare_staged_file(file: &File, mode: u32, mtime_ns: Option<i64>) -> io::Result<()> {
@@ -3579,7 +3635,7 @@ mod unix {
                 let identity_guard = if kind == CreatedKind::Directory {
                     // Retain an fchmod-capable handle before final permissions
                     // can remove owner access needed by rollback.
-                    open_directory(path)
+                    open_directory_identity(path)
                 } else {
                     #[cfg(target_os = "linux")]
                     let flags = libc::O_PATH | libc::O_NOFOLLOW;
@@ -3912,6 +3968,88 @@ mod unix {
         }
 
         #[test]
+        fn unverified_directory_handle_never_changes_replacement_permissions() {
+            for symbolic in [false, true] {
+                let root = tempdir().unwrap();
+                let path = root.path().join("owned");
+                let moved = root.path().join("moved");
+                let target = root.path().join("target");
+                let mut created = Vec::new();
+                create_directory(&path, &mut created).unwrap();
+                fs::rename(&path, &moved).unwrap();
+                let replacement = if symbolic { &target } else { &path };
+                fs::create_dir(replacement).unwrap();
+                fs::set_permissions(replacement, Permissions::from_mode(0o750)).unwrap();
+                if symbolic {
+                    std::os::unix::fs::symlink(&target, &path).unwrap();
+                }
+                created[0]._identity_guard = None;
+                assert!(ensure_directory_access(&mut created[0]).is_err());
+                created[0]._identity_guard = Some(open_directory(replacement).unwrap());
+                assert!(ensure_directory_access(&mut created[0]).is_err());
+                assert_eq!(
+                    fs::metadata(replacement).unwrap().permissions().mode() & 0o777,
+                    0o750
+                );
+                assert_eq!(
+                    fs::metadata(&moved).unwrap().permissions().mode() & 0o777,
+                    0o700
+                );
+            }
+        }
+
+        #[test]
+        #[cfg(target_os = "linux")]
+        fn opath_directory_access_recovery_ignores_replaced_paths() {
+            for symbolic in [false, true] {
+                let root = tempdir().unwrap();
+                let path = root.path().join("owned");
+                let moved = root.path().join("moved");
+                let target = root.path().join("target");
+                let mut created = Vec::new();
+                create_directory(&path, &mut created).unwrap();
+                // Force this path even for a privileged test runner that can
+                // open unreadable directories without the O_PATH fallback.
+                created[0]._identity_guard = Some(
+                    fs::OpenOptions::new()
+                        .read(true)
+                        .custom_flags(libc::O_PATH | libc::O_DIRECTORY | libc::O_NOFOLLOW)
+                        .open(&path)
+                        .unwrap(),
+                );
+                fs::set_permissions(&path, Permissions::from_mode(0o000)).unwrap();
+                fs::rename(&path, &moved).unwrap();
+                let replacement = if symbolic { &target } else { &path };
+                fs::create_dir(replacement).unwrap();
+                fs::set_permissions(replacement, Permissions::from_mode(0o750)).unwrap();
+                if symbolic {
+                    std::os::unix::fs::symlink(&target, &path).unwrap();
+                }
+                let before = fs::metadata(replacement).unwrap();
+                ensure_directory_access(&mut created[0]).unwrap();
+                assert_eq!(
+                    fs::metadata(&moved).unwrap().permissions().mode() & 0o777,
+                    0o700
+                );
+                // Finalization requires the upgraded usable handle, not merely
+                // a successful chmod through the metadata-only handle.
+                finalize_directory(&path, 0o555, Some(-1), &created).unwrap();
+                let owned = fs::metadata(&moved).unwrap();
+                assert_eq!(owned.permissions().mode() & 0o777, 0o555);
+                assert_eq!((owned.mtime(), owned.mtime_nsec()), (-1, 999_999_999));
+                rollback_paths(&created);
+                let after = fs::metadata(replacement).unwrap();
+                assert_eq!(after.permissions().mode(), before.permissions().mode());
+                assert_eq!(
+                    (after.mtime(), after.mtime_nsec()),
+                    (before.mtime(), before.mtime_nsec())
+                );
+                assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+            }
+        }
+
+        #[test]
+        #[cfg(target_os = "linux")]
         fn directory_assembly_access_survives_restrictive_umask() {
             const CHILD: &str = "TERMERIC_TEST_TRANSFER_DIRECTORY_UMASK";
             if std::env::var_os(CHILD).is_none() {
