@@ -230,9 +230,23 @@ cases across all selection shapes and reversed endpoints, overlap directions,
 clipping, origin/margin coordinates, protected wide/multicell boundary damage,
 and single/split-pane drag and release without invoking the desktop clipboard.
 
-Standalone horizontal edits, new OSC 66 placement, and glyph erasure during
-other boundary-repair operations still need selection invalidation coverage;
-this is not a claim that every grid mutation is covered.
+Standalone ICH/DCH move an intact single-row selection with its surviving cells,
+preserving endpoint direction, type, and active state. Stationary selections stay
+put; clipped/deleted selections and ranges mixing moved and stationary cells
+are cleared. The constant-time mapping does not scan selected history. Whole
+multicell erasures invalidate old coordinates before movement, while wide-pair
+repair reports damage in the new coordinates. Single-row multicell blocks that
+cross the right edit margin are erased atomically on deletion as on insertion.
+Zero-count core calls are no-ops (CSI zero still defaults to one); margins,
+history, and synchronized snapshots retain their existing isolation rules.
+Coverage includes 107,520 small-grid cellwise mapping cases, 1,344 protocol
+count/margin cases, wide/multicell boundary repair, and single/split-pane mouse
+release and drag reconciliation. Insert-mode printing retains its separately
+documented invalidation policy; native desktop acceptance remains deferred.
+
+New OSC 66 placement and glyph erasure during other boundary-repair operations
+still need selection invalidation coverage; this is not a claim that every grid
+mutation is covered.
 
 ## Filtered selection and accessible text
 

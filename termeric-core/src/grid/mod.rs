@@ -301,7 +301,7 @@ impl Grid {
         self.clear_multicell_at_with_damage(row, col, blank, replace_with_spaces, |_, _| {})
     }
 
-    fn clear_multicell_at_with_damage(
+    pub(crate) fn clear_multicell_at_with_damage(
         &mut self,
         row: usize,
         col: usize,

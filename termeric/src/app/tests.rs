@@ -3,6 +3,47 @@ use crate::plugin::hooks::{HookResponse, Plugin, PluginCommand};
 
 #[cfg(unix)]
 #[test]
+fn native_selection_tracks_horizontal_motion_and_cannot_restore_deleted_cells() {
+    use termeric_core::Point;
+    for split in [false, true] {
+        for inserting in [false, true] {
+            let mut app = if split {
+                divider_owner_fixture()
+            } else {
+                scrollbar_owner_fixture()
+            };
+            let terminal = app.active_terminal_mut().unwrap();
+            terminal.resize(12, 3);
+            terminal.process(b"\x1bc\x1b[3J..anchor\x1b[H");
+            app.begin_native_selection(MouseButton::Left, Point::new(0, 2));
+            app.extend_native_selection(Point::new(0, 7));
+            app.active_terminal_mut().unwrap().process(if inserting {
+                b"\x1b[1@"
+            } else {
+                b"\x1b[1P"
+            });
+            app.finish_native_selection(); // Release without another movement must reconcile too.
+            assert_eq!(app.native_selection_text().as_deref(), Some("anchor"));
+            assert_eq!(
+                app.mouse_state.selection.as_ref().unwrap().start.col,
+                if inserting { 3 } else { 1 }
+            );
+
+            app.begin_native_selection(MouseButton::Left, Point::new(0, 3));
+            app.extend_native_selection(Point::new(0, 5));
+            app.active_terminal_mut()
+                .unwrap()
+                .process(b"\x1b[1;4H\x1b[P");
+            app.extend_native_selection(Point::new(0, 5));
+            app.finish_native_selection();
+            assert!(app.native_selection_text().is_none());
+            assert!(app.mouse_state.selection.is_none());
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn native_selection_follows_rectangular_writes_without_resurrecting_destinations() {
     use termeric_core::Point;
     for split in [false, true] {

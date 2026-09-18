@@ -178,6 +178,18 @@ impl Row {
         count: usize,
         blank: &Cell,
     ) {
+        self.insert_cells_bounded_with_damage(col, right, count, blank, |_| {});
+    }
+
+    /// Report cells erased by glyph repair after moving the surviving cells.
+    pub(crate) fn insert_cells_bounded_with_damage(
+        &mut self,
+        col: usize,
+        right: usize,
+        count: usize,
+        blank: &Cell,
+        damage: impl FnMut(std::ops::Range<usize>),
+    ) {
         let right = right.min(self.cells.len());
         if count == 0 || col >= right {
             return;
@@ -195,7 +207,7 @@ impl Row {
             self.cells[c].flags.insert(CellFlags::DIRTY);
         }
 
-        self.repair_wide_cells_with(blank);
+        self.repair_wide_cells_with_damage(blank, damage);
         self.dirty = true;
     }
 
@@ -212,6 +224,18 @@ impl Row {
         count: usize,
         blank: &Cell,
     ) {
+        self.delete_cells_bounded_with_damage(col, right, count, blank, |_| {});
+    }
+
+    /// Report cells erased by glyph repair after moving the surviving cells.
+    pub(crate) fn delete_cells_bounded_with_damage(
+        &mut self,
+        col: usize,
+        right: usize,
+        count: usize,
+        blank: &Cell,
+        damage: impl FnMut(std::ops::Range<usize>),
+    ) {
         let right = right.min(self.cells.len());
         if count == 0 || col >= right {
             return;
@@ -226,7 +250,7 @@ impl Row {
             }
         }
 
-        self.repair_wide_cells_with(blank);
+        self.repair_wide_cells_with_damage(blank, damage);
         self.dirty = true;
     }
 

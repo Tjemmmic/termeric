@@ -154,6 +154,52 @@ impl Selection {
         true
     }
 
+    /// Follow one horizontal row edit. A selection can stay stationary or
+    /// translate intact; erased cells or mixed motion retire the whole range.
+    pub(super) fn shift_columns_in_row(
+        &mut self,
+        row: usize,
+        cols: std::ops::Range<usize>,
+        delta: isize,
+        total_cols: usize,
+    ) -> bool {
+        if delta == 0
+            || !self.intersects_region(row..row.saturating_add(1), cols.clone(), total_cols)
+        {
+            return true;
+        }
+        let Ok(row) = i32::try_from(row) else {
+            return false;
+        };
+        if self.start.row != row || self.end.row != row {
+            return false;
+        }
+        let Some(range) = self.col_range(row, total_cols) else {
+            return false;
+        };
+        if *range.start() < cols.start || *range.end() >= cols.end {
+            return false;
+        }
+        let (Some(first), Some(last)) = (
+            range.start().checked_add_signed(delta),
+            range.end().checked_add_signed(delta),
+        ) else {
+            return false;
+        };
+        if first < cols.start || last >= cols.end {
+            return false;
+        }
+        let (Some(start), Some(end)) = (
+            self.start.col.checked_add_signed(delta),
+            self.end.col.checked_add_signed(delta),
+        ) else {
+            return false;
+        };
+        self.start.col = start;
+        self.end.col = end;
+        true
+    }
+
     /// Get the normalized bounds (start <= end)
     pub fn bounds(&self) -> (Point, Point) {
         if self.start <= self.end {
@@ -251,6 +297,83 @@ impl Selection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn horizontal_selection_mapping_matches_cellwise_uniform_motion() {
+        let points: Vec<_> = (-1..3)
+            .flat_map(|row| (0..4).map(move |col| Point::new(row, col)))
+            .collect();
+        for ty in [
+            SelectionType::Simple,
+            SelectionType::Semantic,
+            SelectionType::Lines,
+            SelectionType::Block,
+        ] {
+            for &start in &points {
+                for &end in &points {
+                    let mut original = Selection::new(start, ty);
+                    original.update(end);
+                    original.finish();
+                    for row in 0..3 {
+                        for cols in [0..4, 1..4, 1..3, 2..2, 0..1] {
+                            for delta in [-4_isize, -2, -1, 0, 1, 2, 4] {
+                                let mut uniform = None;
+                                let mut expected = true;
+                                for point in points
+                                    .iter()
+                                    .filter(|point| original.contains(point.row, point.col))
+                                {
+                                    let movement =
+                                        if point.row == row as i32 && cols.contains(&point.col) {
+                                            delta
+                                        } else {
+                                            0
+                                        };
+                                    if movement != 0
+                                        && point
+                                            .col
+                                            .checked_add_signed(movement)
+                                            .is_none_or(|col| !cols.contains(&col))
+                                    {
+                                        expected = false;
+                                    }
+                                    if uniform.is_some_and(|prior| prior != movement) {
+                                        expected = false;
+                                    }
+                                    uniform = Some(movement);
+                                }
+                                let mut actual = original.clone();
+                                assert_eq!(
+                                    actual.shift_columns_in_row(row, cols.clone(), delta, 4),
+                                    expected,
+                                    "{ty:?} {start:?} {end:?} row={row} cols={cols:?} delta={delta}"
+                                );
+                                if expected {
+                                    let shift = uniform.unwrap_or(0);
+                                    assert_eq!(
+                                        actual.start,
+                                        Point::new(
+                                            start.row,
+                                            start.col.checked_add_signed(shift).unwrap()
+                                        )
+                                    );
+                                    assert_eq!(
+                                        actual.end,
+                                        Point::new(
+                                            end.row,
+                                            end.col.checked_add_signed(shift).unwrap()
+                                        )
+                                    );
+                                    assert_eq!(actual.ty, ty);
+                                    assert!(!actual.active);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn region_selection_mapping_matches_a_cellwise_uniform_motion_oracle() {

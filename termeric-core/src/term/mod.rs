@@ -4700,41 +4700,47 @@ impl Terminal {
 
     /// Insert blank characters at cursor position
     pub fn insert_chars(&mut self, count: usize) {
-        let cursor = self.grid().cursor();
-        let blank = self.erase_cell();
-        let (left, right) = if self.row_inside_vertical_margins(cursor.row) {
-            (self.scroll_left, self.scroll_right)
-        } else {
-            (0, self.cols)
-        };
-        if cursor.col >= left && cursor.col < right {
-            self.erase_multicells_for_horizontal_shift(
-                cursor.row, cursor.col, right, count, true, &blank,
-            );
-            if let Some(row) = self.grid_mut().row_mut(cursor.row) {
-                row.insert_cells_bounded(cursor.col, right, count, &blank);
-                self.grid_mut().set_wrap_pending(false);
-            }
-        }
+        self.shift_chars(count, true);
     }
 
     /// Delete characters at cursor position
     pub fn delete_chars(&mut self, count: usize) {
+        self.shift_chars(count, false);
+    }
+
+    fn shift_chars(&mut self, count: usize, inserting: bool) {
         let cursor = self.grid().cursor();
-        let blank = self.erase_cell();
         let (left, right) = if self.row_inside_vertical_margins(cursor.row) {
             (self.scroll_left, self.scroll_right)
         } else {
             (0, self.cols)
         };
-        if cursor.col >= left && cursor.col < right {
-            self.erase_multicells_for_horizontal_shift(
-                cursor.row, cursor.col, right, count, false, &blank,
-            );
-            if let Some(row) = self.grid_mut().row_mut(cursor.row) {
-                row.delete_cells_bounded(cursor.col, right, count, &blank);
-                self.grid_mut().set_wrap_pending(false);
+        let count = count.min(right.saturating_sub(cursor.col));
+        if count == 0 || cursor.col < left || cursor.col >= right {
+            return;
+        }
+        let blank = self.erase_cell();
+        // Whole-block erasure happens in the old coordinates, before moving
+        // surviving anchors. Wide-pair repair below reports new coordinates.
+        self.erase_multicells_for_horizontal_shift(
+            cursor.row, cursor.col, right, count, inserting, &blank,
+        );
+        let magnitude = isize::try_from(count).unwrap_or(isize::MAX);
+        let delta = if inserting { magnitude } else { -magnitude };
+        if let Some(selection) = &mut self.selection
+            && !selection.shift_columns_in_row(cursor.row, cursor.col..right, delta, self.cols)
+        {
+            self.selection = None;
+        }
+        let (grid, mut damage) = self.grid_with_selection_damage();
+        if let Some(row) = grid.row_mut(cursor.row) {
+            let report = |cols| damage(cursor.row..cursor.row + 1, cols);
+            if inserting {
+                row.insert_cells_bounded_with_damage(cursor.col, right, count, &blank, report);
+            } else {
+                row.delete_cells_bounded_with_damage(cursor.col, right, count, &blank, report);
             }
+            grid.set_wrap_pending(false);
         }
     }
 
@@ -4768,14 +4774,16 @@ impl Terminal {
             } else if inserting {
                 region.left < start || region.right() > right.saturating_sub(count)
             } else {
-                region.left < start.saturating_add(count) && region.right() > start
+                (region.left < start.saturating_add(count) && region.right() > start)
+                    || region.right() > right
             };
             if split {
                 erase.insert((region.top, region.left));
             }
         }
         for (top, left) in erase {
-            self.grid_mut().clear_multicell_at(top, left, blank, false);
+            let (grid, damage) = self.grid_with_selection_damage();
+            grid.clear_multicell_at_with_damage(top, left, blank, false, damage);
         }
     }
 
@@ -7349,6 +7357,167 @@ mod tests {
             before, after,
             "Characters lost after expanding from 20 to 80 cols"
         );
+    }
+
+    #[test]
+    fn horizontal_protocol_selection_mapping_obeys_counts_and_margins() {
+        let scenarios: &[(&[u8], usize, usize, usize, bool)] = &[
+            (b"\x1b[H", 0, 0, 8, true),
+            (b"\x1b[2;4H", 1, 3, 8, true),
+            (b"\x1b[?69h\x1b[2;7s\x1b[2;3r\x1b[2;3H", 1, 2, 7, true),
+            (b"\x1b[?69h\x1b[2;7s\x1b[2;3r\x1b[1;3H", 0, 2, 8, true),
+            (b"\x1b[?69h\x1b[2;7s\x1b[2;3r\x1b[2;1H", 1, 0, 7, false),
+            (b"\x1b[?69h\x1b[2;7s\x1b[2;3r\x1b[2;8H", 1, 7, 7, false),
+            (
+                b"\x1b[?69h\x1b[2;7s\x1b[2;3r\x1b[?6h\x1b[1;2H",
+                1,
+                2,
+                7,
+                true,
+            ),
+        ];
+        for &(prefix, edit_row, left, right, enabled) in scenarios {
+            for inserting in [false, true] {
+                for count in [0_usize, 1, 2, 99] {
+                    for index in 0..24 {
+                        let mut term = Terminal::new(8, 3);
+                        term.process(b"abcdefgh\r\nijklmnop\r\nqrstuvwx");
+                        term.process(prefix);
+                        let point = Point::new(index / 8, index as usize % 8);
+                        term.set_selection(Some(Selection::new(point, SelectionType::Block)));
+                        let text = term.get_selection_text();
+                        let cursor = term.grid().cursor();
+                        term.process(
+                            format!("\x1b[{count}{}", if inserting { '@' } else { 'P' }).as_bytes(),
+                        );
+                        let expected = if enabled
+                            && point.row == edit_row as i32
+                            && (left..right).contains(&point.col)
+                        {
+                            let distance = count.max(1).min(right - left) as isize;
+                            point
+                                .col
+                                .checked_add_signed(if inserting { distance } else { -distance })
+                                .filter(|col| (left..right).contains(col))
+                                .map(|col| Point::new(point.row, col))
+                        } else {
+                            Some(point)
+                        };
+                        assert_eq!(
+                            term.selection().map(|selection| selection.start),
+                            expected,
+                            "prefix={prefix:?} insert={inserting} count={count} point={point:?}"
+                        );
+                        if expected.is_some() {
+                            assert_eq!(term.get_selection_text(), text);
+                        }
+                        assert_eq!(
+                            (term.grid().cursor().row, term.grid().cursor().col),
+                            (cursor.row, cursor.col)
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn horizontal_edits_preserve_whole_glyphs_and_retire_boundary_damage() {
+        for inserting in [false, true] {
+            for wide in [false, true] {
+                let mut term = Terminal::new(12, 4);
+                term.process(b"..\x1b[1\"q");
+                if wide {
+                    term.process("界".as_bytes());
+                } else {
+                    term.process(b"\x1b]66;s=1:w=2;A\x07");
+                }
+                term.grid_mut().set_cursor(0, 0);
+                term.set_selection(Some(Selection::new(Point::new(0, 2), SelectionType::Block)));
+                let text = term.get_selection_text();
+                term.shift_chars(1, inserting);
+                assert_eq!(
+                    term.selection().unwrap().start.col,
+                    if inserting { 3 } else { 1 }
+                );
+                assert_eq!(term.get_selection_text(), text);
+            }
+
+            for selected_col in [2, 3] {
+                let mut term = Terminal::new(12, 4);
+                term.process("..界".as_bytes());
+                term.process(b"\x1b[?69h\x1b[1;3s\x1b[H");
+                term.set_selection(Some(Selection::new(
+                    Point::new(0, selected_col),
+                    SelectionType::Block,
+                )));
+                term.shift_chars(1, inserting);
+                assert!(term.selection().is_none()); // Repair covers both moved and stationary halves.
+            }
+
+            let mut block = Terminal::new(12, 4);
+            block.process(b"....\x1b]66;s=1:w=4;A\x07\x1b[?69h\x1b[1;6s\x1b[H");
+            block.set_selection(Some(Selection::new(Point::new(0, 7), SelectionType::Block)));
+            block.shift_chars(1, inserting);
+            assert!(block.selection().is_none());
+            assert!((0..12).all(|col| !block.grid().cell(0, col).unwrap().multicell.is_present()));
+
+            let mut tall = Terminal::new(12, 4);
+            tall.process(b"..\x1b]66;s=2;A\x07\x1b[2;1H");
+            tall.set_selection(Some(Selection::new(Point::new(0, 2), SelectionType::Block)));
+            tall.shift_chars(0, inserting);
+            assert_eq!(tall.get_selection_text().as_deref(), Some("A"));
+            tall.shift_chars(1, inserting);
+            assert!(tall.selection().is_none()); // Whole block erased outside the edited row.
+            assert!(tall.grid().cell(0, 2).unwrap().content.is_empty());
+        }
+    }
+
+    #[test]
+    fn horizontal_edits_isolate_frozen_history_and_mixed_motion_selections() {
+        for inserting in [false, true] {
+            let mut term = Terminal::new(12, 3);
+            term.process(b"..anchor\r\nother");
+            let mut selection = Selection::new(Point::new(0, 7), SelectionType::Simple);
+            selection.update(Point::new(0, 2));
+            term.set_selection(Some(selection.clone()));
+            term.process(b"\x1b[22J");
+            term.shift_chars(1, inserting);
+            assert_eq!(term.get_selection_text().as_deref(), Some("anchor"));
+            term.process(b"\x1b[?1049h..anchor\x1b[H");
+            term.set_selection(Some(selection));
+            term.process(b"\x1b[?2026h");
+            term.shift_chars(1, inserting);
+            assert_eq!(term.selection().unwrap().start, Point::new(0, 7));
+            assert_eq!(term.get_selection_text().as_deref(), Some("anchor"));
+            term.process(b"\x1b[?2026l");
+            assert_eq!(
+                term.selection().unwrap().start.col,
+                if inserting { 8 } else { 6 }
+            );
+            assert_eq!(term.get_selection_text().as_deref(), Some("anchor"));
+
+            let mut mixed = Selection::new(Point::new(0, 2), SelectionType::Block);
+            mixed.update(Point::new(1, 4));
+            term.set_selection(Some(mixed));
+            term.shift_chars(1, inserting);
+            assert!(term.selection().is_none());
+        }
+    }
+
+    #[test]
+    fn horizontal_edits_follow_surviving_selected_text() {
+        let mut term = Terminal::new(12, 3);
+        term.process(b"..anchor\x1b[H");
+        let mut selection = Selection::new(Point::new(0, 2), SelectionType::Simple);
+        selection.update(Point::new(0, 7));
+        term.set_selection(Some(selection));
+        term.process(b"\x1b[2@");
+        assert_eq!(term.selection().unwrap().start, Point::new(0, 4));
+        assert_eq!(term.get_selection_text().as_deref(), Some("anchor"));
+        term.process(b"\x1b[2P");
+        assert_eq!(term.selection().unwrap().start, Point::new(0, 2));
+        assert_eq!(term.get_selection_text().as_deref(), Some("anchor"));
     }
 
     #[test]
