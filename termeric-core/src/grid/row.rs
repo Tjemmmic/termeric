@@ -320,14 +320,29 @@ impl Row {
 
     /// Erase cells from start to end (exclusive)
     pub fn erase_range(&mut self, start: usize, end: usize, blank: &Cell) {
+        self.erase_range_with_damage(start, end, blank, |_| {});
+    }
+
+    /// Report the exact expanded glyph span replaced by this erase.
+    pub(crate) fn erase_range_with_damage(
+        &mut self,
+        start: usize,
+        end: usize,
+        blank: &Cell,
+        mut damage: impl FnMut(std::ops::Range<usize>),
+    ) {
         let mut start = start.min(self.cells.len());
         let mut end = end.min(self.cells.len()).max(start);
+        if start == end {
+            return;
+        }
         if start < self.cells.len() && self.cells[start].is_wide_char_spacer() {
             start = start.saturating_sub(1);
         }
         if end > 0 && self.cells[end - 1].is_wide_char() {
             end = (end + 1).min(self.cells.len());
         }
+        damage(start..end);
         for c in start..end {
             self.cells[c] = blank.clone();
             self.cells[c].flags.insert(CellFlags::DIRTY);
@@ -344,6 +359,18 @@ impl Row {
     /// pairs are treated atomically: intersecting either half erases both only
     /// when neither half is protected.
     pub fn selective_erase_range(&mut self, start: usize, end: usize, blank: &Cell) {
+        self.selective_erase_range_with_damage(start, end, blank, |_| {});
+    }
+
+    /// Emit only unprotected grapheme spans actually erased, including both
+    /// halves of a wide pair when the requested range touches just one half.
+    pub(crate) fn selective_erase_range_with_damage(
+        &mut self,
+        start: usize,
+        end: usize,
+        blank: &Cell,
+        mut damage: impl FnMut(std::ops::Range<usize>),
+    ) {
         let start = start.min(self.cells.len());
         let end = end.min(self.cells.len()).max(start);
         let mut col = start;
@@ -364,6 +391,7 @@ impl Row {
             if protected {
                 preserved = true;
             } else {
+                damage(leader..grapheme_end);
                 for target in leader..grapheme_end {
                     self.cells[target].clear_content_preserving_attrs();
                 }
@@ -715,6 +743,29 @@ mod tests {
     use super::*;
     use crate::{CellAttrs, Color, ColorSpec};
 
+    #[test]
+    fn erase_damage_reports_atomic_wide_spans_and_skips_protected_pairs() {
+        let mut terminal = crate::Terminal::new(4, 2);
+        terminal.process("A界B".as_bytes());
+        let mut row = terminal.grid().row(0).unwrap().clone();
+        row.get_mut(0).unwrap().flags.insert(CellFlags::PROTECTED);
+        // Protecting only the spacer still preserves the complete pair.
+        row.get_mut(2).unwrap().flags.insert(CellFlags::PROTECTED);
+        let blank = Cell::default();
+        let mut damage = Vec::new();
+        row.erase_range_with_damage(2, 2, &blank, |range| damage.push(range));
+        assert!(damage.is_empty());
+        assert_eq!(row.to_string(), "A界B");
+        row.selective_erase_range_with_damage(0, 4, &blank, |range| damage.push(range));
+        assert_eq!(damage.len(), 1);
+        assert_eq!(damage[0], 3..4);
+        assert_eq!(row.to_string(), "A界");
+        damage.clear();
+        row.erase_range_with_damage(2, 3, &blank, |range| damage.push(range));
+        assert_eq!(damage.len(), 1);
+        assert_eq!(damage[0], 1..3);
+        assert_eq!(row.to_string(), "A");
+    }
     fn descriptor_cell() -> Cell {
         use crate::grid::{MultiCell, MultiCellAlignment};
         Cell {

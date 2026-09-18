@@ -3,6 +3,38 @@ use crate::plugin::hooks::{HookResponse, Plugin, PluginCommand};
 
 #[cfg(unix)]
 #[test]
+fn native_erased_selection_cannot_return_but_protected_selection_survives_selective_erase() {
+    use termeric_core::Point;
+    for split in [false, true] {
+        for selective in [false, true] {
+            let mut app = if split {
+                divider_owner_fixture()
+            } else {
+                scrollbar_owner_fixture()
+            };
+            let terminal = app.active_terminal_mut().unwrap();
+            terminal.resize(12, 3);
+            terminal.process(b"\x1bc\x1b[3J\x1b[1\"qanchor\x1b[0\"q");
+            app.begin_native_selection(MouseButton::Left, Point::new(0, 0));
+            app.extend_native_selection(Point::new(0, 5));
+            app.active_terminal_mut().unwrap().process(if selective {
+                b"\x1b[?2K"
+            } else {
+                b"\x1b[2K"
+            });
+            app.extend_native_selection(Point::new(0, 5));
+            app.finish_native_selection();
+            assert_eq!(
+                app.native_selection_text().as_deref(),
+                selective.then_some("anchor")
+            );
+            assert_eq!(app.mouse_state.selection.is_some(), selective);
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn native_selection_cannot_return_after_printed_output_replaces_selected_cells() {
     use termeric_core::Point;
     for split in [false, true] {

@@ -298,15 +298,28 @@ impl Grid {
         blank: &Cell,
         replace_with_spaces: bool,
     ) -> bool {
+        self.clear_multicell_at_with_damage(row, col, blank, replace_with_spaces, |_, _| {})
+    }
+
+    fn clear_multicell_at_with_damage(
+        &mut self,
+        row: usize,
+        col: usize,
+        blank: &Cell,
+        replace_with_spaces: bool,
+        mut damage: impl FnMut(std::ops::Range<usize>, std::ops::Range<usize>),
+    ) -> bool {
         let Some(region) = self.multicell_region_at(row, col) else {
             if let Some(cell) = self.cell_mut(row, col)
                 && cell.multicell.is_present()
             {
+                damage(row..row + 1, col..col + 1);
                 *cell = blank.clone();
                 cell.flags.insert(CellFlags::DIRTY);
             }
             return false;
         };
+        damage(region.top..region.bottom(), region.left..region.right());
         for target_row in region.top..region.bottom() {
             for target_col in region.left..region.right() {
                 if let Some(cell) = self.cell_mut(target_row, target_col) {
@@ -335,6 +348,26 @@ impl Grid {
         blank: &Cell,
         preserve_protected: bool,
     ) -> usize {
+        self.erase_multicells_with_damage(
+            top..bottom,
+            left..right,
+            blank,
+            preserve_protected,
+            |_, _| {},
+        )
+    }
+
+    /// Report complete blocks (or individual malformed descriptors) that the
+    /// existing erase policy removes, without retaining a second damage list.
+    pub(crate) fn erase_multicells_with_damage(
+        &mut self,
+        rows: std::ops::Range<usize>,
+        cols: std::ops::Range<usize>,
+        blank: &Cell,
+        preserve_protected: bool,
+        mut damage: impl FnMut(std::ops::Range<usize>, std::ops::Range<usize>),
+    ) -> usize {
+        let (top, bottom, left, right) = (rows.start, rows.end, cols.start, cols.end);
         let bottom = bottom.min(self.rows);
         let right = right.min(self.cols);
         if top >= bottom || left >= right {
@@ -366,13 +399,14 @@ impl Grid {
         }
 
         for (row, col) in malformed {
+            damage(row..row + 1, col..col + 1);
             if let Some(cell) = self.cell_mut(row, col) {
                 *cell = blank.clone();
                 cell.flags.insert(CellFlags::DIRTY);
             }
         }
         for (row, col) in regions.iter().copied() {
-            self.clear_multicell_at(row, col, blank, false);
+            self.clear_multicell_at_with_damage(row, col, blank, false, &mut damage);
         }
         regions.len()
     }

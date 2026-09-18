@@ -3168,58 +3168,17 @@ impl Terminal {
     /// Erase in display
     pub fn erase_in_display(&mut self, mode: u16) {
         let cursor = self.grid().cursor();
-        let blank = self.erase_cell();
         let cols = self.cols;
         let rows = self.rows;
 
         match mode {
             0 => {
-                self.grid_mut().erase_multicells_intersecting(
-                    cursor.row,
-                    cursor.row + 1,
-                    cursor.col,
-                    cols,
-                    &blank,
-                    false,
-                );
-                self.grid_mut().erase_multicells_intersecting(
-                    cursor.row + 1,
-                    rows,
-                    0,
-                    cols,
-                    &blank,
-                    false,
-                );
-                // Erase from cursor to end of screen
-                if let Some(row) = self.grid_mut().row_mut(cursor.row) {
-                    row.erase_range(cursor.col, cols, &blank);
-                }
-                for row in (cursor.row + 1)..rows {
-                    if let Some(row) = self.grid_mut().row_mut(row) {
-                        row.erase_range(0, cols, &blank);
-                    }
-                }
+                self.erase_cells_in_region(cursor.row..cursor.row + 1, cursor.col..cols, false);
+                self.erase_cells_in_region(cursor.row + 1..rows, 0..cols, false);
             }
             1 => {
-                self.grid_mut()
-                    .erase_multicells_intersecting(0, cursor.row, 0, cols, &blank, false);
-                self.grid_mut().erase_multicells_intersecting(
-                    cursor.row,
-                    cursor.row + 1,
-                    0,
-                    cursor.col + 1,
-                    &blank,
-                    false,
-                );
-                // Erase from start of screen to cursor
-                for row in 0..cursor.row {
-                    if let Some(row) = self.grid_mut().row_mut(row) {
-                        row.erase_range(0, cols, &blank);
-                    }
-                }
-                if let Some(row) = self.grid_mut().row_mut(cursor.row) {
-                    row.erase_range(0, cursor.col + 1, &blank);
-                }
+                self.erase_cells_in_region(0..cursor.row, 0..cols, false);
+                self.erase_cells_in_region(cursor.row..cursor.row + 1, 0..cursor.col + 1, false);
             }
             2 | 22 => {
                 if mode == 22 && !self.alt_screen_active {
@@ -3236,15 +3195,9 @@ impl Terminal {
                     }
                     self.retain_prompt_navigation(oldest);
                 }
-                self.grid_mut()
-                    .erase_multicells_intersecting(0, rows, 0, cols, &blank, false);
                 // Erase the viewport without moving the cursor or clearing
                 // scrollback.
-                for row in 0..rows {
-                    if let Some(row) = self.grid_mut().row_mut(row) {
-                        row.erase_range(0, cols, &blank);
-                    }
-                }
+                self.erase_cells_in_region(0..rows, 0..cols, false);
                 self.graphics.clear_screen(self.alt_screen_active);
                 if !self.alt_screen_active && rows > 0 {
                     self.shell.prompt_tracker.retire_content_in_rows(
@@ -3269,7 +3222,6 @@ impl Terminal {
     /// Erase in line
     pub fn erase_in_line(&mut self, mode: u16) {
         let cursor = self.grid().cursor();
-        let blank = self.erase_cell();
 
         let (start, end) = match mode {
             0 => (cursor.col, self.cols),
@@ -3278,82 +3230,27 @@ impl Terminal {
             _ => return,
         };
 
-        self.grid_mut().erase_multicells_intersecting(
-            cursor.row,
-            cursor.row + 1,
-            start,
-            end,
-            &blank,
-            false,
-        );
-        if let Some(row) = self.grid_mut().row_mut(cursor.row) {
-            row.erase_range(start, end, &blank);
-        }
+        self.erase_cells_in_region(cursor.row..cursor.row + 1, start..end, false);
     }
 
     /// Selectively erase erasable cells in the display (DECSED). Protected
     /// cells survive with their complete grapheme and presentation state.
     pub fn selective_erase_in_display(&mut self, mode: u16) {
         let cursor = self.grid().cursor();
-        let blank = self.erase_cell();
         let cols = self.cols;
         let rows = self.rows;
 
         match mode {
             0 => {
-                self.grid_mut().erase_multicells_intersecting(
-                    cursor.row,
-                    cursor.row + 1,
-                    cursor.col,
-                    cols,
-                    &blank,
-                    true,
-                );
-                self.grid_mut().erase_multicells_intersecting(
-                    cursor.row + 1,
-                    rows,
-                    0,
-                    cols,
-                    &blank,
-                    true,
-                );
-                if let Some(row) = self.grid_mut().row_mut(cursor.row) {
-                    row.selective_erase_range(cursor.col, cols, &blank);
-                }
-                for row in (cursor.row + 1)..rows {
-                    if let Some(row) = self.grid_mut().row_mut(row) {
-                        row.selective_erase_range(0, cols, &blank);
-                    }
-                }
+                self.erase_cells_in_region(cursor.row..cursor.row + 1, cursor.col..cols, true);
+                self.erase_cells_in_region(cursor.row + 1..rows, 0..cols, true);
             }
             1 => {
-                self.grid_mut()
-                    .erase_multicells_intersecting(0, cursor.row, 0, cols, &blank, true);
-                self.grid_mut().erase_multicells_intersecting(
-                    cursor.row,
-                    cursor.row + 1,
-                    0,
-                    cursor.col + 1,
-                    &blank,
-                    true,
-                );
-                for row in 0..cursor.row {
-                    if let Some(row) = self.grid_mut().row_mut(row) {
-                        row.selective_erase_range(0, cols, &blank);
-                    }
-                }
-                if let Some(row) = self.grid_mut().row_mut(cursor.row) {
-                    row.selective_erase_range(0, cursor.col + 1, &blank);
-                }
+                self.erase_cells_in_region(0..cursor.row, 0..cols, true);
+                self.erase_cells_in_region(cursor.row..cursor.row + 1, 0..cursor.col + 1, true);
             }
             2 => {
-                self.grid_mut()
-                    .erase_multicells_intersecting(0, rows, 0, cols, &blank, true);
-                for row in 0..rows {
-                    if let Some(row) = self.grid_mut().row_mut(row) {
-                        row.selective_erase_range(0, cols, &blank);
-                    }
-                }
+                self.erase_cells_in_region(0..rows, 0..cols, true);
             }
             _ => {}
         }
@@ -3362,24 +3259,13 @@ impl Terminal {
     /// Selectively erase erasable cells in the current line (DECSEL).
     pub fn selective_erase_in_line(&mut self, mode: u16) {
         let cursor = self.grid().cursor();
-        let blank = self.erase_cell();
         let (start, end) = match mode {
             0 => (cursor.col, self.cols),
             1 => (0, cursor.col + 1),
             2 => (0, self.cols),
             _ => return,
         };
-        self.grid_mut().erase_multicells_intersecting(
-            cursor.row,
-            cursor.row + 1,
-            start,
-            end,
-            &blank,
-            true,
-        );
-        if let Some(row) = self.grid_mut().row_mut(cursor.row) {
-            row.selective_erase_range(start, end, &blank);
-        }
+        self.erase_cells_in_region(cursor.row..cursor.row + 1, start..end, true);
     }
 
     /// Resolve VT's 1-indexed inclusive rectangle coordinates into an
@@ -3757,20 +3643,7 @@ impl Terminal {
         let Some(area) = self.rectangular_area(top, left, bottom, right) else {
             return;
         };
-        let blank = self.erase_cell();
-        self.grid_mut().erase_multicells_intersecting(
-            area.top,
-            area.bottom,
-            area.left,
-            area.right,
-            &blank,
-            false,
-        );
-        for row in area.top..area.bottom {
-            if let Some(row) = self.grid_mut().row_mut(row) {
-                row.erase_range(area.left, area.right, &blank);
-            }
-        }
+        self.erase_cells_in_region(area.top..area.bottom, area.left..area.right, false);
         self.graphics.erase_rect(
             self.alt_screen_active,
             area.top..area.bottom,
@@ -3790,20 +3663,7 @@ impl Terminal {
         let Some(area) = self.rectangular_area(top, left, bottom, right) else {
             return;
         };
-        let blank = self.erase_cell();
-        self.grid_mut().erase_multicells_intersecting(
-            area.top,
-            area.bottom,
-            area.left,
-            area.right,
-            &blank,
-            true,
-        );
-        for row in area.top..area.bottom {
-            if let Some(row) = self.grid_mut().row_mut(row) {
-                row.selective_erase_range(area.left, area.right, &blank);
-            }
-        }
+        self.erase_cells_in_region(area.top..area.bottom, area.left..area.right, true);
     }
 
     /// DECSACE — select whether DECCARA/DECRARA treat their endpoints as a
@@ -4872,18 +4732,11 @@ impl Terminal {
     /// Erase characters at the cursor without moving it.
     pub fn erase_chars(&mut self, count: usize) {
         let cursor = self.grid().cursor();
-        let blank = self.erase_cell();
-        self.grid_mut().erase_multicells_intersecting(
-            cursor.row,
-            cursor.row + 1,
-            cursor.col,
-            cursor.col.saturating_add(count),
-            &blank,
+        self.erase_cells_in_region(
+            cursor.row..cursor.row + 1,
+            cursor.col..cursor.col.saturating_add(count),
             false,
         );
-        if let Some(row) = self.grid_mut().row_mut(cursor.row) {
-            row.erase_range(cursor.col, cursor.col.saturating_add(count), &blank);
-        }
     }
 
     fn erase_multicells_for_horizontal_shift(
@@ -7487,6 +7340,142 @@ mod tests {
             before, after,
             "Characters lost after expanding from 20 to 80 cols"
         );
+    }
+
+    #[test]
+    fn explicit_erase_invalidates_a_selection_over_removed_text() {
+        let mut term = Terminal::new(12, 3);
+        term.process(b"selected");
+        let mut selection = Selection::new(Point::new(0, 0), SelectionType::Simple);
+        selection.update(Point::new(0, 7));
+        term.set_selection(Some(selection));
+        term.process(b"\x1b[2K");
+        assert!(term.selection().is_none());
+    }
+
+    #[test]
+    fn erase_command_selection_damage_matches_actual_cell_changes() {
+        let commands: &[&[u8]] = &[
+            b"\x1b[J",
+            b"\x1b[1J",
+            b"\x1b[2J",
+            b"\x1b[K",
+            b"\x1b[1K",
+            b"\x1b[2K",
+            b"\x1b[2X",
+            b"\x1b[?J",
+            b"\x1b[?1J",
+            b"\x1b[?2J",
+            b"\x1b[?K",
+            b"\x1b[?1K",
+            b"\x1b[?2K",
+            b"\x1b[2;4;2;5$z",
+            b"\x1b[2;4;2;5${",
+        ];
+        for &command in commands {
+            for row in 0..3 {
+                for col in 0..8 {
+                    let mut term = Terminal::new(8, 3);
+                    term.process(b"abcdefgh\r\nijklmnop\r\nqrstuvwx\x1b[2;4H");
+                    for protected_row in 0..3 {
+                        for protected_col in [1, 4, 7] {
+                            term.grid_mut()
+                                .cell_mut(protected_row, protected_col)
+                                .unwrap()
+                                .flags
+                                .insert(CellFlags::PROTECTED);
+                        }
+                    }
+                    let original = term.grid().cell(row, col).unwrap().content.to_text();
+                    term.set_selection(Some(Selection::new(
+                        Point::new(row as i32, col),
+                        SelectionType::Block,
+                    )));
+                    term.process(command);
+                    let unchanged =
+                        term.grid().cell(row, col).unwrap().content.to_text() == original;
+                    assert_eq!(
+                        term.selection().is_some(),
+                        unchanged,
+                        "command={command:?} row={row} col={col}"
+                    );
+                    assert_eq!((term.grid().cursor().row, term.grid().cursor().col), (1, 3));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn selective_erase_preserves_protected_selection_and_invalidates_expanded_glyph_damage() {
+        for protected in [false, true] {
+            for selective in [false, true] {
+                for wide in [false, true] {
+                    let mut term = Terminal::new(10, 4);
+                    if protected {
+                        term.process(b"\x1b[1\"q");
+                    }
+                    if wide {
+                        term.process("界".as_bytes());
+                    } else {
+                        term.process(b"\x1b]66;s=2:w=2;A\x07");
+                    }
+                    term.process(b"\x1b[0\"q");
+                    term.set_selection(Some(Selection::new(
+                        Point::new(0, 0),
+                        SelectionType::Block,
+                    )));
+                    let text = term.get_selection_text();
+                    // Target only the wide spacer or a covered lower-row cell,
+                    // outside the selection's requested row/column rectangle.
+                    let row = if wide { 1 } else { 2 };
+                    if selective {
+                        term.selective_erase_rectangular_area(row, 2, row, 2);
+                    } else {
+                        term.erase_rectangular_area(row, 2, row, 2);
+                    }
+                    assert_eq!(
+                        term.selection().is_some(),
+                        protected && selective,
+                        "protected={protected} selective={selective} wide={wide}"
+                    );
+                    if protected && selective {
+                        assert_eq!(term.get_selection_text(), text);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn erasure_keeps_archived_and_frozen_selection_but_clears_erased_alternate_content() {
+        let mut term = Terminal::new(12, 3);
+        term.process(b"anchor");
+        let mut selection = Selection::new(Point::new(0, 5), SelectionType::Simple);
+        selection.update(Point::new(0, 0));
+        term.set_selection(Some(selection));
+        term.process(b"\x1b[22J");
+        assert_eq!(term.selection().unwrap().start, Point::new(-3, 5));
+        assert_eq!(term.get_selection_text().as_deref(), Some("anchor"));
+        term.process(b"\x1b[2J\x1b[?2J");
+        assert_eq!(term.get_selection_text().as_deref(), Some("anchor"));
+
+        term.process(b"\x1b[?1049hanchor");
+        let mut selection = Selection::new(Point::new(0, 0), SelectionType::Simple);
+        selection.update(Point::new(0, 5));
+        term.set_selection(Some(selection));
+        term.process(b"\x1b[?2026h\x1b[2J");
+        assert_eq!(term.get_selection_text().as_deref(), Some("anchor"));
+        term.process(b"\x1b[?2026l");
+        assert!(term.selection().is_none());
+
+        term.process("\x1b[H界".as_bytes());
+        term.set_selection(Some(Selection::new(Point::new(0, 0), SelectionType::Block)));
+        term.grid_mut().set_cursor(0, 1);
+        term.erase_chars(0); // The core API's empty range must not erase half a pair.
+        term.erase_in_display(99);
+        term.selective_erase_in_line(99);
+        term.erase_rectangular_area(3, 3, 1, 1);
+        assert_eq!(term.get_selection_text().as_deref(), Some("界"));
     }
 
     #[test]

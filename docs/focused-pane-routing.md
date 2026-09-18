@@ -198,10 +198,29 @@ that edited row span are inspected; no selected-text/history copy is added.
 Hermetic tests cover all selection types and reversed endpoints, Unicode,
 OSC 66 collision/skip/extension, history/frozen isolation, and single/split-pane
 drag and release after replacement. They do not invoke the desktop clipboard.
-Explicit erase/fill/copy commands, standalone horizontal edits, new OSC 66
-placement, and glyph erasure during other boundary-repair operations still need
-selection invalidation coverage; this is not a claim that every grid mutation
-is covered.
+
+Explicit ED/EL/ECH, DECSED/DECSEL, and DECERA/DECSERA now share a text-erasure
+path that invalidates selections from actual damage. Row erasure reports its
+expanded wide-grapheme span; selective erasure reports only unprotected spans,
+and multicell erasure reports the whole block rather than only the requested
+intersection. These callbacks come from the mutation routines themselves, so
+selection does not maintain a second protection policy or rescan/copy selected
+history. There is no persistent damage list or extra block-validation pass.
+
+Protected selections survive selective erasure when all of their selected cells
+survive. Ordinary erasure still ignores protection. ED 22 moves retained ranges
+into history before erasing the viewport; viewport erasure does not remove
+backed history selections. Hidden erases cannot alter a frozen visible selection.
+Empty core erase ranges and unsupported erase modes do not invalidate it.
+Native drag/release consumes this canonical state and cannot resurrect erased
+ranges. Hermetic coverage includes 360 command/cell comparisons, protected
+wide pairs and OSC 66 blocks extending beyond the requested rectangle, history,
+alternate/frozen screens, and single/split-pane native selection. Desktop
+painting and clipboard acceptance remain deferred.
+
+Fill/copy commands, standalone horizontal edits, new OSC 66 placement, and glyph
+erasure during other boundary-repair operations still need selection
+invalidation coverage; this is not a claim that every grid mutation is covered.
 
 ## Filtered selection and accessible text
 
