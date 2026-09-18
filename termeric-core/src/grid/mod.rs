@@ -164,12 +164,18 @@ impl Grid {
 
     /// Resize the grid to new dimensions, reflowing text when columns change
     pub fn resize(&mut self, cols: usize, rows: usize) {
+        self.resize_with_row_shift(cols, rows);
+    }
+
+    /// Return the exact number of viewport rows archived during resize. This
+    /// is a selection translation only when the column count is unchanged.
+    pub(crate) fn resize_with_row_shift(&mut self, cols: usize, rows: usize) -> usize {
         if self.cols != cols || self.rows != rows {
             self.mark_rows_changed();
         }
-        let (new_row, new_col) = self
-            .storage
-            .resize(cols, rows, self.cursor.row, self.cursor.col);
+        let ((new_row, new_col), rows_pushed_top) =
+            self.storage
+                .resize(cols, rows, self.cursor.row, self.cursor.col);
         self.cols = cols;
         self.rows = rows;
         self.cursor.row = new_row;
@@ -178,6 +184,7 @@ impl Grid {
 
         // Clamp scroll offset
         self.scroll_offset = self.scroll_offset.min(self.storage.scrollback_len());
+        rows_pushed_top
     }
 
     /// Get the number of columns

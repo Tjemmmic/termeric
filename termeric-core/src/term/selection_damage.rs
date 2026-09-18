@@ -5,6 +5,19 @@ use crate::grid::{Cell, Grid};
 use std::ops::Range;
 
 impl Terminal {
+    /// Height-only resize preserves column geometry. Follow retained rows,
+    /// then reject selections whose content was evicted or clipped rather
+    /// than clamping their anchors onto unrelated text.
+    pub(super) fn remap_selection_after_height_resize(&mut self, archived: usize, rows: usize) {
+        self.shift_selection_after_full_scroll(archived);
+        if self.selection.as_ref().is_some_and(|selection| {
+            let (start, end) = selection.bounds();
+            start.row >= rows as i32 || end.row >= rows as i32
+        }) {
+            self.selection = None;
+        }
+    }
+
     pub(super) fn erase_multicells_crossing_row_with_selection(
         &mut self,
         boundary: usize,

@@ -2277,12 +2277,18 @@ impl Terminal {
             .into_iter()
             .filter_map(|row| shell_logical_anchor(&self.grid, row).map(|anchor| (row, anchor)))
             .collect::<Vec<_>>();
-        self.grid.resize(cols, rows);
+        let same_columns = self.cols == cols;
+        let primary_shift = self.grid.resize_with_row_shift(cols, rows);
         let resize_blank = Cell {
             flags: CellFlags::DIRTY,
             ..Cell::default()
         };
-        self.grid.repair_multicells(&resize_blank);
+        if same_columns && !self.alt_screen_active {
+            self.remap_selection_after_height_resize(primary_shift, rows);
+            self.repair_multicells_with_selection(&resize_blank);
+        } else {
+            self.grid.repair_multicells(&resize_blank);
+        }
         let remapped_shell_rows = shell_anchors
             .into_iter()
             .filter_map(|(old_row, anchor)| {
@@ -2302,8 +2308,13 @@ impl Terminal {
                 row,
                 scroll_offset: self.grid.scroll_offset(),
             });
-        self.alt_grid.resize(cols, rows);
-        self.alt_grid.repair_multicells(&resize_blank);
+        let alternate_shift = self.alt_grid.resize_with_row_shift(cols, rows);
+        if same_columns && self.alt_screen_active {
+            self.remap_selection_after_height_resize(alternate_shift, rows);
+            self.repair_multicells_with_selection(&resize_blank);
+        } else {
+            self.alt_grid.repair_multicells(&resize_blank);
+        }
         if let Some(snapshot) = &mut self.synchronized_output_snapshot {
             if snapshot.grid.cols() != cols || snapshot.grid.rows() != rows {
                 snapshot.selection = None;
@@ -6356,6 +6367,148 @@ mod tests {
             term.set_selection(Some(selection));
             assert_eq!(term.get_selection_text().as_deref(), Some("ab 界Z"));
         }
+    }
+
+    #[test]
+    fn height_resize_selection_matches_retained_row_identity() {
+        for limit in [0, 1, 4] {
+            for cursor_row in 0..5 {
+                for new_rows in 1..=7 {
+                    for ty in [
+                        SelectionType::Simple,
+                        SelectionType::Semantic,
+                        SelectionType::Block,
+                        SelectionType::Lines,
+                    ] {
+                        for selected_row in -2..5 {
+                            for multiline in [false, true] {
+                                for reverse in [false, true] {
+                                    let mut term = Terminal::new(4, 5);
+                                    term.grid_mut().set_scrollback_limit(limit);
+                                    term.process(
+                                        b"aaaa\r\nbbbb\r\ncccc\r\ndddd\r\neeee\r\nffff\r\ngggg",
+                                    );
+                                    let oldest = -(term.grid().scrollback_len() as i32);
+                                    if selected_row < oldest {
+                                        continue;
+                                    }
+                                    let mut start = Point::new(selected_row, 1);
+                                    let mut end =
+                                        Point::new(if multiline { 4 } else { selected_row }, 2);
+                                    if reverse {
+                                        std::mem::swap(&mut start, &mut end);
+                                    }
+                                    let mut selection = Selection::new(start, ty);
+                                    selection.update(end);
+                                    selection.finish();
+                                    let original: Vec<_> = selection
+                                        .row_range()
+                                        .map(|row| {
+                                            (
+                                                row,
+                                                term.grid().row_at_offset(row).unwrap().to_string(),
+                                            )
+                                        })
+                                        .collect();
+                                    term.set_selection(Some(selection.clone()));
+                                    let text = term.get_selection_text();
+                                    term.grid_mut().set_cursor(cursor_row, 0);
+                                    term.resize(4, new_rows);
+                                    let new_oldest = -(term.grid().scrollback_len() as i32);
+                                    let mut uniform = None;
+                                    let mut survives = true;
+                                    for (old_row, text) in original {
+                                        let mapped = (new_oldest..new_rows as i32).find(|&row| {
+                                            term.grid().row_at_offset(row).unwrap().to_string()
+                                                == text
+                                        });
+                                        if let Some(row) = mapped {
+                                            let shift = row - old_row;
+                                            if uniform.is_some_and(|prior| prior != shift) {
+                                                survives = false;
+                                            }
+                                            uniform = Some(shift);
+                                        } else {
+                                            survives = false;
+                                        }
+                                    }
+                                    assert_eq!(
+                                        term.selection().is_some(),
+                                        survives,
+                                        "limit={limit} cursor={cursor_row} rows={new_rows} type={ty:?} {start:?}..{end:?}"
+                                    );
+                                    if survives {
+                                        let shift = uniform.unwrap();
+                                        let actual = term.selection().unwrap();
+                                        assert_eq!(
+                                            actual.start,
+                                            Point::new(start.row + shift, start.col)
+                                        );
+                                        assert_eq!(
+                                            actual.end,
+                                            Point::new(end.row + shift, end.col)
+                                        );
+                                        assert_eq!(actual.ty, ty);
+                                        assert!(!actual.active);
+                                        assert_eq!(term.get_selection_text(), text);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn height_resize_retires_clipped_multicells_and_isolates_frozen_selection() {
+        for alternate in [false, true] {
+            let mut term = Terminal::new(12, 5);
+            if alternate {
+                term.process(b"\x1b[?1049h");
+            }
+            term.process(b"\x1b]66;s=3;X\x07");
+            term.set_selection(Some(Selection::new(Point::new(0, 0), SelectionType::Block)));
+            term.resize(12, 5);
+            assert_eq!(term.get_selection_text().as_deref(), Some("X"));
+            term.resize(12, 2);
+            assert!(term.selection().is_none());
+            assert!(term.grid().cell(0, 0).unwrap().content.is_empty());
+
+            let mut frozen = Terminal::new(12, 4);
+            if alternate {
+                frozen.process(b"\x1b[?1049h");
+            }
+            frozen.process(b"anchor\r\nsecond\r\nthird\r\nlast");
+            let mut selection = Selection::new(Point::new(0, 0), SelectionType::Simple);
+            selection.update(Point::new(0, 5));
+            frozen.set_selection(Some(selection));
+            frozen.process(b"\x1b[?2026h");
+            frozen.resize(12, 4);
+            assert_eq!(frozen.get_selection_text().as_deref(), Some("anchor"));
+            frozen.resize(12, 2);
+            assert!(frozen.selection().is_none()); // Resized frozen projection is retired.
+            frozen.process(b"\x1b[?2026l");
+            if alternate {
+                assert!(frozen.selection().is_none()); // Alternate grid has no history retention.
+            } else {
+                assert_eq!(frozen.get_selection_text().as_deref(), Some("anchor"));
+                assert_eq!(frozen.selection().unwrap().start.row, -2);
+            }
+        }
+    }
+
+    #[test]
+    fn height_resize_moves_selection_with_archived_rows() {
+        let mut term = Terminal::new(12, 4);
+        term.process(b"anchor\r\nsecond\r\nthird\r\nlast");
+        let mut selection = Selection::new(Point::new(0, 0), SelectionType::Simple);
+        selection.update(Point::new(0, 5));
+        term.set_selection(Some(selection));
+        term.resize(12, 2);
+        assert_eq!(term.selection().unwrap().start, Point::new(-2, 0));
+        assert_eq!(term.get_selection_text().as_deref(), Some("anchor"));
     }
 
     #[test]

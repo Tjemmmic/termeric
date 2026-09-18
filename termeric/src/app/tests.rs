@@ -3,6 +3,44 @@ use crate::plugin::hooks::{HookResponse, Plugin, PluginCommand};
 
 #[cfg(unix)]
 #[test]
+fn native_height_resize_keeps_canonical_text_but_cancels_old_drag_coordinates() {
+    use termeric_core::Point;
+    for split in [false, true] {
+        for retained in [false, true] {
+            let mut app = if split {
+                divider_owner_fixture()
+            } else {
+                scrollbar_owner_fixture()
+            };
+            let terminal = app.active_terminal_mut().unwrap();
+            terminal.resize(12, 4);
+            terminal.process(b"\x1bc\x1b[3Janchor\r\nsecond\r\nthird\r\nlast");
+            app.begin_native_selection(MouseButton::Left, Point::new(0, 0));
+            app.extend_native_selection(Point::new(0, 5));
+            if !retained {
+                app.active_terminal_mut()
+                    .unwrap()
+                    .grid_mut()
+                    .set_scrollback_limit(0);
+            }
+            app.active_terminal_mut().unwrap().resize(12, 2);
+            app.extend_native_selection(Point::new(0, 5));
+            app.finish_native_selection();
+            assert!(!app.mouse_pressed);
+            assert!(app.mouse_state.selection.is_none());
+            assert_eq!(
+                app.active_terminal()
+                    .unwrap()
+                    .get_selection_text()
+                    .as_deref(),
+                retained.then_some("anchor")
+            );
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn native_selection_follows_grapheme_growth_collision_and_skip_policy() {
     use termeric_core::Point;
     for split in [false, true] {

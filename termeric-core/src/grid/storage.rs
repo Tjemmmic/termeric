@@ -820,14 +820,15 @@ impl GridStorage {
     }
 
     /// Resize the grid with text reflow when columns change.
-    /// Accepts cursor position and returns the new cursor position after reflow.
+    /// Return the new cursor position and number of viewport rows archived.
+    /// The row count is exact even when retention limits evict archive rows.
     pub fn resize(
         &mut self,
         new_cols: usize,
         new_rows: usize,
         cursor_row: usize,
         cursor_col: usize,
-    ) -> (usize, usize) {
+    ) -> ((usize, usize), usize) {
         let old_cols = self.cols;
         let mut new_cursor = (cursor_row, cursor_col);
 
@@ -928,7 +929,7 @@ impl GridStorage {
         self.enforce_scrollback_limits();
 
         self.cols = new_cols;
-        new_cursor
+        (new_cursor, rows_pushed_top)
     }
 
     /// Reflow compact history one logical line at a time. This avoids expanding
@@ -1429,7 +1430,7 @@ mod tests {
         fill_row(&mut storage, 1, "ghZ");
         let mut cursor = (1, 2);
         for cols in [9, 3, 5, 1, 9] {
-            cursor = storage.resize(cols, 2, cursor.0, cursor.1);
+            cursor = storage.resize(cols, 2, cursor.0, cursor.1).0;
             assert_eq!(
                 storage.cell(cursor.0, cursor.1).unwrap().content.to_text(),
                 "Z"
@@ -1473,7 +1474,7 @@ mod tests {
             fill_row(&mut storage, 1, "efgQ");
             let mut cursor = (1, 3);
             for cols in [1, 8, 3, 64] {
-                cursor = storage.resize(cols, 2, cursor.0, cursor.1);
+                cursor = storage.resize(cols, 2, cursor.0, cursor.1).0;
                 assert_eq!(
                     storage.cell(cursor.0, cursor.1).unwrap().content.to_text(),
                     "Q"
@@ -1547,7 +1548,7 @@ mod tests {
             fill_row(&mut storage, i, &format!("LINE{}", i));
         }
 
-        let (new_row, new_col) = storage.resize(10, 3, 9, 0);
+        let ((new_row, new_col), _) = storage.resize(10, 3, 9, 0);
 
         // Cursor should be at the bottom of the 3-row visible area
         assert_eq!(new_row, 2);
@@ -1664,7 +1665,7 @@ mod tests {
             ..Cell::default()
         };
         *storage.row_mut(2).unwrap().get_mut(2).unwrap() = blank.clone();
-        let cursor = storage.resize(3, 2, 2, 0);
+        let (cursor, _) = storage.resize(3, 2, 2, 0);
         assert_eq!(cursor, (1, 0));
         assert_eq!(storage.scrollback_len(), 1);
         assert_eq!(storage.scrollback_row(0).unwrap().to_string(), "top");
@@ -1790,7 +1791,7 @@ mod tests {
         // rows 2-3 empty
         fill_row(&mut storage, 4, "$ "); // prompt with cursor
 
-        let (new_row, _new_col) = storage.resize(5, 3, 4, 2);
+        let ((new_row, _new_col), _) = storage.resize(5, 3, 4, 2);
 
         // Cursor must be in the visible area [0..2]
         assert!(

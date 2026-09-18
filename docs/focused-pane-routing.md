@@ -286,7 +286,22 @@ tests cover growth, wrapping, margins, no-autowrap skips, frozen alternate
 screens, descriptor/wide invariants, and single/split-pane drag reconciliation.
 The collision policy follows [Kitty's text-sizing rules](https://sw.kovidgoyal.net/kitty/text-sizing-protocol/#wrapping-and-overwriting-behavior).
 
-Resize/reflow still needs a complete selection-damage audit; this is not a claim
+Height-only resize now translates live selection rows by the storage layer's
+exact archived-row count, not by the change in history length (which can stay
+capped). It preserves endpoint direction, columns, type, and active state when
+all selected rows survive. Evicted history and discarded bottom rows retire the
+selection instead of clamping onto unrelated content. Repair of a clipped
+multicell reports further damage after mapping. This adds no row/text copy,
+history scan, or retained mapping table. Frozen selections keep their existing
+policy: identical dimensions preserve them; changed dimensions retire the frozen
+projection while independently updating live state. Native resize cancels the
+old drag geometry without restoring stale anchors over the canonical selection.
+Hermetic tests use retained-row identities across cursor positions, heights,
+selection shapes/directions, and history limits, plus clipped multicells,
+primary/alternate frozen screens, and single/split-pane pointer reconciliation.
+
+Width-changing reflow still needs grapheme-level selection mapping; its old
+live anchors are not yet remapped by this height-only fix. This is not a claim
 that every grid mutation is covered. Native desktop acceptance remains deferred.
 
 ## Filtered selection and accessible text
