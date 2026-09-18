@@ -27,7 +27,7 @@ use frame_io::write_server_frame;
 
 const MAX_CLIENTS: usize = 64;
 const MAX_CONCURRENT_UPLOADS: usize = 4;
-const UPLOAD_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+const UPLOAD_FRAME_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_RETAINED_PARTIAL_UPLOADS: usize = 4;
 const MAX_RETAINED_UPLOAD_BYTES: u64 =
     protocol::MAX_FILE_UPLOAD_BYTES * MAX_RETAINED_PARTIAL_UPLOADS as u64;
@@ -640,21 +640,21 @@ fn handle_client(
     handle_client_with_setup_timeout(stream, expected_token, state, Duration::from_secs(10))
 }
 
-fn read_client_setup_frame(
+fn read_client_frame_with_timeout(
     stream: &mut UnixStream,
     timeout: Duration,
 ) -> anyhow::Result<ClientFrame> {
-    struct SetupReader<'a> {
+    struct FrameReader<'a> {
         stream: &'a mut UnixStream,
         deadline: Instant,
     }
-    impl Read for SetupReader<'_> {
+    impl Read for FrameReader<'_> {
         fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
             let remaining = self.deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::TimedOut,
-                    "domain connection setup frame deadline exceeded",
+                    "domain client frame read deadline exceeded",
                 ));
             }
             self.stream.set_read_timeout(Some(remaining))?;
@@ -666,7 +666,7 @@ fn read_client_setup_frame(
     // Restore socket policy on both success and failure; an established relay
     // must not inherit the setup deadline as an idle-disconnect timer.
     let previous = stream.read_timeout()?;
-    let result = protocol::read_frame(&mut SetupReader {
+    let result = protocol::read_frame(&mut FrameReader {
         stream,
         deadline: Instant::now() + timeout,
     });
@@ -683,7 +683,7 @@ fn handle_client_with_setup_timeout(
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
     validate_peer(&stream)?;
     if let Err(message) = validate_hello(
-        read_client_setup_frame(&mut stream, setup_timeout)?,
+        read_client_frame_with_timeout(&mut stream, setup_timeout)?,
         expected_token,
     ) {
         write_server_frame(&mut stream, &ServerFrame::Error { message })?;
@@ -699,7 +699,8 @@ fn handle_client_with_setup_timeout(
     // preserves it between sends. Streaming queues also enforce capacity.
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
 
-    let ClientFrame::Request { request } = read_client_setup_frame(&mut stream, setup_timeout)?
+    let ClientFrame::Request { request } =
+        read_client_frame_with_timeout(&mut stream, setup_timeout)?
     else {
         anyhow::bail!("expected one domain request after negotiation");
     };
@@ -798,7 +799,7 @@ fn serve_file_upload(
     retention: UploadRetention,
     resume_only: bool,
 ) -> anyhow::Result<()> {
-    stream.set_read_timeout(Some(UPLOAD_IDLE_TIMEOUT))?;
+    stream.set_read_timeout(Some(UPLOAD_FRAME_TIMEOUT))?;
     let result = receive_file_upload(
         &mut stream,
         state,
@@ -820,6 +821,11 @@ fn serve_file_upload(
             },
         ),
     }
+}
+
+fn read_upload_frame(stream: &mut UnixStream) -> anyhow::Result<ClientFrame> {
+    let timeout = stream.read_timeout()?.unwrap_or(UPLOAD_FRAME_TIMEOUT);
+    read_client_frame_with_timeout(stream, timeout)
 }
 
 fn receive_file_upload(
@@ -1087,7 +1093,7 @@ fn receive_file_upload(
     }
 
     while offset < total_bytes {
-        let frame = match protocol::read_frame(stream) {
+        let frame = match read_upload_frame(stream) {
             Ok(frame) => frame,
             Err(error) => {
                 temporary.preserve();
@@ -1119,7 +1125,7 @@ fn receive_file_upload(
             .context("write temporary upload")?;
         offset += data.len() as u64;
     }
-    let final_frame = match protocol::read_frame::<ClientFrame>(stream) {
+    let final_frame = match read_upload_frame(stream) {
         Ok(frame) => frame,
         Err(error) => {
             temporary.preserve();
@@ -3329,6 +3335,14 @@ impl DomainRuntime {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "server_test_support.rs"]
+mod test_support;
+
+#[cfg(test)]
+#[path = "upload_deadline_tests.rs"]
+mod upload_deadline_tests;
 
 #[cfg(test)]
 #[path = "topology_lifecycle_tests.rs"]

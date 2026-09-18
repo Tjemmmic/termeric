@@ -1,36 +1,7 @@
 //! Socket-only lifecycle fixtures: no PTY, shell, desktop, or remote host.
 use super::*;
 
-const DOMAIN: &str = "11111111111111111111111111111111";
-
-fn state() -> SharedState {
-    let domain = DomainRuntime {
-        id: DOMAIN.into(),
-        name: "topology-fixture".into(),
-        created_at: String::new(),
-        workspace_id: DOMAIN.into(),
-        active_tab: 0,
-        next_tab: 0,
-        next_pane: 0,
-        next_split: 0,
-        topology_revision: 1,
-        topology_subscribers: Vec::new(),
-        tabs: Vec::new(),
-    };
-    Arc::new(Mutex::new(ServerState {
-        domains: HashMap::from([(DOMAIN.into(), domain)]),
-        allow_screen_checksum_reports: false,
-        xterm_keyboard_type: XtermKeyboardType::Normal,
-        shutdown: Arc::new(AtomicBool::new(false)),
-        wake_socket: None,
-        next_attachment: AtomicU64::new(1),
-        next_topology_subscription: AtomicU64::new(1),
-        active_uploads: 0,
-        upload_ids_in_flight: HashMap::new(),
-        upload_records: HashMap::new(),
-        upload_janitor_running: false,
-    }))
-}
+use super::test_support::{DOMAIN, state};
 
 #[test]
 fn authenticated_client_must_send_a_complete_initial_request_before_setup_deadline() {
@@ -99,7 +70,7 @@ fn partial_setup_header_and_payload_cannot_renew_the_deadline() {
                 }
             }
         });
-        let result = read_client_setup_frame(&mut server, Duration::from_millis(40));
+        let result = read_client_frame_with_timeout(&mut server, Duration::from_millis(40));
         assert_eq!(server.read_timeout().unwrap(), None);
         drop(server);
         writer.join().unwrap();
@@ -122,7 +93,7 @@ fn complete_setup_frame_restores_the_previous_socket_timeout() {
     };
     protocol::write_frame(&mut client, &frame).unwrap();
     assert_eq!(
-        read_client_setup_frame(&mut server, Duration::from_secs(1)).unwrap(),
+        read_client_frame_with_timeout(&mut server, Duration::from_secs(1)).unwrap(),
         frame
     );
     assert_eq!(server.read_timeout().unwrap(), previous);

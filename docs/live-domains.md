@@ -243,10 +243,23 @@ the length header and JSON body; trickling partial bytes does not renew it.
 Authenticated clients that never submit a request are disconnected and release
 their client slot. The setup reader restores the preceding socket timeout on
 success and failure, and completed setup clears the read timeout before entering
-a long-lived attachment/subscription (uploads apply their own idle policy).
+a long-lived attachment/subscription (uploads apply their own frame policy).
 Socket-only fixtures check slot release, partial-header/body deadlines, timeout
 restoration, and an established idle subscription surviving its setup budget.
 These are setup I/O limits, not a total request-execution or transfer deadline.
+
+Upload chunks, cancellation, and the final commit each have a separate
+thirty-second complete-frame read deadline, replacing the former per-read idle
+timeout that partial bytes could renew indefinitely. This includes the wait
+for the frame's first byte, length header, and JSON body. Each completed frame
+starts a fresh budget; the overall transfer is not limited to thirty seconds.
+A timed-out partial frame is never applied. The active upload slot is released,
+only fully accepted chunks are retained under the existing bounded resume/TTL
+policy, and no destination is published without a complete valid commit.
+Local socket/temporary-file fixtures exercise timeout during both a chunk and
+the final commit, inspect retained bytes and inactive-slot accounting, then
+resume on a fresh connection using the same validated offset/prefix hash and
+verify exact published contents. Slow-link/remote-host acceptance is separate.
 
 PTY reader threads never write to client sockets. They publish into bounded
 64-frame queues; a full/disconnected subscriber is evicted. PTY attachment
