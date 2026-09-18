@@ -2504,6 +2504,7 @@ mod unix {
     use super::*;
     use flate2::{Decompress, FlushDecompress, Status};
     use std::collections::{HashMap, HashSet};
+    #[cfg(any(test, not(target_os = "linux")))]
     use std::ffi::CString;
     use std::fs::{self, File, Permissions};
     use std::io::{self, Write};
@@ -3134,9 +3135,9 @@ mod unix {
                     created,
                 )
                 .map_err(|error| TransactionError::io(&id, "record link", error))?;
-                apply_mtime(&path, mtime, is_symlink).map_err(|error| {
-                    TransactionError::io(&id, "set link modification time", error)
-                })?;
+                apply_link_mtime(created.last().expect("link was recorded"), mtime).map_err(
+                    |error| TransactionError::io(&id, "set link modification time", error),
+                )?;
             }
 
             directories.sort_by_key(|(_, path)| std::cmp::Reverse(path.components().count()));
@@ -3649,22 +3650,62 @@ mod unix {
         }
     }
 
+    fn apply_link_mtime(entry: &CreatedPath, mtime_ns: Option<i64>) -> io::Result<()> {
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::fd::AsRawFd;
+
+            let Some(mtime_ns) = mtime_ns else {
+                return Ok(());
+            };
+            let file = entry._identity_guard.as_ref().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::PermissionDenied, "link handle is missing")
+            })?;
+            let metadata = file.metadata()?;
+            let kind_matches = match entry.kind {
+                CreatedKind::Symlink => metadata.file_type().is_symlink(),
+                CreatedKind::File => metadata.is_file(),
+                CreatedKind::Directory => false,
+            };
+            if !kind_matches || metadata.dev() != entry.device || metadata.ino() != entry.inode {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "link handle does not match its recorded identity",
+                ));
+            }
+            let times = timestamp_times(mtime_ns)?;
+            // SAFETY: file owns the live descriptor, c"" is NUL-terminated,
+            // and times contains exactly two initialized timespec values.
+            // AT_EMPTY_PATH operates on the pinned O_PATH inode; NOFOLLOW
+            // keeps symlink timestamps on the link, never its target. Do not
+            // fall back to a pathname if this requires a newer kernel.
+            let result = unsafe {
+                libc::utimensat(
+                    file.as_raw_fd(),
+                    c"".as_ptr(),
+                    times.as_ptr(),
+                    libc::AT_EMPTY_PATH | libc::AT_SYMLINK_NOFOLLOW,
+                )
+            };
+            if result == 0 {
+                Ok(())
+            } else {
+                Err(io::Error::last_os_error())
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            // Non-Linux hosts still reject transfers at the application gate.
+            apply_mtime(&entry.path, mtime_ns, entry.kind == CreatedKind::Symlink)
+        }
+    }
+
+    #[cfg(any(test, not(target_os = "linux")))]
     fn apply_mtime(path: &Path, mtime_ns: Option<i64>, symlink: bool) -> io::Result<()> {
         let Some(mtime_ns) = mtime_ns else {
             return Ok(());
         };
-        let seconds = mtime_ns.div_euclid(1_000_000_000);
-        let nanos = mtime_ns.rem_euclid(1_000_000_000);
-        let times = [
-            libc::timespec {
-                tv_sec: seconds as libc::time_t,
-                tv_nsec: nanos as libc::c_long,
-            },
-            libc::timespec {
-                tv_sec: seconds as libc::time_t,
-                tv_nsec: nanos as libc::c_long,
-            },
-        ];
+        let times = timestamp_times(mtime_ns)?;
         let path = CString::new(path.as_os_str().as_bytes())
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains a NUL byte"))?;
         let flags = if symlink {
@@ -3681,6 +3722,18 @@ mod unix {
         } else {
             Err(io::Error::last_os_error())
         }
+    }
+
+    fn timestamp_times(mtime_ns: i64) -> io::Result<[libc::timespec; 2]> {
+        // time_t is narrower on some Unix targets; never wrap a wire timestamp.
+        #[allow(clippy::useless_conversion)]
+        let seconds = mtime_ns.div_euclid(1_000_000_000).try_into().map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidInput, "timestamp is out of range")
+        })?;
+        Ok([libc::timespec {
+            tv_sec: seconds,
+            tv_nsec: mtime_ns.rem_euclid(1_000_000_000) as libc::c_long,
+        }; 2])
     }
 
     fn relative_path(base: &Path, target: &Path) -> Option<PathBuf> {
@@ -4343,6 +4396,135 @@ mod unix {
             );
             assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
             assert_eq!(fs::read(&destination).unwrap(), b"keep");
+        }
+
+        #[test]
+        #[cfg(target_os = "linux")]
+        fn link_timestamps_use_the_retained_inode_after_path_replacement() {
+            for symbolic in [false, true] {
+                for replacement_symbolic in [false, true] {
+                    let root = tempdir().unwrap();
+                    let source = root.path().join("source");
+                    let path = root.path().join("link");
+                    let moved = root.path().join("moved");
+                    let victim = root.path().join("victim");
+                    fs::write(&source, b"source").unwrap();
+                    apply_mtime(&source, Some(1_700_000_000_123_456_789), false).unwrap();
+                    let source_before = fs::metadata(&source).unwrap();
+                    let kind = if symbolic {
+                        std::os::unix::fs::symlink(&source, &path).unwrap();
+                        CreatedKind::Symlink
+                    } else {
+                        fs::hard_link(&source, &path).unwrap();
+                        CreatedKind::File
+                    };
+                    let mut created = Vec::new();
+                    record_created(&path, kind, &mut created).unwrap();
+                    fs::rename(&path, &moved).unwrap();
+                    fs::write(&victim, b"keep").unwrap();
+                    if replacement_symbolic {
+                        std::os::unix::fs::symlink(&victim, &path).unwrap();
+                    } else {
+                        fs::write(&path, b"replacement").unwrap();
+                    }
+                    let replacement_before = fs::symlink_metadata(&path).unwrap();
+                    let victim_before = fs::metadata(&victim).unwrap();
+                    apply_link_mtime(&created[0], Some(-1)).unwrap();
+                    let owned = fs::symlink_metadata(&moved).unwrap();
+                    assert_eq!((owned.mtime(), owned.mtime_nsec()), (-1, 999_999_999));
+                    for (path, before) in [(&path, replacement_before), (&victim, victim_before)] {
+                        let after = fs::symlink_metadata(path).unwrap();
+                        assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+                        assert_eq!(
+                            (after.mtime(), after.mtime_nsec()),
+                            (before.mtime(), before.mtime_nsec())
+                        );
+                    }
+                    let source_after = fs::metadata(&source).unwrap();
+                    let expected = if symbolic {
+                        (source_before.mtime(), source_before.mtime_nsec())
+                    } else {
+                        (-1, 999_999_999)
+                    };
+                    assert_eq!((source_after.mtime(), source_after.mtime_nsec()), expected);
+                    assert_eq!(fs::read(&victim).unwrap(), b"keep");
+                    assert_eq!(fs::read(&source).unwrap(), b"source");
+                }
+            }
+        }
+
+        #[test]
+        #[cfg(target_os = "linux")]
+        fn link_timestamp_updates_require_the_recorded_identity() {
+            for invalid in ["missing", "foreign-link", "wrong-kind", "wrong-inode"] {
+                let root = tempdir().unwrap();
+                let source = root.path().join("source");
+                let first = root.path().join("first");
+                let second = root.path().join("second");
+                fs::write(&source, b"keep").unwrap();
+                std::os::unix::fs::symlink(&source, &first).unwrap();
+                std::os::unix::fs::symlink(&source, &second).unwrap();
+                let mut created = Vec::new();
+                record_created(&first, CreatedKind::Symlink, &mut created).unwrap();
+                record_created(&second, CreatedKind::Symlink, &mut created).unwrap();
+                let snapshots: Vec<_> = [&source, &first, &second]
+                    .into_iter()
+                    .map(|path| (path, fs::symlink_metadata(path).unwrap()))
+                    .collect();
+                match invalid {
+                    "missing" => created[0]._identity_guard = None,
+                    "foreign-link" => {
+                        created[0]._identity_guard = Some(
+                            created[1]
+                                ._identity_guard
+                                .as_ref()
+                                .unwrap()
+                                .try_clone()
+                                .unwrap(),
+                        )
+                    }
+                    "wrong-kind" => created[0].kind = CreatedKind::File,
+                    "wrong-inode" => created[0].inode ^= 1,
+                    _ => unreachable!(),
+                }
+                // Missing timestamps perform no syscall, even without a guard.
+                apply_link_mtime(&created[0], None).unwrap();
+                assert_eq!(
+                    apply_link_mtime(&created[0], Some(-1)).unwrap_err().kind(),
+                    io::ErrorKind::PermissionDenied,
+                    "{invalid}"
+                );
+                for (path, before) in snapshots {
+                    let after = fs::symlink_metadata(path).unwrap();
+                    assert_eq!(
+                        (after.mtime(), after.mtime_nsec()),
+                        (before.mtime(), before.mtime_nsec()),
+                        "{invalid}: {path:?}"
+                    );
+                }
+            }
+        }
+
+        #[test]
+        #[cfg(target_os = "linux")]
+        fn dangling_link_timestamps_survive_unlink_without_path_recovery() {
+            let root = tempdir().unwrap();
+            let path = root.path().join("link");
+            std::os::unix::fs::symlink("missing", &path).unwrap();
+            let mut created = Vec::new();
+            record_created(&path, CreatedKind::Symlink, &mut created).unwrap();
+            fs::remove_file(&path).unwrap();
+            apply_link_mtime(&created[0], Some(-1_000_000_001)).unwrap();
+            let metadata = created[0]
+                ._identity_guard
+                .as_ref()
+                .unwrap()
+                .metadata()
+                .unwrap();
+            assert!(metadata.file_type().is_symlink());
+            assert_eq!((metadata.mtime(), metadata.mtime_nsec()), (-2, 999_999_999));
+            assert!(fs::symlink_metadata(&path).is_err());
+            assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
         }
 
         #[test]

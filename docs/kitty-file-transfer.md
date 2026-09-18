@@ -101,7 +101,13 @@ timestamps and permissions through the retained staging handle and are synced
 before no-overwrite publication; there is no destination-path timestamp update
 after publication. Regressions cover metadata before publication, absent and
 signed timestamps, restrictive modes, replacement paths, and unchanged existing
-destinations after publication refusal. Link timestamps remain path-based.
+destinations after publication refusal. On Linux, link timestamps use the
+recorded metadata-only handle with `utimensat(AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW)`
+after checking type and device/inode identity. This requires Linux 5.8 or newer
+when link timestamps are supplied; missing handles, kernel rejection, and stale
+identity fail without a pathname fallback. Tests cover hard-link shared-inode
+semantics, untouched symlink targets and replacement paths, absent timestamps,
+invalid guards, and dangling links whose names were removed.
 Bookkeeping does not
 open symbolic-link targets as data files, so links to FIFOs do not wait for a target
 writer. Local regressions cover
