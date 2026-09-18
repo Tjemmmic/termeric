@@ -40,7 +40,8 @@ and real blank cells remain positions. The same row-view iterator is used for
 shell prompt-row bookmarks and reads compact history without expanding rows or
 cloning grapheme payloads. Tests retain both copy endpoints, selection direction,
 and selected Unicode text through narrowing, one-column collapse, and widening,
-including fully archived logical lines. OSC 66 retains its physical-cell policy;
+including fully archived logical lines and lines spanning history and the
+viewport. OSC 66 retains its physical-cell policy;
 this does not establish behavior for clipped/removed blocks or evicted history,
 nor native shell/IME resize acceptance.
 Compact rows retain one machine-word spacer count, included in their existing

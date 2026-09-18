@@ -60,6 +60,17 @@ round trips, archived and scrolled snapshot rows, cursor placement, and edits;
 this is in-memory grid/history evidence, not native compositor or saved-session
 replay acceptance.
 
+A soft-wrapped logical line can cross the compact-history/viewport boundary.
+Width changes reflow its archived prefix together with the visible continuation,
+including cursor mapping and synthetic wide-wrap padding. Completed history
+lines remain on the compact-history reflow path; only the crossing line is
+expanded, moving its graphemes rather than cloning them. Rows returned to history
+are moved in a batch, avoiding repeated shifts of the viewport vector. Existing
+line/byte eviction limits and cursor-preserving bottom clipping still apply.
+Tests cover repeated widening, narrowing and one-column collapse, hard-line
+separation, Unicode copy endpoints across the boundary, and history accounting
+under eviction. No native latency or shell-resize acceptance is inferred.
+
 Normal drag and semantic selections copy logical text: soft-wrapped rows join
 without a newline, and known synthetic wide-wrap padding is omitted. Hard line
 breaks remain newlines, and explicit or styled blank cells remain content.

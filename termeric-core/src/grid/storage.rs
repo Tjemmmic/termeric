@@ -826,16 +826,34 @@ impl GridStorage {
         let mut new_cursor = (cursor_row, cursor_col);
 
         if new_cols != old_cols {
-            // Reflow scrollback (no cursor tracking needed)
-            let old_scrollback = std::mem::take(&mut self.scrollback);
+            // A wrapped history tail continues into the first visible row.
+            // Keep that one logical line with the viewport reflow so the
+            // storage boundary never becomes an artificial hard line break.
+            let mut old_scrollback = std::mem::take(&mut self.scrollback);
+            let boundary = if self.rows.is_empty() {
+                old_scrollback.len()
+            } else {
+                old_scrollback
+                    .iter()
+                    .rposition(|row| !row.wrapped)
+                    .map_or(0, |index| index + 1)
+            };
+            let continuation = old_scrollback.split_off(boundary);
+            let prefix_rows = continuation.len();
             self.scrollback = Self::reflow_scrollback(old_scrollback, new_cols);
             self.recalculate_scrollback_bytes();
 
-            // Reflow visible rows with cursor tracking
+            // Expand only the crossing history line, moving its graphemes.
+            // Its rows are all wrapped; into_reflow_cells removes synthetic
+            // padding before these cells reach the shared logical-line path.
             let old_visible = std::mem::take(&mut self.rows);
-            let cursor_info = Some((cursor_row, cursor_col));
+            let rows = continuation
+                .into_iter()
+                .map(|row| Row::from_cells(row.into_reflow_cells(), true))
+                .chain(old_visible);
+            let cursor_info = Some((cursor_row.saturating_add(prefix_rows), cursor_col));
             let (reflowed, tracked_cursor) =
-                Self::reflow_rows_with_cursor(old_visible, new_cols, cursor_info);
+                Self::reflow_rows_with_cursor(rows, new_cols, cursor_info);
             self.rows = reflowed;
             if let Some(pos) = tracked_cursor {
                 new_cursor = pos;
@@ -875,11 +893,15 @@ impl GridStorage {
             // Don't push more rows than the cursor position — that would
             // push the cursor into scrollback and lose its correct position.
             let max_push = excess.min(new_cursor.0);
-            for _ in 0..max_push {
-                let row = self.rows.remove(0);
-                self.push_scrollback(row);
-                rows_pushed_top += 1;
+            // Move the archive prefix in one batch. Repeated remove(0) would
+            // shift a long boundary-spanning line quadratically.
+            if max_push > 0 {
+                let visible = self.rows.split_off(max_push);
+                for row in std::mem::replace(&mut self.rows, visible) {
+                    self.push_scrollback(row);
+                }
             }
+            rows_pushed_top = max_push;
         }
 
         // Phase 3: if still too many, pop from bottom (content below cursor)
@@ -941,7 +963,7 @@ impl GridStorage {
     /// the cursor at the correct position after resize, which prevents the shell's
     /// SIGWINCH response from corrupting content.
     fn reflow_rows_with_cursor(
-        rows: Vec<Row>,
+        rows: impl IntoIterator<Item = Row>,
         new_cols: usize,
         cursor: Option<(usize, usize)>,
     ) -> (Vec<Row>, Option<(usize, usize)>) {
@@ -1382,6 +1404,87 @@ mod tests {
         storage.resize(10, 1, 0, 0);
 
         assert_eq!(row_text(&storage, 0), "ABCDEFGHIJ");
+    }
+
+    #[test]
+    fn reflow_joins_a_logical_line_across_the_history_viewport_boundary() {
+        let mut storage = GridStorage::new(3, 2);
+        let mut hard_line = Row::new(3);
+        hard_line.get_mut(0).unwrap().set_char('!');
+        storage.push_scrollback(hard_line);
+        let mut prefix = Row::new(3);
+        for (col, ch) in "abc".chars().enumerate() {
+            prefix.get_mut(col).unwrap().set_char(ch);
+        }
+        prefix.set_wrapped(true);
+        storage.push_scrollback(prefix);
+        fill_row(&mut storage, 0, "def");
+        storage.row_mut(0).unwrap().set_wrapped(true);
+        fill_row(&mut storage, 1, "ghZ");
+        let mut cursor = (1, 2);
+        for cols in [9, 3, 5, 1, 9] {
+            cursor = storage.resize(cols, 2, cursor.0, cursor.1);
+            assert_eq!(
+                storage.cell(cursor.0, cursor.1).unwrap().content.to_text(),
+                "Z"
+            );
+            let mut logical_lines = Vec::new();
+            let mut text = String::new();
+            for index in -(storage.scrollback_len() as i32)..2 {
+                let row = storage.row_at_offset(index).unwrap();
+                text.push_str(&row.to_string());
+                if !row.is_wrapped() {
+                    logical_lines.push(std::mem::take(&mut text));
+                }
+            }
+            logical_lines.retain(|line| !line.is_empty());
+            assert_eq!(logical_lines, ["!", "abcdefghZ"], "cols={cols}");
+            if cols == 9 {
+                assert_eq!(storage.scrollback_len(), 1);
+                assert_eq!(row_text(&storage, 0), "abcdefghZ");
+                assert_eq!(cursor, (0, 8));
+            }
+        }
+    }
+
+    #[test]
+    fn boundary_reflow_preserves_history_accounting_and_eviction_limits() {
+        for (line_limit, byte_limit) in [(64, 65_536), (10_000, 2_048)] {
+            let mut storage = GridStorage::new(4, 2);
+            storage.set_scrollback_limit(line_limit);
+            storage.set_scrollback_byte_limit(byte_limit);
+            for _ in 0..32 {
+                let mut prefix = Row::new(4);
+                for cell in prefix.iter_mut() {
+                    cell.set_char('a');
+                }
+                prefix.set_wrapped(true);
+                storage.push_scrollback(prefix);
+            }
+            assert!(storage.scrollback_len() > 0);
+            fill_row(&mut storage, 0, "abcd");
+            storage.row_mut(0).unwrap().set_wrapped(true);
+            fill_row(&mut storage, 1, "efgQ");
+            let mut cursor = (1, 3);
+            for cols in [1, 8, 3, 64] {
+                cursor = storage.resize(cols, 2, cursor.0, cursor.1);
+                assert_eq!(
+                    storage.cell(cursor.0, cursor.1).unwrap().content.to_text(),
+                    "Q"
+                );
+                let usage = storage.memory_usage();
+                assert!(usage.scrollback_lines <= line_limit);
+                assert!(usage.scrollback_bytes <= byte_limit);
+                assert_eq!(
+                    usage.scrollback_bytes,
+                    storage
+                        .scrollback
+                        .iter()
+                        .map(CompactRow::owned_bytes)
+                        .sum::<usize>()
+                );
+            }
+        }
     }
 
     #[test]

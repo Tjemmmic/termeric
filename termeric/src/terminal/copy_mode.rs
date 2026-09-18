@@ -981,6 +981,38 @@ mod tests {
     }
 
     #[test]
+    fn unicode_selection_survives_reflow_across_the_history_viewport_boundary() {
+        for reverse in [false, true] {
+            let mut terminal = Terminal::new(3, 2);
+            terminal.process("ab界ZQ".as_bytes());
+            assert_eq!(terminal.grid().scrollback_len(), 1);
+            let (start, end) = (Point::new(-1, 0), Point::new(1, 0));
+            let (start, end) = if reverse { (end, start) } else { (start, end) };
+            let mut mode = CopyMode::default();
+            mode.enter(terminal.grid());
+            mode.jump_to(start, terminal.grid_mut());
+            mode.toggle_selection(SelectionType::Simple);
+            mode.jump_to(end, terminal.grid_mut());
+            for cols in [5, 1, 3, 5] {
+                mode.prepare_reflow(terminal.grid());
+                terminal.resize(cols, 2);
+                mode.finish_reflow(terminal.grid_mut());
+                let selection = mode.selection().unwrap();
+                assert_eq!(selection.start > selection.end, reverse);
+                terminal.set_selection(Some(selection));
+                assert_eq!(
+                    terminal.get_selection_text().as_deref(),
+                    Some("ab界ZQ"),
+                    "cols={cols} reverse={reverse}"
+                );
+                if cols == 5 {
+                    assert_eq!(terminal.grid().scrollback_len(), 0);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn cursor_and_selection_follow_logical_text_across_reflow() {
         let mut terminal = Terminal::new(8, 3);
         terminal.process(b"abcdefghijklmno");
