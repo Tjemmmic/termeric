@@ -107,6 +107,18 @@ impl Grid {
                 };
                 *target = (*source).clone();
             }
+            let offset = i32::try_from(row)
+                .ok()
+                .zip(i32::try_from(self.scroll_offset).ok())
+                .and_then(|(row, scroll)| row.checked_sub(scroll));
+            if let Some(source) = offset.and_then(|offset| self.storage.row_at_offset(offset))
+                && let Some(target) = snapshot.row_mut(row)
+            {
+                target.set_wrapped(source.is_wrapped());
+                if source.has_wide_wrap_padding() {
+                    target.mark_wide_wrap_padding();
+                }
+            }
         }
         let blank = Cell {
             flags: CellFlags::DIRTY,

@@ -48,6 +48,18 @@ cursor-preserving archival/clipping rules apply instead. Tests cover visible
 and compact-history tails, colored/protected bottom rows, default-padding
 trimming, and a background-color-erasure narrow/wide round trip.
 
+Rows separately remember a default trailing cell inserted only because a wide
+pair did not fit. Reflow removes this synthetic padding before joining wrapped
+rows, rather than turning it into a real space after widening. Ordinary wide
+wraps, variation-selector expansion, compact history (including recycled rows),
+and synchronized-output visible snapshots preserve this metadata. Explicit
+spaces and styled blanks never qualify. Editing the padding, exposing the row's
+mutable iterator, hard-breaking the row, or performing structural row edits
+retires the marker conservatively. Regressions cover repeated narrow/wide
+round trips, archived and scrolled snapshot rows, cursor placement, and edits;
+this is in-memory grid/history evidence, not native compositor or saved-session
+replay acceptance.
+
 The renderer sends complete multi-scalar clusters through advanced
 `cosmic-text` shaping even when optional programming ligatures are disabled.
 Native color-font glyphs retain RGBA pixels in a separate bounded atlas; mask

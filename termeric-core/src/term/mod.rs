@@ -2403,6 +2403,7 @@ impl Terminal {
                 if self.mode.contains(TerminalMode::AUTOWRAP) && current_right - current_left >= 2 {
                     if let Some(row) = self.grid_mut().row_mut(cursor.row) {
                         row.set_wrapped(current_left == 0 && current_right == cols);
+                        row.mark_wide_wrap_padding();
                     }
                     self.grid_mut().set_cursor(cursor.row, current_left);
                     self.linefeed();
@@ -2630,6 +2631,7 @@ impl Terminal {
             if let Some(row) = self.grid_mut().row_mut(cursor.row) {
                 row.clear_grapheme_at(col);
                 row.set_wrapped(left == 0 && right == cols);
+                row.mark_wide_wrap_padding();
             }
             self.grid_mut().set_cursor(cursor.row, left);
             self.linefeed();
@@ -5804,6 +5806,72 @@ mod tests {
         one_column.resize(4, 4);
         assert!(one_column.rows_text(0, 3).contains('界'));
         assert_wide_invariants(&one_column);
+    }
+
+    #[test]
+    fn wide_text_resize_round_trip_does_not_materialize_wrap_padding() {
+        let mut term = Terminal::new(5, 4);
+        term.process("ab界Z".as_bytes());
+        term.process(b"\x1b[1;5H");
+        for cols in [3, 5, 3, 5] {
+            term.resize(cols, 4);
+        }
+        assert_eq!(term.grid().row(0).unwrap().to_string(), "ab界Z");
+        let cursor = term.grid().cursor();
+        assert_eq!((cursor.row, cursor.col), (0, 4));
+    }
+
+    #[test]
+    fn native_wide_wrap_padding_survives_history_and_visible_snapshots() {
+        let mut term = Terminal::new(3, 3);
+        term.process("ab界Z".as_bytes());
+        assert!(term.grid().row(0).unwrap().has_wide_wrap_padding());
+        let mut snapshot = term.grid().visible_snapshot();
+        snapshot.resize(5, 3);
+        assert_eq!(snapshot.row(0).unwrap().to_string(), "ab界Z");
+        term.process(b"\r\nx\r\ny\r\nz");
+        assert_eq!(term.grid().scrollback_len(), 2);
+        term.grid_mut().set_scroll_offset(2);
+        let mut history_snapshot = term.grid().visible_snapshot();
+        history_snapshot.resize(5, 3);
+        assert_eq!(history_snapshot.row(0).unwrap().to_string(), "ab界Z");
+        term.grid_mut().set_scroll_offset(0);
+        for cols in [5, 3, 5] {
+            term.resize(cols, 3);
+        }
+        assert_eq!(
+            term.grid().scrollback_rows().next().unwrap().to_string(),
+            "ab界Z"
+        );
+
+        // A variation selector can turn the last-column narrow scalar into a
+        // wide cluster. Its vacated default cell is the same synthetic padding.
+        let mut variation = Terminal::new(3, 3);
+        variation.process("ab☺\u{fe0f}Z".as_bytes());
+        variation.resize(5, 3);
+        assert_eq!(variation.grid().row(0).unwrap().to_string(), "ab☺\u{fe0f}Z");
+    }
+
+    #[test]
+    fn wide_wrap_never_discards_explicit_or_edited_blank_cells() {
+        for styled in [false, true] {
+            let mut term = Terminal::new(3, 3);
+            term.process("ab界Z".as_bytes());
+            let cell = term.grid_mut().cell_mut(0, 2).unwrap();
+            if styled {
+                cell.bg_spec = ColorSpec::Indexed(4);
+            } else {
+                cell.set_char(' ');
+            }
+            term.resize(6, 3);
+            assert_eq!(term.grid().row(0).unwrap().to_string(), "ab 界Z");
+            if styled {
+                assert_eq!(
+                    term.grid().cell(0, 2).unwrap().bg_spec,
+                    ColorSpec::Indexed(4)
+                );
+            }
+        }
     }
 
     #[test]

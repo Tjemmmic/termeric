@@ -193,12 +193,14 @@ struct CompactRow {
     styles: Vec<StyleRun>,
     cols: usize,
     wrapped: bool,
+    wide_wrap_padding: bool,
 }
 
 impl CompactRow {
     fn from_row(row: Row) -> Self {
         let cols = row.len();
         let wrapped = row.is_wrapped();
+        let wide_wrap_padding = row.has_wide_wrap_padding();
         let mut cells = row.into_cells();
         while cells.last().is_some_and(Cell::is_history_default) {
             cells.pop();
@@ -227,6 +229,7 @@ impl CompactRow {
             styles,
             cols,
             wrapped,
+            wide_wrap_padding,
         }
     }
 
@@ -237,6 +240,7 @@ impl CompactRow {
     fn from_row_recycling(row: Row) -> (Self, Row) {
         let cols = row.len();
         let wrapped = row.is_wrapped();
+        let wide_wrap_padding = row.has_wide_wrap_padding();
         let mut cells = row.into_cells();
         let retained_len = cells
             .iter()
@@ -270,6 +274,7 @@ impl CompactRow {
                 styles,
                 cols,
                 wrapped,
+                wide_wrap_padding,
             },
             Row::from_cells(cells, false),
         )
@@ -297,6 +302,7 @@ impl CompactRow {
             styles,
             cols,
             wrapped,
+            wide_wrap_padding,
         } = self;
         let stored_len = content.len();
         let mut cells = Vec::with_capacity(if wrapped { cols } else { stored_len });
@@ -313,6 +319,9 @@ impl CompactRow {
         }
         if wrapped {
             cells.resize_with(cols, Cell::default);
+            if wide_wrap_padding {
+                cells.pop();
+            }
         }
         cells
     }
@@ -352,7 +361,11 @@ impl CompactRow {
         for col in 0..self.cols {
             cells.push(self.get(col).expect("history cell is in bounds"));
         }
-        Row::from_cells(cells, self.wrapped)
+        let mut row = Row::from_cells(cells, self.wrapped);
+        if self.wide_wrap_padding {
+            row.mark_wide_wrap_padding();
+        }
+        row
     }
 
     fn owned_bytes(&self) -> usize {
@@ -405,6 +418,13 @@ enum RowViewInner<'a> {
 }
 
 impl<'a> RowView<'a> {
+    pub(crate) fn has_wide_wrap_padding(&self) -> bool {
+        match self.inner {
+            RowViewInner::Visible(row) => row.has_wide_wrap_padding(),
+            RowViewInner::History(row) => row.wide_wrap_padding,
+        }
+    }
+
     fn visible(row: &'a Row) -> Self {
         Self {
             inner: RowViewInner::Visible(row),
@@ -895,7 +915,7 @@ impl GridStorage {
         for (row_idx, row) in rows.into_iter().enumerate() {
             let is_wrapped = row.is_wrapped();
             let row_len = row.len();
-            let cells = row.into_cells();
+            let cells = row.into_reflow_cells();
 
             if in_logical_line {
                 // Check if cursor is in this row of the logical line
@@ -1036,6 +1056,7 @@ impl GridStorage {
         let mut cells = cells.into_iter().enumerate().peekable();
         while cells.peek().is_some() {
             let mut row_cells: Vec<Cell> = Vec::with_capacity(cols);
+            let mut wide_wrap_padding = false;
 
             while row_cells.len() < cols && cells.peek().is_some() {
                 if cells.peek().is_some_and(|(_, cell)| {
@@ -1070,6 +1091,7 @@ impl GridStorage {
                             mapped_cursor = mapped_cursor.map(|offset| offset.saturating_add(1));
                         }
                         row_cells.resize_with(cols, Cell::default);
+                        wide_wrap_padding = true;
                         break;
                     }
                     let (index, mut leader) = cells.next().expect("peeked wide cell exists");
@@ -1108,7 +1130,11 @@ impl GridStorage {
             // Pad row to full width
             row_cells.resize_with(cols, Cell::default);
             // All rows except the last are wrapped
-            output.push(Row::from_cells(row_cells, !is_last));
+            let mut row = Row::from_cells(row_cells, !is_last);
+            if wide_wrap_padding {
+                row.mark_wide_wrap_padding();
+            }
+            output.push(row);
         }
         mapped_cursor
     }

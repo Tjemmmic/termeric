@@ -11,6 +11,8 @@ pub struct Row {
     dirty: bool,
     /// True if this row was soft-wrapped (content continues on next row)
     wrapped: bool,
+    /// Final default cell inserted only because a wide pair did not fit.
+    wide_wrap_padding: bool,
     /// Lazy descriptor presence, independent of render dirtiness. Every cell
     /// mutation must invalidate or recompute it; exposed mutable references
     /// must invalidate it. Keeping
@@ -25,6 +27,7 @@ impl Row {
             cells: vec![Cell::default(); cols],
             dirty: true,
             wrapped: false,
+            wide_wrap_padding: false,
             multicells_present: Some(false),
         }
     }
@@ -35,6 +38,7 @@ impl Row {
             cells,
             dirty: true,
             wrapped,
+            wide_wrap_padding: false,
             multicells_present: None,
         }
     }
@@ -60,6 +64,9 @@ impl Row {
 
     /// Get a mutable reference to a cell
     pub fn get_mut(&mut self, col: usize) -> Option<&mut Cell> {
+        if col.checked_add(1) == Some(self.cells.len()) {
+            self.wide_wrap_padding = false;
+        }
         self.dirty = true;
         self.multicells_present = None;
         self.cells.get_mut(col)
@@ -78,6 +85,7 @@ impl Row {
         }
         self.dirty = true;
         self.wrapped = false;
+        self.wide_wrap_padding = false;
         self.multicells_present = Some(false);
     }
 
@@ -111,6 +119,27 @@ impl Row {
     /// Set the soft-wrap flag
     pub fn set_wrapped(&mut self, wrapped: bool) {
         self.wrapped = wrapped;
+        if !wrapped {
+            self.wide_wrap_padding = false;
+        }
+    }
+
+    pub(crate) fn mark_wide_wrap_padding(&mut self) {
+        self.wide_wrap_padding =
+            self.wrapped && self.cells.last().is_some_and(Cell::is_history_default);
+    }
+
+    pub(crate) fn has_wide_wrap_padding(&self) -> bool {
+        self.wide_wrap_padding
+            && self.wrapped
+            && self.cells.last().is_some_and(Cell::is_history_default)
+    }
+
+    pub(crate) fn into_reflow_cells(mut self) -> Vec<Cell> {
+        if self.has_wide_wrap_padding() {
+            self.cells.pop();
+        }
+        self.cells
     }
 
     /// Consume the row and return its cells
@@ -125,6 +154,7 @@ impl Row {
 
     /// Iterate over all cells mutably
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Cell> {
+        self.wide_wrap_padding = false;
         self.dirty = true;
         self.multicells_present = None;
         self.cells.iter_mut()
@@ -260,6 +290,9 @@ impl Row {
         exact_rectangle: bool,
         mut apply: impl FnMut(&mut CellAttrs),
     ) {
+        if start < self.cells.len() && end >= self.cells.len() {
+            self.wide_wrap_padding = false;
+        }
         self.multicells_present = None;
         let start = start.min(self.cells.len());
         let end = end.min(self.cells.len()).max(start);
@@ -348,6 +381,7 @@ impl Row {
     /// Clear a grapheme atomically when an edit targets either half of a wide
     /// cell pair.
     pub fn clear_grapheme_at(&mut self, col: usize) {
+        self.wide_wrap_padding = false;
         self.multicells_present = None;
         if col >= self.cells.len() {
             return;
@@ -376,6 +410,9 @@ impl Row {
     /// Remove orphan leaders/spacers using the caller's active blank-cell
     /// background policy.
     fn repair_wide_cells_with(&mut self, blank: &Cell) {
+        // Structural edits materialize any old wrap padding as an ordinary
+        // blank rather than allowing moved metadata to discard edited cells.
+        self.wide_wrap_padding = false;
         // Range/resize edits delegate here. Their inserted/copied blank cells
         // can carry descriptors too, so invalidate even if no wide pair needs
         // repair. Other mutation paths handle their own cache invalidation.
@@ -750,6 +787,35 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn wide_wrap_padding_is_validated_and_retired_by_edits() {
+        let mut row = Row::new(3);
+        row.set_wrapped(true);
+        row.mark_wide_wrap_padding();
+        assert!(row.has_wide_wrap_padding());
+        assert_eq!(row.clone().into_reflow_cells().len(), 2);
+        let mut copy = row.clone();
+        copy.get_mut(2).unwrap().set_char(' ');
+        assert!(!copy.has_wide_wrap_padding());
+        assert_eq!(copy.into_reflow_cells().len(), 3);
+        for mutation in 0..5 {
+            let mut copy = row.clone();
+            match mutation {
+                0 => {
+                    copy.iter_mut().next();
+                }
+                1 => copy.insert_cells(0, 1, &Cell::default()),
+                2 => copy.change_attributes_range(2, 3, true, |_| {}),
+                3 => copy.clear(),
+                _ => copy.set_wrapped(false),
+            }
+            assert!(!copy.has_wide_wrap_padding(), "mutation={mutation}");
+        }
+        row.get_mut(2).unwrap().bg_spec = super::super::ColorSpec::Indexed(4);
+        row.mark_wide_wrap_padding();
+        assert!(!row.has_wide_wrap_padding());
     }
 
     #[test]
