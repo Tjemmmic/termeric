@@ -38,11 +38,13 @@ impl Terminal {
     /// than clamping their anchors onto unrelated text.
     pub(super) fn remap_selection_after_height_resize(&mut self, archived: usize, rows: usize) {
         self.shift_selection_after_full_scroll(archived);
-        if self.selection.as_ref().is_some_and(|selection| {
-            let (start, end) = selection.bounds();
-            start.row >= rows as i32 || end.row >= rows as i32
-        }) {
-            self.selection = None;
+        for slot in [&mut self.selection, &mut self.navigation_cursor] {
+            if slot.as_ref().is_some_and(|selection| {
+                let (start, end) = selection.bounds();
+                start.row >= rows as i32 || end.row >= rows as i32
+            }) {
+                *slot = None;
+            }
         }
     }
 
@@ -97,12 +99,14 @@ impl Terminal {
         };
         let total_cols = grid.cols();
         let selection = &mut self.selection;
+        let navigation = &mut self.navigation_cursor;
         (grid, move |rows, cols| {
-            if selection
-                .as_ref()
-                .is_some_and(|selection| selection.intersects_region(rows, cols, total_cols))
-            {
-                *selection = None;
+            for slot in [&mut *selection, &mut *navigation] {
+                if slot.as_ref().is_some_and(|selection| {
+                    selection.intersects_region(rows.clone(), cols.clone(), total_cols)
+                }) {
+                    *slot = None;
+                }
             }
         })
     }
@@ -152,12 +156,12 @@ impl Terminal {
     ) {
         // Output mutates live state only. The synchronized snapshot's visible
         // selection and text remain unchanged until that snapshot is released.
-        if self
-            .selection
-            .as_ref()
-            .is_some_and(|selection| selection.intersects_region(rows, cols, self.cols))
-        {
-            self.selection = None;
+        for slot in [&mut self.selection, &mut self.navigation_cursor] {
+            if slot.as_ref().is_some_and(|selection| {
+                selection.intersects_region(rows.clone(), cols.clone(), self.cols)
+            }) {
+                *slot = None;
+            }
         }
     }
 
@@ -167,7 +171,7 @@ impl Terminal {
     /// copy or selection-sized scan is required, and no-selection writes return
     /// before any grid lookups.
     pub(super) fn invalidate_selection_for_write(&mut self, row: usize, start: usize, end: usize) {
-        if self.selection.is_none() || row >= self.rows {
+        if (self.selection.is_none() && self.navigation_cursor.is_none()) || row >= self.rows {
             return;
         }
         let mut start = start.min(self.cols);
@@ -190,17 +194,19 @@ impl Terminal {
             end = end.saturating_add(1).min(self.cols);
         }
         self.invalidate_selection_in_region(row..row + 1, start..end);
-        if self
-            .selection
-            .as_ref()
-            .is_none_or(|selection| selection.bounds().1.row < 0)
+        if [&self.selection, &self.navigation_cursor]
+            .into_iter()
+            .all(|slot| {
+                slot.as_ref()
+                    .is_none_or(|selection| selection.bounds().1.row < 0)
+            })
         {
             return;
         }
         // Insertion or a width-changing write can erase an entire multicell
         // block whose selected leader/covered cells lie outside this row span.
         let mut col = start;
-        while col < end && self.selection.is_some() {
+        while col < end && (self.selection.is_some() || self.navigation_cursor.is_some()) {
             if let Some(region) = self.grid().multicell_region_at(row, col) {
                 self.invalidate_selection_in_region(
                     region.top..region.bottom(),

@@ -84,6 +84,7 @@ impl App {
         };
         copy_mode.enter_presentation(terminal);
         terminal.set_selection(None);
+        copy_mode.sync_live_cursor(terminal);
         self.copy_mode_target = target;
         self.mouse_state.clear_selection();
         self.mouse_selection_source = None;
@@ -93,13 +94,27 @@ impl App {
     }
 
     pub(super) fn leave_copy_mode(&mut self, clear_selection: bool) {
+        if let Some(target) = self.copy_mode_target
+            && let Some(tabs) = &mut self.tabs
+            && let Some(terminal) = tabs.terminal_for_origin_mut(match target.pane {
+                Some(pane_id) => crate::tabs::TerminalEventOrigin::Pane {
+                    tab_id: target.tab,
+                    pane_id,
+                },
+                None => crate::tabs::TerminalEventOrigin::Tab { tab_id: target.tab },
+            })
+        {
+            if self.copy_mode.owns_navigation_cursor(terminal) {
+                terminal.set_navigation_cursor(None);
+            }
+            if clear_selection && self.copy_mode.presentation_matches(terminal) {
+                terminal.set_selection(None);
+            }
+        }
         self.copy_mode.exit();
         self.copy_mode_target = None;
         if clear_selection {
             self.mouse_state.clear_selection();
-            if let Some(terminal) = self.active_terminal_mut() {
-                terminal.set_selection(None);
-            }
         }
     }
 
@@ -139,7 +154,12 @@ impl App {
 
     fn sync_copy_mode_selection(&mut self) {
         let selection = self.copy_mode.selection();
-        if let Some(terminal) = self.active_terminal_mut() {
+        let (copy_mode, tabs) = (&mut self.copy_mode, &mut self.tabs);
+        if let Some(terminal) = tabs
+            .as_mut()
+            .and_then(crate::tabs::TabManager::active_tab_mut)
+            .and_then(crate::tabs::Tab::focused_terminal_mut)
+        {
             // Frozen viewport coordinates must never be installed on the live
             // grid. The copy-mode overlay owns this selection until release.
             terminal.set_selection(if terminal.synchronized_output_deadline().is_some() {
@@ -147,6 +167,7 @@ impl App {
             } else {
                 selection
             });
+            copy_mode.sync_live_cursor(terminal);
         }
     }
 
@@ -181,11 +202,19 @@ impl App {
             .active_terminal()
             .is_some_and(|term| self.copy_mode.presentation_matches(term))
         {
+            let (copy_mode, tabs) = (&mut self.copy_mode, &mut self.tabs);
+            if let Some(terminal) = tabs
+                .as_mut()
+                .and_then(crate::tabs::TabManager::active_tab_mut)
+                .and_then(crate::tabs::Tab::focused_terminal_mut)
+            {
+                copy_mode.reconcile_live_output(terminal);
+            }
             return false;
         }
         self.enter_copy_mode();
         self.toasts
-            .info("Copy selection reset because the displayed snapshot changed");
+            .info("Copy selection reset because the displayed terminal view changed");
         true
     }
 

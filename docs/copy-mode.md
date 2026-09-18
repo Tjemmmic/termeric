@@ -58,9 +58,28 @@ Hermetic coverage includes retained-character identities across widths, heights,
 history limits and endpoint directions; Unicode round trips; fully archived and
 crossing logical lines; lost ranges; glyph repairs; and single/split-pane
 synchronization with the canonical terminal selection. Native shell/IME resize,
-painting, and clipboard acceptance remain deferred. Output between ordinary copy
-mode actions has a separate coordinate lifecycle; resize tracking is not a claim
-that all ongoing-output cases are covered.
+painting, and clipboard acceptance remain deferred.
+
+During live output, an invisible core navigation anchor follows the copy cursor
+even when no range is selected. It uses the same movement and actual-damage
+rules as terminal selections: full/partial scrolling, line edits, horizontal
+insertion/deletion, Unicode and multicell writes, erases, and history eviction.
+Before render/input, a changed grid revision reconciles the modal cursor and
+the core's canonical selection. Damaged ranges cannot be resurrected by the next
+motion; an intact cursor remains usable when only the selection anchor is lost.
+Losing the cursor restarts navigation at the terminal cursor with no selection.
+Reset and primary/alternate grid changes retire old coordinates. Frozen views
+retain their independent modal state and never register it on the hidden live
+grid. Leaving copy mode releases the invisible anchor in its original owner.
+
+This adds one optional fixed-size point represented by the existing selection
+geometry, not a second grid or a history-sized scan. No-selection output still
+returns before glyph lookups when there is no navigation anchor. Width changes
+use the separate scoped resize transaction above and republish the live anchor
+afterward. Hermetic regressions compare point movement/damage with canonical
+selections and cover unselected navigation, damaged/evicted ranges, ownership,
+screen transitions, and frozen/resize compatibility. This does not establish
+all protocols' mutation coverage or native desktop acceptance.
 
 ## Quick select
 

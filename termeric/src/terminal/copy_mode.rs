@@ -66,6 +66,8 @@ pub struct CopyMode {
     quick_select: Option<QuickSelect>,
     reflow_bookmark: Option<termeric_core::grid::ResizeTrackingToken>,
     synchronized_output_deadline: Option<std::time::Instant>,
+    presentation_identity: Option<u64>,
+    live_revision: Option<(u64, u64)>,
 }
 
 impl Default for CopyMode {
@@ -80,6 +82,8 @@ impl Default for CopyMode {
             quick_select: None,
             reflow_bookmark: None,
             synchronized_output_deadline: None,
+            presentation_identity: None,
+            live_revision: None,
         }
     }
 }
@@ -98,6 +102,8 @@ impl CopyMode {
     }
 
     pub fn enter(&mut self, grid: &Grid) {
+        self.presentation_identity = Some(grid.content_revision().0);
+        self.live_revision = None;
         self.active = true;
         self.anchor = None;
         self.selection_type = SelectionType::Simple;
@@ -123,6 +129,56 @@ impl CopyMode {
 
     pub fn presentation_matches(&self, terminal: &Terminal) -> bool {
         self.synchronized_output_deadline == terminal.synchronized_output_deadline()
+            && self.presentation_identity == Some(terminal.presentation_grid().content_revision().0)
+    }
+
+    /// Publish an invisible live anchor independently of whether a range is
+    /// selected. Frozen coordinates stay solely in the modal presentation.
+    pub fn sync_live_cursor(&mut self, terminal: &mut Terminal) {
+        terminal.set_navigation_cursor(
+            terminal
+                .synchronized_output_deadline()
+                .is_none()
+                .then_some(self.cursor),
+        );
+        self.live_revision = Some(terminal.presentation_grid().content_revision());
+    }
+
+    pub fn owns_navigation_cursor(&self, terminal: &Terminal) -> bool {
+        self.live_revision
+            .is_some_and(|revision| revision.0 == terminal.grid().content_revision().0)
+    }
+
+    pub fn reconcile_live_output(&mut self, terminal: &mut Terminal) {
+        if self.reflow_bookmark.is_some()
+            || terminal.synchronized_output_deadline().is_some()
+            || self.live_revision == Some(terminal.grid().content_revision())
+        {
+            return;
+        }
+        let previous = self.cursor;
+        if let Some(cursor) = terminal.navigation_cursor() {
+            self.cursor = cursor;
+            if self.anchor.is_some() {
+                self.anchor = terminal.selection().map(|selection| selection.start);
+                if let Some(selection) = terminal.selection() {
+                    self.selection_type = selection.ty;
+                }
+            }
+        } else {
+            self.cursor = Point::new(
+                terminal.grid().cursor().row as i32,
+                terminal.grid().cursor().col,
+            );
+            self.anchor = None;
+            terminal.set_selection(None);
+        }
+        self.clamp(terminal.grid());
+        if previous.col != self.cursor.col {
+            self.preferred_col = self.cursor.col;
+        }
+        self.pending_g = false;
+        self.sync_live_cursor(terminal);
     }
 
     pub fn exit(&mut self) {

@@ -747,6 +747,8 @@ pub struct Terminal {
     hyperlink_gc_evictions: usize,
     /// Current selection
     selection: Option<Selection>,
+    /// Invisible modal navigation point, sharing live selection damage rules.
+    navigation_cursor: Option<Selection>,
     /// Scroll region top (inclusive, 0-indexed)
     scroll_top: usize,
     /// Scroll region bottom (exclusive, 0-indexed)
@@ -864,6 +866,7 @@ impl Terminal {
             hyperlink_registry: HyperlinkRegistry::new(),
             hyperlink_gc_evictions: 0,
             selection: None,
+            navigation_cursor: None,
             scroll_top: 0,
             scroll_bottom: rows,
             scroll_left: 0,
@@ -1941,6 +1944,28 @@ impl Terminal {
         }
     }
 
+    /// Register an invisible live-grid modal cursor. It follows output moves
+    /// and disappears on actual damage/eviction; it is never a copy selection.
+    /// Width resize retires it: callers use a scoped grid resize transaction.
+    /// Frozen presentation coordinates must not be registered on live state.
+    pub fn set_navigation_cursor(&mut self, point: Option<Point>) {
+        self.navigation_cursor = point
+            .filter(|point| {
+                self.synchronized_output_snapshot.is_none()
+                    && self
+                        .grid()
+                        .row_at_offset(point.row)
+                        .is_some_and(|row| point.col < row.len())
+            })
+            .map(|point| Selection::new(point, SelectionType::Simple));
+    }
+
+    pub fn navigation_cursor(&self) -> Option<Point> {
+        self.navigation_cursor
+            .as_ref()
+            .map(|selection| selection.start)
+    }
+
     fn selection_for_snapshot(&self) -> Option<Selection> {
         let mut selection = self.selection.clone()?;
         let grid = self.grid();
@@ -2031,16 +2056,21 @@ impl Terminal {
 
     fn clear_selection_if_evicted(&mut self) {
         let oldest_row = -(self.grid().scrollback_len() as i32);
-        if self.selection.as_ref().is_some_and(|selection| {
-            selection.start.row < oldest_row || selection.end.row < oldest_row
-        }) {
-            self.selection = None;
+        for slot in [&mut self.selection, &mut self.navigation_cursor] {
+            if slot.as_ref().is_some_and(|selection| {
+                selection.start.row < oldest_row || selection.end.row < oldest_row
+            }) {
+                *slot = None;
+            }
         }
     }
 
     fn shift_selection_after_full_scroll(&mut self, lines: usize) {
         let lines = i32::try_from(lines).unwrap_or(i32::MAX);
-        if let Some(selection) = &mut self.selection {
+        for selection in [&mut self.selection, &mut self.navigation_cursor]
+            .into_iter()
+            .flatten()
+        {
             selection.start.row = selection.start.row.saturating_sub(lines);
             selection.end.row = selection.end.row.saturating_sub(lines);
         }
@@ -2055,10 +2085,12 @@ impl Terminal {
     ) {
         // Only live state follows output; a synchronized snapshot owns its
         // independent visible selection until the snapshot is released.
-        if let Some(selection) = &mut self.selection
-            && !selection.scroll_in_region(rows, cols, delta, self.cols)
-        {
-            self.selection = None;
+        for slot in [&mut self.selection, &mut self.navigation_cursor] {
+            if let Some(selection) = slot
+                && !selection.scroll_in_region(rows.clone(), cols.clone(), delta, self.cols)
+            {
+                *slot = None;
+            }
         }
     }
 
@@ -2278,6 +2310,9 @@ impl Terminal {
             .filter_map(|row| shell_logical_anchor(&self.grid, row).map(|anchor| (row, anchor)))
             .collect::<Vec<_>>();
         let same_columns = self.cols == cols;
+        if !same_columns {
+            self.navigation_cursor = None;
+        }
         let mut primary_points = if !same_columns && !self.alt_screen_active {
             self.selection_reflow_points()
         } else {
@@ -4741,10 +4776,12 @@ impl Terminal {
         );
         let magnitude = isize::try_from(count).unwrap_or(isize::MAX);
         let delta = if inserting { magnitude } else { -magnitude };
-        if let Some(selection) = &mut self.selection
-            && !selection.shift_columns_in_row(cursor.row, cursor.col..right, delta, self.cols)
-        {
-            self.selection = None;
+        for slot in [&mut self.selection, &mut self.navigation_cursor] {
+            if let Some(selection) = slot
+                && !selection.shift_columns_in_row(cursor.row, cursor.col..right, delta, self.cols)
+            {
+                *slot = None;
+            }
         }
         let (grid, mut damage) = self.grid_with_selection_damage();
         if let Some(row) = grid.row_mut(cursor.row) {
@@ -4941,6 +4978,7 @@ impl Terminal {
         let previous_pointer_shape = self.effective_pointer_shape();
         self.mode.insert(TerminalMode::ALT_SCREEN);
         if !self.alt_screen_active {
+            self.navigation_cursor = None;
             self.clear_extra_cursors();
             self.graphics.clear_screen_all(true);
             self.alt_screen_active = true;
@@ -4956,6 +4994,7 @@ impl Terminal {
         self.mode.remove(TerminalMode::ALT_SCREEN);
         if self.alt_screen_active {
             self.clear_extra_cursors();
+            self.navigation_cursor = None;
             self.graphics.clear_screen_all(true);
             self.alt_screen_active = false;
         }
@@ -5181,6 +5220,7 @@ impl Terminal {
         self.scroll_right = self.cols;
         self.selection = None;
         self.graphics.clear_screen(false);
+        self.navigation_cursor = None;
         self.graphics.clear_screen_all(true);
         self.graphics_apc_data.clear();
         self.graphics_apc_active = false;
@@ -5472,6 +5512,66 @@ fn is_word_char(c: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn navigation_anchor_shares_exact_live_selection_moves_and_damage() {
+        let commands: &[&[u8]] = &[
+            b"\r\nnext",
+            b"\x1b[2S",
+            b"\x1b[2T",
+            b"\x1b[2;1H\x1b[L",
+            b"\x1b[2;1H\x1b[M",
+            b"\x1b[1;3H\x1b[2@",
+            b"\x1b[1;3H\x1b[2P",
+            b"\x1b[Hxx",
+            b"\x1b[H\x1b[2X",
+            b"\x1b[2K",
+            b"\x1b[2J",
+            b"\x1b[?2J",
+            b"\x1b[1;2;2;5$z",
+            b"\x1b[65;1;2;2;5$x",
+            b"\x1b[1;1;1;4;1;2;2;1$v",
+            b"\x1b[?69h\x1b[2;6s\x1b[2;4r\x1b[S",
+            b"\x1b[?69h\x1b[2;6s\x1b[2;4r\x1b[T",
+            b"\x1b[H\x1b]66;s=2;X\x07",
+        ];
+        for command in commands {
+            for row in -1..4 {
+                for col in 0..8 {
+                    let mut term = Terminal::new(8, 4);
+                    term.process(
+                        "history\r\nab界Zdef\r\n\x1b[1\"qprotected\x1b[0\"q\r\nlast".as_bytes(),
+                    );
+                    let point = Point::new(row, col);
+                    if term.grid().row_at_offset(row).is_none() {
+                        continue;
+                    }
+                    term.set_selection(Some(Selection::new(point, SelectionType::Simple)));
+                    term.set_navigation_cursor(Some(point));
+                    term.process(command);
+                    assert_eq!(
+                        term.navigation_cursor(),
+                        term.selection().map(|selection| selection.start),
+                        "command={command:?} point={point:?}"
+                    );
+                }
+            }
+        }
+        let mut term = Terminal::new(8, 3);
+        term.process(b"first\r\nsecond\r\nthird\r\nlast");
+        term.set_navigation_cursor(Some(Point::new(-1, 0)));
+        assert!(
+            term.selection().is_none(),
+            "navigation must never become a copy selection"
+        );
+        term.set_scrollback_limits(0, 0);
+        assert!(term.navigation_cursor().is_none());
+        for command in [b"\x1bc".as_slice(), b"\x1b[?1049h", b"\x1b[?1049l"] {
+            term.set_navigation_cursor(Some(Point::new(0, 0)));
+            term.process(command);
+            assert!(term.navigation_cursor().is_none());
+        }
+    }
 
     fn assert_wide_invariants(term: &Terminal) {
         for row in 0..term.rows() {

@@ -3,6 +3,141 @@ use crate::plugin::hooks::{HookResponse, Plugin, PluginCommand};
 
 #[cfg(unix)]
 #[test]
+fn copy_mode_follows_live_output_before_navigation_with_or_without_selection() {
+    use crate::terminal::copy_mode::CopyMotion;
+    use termeric_core::{Point, SelectionType};
+    for selected in [false, true] {
+        let mut app = scrollbar_owner_fixture();
+        let terminal = app.active_terminal_mut().unwrap();
+        terminal.resize(8, 3);
+        terminal.process(b"\x1bc\x1b[3Jabcdefgh\r\nijklmnop\r\nqrstuvwx");
+        app.enter_copy_mode();
+        app.move_copy_cursor(CopyMotion::Top);
+        if selected {
+            app.copy_mode.toggle_selection(SelectionType::Simple);
+        }
+        app.move_copy_cursor(CopyMotion::Right);
+        app.move_copy_cursor(CopyMotion::Right);
+        app.active_terminal_mut().unwrap().process(b"\r\nnext");
+        app.reconcile_copy_mode_presentation();
+        assert_eq!(app.copy_mode.cursor(), Point::new(-1, 2));
+        app.move_copy_cursor(CopyMotion::Right);
+        assert_eq!(app.copy_mode.cursor(), Point::new(-1, 3));
+        assert_eq!(
+            app.copy_mode_selection_text().as_deref(),
+            selected.then_some("abcd")
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn copy_mode_output_damage_cannot_resurrect_ranges_and_preserves_intact_cursor() {
+    use crate::terminal::copy_mode::CopyMotion;
+    use termeric_core::{Point, SelectionType};
+    for split in [false, true] {
+        let mut app = if split {
+            divider_owner_fixture()
+        } else {
+            scrollbar_owner_fixture()
+        };
+        for (command, expected_cursor) in [
+            (b"\x1b[1;1HX".as_slice(), Point::new(0, 2)),
+            (b"\x1b[1;3HX".as_slice(), Point::new(0, 3)),
+            (b"\x1b[2J".as_slice(), Point::new(2, 7)),
+            (b"\x1b[3S".as_slice(), Point::new(2, 7)),
+        ] {
+            let terminal = app.active_terminal_mut().unwrap();
+            terminal.resize(8, 3);
+            terminal.process(b"\x1bc\x1b[3Jabcdefgh\r\nijklmnop\r\nqrstuvwx");
+            terminal.set_scrollback_limits(0, 0);
+            app.enter_copy_mode();
+            app.move_copy_cursor(CopyMotion::Top);
+            app.copy_mode.toggle_selection(SelectionType::Simple);
+            app.move_copy_cursor(CopyMotion::Right);
+            app.move_copy_cursor(CopyMotion::Right);
+            app.active_terminal_mut().unwrap().process(command);
+            assert!(app.copy_mode_selection_text().is_none());
+            assert!(!app.reconcile_copy_mode_presentation());
+            assert_eq!(app.copy_mode.cursor(), expected_cursor, "{command:?}");
+            assert!(app.copy_mode.selection().is_none());
+            app.move_copy_cursor(CopyMotion::Left);
+            assert!(app.active_terminal().unwrap().selection().is_none());
+            app.leave_copy_mode(false);
+            assert!(app.active_terminal().unwrap().navigation_cursor().is_none());
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn copy_mode_anchor_cleanup_targets_original_pane_and_screen_changes_reset_mode() {
+    use crate::terminal::copy_mode::CopyMotion;
+    use termeric_core::{Point, Selection, SelectionType};
+    let mut app = divider_owner_fixture();
+    app.enter_copy_mode();
+    let target = app.copy_mode_target.unwrap();
+    let tabs = app.tabs.as_mut().unwrap();
+    let panes = tabs
+        .active_tab_mut()
+        .unwrap()
+        .pane_manager
+        .as_mut()
+        .unwrap();
+    let other = panes
+        .pane_ids()
+        .into_iter()
+        .find(|id| *id != panes.focused_id())
+        .unwrap();
+    panes.focus(other);
+    let other_term = &mut panes.get_pane_mut(other).unwrap().terminal;
+    other_term.set_selection(Some(Selection::new(
+        Point::new(0, 0),
+        SelectionType::Simple,
+    )));
+    other_term.set_navigation_cursor(Some(Point::new(0, 0)));
+    app.leave_copy_mode(true);
+    let tabs = app.tabs.as_ref().unwrap();
+    let origin = tabs
+        .origin_for_pane(target.tab, target.pane.unwrap())
+        .unwrap();
+    assert!(
+        tabs.terminal_for_origin(origin)
+            .unwrap()
+            .navigation_cursor()
+            .is_none()
+    );
+    assert!(app.active_terminal().unwrap().navigation_cursor().is_some());
+    assert!(app.active_terminal().unwrap().selection().is_some());
+
+    let terminal = app.active_terminal_mut().unwrap();
+    terminal.resize(8, 3);
+    terminal.process(b"\x1bc\x1b[3Jtext");
+    app.enter_copy_mode();
+    app.move_copy_cursor(CopyMotion::Top);
+    app.copy_mode.toggle_selection(SelectionType::Simple);
+    app.move_copy_cursor(CopyMotion::Right);
+    app.active_terminal_mut()
+        .unwrap()
+        .process(b"\x1b[?1049hother");
+    assert!(app.copy_mode_selection_text().is_none());
+    assert!(app.reconcile_copy_mode_presentation());
+    assert!(app.copy_mode.selection().is_none());
+    assert!(app.copy_mode.is_active());
+    let terminal = app.active_terminal_mut().unwrap();
+    *terminal = termeric_core::Terminal::new(8, 3);
+    terminal.set_navigation_cursor(Some(Point::new(0, 0)));
+    terminal.set_selection(Some(Selection::new(
+        Point::new(0, 0),
+        SelectionType::Simple,
+    )));
+    app.leave_copy_mode(true);
+    assert!(app.active_terminal().unwrap().navigation_cursor().is_some());
+    assert!(app.active_terminal().unwrap().selection().is_some());
+}
+
+#[cfg(unix)]
+#[test]
 fn copy_mode_resize_does_not_restore_evicted_ranges_over_canonical_selection() {
     use crate::terminal::copy_mode::CopyMotion;
     for split in [false, true] {

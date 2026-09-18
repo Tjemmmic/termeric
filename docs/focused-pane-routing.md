@@ -319,8 +319,10 @@ across widths/heights/history limits, clipped and evicted endpoints, discarded
 padding/orphan spacers, frozen primary/alternate screens, and single/split-pane
 pointer reconciliation. Keyboard copy mode now shares this mapping through its
 own grid-bound [resize transaction](copy-mode.md#copy-mode), including frozen
-views. This is not a claim that every grid mutation or ongoing-output modal
-coordinate lifecycle is covered. Native desktop acceptance remains deferred.
+views. Its live navigation point now shares core movement/damage handling and
+reconciles with the canonical selection before input/render, rather than
+restoring stale modal coordinates after output. This is not a claim that every
+grid mutation is covered. Native desktop acceptance remains deferred.
 
 ## Filtered selection and accessible text
 
