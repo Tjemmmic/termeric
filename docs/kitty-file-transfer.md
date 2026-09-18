@@ -96,8 +96,13 @@ chmod a replacement directory or follow a replacement link. Final directory
 permissions and timestamps also use those handles, after checking their recorded
 device/inode identity; missing or mismatched handles fail rather than falling
 back to a path lookup. Replacement-directory and replacement-symlink regressions
-verify that only the original directory receives metadata. This does not yet
-extend handle-bound timestamps to regular files or links. Bookkeeping does not
+verify that only the original directory receives metadata. Regular files receive
+timestamps and permissions through the retained staging handle and are synced
+before no-overwrite publication; there is no destination-path timestamp update
+after publication. Regressions cover metadata before publication, absent and
+signed timestamps, restrictive modes, replacement paths, and unchanged existing
+destinations after publication refusal. Link timestamps remain path-based.
+Bookkeeping does not
 open symbolic-link targets as data files, so links to FIFOs do not wait for a target
 writer. Local regressions cover
 writer-free FIFO-link commit, target preservation, dangling-link identity, and

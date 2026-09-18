@@ -3072,14 +3072,8 @@ mod unix {
                     _ => None,
                 }
                 .ok_or_else(|| TransactionError::invalid(&id, "missing staged file"))?;
-                temporary
-                    .as_file()
-                    .sync_all()
-                    .map_err(|error| TransactionError::io(&id, "sync staging file", error))?;
-                temporary
-                    .as_file()
-                    .set_permissions(Permissions::from_mode(entry.mode))
-                    .map_err(|error| TransactionError::io(&id, "set file permissions", error))?;
+                prepare_staged_file(temporary.as_file(), entry.mode, entry.mtime_ns)
+                    .map_err(|error| TransactionError::io(&id, "finalize staging file", error))?;
                 let identity = temporary
                     .as_file()
                     .metadata()
@@ -3094,9 +3088,6 @@ mod unix {
                     kind: CreatedKind::File,
                     _identity_guard: Some(published),
                 });
-                apply_mtime(&entry.path, entry.mtime_ns, false).map_err(|error| {
-                    TransactionError::io(&id, "set file modification time", error)
-                })?;
             }
 
             let link_ids: Vec<_> = self
@@ -3496,6 +3487,14 @@ mod unix {
         Ok(())
     }
 
+    fn prepare_staged_file(file: &File, mode: u32, mtime_ns: Option<i64>) -> io::Result<()> {
+        // Finish metadata on the retained inode before making it visible, then
+        // sync both data and metadata. Never re-open its eventual destination.
+        apply_file_mtime(file, mtime_ns)?;
+        file.set_permissions(Permissions::from_mode(mode))?;
+        file.sync_all()
+    }
+
     fn finalize_directory(
         path: &Path,
         mode: u32,
@@ -3521,6 +3520,11 @@ mod unix {
                 "directory handle does not match its recorded identity",
             ));
         }
+        apply_file_mtime(directory, mtime_ns)?;
+        directory.set_permissions(Permissions::from_mode(mode))
+    }
+
+    fn apply_file_mtime(file: &File, mtime_ns: Option<i64>) -> io::Result<()> {
         if let Some(mtime_ns) = mtime_ns {
             let distance = Duration::from_nanos(mtime_ns.unsigned_abs());
             let timestamp = if mtime_ns < 0 {
@@ -3531,13 +3535,13 @@ mod unix {
             .ok_or_else(|| {
                 io::Error::new(io::ErrorKind::InvalidInput, "timestamp is out of range")
             })?;
-            directory.set_times(
+            file.set_times(
                 fs::FileTimes::new()
                     .set_accessed(timestamp)
                     .set_modified(timestamp),
             )?;
         }
-        directory.set_permissions(Permissions::from_mode(mode))
+        Ok(())
     }
 
     fn record_created(
@@ -4252,6 +4256,93 @@ mod unix {
                 );
                 assert_eq!(fs::read_link(&symlink).unwrap(), PathBuf::from("file"));
             }
+        }
+
+        #[test]
+        fn staged_file_metadata_is_complete_before_publication() {
+            for mtime in [None, Some(-1), Some(0), Some(1_700_000_000_123_456_789)] {
+                for mode in [0o000, 0o400, 0o640] {
+                    let root = tempdir().unwrap();
+                    let destination = root.path().join("published");
+                    let mut staged = NamedTempFile::new_in(root.path()).unwrap();
+                    staged.write_all(b"payload").unwrap();
+                    let before = staged.as_file().metadata().unwrap();
+                    prepare_staged_file(staged.as_file(), mode, mtime).unwrap();
+                    assert!(!destination.exists());
+                    let prepared = staged.as_file().metadata().unwrap();
+                    let expected = mtime.map_or((before.mtime(), before.mtime_nsec()), |value| {
+                        (
+                            value.div_euclid(1_000_000_000),
+                            value.rem_euclid(1_000_000_000),
+                        )
+                    });
+                    assert_eq!((prepared.mtime(), prepared.mtime_nsec()), expected);
+                    assert_eq!(prepared.permissions().mode() & 0o777, mode);
+                    let published = staged.persist_noclobber(&destination).unwrap();
+                    let after = published.metadata().unwrap();
+                    assert_eq!((after.dev(), after.ino()), (prepared.dev(), prepared.ino()));
+                    assert_eq!((after.mtime(), after.mtime_nsec()), expected);
+                    assert_eq!(after.permissions().mode() & 0o777, mode);
+                }
+            }
+        }
+
+        #[test]
+        fn staged_file_metadata_never_changes_a_replacement_path() {
+            for symlink_replacement in [false, true] {
+                let root = tempdir().unwrap();
+                let path = root.path().join("staged");
+                let moved = root.path().join("moved");
+                let target = root.path().join("target");
+                let mut file = File::create(&path).unwrap();
+                file.write_all(b"ours").unwrap();
+                fs::rename(&path, &moved).unwrap();
+                let replacement = if symlink_replacement { &target } else { &path };
+                fs::write(replacement, b"keep").unwrap();
+                apply_mtime(replacement, Some(1_700_000_000_123_456_789), false).unwrap();
+                let before = fs::metadata(replacement).unwrap();
+                if symlink_replacement {
+                    std::os::unix::fs::symlink(&target, &path).unwrap();
+                }
+                prepare_staged_file(&file, 0o400, Some(-1)).unwrap();
+                let owned = file.metadata().unwrap();
+                let after = fs::metadata(replacement).unwrap();
+                assert_eq!(owned.permissions().mode() & 0o777, 0o400);
+                assert_eq!((owned.mtime(), owned.mtime_nsec()), (-1, 999_999_999));
+                assert_eq!(after.permissions().mode(), before.permissions().mode());
+                assert_eq!(
+                    (after.mtime(), after.mtime_nsec()),
+                    (before.mtime(), before.mtime_nsec())
+                );
+                assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+                assert_eq!(fs::read(replacement).unwrap(), b"keep");
+                assert_eq!(fs::read(&moved).unwrap(), b"ours");
+            }
+        }
+
+        #[test]
+        fn prepared_file_does_not_change_an_existing_destination() {
+            let root = tempdir().unwrap();
+            let destination = root.path().join("existing");
+            fs::write(&destination, b"keep").unwrap();
+            apply_mtime(&destination, Some(1_700_000_000_123_456_789), false).unwrap();
+            let before = fs::metadata(&destination).unwrap();
+            let mut staged = NamedTempFile::new_in(root.path()).unwrap();
+            staged.write_all(b"new").unwrap();
+            let staged_path = staged.path().to_path_buf();
+            prepare_staged_file(staged.as_file(), 0o000, Some(-1)).unwrap();
+            let error = staged.persist_noclobber(&destination).unwrap_err();
+            assert_eq!(error.error.kind(), io::ErrorKind::AlreadyExists);
+            drop(error);
+            assert!(!staged_path.exists());
+            let after = fs::metadata(&destination).unwrap();
+            assert_eq!(after.permissions().mode(), before.permissions().mode());
+            assert_eq!(
+                (after.mtime(), after.mtime_nsec()),
+                (before.mtime(), before.mtime_nsec())
+            );
+            assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+            assert_eq!(fs::read(&destination).unwrap(), b"keep");
         }
 
         #[test]
