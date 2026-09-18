@@ -11359,6 +11359,7 @@ if [ "${1-}" = "--version" ]; then
   printf 'fake-ai 1.0\n'
   exit 0
 fi
+trap 'printf "signal=INT\tplugin=%s\n" "$TERMERIC_FAKE_AI_PLUGIN" >> "$TERMERIC_FAKE_AI_LOG"' INT
 printf 'launch\tcwd=%s\targv=%s\tcolumns=%s\tlines=%s\n' "$PWD" "$*" "${COLUMNS-}" "${LINES-}" >> "$TERMERIC_FAKE_AI_LOG"
 printf '%s\r\n' 'FAKE_AI_RESPONSE_26' '--- a/example.txt' '+++ b/example.txt' '@@ -1 +1 @@' '-old' '+new' 'END_DIFF_26' 'ERROR acceptance failure marker'
 i=0
@@ -11367,10 +11368,11 @@ while [ "$i" -lt 40 ]; do
   i=$((i + 1))
 done
 printf '%s\r\n' 'ERROR acceptance failure marker after scrollback'
-trap 'printf "signal=INT\\n" >> "$TERMERIC_FAKE_AI_LOG"' INT
+printf '%s\r\n' 'FAKE_AI_READY_26'
+while [ ! -e "$TERMERIC_FAKE_AI_GATE" ]; do sleep 0.01; done
 while :; do
   if IFS= read -r line; then
-    printf 'stdin=%s\n' "$line" >> "$TERMERIC_FAKE_AI_LOG"
+    printf 'stdin=%s\tplugin=%s\n' "$line" "$TERMERIC_FAKE_AI_PLUGIN" >> "$TERMERIC_FAKE_AI_LOG"
   else
     sleep 0.01
   fi
@@ -11389,10 +11391,17 @@ done
     config.plugins.claude_code.profiles.insert(
         "acceptance".into(),
         crate::plugin::claude_profiles::ClaudeProfile {
-            env: HashMap::from([(
-                "TERMERIC_FAKE_AI_LOG".into(),
-                invocation_log.display().to_string(),
-            )]),
+            env: HashMap::from([
+                (
+                    "TERMERIC_FAKE_AI_LOG".into(),
+                    invocation_log.display().to_string(),
+                ),
+                (
+                    "TERMERIC_FAKE_AI_GATE".into(),
+                    temp.path().join("claude-code-ready").display().to_string(),
+                ),
+                ("TERMERIC_FAKE_AI_PLUGIN".into(), "claude-code".into()),
+            ]),
             ..Default::default()
         },
     );
@@ -11402,10 +11411,17 @@ done
     config.plugins.codex.profiles.insert(
         "acceptance".into(),
         crate::plugin::codex_profiles::CodexProfile {
-            env: HashMap::from([(
-                "TERMERIC_FAKE_AI_LOG".into(),
-                invocation_log.display().to_string(),
-            )]),
+            env: HashMap::from([
+                (
+                    "TERMERIC_FAKE_AI_LOG".into(),
+                    invocation_log.display().to_string(),
+                ),
+                (
+                    "TERMERIC_FAKE_AI_GATE".into(),
+                    temp.path().join("codex-ready").display().to_string(),
+                ),
+                ("TERMERIC_FAKE_AI_PLUGIN".into(), "codex".into()),
+            ]),
             ..Default::default()
         },
     );
@@ -11431,12 +11447,18 @@ done
             app.execute_plugin_command(&format!("{plugin_id}.open"));
             wait_for_plugin_fixture(&mut app, plugin_id, "FAKE_AI_RESPONSE_26");
             wait_for_plugin_fixture(&mut app, plugin_id, "END_DIFF_26");
+            wait_for_plugin_fixture(&mut app, plugin_id, "FAKE_AI_READY_26");
 
             app.execute_plugin_command(&format!("{plugin_id}.copy-last"));
             assert_eq!(latest_toast(&app), Some("Clipboard not available"));
 
             app.execute_plugin_command(&format!("{plugin_id}.clear"));
-            wait_for_file_text(&invocation_log, "stdin=clear");
+            // Keep the fixture out of its read loop until this exact plugin
+            // acknowledges Ctrl+C. Readiness must imply the trap is installed;
+            // earlier output markers alone do not establish that contract.
+            wait_for_file_text(&invocation_log, &format!("signal=INT\tplugin={plugin_id}"));
+            std::fs::write(temp.path().join(format!("{plugin_id}-ready")), b"release").unwrap();
+            wait_for_file_text(&invocation_log, &format!("stdin=clear\tplugin={plugin_id}"));
 
             app.execute_plugin_command(&format!("{plugin_id}.review-diff"));
             assert!(app.diff_review.is_active());
@@ -11476,7 +11498,10 @@ done
                 [crate::ui::context_picker::ContextSourceId::TerminalOutput]
             );
             app.handle_context_gathered(request_id, Ok("FAKE_CONTEXT_PAYLOAD_26".into()));
-            wait_for_file_text(&invocation_log, "stdin=FAKE_CONTEXT_PAYLOAD_26");
+            wait_for_file_text(
+                &invocation_log,
+                &format!("stdin=FAKE_CONTEXT_PAYLOAD_26\tplugin={plugin_id}"),
+            );
 
             app.execute_plugin_command(&format!("{plugin_id}.toggle-transcript"));
             let recording = app
@@ -11510,9 +11535,8 @@ done
             assert!(latest_toast(&app).is_some_and(|message| message.contains("Exported")));
             drop(export_guard);
 
-            // The initial readiness marker is emitted before the fake CLI's
-            // padding lines. Wait for its final error marker so this assertion
-            // proves an actual scrollback jump instead of racing PTY delivery.
+            // Keep the final error marker in the evidence for this assertion,
+            // which must prove an actual scrollback jump, not just command dispatch.
             wait_for_plugin_fixture(
                 &mut app,
                 plugin_id,

@@ -369,6 +369,12 @@ The separate `scripts/run_fake_provider_acceptance.py` runner resolves and
 executes only that exact fake-CLI test, strips the real-Codex opt-in variable,
 and emits a sealed partial integration record. CI uploads it with the tested
 binary digest; every non-fake integration row remains visibly unrecorded.
+The fake CLI installs its interrupt handler before publishing readiness. A
+per-plugin startup gate holds it before its input loop while the test invokes
+clear, then releases only after that plugin acknowledges Ctrl+C. Clear and
+context-input acknowledgments carry the plugin identity, so one plugin's log
+entry cannot satisfy the other's assertions. This covers fixture scheduling
+and routing, not the readiness or behavior of real provider executables.
 
 The feature-support contract rejects undefined status vocabulary, README
 highlights without reviewed matrix mappings, missing/duplicate capability rows,
