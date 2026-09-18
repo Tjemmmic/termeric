@@ -2508,7 +2508,7 @@ mod unix {
     use std::fs::{self, File, Permissions};
     use std::io::{self, Write};
     use std::os::unix::ffi::OsStrExt;
-    use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
     use std::path::{Component, Path, PathBuf};
     use tempfile::NamedTempFile;
 
@@ -2779,15 +2779,10 @@ mod unix {
                 }
             }
 
-            let mut mode = command.permissions.unwrap_or(match command.file_type {
+            let mode = command.permissions.unwrap_or(match command.file_type {
                 KittyFileTransferType::Directory => 0o700,
                 _ => 0o600,
             }) & 0o777;
-            if command.file_type == KittyFileTransferType::Directory {
-                // Transaction assembly and rollback must retain owner access;
-                // setuid/setgid/sticky bits were already stripped above.
-                mode |= 0o700;
-            }
             // Kitty modification times are signed nanoseconds since the epoch;
             // negative values are valid dates, not missing-metadata sentinels.
             let mtime_ns = command.mtime_ns;
@@ -3048,10 +3043,8 @@ mod unix {
                 create_missing_parents(path, &self.paths, created).map_err(|error| {
                     TransactionError::io(id, "create destination parent", error)
                 })?;
-                fs::create_dir(path)
+                create_directory(path, created)
                     .map_err(|error| TransactionError::io(id, "create directory", error))?;
-                record_created(path, CreatedKind::Directory, created)
-                    .map_err(|error| TransactionError::io(id, "record directory", error))?;
             }
 
             let file_ids: Vec<_> = self
@@ -3449,9 +3442,37 @@ mod unix {
             if transfer_paths.contains(&directory) {
                 continue;
             }
-            fs::create_dir(&directory)?;
-            record_created(&directory, CreatedKind::Directory, created)?;
-            fs::set_permissions(&directory, Permissions::from_mode(0o700))?;
+            create_directory(&directory, created)?;
+        }
+        Ok(())
+    }
+
+    fn open_directory(path: &Path) -> io::Result<File> {
+        fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(path)
+    }
+
+    fn create_directory(path: &Path, created: &mut Vec<CreatedPath>) -> io::Result<()> {
+        fs::DirBuilder::new().mode(0o700).create(path)?;
+        record_created(path, CreatedKind::Directory, created)?;
+        let entry = created.last_mut().expect("created directory was recorded");
+        if let Some(directory) = &entry._identity_guard {
+            directory.set_permissions(Permissions::from_mode(0o700))?;
+        } else {
+            // A restrictive umask can prevent opening the new directory.
+            // Record it first so failure still enters transaction rollback.
+            fs::set_permissions(path, Permissions::from_mode(0o700))?;
+            let directory = open_directory(path)?;
+            let metadata = directory.metadata()?;
+            if metadata.dev() != entry.device || metadata.ino() != entry.inode {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "created directory changed identity",
+                ));
+            }
+            entry._identity_guard = Some(directory);
         }
         Ok(())
     }
@@ -3467,20 +3488,26 @@ mod unix {
                 // could be a FIFO/device, and a followed handle would not pin
                 // the link's inode anyway. Linux O_PATH pins even dangling
                 // symlinks without opening their contents or requiring readers.
-                #[cfg(target_os = "linux")]
-                let flags = libc::O_PATH | libc::O_NOFOLLOW;
-                #[cfg(not(target_os = "linux"))]
-                let flags = libc::O_NOFOLLOW | libc::O_NONBLOCK;
-                let identity_guard = fs::OpenOptions::new()
-                    .read(true)
-                    .custom_flags(flags)
-                    .open(path)
-                    .ok()
-                    .filter(|file| {
-                        file.metadata().is_ok_and(|opened| {
-                            opened.dev() == metadata.dev() && opened.ino() == metadata.ino()
-                        })
-                    });
+                let identity_guard = if kind == CreatedKind::Directory {
+                    // Retain an fchmod-capable handle before final permissions
+                    // can remove owner access needed by rollback.
+                    open_directory(path)
+                } else {
+                    #[cfg(target_os = "linux")]
+                    let flags = libc::O_PATH | libc::O_NOFOLLOW;
+                    #[cfg(not(target_os = "linux"))]
+                    let flags = libc::O_NOFOLLOW | libc::O_NONBLOCK;
+                    fs::OpenOptions::new()
+                        .read(true)
+                        .custom_flags(flags)
+                        .open(path)
+                }
+                .ok()
+                .filter(|file| {
+                    file.metadata().is_ok_and(|opened| {
+                        opened.dev() == metadata.dev() && opened.ino() == metadata.ino()
+                    })
+                });
                 created.push(CreatedPath {
                     path: path.to_path_buf(),
                     device: metadata.dev(),
@@ -3502,6 +3529,21 @@ mod unix {
     }
 
     fn rollback_paths(created: &[CreatedPath]) {
+        // Restore access top-down through retained handles before unlinking
+        // children. Never chmod the current path, which might be a replacement.
+        for entry in created {
+            if entry.kind == CreatedKind::Directory
+                && let Some(directory) = &entry._identity_guard
+                && let Ok(metadata) = directory.metadata()
+                && metadata.is_dir()
+                && metadata.dev() == entry.device
+                && metadata.ino() == entry.inode
+            {
+                let _ = directory.set_permissions(Permissions::from_mode(
+                    (metadata.permissions().mode() & 0o777) | 0o700,
+                ));
+            }
+        }
         for created in created.iter().rev() {
             match fs::symlink_metadata(&created.path) {
                 Ok(metadata)
@@ -3622,7 +3664,13 @@ mod unix {
                 file_id: file_id.into(),
                 quiet: 0,
                 mtime_ns: is_metadata.then_some(1_700_000_000_123_456_789),
-                permissions: is_metadata.then_some(0o640),
+                permissions: is_metadata.then_some(
+                    if file_type == KittyFileTransferType::Directory {
+                        0o750
+                    } else {
+                        0o640
+                    },
+                ),
                 size: is_metadata.then(|| path.map_or(0, |_| data.len() as i64)),
                 name: path.map(|path| path.to_string_lossy().into_owned()),
                 status: is_metadata.then(|| file_id.into()),
@@ -3630,6 +3678,167 @@ mod unix {
                 data: data.into(),
                 bypass_present: false,
                 reply_uses_8bit_controls: false,
+            }
+        }
+
+        #[test]
+        fn directory_final_permissions_do_not_retain_assembly_access() {
+            for requested in [0o000, 0o055, 0o555, 0o2750] {
+                let root = tempdir().unwrap();
+                let directory = root.path().join("tree");
+                let child = directory.join("child");
+                let file = child.join("file");
+                let cancel = AtomicBool::new(false);
+                let mut transaction = DownloadTransaction::new("session".into());
+                for (id, path) in [("d", &directory), ("c", &child)] {
+                    let mut metadata = command(
+                        KittyFileTransferAction::File,
+                        id,
+                        Some(path),
+                        KittyFileTransferType::Directory,
+                        b"",
+                    );
+                    metadata.permissions = Some(requested);
+                    transaction.handle(metadata, &cancel).unwrap();
+                }
+                let mut metadata = command(
+                    KittyFileTransferAction::File,
+                    "f",
+                    Some(&file),
+                    KittyFileTransferType::Regular,
+                    b"content",
+                );
+                metadata.data = Box::default();
+                transaction.handle(metadata, &cancel).unwrap();
+                transaction
+                    .handle(
+                        command(
+                            KittyFileTransferAction::EndData,
+                            "f",
+                            None,
+                            KittyFileTransferType::Regular,
+                            b"content",
+                        ),
+                        &cancel,
+                    )
+                    .unwrap();
+                transaction
+                    .handle(
+                        command(
+                            KittyFileTransferAction::Finish,
+                            "",
+                            None,
+                            KittyFileTransferType::Regular,
+                            b"",
+                        ),
+                        &cancel,
+                    )
+                    .unwrap();
+                // Restore access top-down only after observing the actual final
+                // mode, so 000/055 directories are inspectable and removable.
+                for path in [&directory, &child] {
+                    let actual = fs::symlink_metadata(path).unwrap().permissions().mode() & 0o7777;
+                    fs::set_permissions(path, Permissions::from_mode(0o700)).unwrap();
+                    assert_eq!(actual, requested & 0o777, "{path:?}");
+                }
+                assert_eq!(fs::read(&file).unwrap(), b"content");
+            }
+        }
+
+        #[test]
+        fn rollback_restores_owned_directory_access_before_removing_children() {
+            let root = tempdir().unwrap();
+            let parent = root.path().join("parent");
+            let child = parent.join("child");
+            let file = child.join("file");
+            let mut created = Vec::new();
+            for path in [&parent, &child] {
+                fs::create_dir(path).unwrap();
+                record_created(path, CreatedKind::Directory, &mut created).unwrap();
+            }
+            fs::write(&file, b"payload").unwrap();
+            record_created(&file, CreatedKind::File, &mut created).unwrap();
+            for path in [&child, &parent] {
+                fs::set_permissions(path, Permissions::from_mode(0o000)).unwrap();
+            }
+            rollback_paths(&created);
+            let removed = fs::symlink_metadata(&parent).is_err();
+            // A failing implementation must not leave inaccessible test data.
+            if !removed {
+                fs::set_permissions(&parent, Permissions::from_mode(0o700)).unwrap();
+                fs::set_permissions(&child, Permissions::from_mode(0o700)).unwrap();
+                rollback_paths(&created);
+            }
+            assert!(
+                removed,
+                "rollback left a finalized restrictive directory tree"
+            );
+            assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
+        }
+
+        #[test]
+        fn directory_assembly_access_survives_restrictive_umask() {
+            const CHILD: &str = "TERMERIC_TEST_TRANSFER_DIRECTORY_UMASK";
+            if std::env::var_os(CHILD).is_none() {
+                let output = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", "app::kitty_file_transfer::unix::tests::directory_assembly_access_survives_restrictive_umask", "--nocapture"])
+                    .env(CHILD, "1")
+                    .output().unwrap();
+                assert!(
+                    output.status.success(),
+                    "{}\n{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                return;
+            }
+            let root = tempdir().unwrap();
+            // Change the process-wide umask only in this isolated test process.
+            // SAFETY: umask has no pointer arguments; no sibling test runs here.
+            let previous = unsafe { libc::umask(0o777) };
+            let mut created = Vec::new();
+            let path = root.path().join("private");
+            let result = create_directory(&path, &mut created);
+            // SAFETY: restore the original process umask before assertions/cleanup.
+            unsafe { libc::umask(previous) };
+            result.unwrap();
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+            assert!(created[0]._identity_guard.is_some());
+            rollback_paths(&created);
+            assert!(!path.exists());
+        }
+
+        #[test]
+        fn directory_rollback_does_not_change_replacement_permissions() {
+            for symlink_replacement in [false, true] {
+                let root = tempdir().unwrap();
+                let path = root.path().join("owned");
+                let moved = root.path().join("moved");
+                let target = root.path().join("target");
+                let mut created = Vec::new();
+                create_directory(&path, &mut created).unwrap();
+                fs::set_permissions(&path, Permissions::from_mode(0o000)).unwrap();
+                fs::rename(&path, &moved).unwrap();
+                let replacement = if symlink_replacement { &target } else { &path };
+                fs::create_dir(replacement).unwrap();
+                fs::set_permissions(replacement, Permissions::from_mode(0o555)).unwrap();
+                if symlink_replacement {
+                    std::os::unix::fs::symlink(&target, &path).unwrap();
+                }
+                rollback_paths(&created);
+                assert_eq!(
+                    fs::metadata(replacement).unwrap().permissions().mode() & 0o777,
+                    0o555
+                );
+                assert_eq!(
+                    fs::metadata(&moved).unwrap().permissions().mode() & 0o777,
+                    0o700
+                );
+                assert!(fs::symlink_metadata(&path).is_ok());
+                fs::set_permissions(replacement, Permissions::from_mode(0o700)).unwrap();
             }
         }
 

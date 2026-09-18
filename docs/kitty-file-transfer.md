@@ -29,9 +29,11 @@ and failure paths have hermetic coverage; native client acceptance is deferred.
   files published without overwrite, and best-effort transaction rollback if
   a later entry fails during `finish`.
 - Mode bits limited to `0777`; setuid, setgid, and sticky bits are stripped.
-  Directories retain owner access while assembling and receive final mode and
-  modification time after their contents. Signed nanoseconds since the Unix
-  epoch, including pre-1970 times, are passed to the filesystem; its supported
+  Directories use private `0700` assembly permissions, even with a restrictive
+  umask, then receive the requested mode without adding owner permissions.
+  Final directory modes and modification times are applied deepest-first after
+  their contents. Signed nanoseconds since the Unix epoch, including pre-1970
+  times, are passed to the filesystem; its supported
   date range and timestamp precision still apply. Hermetic transaction tests
   check pre-epoch fractional seconds, zero, and positive times on files,
   directories, hard links, and symbolic links without following symlink targets.
@@ -82,9 +84,13 @@ preserved; the approval dialog calls out that the remote side controls symbolic
 link targets. The link destination itself remains subject to every path and
 no-overwrite check.
 
-Linux rollback bookkeeping uses metadata-only, no-follow handles to retain
-created entry identities. It does not open symbolic-link targets as data files,
-so links to FIFOs do not wait for a target writer. Local regressions cover
+Linux rollback bookkeeping retains created entry identities through file
+handles; symlink identities use metadata-only, no-follow handles.
+Retained directory handles let rollback restore owner access top-down before
+removing children after restrictive final modes have been applied; this does not
+chmod a replacement directory or follow a replacement link. It does not open
+symbolic-link targets as data files, so links to FIFOs do not wait for a target
+writer. Local regressions cover
 writer-free FIFO-link commit, target preservation, dangling-link identity, and
 preserving a replacement link during rollback. General filesystem calls can
 still block; this fix does not eliminate ancestor-path replacement races.
