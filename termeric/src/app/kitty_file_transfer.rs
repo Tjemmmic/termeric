@@ -3151,12 +3151,8 @@ mod unix {
             directories.sort_by_key(|(_, path)| std::cmp::Reverse(path.components().count()));
             for (id, path) in directories {
                 let entry = self.entries.get(&id).expect("directory id exists");
-                fs::set_permissions(&path, Permissions::from_mode(entry.mode)).map_err(
-                    |error| TransactionError::io(&id, "set directory permissions", error),
-                )?;
-                apply_mtime(&path, entry.mtime_ns, false).map_err(|error| {
-                    TransactionError::io(&id, "set directory modification time", error)
-                })?;
+                finalize_directory(&path, entry.mode, entry.mtime_ns, created)
+                    .map_err(|error| TransactionError::io(&id, "set directory metadata", error))?;
             }
             Ok(())
         }
@@ -3500,6 +3496,50 @@ mod unix {
         Ok(())
     }
 
+    fn finalize_directory(
+        path: &Path,
+        mode: u32,
+        mtime_ns: Option<i64>,
+        created: &[CreatedPath],
+    ) -> io::Result<()> {
+        // The path is a transaction lookup key, never fresh filesystem
+        // authority: another process may have replaced it since creation.
+        let entry = created
+            .iter()
+            .find(|entry| entry.path == path && entry.kind == CreatedKind::Directory)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "directory was not recorded"))?;
+        let directory = entry._identity_guard.as_ref().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "directory handle is missing",
+            )
+        })?;
+        let metadata = directory.metadata()?;
+        if !metadata.is_dir() || metadata.dev() != entry.device || metadata.ino() != entry.inode {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "directory handle does not match its recorded identity",
+            ));
+        }
+        if let Some(mtime_ns) = mtime_ns {
+            let distance = Duration::from_nanos(mtime_ns.unsigned_abs());
+            let timestamp = if mtime_ns < 0 {
+                std::time::UNIX_EPOCH.checked_sub(distance)
+            } else {
+                std::time::UNIX_EPOCH.checked_add(distance)
+            }
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "timestamp is out of range")
+            })?;
+            directory.set_times(
+                fs::FileTimes::new()
+                    .set_accessed(timestamp)
+                    .set_modified(timestamp),
+            )?;
+        }
+        directory.set_permissions(Permissions::from_mode(mode))
+    }
+
     fn record_created(
         path: &Path,
         kind: CreatedKind,
@@ -3832,6 +3872,87 @@ mod unix {
             assert!(created[0]._identity_guard.is_some());
             rollback_paths(&created);
             assert!(!path.exists());
+        }
+
+        #[test]
+        fn directory_finalization_never_changes_a_replacement_path() {
+            for symlink_replacement in [false, true] {
+                let root = tempdir().unwrap();
+                let path = root.path().join("owned");
+                let moved = root.path().join("moved");
+                let target = root.path().join("target");
+                let mut created = Vec::new();
+                create_directory(&path, &mut created).unwrap();
+                fs::rename(&path, &moved).unwrap();
+                let replacement = if symlink_replacement { &target } else { &path };
+                fs::create_dir(replacement).unwrap();
+                fs::set_permissions(replacement, Permissions::from_mode(0o750)).unwrap();
+                apply_mtime(replacement, Some(1_700_000_000_123_456_789), false).unwrap();
+                let before = fs::metadata(replacement).unwrap();
+                if symlink_replacement {
+                    std::os::unix::fs::symlink(&target, &path).unwrap();
+                }
+                finalize_directory(&path, 0o555, Some(-1), &created).unwrap();
+                let owned = fs::metadata(&moved).unwrap();
+                let after = fs::metadata(replacement).unwrap();
+                // Restore cleanup access before asserting, including on the
+                // vulnerable path-based implementation used by the red test.
+                created[0]
+                    ._identity_guard
+                    .as_ref()
+                    .unwrap()
+                    .set_permissions(Permissions::from_mode(0o700))
+                    .unwrap();
+                fs::set_permissions(replacement, Permissions::from_mode(0o700)).unwrap();
+                assert_eq!(owned.permissions().mode() & 0o777, 0o555);
+                assert_eq!((owned.mtime(), owned.mtime_nsec()), (-1, 999_999_999));
+                assert_eq!(after.permissions().mode(), before.permissions().mode());
+                assert_eq!(
+                    (after.mtime(), after.mtime_nsec()),
+                    (before.mtime(), before.mtime_nsec())
+                );
+                assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+            }
+        }
+
+        #[test]
+        fn directory_finalization_requires_its_recorded_handle() {
+            for invalid in ["unrecorded", "missing", "mismatched", "wrong-kind"] {
+                let root = tempdir().unwrap();
+                let path = root.path().join("owned");
+                let other = root.path().join("other");
+                let mut created = Vec::new();
+                create_directory(&path, &mut created).unwrap();
+                fs::create_dir(&other).unwrap();
+                let before = fs::metadata(&path).unwrap();
+                let other_before = fs::metadata(&other).unwrap();
+                match invalid {
+                    "unrecorded" => created.clear(),
+                    "missing" => created[0]._identity_guard = None,
+                    "mismatched" => {
+                        created[0]._identity_guard = Some(open_directory(&other).unwrap())
+                    }
+                    "wrong-kind" => created[0].kind = CreatedKind::File,
+                    _ => unreachable!(),
+                }
+                assert!(
+                    finalize_directory(&path, 0o000, Some(-1), &created).is_err(),
+                    "{invalid}"
+                );
+                for (path, before) in [(&path, before), (&other, other_before)] {
+                    let after = fs::metadata(path).unwrap();
+                    assert_eq!(
+                        after.permissions().mode(),
+                        before.permissions().mode(),
+                        "{invalid}"
+                    );
+                    assert_eq!(
+                        (after.mtime(), after.mtime_nsec()),
+                        (before.mtime(), before.mtime_nsec()),
+                        "{invalid}"
+                    );
+                }
+            }
         }
 
         #[test]

@@ -92,8 +92,13 @@ Linux rollback bookkeeping retains created entry identities through file
 handles; symlink identities use metadata-only, no-follow handles.
 Retained directory handles let rollback restore owner access top-down before
 removing children after restrictive final modes have been applied; this does not
-chmod a replacement directory or follow a replacement link. It does not open
-symbolic-link targets as data files, so links to FIFOs do not wait for a target
+chmod a replacement directory or follow a replacement link. Final directory
+permissions and timestamps also use those handles, after checking their recorded
+device/inode identity; missing or mismatched handles fail rather than falling
+back to a path lookup. Replacement-directory and replacement-symlink regressions
+verify that only the original directory receives metadata. This does not yet
+extend handle-bound timestamps to regular files or links. Bookkeeping does not
+open symbolic-link targets as data files, so links to FIFOs do not wait for a target
 writer. Local regressions cover
 writer-free FIFO-link commit, target preservation, dangling-link identity, and
 preserving a replacement link during rollback. General filesystem calls can
