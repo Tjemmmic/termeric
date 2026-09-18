@@ -236,6 +236,70 @@ struct UrlCellSpan {
     row: usize,
     start_col: usize,
     end_col: usize,
+    linear: bool,
+}
+
+impl UrlCellSpan {
+    fn start_column(&self, byte: usize) -> usize {
+        if self.linear {
+            self.start_col + byte - self.byte_start
+        } else {
+            self.start_col
+        }
+    }
+
+    fn end_column(&self, byte: usize) -> usize {
+        if self.linear {
+            self.start_col + byte - self.byte_start
+        } else {
+            self.end_col
+        }
+    }
+}
+
+fn append_url_row(
+    row: &termeric_core::RowView<'_>,
+    visual_row: usize,
+    text: &mut String,
+    spans: &mut Vec<UrlCellSpan>,
+) {
+    for col in row.reflow_columns() {
+        let Some(cell) = row.get(col) else { continue };
+        if cell.multicell.is_present() && !cell.multicell.is_leader() {
+            continue;
+        }
+        let byte_start = text.len();
+        match &cell.content {
+            termeric_core::CellContent::Empty => text.push(' '),
+            termeric_core::CellContent::Char(character) => text.push(*character),
+            termeric_core::CellContent::Grapheme(grapheme) => text.push_str(grapheme),
+        }
+        let end_col = col
+            .saturating_add(cell.width().saturating_sub(1))
+            .min(row.len().saturating_sub(1));
+        // Exactly one UTF-8 byte and one display cell is an affine mapping.
+        // Never merge across rows, skipped cells, or variable-width graphemes.
+        let linear = text.len() == byte_start + 1 && cell.width() == 1;
+        if linear
+            && let Some(previous) = spans.last_mut()
+            && previous.linear
+            && previous.row == visual_row
+            && previous.byte_end == byte_start
+            && previous.end_col.checked_add(1) == Some(col)
+        {
+            previous.byte_end = text.len();
+            previous.end_col = end_col;
+        } else {
+            spans.push(UrlCellSpan {
+                byte_start,
+                byte_end: text.len(),
+                row: visual_row,
+                start_col: col,
+                end_col,
+                linear,
+            });
+        }
+    }
 }
 
 fn sort_disjoint_urls(urls: &mut Vec<DetectedUrl>) {
@@ -284,27 +348,7 @@ impl UrlCache {
         for visual_row in 0..grid.rows() {
             let row = grid.row_at_offset((visual_row as i32).saturating_sub(offset));
             if let Some(row) = &row {
-                for col in row.reflow_columns() {
-                    let Some(cell) = row.get(col) else { continue };
-                    if cell.multicell.is_present() && !cell.multicell.is_leader() {
-                        continue;
-                    }
-                    let byte_start = text.len();
-                    match &cell.content {
-                        termeric_core::CellContent::Empty => text.push(' '),
-                        termeric_core::CellContent::Char(character) => text.push(*character),
-                        termeric_core::CellContent::Grapheme(grapheme) => text.push_str(grapheme),
-                    }
-                    spans.push(UrlCellSpan {
-                        byte_start,
-                        byte_end: text.len(),
-                        row: visual_row,
-                        start_col: col,
-                        end_col: col
-                            .saturating_add(cell.width().saturating_sub(1))
-                            .min(grid.cols().saturating_sub(1)),
-                    });
-                }
+                append_url_row(row, visual_row, &mut text, &mut spans);
             }
             if row.is_none_or(|row| !row.is_wrapped()) || visual_row + 1 == grid.rows() {
                 self.update_logical_line(first, visual_row, &text, &spans, detector);
@@ -352,9 +396,9 @@ impl UrlCache {
                 continue;
             };
             url.start_row = start.row;
-            url.start_col = start.start_col;
+            url.start_col = start.start_column(url.start_col);
             url.end_row = end.row;
-            url.end_col = end.end_col;
+            url.end_col = end.end_column(url.end_col);
             let url = Arc::new(url);
             for row in url.start_row..=url.end_row {
                 self.urls_by_row[row].push(Arc::clone(&url));
@@ -403,6 +447,7 @@ impl UrlCache {
                     row,
                     start_col: column(byte_start),
                     end_col: column(byte_end).saturating_sub(1),
+                    linear: character.is_ascii() && column(byte_end) == column(byte_start) + 1,
                 }
             })
             .collect();
@@ -435,6 +480,86 @@ impl UrlCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ascii_url_mapping_retains_one_span_per_physical_row() {
+        let mut terminal = termeric_core::Terminal::new(100, 30);
+        terminal.process("a".repeat(3_000).as_bytes());
+        let mut text = String::new();
+        let mut spans = Vec::new();
+        for row in 0..30 {
+            append_url_row(
+                &terminal.grid().row_at_offset(row).unwrap(),
+                row as usize,
+                &mut text,
+                &mut spans,
+            );
+        }
+        assert_eq!(text.len(), 3_000);
+        assert_eq!(spans.len(), 30);
+        for (row, span) in spans.iter().enumerate() {
+            assert!(span.linear);
+            assert_eq!(span.row, row);
+            assert_eq!(span.start_column(row * 100 + 17), 17);
+            assert_eq!(span.end_column(row * 100 + 83), 83);
+        }
+    }
+
+    #[test]
+    fn coalesced_url_mapping_matches_dense_cell_mapping_for_every_byte() {
+        for cols in [1, 3, 9, 32] {
+            let mut terminal = termeric_core::Terminal::new(cols, 8);
+            terminal.process("a界 e\u{301} 👩\u{200d}💻 https://e.test/x\r\n".as_bytes());
+            terminal.process(b"\x1b]66;s=2:w=2;title\x07! https://b.test/y\r\nend");
+            for offset in [0, terminal.grid().scrollback_len()] {
+                terminal.grid_mut().set_scroll_offset(offset);
+                let mut text = String::new();
+                let mut spans = Vec::new();
+                let mut reference = String::new();
+                let mut expected = Vec::new();
+                for visual_row in 0..8 {
+                    let row = terminal
+                        .grid()
+                        .row_at_offset(visual_row as i32 - offset as i32)
+                        .unwrap();
+                    append_url_row(&row, visual_row, &mut text, &mut spans);
+                    // Independent pre-coalescing cell traversal, including
+                    // skipped physical columns and non-linear glyph spans.
+                    for col in 0..row.len() {
+                        let cell = row.get(col).unwrap();
+                        if cell.is_wide_char_spacer()
+                            || (col + 1 == row.len() && row.has_wide_wrap_padding())
+                            || (cell.multicell.is_present() && !cell.multicell.is_leader())
+                        {
+                            continue;
+                        }
+                        let start = reference.len();
+                        match &cell.content {
+                            termeric_core::CellContent::Empty => reference.push(' '),
+                            termeric_core::CellContent::Char(ch) => reference.push(*ch),
+                            termeric_core::CellContent::Grapheme(grapheme) => {
+                                reference.push_str(grapheme)
+                            }
+                        }
+                        let end_col =
+                            (col + cell.width().saturating_sub(1)).min(row.len().saturating_sub(1));
+                        expected.extend(
+                            (start..reference.len()).map(|byte| (byte, visual_row, col, end_col)),
+                        );
+                    }
+                }
+                assert_eq!(text, reference, "cols={cols} offset={offset}");
+                for (byte, row, start_col, end_col) in expected {
+                    let span = &spans[spans.partition_point(|span| span.byte_end <= byte)];
+                    assert_eq!(
+                        (span.row, span.start_column(byte), span.end_column(byte)),
+                        (row, start_col, end_col),
+                        "cols={cols} offset={offset} byte={byte}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn logical_url_cache_shares_payloads_and_invalidates_the_whole_line() {

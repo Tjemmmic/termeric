@@ -54,6 +54,29 @@ resize, and compact history scrolled into view. Viewport edges still bound URL
 recognition; this does not establish complete URLs continuing beyond the view
 or change supported URL characters, schemes, or opener policy.
 
+URL scan scratch mapping coalesces contiguous one-byte/one-cell text into one
+span per ASCII run. Row edges, skipped columns, wide glyphs, combining sequences,
+and OSC 66 geometry keep distinct spans; endpoint lookup translates byte offsets
+within a run back to exact columns. A dense-cell reference checks every byte
+across Unicode, compact history, narrow grids, and OSC 66 cases. A 100×30 fully
+wrapped ASCII grid retains 30 mapping records rather than 3,000.
+
+The isolated `url_cache_memory` test counts allocations on its own test thread
+after warming the production cache. On the local 64-bit Linux dev build, ten
+unchanged scans requested 3,357,040 cumulative allocation bytes in 210 calls
+before coalescing (production base `f408382`), versus 110,640 bytes in 140 calls
+afterward—about 96.7% fewer requested bytes for this case. The regression gate
+allows at most 32 KiB per hot scan, including text scratch. This excludes initial
+grid/cache construction and is not peak memory, RSS, GPU usage, or native frame
+latency evidence. Non-linear cells still need individual records; their linear
+tag costs one extra machine word per record on this target, so this is not a
+universal Unicode-memory reduction claim.
+
+```sh
+cargo test -p termeric --test url_cache_memory --locked --offline \
+  hot_wrapped_ascii_url_mapping_has_a_small_allocation_budget -- --nocapture
+```
+
 ## Invalidation
 
 The renderer clears all cached rows when any global rasterization or geometry
