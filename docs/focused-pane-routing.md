@@ -355,6 +355,42 @@ and frozen filtered accessibility nodes. Native painting, clipboard, and Orca
 acceptance remain deferred. A changed search projection invalidates its filtered
 selection rather than applying ordinary contiguous-range scroll tracking to it.
 
+## Detected Unicode links
+
+Automatic URL detection preserves Unicode hosts, paths, query text, and
+fragments for the existing lowercase scheme list (`http`, `https`, `ftp`,
+`ftps`, `file`, `mailto`, `ssh`, and `git`). It retains the original UTF-8,
+including combining sequences and ZWNJ/ZWJ, without normalization, IDNA
+conversion, percent encoding, or decoding. The desktop handler remains
+responsible for interpreting the target; detection is not validation or a
+guarantee that a handler supports an internationalized resource identifier.
+
+The non-ASCII repertoire follows RFC 3987's
+[`ucschar` ranges](https://www.rfc-editor.org/rfc/rfc3987.html#section-2.2),
+with conservative boundaries for prose: Unicode whitespace, soft hyphen,
+zero-width space, word joiner, BOM, and explicit bidi formatting controls end
+an inferred target. Private-use characters and noncharacters are not inferred
+as URL text. This is deliberately narrower than a complete IRI parser (including
+private-use query text), and not a Unicode-spoofing defense. Explicit OSC 8
+targets retain their separate semantics and priority.
+
+Matched ASCII parentheses and square brackets remain part of a target,
+including IPv6 hosts; an unmatched closing delimiter is excluded rather than
+passed to the opener. Existing trailing ASCII sentence-punctuation trimming
+is unchanged. Ambiguous prose, Unicode punctuation adjacent to a URL, unmatched
+opening delimiters, and scheme casing remain heuristic boundaries; use explicit
+OSC 8 metadata when the target cannot be inferred unambiguously.
+
+Detection tracks UTF-8 byte boundaries in one forward scan, then the existing
+logical-line cache maps those spans to cells. Wide halves and combined/emoji
+graphemes resolve to the complete original target, including across soft wraps,
+resize reflow, and retained history. The scan adds no per-character allocation
+or normalization buffer. Tests check exact bytes, delimiter and scalar-range
+boundaries, all occupied cells of representative graphemes, unchanged-cache
+reuse, and single/split-pane filtered and synchronized-output activation data.
+They open no links; native Unicode underline/click/handler acceptance remains
+deferred. This is not a measured whole-application performance claim.
+
 ## Filtered link presentation
 
 Detected-URL underlines and Ctrl+click targets use the same displayed matching-row

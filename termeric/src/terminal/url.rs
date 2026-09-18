@@ -72,7 +72,8 @@ impl UrlDetector {
         }
     }
 
-    /// Detect URLs in a line of text
+    /// Detect URLs in a line of text. Columns here are UTF-8 byte offsets;
+    /// the grid cache maps them to display cells (including wide graphemes).
     pub fn detect_in_line(&self, text: &str, row: usize) -> Vec<DetectedUrl> {
         let mut urls = Vec::new();
 
@@ -113,52 +114,65 @@ impl UrlDetector {
 
         for (i, c) in text.char_indices() {
             match c {
-                // Valid URL characters
-                'a'..='z' | 'A'..='Z' | '0'..='9' => end = i + c.len_utf8(),
-                '-' | '.' | '_' | '~' | ':' | '/' | '?' | '#' | '[' | ']' | '@' | '!' | '$'
-                | '&' | '\'' | '*' | '+' | ',' | ';' | '=' | '%' => {
-                    end = i + c.len_utf8();
-                    match c {
-                        '(' => paren_depth += 1,
-                        ')' => {
-                            if paren_depth > 0 {
-                                paren_depth -= 1;
-                            } else {
-                                break;
-                            }
-                        }
-                        '[' => bracket_depth += 1,
-                        ']' => {
-                            if bracket_depth > 0 {
-                                bracket_depth -= 1;
-                            } else {
-                                break;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                '(' => {
-                    paren_depth += 1;
-                    end = i + 1;
-                }
-                ')' => {
-                    if paren_depth > 0 {
-                        paren_depth -= 1;
-                        end = i + 1;
-                    } else {
-                        break;
-                    }
-                }
+                'a'..='z'
+                | 'A'..='Z'
+                | '0'..='9'
+                | '-'
+                | '.'
+                | '_'
+                | '~'
+                | ':'
+                | '/'
+                | '?'
+                | '#'
+                | '@'
+                | '!'
+                | '$'
+                | '&'
+                | '\''
+                | '*'
+                | '+'
+                | ','
+                | ';'
+                | '='
+                | '%' => {}
+                '(' => paren_depth += 1,
+                ')' if paren_depth > 0 => paren_depth -= 1,
+                '[' => bracket_depth += 1,
+                ']' if bracket_depth > 0 => bracket_depth -= 1,
+                _ if Self::is_unicode_url_char(c) => {}
                 // End URL at whitespace or other characters
                 _ => break,
             }
+            // Advance only after accepting a whole scalar. In particular an
+            // unmatched closing bracket must not become part of the target.
+            end = i + c.len_utf8();
         }
 
         // Strip trailing punctuation that's likely not part of the URL
         let url_text = &text[..end];
         let trimmed = url_text.trim_end_matches(['.', ',', ':', ';', '!', '?']);
         trimmed.len()
+    }
+
+    fn is_unicode_url_char(character: char) -> bool {
+        // RFC 3987 section 2.2 ucschar, with conservative prose boundaries.
+        // This is link detection, not IRI validation/normalization. Whitespace
+        // and directional/word-separation formatting end an inferred target;
+        // ZWNJ/ZWJ remain valid for joined text and emoji sequences.
+        if character.is_whitespace()
+            || matches!(character,
+                '\u{ad}' | '\u{61c}' | '\u{200b}' | '\u{200e}' | '\u{200f}'
+                | '\u{202a}'..='\u{202e}' | '\u{2060}' | '\u{2066}'..='\u{2069}'
+                | '\u{feff}')
+        {
+            return false;
+        }
+        match character as u32 {
+            0xA0..=0xD7FF | 0xF900..=0xFDCF | 0xFDF0..=0xFFEF | 0xE1000..=0xEFFFD => true,
+            0x10000..=0xDFFFD => (character as u32 & 0xFFFF) <= 0xFFFD,
+            _ => false,
+        }
     }
 
     /// Open a URL or path relative to the focused terminal's trusted local
@@ -542,6 +556,167 @@ impl UrlCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unicode_detected_target_preserves_utf8_and_byte_boundaries() {
+        let detector = UrlDetector::new();
+        for target in [
+            "https://例え.test/路径/e\u{301}/👩\u{200d}💻?名称=值#片段",
+            "mailto:élève@例.test",
+            "file:///tmp/資料/é.txt",
+            "https://[::1]/界",
+        ] {
+            let prefix = "前言 [";
+            let text = format!("{prefix}{target}] next");
+            let urls = detector.detect_in_line(&text, 7);
+            assert_eq!(urls.len(), 1);
+            assert_eq!(urls[0].url, target);
+            assert_eq!((urls[0].start_row, urls[0].end_row), (7, 7));
+            assert_eq!(urls[0].start_col, prefix.len());
+            assert_eq!(urls[0].end_col + 1, prefix.len() + target.len());
+            assert_eq!(&text[urls[0].start_col..=urls[0].end_col], target);
+        }
+    }
+
+    #[test]
+    fn unmatched_url_brackets_are_not_part_of_the_target() {
+        let detector = UrlDetector::new();
+        for (text, expected) in [
+            ("[https://example.test]", "https://example.test"),
+            ("[https://[::1]/path]", "https://[::1]/path"),
+            ("https://e.test/a[b[c]]d]tail", "https://e.test/a[b[c]]d"),
+            ("(https://e.test/a(b(c)))", "https://e.test/a(b(c))"),
+        ] {
+            let urls = detector.detect_in_line(text, 0);
+            assert_eq!(urls.len(), 1);
+            assert_eq!(urls[0].url, expected);
+        }
+    }
+
+    #[test]
+    fn unicode_url_boundaries_exclude_separators_controls_and_noncharacters() {
+        let detector = UrlDetector::new();
+        for separator in [
+            ' ',
+            '\t',
+            '\n',
+            '\u{7f}',
+            '\u{85}',
+            '\u{a0}',
+            '\u{ad}',
+            '\u{61c}',
+            '\u{2000}',
+            '\u{200b}',
+            '\u{200e}',
+            '\u{200f}',
+            '\u{2028}',
+            '\u{2029}',
+            '\u{202a}',
+            '\u{202e}',
+            '\u{202f}',
+            '\u{2060}',
+            '\u{2066}',
+            '\u{2069}',
+            '\u{3000}',
+            '\u{e000}',
+            '\u{f8ff}',
+            '\u{fdd0}',
+            '\u{fdef}',
+            '\u{feff}',
+            '\u{fff0}',
+            '\u{ffff}',
+            '\u{1fffe}',
+            '\u{affff}',
+            '\u{e0001}',
+            '\u{effff}',
+            '\u{f0000}',
+            '\u{10ffff}',
+        ] {
+            let text = format!("https://例.test/界{separator}tail https://next.test");
+            let urls = detector.detect_in_line(&text, 0);
+            assert_eq!(urls.len(), 2, "separator={separator:?}");
+            assert_eq!(urls[0].url, "https://例.test/界", "separator={separator:?}");
+            assert_eq!(urls[1].url, "https://next.test");
+        }
+        for character in [
+            '\u{a1}',
+            '\u{301}',
+            '\u{200c}',
+            '\u{200d}',
+            '\u{d7ff}',
+            '\u{f900}',
+            '\u{fdcf}',
+            '\u{fdf0}',
+            '\u{ffef}',
+            '\u{10000}',
+            '\u{1fffd}',
+            '\u{20000}',
+            '\u{dfffd}',
+            '\u{e1000}',
+            '\u{efffd}',
+        ] {
+            let target = format!("https://例.test/{character}/end");
+            assert_eq!(detector.detect_in_line(&target, 0)[0].url, target);
+        }
+    }
+
+    #[test]
+    fn unicode_url_cache_maps_wrapped_graphemes_history_and_reflow() {
+        let target = "https://例.test/e\u{301}/👩\u{200d}💻/界";
+        let detector = UrlDetector::new();
+        let mut terminal = termeric_core::Terminal::new(7, 32);
+        terminal.process(format!("前 [{target}] ").as_bytes());
+        let mut cache = UrlCache::new(0);
+        for cols in [7, 4, 16, 80] {
+            terminal.resize(cols, 32);
+            let history = terminal.grid().scrollback_len();
+            terminal.grid_mut().set_scroll_offset(history);
+            cache.update_grid(terminal.grid(), &detector);
+            let mut checked = [false; 5];
+            for visual_row in 0..32 {
+                let row = terminal
+                    .grid()
+                    .row_at_offset(visual_row as i32 - terminal.grid().scroll_offset() as i32)
+                    .unwrap();
+                for col in row.reflow_columns() {
+                    let cell = row.get(col).unwrap();
+                    let index = match &cell.content {
+                        termeric_core::CellContent::Char('例') => Some(0),
+                        termeric_core::CellContent::Grapheme(value)
+                            if value.as_ref() == "e\u{301}" =>
+                        {
+                            Some(1)
+                        }
+                        termeric_core::CellContent::Grapheme(value)
+                            if value.as_ref() == "👩\u{200d}💻" =>
+                        {
+                            Some(2)
+                        }
+                        termeric_core::CellContent::Char('界') => Some(3),
+                        termeric_core::CellContent::Char(']') => {
+                            assert!(cache.url_at(visual_row, col).is_none());
+                            checked[4] = true;
+                            None
+                        }
+                        _ => None,
+                    };
+                    if let Some(index) = index {
+                        checked[index] = true;
+                        for column in col..col + cell.width() {
+                            assert_eq!(cache.url_at(visual_row, column).unwrap().url, target);
+                        }
+                    }
+                }
+            }
+            assert_eq!(checked, [true; 5], "cols={cols}");
+            let (scans, hits) = cache.metrics();
+            cache.update_grid(terminal.grid(), &detector);
+            assert_eq!(cache.metrics().0, scans);
+            assert!(cache.metrics().1 > hits);
+            // Move this same content into compact history before next resize.
+            terminal.process(&b"\r\n".repeat(35));
+        }
+    }
 
     #[test]
     fn ascii_url_mapping_retains_one_span_per_physical_row() {
