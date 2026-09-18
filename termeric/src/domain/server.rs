@@ -187,6 +187,35 @@ impl Attachment {
 struct TopologySubscriber {
     id: u64,
     sender: SyncSender<ServerFrame>,
+    transport: UnixStream,
+}
+
+impl TopologySubscriber {
+    fn disconnect(&self) {
+        let _ = self.transport.shutdown(std::net::Shutdown::Both);
+    }
+
+    fn send_or_disconnect(&self, frame: ServerFrame) -> bool {
+        match self.sender.try_send(frame) {
+            Ok(()) => true,
+            Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {
+                self.disconnect();
+                false
+            }
+        }
+    }
+}
+
+struct TopologySubscriptionGuard {
+    state: SharedState,
+    domain_id: String,
+    subscription_id: u64,
+}
+
+impl Drop for TopologySubscriptionGuard {
+    fn drop(&mut self) {
+        remove_topology_subscription(&self.state, &self.domain_id, self.subscription_id);
+    }
 }
 
 struct ClientGuard(Arc<AtomicUsize>);
@@ -2537,6 +2566,7 @@ fn serve_topology_subscription(
     domain_id: String,
 ) -> anyhow::Result<()> {
     validate_id("domain id", &domain_id)?;
+    let transport = stream.try_clone()?;
     let (subscription_id, receiver, revision, snapshot) = {
         let mut state_guard = state.lock().unwrap();
         let subscription_id = state_guard
@@ -2557,8 +2587,16 @@ fn serve_topology_subscription(
         domain.topology_subscribers.push(TopologySubscriber {
             id: subscription_id,
             sender,
+            transport,
         });
         (subscription_id, receiver, revision, snapshot)
+    };
+    // Cover snapshot write, descriptor clone, and reader-spawn failures as
+    // well as normal completion. Never retain a dead slot until a later edit.
+    let _registration = TopologySubscriptionGuard {
+        state: Arc::clone(&state),
+        domain_id: domain_id.clone(),
+        subscription_id,
     };
     protocol::write_frame(
         &mut stream,
@@ -2588,7 +2626,6 @@ fn serve_topology_subscription(
     }
     let _ = stream.shutdown(std::net::Shutdown::Both);
     let _ = reader.join();
-    remove_topology_subscription(&state, &domain_id, subscription_id);
     Ok(())
 }
 
@@ -2603,9 +2640,14 @@ fn topology_subscription_input_loop(mut stream: UnixStream) {
 fn remove_topology_subscription(state: &SharedState, domain_id: &str, subscription_id: u64) {
     let mut state = state.lock().unwrap();
     if let Some(domain) = state.domains.get_mut(domain_id) {
-        domain
-            .topology_subscribers
-            .retain(|subscriber| subscriber.id != subscription_id);
+        domain.topology_subscribers.retain(|subscriber| {
+            if subscriber.id == subscription_id {
+                subscriber.disconnect();
+                false
+            } else {
+                true
+            }
+        });
     }
 }
 
@@ -3208,12 +3250,8 @@ impl DomainRuntime {
             revision: self.topology_revision,
             domain: self.topology_snapshot(),
         };
-        self.topology_subscribers.retain(|subscriber| {
-            match subscriber.sender.try_send(frame.clone()) {
-                Ok(()) => true,
-                Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => false,
-            }
-        });
+        self.topology_subscribers
+            .retain(|subscriber| subscriber.send_or_disconnect(frame.clone()));
     }
 
     fn close_topology_subscribers(&mut self, message: &str) {
@@ -3222,7 +3260,7 @@ impl DomainRuntime {
             message: message.to_string(),
         };
         for subscriber in self.topology_subscribers.drain(..) {
-            let _ = subscriber.sender.try_send(frame.clone());
+            subscriber.send_or_disconnect(frame.clone());
         }
     }
 
@@ -3244,6 +3282,10 @@ impl DomainRuntime {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "topology_lifecycle_tests.rs"]
+mod topology_lifecycle_tests;
 
 #[cfg(test)]
 mod tests {
@@ -5292,6 +5334,7 @@ mod tests {
             .set_read_timeout(Some(Duration::from_secs(1)))
             .unwrap();
         let (topology_sender, topology_receiver) = std::sync::mpsc::sync_channel(1);
+        let (topology_transport, _topology_client) = UnixStream::pair().unwrap();
         {
             let mut guard = state.lock().unwrap();
             find_pane_mut(&mut guard, &domain.id, 0)
@@ -5306,6 +5349,7 @@ mod tests {
             runtime.topology_subscribers.push(TopologySubscriber {
                 id: 1,
                 sender: topology_sender,
+                transport: topology_transport,
             });
             runtime.publish_topology();
             assert_eq!(runtime.topology_revision, 2);
@@ -5485,6 +5529,7 @@ mod tests {
         )
         .unwrap();
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let (transport, _topology_client) = UnixStream::pair().unwrap();
         {
             let mut state = state.lock().unwrap();
             state
@@ -5492,7 +5537,11 @@ mod tests {
                 .get_mut(&domain.id)
                 .unwrap()
                 .topology_subscribers
-                .push(TopologySubscriber { id: 1, sender });
+                .push(TopologySubscriber {
+                    id: 1,
+                    sender,
+                    transport,
+                });
         }
 
         close_pane(&state, &domain.id, 1, "terminal process exited");

@@ -251,7 +251,17 @@ cannot fit, the connection is shut down without claiming successful delivery.
 Local fixtures cover queue-full/disconnected-receiver shutdown, stale/replaced
 reader rejection, closed-pane refusal, and live replacement input/resize.
 These checks are not native remote-host acceptance. Topology subscriptions
-retain their separate bounded queue/teardown policy. Socket writes time
+also retain one shutdown descriptor within their eight-per-domain ceiling:
+overflow, receiver loss, or explicit detach closes only that subscription's
+transport, without waiting to drain an obsolete snapshot. A registration
+guard releases the exact slot on initial-snapshot write, descriptor-clone,
+or reader-spawn failure as well as normal completion. Healthy subscribers
+still receive ordered revisions and `DomainClosed`; a full queue on domain
+closure instead disconnects, without claiming the close frame was delivered.
+Socket-only tests reproduce failed initial publication without a later topology
+edit, check repeated slot reuse, exercise overflow/receiver-loss/full-close
+shutdown, and join real subscription workers after exact detach and normal
+domain closure while another subscriber remains live. Socket writes time
 out after five seconds, so slow clients cannot block PTY draining or cause an
 unbounded output queue. A topology subscriber retains at most one pending
 lightweight snapshot before eviction; revision frames omit command argv, cwd,
