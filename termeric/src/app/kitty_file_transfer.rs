@@ -3550,8 +3550,28 @@ mod unix {
         kind: CreatedKind,
         created: &mut Vec<CreatedPath>,
     ) -> io::Result<()> {
-        match fs::symlink_metadata(path) {
+        record_created_with(path, kind, created, |path| fs::symlink_metadata(path))
+    }
+
+    fn record_created_with(
+        path: &Path,
+        kind: CreatedKind,
+        created: &mut Vec<CreatedPath>,
+        inspect: impl FnOnce(&Path) -> io::Result<fs::Metadata>,
+    ) -> io::Result<()> {
+        match inspect(path) {
             Ok(metadata) => {
+                let kind_matches = match kind {
+                    CreatedKind::Directory => metadata.is_dir(),
+                    CreatedKind::File => metadata.is_file(),
+                    CreatedKind::Symlink => metadata.file_type().is_symlink(),
+                };
+                if !kind_matches {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "created path changed type before its identity was recorded",
+                    ));
+                }
                 // Bookkeeping must never open a symbolic link's target: it
                 // could be a FIFO/device, and a followed handle would not pin
                 // the link's inode anyway. Linux O_PATH pins even dangling
@@ -3585,14 +3605,9 @@ mod unix {
                 });
                 Ok(())
             }
-            Err(error) => {
-                let _ = if kind == CreatedKind::Directory {
-                    fs::remove_dir(path)
-                } else {
-                    fs::remove_file(path)
-                };
-                Err(error)
-            }
+            // Without an observed identity there is no safe cleanup authority:
+            // the pathname might already refer to somebody else's replacement.
+            Err(error) => Err(error),
         }
     }
 
@@ -5257,6 +5272,87 @@ mod unix {
             rollback_paths(&replacement);
             assert!(fs::symlink_metadata(&link).is_err());
             assert_eq!(fs::read(&target).unwrap(), b"keep");
+        }
+
+        #[test]
+        fn failed_created_path_inspection_never_deletes_a_replacement() {
+            for kind in [
+                CreatedKind::File,
+                CreatedKind::Directory,
+                CreatedKind::Symlink,
+            ] {
+                let root = tempdir().unwrap();
+                let path = root.path().join("entry");
+                let moved = root.path().join("original");
+                let target = root.path().join("target");
+                fs::write(&target, b"keep target").unwrap();
+                let create = |path: &Path| match kind {
+                    CreatedKind::File => fs::write(path, b"keep file"),
+                    CreatedKind::Directory => fs::create_dir(path),
+                    CreatedKind::Symlink => std::os::unix::fs::symlink(&target, path),
+                };
+                create(&path).unwrap();
+                let mut created = Vec::new();
+                let error = record_created_with(&path, kind, &mut created, |observed| {
+                    // Model a failed metadata observation while another actor
+                    // moves the original and replaces its pathname.
+                    fs::rename(observed, &moved).unwrap();
+                    create(observed).unwrap();
+                    Err(io::Error::new(
+                        io::ErrorKind::Interrupted,
+                        "injected inspection failure",
+                    ))
+                })
+                .unwrap_err();
+                assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+                assert!(created.is_empty());
+                assert!(
+                    fs::symlink_metadata(&path).is_ok(),
+                    "replacement was deleted"
+                );
+                assert!(fs::symlink_metadata(&moved).is_ok(), "original was deleted");
+                assert_eq!(fs::read(&target).unwrap(), b"keep target");
+                rollback_paths(&created);
+                assert!(fs::symlink_metadata(&path).is_ok());
+            }
+        }
+
+        #[test]
+        fn created_path_type_mismatches_never_gain_rollback_authority() {
+            let kinds = [
+                CreatedKind::File,
+                CreatedKind::Directory,
+                CreatedKind::Symlink,
+            ];
+            for actual in kinds {
+                let root = tempdir().unwrap();
+                let path = root.path().join("entry");
+                let target = root.path().join("target");
+                fs::write(&target, b"keep target").unwrap();
+                match actual {
+                    CreatedKind::File => fs::write(&path, b"keep file").unwrap(),
+                    CreatedKind::Directory => fs::create_dir(&path).unwrap(),
+                    CreatedKind::Symlink => std::os::unix::fs::symlink(&target, &path).unwrap(),
+                }
+                let before = fs::symlink_metadata(&path).unwrap();
+                let target_before = fs::metadata(&target).unwrap();
+                for expected in kinds.into_iter().filter(|kind| *kind != actual) {
+                    let mut created = Vec::new();
+                    let error = record_created(&path, expected, &mut created).unwrap_err();
+                    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+                    assert!(created.is_empty());
+                    rollback_paths(&created);
+                    let after = fs::symlink_metadata(&path).unwrap();
+                    assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+                    assert_eq!(after.permissions().mode(), before.permissions().mode());
+                    let target_after = fs::metadata(&target).unwrap();
+                    assert_eq!(
+                        target_after.permissions().mode(),
+                        target_before.permissions().mode()
+                    );
+                    assert_eq!(fs::read(&target).unwrap(), b"keep target");
+                }
+            }
         }
 
         #[test]

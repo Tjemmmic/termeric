@@ -115,6 +115,14 @@ writer-free FIFO-link commit, target preservation, dangling-link identity, and
 preserving a replacement link during rollback. General filesystem calls can
 still block; this fix does not eliminate ancestor-path replacement races.
 
+Created-entry bookkeeping rejects observed types that do not match the entry
+being created. A failed identity lookup or type mismatch grants no rollback
+authority and triggers no speculative unlink or chmod. Fault-injected tests
+preserve files, directories, and links replaced during an inspection failure;
+type-mismatch tests preserve both the entry and any symlink target. Cleanup
+remains best effort: an entry whose identity could not be recorded may remain
+on disk, and same-type substitutions before identity capture are still a gap.
+
 ## Consent and lifecycle
 
 Terminal output is untrusted. An initial `send` command only opens a modal; it
