@@ -3122,20 +3122,12 @@ mod unix {
                     std::os::unix::fs::symlink(&target, &path).map_err(|error| {
                         TransactionError::io(&id, "create symbolic link", error)
                     })?;
+                    record_created(&path, CreatedKind::Symlink, created)
+                        .map_err(|error| TransactionError::io(&id, "record link", error))?;
                 } else {
-                    fs::hard_link(&target, &path)
+                    create_hard_link(&target, &path, created)
                         .map_err(|error| TransactionError::io(&id, "create hard link", error))?;
                 }
-                record_created(
-                    &path,
-                    if is_symlink {
-                        CreatedKind::Symlink
-                    } else {
-                        CreatedKind::File
-                    },
-                    created,
-                )
-                .map_err(|error| TransactionError::io(&id, "record link", error))?;
                 apply_link_mtime(created.last().expect("link was recorded"), mtime).map_err(
                     |error| TransactionError::io(&id, "set link modification time", error),
                 )?;
@@ -3328,6 +3320,54 @@ mod unix {
         Ok(())
     }
 
+    fn create_hard_link(
+        source: &Path,
+        destination: &Path,
+        created: &mut Vec<CreatedPath>,
+    ) -> io::Result<()> {
+        #[cfg(target_os = "linux")]
+        {
+            // source is only a transaction lookup key. Its current pathname
+            // cannot grant authority to link or timestamp a replacement inode.
+            let entry = created
+                .iter()
+                .find(|entry| entry.path == source && entry.kind == CreatedKind::File)
+                .ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::NotFound, "source was not recorded")
+                })?;
+            let file = entry._identity_guard.as_ref().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::PermissionDenied, "source handle is missing")
+            })?;
+            let identity = file.metadata()?;
+            if !identity.is_file()
+                || identity.dev() != entry.device
+                || identity.ino() != entry.inode
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "source handle does not match its recorded regular-file identity",
+                ));
+            }
+            let published = PublicationTarget::open(destination)?.link_file(file)?;
+            // Record directly from the known source, not a fresh destination
+            // lookup that could observe an intervening replacement.
+            created.push(CreatedPath {
+                path: destination.to_owned(),
+                device: identity.dev(),
+                inode: identity.ino(),
+                kind: CreatedKind::File,
+                _identity_guard: Some(published),
+            });
+            Ok(())
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            // Internal Unix transaction tests only; host transfers are Linux-only.
+            fs::hard_link(source, destination)?;
+            record_created(destination, CreatedKind::File, created)
+        }
+    }
+
     struct StagedFile {
         file: File,
         path: TempPath,
@@ -3443,38 +3483,46 @@ mod unix {
 
         fn publish(self, temporary: impl Into<StagedFile>) -> io::Result<File> {
             let temporary = temporary.into();
-            // Acquire the returned handle before publication so a descriptor
-            // allocation failure cannot leave an unrecorded destination behind.
-            let published = temporary.as_file().try_clone()?;
             #[cfg(target_os = "linux")]
             {
-                use std::os::fd::AsRawFd;
-
-                let source =
-                    CString::new(format!("/proc/self/fd/{}", temporary.as_file().as_raw_fd()))
-                        .expect("descriptor path contains no NUL");
-                let destination = CString::new(self.path.as_os_str().as_bytes())
-                    .expect("publication path was validated");
-                // SAFETY: both CString pointers and both retained descriptors
-                // stay live through linkat. Only our trusted procfs source link
-                // is followed. linkat atomically refuses an existing destination.
-                let result = unsafe {
-                    libc::linkat(
-                        libc::AT_FDCWD,
-                        source.as_ptr(),
-                        libc::AT_FDCWD,
-                        destination.as_ptr(),
-                        libc::AT_SYMLINK_FOLLOW,
-                    )
-                };
-                if result != 0 {
-                    return Err(io::Error::last_os_error());
-                }
-                drop(self.parent);
+                self.link_file(temporary.as_file())
             }
             // Internal Unix tests only; actual host transfers remain Linux-only.
             #[cfg(not(target_os = "linux"))]
-            fs::hard_link(&temporary.path, &self.path)?;
+            {
+                let published = temporary.as_file().try_clone()?;
+                fs::hard_link(&temporary.path, &self.path)?;
+                Ok(published)
+            }
+        }
+
+        #[cfg(target_os = "linux")]
+        fn link_file(self, file: &File) -> io::Result<File> {
+            use std::os::fd::AsRawFd;
+
+            // Acquire the returned handle before publication so a descriptor
+            // allocation failure cannot leave an unrecorded destination behind.
+            let published = file.try_clone()?;
+            let source = CString::new(format!("/proc/self/fd/{}", file.as_raw_fd()))
+                .expect("descriptor path contains no NUL");
+            let destination = CString::new(self.path.as_os_str().as_bytes())
+                .expect("publication path was validated");
+            // SAFETY: both CString pointers and both retained descriptors
+            // stay live through linkat. Only our trusted procfs source link
+            // is followed. linkat atomically refuses an existing destination.
+            let result = unsafe {
+                libc::linkat(
+                    libc::AT_FDCWD,
+                    source.as_ptr(),
+                    libc::AT_FDCWD,
+                    destination.as_ptr(),
+                    libc::AT_SYMLINK_FOLLOW,
+                )
+            };
+            if result != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            drop(self.parent);
             Ok(published)
         }
     }
@@ -4614,6 +4662,151 @@ mod unix {
                     fs::metadata(&hardlink).unwrap().ino()
                 );
                 assert_eq!(fs::read_link(&symlink).unwrap(), PathBuf::from("file"));
+            }
+        }
+
+        #[test]
+        #[cfg(target_os = "linux")]
+        fn hard_link_refuses_invalid_source_authority() {
+            for fault in [
+                "unrecorded",
+                "missing",
+                "foreign",
+                "kind",
+                "type",
+                "unlinked",
+            ] {
+                let root = tempdir().unwrap();
+                let source = root.path().join("source");
+                let other = root.path().join("other");
+                let destination = root.path().join("destination");
+                fs::write(&source, b"source").unwrap();
+                fs::write(&other, b"keep").unwrap();
+                let before = fs::metadata(&other).unwrap();
+                let mut created = Vec::new();
+                record_created(&source, CreatedKind::File, &mut created).unwrap();
+                match fault {
+                    "unrecorded" => created.clear(),
+                    "missing" => created[0]._identity_guard = None,
+                    "foreign" => created[0]._identity_guard = Some(File::open(&other).unwrap()),
+                    "kind" => created[0].kind = CreatedKind::Symlink,
+                    "type" => {
+                        let directory = File::open(root.path()).unwrap();
+                        let metadata = directory.metadata().unwrap();
+                        created[0].device = metadata.dev();
+                        created[0].inode = metadata.ino();
+                        created[0]._identity_guard = Some(directory);
+                    }
+                    "unlinked" => {
+                        fs::remove_file(&source).unwrap();
+                        fs::write(&source, b"replacement").unwrap();
+                    }
+                    _ => unreachable!(),
+                }
+                let count = created.len();
+                assert!(
+                    create_hard_link(&source, &destination, &mut created).is_err(),
+                    "{fault}"
+                );
+                assert!(!destination.exists(), "{fault}");
+                assert_eq!(
+                    created.len(),
+                    count,
+                    "failure must not grant cleanup authority"
+                );
+                let after = fs::metadata(&other).unwrap();
+                assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+                assert_eq!(
+                    (after.mtime(), after.mtime_nsec()),
+                    (before.mtime(), before.mtime_nsec())
+                );
+                assert_eq!(fs::read(&other).unwrap(), b"keep");
+            }
+        }
+
+        #[test]
+        #[cfg(target_os = "linux")]
+        fn hard_link_refuses_existing_destinations_and_symlink_ancestors() {
+            for fault in ["file", "symlink", "ancestor"] {
+                let root = tempdir().unwrap();
+                let source = root.path().join("source");
+                let outside = root.path().join("outside");
+                fs::write(&source, b"source").unwrap();
+                fs::create_dir(&outside).unwrap();
+                let victim = outside.join("victim");
+                fs::write(&victim, b"keep").unwrap();
+                let mut created = Vec::new();
+                record_created(&source, CreatedKind::File, &mut created).unwrap();
+                let destination = match fault {
+                    "file" => victim.clone(),
+                    "symlink" => {
+                        let link = root.path().join("link");
+                        std::os::unix::fs::symlink(&victim, &link).unwrap();
+                        link
+                    }
+                    "ancestor" => {
+                        let link = root.path().join("link");
+                        std::os::unix::fs::symlink(&outside, &link).unwrap();
+                        link.join("new")
+                    }
+                    _ => unreachable!(),
+                };
+                let before = fs::metadata(&victim).unwrap();
+                assert!(
+                    create_hard_link(&source, &destination, &mut created).is_err(),
+                    "{fault}"
+                );
+                assert_eq!(created.len(), 1);
+                assert!(!outside.join("new").exists());
+                let after = fs::metadata(&victim).unwrap();
+                assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+                assert_eq!(after.nlink(), before.nlink());
+                assert_eq!(fs::read(&victim).unwrap(), b"keep");
+            }
+        }
+
+        #[test]
+        #[cfg(target_os = "linux")]
+        fn hard_link_uses_recorded_source_after_name_replacement() {
+            for symbolic in [false, true] {
+                let root = tempdir().unwrap();
+                let source = root.path().join("source");
+                let moved = root.path().join("moved");
+                let destination = root.path().join("hardlink");
+                let victim = root.path().join("victim");
+                fs::write(&source, b"approved payload").unwrap();
+                let mut created = Vec::new();
+                record_created(&source, CreatedKind::File, &mut created).unwrap();
+                let identity = fs::metadata(&source).unwrap();
+                fs::rename(&source, &moved).unwrap();
+                let replacement = if symbolic { &victim } else { &source };
+                fs::write(replacement, b"keep").unwrap();
+                apply_mtime(replacement, Some(1_700_000_000_123_456_789), false).unwrap();
+                let before = fs::metadata(replacement).unwrap();
+                if symbolic {
+                    std::os::unix::fs::symlink(&victim, &source).unwrap();
+                }
+                create_hard_link(&source, &destination, &mut created).unwrap();
+                apply_link_mtime(created.last().unwrap(), Some(-1)).unwrap();
+                let linked = fs::symlink_metadata(&destination).unwrap();
+                assert!(linked.is_file());
+                assert_eq!(
+                    (linked.dev(), linked.ino()),
+                    (identity.dev(), identity.ino())
+                );
+                assert_eq!(fs::read(&destination).unwrap(), b"approved payload");
+                assert_eq!((linked.mtime(), linked.mtime_nsec()), (-1, 999_999_999));
+                let after = fs::metadata(replacement).unwrap();
+                assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+                assert_eq!(
+                    (after.mtime(), after.mtime_nsec()),
+                    (before.mtime(), before.mtime_nsec())
+                );
+                assert_eq!(fs::read(replacement).unwrap(), b"keep");
+                rollback_paths(&created);
+                assert!(!destination.exists());
+                assert!(fs::symlink_metadata(&source).is_ok());
+                assert!(moved.exists());
             }
         }
 

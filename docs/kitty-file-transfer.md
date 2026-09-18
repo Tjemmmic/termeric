@@ -109,7 +109,21 @@ identity-check-then-unlink is atomic, and either may leave an orphan. Ancestor
 races during other creation operations and same-inode content mutation by a
 process with write authority also remain outside these publication guarantees.
 
-Hard links may name only a regular file ID in the same transfer. Symbolic links
+Hard links may name only a regular file ID in the same transfer. On Linux,
+creation uses that source's recorded regular-file handle after validating its
+type and device/inode, not a fresh lookup of its destination name. It shares
+regular-file publication's pinned destination parent, descriptor-based source,
+procfs requirement, and atomic no-overwrite link operation. Bookkeeping records
+the known source identity directly; subsequent link timestamps therefore apply
+to the same original shared inode, even when its earlier name was replaced.
+Missing, foreign, wrong-type, and unlinked source handles fail without a path
+fallback or new rollback authority. Regressions cover replaced file/symlink
+source names, unchanged replacement timestamps/content, invalid handles,
+existing destinations, symbolic-link ancestors, and rollback preservation.
+This does not close races in symbolic-link or directory creation, or make
+rollback unlink atomic.
+
+Symbolic links
 support Kitty's `fid:`, `fid_abs:`, and `path:` forms. `fid` targets must name an
 entry in the same transfer, including a directory. Relative and absolute links
 can name entries declared later: their destination paths are resolved at commit
