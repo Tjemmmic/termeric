@@ -62,6 +62,15 @@ The explicit hint keystroke is the user's open action. Opening delegates to the
 same argument-safe desktop opener used by Ctrl+click; no match text is evaluated
 by a shell. Relative paths use the focused terminal's trusted local OSC 7
 working directory; remote-host reports are never converted into local paths.
+File URI targets are passed unchanged to the desktop opener: their authority
+and percent escapes are not stripped or decoded by Termeric. Termeric no longer
+silently turns a remote file URI into the same pathname on the local machine. The
+desktop handler decides whether that URI is supported; this does not promise
+remote-file mounting or access. This preserves the host distinction in
+[RFC 8089](https://www.rfc-editor.org/rfc/rfc8089.html#section-3), and Linux's
+[xdg-open](https://portland.freedesktop.org/doc/xdg-open.html) accepts file URIs.
+Side-effect-free tests inspect the actual launch command's single target
+argument and cwd; native file-handler acceptance remains deferred.
 OSC 8 links take precedence over overlapping regex matches across every row of
 a wrapped link. Resize reflow rebuilds visible matches and their cell
 coordinates while preserving the chosen open/copy action. Configured

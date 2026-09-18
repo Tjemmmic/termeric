@@ -170,13 +170,15 @@ impl UrlDetector {
         url: &str,
         working_directory: Option<&Path>,
     ) -> std::io::Result<()> {
-        // Handle file:// URLs specially - extract the path portion
-        let effective_url = if url.starts_with("file://") {
-            Self::normalize_file_url(url)
-        } else {
-            url.to_string()
-        };
+        Self::opener_command(url, working_directory).spawn()?;
+        Ok(())
+    }
 
+    /// Leave URI interpretation to the desktop handler. In particular, a file
+    /// authority must never be discarded or its encoded path treated as a
+    /// literal local filename. Building separately permits side-effect-free
+    /// argument and working-directory tests of the actual launch path.
+    fn opener_command(url: &str, working_directory: Option<&Path>) -> std::process::Command {
         #[cfg(target_os = "linux")]
         let mut command = std::process::Command::new("xdg-open");
 
@@ -186,48 +188,13 @@ impl UrlDetector {
         #[cfg(target_os = "windows")]
         let mut command = std::process::Command::new("explorer.exe");
 
-        command.arg(&effective_url);
+        command.arg(url);
         if let Some(working_directory) = working_directory
-            && Self::is_explicit_relative_path(&effective_url)
+            && Self::is_explicit_relative_path(url)
         {
             command.current_dir(working_directory);
         }
-        command.spawn()?;
-
-        Ok(())
-    }
-
-    /// Normalize a file:// URL to extract the local path
-    ///
-    /// Handles URLs like:
-    /// - file:///path/to/file -> /path/to/file
-    /// - file://localhost/path/to/file -> /path/to/file
-    /// - file://hostname/path/to/file -> /path/to/file (for local files)
-    fn normalize_file_url(url: &str) -> String {
-        let without_scheme = url.strip_prefix("file://").unwrap_or(url);
-
-        // Check if it starts with a path (three slashes total: file:///path)
-        if without_scheme.starts_with('/') {
-            // Already a proper local path: file:///path/to/file
-            return without_scheme.to_string();
-        }
-
-        // Has a hostname: file://hostname/path/to/file
-        // Find the first slash after the hostname
-        if let Some(slash_pos) = without_scheme.find('/') {
-            let hostname = &without_scheme[..slash_pos];
-            let path = &without_scheme[slash_pos..];
-
-            log::debug!(
-                "Normalized file URL: hostname='{}', path='{}'",
-                hostname,
-                path
-            );
-            path.to_string()
-        } else {
-            // No path portion - malformed URL, return as-is
-            format!("file://{}", without_scheme)
-        }
+        command
     }
 
     fn is_explicit_relative_path(target: &str) -> bool {
@@ -680,21 +647,67 @@ mod tests {
     }
 
     #[test]
-    fn test_normalize_file_url_with_hostname() {
-        let result = UrlDetector::normalize_file_url("file://Emrakul/home/zilawon/Downloads");
-        assert_eq!(result, "/home/zilawon/Downloads");
+    fn opener_preserves_file_uri_authorities() {
+        for target in [
+            "file://remote.example/home/user/Downloads",
+            "file://localhost/home/user/file.txt",
+            "file://[::1]/tmp/file",
+            "FILE://Remote.Example/share/file.txt",
+            "file://remote.example",
+        ] {
+            let command = UrlDetector::opener_command(target, Some(Path::new("/trusted/cwd")));
+            assert_eq!(
+                command.get_args().collect::<Vec<_>>(),
+                [std::ffi::OsStr::new(target)]
+            );
+            assert!(command.get_current_dir().is_none());
+        }
     }
 
     #[test]
-    fn test_normalize_file_url_with_localhost() {
-        let result = UrlDetector::normalize_file_url("file://localhost/home/user/file.txt");
-        assert_eq!(result, "/home/user/file.txt");
+    fn opener_preserves_encoded_local_file_uris() {
+        for target in [
+            "file:///tmp/file.txt",
+            "file:///tmp/a%20b%23c%2520.txt",
+            "file://localhost/tmp/%E7%95%8C.txt",
+            "file:/tmp/a%3Fb.txt",
+            "file:///C:/Users/Example/a%20b.txt",
+        ] {
+            let command = UrlDetector::opener_command(target, None);
+            assert_eq!(
+                command.get_args().collect::<Vec<_>>(),
+                [std::ffi::OsStr::new(target)]
+            );
+        }
     }
 
     #[test]
-    fn test_normalize_file_url_triple_slash() {
-        let result = UrlDetector::normalize_file_url("file:///home/user/file.txt");
-        assert_eq!(result, "/home/user/file.txt");
+    fn opener_keeps_literal_arguments_and_only_rebases_explicit_relative_paths() {
+        let cwd = Path::new("/trusted/cwd");
+        for target in [
+            "./a b;$(not-a-command).txt",
+            "../file",
+            ".\\file",
+            "..\\file",
+            "/absolute/a b.txt",
+            "https://example.test/?x=a%20b&y=2",
+        ] {
+            let command = UrlDetector::opener_command(target, Some(cwd));
+            assert_eq!(
+                command.get_args().collect::<Vec<_>>(),
+                [std::ffi::OsStr::new(target)]
+            );
+            assert_eq!(
+                command.get_current_dir(),
+                UrlDetector::is_explicit_relative_path(target).then_some(cwd)
+            );
+            #[cfg(target_os = "linux")]
+            assert_eq!(command.get_program(), "xdg-open");
+            #[cfg(target_os = "macos")]
+            assert_eq!(command.get_program(), "open");
+            #[cfg(target_os = "windows")]
+            assert_eq!(command.get_program(), "explorer.exe");
+        }
     }
 
     #[test]
