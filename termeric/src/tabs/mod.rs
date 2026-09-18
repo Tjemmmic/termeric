@@ -10,7 +10,10 @@ mod title;
 pub(crate) use tab::SessionCapture;
 pub(crate) use tab::{LiveDomainTab, TabTerminalOwner};
 pub use tab::{Tab, TabType};
-pub(crate) use title::{get_foreground_process, get_process_cwd, terminal_working_directory};
+pub(crate) use title::{
+    get_foreground_process, get_process_cwd, presentation_working_directory,
+    terminal_working_directory,
+};
 
 use crate::config::ShellConfig;
 use crate::panes::PaneId;

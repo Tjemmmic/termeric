@@ -23,7 +23,16 @@ pub(crate) fn get_process_cwd(_pid: u32) -> Option<String> {
 /// this machine. Remote hosts remain useful display metadata but must never be
 /// treated as local filesystem paths for Git, persistence, or process spawn.
 pub(crate) fn terminal_working_directory(terminal: &Terminal) -> Option<String> {
-    let directory = terminal.reported_working_directory()?;
+    local_reported_directory(terminal.reported_working_directory()?)
+}
+
+pub(crate) fn presentation_working_directory(terminal: &Terminal) -> Option<String> {
+    local_reported_directory(terminal.presentation_working_directory()?)
+}
+
+fn local_reported_directory(
+    directory: &termeric_core::term::ReportedWorkingDirectory,
+) -> Option<String> {
     if !directory.host().is_none_or(host_is_local) {
         return None;
     }
@@ -150,6 +159,36 @@ pub(crate) fn get_foreground_process(_shell_pid: u32) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn presented_directory_preserves_absent_and_remote_snapshot_metadata() {
+        for (initial, expected) in [
+            ("", None),
+            ("file://localhost/tmp/visible", Some("/tmp/visible")),
+            ("file://remote.example/tmp/remote", None),
+        ] {
+            let mut terminal = Terminal::new(8, 2);
+            if !initial.is_empty() {
+                terminal.process(format!("\x1b]7;{initial}\x07").as_bytes());
+            }
+            let original = terminal.reported_working_directory().cloned();
+            terminal.process(b"\x1b[?2026h\x1b]7;file:///tmp/hidden\x07");
+            assert_eq!(terminal.presentation_working_directory(), original.as_ref());
+            assert_eq!(
+                presentation_working_directory(&terminal).as_deref(),
+                expected
+            );
+            assert_eq!(
+                terminal_working_directory(&terminal).as_deref(),
+                Some("/tmp/hidden")
+            );
+            terminal.process(b"\x1b[?2026l");
+            assert_eq!(
+                presentation_working_directory(&terminal).as_deref(),
+                Some("/tmp/hidden")
+            );
+        }
+    }
 
     #[test]
     fn reported_directory_accepts_local_authorities_and_rejects_remote_hosts() {

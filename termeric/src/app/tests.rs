@@ -3,6 +3,53 @@ use crate::plugin::hooks::{HookResponse, Plugin, PluginCommand};
 
 #[cfg(unix)]
 #[test]
+fn quick_select_pins_presented_targets_and_cwd_and_expires_without_activation() {
+    let patterns = vec![("path".into(), regex::Regex::new(r"\./[^ ]+").unwrap())];
+    for split in [false, true] {
+        let mut app = if split {
+            divider_owner_fixture()
+        } else {
+            scrollbar_owner_fixture()
+        };
+        app.compiled_copy_patterns = patterns.clone();
+        app.active_terminal_mut().unwrap().process(b"\x1bc\x1b[3J\x1b]7;file:///tmp/visible\x07\x1b]8;;https://visible.test\x1b\\link\x1b]8;;\x1b\\ ./visible\x1b[?2026h\x1b[H\x1b[2K./hidden\x1b]7;file:///tmp/hidden\x07");
+        app.begin_quick_select();
+        let quick = app.copy_mode.quick_select().unwrap();
+        assert_eq!(
+            quick
+                .matches
+                .iter()
+                .map(|item| item.value.as_str())
+                .collect::<Vec<_>>(),
+            ["https://visible.test", "./visible"]
+        );
+        assert_eq!(quick.working_directory.as_deref(), Some("/tmp/visible"));
+        let point = quick.matches[0].start;
+        assert_eq!(app.copy_mode_render_info().unwrap().cursor, point);
+        app.copy_mode.toggle_hint_action();
+        let label = app.copy_mode.quick_select().unwrap().matches[0]
+            .label
+            .clone();
+        let mut chosen = None;
+        for character in label.chars() {
+            chosen = app.copy_mode.push_hint_key(character);
+        }
+        let (selected, action) = chosen.unwrap();
+        assert_eq!(selected.value, "https://visible.test");
+        assert_eq!(action, crate::terminal::copy_mode::HintAction::Copy);
+        assert!(!app.reconcile_quick_select_presentation());
+        let terminal = app.active_terminal_mut().unwrap();
+        let deadline = terminal.synchronized_output_deadline().unwrap();
+        assert!(terminal.expire_synchronized_output(deadline));
+        assert!(app.reconcile_quick_select_presentation());
+        assert!(app.copy_mode.quick_select().is_none());
+        assert!(app.copy_mode.is_active());
+        assert!(!app.reconcile_quick_select_presentation());
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn focused_url_refresh_uses_the_synchronized_presentation() {
     for split in [false, true] {
         let mut app = if split {

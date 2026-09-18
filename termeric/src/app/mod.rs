@@ -1957,6 +1957,7 @@ impl App {
             return false;
         }
 
+        self.reconcile_quick_select_presentation();
         self.reconcile_broadcast_state();
 
         // Keep initial full-history search off the keyboard event path. Each

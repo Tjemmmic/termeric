@@ -47,7 +47,11 @@ impl App {
             (format!("COPY MODE · {bindings} · ESC EXIT"), Vec::new())
         };
         Some(crate::renderer::CopyModeRenderInfo {
-            cursor: self.copy_mode.cursor(),
+            cursor: self
+                .copy_mode
+                .quick_select()
+                .and_then(|quick| quick.matches.first())
+                .map_or_else(|| self.copy_mode.cursor(), |first| first.start),
             status,
             hints,
         })
@@ -110,7 +114,12 @@ impl App {
         else {
             return;
         };
-        copy_mode.start_quick_select(terminal, patterns, HintAction::Open);
+        copy_mode.start_quick_select(
+            terminal,
+            patterns,
+            HintAction::Open,
+            crate::tabs::presentation_working_directory(terminal),
+        );
         let count = copy_mode
             .quick_select()
             .map_or(0, |quick| quick.matches.len());
@@ -196,13 +205,14 @@ impl App {
     }
 
     fn activate_hint(&mut self, value: String, action: HintAction) {
+        let working_directory = self
+            .copy_mode
+            .quick_select()
+            .and_then(|quick| quick.working_directory.clone());
         self.copy_mode.cancel_quick_select();
         match action {
             HintAction::Copy => self.copy_to_clipboard(value, "Copied quick-select match"),
             HintAction::Open => {
-                let working_directory = self
-                    .active_terminal()
-                    .and_then(crate::tabs::terminal_working_directory);
                 if let Err(error) = crate::terminal::url::UrlDetector::open_url_in_directory(
                     &value,
                     working_directory.as_deref().map(std::path::Path::new),
@@ -217,6 +227,9 @@ impl App {
     }
 
     fn handle_quick_select_input(&mut self, event: &KeyEvent) -> bool {
+        if self.reconcile_quick_select_presentation() {
+            return true;
+        }
         if self.copy_mode.quick_select().is_none() {
             return false;
         }
@@ -242,6 +255,24 @@ impl App {
             }
             _ => {}
         }
+        true
+    }
+
+    /// Never rebind a partly typed label across a synchronized presentation
+    /// boundary. Called before rendering and before consuming hint input.
+    pub(super) fn reconcile_quick_select_presentation(&mut self) -> bool {
+        if self.copy_mode.quick_select().is_none() {
+            return false;
+        }
+        let current = self
+            .active_terminal()
+            .is_some_and(|terminal| self.copy_mode.quick_select_presentation_matches(terminal));
+        if current {
+            return false;
+        }
+        self.copy_mode.cancel_quick_select();
+        self.toasts
+            .info("Quick select closed because the displayed snapshot changed");
         true
     }
 

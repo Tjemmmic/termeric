@@ -58,6 +58,24 @@ Type a complete hint to perform the displayed action. `Tab` toggles between
 `OPEN` and `COPY`, `Backspace` edits a multi-key prefix, and `Escape` returns to
 copy mode.
 
+Quick-select hints scan the presented grid, including the frozen viewport during
+synchronized output. They retain their matched values and the presented trusted
+local OSC 7 directory for relative-path actions; hidden text and cwd changes do
+not replace those targets. An absent or remote directory report does not borrow
+a hidden local report; the opener's existing no-directory fallback is unchanged.
+One bounded OSC 7 metadata record is retained with the synchronized snapshot;
+this is not a second scrollback model.
+
+Hints are tied to that synchronized snapshot's lifetime. Beginning, releasing,
+timing out, or replacing the snapshot invalidates existing hints at render/input
+boundaries, with feedback, rather than rebinding a partly typed label. Resize
+within the same snapshot rebuilds coordinates while retaining its action and
+captured directory. The quick-select cursor marks a presented hint; ordinary
+copy-mode navigation/selection continues to use its existing live-grid policy.
+Tests cover frozen OSC/regex targets, local/remote/absent directory metadata,
+single and split panes, resize and lifetime invalidation without opening links
+or writing to the desktop clipboard. Native acceptance remains deferred.
+
 The explicit hint keystroke is the user's open action. Opening delegates to the
 same argument-safe desktop opener used by Ctrl+click; no match text is evaluated
 by a shell. Relative paths use the focused terminal's trusted local OSC 7

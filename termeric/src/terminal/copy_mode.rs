@@ -51,6 +51,8 @@ pub struct QuickSelect {
     pub matches: Vec<SemanticMatch>,
     pub prefix: String,
     pub action: HintAction,
+    pub working_directory: Option<String>,
+    synchronized_output_deadline: Option<std::time::Instant>,
 }
 
 #[derive(Debug, Clone)]
@@ -205,6 +207,7 @@ impl CopyMode {
         terminal: &Terminal,
         patterns: &[(String, Regex)],
         action: HintAction,
+        working_directory: Option<String>,
     ) {
         if !self.active {
             self.enter(terminal.grid());
@@ -213,6 +216,8 @@ impl CopyMode {
             matches: semantic_matches(terminal, patterns),
             prefix: String::new(),
             action,
+            working_directory,
+            synchronized_output_deadline: terminal.synchronized_output_deadline(),
         });
     }
 
@@ -229,9 +234,19 @@ impl CopyMode {
         self.quick_select = None;
     }
 
+    pub fn quick_select_presentation_matches(&self, terminal: &Terminal) -> bool {
+        self.quick_select.as_ref().is_none_or(|quick| {
+            quick.synchronized_output_deadline == terminal.synchronized_output_deadline()
+        })
+    }
+
     /// Rebuild visible semantic matches after the terminal grid reflows while
     /// retaining the user's selected action and any still-valid label prefix.
     pub fn refresh_quick_select(&mut self, terminal: &Terminal, patterns: &[(String, Regex)]) {
+        if !self.quick_select_presentation_matches(terminal) {
+            self.cancel_quick_select();
+            return;
+        }
         let Some(quick) = self.quick_select.as_mut() else {
             return;
         };
@@ -569,7 +584,7 @@ fn append_pattern_matches(
 }
 
 pub fn semantic_matches(terminal: &Terminal, patterns: &[(String, Regex)]) -> Vec<SemanticMatch> {
-    let grid = terminal.grid();
+    let grid = terminal.presentation_grid();
     let offset = i32::try_from(grid.scroll_offset()).unwrap_or(i32::MAX);
     let first = -offset;
     let last = (grid.rows().saturating_sub(1) as i32).saturating_sub(offset);
@@ -709,6 +724,58 @@ mod tests {
     }
 
     #[test]
+    fn quick_select_snapshot_identity_survives_resize_but_not_release_or_restart() {
+        let patterns = vec![("path".into(), Regex::new(r"\./[^ ]+").unwrap())];
+        for restart in [false, true] {
+            let mut terminal = Terminal::new(30, 3);
+            terminal.process(b"./visible\x1b[?2026h\x1b[H\x1b[2K./hidden");
+            let mut mode = CopyMode::default();
+            mode.start_quick_select(
+                &terminal,
+                &patterns,
+                HintAction::Copy,
+                Some("/visible".into()),
+            );
+            terminal.resize(6, 4);
+            mode.refresh_quick_select(&terminal, &patterns);
+            assert_eq!(mode.quick_select().unwrap().matches[0].value, "./visible");
+            assert_eq!(
+                mode.quick_select().unwrap().working_directory.as_deref(),
+                Some("/visible")
+            );
+            terminal.process(b"\x1b[?2026l");
+            if restart {
+                terminal.process(b"\x1b[?2026h");
+            }
+            assert!(!mode.quick_select_presentation_matches(&terminal));
+            mode.refresh_quick_select(&terminal, &patterns);
+            assert!(mode.quick_select().is_none());
+
+            terminal.process(b"\x1b[?2026l");
+            mode.start_quick_select(&terminal, &patterns, HintAction::Copy, None);
+            terminal.process(b"\x1b[?2026h");
+            assert!(!mode.quick_select_presentation_matches(&terminal));
+            mode.refresh_quick_select(&terminal, &patterns);
+            assert!(mode.quick_select().is_none());
+        }
+    }
+
+    #[test]
+    fn quick_select_reads_the_frozen_presentation_not_hidden_replacements() {
+        let mut terminal = Terminal::new(40, 3);
+        terminal.process(b"\x1b]8;;https://visible.test\x1b\\link\x1b]8;;\x1b\\ ./visible\x1b[?2026h\x1b[H\x1b[2K\x1b]8;;https://hidden.test\x1b\\link\x1b]8;;\x1b\\ ./hidden");
+        let patterns = vec![("path".into(), Regex::new(r"\./[^ ]+").unwrap())];
+        let matches = semantic_matches(&terminal, &patterns);
+        assert_eq!(
+            matches
+                .iter()
+                .map(|item| item.value.as_str())
+                .collect::<Vec<_>>(),
+            ["https://visible.test", "./visible"]
+        );
+    }
+
+    #[test]
     fn quick_select_prioritizes_osc_links_and_maps_regex_bytes_to_cells() {
         let mut terminal = Terminal::new(40, 3);
         terminal.process(b"\x1b]8;;https://example.test\x1b\\link\x1b]8;;\x1b\\ /tmp/a abcdef1");
@@ -837,7 +904,7 @@ mod tests {
             terminal.process(b"\x1b]8;;\x1b\\");
             let mut mode = CopyMode::default();
             mode.enter(terminal.grid());
-            mode.start_quick_select(&terminal, &patterns, HintAction::Copy);
+            mode.start_quick_select(&terminal, &patterns, HintAction::Copy, None);
             for (cols, end) in [
                 (3, Point::new(1, 2)),
                 (1, Point::new(3, 0)),
@@ -912,6 +979,8 @@ mod tests {
                 }],
                 prefix: String::new(),
                 action: HintAction::Copy,
+                working_directory: None,
+                synchronized_output_deadline: None,
             }),
             ..CopyMode::default()
         };
@@ -1035,7 +1104,7 @@ mod tests {
         let patterns = vec![("path".into(), Regex::new(r"/[^ ]+").unwrap())];
         let mut mode = CopyMode::default();
         mode.enter(terminal.grid());
-        mode.start_quick_select(&terminal, &patterns, HintAction::Copy);
+        mode.start_quick_select(&terminal, &patterns, HintAction::Copy, None);
         assert_eq!(mode.quick_select().unwrap().matches[0].start.row, 0);
 
         mode.prepare_reflow(terminal.grid());

@@ -110,6 +110,7 @@ impl ReportedWorkingDirectory {
 
 struct SynchronizedOutputSnapshot {
     grid: Grid,
+    reported_working_directory: Option<ReportedWorkingDirectory>,
     alternate_screen: bool,
     dynamic_colors: DynamicColors,
     cursor_style: Option<TerminalCursorStyle>,
@@ -912,6 +913,15 @@ impl Terminal {
     /// Last valid OSC 7 working-directory report for this terminal owner.
     pub fn reported_working_directory(&self) -> Option<&ReportedWorkingDirectory> {
         self.reported_working_directory.as_ref()
+    }
+
+    /// OSC 7 metadata corresponding to the displayed content, including an
+    /// absent report at the start of a synchronized-output snapshot.
+    pub fn presentation_working_directory(&self) -> Option<&ReportedWorkingDirectory> {
+        self.synchronized_output_snapshot.as_ref().map_or_else(
+            || self.reported_working_directory(),
+            |snapshot| snapshot.reported_working_directory.as_ref(),
+        )
     }
 
     pub(crate) fn set_reported_working_directory(&mut self, directory: ReportedWorkingDirectory) {
@@ -5032,6 +5042,7 @@ impl Terminal {
                     let images = self.presentation_images();
                     self.synchronized_output_snapshot = Some(SynchronizedOutputSnapshot {
                         grid: self.grid().visible_snapshot(),
+                        reported_working_directory: self.reported_working_directory.clone(),
                         alternate_screen: self.alt_screen_active,
                         dynamic_colors: self.dynamic_colors.clone(),
                         cursor_style: self.cursor_style,
