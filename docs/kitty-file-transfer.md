@@ -30,8 +30,11 @@ and failure paths have hermetic coverage; native client acceptance is deferred.
   a later entry fails during `finish`.
 - Mode bits limited to `0777`; setuid, setgid, and sticky bits are stripped.
   Directories retain owner access while assembling and receive final mode and
-  modification time after their contents. Non-negative modification times are
-  applied where the platform supports them.
+  modification time after their contents. Signed nanoseconds since the Unix
+  epoch, including pre-1970 times, are passed to the filesystem; its supported
+  date range and timestamp precision still apply. Hermetic transaction tests
+  check pre-epoch fractional seconds, zero, and positive times on files,
+  directories, hard links, and symbolic links without following symlink targets.
 
 For Kitty `receive` (host-to-child), the supported subset is intentionally
 smaller:

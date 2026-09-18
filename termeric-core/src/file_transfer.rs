@@ -583,6 +583,15 @@ mod tests {
     }
 
     #[test]
+    fn parses_signed_modification_times_without_losing_nanoseconds() {
+        for timestamp in [i64::MIN, -1_000_000_001, -1, 0, 1, i64::MAX] {
+            let input = format!("ac=file;id=session;fid=f;mod={timestamp}");
+            let command = parse_kitty_file_transfer(&fields(input.as_bytes()), false).unwrap();
+            assert_eq!(command.mtime_ns, Some(timestamp));
+        }
+    }
+
+    #[test]
     fn parses_complete_bounded_command_and_forgets_bypass_secret() {
         let name = STANDARD.encode("/tmp/root/file.txt");
         let data = STANDARD.encode(b"hello");

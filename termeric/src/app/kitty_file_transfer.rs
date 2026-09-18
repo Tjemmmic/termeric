@@ -2788,7 +2788,9 @@ mod unix {
                 // setuid/setgid/sticky bits were already stripped above.
                 mode |= 0o700;
             }
-            let mtime_ns = command.mtime_ns.filter(|value| *value >= 0);
+            // Kitty modification times are signed nanoseconds since the epoch;
+            // negative values are valid dates, not missing-metadata sentinels.
+            let mtime_ns = command.mtime_ns;
             let kind = match command.file_type {
                 KittyFileTransferType::Directory => EntryKind::Directory,
                 KittyFileTransferType::Regular => EntryKind::Regular {
@@ -3613,6 +3615,108 @@ mod unix {
                 data: data.into(),
                 bypass_present: false,
                 reply_uses_8bit_controls: false,
+            }
+        }
+
+        #[test]
+        fn signed_modification_times_survive_transaction_commit() {
+            for mtime_ns in [-1_i64, -1_000_000_001, 0, 1_700_000_000_123_456_789] {
+                let root = tempdir().unwrap();
+                let directory = root.path().join("tree");
+                let file = directory.join("file");
+                let hardlink = directory.join("hard");
+                let symlink = directory.join("symbolic");
+                let cancel = AtomicBool::new(false);
+                let mut transaction = DownloadTransaction::new("session".into());
+                for (id, path, kind, data, timestamp) in [
+                    (
+                        "d",
+                        &directory,
+                        KittyFileTransferType::Directory,
+                        b"".as_slice(),
+                        mtime_ns,
+                    ),
+                    (
+                        "f",
+                        &file,
+                        KittyFileTransferType::Regular,
+                        b"content".as_slice(),
+                        mtime_ns,
+                    ),
+                    (
+                        "h",
+                        &hardlink,
+                        KittyFileTransferType::HardLink,
+                        b"f".as_slice(),
+                        mtime_ns,
+                    ),
+                    // A distinct link timestamp verifies AT_SYMLINK_NOFOLLOW:
+                    // setting it must not change the regular file's timestamp.
+                    (
+                        "s",
+                        &symlink,
+                        KittyFileTransferType::Symlink,
+                        b"fid:f".as_slice(),
+                        mtime_ns - 1,
+                    ),
+                ] {
+                    let mut metadata =
+                        command(KittyFileTransferAction::File, id, Some(path), kind, b"");
+                    metadata.mtime_ns = Some(timestamp);
+                    metadata.size = Some(if kind == KittyFileTransferType::Regular {
+                        data.len() as i64
+                    } else {
+                        0
+                    });
+                    if id != "d" {
+                        metadata.parent = Some("d".into());
+                    }
+                    transaction.handle(metadata, &cancel).unwrap();
+                    if kind != KittyFileTransferType::Directory {
+                        transaction
+                            .handle(
+                                command(KittyFileTransferAction::EndData, id, None, kind, data),
+                                &cancel,
+                            )
+                            .unwrap();
+                    }
+                }
+                transaction
+                    .handle(
+                        command(
+                            KittyFileTransferAction::Finish,
+                            "",
+                            None,
+                            KittyFileTransferType::Regular,
+                            b"",
+                        ),
+                        &cancel,
+                    )
+                    .unwrap();
+                for (path, expected) in [
+                    (&directory, mtime_ns),
+                    (&file, mtime_ns),
+                    (&hardlink, mtime_ns),
+                    (&symlink, mtime_ns - 1),
+                ] {
+                    let metadata = fs::symlink_metadata(path).unwrap();
+                    assert_eq!(
+                        metadata.mtime(),
+                        expected.div_euclid(1_000_000_000),
+                        "{path:?}"
+                    );
+                    assert_eq!(
+                        metadata.mtime_nsec(),
+                        expected.rem_euclid(1_000_000_000),
+                        "{path:?}"
+                    );
+                }
+                assert_eq!(fs::read(&file).unwrap(), b"content");
+                assert_eq!(
+                    fs::metadata(&file).unwrap().ino(),
+                    fs::metadata(&hardlink).unwrap().ino()
+                );
+                assert_eq!(fs::read_link(&symlink).unwrap(), PathBuf::from("file"));
             }
         }
 
