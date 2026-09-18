@@ -107,7 +107,9 @@ impl MouseState {
             // A click without drag creates a selection where start == end,
             // which would otherwise persist and cause ClearSelection to
             // swallow every Escape press.
-            if selection.is_empty() {
+            // Explicit word/line/block selection can intentionally be one
+            // cell; only a plain click without a drag is trivial.
+            if selection.is_empty() && selection.ty == SelectionType::Simple {
                 self.selection = None;
             }
             return Some(result);

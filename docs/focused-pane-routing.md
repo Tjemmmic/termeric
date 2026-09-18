@@ -41,7 +41,9 @@ has lost its focused pane.
   origin route remains available only for app-mediated terminal replies. This
   prevents input bypasses without deadlocking OSC/color/capability queries.
 - Mouse coordinates are converted relative to the focused pane rectangle and
-  that pane's scroll offset. Clicking content or a pane-local scrollbar focuses
+  that pane's scroll offset. Native selection then maps the visual row into
+  the presented grid; terminal-protocol reports retain live coordinates.
+  Clicking content or a pane-local scrollbar focuses
   that pane before the operation is applied.
 - Focus changes re-run the current search against the new grid, rebuild the
   visible URL cache, refresh the cwd-derived title, invalidate Git state, reset
@@ -92,7 +94,37 @@ Hermetic tests cover hidden text, partial and confirmed result invalidation,
 filter rows, timeout/restart, single and split panes, scroll isolation, resize,
 alternate screens, and strict command-scope invalidation. Native search-bar,
 screen-reader, and filter-painting acceptance of these newer paths remains
-deferred. Ordinary mouse selection retains its separate live-grid policy.
+deferred. Native selection follows the contract below.
+
+## Mouse selection presentation
+
+Native drag, word, line, and rectangular selection in the unfiltered terminal
+viewport read the presented grid. During synchronized output the terminal keeps
+one small selection record alongside its existing frozen viewport; neither
+text nor scrollback is cloned again. Rendering, accessible selection reporting,
+word/line expansion, and clipboard text extraction read this same selection.
+
+An existing selection is intersected with the captured viewport and translated
+from scrollback into frozen coordinates at begin. Copying it while frozen
+includes only that visible intersection. New selections made in the frozen
+view clear any old live selection; their coordinates never transfer to hidden
+content after release. A dimension-changing resize clears frozen native
+selection rather than guessing new endpoints; an identical resize preserves it.
+
+A native drag records its terminal owner, snapshot lifetime, presented screen,
+and dimensions. Changed ownership or presentation cancels further drag updates
+and resets multi-click tracking. Snapshot-captured selections can still be
+cleared with Escape after that cancellation. Mouse-up finishes a selection on
+its original presentation only; plain clicks without a drag clear, while
+explicit one-cell word/line/block selections remain selectable.
+
+Core and headless app regressions cover hidden replacement text, clipped and
+reversed scrollback selections, word/line/block behavior, single/split panes,
+timeout/restart/resize/focus invalidation, and no hidden-coordinate fallback.
+Tests do not write the desktop clipboard. Native painting/clipboard acceptance
+remains deferred. Noncontiguous filtered-search-row selection and selection
+tracking during ordinary live-output drags retain their separate existing
+policies and are not established by these tests.
 
 ## Regression evidence
 

@@ -14,6 +14,7 @@ mod git_completion;
 mod ime;
 mod kitty_file_transfer;
 mod mouse;
+mod mouse_selection;
 mod palette_input;
 mod plugin_actions;
 mod plugin_launch;
@@ -1103,6 +1104,7 @@ pub struct App {
     file_drop_hovered: bool,
     /// Whether mouse is currently pressed (for selection)
     mouse_pressed: bool,
+    mouse_selection_source: Option<mouse_selection::MouseSelectionPresentation>,
     /// Exact terminal that received the held application mouse button.
     terminal_mouse_capture: Option<TerminalMouseCapture>,
     /// Whether we're dragging the scrollbar
@@ -1388,6 +1390,7 @@ impl App {
             last_cursor_pos: None,
             file_drop_hovered: false,
             mouse_pressed: false,
+            mouse_selection_source: None,
             terminal_mouse_capture: None,
             scrollbar_dragging: None,
             divider_dragging: None,
@@ -1960,6 +1963,7 @@ impl App {
             return false;
         }
 
+        self.reconcile_mouse_selection_presentation();
         self.reconcile_copy_mode_presentation();
         self.reconcile_quick_select_presentation();
         self.reconcile_broadcast_state();
@@ -3389,7 +3393,12 @@ impl App {
             }
             Action::ClearSelection => {
                 // Only consume the key if there's actually a selection to clear
-                if self.mouse_state.current_selection().is_none() {
+                if self.mouse_state.current_selection().is_none()
+                    && self
+                        .active_terminal()
+                        .and_then(termeric_core::Terminal::selection)
+                        .is_none()
+                {
                     return false;
                 }
                 self.mouse_state.clear_selection();

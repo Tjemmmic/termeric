@@ -68,7 +68,7 @@ acceptance. Keyboard selection and quick select's separate snapshot/action
 contracts are documented in [copy mode and quick select](copy-mode.md). They
 reuse the existing presentation grid rather than cloning a second scrollback
 model. Standalone search follows the [search presentation contract](focused-pane-routing.md#search-presentation);
-ordinary mouse selection remains a separate policy.
+native selection follows the [mouse selection presentation contract](focused-pane-routing.md#mouse-selection-presentation).
 
 URL scan scratch mapping coalesces contiguous one-byte/one-cell text into one
 span per ASCII run. Row edges, skipped columns, wide glyphs, combining sequences,

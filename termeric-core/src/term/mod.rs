@@ -110,6 +110,7 @@ impl ReportedWorkingDirectory {
 
 struct SynchronizedOutputSnapshot {
     grid: Grid,
+    selection: Option<Selection>,
     reported_working_directory: Option<ReportedWorkingDirectory>,
     alternate_screen: bool,
     dynamic_colors: DynamicColors,
@@ -1905,14 +1906,52 @@ impl Terminal {
         ));
     }
 
-    /// Get the current selection
+    /// Get the selection belonging to the displayed grid.
     pub fn selection(&self) -> Option<&Selection> {
-        self.selection.as_ref()
+        self.synchronized_output_snapshot.as_ref().map_or_else(
+            || self.selection.as_ref(),
+            |snapshot| snapshot.selection.as_ref(),
+        )
     }
 
-    /// Set the selection
+    /// Set a user selection in presentation-grid coordinates. Frozen selections
+    /// never become live-grid coordinates after the snapshot is released.
     pub fn set_selection(&mut self, selection: Option<Selection>) {
-        self.selection = selection;
+        if let Some(snapshot) = &mut self.synchronized_output_snapshot {
+            snapshot.selection = selection;
+            self.selection = None;
+        } else {
+            self.selection = selection;
+        }
+    }
+
+    fn selection_for_snapshot(&self) -> Option<Selection> {
+        let mut selection = self.selection.clone()?;
+        let grid = self.grid();
+        let offset = i32::try_from(grid.scroll_offset()).ok()?;
+        let first = -offset;
+        let last = (grid.rows().saturating_sub(1) as i32).saturating_sub(offset);
+        let max_col = grid.cols().saturating_sub(1);
+        let (mut start, mut end) = selection.bounds();
+        if end.row < first || start.row > last {
+            return None;
+        }
+        if selection.ty == SelectionType::Block {
+            start.row = start.row.max(first);
+            end.row = end.row.min(last);
+        } else {
+            start = start.max(Point::new(first, 0));
+            end = end.min(Point::new(last, max_col));
+        }
+        start.row = start.row.saturating_add(offset);
+        end.row = end.row.saturating_add(offset);
+        start.col = start.col.min(max_col);
+        end.col = end.col.min(max_col);
+        let reversed = selection.start > selection.end;
+        selection.start = if reversed { end } else { start };
+        selection.end = if reversed { start } else { end };
+        selection.finish();
+        Some(selection)
     }
 
     /// Get the number of columns
@@ -2234,6 +2273,9 @@ impl Terminal {
         self.alt_grid.resize(cols, rows);
         self.alt_grid.repair_multicells(&resize_blank);
         if let Some(snapshot) = &mut self.synchronized_output_snapshot {
+            if snapshot.grid.cols() != cols || snapshot.grid.rows() != rows {
+                snapshot.selection = None;
+            }
             snapshot.grid.resize(cols, rows);
             snapshot.grid.repair_multicells(&resize_blank);
         }
@@ -5055,6 +5097,7 @@ impl Terminal {
                     let images = self.presentation_images();
                     self.synchronized_output_snapshot = Some(SynchronizedOutputSnapshot {
                         grid: self.grid().visible_snapshot(),
+                        selection: self.selection_for_snapshot(),
                         reported_working_directory: self.reported_working_directory.clone(),
                         alternate_screen: self.alt_screen_active,
                         dynamic_colors: self.dynamic_colors.clone(),
@@ -5289,7 +5332,8 @@ impl Terminal {
     /// whitespace or empty, returns `(point, point)` unchanged so the caller
     /// falls back to a zero-width selection.
     pub fn word_at(&self, point: Point) -> (Point, Point) {
-        let Some(row) = self.grid().row_at_offset(point.row) else {
+        let grid = self.presentation_grid();
+        let Some(row) = grid.row_at_offset(point.row) else {
             return (point, point);
         };
         let cell_char = |col: usize| -> Option<char> {
@@ -5313,7 +5357,7 @@ impl Terminal {
             _ => return (point, point),
         }
 
-        let max_col = self.cols.saturating_sub(1);
+        let max_col = grid.cols().saturating_sub(1);
         // Walk left
         let mut start_col = point.col;
         while start_col > 0 {
@@ -5341,10 +5385,11 @@ impl Terminal {
     /// Trailing whitespace is excluded so the selection doesn't drag past the
     /// visible end of the line.
     pub fn line_at(&self, point: Point) -> (Point, Point) {
-        let Some(row) = self.grid().row_at_offset(point.row) else {
+        let grid = self.presentation_grid();
+        let Some(row) = grid.row_at_offset(point.row) else {
             return (point, point);
         };
-        let max_col = self.cols.saturating_sub(1);
+        let max_col = grid.cols().saturating_sub(1);
         let mut end_col = max_col;
         while end_col > 0 {
             let ch = row.get(end_col).and_then(|c| c.content.char());
@@ -5361,8 +5406,8 @@ impl Terminal {
     /// - Lines: full rows from start to end.
     /// - Block: rectangular region (one newline between rows).
     pub fn get_selection_text(&self) -> Option<String> {
-        let selection = self.selection.as_ref()?;
-        Some(Self::selection_text(self.grid(), selection))
+        let selection = self.selection()?;
+        Some(Self::selection_text(self.presentation_grid(), selection))
     }
 
     /// Extract an explicit selection in presentation-grid coordinates without
@@ -5937,6 +5982,73 @@ mod tests {
                 assert!(term.selection().is_none());
             }
         }
+    }
+
+    #[test]
+    fn native_selection_reads_frozen_text_and_word_boundaries() {
+        let mut term = Terminal::new(16, 3);
+        term.process(b"visible word");
+        let mut selection = Selection::new(Point::new(0, 0), SelectionType::Simple);
+        selection.update(Point::new(0, 6));
+        term.set_selection(Some(selection));
+        term.process(b"\x1b[?2026h\x1b[H\x1b[2Khidden text");
+        assert_eq!(term.get_selection_text().as_deref(), Some("visible"));
+        assert_eq!(
+            term.word_at(Point::new(0, 6)),
+            (Point::new(0, 0), Point::new(0, 6))
+        );
+    }
+
+    #[test]
+    fn snapshot_selection_clips_scrollback_and_preserves_block_columns() {
+        for ty in [
+            SelectionType::Simple,
+            SelectionType::Lines,
+            SelectionType::Block,
+        ] {
+            for reversed in [false, true] {
+                let mut term = Terminal::new(3, 3);
+                term.process(b"abc\r\ndef\r\nghi\r\njkl\r\nmno");
+                term.grid_mut().set_scroll_offset(1);
+                let (start, end) = (Point::new(-2, 1), Point::new(2, 1));
+                let mut selection = Selection::new(if reversed { end } else { start }, ty);
+                selection.update(if reversed { start } else { end });
+                term.set_selection(Some(selection));
+                term.process(b"\x1b[?2026h\x1b[?1049hSECRET");
+                assert_eq!(
+                    term.get_selection_text().as_deref(),
+                    Some(if ty == SelectionType::Block {
+                        "e\nh\nk"
+                    } else {
+                        "def\nghi\njkl"
+                    })
+                );
+                let selection = term.selection().unwrap();
+                assert_eq!((selection.bounds().0.row, selection.bounds().1.row), (0, 2));
+                assert!(!selection.active);
+            }
+        }
+    }
+
+    #[test]
+    fn frozen_selection_never_falls_back_to_hidden_selection_and_retires_on_resize() {
+        let mut term = Terminal::new(8, 3);
+        term.process(b"visible\x1b[?2026h\x1b[H\x1b[2Khidden");
+        let mut selection = Selection::new(Point::new(0, 0), SelectionType::Simple);
+        selection.update(Point::new(0, 6));
+        term.set_selection(Some(selection.clone()));
+        assert_eq!(term.get_selection_text().as_deref(), Some("visible"));
+        assert!(
+            term.selection.is_none(),
+            "frozen coordinates must not survive on the live grid"
+        );
+        term.resize(8, 3);
+        assert_eq!(term.get_selection_text().as_deref(), Some("visible"));
+        term.resize(4, 6);
+        assert!(term.selection().is_none());
+        term.set_selection(Some(selection));
+        term.process(b"\x1b[?2026l");
+        assert!(term.get_selection_text().is_none());
     }
 
     #[test]

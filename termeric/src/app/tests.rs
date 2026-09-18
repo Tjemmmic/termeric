@@ -3,6 +3,165 @@ use crate::plugin::hooks::{HookResponse, Plugin, PluginCommand};
 
 #[cfg(unix)]
 #[test]
+fn native_selection_release_clears_plain_clicks_but_keeps_one_cell_explicit_selections() {
+    use termeric_core::Point;
+    let mut app = scrollbar_owner_fixture();
+    app.active_terminal_mut()
+        .unwrap()
+        .process(b"\x1bc\x1b[3Jx\x1b[?2026h\x1b[Hhidden");
+    for (previous_clicks, modifiers, expected) in [
+        (0, ModifiersState::empty(), None),
+        (1, ModifiersState::empty(), Some("x")),
+        (2, ModifiersState::empty(), Some("x")),
+        (0, ModifiersState::ALT, Some("x")),
+    ] {
+        app.modifiers = modifiers;
+        app.mouse_state.click_count = previous_clicks;
+        app.mouse_state.last_click_pos = Some(Point::new(0, 0));
+        app.mouse_state.last_click_time = Instant::now();
+        app.begin_native_selection(MouseButton::Left, Point::new(0, 0));
+        app.finish_native_selection();
+        assert_eq!(
+            app.active_terminal()
+                .unwrap()
+                .get_selection_text()
+                .as_deref(),
+            expected
+        );
+    }
+}
+#[cfg(unix)]
+#[test]
+fn native_selection_uses_scrolled_frozen_text_for_drag_word_line_and_block() {
+    use termeric_core::Point;
+    for split in [false, true] {
+        let mut app = if split {
+            divider_owner_fixture()
+        } else {
+            scrollbar_owner_fixture()
+        };
+        let terminal = app.active_terminal_mut().unwrap();
+        terminal.resize(16, 3);
+        terminal.process(b"\x1bc\x1b[3Jolder\r\nvisible word\r\ntail\r\na\r\nb\r\nc");
+        terminal.grid_mut().set_scroll_offset(3);
+        terminal.process(b"\x1b[?2026h\x1b[H\x1b[2KHIDDEN");
+        terminal.grid_mut().set_scroll_offset(3);
+        let point = Point::new(-2, 0); // visual row 1 despite hidden live offset 3
+        app.begin_native_selection(MouseButton::Left, point);
+        app.extend_native_selection(Point::new(-2, 6));
+        app.finish_native_selection();
+        assert_eq!(
+            app.active_terminal()
+                .unwrap()
+                .get_selection_text()
+                .as_deref(),
+            Some("visible")
+        );
+        assert!(!app.active_terminal().unwrap().selection().unwrap().active);
+        for (click_count, expected) in [(1, "visible"), (2, "visible word")] {
+            app.mouse_state.click_count = click_count;
+            app.mouse_state.last_click_pos = Some(Point::new(1, 2));
+            app.mouse_state.last_click_time = Instant::now();
+            app.begin_native_selection(MouseButton::Left, Point::new(-2, 2));
+            app.finish_native_selection();
+            assert_eq!(
+                app.active_terminal()
+                    .unwrap()
+                    .get_selection_text()
+                    .as_deref(),
+                Some(expected)
+            );
+        }
+        app.modifiers = ModifiersState::ALT;
+        app.begin_native_selection(MouseButton::Left, point);
+        app.extend_native_selection(Point::new(-2, 6));
+        assert_eq!(
+            app.active_terminal().unwrap().selection().unwrap().ty,
+            termeric_core::SelectionType::Block
+        );
+        assert_eq!(
+            app.active_terminal()
+                .unwrap()
+                .get_selection_text()
+                .as_deref(),
+            Some("visible")
+        );
+        app.active_terminal_mut().unwrap().process(b"\x1b[?2026l");
+        app.extend_native_selection(Point::new(0, 5));
+        assert!(!app.mouse_pressed);
+        assert!(app.mouse_state.selection.is_none());
+        assert!(app.active_terminal().unwrap().selection().is_none());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn native_selection_drag_rejects_snapshot_resize_and_owner_replacement() {
+    use termeric_core::Point;
+    for transition in ["begin", "timeout", "restart", "resize", "focus"] {
+        let mut app = divider_owner_fixture();
+        let terminal = app.active_terminal_mut().unwrap();
+        terminal.process(b"\x1bc\x1b[3Jvisible\x1b[H");
+        if transition != "begin" {
+            terminal.process(b"\x1b[?2026h");
+        }
+        app.begin_native_selection(MouseButton::Left, Point::new(0, 0));
+        app.extend_native_selection(Point::new(0, 6));
+        match transition {
+            "begin" => app.active_terminal_mut().unwrap().process(b"\x1b[?2026h"),
+            "timeout" => {
+                let terminal = app.active_terminal_mut().unwrap();
+                terminal
+                    .expire_synchronized_output(terminal.synchronized_output_deadline().unwrap());
+            }
+            "restart" => app
+                .active_terminal_mut()
+                .unwrap()
+                .process(b"\x1b[?2026l\x1b[?2026h"),
+            "resize" => app.active_terminal_mut().unwrap().resize(9, 4),
+            "focus" => {
+                let panes = app
+                    .tabs
+                    .as_mut()
+                    .unwrap()
+                    .active_tab_mut()
+                    .unwrap()
+                    .pane_manager
+                    .as_mut()
+                    .unwrap();
+                let other = panes
+                    .pane_ids()
+                    .into_iter()
+                    .find(|id| *id != panes.focused_id())
+                    .unwrap();
+                panes.focus(other);
+            }
+            _ => unreachable!(),
+        }
+        app.extend_native_selection(Point::new(0, 2));
+        assert!(!app.mouse_pressed, "{transition}");
+        assert!(app.mouse_state.selection.is_none(), "{transition}");
+        assert!(app.mouse_selection_source.is_none(), "{transition}");
+        if transition == "begin" {
+            assert_eq!(
+                app.active_terminal()
+                    .unwrap()
+                    .get_selection_text()
+                    .as_deref(),
+                Some("visible")
+            );
+            assert!(app.handle_action(crate::input::Action::ClearSelection));
+            assert!(app.active_terminal().unwrap().selection().is_none());
+        } else {
+            assert!(
+                app.active_terminal().unwrap().selection().is_none(),
+                "{transition}"
+            );
+        }
+    }
+}
+#[cfg(unix)]
+#[test]
 fn standalone_search_does_not_find_hidden_synchronized_output() {
     let mut app = scrollbar_owner_fixture();
     app.active_terminal_mut()

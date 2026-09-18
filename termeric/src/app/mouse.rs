@@ -72,7 +72,7 @@ impl App {
         }
     }
 
-    fn focused_pointer_terminal(&self) -> Option<crate::tabs::TerminalIdentity> {
+    pub(super) fn focused_pointer_terminal(&self) -> Option<crate::tabs::TerminalIdentity> {
         let tabs = self.tabs.as_ref()?;
         let target = tabs.active_tab()?.focused_terminal_identity();
         tabs.origin_for_pane(target.tab_id, target.pane_id)?;
@@ -157,12 +157,11 @@ impl App {
     }
 
     pub(super) fn take_native_drag_controls(&mut self) -> Vec<LiveDomainControl> {
-        self.mouse_pressed = false;
+        self.finish_native_selection();
         self.scrollbar_dragging = None;
         let divider_drag = self.divider_dragging.take();
         let tab_drag = self.tab_dragging.take();
         self.tab_drag_scroll = None;
-        let _ = self.mouse_state.handle_release(MouseButton::Left);
         let mut controls = Vec::new();
         if let Some(drag) = divider_drag {
             // Never commit a captured split ID through a replacement route.
@@ -702,34 +701,7 @@ impl App {
                     return;
                 }
 
-                if let Some(mut selection) =
-                    self.mouse_state
-                        .handle_press(button, grid_pos, self.modifiers)
-                {
-                    self.mouse_pressed = true;
-                    // Double-click expands to the word under the cursor;
-                    // triple-click expands to the full line. Simple/Block
-                    // selections pass through unchanged.
-                    if let Some(terminal) = self.active_terminal_mut() {
-                        match selection.ty {
-                            termeric_core::SelectionType::Semantic => {
-                                let (start, end) = terminal.word_at(grid_pos);
-                                selection.start = start;
-                                selection.end = end;
-                            }
-                            termeric_core::SelectionType::Lines => {
-                                let (start, end) = terminal.line_at(grid_pos);
-                                selection.start = start;
-                                selection.end = end;
-                            }
-                            _ => {}
-                        }
-                        terminal.set_selection(Some(selection.clone()));
-                    }
-                    // Keep mouse_state in sync so drags extend the expanded
-                    // selection. Written after the terminal borrow ends.
-                    self.mouse_state.selection = Some(selection);
-                }
+                self.begin_native_selection(button, grid_pos);
 
                 if button != MouseButton::Left {
                     if self.focus_pane_at(position, content_top, padding) {
@@ -1059,14 +1031,9 @@ impl App {
 
         // Only update selection when mouse is pressed (dragging)
         if self.mouse_pressed {
-            if let Some(selection) = self.mouse_state.handle_move(grid_pos) {
-                if let Some(terminal) = self.active_terminal_mut() {
-                    terminal.set_selection(Some(selection));
-                }
-                // Request redraw for selection update
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
+            self.extend_native_selection(grid_pos);
+            if let Some(window) = &self.window {
+                window.request_redraw();
             }
         } else {
             // Just update position tracking when not dragging
