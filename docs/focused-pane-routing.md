@@ -317,9 +317,10 @@ Hermetic tests cover Unicode round trips, both endpoint directions, compact
 history fast paths, crossing history/viewport lines, retained-character identity
 across widths/heights/history limits, clipped and evicted endpoints, discarded
 padding/orphan spacers, frozen primary/alternate screens, and single/split-pane
-pointer reconciliation. This is not a claim that every grid mutation or the
-separate keyboard copy-mode bookmark lifecycle is covered. Native desktop
-acceptance remains deferred.
+pointer reconciliation. Keyboard copy mode now shares this mapping through its
+own grid-bound [resize transaction](copy-mode.md#copy-mode), including frozen
+views. This is not a claim that every grid mutation or ongoing-output modal
+coordinate lifecycle is covered. Native desktop acceptance remains deferred.
 
 ## Filtered selection and accessible text
 

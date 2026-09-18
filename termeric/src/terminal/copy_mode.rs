@@ -64,14 +64,8 @@ pub struct CopyMode {
     preferred_col: usize,
     pending_g: bool,
     quick_select: Option<QuickSelect>,
-    reflow_bookmark: Option<(LogicalPoint, Option<LogicalPoint>)>,
+    reflow_bookmark: Option<termeric_core::grid::ResizeTrackingToken>,
     synchronized_output_deadline: Option<std::time::Instant>,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct LogicalPoint {
-    line: usize,
-    cell: usize,
 }
 
 impl Default for CopyMode {
@@ -318,90 +312,28 @@ impl CopyMode {
         }
     }
 
-    pub fn prepare_reflow(&mut self, grid: &Grid) {
+    pub fn prepare_reflow(&mut self, grid: &mut Grid) {
         if self.active {
-            self.reflow_bookmark = Some((
-                logical_point(grid, self.cursor),
-                self.anchor.map(|anchor| logical_point(grid, anchor)),
-            ));
+            self.reflow_bookmark =
+                Some(grid.begin_resize_tracking(self.cursor, self.anchor, self.selection_type));
         }
     }
 
     pub fn finish_reflow(&mut self, grid: &mut Grid) {
-        let Some((cursor, anchor)) = self.reflow_bookmark.take() else {
+        let Some(token) = self.reflow_bookmark.take() else {
             return;
         };
-        self.cursor = point_from_logical(grid, cursor);
-        self.anchor = anchor.map(|anchor| point_from_logical(grid, anchor));
+        let [cursor, anchor] = grid.finish_resize_tracking(token).unwrap_or([None; 2]);
+        // A missing cursor no longer names retained text. Restart navigation
+        // at the terminal cursor, never transfer its old selection elsewhere.
+        self.cursor =
+            cursor.unwrap_or_else(|| Point::new(grid.cursor().row as i32, grid.cursor().col));
+        self.anchor = cursor.and(anchor);
+        self.pending_g = false;
         self.preferred_col = self.cursor.col;
         self.clamp(grid);
         reveal_cursor(grid, self.cursor);
     }
-}
-
-fn logical_point(grid: &Grid, point: Point) -> LogicalPoint {
-    let oldest = -(grid.scrollback_len() as i32);
-    let newest = grid.rows().saturating_sub(1) as i32;
-    let target = point.row.clamp(oldest, newest);
-    let mut line = 0;
-    let mut cell = 0;
-    for row_index in oldest..=newest {
-        let Some(row) = grid.row_at_offset(row_index) else {
-            continue;
-        };
-        if row_index == target {
-            let mut col = point.col.min(row.len().saturating_sub(1));
-            if row.get(col).is_some_and(|cell| cell.is_wide_char_spacer()) {
-                col = col.saturating_sub(1);
-            }
-            return LogicalPoint {
-                line,
-                cell: cell
-                    + row
-                        .reflow_columns()
-                        .take_while(|column| *column < col)
-                        .count(),
-            };
-        }
-        if row.is_wrapped() {
-            cell += row.reflow_unit_count();
-        } else {
-            line += 1;
-            cell = 0;
-        }
-    }
-    LogicalPoint { line, cell }
-}
-
-fn point_from_logical(grid: &Grid, target: LogicalPoint) -> Point {
-    let oldest = -(grid.scrollback_len() as i32);
-    let newest = grid.rows().saturating_sub(1) as i32;
-    let mut line = 0;
-    let mut remaining = target.cell;
-    for row_index in oldest..=newest {
-        let Some(row) = grid.row_at_offset(row_index) else {
-            continue;
-        };
-        if line == target.line {
-            let units = row.reflow_unit_count();
-            if remaining < units {
-                let col = row
-                    .reflow_columns()
-                    .nth(remaining)
-                    .expect("reflow unit count matches the immutable row view");
-                return Point::new(row_index, col);
-            }
-            remaining = remaining.saturating_sub(units);
-        }
-        if !row.is_wrapped() {
-            if line == target.line {
-                return Point::new(row_index, row.len().saturating_sub(1));
-            }
-            line += 1;
-            remaining = target.cell;
-        }
-    }
-    Point::new(newest, grid.cols().saturating_sub(1))
 }
 
 fn reveal_cursor(grid: &mut Grid, cursor: Point) {
@@ -923,7 +855,7 @@ mod tests {
                 (1, Point::new(3, 0)),
                 (5, Point::new(0, 4)),
             ] {
-                mode.prepare_reflow(terminal.grid());
+                mode.prepare_reflow(terminal.grid_mut());
                 terminal.resize(cols, 6);
                 mode.finish_reflow(terminal.grid_mut());
                 mode.refresh_quick_select(&terminal, &patterns);
@@ -1003,6 +935,141 @@ mod tests {
     }
 
     #[test]
+    fn copy_resize_tracks_retained_text_instead_of_history_relative_line_numbers() {
+        fn locate(term: &Terminal, character: char) -> Option<Point> {
+            (-(term.grid().scrollback_len() as i32)..term.rows() as i32).find_map(|row| {
+                let cells = term.grid().row_at_offset(row).unwrap();
+                (0..cells.len())
+                    .find(|&col| {
+                        cells
+                            .get(col)
+                            .is_some_and(|cell| cell.content.char() == Some(character))
+                    })
+                    .map(|col| Point::new(row, col))
+            })
+        }
+        for limit in [0, 1, 8] {
+            for cols in [1, 2, 4, 8, 12] {
+                for rows in [1, 3, 8] {
+                    for (first, last) in
+                        [('A', 'B'), ('C', 'J'), ('K', 'N'), ('O', 'V'), ('S', 'V')]
+                    {
+                        for reverse in [false, true] {
+                            let mut terminal = Terminal::new(8, 3);
+                            terminal.grid_mut().set_scrollback_limit(limit);
+                            terminal.process(b"AB\r\nCDEFGHIJ\r\nKLMN\r\nOPQRSTUV");
+                            let (Some(mut start), Some(mut end)) =
+                                (locate(&terminal, first), locate(&terminal, last))
+                            else {
+                                continue;
+                            };
+                            if reverse {
+                                std::mem::swap(&mut start, &mut end);
+                            }
+                            let mut mode = CopyMode::default();
+                            mode.enter(terminal.grid());
+                            mode.jump_to(start, terminal.grid_mut());
+                            mode.toggle_selection(SelectionType::Simple);
+                            mode.jump_to(end, terminal.grid_mut());
+                            terminal.set_selection(mode.selection());
+                            let original = terminal.get_selection_text();
+                            mode.prepare_reflow(terminal.grid_mut());
+                            terminal.resize(cols, rows);
+                            mode.finish_reflow(terminal.grid_mut());
+                            if let (Some(mut start), Some(mut end)) =
+                                (locate(&terminal, first), locate(&terminal, last))
+                            {
+                                if reverse {
+                                    std::mem::swap(&mut start, &mut end);
+                                }
+                                let selection =
+                                    mode.selection().expect("retained endpoints must survive");
+                                assert_eq!(
+                                    (selection.start, selection.end),
+                                    (start, end),
+                                    "limit={limit} cols={cols} rows={rows}"
+                                );
+                                terminal.set_selection(Some(selection));
+                                assert_eq!(terminal.get_selection_text(), original);
+                            } else {
+                                assert!(
+                                    mode.selection().is_none(),
+                                    "evicted or clipped endpoint cannot alias other text"
+                                );
+                            }
+                            assert!(mode.is_active());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn copy_resize_retires_geometric_ranges_but_keeps_the_surviving_cursor() {
+        for ty in [SelectionType::Block, SelectionType::Lines] {
+            let mut terminal = Terminal::new(8, 4);
+            terminal.process(b"abcdefghijklmno");
+            let mut mode = CopyMode::default();
+            mode.enter(terminal.grid());
+            mode.jump_to(Point::new(0, 1), terminal.grid_mut());
+            mode.toggle_selection(ty);
+            mode.jump_to(Point::new(1, 2), terminal.grid_mut());
+            mode.prepare_reflow(terminal.grid_mut());
+            terminal.resize(8, 3);
+            mode.finish_reflow(terminal.grid_mut());
+            assert_eq!(mode.selection().unwrap().ty, ty);
+            mode.prepare_reflow(terminal.grid_mut());
+            terminal.resize(5, 4);
+            mode.finish_reflow(terminal.grid_mut());
+            assert!(mode.selection().is_none());
+            assert_eq!(mode.cursor(), Point::new(2, 0));
+        }
+    }
+
+    #[test]
+    fn copy_resize_glyph_repair_only_retires_damaged_selection() {
+        for selected_block in [false, true] {
+            let mut terminal = Terminal::new(8, 4);
+            terminal.process(b"abcd\x1b]66;s=2;X\x07");
+            let mut mode = CopyMode::default();
+            mode.enter(terminal.grid());
+            mode.jump_to(
+                Point::new(0, if selected_block { 4 } else { 0 }),
+                terminal.grid_mut(),
+            );
+            mode.toggle_selection(SelectionType::Simple);
+            mode.prepare_reflow(terminal.grid_mut());
+            terminal.resize(3, 6);
+            mode.finish_reflow(terminal.grid_mut());
+            assert_eq!(mode.selection().is_none(), selected_block);
+            if !selected_block {
+                terminal.set_selection(mode.selection());
+                assert_eq!(terminal.get_selection_text().as_deref(), Some("a"));
+            }
+        }
+    }
+
+    #[test]
+    fn resize_bookmarks_do_not_alias_evicted_history() {
+        let mut terminal = Terminal::new(8, 3);
+        terminal.grid_mut().set_scrollback_limit(1);
+        terminal.process(b"abcdefgh\r\nijklmnop\r\nqrstuvwx");
+        let mut mode = CopyMode::default();
+        mode.enter(terminal.grid());
+        mode.jump_to(Point::new(0, 0), terminal.grid_mut());
+        mode.toggle_selection(SelectionType::Simple);
+        mode.jump_to(Point::new(0, 3), terminal.grid_mut());
+        mode.prepare_reflow(terminal.grid_mut());
+        terminal.resize(2, 2);
+        mode.finish_reflow(terminal.grid_mut());
+        assert!(
+            mode.selection().is_none(),
+            "evicted text must not select a different logical line"
+        );
+    }
+
+    #[test]
     fn unicode_copy_bookmarks_follow_both_endpoints_through_width_changes() {
         let mut terminal = Terminal::new(5, 6);
         terminal.process("ab界ZQ".as_bytes());
@@ -1012,7 +1079,7 @@ mod tests {
         mode.toggle_selection(SelectionType::Simple);
         mode.jump_to(Point::new(1, 0), terminal.grid_mut());
         for cols in [3, 1, 5, 3, 5] {
-            mode.prepare_reflow(terminal.grid());
+            mode.prepare_reflow(terminal.grid_mut());
             terminal.resize(cols, 6);
             mode.finish_reflow(terminal.grid_mut());
             let selection = mode.selection().unwrap();
@@ -1047,7 +1114,7 @@ mod tests {
             mode.toggle_selection(SelectionType::Simple);
             mode.jump_to(end, terminal.grid_mut());
             for cols in [3, 1, 5] {
-                mode.prepare_reflow(terminal.grid());
+                mode.prepare_reflow(terminal.grid_mut());
                 terminal.resize(cols, 3);
                 mode.finish_reflow(terminal.grid_mut());
                 let selection = mode.selection().unwrap();
@@ -1076,7 +1143,7 @@ mod tests {
             mode.toggle_selection(SelectionType::Simple);
             mode.jump_to(end, terminal.grid_mut());
             for cols in [5, 1, 3, 5] {
-                mode.prepare_reflow(terminal.grid());
+                mode.prepare_reflow(terminal.grid_mut());
                 terminal.resize(cols, 2);
                 mode.finish_reflow(terminal.grid_mut());
                 let selection = mode.selection().unwrap();
@@ -1103,7 +1170,7 @@ mod tests {
         mode.jump_to(Point::new(1, 2), terminal.grid_mut());
         mode.toggle_selection(SelectionType::Simple);
         mode.move_cursor(CopyMotion::Right, terminal.grid_mut());
-        mode.prepare_reflow(terminal.grid());
+        mode.prepare_reflow(terminal.grid_mut());
         terminal.resize(5, 4);
         mode.finish_reflow(terminal.grid_mut());
         assert_eq!(mode.cursor(), Point::new(2, 1));
@@ -1120,7 +1187,7 @@ mod tests {
         mode.start_quick_select(&terminal, &patterns, HintAction::Copy, None);
         assert_eq!(mode.quick_select().unwrap().matches[0].start.row, 0);
 
-        mode.prepare_reflow(terminal.grid());
+        mode.prepare_reflow(terminal.grid_mut());
         terminal.resize(12, 4);
         mode.finish_reflow(terminal.grid_mut());
         mode.refresh_quick_select(&terminal, &patterns);

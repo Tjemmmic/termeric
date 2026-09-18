@@ -27,28 +27,40 @@ End, Page Up, and Page Down work in either preset.
 
 The cursor and selection use the terminal's scrollback-aware cell coordinates.
 Wide-character spacer cells are never selected as a cursor position. Before a
-column resize, logical-line bookmarks are captured for both endpoints and
-resolved after reflow, so wrapped selection endpoints follow their text. Mode
+resize, a grid-bound transaction tracks the cursor and anchor through the actual
+cell moves, so retained stream-selection endpoints follow their text. Mode
 ownership includes the tab and pane ID; changing focus with the mouse exits the
 mode rather than silently operating on another pane. Search uses the existing
 grid and match index, including Unicode byte-to-cell mapping and retained
 scrollback. Search filter mode is not duplicated or hidden.
 
-Resize bookmarks count stable reflow units rather than physical columns: a
-wide grapheme counts once, its spacer and synthetic wrap padding do not count,
-and real blank cells remain positions. The same row-view iterator is used for
-shell prompt-row bookmarks and reads compact history without expanding rows or
-cloning grapheme payloads. Tests retain both copy endpoints, selection direction,
-and selected Unicode text through narrowing, one-column collapse, and widening,
-including fully archived logical lines and lines spanning history and the
-viewport. OSC 66 retains its physical-cell policy;
-this does not establish behavior for clipped/removed blocks or evicted history,
-nor native shell/IME resize acceptance.
-Compact rows retain one machine-word spacer count, included in their existing
-owned-byte accounting, so counting archived bookmark units is constant-time per
-row. The count is computed during both ordinary and recycling compaction; no
-per-cell bookmark table is retained. This is a resource bound, not a measured
-native resize-latency claim.
+Resize tracking shares the core selection mapper: wide-spacer anchors normalize
+to their grapheme leader, and endpoints follow synthetic padding and one-column
+collapse/re-expansion. It handles compact history, lines crossing into the
+viewport, height-only archival, and eviction without reconstructing line numbers
+from the oldest remaining row. Evicted, clipped, or discarded-padding endpoints
+cannot alias other text. Losing either endpoint clears the selection; losing the
+modal cursor also restarts navigation at the terminal cursor. Copy mode remains
+active. Actual OSC 66 repair damage clears affected selections, not unrelated
+ranges. Block and physical-line ranges survive height-only changes when their
+cells survive, but retire on width changes while the cursor still follows text.
+
+Each grid stores at most one fixed-size pair of modal coordinates. The existing
+reflow pass handles four endpoints only when a transaction is present (the live
+selection pair plus the modal pair); otherwise it retains its two-endpoint path.
+There is no second text model, per-cell map, or extra retained-history scan.
+Tokens are one-use, cannot consume another grid/request's result, and reject
+intervening content mutations outside resize and its glyph repair. Multiple
+resizes within one transaction compose their mappings. These are resource and
+correctness bounds, not measured native resize-latency claims.
+
+Hermetic coverage includes retained-character identities across widths, heights,
+history limits and endpoint directions; Unicode round trips; fully archived and
+crossing logical lines; lost ranges; glyph repairs; and single/split-pane
+synchronization with the canonical terminal selection. Native shell/IME resize,
+painting, and clipboard acceptance remain deferred. Output between ordinary copy
+mode actions has a separate coordinate lifecycle; resize tracking is not a claim
+that all ongoing-output cases are covered.
 
 ## Quick select
 
@@ -80,8 +92,9 @@ presented grid. During synchronized output this is only the captured viewport:
 hidden new output and off-viewport history are not accessible until release.
 Navigation reuses that grid without cloning scrollback; its selection remains
 owned by copy mode and is not installed on the hidden live grid. Single and
-split panes render that same selection. Reflow within a snapshot restores its
-logical selection bookmarks, including wrapped text.
+split panes render that same selection. Reflow within a snapshot tracks its
+retained endpoints through that snapshot's own grid, including wrapped text;
+the hidden live grid never receives those coordinates.
 
 Beginning, releasing, timing out, or replacing the synchronized snapshot resets
 copy mode onto the new displayed grid and clears selection, hints, and search.

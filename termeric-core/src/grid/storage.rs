@@ -7,16 +7,16 @@ use std::fmt;
 use std::mem::size_of;
 use std::ops::Deref;
 
-// Two selection endpoints travel alongside the existing cursor. Fixed-size
-// tracking avoids a per-cell map or a second copy of retained history.
-type ReflowPoints = [Option<(usize, usize)>; 2];
+// Fixed-size endpoint tracking travels alongside the existing cursor without
+// a per-cell map or a second copy of retained history.
+type ReflowPoints<const N: usize> = [Option<(usize, usize)>; N];
 
-fn capture_line_points(
-    source: ReflowPoints,
+fn capture_line_points<const N: usize>(
+    source: ReflowPoints<N>,
     row: usize,
     cells: &[Cell],
     base: usize,
-    offsets: &mut [Option<usize>; 2],
+    offsets: &mut [Option<usize>; N],
 ) {
     for (index, point) in source.into_iter().enumerate() {
         if let Some((target_row, mut col)) = point
@@ -31,9 +31,9 @@ fn capture_line_points(
     }
 }
 
-fn finish_line_points(
-    points: &mut ReflowPoints,
-    offsets: &mut [Option<usize>; 2],
+fn finish_line_points<const N: usize>(
+    points: &mut ReflowPoints<N>,
+    offsets: &mut [Option<usize>; N],
     first_row: usize,
     cols: usize,
 ) {
@@ -872,13 +872,13 @@ impl GridStorage {
         self.resize_with_points(new_cols, new_rows, cursor_row, cursor_col, &mut [None; 2])
     }
 
-    pub fn resize_with_points(
+    pub fn resize_with_points<const N: usize>(
         &mut self,
         new_cols: usize,
         new_rows: usize,
         cursor_row: usize,
         cursor_col: usize,
-        points: &mut [Option<(i32, usize)>; 2],
+        points: &mut [Option<(i32, usize)>; N],
     ) -> ((usize, usize), usize) {
         let old_cols = self.cols;
         let mut new_cursor = (cursor_row, cursor_col);
@@ -1020,16 +1020,16 @@ impl GridStorage {
         Self::reflow_scrollback_with_points(rows, new_cols, &mut [None; 2])
     }
 
-    fn reflow_scrollback_with_points(
+    fn reflow_scrollback_with_points<const N: usize>(
         rows: VecDeque<CompactRow>,
         new_cols: usize,
-        points: &mut ReflowPoints,
+        points: &mut ReflowPoints<N>,
     ) -> VecDeque<CompactRow> {
         let mut result = VecDeque::new();
         let mut logical_line = Vec::new();
         let source = *points;
-        *points = [None; 2];
-        let mut offsets = [None; 2];
+        *points = [None; N];
+        let mut offsets = [None; N];
 
         for (row_index, mut row) in rows.into_iter().enumerate() {
             if logical_line.is_empty() && row.retarget_width_without_reflow(new_cols) {
@@ -1098,17 +1098,17 @@ impl GridStorage {
         Self::reflow_rows_with_points(rows, new_cols, cursor, &mut [None; 2])
     }
 
-    fn reflow_rows_with_points(
+    fn reflow_rows_with_points<const N: usize>(
         rows: impl IntoIterator<Item = Row>,
         new_cols: usize,
         cursor: Option<(usize, usize)>,
-        points: &mut ReflowPoints,
+        points: &mut ReflowPoints<N>,
     ) -> (Vec<Row>, Option<(usize, usize)>) {
         let mut result: Vec<Row> = Vec::new();
         let mut new_cursor: Option<(usize, usize)> = None;
         let source = *points;
-        *points = [None; 2];
-        let mut offsets = [None; 2];
+        *points = [None; N];
+        let mut offsets = [None; N];
 
         // Group rows into logical lines using the `wrapped` flag.
         let mut line_cells: Vec<Cell> = Vec::new();
@@ -1238,17 +1238,17 @@ impl GridStorage {
     /// Translate the cursor and selection offsets alongside the cell moves, without allocating
     /// a per-cell mapping. Comparisons use original source indices; only the
     /// returned offset includes transformations before the cursor.
-    fn rewrap_line_with_cursor(
+    fn rewrap_line_with_cursor<const N: usize>(
         output: &mut Vec<Row>,
         mut cells: Vec<Cell>,
         cols: usize,
         cursor: Option<usize>,
-        points: &mut [Option<usize>; 2],
+        points: &mut [Option<usize>; N],
     ) -> Option<usize> {
         use super::cell::CellFlags;
         let mut mapped_cursor = cursor;
         let source = *points;
-        *points = [None; 2];
+        *points = [None; N];
         let first_row = output.len();
         let mut record = |source_index, target| {
             for (index, point) in source.into_iter().enumerate() {

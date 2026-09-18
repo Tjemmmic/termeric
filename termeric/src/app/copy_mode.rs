@@ -191,12 +191,12 @@ impl App {
 
     pub(super) fn prepare_copy_mode_reflow(&mut self) {
         self.reconcile_copy_mode_presentation();
-        let (copy_mode, tabs) = (&mut self.copy_mode, &self.tabs);
+        let (copy_mode, tabs) = (&mut self.copy_mode, &mut self.tabs);
         if let Some(grid) = tabs
-            .as_ref()
-            .and_then(crate::tabs::TabManager::active_tab)
-            .and_then(crate::tabs::Tab::focused_terminal)
-            .map(termeric_core::Terminal::presentation_grid)
+            .as_mut()
+            .and_then(crate::tabs::TabManager::active_tab_mut)
+            .and_then(crate::tabs::Tab::focused_terminal_mut)
+            .map(termeric_core::Terminal::presentation_grid_mut)
         {
             copy_mode.prepare_reflow(grid);
         }

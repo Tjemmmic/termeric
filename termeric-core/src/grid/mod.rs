@@ -5,6 +5,7 @@
 
 mod cell;
 mod hyperlink;
+mod resize_tracking;
 mod row;
 mod storage;
 
@@ -12,6 +13,7 @@ pub use cell::{
     Cell, CellAttrs, CellContent, CellFlags, Color, ColorSpec, MultiCell, MultiCellAlignment,
 };
 pub use hyperlink::{Hyperlink, HyperlinkRegistry};
+pub use resize_tracking::ResizeTrackingToken;
 pub use row::Row;
 pub use storage::{CellRef, DEFAULT_SCROLLBACK_MEMORY_BYTES, GridMemoryUsage, RowView};
 
@@ -60,6 +62,7 @@ pub struct Grid {
     identity: u64,
     content_revision: u64,
     row_mapping_revision: u64,
+    resize_tracking: Option<resize_tracking::ResizeTracking>,
 }
 
 /// Validated rectangle occupied by one OSC 66 multicell text block.
@@ -100,6 +103,7 @@ impl Grid {
             identity: NEXT_GRID_ID.fetch_add(1, Ordering::Relaxed),
             content_revision: 0,
             row_mapping_revision: 0,
+            resize_tracking: None,
         }
     }
 
@@ -179,12 +183,35 @@ impl Grid {
         rows: usize,
         points: &mut [Option<(i32, usize)>; 2],
     ) -> usize {
+        let mut tracking = self.take_valid_resize_tracking();
+        if self.cols != cols
+            && let Some(tracking) = &mut tracking
+            && matches!(
+                tracking.selection_type,
+                crate::SelectionType::Block | crate::SelectionType::Lines
+            )
+        {
+            tracking.points[1] = None;
+        }
         if self.cols != cols || self.rows != rows {
             self.mark_rows_changed();
         }
-        let ((new_row, new_col), rows_pushed_top) =
+        let ((new_row, new_col), rows_pushed_top) = if let Some(tracking) = &mut tracking {
+            let mut combined = [points[0], points[1], tracking.points[0], tracking.points[1]];
+            let result = self.storage.resize_with_points(
+                cols,
+                rows,
+                self.cursor.row,
+                self.cursor.col,
+                &mut combined,
+            );
+            *points = [combined[0], combined[1]];
+            tracking.points = [combined[2], combined[3]];
+            result
+        } else {
             self.storage
-                .resize_with_points(cols, rows, self.cursor.row, self.cursor.col, points);
+                .resize_with_points(cols, rows, self.cursor.row, self.cursor.col, points)
+        };
         self.cols = cols;
         self.rows = rows;
         self.cursor.row = new_row;
@@ -193,6 +220,7 @@ impl Grid {
 
         // Clamp scroll offset
         self.scroll_offset = self.scroll_offset.min(self.storage.scrollback_len());
+        self.restore_resize_tracking(tracking);
         rows_pushed_top
     }
 
@@ -421,6 +449,7 @@ impl Grid {
         blank: &Cell,
         mut damage: impl FnMut(std::ops::Range<usize>, std::ops::Range<usize>),
     ) {
+        let mut tracking = self.take_valid_resize_tracking();
         let mut valid = HashMap::new();
         let mut has_descriptors = false;
         for row in 0..self.rows {
@@ -444,6 +473,7 @@ impl Grid {
         // full-screen scan. Do not use `valid.is_empty()` here, since orphaned
         // or malformed descriptors must still be erased even without a leader.
         if !has_descriptors {
+            self.restore_resize_tracking(tracking);
             return;
         }
         for row in 0..self.rows {
@@ -467,9 +497,13 @@ impl Grid {
                     damage(row..row + 1, col..col + 1);
                     *cell = blank.clone();
                     cell.flags.insert(CellFlags::DIRTY);
+                    if let Some(tracking) = &mut tracking {
+                        tracking.damage(row..row + 1, col..col + 1, self.cols);
+                    }
                 }
             }
         }
+        self.restore_resize_tracking(tracking);
     }
 
     /// Erase blocks split by a horizontal structural-edit boundary.

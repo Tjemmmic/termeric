@@ -3,6 +3,62 @@ use crate::plugin::hooks::{HookResponse, Plugin, PluginCommand};
 
 #[cfg(unix)]
 #[test]
+fn copy_mode_resize_does_not_restore_evicted_ranges_over_canonical_selection() {
+    use crate::terminal::copy_mode::CopyMotion;
+    for split in [false, true] {
+        for surviving in [false, true] {
+            let mut app = if split {
+                divider_owner_fixture()
+            } else {
+                scrollbar_owner_fixture()
+            };
+            let terminal = app.active_terminal_mut().unwrap();
+            terminal.resize(8, 3);
+            terminal.process(b"\x1bc\x1b[3Jabcdefgh\r\nijklmnop\r\nqrstuvwx");
+            terminal.grid_mut().set_scrollback_limit(1);
+            app.enter_copy_mode();
+            app.move_copy_cursor(if surviving {
+                CopyMotion::Bottom
+            } else {
+                CopyMotion::Top
+            });
+            if surviving {
+                for _ in 0..4 {
+                    app.move_copy_cursor(CopyMotion::Right);
+                }
+            }
+            app.copy_mode
+                .toggle_selection(termeric_core::SelectionType::Simple);
+            for _ in 0..3 {
+                app.move_copy_cursor(CopyMotion::Right);
+            }
+            assert_eq!(
+                app.copy_mode_selection_text().as_deref(),
+                Some(if surviving { "uvwx" } else { "abcd" })
+            );
+            app.prepare_copy_mode_reflow();
+            app.active_terminal_mut().unwrap().resize(2, 2);
+            app.finish_copy_mode_reflow();
+            assert!(app.copy_mode.is_active());
+            assert_eq!(app.copy_mode.selection().is_some(), surviving);
+            assert_eq!(
+                app.active_terminal().unwrap().selection().is_some(),
+                surviving
+            );
+            assert_eq!(
+                app.copy_mode_selection_text().as_deref(),
+                surviving.then_some("uvwx")
+            );
+            if !surviving {
+                app.move_copy_cursor(CopyMotion::Left);
+                assert!(app.copy_mode_selection_text().is_none());
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn native_width_resize_retains_reflowed_text_without_restoring_old_drag_geometry() {
     use termeric_core::Point;
     for split in [false, true] {

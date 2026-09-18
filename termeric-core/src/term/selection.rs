@@ -82,7 +82,7 @@ impl Selection {
     /// Whether any selected cell intersects a visible edit rectangle. First,
     /// last and interior rows cover every column shape without scanning the
     /// selection or incorrectly filling the gap between two stream endpoints.
-    pub(super) fn intersects_region(
+    pub(crate) fn intersects_region(
         &self,
         rows: std::ops::Range<usize>,
         cols: std::ops::Range<usize>,
