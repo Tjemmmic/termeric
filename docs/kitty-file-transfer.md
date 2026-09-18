@@ -91,8 +91,23 @@ parent handle does not require directory read permission. See the
 Deterministic regressions replace both immediate parents and higher ancestors
 with directories or symlinks, and verify retained file identity/metadata,
 untouched replacements, and refusal to overwrite regular files or symlinks.
-This does not pin the named staging source, close ancestor races during other
-creation operations, or make rollback's identity-check-then-unlink atomic.
+The source is also descriptor-bound: Linux publication uses
+[`linkat(AT_SYMLINK_FOLLOW)`](https://man7.org/linux/man-pages/man2/link.2.html)
+on the staging file's trusted `/proc/self/fd` reference, never its mutable name.
+The filesystem must support hard links on the same mount. Kernel/filesystem
+rejection fails without falling back to a pathname rename or copying from the
+staging name. A renamed source can still publish its original inode; a removed
+source with no remaining links fails closed. Regressions replace staging names
+with regular files or symlinks and check destination bytes, inode, permissions,
+timestamps, untouched replacements, and rejection of unlinked originals.
+
+Staging cleanup on cancellation, failure, and successful publication compares
+the remaining name's no-follow identity with the retained file before unlinking.
+Unknown or replaced names are left alone, and moved staging files are not searched
+for. This cleanup and transaction rollback remain best effort: neither
+identity-check-then-unlink is atomic, and either may leave an orphan. Ancestor
+races during other creation operations and same-inode content mutation by a
+process with write authority also remain outside these publication guarantees.
 
 Hard links may name only a regular file ID in the same transfer. Symbolic links
 support Kitty's `fid:`, `fid_abs:`, and `path:` forms. `fid` targets must name an

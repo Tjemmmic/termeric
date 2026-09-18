@@ -2510,7 +2510,7 @@ mod unix {
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
     use std::path::{Component, Path, PathBuf};
-    use tempfile::NamedTempFile;
+    use tempfile::{NamedTempFile, TempPath};
 
     const DECOMPRESS_BUFFER_BYTES: usize = 64 * 1024;
 
@@ -2536,7 +2536,7 @@ mod unix {
     enum EntryKind {
         Directory,
         Regular {
-            temporary: Option<NamedTempFile>,
+            temporary: Option<StagedFile>,
             decompressor: Option<DownloadDecompressor>,
         },
         Symlink {
@@ -3328,6 +3328,50 @@ mod unix {
         Ok(())
     }
 
+    struct StagedFile {
+        file: File,
+        path: TempPath,
+    }
+
+    impl From<NamedTempFile> for StagedFile {
+        fn from(temporary: NamedTempFile) -> Self {
+            let (file, mut path) = temporary.into_parts();
+            // Never let TempPath blindly unlink a replacement during failure,
+            // cancellation, or successful publication. Our Drop checks identity.
+            path.disable_cleanup(true);
+            Self { file, path }
+        }
+    }
+
+    impl StagedFile {
+        fn as_file(&self) -> &File {
+            &self.file
+        }
+
+        fn as_file_mut(&mut self) -> &mut File {
+            &mut self.file
+        }
+    }
+
+    impl Drop for StagedFile {
+        fn drop(&mut self) {
+            let Ok(owned) = self.file.metadata() else {
+                return;
+            };
+            let Ok(named) = fs::symlink_metadata(&self.path) else {
+                return;
+            };
+            if owned.is_file()
+                && named.is_file()
+                && (owned.dev(), owned.ino()) == (named.dev(), named.ino())
+            {
+                // Best effort, not an atomic compare-and-unlink. A moved source
+                // is not searched for, and an unknown/replaced name is retained.
+                let _ = fs::remove_file(&self.path);
+            }
+        }
+    }
+
     struct PublicationTarget {
         #[cfg(target_os = "linux")]
         parent: File,
@@ -3397,26 +3441,53 @@ mod unix {
             Ok(Self { path: path.into() })
         }
 
-        fn publish(self, temporary: NamedTempFile) -> io::Result<File> {
-            // Keep the parent descriptor alive until persistence completes. This
-            // deliberately follows only our own trusted procfs reference, never
-            // the original destination ancestors. The staging source is still
-            // named; protecting its name and rollback unlink races is separate.
-            let result = temporary.persist_noclobber(&self.path);
+        fn publish(self, temporary: impl Into<StagedFile>) -> io::Result<File> {
+            let temporary = temporary.into();
+            // Acquire the returned handle before publication so a descriptor
+            // allocation failure cannot leave an unrecorded destination behind.
+            let published = temporary.as_file().try_clone()?;
             #[cfg(target_os = "linux")]
-            drop(self.parent);
-            result.map_err(|error| error.error)
+            {
+                use std::os::fd::AsRawFd;
+
+                let source =
+                    CString::new(format!("/proc/self/fd/{}", temporary.as_file().as_raw_fd()))
+                        .expect("descriptor path contains no NUL");
+                let destination = CString::new(self.path.as_os_str().as_bytes())
+                    .expect("publication path was validated");
+                // SAFETY: both CString pointers and both retained descriptors
+                // stay live through linkat. Only our trusted procfs source link
+                // is followed. linkat atomically refuses an existing destination.
+                let result = unsafe {
+                    libc::linkat(
+                        libc::AT_FDCWD,
+                        source.as_ptr(),
+                        libc::AT_FDCWD,
+                        destination.as_ptr(),
+                        libc::AT_SYMLINK_FOLLOW,
+                    )
+                };
+                if result != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                drop(self.parent);
+            }
+            // Internal Unix tests only; actual host transfers remain Linux-only.
+            #[cfg(not(target_os = "linux"))]
+            fs::hard_link(&temporary.path, &self.path)?;
+            Ok(published)
         }
     }
 
-    fn stage_file(path: &Path) -> io::Result<NamedTempFile> {
+    fn stage_file(path: &Path) -> io::Result<StagedFile> {
         let mut ancestor = path.parent();
         while let Some(candidate) = ancestor {
             match fs::symlink_metadata(candidate) {
                 Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
                     return tempfile::Builder::new()
                         .prefix(".termeric-transfer-")
-                        .tempfile_in(candidate);
+                        .tempfile_in(candidate)
+                        .map(StagedFile::from);
                 }
                 Ok(_) => {
                     return Err(io::Error::new(
@@ -4543,6 +4614,96 @@ mod unix {
                     fs::metadata(&hardlink).unwrap().ino()
                 );
                 assert_eq!(fs::read_link(&symlink).unwrap(), PathBuf::from("file"));
+            }
+        }
+
+        #[test]
+        #[cfg(target_os = "linux")]
+        fn staging_cleanup_preserves_replacements_before_publication() {
+            for replacement_kind in ["file", "link", "directory", "none"] {
+                let root = tempdir().unwrap();
+                let staged = stage_file(&root.path().join("destination")).unwrap();
+                let source = staged.path.to_path_buf();
+                if replacement_kind == "none" {
+                    drop(staged);
+                    assert!(!source.exists());
+                    continue;
+                }
+                let moved = root.path().join("moved");
+                fs::rename(&source, &moved).unwrap();
+                match replacement_kind {
+                    "file" => fs::write(&source, b"keep").unwrap(),
+                    "link" => std::os::unix::fs::symlink("missing", &source).unwrap(),
+                    "directory" => fs::create_dir(&source).unwrap(),
+                    _ => unreachable!(),
+                }
+                let before = fs::symlink_metadata(&source).unwrap();
+                drop(staged);
+                let after = fs::symlink_metadata(&source).unwrap();
+                assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+                assert!(moved.exists());
+            }
+        }
+
+        #[test]
+        #[cfg(target_os = "linux")]
+        fn publication_uses_staging_inode_not_replacement_name() {
+            for symbolic in [false, true] {
+                for remove_original in [false, true] {
+                    let root = tempdir().unwrap();
+                    let mut staged = NamedTempFile::new_in(root.path()).unwrap();
+                    staged.write_all(b"approved payload").unwrap();
+                    prepare_staged_file(staged.as_file(), 0o400, Some(-1)).unwrap();
+                    let identity = staged.as_file().metadata().unwrap();
+                    let source = staged.path().to_owned();
+                    if remove_original {
+                        fs::remove_file(&source).unwrap();
+                    } else {
+                        fs::rename(&source, root.path().join("moved")).unwrap();
+                    }
+                    let victim = root.path().join("victim");
+                    if symbolic {
+                        fs::write(&victim, b"keep victim").unwrap();
+                        std::os::unix::fs::symlink(&victim, &source).unwrap();
+                    } else {
+                        fs::write(&source, b"replacement payload").unwrap();
+                    }
+                    let replacement = fs::symlink_metadata(&source).unwrap();
+                    let destination = root.path().join("published");
+                    let result = PublicationTarget::open(&destination)
+                        .unwrap()
+                        .publish(staged);
+                    if remove_original {
+                        assert!(
+                            result.is_err(),
+                            "an unlinked named inode cannot be republished"
+                        );
+                        assert!(!destination.exists());
+                    } else {
+                        let published = result.unwrap();
+                        let metadata = fs::symlink_metadata(&destination).unwrap();
+                        assert!(metadata.is_file());
+                        assert_eq!(
+                            (metadata.dev(), metadata.ino()),
+                            (identity.dev(), identity.ino())
+                        );
+                        assert_eq!(published.metadata().unwrap().ino(), metadata.ino());
+                        assert_eq!(metadata.permissions().mode() & 0o777, 0o400);
+                        assert_eq!((metadata.mtime(), metadata.mtime_nsec()), (-1, 999_999_999));
+                        assert_eq!(fs::read(&destination).unwrap(), b"approved payload");
+                    }
+                    let after = fs::symlink_metadata(&source).unwrap();
+                    assert_eq!(
+                        (after.dev(), after.ino()),
+                        (replacement.dev(), replacement.ino())
+                    );
+                    if symbolic {
+                        assert_eq!(fs::read_link(&source).unwrap(), victim);
+                        assert_eq!(fs::read(&victim).unwrap(), b"keep victim");
+                    } else {
+                        assert_eq!(fs::read(&source).unwrap(), b"replacement payload");
+                    }
+                }
             }
         }
 
