@@ -54,6 +54,18 @@ resize, and compact history scrolled into view. Viewport edges still bound URL
 recognition; this does not establish complete URLs continuing beyond the view
 or change supported URL characters, schemes, or opener policy.
 
+Ctrl+click resolves OSC 8 targets against the presented viewport, not live cells
+hidden behind synchronized output. Live scrollback input coordinates are first
+converted back to visual rows; frozen presentation grids have no history of
+their own. Focus changes likewise rebuild detected-URL caches from presentation
+state. Hyperlink collection retains IDs referenced by the frozen viewport in
+the existing bounded registry, without cloning a second URL table; after release
+they become eligible for ordinary collection. Regressions cover hidden target
+replacement, collection, scrolled snapshots, alternate-screen switching,
+timeout/release, and single-terminal/split-pane target resolution. These tests
+resolve targets without opening them and do not establish native click/opener
+acceptance or change copy-mode/quick-select snapshot behavior.
+
 URL scan scratch mapping coalesces contiguous one-byte/one-cell text into one
 span per ASCII run. Row edges, skipped columns, wide glyphs, combining sequences,
 and OSC 66 geometry keep distinct spans; endpoint lookup translates byte offsets

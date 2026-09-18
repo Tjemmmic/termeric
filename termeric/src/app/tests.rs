@@ -1,6 +1,64 @@
 use super::*;
 use crate::plugin::hooks::{HookResponse, Plugin, PluginCommand};
 
+#[cfg(unix)]
+#[test]
+fn focused_url_refresh_uses_the_synchronized_presentation() {
+    for split in [false, true] {
+        let mut app = if split {
+            divider_owner_fixture()
+        } else {
+            scrollbar_owner_fixture()
+        };
+        app.active_terminal_mut().unwrap().process(
+            b"\x1bc\x1b[3Jhttps://visible.test\r\n\x1b]8;;https://semantic.test\x1b\\https://label.test\x1b]8;;\x1b\\\x1b[?2026h\x1b[H\x1b[2Jhttps://hidden.test",
+        );
+        app.refresh_focused_terminal_surfaces();
+        assert_eq!(
+            app.url_cache.url_at(0, 0).map(|url| url.url.as_str()),
+            Some("https://visible.test"),
+            "split={split}"
+        );
+        assert_eq!(
+            app.focused_hyperlink_at(termeric_core::Point::new(0, 0)),
+            Some("https://visible.test")
+        );
+        assert_eq!(
+            app.focused_hyperlink_at(termeric_core::Point::new(1, 0)),
+            Some("https://semantic.test")
+        );
+
+        let terminal = app.active_terminal_mut().unwrap();
+        terminal.set_scrollback_limits(100, 1024 * 1024);
+        let lines = b"\r\n".repeat(terminal.rows() + 4);
+        terminal.process(&lines);
+        terminal.grid_mut().set_scroll_offset(3);
+        app.refresh_focused_terminal_surfaces();
+        assert_eq!(
+            app.focused_hyperlink_at(termeric_core::Point::new(-3, 0)),
+            Some("https://visible.test")
+        );
+        assert_eq!(
+            app.focused_hyperlink_at(termeric_core::Point::new(-2, 0)),
+            Some("https://semantic.test")
+        );
+        assert_eq!(
+            app.focused_hyperlink_at(termeric_core::Point::new(-4, 0)),
+            None
+        );
+        assert_eq!(
+            app.focused_hyperlink_at(termeric_core::Point::new(-3, usize::MAX)),
+            None
+        );
+        app.active_terminal_mut().unwrap().process(b"\x1b[?2026l");
+        app.refresh_focused_terminal_surfaces();
+        assert_eq!(
+            app.focused_hyperlink_at(termeric_core::Point::new(-3, 0)),
+            None
+        );
+    }
+}
+
 #[test]
 fn option_shaped_hyperlink_activation_is_refused_with_visible_feedback() {
     let mut app = App::new_headless(Config::default()).unwrap();

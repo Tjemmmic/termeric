@@ -1983,6 +1983,9 @@ impl Terminal {
         let mut retained = HashSet::new();
         self.grid.collect_hyperlink_ids(&mut retained);
         self.alt_grid.collect_hyperlink_ids(&mut retained);
+        if let Some(snapshot) = &self.synchronized_output_snapshot {
+            snapshot.grid.collect_hyperlink_ids(&mut retained);
+        }
         if let Some(identifier) = self.current_hyperlink_id {
             retained.insert(identifier);
         }
@@ -4110,6 +4113,17 @@ impl Terminal {
     /// Get the URL for a hyperlink ID
     pub fn get_hyperlink_url(&self, id: u32) -> Option<&str> {
         self.hyperlink_registry.get_url(id)
+    }
+
+    /// Resolve an OSC 8 target at a visual cell in the presented viewport,
+    /// including scrolled history and a frozen synchronized-output snapshot.
+    pub fn presentation_hyperlink_at(&self, row: usize, col: usize) -> Option<&str> {
+        let grid = self.presentation_grid();
+        if row >= grid.rows() || col >= grid.cols() {
+            return None;
+        }
+        let id = grid.cell_scrolled(row, col)?.hyperlink_id?;
+        self.get_hyperlink_url(id)
     }
 
     /// Get access to the hyperlink registry
@@ -7298,6 +7312,56 @@ mod tests {
         )));
         assert_eq!(first.dynamic_colors().palette(42), None);
         assert!(first.dynamic_colors().generation() > generation);
+    }
+
+    #[test]
+    fn synchronized_output_retains_presented_hyperlinks_until_release() {
+        let mut term = Terminal::new(30, 2);
+        term.process(b"\x1b]8;;https://visible.test\x1b\\old\x1b]8;;\x1b\\");
+        let visible_id = term.grid().cell(0, 0).unwrap().hyperlink_id.unwrap();
+        term.process(b"\x1b[?2026h\x1b[H\x1b]8;;https://hidden.test\x1b\\new\x1b]8;;\x1b\\");
+        term.set_scrollback_limits(0, 0);
+        assert_eq!(
+            term.get_hyperlink_url(visible_id),
+            Some("https://visible.test")
+        );
+        assert_eq!(
+            term.presentation_hyperlink_at(0, 0),
+            Some("https://visible.test")
+        );
+        term.process(b"\x1b[?2026l");
+        term.set_scrollback_limits(0, 0);
+        assert_eq!(term.get_hyperlink_url(visible_id), None);
+        assert_eq!(
+            term.presentation_hyperlink_at(0, 0),
+            Some("https://hidden.test")
+        );
+    }
+
+    #[test]
+    fn synchronized_hyperlink_hit_testing_keeps_scrolled_screen_identity_until_timeout() {
+        let mut term = Terminal::new(12, 2);
+        term.process(b"\x1b]8;;https://history.test\x1b\\old\x1b]8;;\x1b\\\r\none\r\n\x1b]8;;https://offscreen.test\x1b\\two\x1b]8;;\x1b\\");
+        term.grid_mut().set_scroll_offset(1);
+        assert_eq!(term.presentation_hyperlink_at(2, 0), None);
+        assert_eq!(
+            term.presentation_hyperlink_at(0, 0),
+            Some("https://history.test")
+        );
+        term.process(b"\x1b[?2026h");
+        term.grid_mut().set_scroll_offset(0);
+        term.process(b"\x1b[?1049h\x1b]8;;https://alternate.test\x1b\\new\x1b]8;;\x1b\\");
+        assert_eq!(
+            term.presentation_hyperlink_at(0, 0),
+            Some("https://history.test")
+        );
+        assert_eq!(term.presentation_hyperlink_at(2, 0), None);
+        assert_eq!(term.presentation_hyperlink_at(0, 12), None);
+        assert!(term.expire_synchronized_output(term.synchronized_output_deadline().unwrap()));
+        assert_eq!(
+            term.presentation_hyperlink_at(0, 0),
+            Some("https://alternate.test")
+        );
     }
 
     #[test]

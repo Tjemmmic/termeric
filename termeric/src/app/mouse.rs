@@ -680,27 +680,7 @@ impl App {
 
                 // Ctrl+Click opens links from the pane selected by this click.
                 if self.modifiers.control_key() {
-                    let col = grid_pos.col;
-                    let semantic_url = self.active_terminal().and_then(|terminal| {
-                        terminal
-                            .grid()
-                            .row_at_offset(grid_pos.row)
-                            .and_then(|row| row.get(col))
-                            .and_then(|cell| cell.hyperlink_id)
-                            .and_then(|id| terminal.get_hyperlink_url(id))
-                    });
-                    let scroll_offset = self
-                        .active_terminal()
-                        .and_then(|terminal| i32::try_from(terminal.grid().scroll_offset()).ok())
-                        .unwrap_or(0);
-                    let visual_row = grid_pos.row.saturating_add(scroll_offset);
-                    let detected_url = usize::try_from(visual_row).ok().and_then(|row| {
-                        self.url_cache
-                            .url_at(row, col)
-                            .map(|detected| detected.url.as_str())
-                    });
-                    let url = semantic_url.or(detected_url);
-                    if let Some(url) = url {
+                    if let Some(url) = self.focused_hyperlink_at(grid_pos) {
                         log::info!("Opening hyperlink: {}", url);
                         if let Err(error) = crate::terminal::url::UrlDetector::open_url(url) {
                             log::error!("Failed to open URL: {}", error);
@@ -1490,6 +1470,26 @@ impl App {
         )
     }
 
+    /// Input points use live scrollback coordinates. Convert back to a visual
+    /// row before consulting the presentation, whose frozen grid has no
+    /// scrollback. Semantic links retain priority over detected URL text.
+    pub(super) fn focused_hyperlink_at(&self, point: termeric_core::Point) -> Option<&str> {
+        let terminal = self.active_terminal()?;
+        let offset = i32::try_from(terminal.grid().scroll_offset()).ok()?;
+        let row = usize::try_from(point.row.checked_add(offset)?).ok()?;
+        let grid = terminal.presentation_grid();
+        if row >= grid.rows() || point.col >= grid.cols() {
+            return None;
+        }
+        terminal
+            .presentation_hyperlink_at(row, point.col)
+            .or_else(|| {
+                self.url_cache
+                    .url_at(row, point.col)
+                    .map(|url| url.url.as_str())
+            })
+    }
+
     /// Toggle the armed broadcast membership of the pane under a content click.
     fn toggle_armed_broadcast_target_at(
         &mut self,
@@ -1602,7 +1602,7 @@ impl App {
             .as_ref()
             .and_then(TabManager::active_tab)
             .and_then(crate::tabs::Tab::focused_terminal)
-            .map(termeric_core::Terminal::grid)
+            .map(termeric_core::Terminal::presentation_grid)
         {
             self.url_cache = UrlCache::new(grid.rows());
             update_visible_url_cache(&mut self.url_cache, grid, &self.url_detector);
