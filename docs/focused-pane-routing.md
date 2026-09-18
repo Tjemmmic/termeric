@@ -33,7 +33,8 @@ has lost its focused pane.
   writes even if confirmation arrives after a focus/lifecycle change.
 - Input, paste, selection, search, scrolling, synchronized-output checks,
   session metadata, plugin context, Git working directory, and tab title updates
-  use the focused live terminal or its focused PTY. A local-authority OSC 7
+  use the focused terminal or its focused PTY. Search reads that terminal's
+  presentation grid, not output hidden by synchronized-output mode. A local-authority OSC 7
   report takes precedence over platform process inspection for cwd consumers.
 - A transient read-only flag is owned by that same live pane. All
   user-originated writers use the checked route, while a separately named exact
@@ -46,6 +47,9 @@ has lost its focused pane.
   visible URL cache, refresh the cwd-derived title, invalidate Git state, reset
   cursor blink state, clear only transient mouse-drag state, and request a
   redraw. Selection remains owned by each terminal.
+- Command-output search scopes are an exception to query rebinding: a source,
+  displayed-screen, snapshot-lifetime, or geometry change closes the scoped
+  search rather than applying old row bounds to unrelated content.
 - OSC 8 hyperlinks use scrollback-aware grid coordinates. Automatically
   detected URLs use the corresponding visible-row cache.
 - Each pane contributes its own Kitty, Sixel, and iTerm2 image placements to rendering. GPU image
@@ -60,6 +64,35 @@ has lost its focused pane.
 Ownership transitions use `Tab::take_terminal_owner()` and
 `restore_terminal_owner()`; application modules never access terminal/PTY
 fields directly. A source guard rejects bypasses of the focused-terminal API.
+
+## Search presentation
+
+Global literal/regex search, highlights, filter rows, and result navigation use
+the displayed grid. During synchronized output that is the bounded viewport
+captured at begin; hidden live changes and off-viewport history are not searched.
+Navigation changes only the presentation grid's scroll offset, preserving the
+hidden live viewport. There is no additional text or scrollback clone.
+
+Search binds results to the focused tab/pane, presented primary/alternate
+screen, synchronized snapshot lifetime, and grid dimensions. A change discards
+partial and completed results, then reschedules the existing query within the
+usual per-frame budget. Query text, case/regex/filter controls, and confirmed
+versus editing state survive for global searches. Pending filter rows and
+counts remain hidden until the rescan finishes. This does not introduce general
+continuous rescanning for every ordinary output mutation.
+
+Harvest's command-output scope uses live command-region coordinates, which are
+not interchangeable with a captured viewport. Starting it while synchronized
+output is frozen is explicitly refused; retry after release. An existing scope
+closes on source/screen/snapshot/geometry changes and consumes a pending query
+edit instead of silently widening it into a global search. Remapping command
+scopes into a frozen viewport is not implemented.
+
+Hermetic tests cover hidden text, partial and confirmed result invalidation,
+filter rows, timeout/restart, single and split panes, scroll isolation, resize,
+alternate screens, and strict command-scope invalidation. Native search-bar,
+screen-reader, and filter-painting acceptance of these newer paths remains
+deferred. Ordinary mouse selection retains its separate live-grid policy.
 
 ## Regression evidence
 

@@ -25,6 +25,7 @@ mod redraw_scheduler;
 mod renderer_recovery;
 mod runtime_plugins;
 mod search_input;
+mod search_presentation;
 mod session_export;
 mod session_input;
 mod sessions;
@@ -1148,6 +1149,7 @@ pub struct App {
     settings_panel: SettingsPanel,
     /// Search state
     search: Search,
+    search_presentation: Option<search_presentation::SearchPresentation>,
     /// Cursor position in search input
     search_cursor_pos: usize,
     /// Keyboard copy mode is bound to the pane that owned focus on entry.
@@ -1407,6 +1409,7 @@ impl App {
             theme,
             settings_panel: SettingsPanel::new(),
             search: Search::new(),
+            search_presentation: None,
             search_cursor_pos: 0,
             copy_mode: CopyMode::default(),
             copy_mode_target: None,
@@ -2873,20 +2876,18 @@ impl App {
             .unwrap_or_default()
     }
 
-    /// Mutate search using copy mode's presented grid or the focused live grid,
+    /// Mutate search using the focused terminal's displayed grid,
     /// without extending a whole-App borrow across the caller's input handling.
     fn with_search_and_active_grid<R>(
         &mut self,
         update: impl FnOnce(&mut Search, &termeric_core::Grid) -> R,
     ) -> Option<R> {
+        if self.reconcile_search_presentation() {
+            return None;
+        }
         let search = &mut self.search;
         let terminal = self.tabs.as_ref()?.active_tab()?.focused_terminal()?;
-        let grid = if self.copy_mode.is_active() {
-            terminal.presentation_grid()
-        } else {
-            terminal.grid()
-        };
-        Some(update(search, grid))
+        Some(update(search, terminal.presentation_grid()))
     }
 
     /// Calculate cursor opacity for smooth blink animation
@@ -4088,6 +4089,9 @@ impl App {
 
     fn handle_search_key(&mut self, key: &winit::keyboard::Key) -> bool {
         use winit::keyboard::{Key, NamedKey};
+        if self.reconcile_search_presentation() {
+            return true;
+        }
         if self.reconcile_copy_mode_presentation() {
             return true;
         }
@@ -4193,6 +4197,9 @@ impl App {
 
     /// Scroll the terminal view to show the current search match
     fn scroll_to_current_match(&mut self) {
+        if self.reconcile_search_presentation() {
+            return;
+        }
         if self.copy_mode.is_active() {
             self.jump_copy_cursor_to_search();
             return;
@@ -4204,7 +4211,7 @@ impl App {
 
         let Some(grid) = self
             .active_terminal_mut()
-            .map(termeric_core::Terminal::grid_mut)
+            .map(termeric_core::Terminal::presentation_grid_mut)
         else {
             return;
         };

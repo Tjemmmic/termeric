@@ -1708,7 +1708,9 @@ impl App {
                     .map(|row| row.saturating_sub(1))
                     .unwrap_or(first)
                     .max(first);
-                self.search.start_in_rows(first, last);
+                if !self.start_command_output_search(first, last) {
+                    return;
+                }
                 self.toasts.info("Search scoped to command output");
                 if let Some(window) = &self.window {
                     window.request_redraw();

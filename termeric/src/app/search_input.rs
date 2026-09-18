@@ -11,6 +11,9 @@ impl App {
         cursor: usize,
         reason: redraw_scheduler::RedrawReason,
     ) -> bool {
+        if self.reconcile_search_presentation() {
+            return false;
+        }
         if !self.search.resume_input_at(cursor) {
             return false;
         }

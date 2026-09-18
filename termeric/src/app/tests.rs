@@ -3,6 +3,165 @@ use crate::plugin::hooks::{HookResponse, Plugin, PluginCommand};
 
 #[cfg(unix)]
 #[test]
+fn standalone_search_does_not_find_hidden_synchronized_output() {
+    let mut app = scrollbar_owner_fixture();
+    app.active_terminal_mut()
+        .unwrap()
+        .process(b"\x1bc\x1b[3Jvisible\x1b[?2026h\x1b[H\x1b[2Khidden");
+    app.search.start();
+    app.with_search_and_active_grid(|search, grid| {
+        search.set_query("hidden", grid);
+        search.finish(grid);
+    });
+    assert_eq!(app.search.match_count(), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn standalone_search_restarts_partial_and_confirmed_results_at_snapshot_boundaries() {
+    for split in [false, true] {
+        let mut app = if split {
+            divider_owner_fixture()
+        } else {
+            scrollbar_owner_fixture()
+        };
+        let terminal = app.active_terminal_mut().unwrap();
+        terminal.resize(12, 32);
+        terminal.process(b"\x1bc\x1b[3Jneedle");
+        app.search.start();
+        app.with_search_and_active_grid(|search, grid| {
+            search.set_query("needle", grid);
+            assert!(search.advance_rows(grid, 1));
+        });
+        app.search.toggle_filter();
+        app.active_terminal_mut()
+            .unwrap()
+            .process(b"\x1b[?2026h\x1b[H\x1b[2Khidden");
+        app.with_search_and_active_grid(|search, grid| search.finish(grid));
+        assert_eq!(app.search.match_count(), 1);
+        assert_eq!(app.search.filtered_rows(32), &[0]);
+        app.search.confirm();
+        let terminal = app.active_terminal_mut().unwrap();
+        terminal.expire_synchronized_output(terminal.synchronized_output_deadline().unwrap());
+        app.reconcile_search_presentation();
+        assert!(app.search.is_searching());
+        assert!(!app.search.is_active());
+        assert_eq!(app.search.query(), "needle");
+        assert!(app.search.is_filter_mode());
+        assert!(app.search.filtered_rows(32).is_empty());
+        app.with_search_and_active_grid(|search, grid| search.finish(grid));
+        assert_eq!(app.search.match_count(), 0);
+        app.active_terminal_mut()
+            .unwrap()
+            .process(b"\x1b[H\x1b[2Kneedle\x1b[?2026h");
+        app.with_search_and_active_grid(|search, grid| search.finish(grid));
+        assert_eq!(app.search.match_count(), 1);
+        app.active_terminal_mut()
+            .unwrap()
+            .process(b"\x1b[?2026l\x1b[H\x1b[2Khidden\x1b[?2026h");
+        app.with_search_and_active_grid(|search, grid| search.finish(grid));
+        assert_eq!(app.search.match_count(), 0);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn standalone_search_navigation_preserves_hidden_live_scroll_and_reflows_results() {
+    let mut app = scrollbar_owner_fixture();
+    let terminal = app.active_terminal_mut().unwrap();
+    terminal.resize(12, 3);
+    terminal.process(b"\x1bc\x1b[3Jold\r\nvisible\r\ntail\r\na\r\nb\r\nc");
+    terminal.grid_mut().set_scroll_offset(3);
+    terminal.process(b"\x1b[?2026h");
+    app.search.start();
+    app.with_search_and_active_grid(|search, grid| {
+        search.set_query("visible", grid);
+        search.finish(grid);
+    });
+    assert_eq!(app.search.current().unwrap().row, 1);
+    app.scroll_to_current_match();
+    assert_eq!(app.active_terminal().unwrap().grid().scroll_offset(), 3);
+    app.active_terminal_mut()
+        .unwrap()
+        .process(b"\x1b[?2026l\x1bc\x1b[3Jabcdef");
+    app.with_search_and_active_grid(|search, grid| {
+        search.set_query("def", grid);
+        search.finish(grid);
+    });
+    assert_eq!(app.search.current().unwrap().start_col, 3);
+    app.active_terminal_mut().unwrap().resize(3, 5);
+    app.with_search_and_active_grid(|search, grid| search.finish(grid));
+    let found = app.search.current().unwrap();
+    assert_eq!((found.row, found.start_col), (1, 0));
+}
+
+#[cfg(unix)]
+#[test]
+fn command_output_search_never_rebinds_a_live_row_scope_to_a_frozen_viewport() {
+    let mut app = scrollbar_owner_fixture();
+    app.active_terminal_mut()
+        .unwrap()
+        .process(b"\x1bc\x1b[3Jvisible");
+    assert!(app.start_command_output_search(0, 0));
+    app.with_search_and_active_grid(|search, grid| {
+        search.set_query("visible", grid);
+        search.finish(grid);
+    });
+    assert_eq!(app.search.match_count(), 1);
+    app.active_terminal_mut().unwrap().process(b"\x1b[?2026h");
+    let mut edited = false;
+    assert!(
+        app.with_search_and_active_grid(|search, grid| {
+            edited = true;
+            search.set_query("unscoped", grid);
+        })
+        .is_none()
+    );
+    assert!(
+        !edited,
+        "cancelling a scope must not apply the pending edit globally"
+    );
+    assert!(!app.search.is_active());
+    assert!(!app.search.is_scoped());
+    assert!(!app.start_command_output_search(0, 0));
+    assert!(!app.search.is_active());
+    app.active_terminal_mut().unwrap().process(b"\x1b[?2026l");
+    assert!(app.start_command_output_search(0, 0));
+    app.active_terminal_mut().unwrap().resize(7, 5);
+    assert!(app.reconcile_search_presentation());
+    assert!(!app.search.is_scoped());
+}
+
+#[cfg(unix)]
+#[test]
+fn standalone_search_drops_completed_results_when_the_displayed_screen_switches() {
+    let mut app = scrollbar_owner_fixture();
+    app.active_terminal_mut()
+        .unwrap()
+        .process(b"\x1bc\x1b[3Jprimary");
+    app.search.start();
+    app.with_search_and_active_grid(|search, grid| {
+        search.set_query("primary", grid);
+        search.finish(grid);
+    });
+    assert_eq!(app.search.match_count(), 1);
+    app.active_terminal_mut()
+        .unwrap()
+        .process(b"\x1b[?1049halternate");
+    app.with_search_and_active_grid(|search, grid| search.finish(grid));
+    assert_eq!(app.search.match_count(), 0);
+    app.with_search_and_active_grid(|search, grid| {
+        search.set_query("alternate", grid);
+        search.finish(grid);
+    });
+    assert_eq!(app.search.match_count(), 1);
+    app.active_terminal_mut().unwrap().process(b"\x1b[?1049l");
+    app.with_search_and_active_grid(|search, grid| search.finish(grid));
+    assert_eq!(app.search.match_count(), 0);
+}
+
+#[cfg(unix)]
+#[test]
 fn copy_mode_enters_at_the_presented_cursor_during_synchronized_output() {
     let mut app = scrollbar_owner_fixture();
     app.active_terminal_mut()
@@ -4995,8 +5154,14 @@ fn harvest_source_survives_single_split_and_collapse() {
                 .unwrap();
             app.execute_sprout_action(action, Some(entry.clone()));
             assert_eq!(app.active_harvest_source(), Some(source));
+            if action == SproutAction::SearchOutput {
+                assert!(app.search.is_active());
+                assert!(app.search.is_scoped());
+            }
         }
-        assert!(app.search.is_active());
+        // The later intentional sibling focus invalidates the row scope; it
+        // must not remain attached to unrelated output when focus returns.
+        assert!(!app.search.is_active());
         expected_input.extend_from_slice(b"\x15echo original\r");
         assert_eq!(
             fenced_harvest_capture(&mut app, &captures),

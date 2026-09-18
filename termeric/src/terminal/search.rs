@@ -245,6 +245,10 @@ impl Search {
         self.start_with_scope(Some(first..=last));
     }
 
+    pub fn is_scoped(&self) -> bool {
+        self.row_scope.is_some()
+    }
+
     fn start_with_scope(&mut self, row_scope: Option<RangeInclusive<i32>>) {
         self.active = true;
         self.query.clear();

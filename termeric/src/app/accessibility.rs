@@ -1082,6 +1082,9 @@ impl App {
     }
 
     fn handle_search_accessibility_action(&mut self, request: ActionRequest) {
+        if self.reconcile_search_presentation() {
+            return;
+        }
         if request.target_node == SEARCH_INPUT {
             match request.action {
                 Action::Focus => {

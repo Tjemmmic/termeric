@@ -87,8 +87,8 @@ Beginning, releasing, timing out, or replacing the synchronized snapshot resets
 copy mode onto the new displayed grid and clears selection, hints, and search.
 Copy extraction rejects stale snapshot coordinates even before the next render.
 Exiting during a frozen snapshot does not retain its selection on the live grid.
-Ordinary mouse selection and search outside copy mode retain their existing
-live-grid policies; this change does not claim to make those paths snapshot-aware.
+Search outside copy mode follows its separate [presentation contract](focused-pane-routing.md#search-presentation).
+Ordinary mouse selection retains its existing live-grid policy.
 Automated tests cover cursor entry, text extraction, Unicode/physical selection
 semantics, copy-mode search, reflow, and lifecycle transitions. Native keyboard,
 selection painting, and clipboard acceptance of this synchronized-output path
