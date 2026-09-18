@@ -9,7 +9,7 @@ mod tracked;
 
 use std::process::{Child, Command};
 use std::sync::OnceLock;
-use std::sync::mpsc::{self, SyncSender, TryRecvError, TrySendError};
+use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::time::{Duration, Instant};
 
 use termeric_core::NotificationRequest;
@@ -50,6 +50,26 @@ struct DesktopCommandRequest {
     started: SyncSender<Result<(), String>>,
 }
 
+impl DesktopCommandRequest {
+    fn new(
+        program: String,
+        args: Vec<String>,
+        label: &'static str,
+    ) -> (Self, Receiver<Result<(), String>>) {
+        // One acknowledgement cannot block cleanup if its caller is descheduled.
+        let (started, result) = mpsc::sync_channel(1);
+        (
+            Self {
+                program,
+                args,
+                label,
+                started,
+            },
+            result,
+        )
+    }
+}
+
 static DESKTOP_COMMAND_RUNNER: OnceLock<Result<SyncSender<DesktopCommandRequest>, String>> =
     OnceLock::new();
 
@@ -59,57 +79,78 @@ fn desktop_command_sender() -> Result<&'static SyncSender<DesktopCommandRequest>
             let (sender, receiver) = mpsc::sync_channel(DESKTOP_COMMAND_QUEUE_CAPACITY);
             std::thread::Builder::new()
                 .name("termeric-desktop-command".into())
-                .spawn(move || {
-                    let mut children: Vec<(&'static str, Child)> = Vec::new();
-                    loop {
-                        match receiver.recv_timeout(Duration::from_millis(50)) {
-                            Ok(request) => start_desktop_command(request, &mut children),
-                            Err(mpsc::RecvTimeoutError::Timeout) => {}
-                            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                        }
-                        loop {
-                            match receiver.try_recv() {
-                                Ok(request) => start_desktop_command(request, &mut children),
-                                Err(TryRecvError::Empty) => break,
-                                Err(TryRecvError::Disconnected) => return,
-                            }
-                        }
-                        let mut index = 0;
-                        while index < children.len() {
-                            let completed = match children[index].1.try_wait() {
-                                Ok(Some(status)) => {
-                                    if !status.success() {
-                                        log::warn!(
-                                            "{} helper exited unsuccessfully: {}",
-                                            children[index].0,
-                                            status
-                                        );
-                                    }
-                                    true
-                                }
-                                Ok(None) => false,
-                                Err(error) => {
-                                    log::warn!(
-                                        "Could not reap {} helper: {}",
-                                        children[index].0,
-                                        error
-                                    );
-                                    true
-                                }
-                            };
-                            if completed {
-                                children.swap_remove(index);
-                            } else {
-                                index += 1;
-                            }
-                        }
-                    }
-                })
+                .spawn(move || run_desktop_commands(receiver, Vec::new(), |_| {}))
                 .map(|_| sender)
                 .map_err(|error| format!("could not start desktop helper worker: {error}"))
         })
         .as_ref()
         .map_err(Clone::clone)
+}
+
+fn run_desktop_commands(
+    receiver: Receiver<DesktopCommandRequest>,
+    mut children: Vec<(&'static str, Child)>,
+    mut before_receive: impl FnMut(bool),
+) {
+    loop {
+        reap_desktop_commands(&mut children);
+        let idle = children.is_empty();
+        // The observer is a no-op in production. Tests observe this exact
+        // receive boundary, not an estimate of whole-application CPU usage.
+        before_receive(idle);
+        let received = if idle {
+            receiver
+                .recv()
+                .map_err(|_| mpsc::RecvTimeoutError::Disconnected)
+        } else {
+            receiver.recv_timeout(Duration::from_millis(50))
+        };
+        match received {
+            Ok(request) => {
+                // A child may have exited while receive was blocked. Reap
+                // before admission so a completed child cannot occupy a slot.
+                // One request per iteration also prevents queue traffic from
+                // postponing cleanup indefinitely.
+                reap_desktop_commands(&mut children);
+                start_desktop_command(request, &mut children);
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                // Accepted requests have drained. Do not abandon remaining
+                // children or kill desktop applications during teardown.
+                for (label, mut child) in children {
+                    report_desktop_exit(label, child.wait());
+                }
+                return;
+            }
+        }
+    }
+}
+
+fn report_desktop_exit(label: &str, result: std::io::Result<std::process::ExitStatus>) {
+    match result {
+        Ok(status) if !status.success() => {
+            log::warn!("{label} helper exited unsuccessfully: {status}");
+        }
+        Err(error) => log::warn!("Could not reap {label} helper: {error}"),
+        Ok(_) => {}
+    }
+}
+
+fn reap_desktop_commands(children: &mut Vec<(&'static str, Child)>) {
+    let mut index = 0;
+    while index < children.len() {
+        let result = match children[index].1.try_wait() {
+            Ok(None) => {
+                index += 1;
+                continue;
+            }
+            Ok(Some(status)) => Ok(status),
+            Err(error) => Err(error),
+        };
+        report_desktop_exit(children[index].0, result);
+        children.swap_remove(index);
+    }
 }
 
 fn start_desktop_command(
@@ -139,13 +180,7 @@ fn spawn_desktop_command(
     label: &'static str,
 ) -> Result<(), String> {
     let runner = desktop_command_sender()?;
-    let (started, result) = mpsc::sync_channel(0);
-    let request = DesktopCommandRequest {
-        program: program.to_owned(),
-        args: args.to_vec(),
-        label,
-        started,
-    };
+    let (request, result) = DesktopCommandRequest::new(program.to_owned(), args.to_vec(), label);
     match runner.try_send(request) {
         Ok(()) => {}
         Err(TrySendError::Full(_)) => {
@@ -670,6 +705,9 @@ fn freedesktop_icon_name(name: &str) -> &str {
         _ => name,
     }
 }
+
+#[cfg(test)]
+mod desktop_worker_tests;
 
 #[cfg(test)]
 mod tests {

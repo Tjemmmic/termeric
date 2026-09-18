@@ -677,6 +677,39 @@ tab/pane selection, stale-origin rejection, and exact delayed-reply routing
 without a session bus. Real-compositor permission, presentation, focus grants,
 and daemon action/signal behavior remain manual acceptance.
 
+### Ordinary notification/audio helper lifetime
+
+Ordinary notification and audio helper delivery shares one process-wide worker,
+with a 16-request queue and at most eight retained direct children. With no
+children, the worker blocks on the request channel without a periodic wakeup.
+With live children, it checks for exits at a 50 ms receive timeout; incoming
+requests wake it sooner. Each request gets its own receive/reap turn, including
+while the queue remains busy. Completed children are reaped again immediately
+before admission, so an exit during a blocked receive can free its slot.
+
+Each launch result has one buffered acknowledgement. A descheduled caller or
+discarded result receiver cannot hold the worker in a rendezvous send or skip
+child cleanup. Spawn acknowledgement still is not proof of native delivery;
+the caller waits for the spawn attempt, whose OS latency is not deadline-bound.
+Capacity/spawn failures keep the existing visible, bounded, deduplicated errors;
+later unsuccessful exits and wait failures are logged.
+
+If all request senders disconnect, already queued requests are processed before
+the worker waits for its remaining children instead of dropping their handles.
+It does not kill a running desktop helper, so this worker-only teardown can
+wait indefinitely for a hung child. The production sender is process-global:
+normal process exit still relies on OS child/orphan handling, not this channel
+disconnect path. There is no new process-exit wait or process-tree cleanup
+claim. The separate hyperlink opener budget is unchanged.
+
+Tests observe the real receive boundary across multiple former idle polling
+intervals, show a live gated child switching back to untimed idle after reaping,
+and verify individual queue turns, unread/disconnected acknowledgements, and
+actual Unix child reaping at shutdown. Only temporary fixture processes run;
+no sound player, desktop notification service, or provider is invoked. These
+checks establish worker scheduling and child ownership, not a measured
+whole-application CPU/power reduction or native delivery acceptance.
+
 Raw-PTY layout-transition regressions cover lifecycle replies, report-only,
 focus-only, and combined actions in S7/S8 mode. A test-only receiver captures the
 real notification frontend's Show/Close/Alive commands across layout changes
