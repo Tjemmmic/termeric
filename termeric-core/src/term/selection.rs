@@ -79,6 +79,34 @@ impl Selection {
         self.active = false;
     }
 
+    /// Whether any selected cell intersects a visible edit rectangle. First,
+    /// last and interior rows cover every column shape without scanning the
+    /// selection or incorrectly filling the gap between two stream endpoints.
+    pub(super) fn intersects_region(
+        &self,
+        rows: std::ops::Range<usize>,
+        cols: std::ops::Range<usize>,
+        total_cols: usize,
+    ) -> bool {
+        if rows.is_empty() || cols.is_empty() || total_cols == 0 {
+            return false;
+        }
+        let (Ok(top), Ok(bottom)) = (i32::try_from(rows.start), i32::try_from(rows.end)) else {
+            return false;
+        };
+        let (start, end) = self.bounds();
+        let first = start.row.max(top);
+        let last = end.row.min(bottom - 1);
+        first <= last
+            && [first, last, first.saturating_add(1).min(last)]
+                .into_iter()
+                .any(|row| {
+                    self.col_range(row, total_cols).is_some_and(|range| {
+                        !range.is_empty() && *range.start() < cols.end && *range.end() >= cols.start
+                    })
+                })
+    }
+
     /// Follow one vertical rectangle move without inventing a discontiguous
     /// selection. Return false if selected cells are erased or only part of
     /// the selection moves. Full-screen upward history archival is different:
@@ -97,21 +125,11 @@ impl Selection {
             return false;
         };
         let (start, end) = self.bounds();
-        let first = start.row.max(top);
-        let last = end.row.min(bottom - 1);
-        if first > last {
-            return true;
-        }
         // Stream selections have at most three column shapes: first row,
         // last row, and interior rows. Block and line selections are uniform.
         // Sampling these shapes keeps even very long history ranges O(1).
         let sample_rows = |first: i32, last: i32| [first, last, first.saturating_add(1).min(last)];
-        let intersects = sample_rows(first, last).into_iter().any(|row| {
-            self.col_range(row, total_cols).is_some_and(|range| {
-                !range.is_empty() && *range.start() < cols.end && *range.end() >= cols.start
-            })
-        });
-        if !intersects {
+        if !self.intersects_region(rows, cols.clone(), total_cols) {
             return true;
         }
         if start.row < top || end.row >= bottom {
@@ -264,6 +282,13 @@ mod tests {
                         .filter(|point| original.contains(point.row, point.col))
                         .collect();
                     for (rows, cols) in &rectangles {
+                        let intersects = cells.iter().any(|cell| {
+                            rows.contains(&(cell.row as usize)) && cols.contains(&cell.col)
+                        });
+                        assert_eq!(
+                            original.intersects_region(rows.clone(), cols.clone(), 4),
+                            intersects
+                        );
                         for delta in [-2, -1, 0, 1, 2] {
                             let mut uniform = None;
                             let mut expected_keep = true;

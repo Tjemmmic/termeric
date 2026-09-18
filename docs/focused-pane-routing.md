@@ -178,9 +178,30 @@ per-cell storage. A cellwise reference checks 48,000 small-grid combinations
 across all four selection types, reversed endpoints, stationary history,
 rectangles, and shifts. Protocol and headless single/split-pane tests cover
 survival, erased edges, mixed movement, frozen selection isolation, and native
-drag/release. Native acceptance remains deferred. In-place replacement and
-selection invalidation for glyphs erased by wide-cell/OSC 66 boundary repair
-remain separate from this coordinate-mapping change.
+drag/release. Native acceptance remains deferred.
+
+Ordinary printable output now clears a selection when it rewrites selected
+cells, including an identical character rewrite. Unrelated writes, cursor/SGR
+changes, and selected history outside the live edit stay selected. Combining
+characters invalidate the changed grapheme; width changes include old wide
+halves and newly overwritten neighbors, including the destination of a wrapping
+width expansion. Normal text overwriting a top-row OSC 66 cell or extending its
+grapheme invalidates the entire affected block's selection; writing past a
+skipped lower row does not. Insert-mode printing clears selections in its
+affected shift span rather than attempting horizontal remapping. Frozen visible
+selections remain isolated from hidden live writes.
+
+This uses the shared constant-time rectangle intersection calculation. With no
+selection, writes return before additional grid lookups. When a selection
+survives outside a write's direct span, only old multicell descriptors within
+that edited row span are inspected; no selected-text/history copy is added.
+Hermetic tests cover all selection types and reversed endpoints, Unicode,
+OSC 66 collision/skip/extension, history/frozen isolation, and single/split-pane
+drag and release after replacement. They do not invoke the desktop clipboard.
+Explicit erase/fill/copy commands, standalone horizontal edits, new OSC 66
+placement, and glyph erasure during other boundary-repair operations still need
+selection invalidation coverage; this is not a claim that every grid mutation
+is covered.
 
 ## Filtered selection and accessible text
 

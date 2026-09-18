@@ -3,6 +3,36 @@ use crate::plugin::hooks::{HookResponse, Plugin, PluginCommand};
 
 #[cfg(unix)]
 #[test]
+fn native_selection_cannot_return_after_printed_output_replaces_selected_cells() {
+    use termeric_core::Point;
+    for split in [false, true] {
+        for held in [false, true] {
+            let mut app = if split {
+                divider_owner_fixture()
+            } else {
+                scrollbar_owner_fixture()
+            };
+            let terminal = app.active_terminal_mut().unwrap();
+            terminal.resize(12, 3);
+            terminal.process(b"\x1bc\x1b[3Janchor");
+            app.begin_native_selection(MouseButton::Left, Point::new(0, 0));
+            app.extend_native_selection(Point::new(0, 5));
+            if !held {
+                app.finish_native_selection();
+            }
+            app.active_terminal_mut().unwrap().process(b"\x1b[Hchange");
+            assert!(app.active_terminal().unwrap().selection().is_none());
+            app.extend_native_selection(Point::new(0, 4));
+            app.finish_native_selection();
+            assert!(app.native_selection_text().is_none());
+            assert!(app.mouse_state.selection.is_none());
+            assert!(app.mouse_selection_source.is_none());
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn native_selection_follows_partial_scroll_and_cannot_revive_a_split_range() {
     use termeric_core::Point;
     for split in [false, true] {

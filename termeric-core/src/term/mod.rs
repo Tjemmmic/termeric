@@ -11,6 +11,7 @@ mod multiple_cursors;
 mod notification;
 mod pointer;
 mod selection;
+mod selection_damage;
 mod title;
 
 pub use cursor::{SavedCursor, TerminalCursorShape, TerminalCursorStyle};
@@ -2521,6 +2522,10 @@ impl Terminal {
                 continue;
             }
             let blank = self.erase_cell();
+            self.invalidate_selection_in_region(
+                region.top..region.bottom(),
+                region.left..region.right(),
+            );
             self.grid_mut().clear_multicell_at(
                 cursor.row,
                 collision_col,
@@ -2540,6 +2545,7 @@ impl Terminal {
 
         let blank = self.erase_cell();
         if self.mode.contains(TerminalMode::INSERT) {
+            self.invalidate_selection_for_write(cursor.row, cursor.col, right);
             self.grid_mut().erase_multicells_intersecting(
                 cursor.row,
                 cursor.row + 1,
@@ -2558,6 +2564,7 @@ impl Terminal {
         let underline_color = self.current_underline_color;
         let underline_color_spec = self.current_underline_color_spec;
         let hyperlink_id = self.current_hyperlink_id;
+        self.invalidate_selection_for_write(cursor.row, cursor.col, cursor.col + width);
         if let Some(row) = self.grid_mut().row_mut(cursor.row) {
             row.clear_grapheme_at(cursor.col);
             if width == 2 {
@@ -2683,6 +2690,10 @@ impl Terminal {
             let mut combined = original;
             combined.push(next);
             let descriptor = leader.multicell;
+            self.invalidate_selection_in_region(
+                region.top..region.bottom(),
+                region.left..region.right(),
+            );
             if let Some(leader) = self.grid_mut().cell_mut(region.top, region.left) {
                 leader.set_grapheme(&combined);
                 leader.multicell = descriptor;
@@ -2713,6 +2724,7 @@ impl Terminal {
             && right - left >= 2
             && self.mode.contains(TerminalMode::AUTOWRAP)
         {
+            self.invalidate_selection_for_write(cursor.row, col, col + old_width);
             if let Some(row) = self.grid_mut().row_mut(cursor.row) {
                 row.clear_grapheme_at(col);
                 row.set_wrapped(left == 0 && right == cols);
@@ -2721,6 +2733,7 @@ impl Terminal {
             self.grid_mut().set_cursor(cursor.row, left);
             self.linefeed();
             let destination = self.grid().cursor();
+            self.invalidate_selection_for_write(destination.row, left, left + 2);
             if let Some(row) = self.grid_mut().row_mut(destination.row) {
                 row.clear_grapheme_at(left);
                 row.clear_grapheme_at(left + 1);
@@ -2756,6 +2769,7 @@ impl Terminal {
             requested_width
         };
 
+        self.invalidate_selection_for_write(cursor.row, col, col + old_width.max(new_width));
         if let Some(row) = self.grid_mut().row_mut(cursor.row) {
             if old_width != new_width {
                 row.clear_grapheme_at(col + 1);
@@ -7473,6 +7487,127 @@ mod tests {
             before, after,
             "Characters lost after expanding from 20 to 80 cols"
         );
+    }
+
+    #[test]
+    fn ordinary_printing_invalidates_a_selection_over_replaced_text() {
+        let mut term = Terminal::new(12, 3);
+        term.process(b"selected");
+        let mut selection = Selection::new(Point::new(0, 0), SelectionType::Simple);
+        selection.update(Point::new(0, 7));
+        selection.finish();
+        term.set_selection(Some(selection));
+        term.process(b"\x1b[Hchanged!");
+        assert!(term.selection().is_none());
+    }
+
+    #[test]
+    fn ordinary_writes_preserve_unaffected_history_and_frozen_selections() {
+        for kind in [
+            SelectionType::Simple,
+            SelectionType::Semantic,
+            SelectionType::Lines,
+            SelectionType::Block,
+        ] {
+            for reverse in [false, true] {
+                let mut term = Terminal::new(12, 3);
+                term.process(b"alpha beta\r\nmiddle\r\nlast");
+                let (start, end) = if reverse { (4, 0) } else { (0, 4) };
+                let mut selection = Selection::new(Point::new(0, start), kind);
+                selection.update(Point::new(0, end));
+                term.set_selection(Some(selection));
+                let text = term.get_selection_text();
+                term.process(b"\x1b[3;1HX\x1b[1;1H\x1b[31m");
+                assert_eq!(term.get_selection_text(), text);
+                assert_eq!(term.selection().unwrap().start, Point::new(0, start));
+                // Even an identical printable rewrite replaces selected cells.
+                term.process(b"a");
+                assert!(term.selection().is_none());
+            }
+        }
+        let mut term = Terminal::new(12, 3);
+        term.process(b"anchor\r\none\r\ntwo\r\nthree");
+        let mut selection = Selection::new(Point::new(-1, 0), SelectionType::Simple);
+        selection.update(Point::new(-1, 5));
+        term.set_selection(Some(selection));
+        term.process(b"\x1b[Hchanged");
+        assert_eq!(term.get_selection_text().as_deref(), Some("anchor"));
+
+        let mut selection = Selection::new(Point::new(0, 0), SelectionType::Simple);
+        selection.update(Point::new(0, 6));
+        term.set_selection(Some(selection));
+        term.process(b"\x1b[?2026h\x1b[Hhidden!");
+        assert_eq!(term.get_selection_text().as_deref(), Some("changed"));
+        term.process(b"\x1b[?2026l");
+        assert!(term.selection().is_none());
+    }
+
+    #[test]
+    fn ordinary_unicode_writes_invalidate_complete_glyph_damage_including_wrap_destinations() {
+        for (selected_col, write_col) in [(0, 1), (1, 0)] {
+            let mut term = Terminal::new(6, 3);
+            term.process("界x".as_bytes());
+            term.set_selection(Some(Selection::new(
+                Point::new(0, selected_col),
+                SelectionType::Block,
+            )));
+            term.grid_mut().set_cursor(0, write_col);
+            term.write_char('a');
+            assert!(term.selection().is_none());
+        }
+        for initial in ["e", "❤"] {
+            let mut term = Terminal::new(6, 3);
+            term.process(initial.as_bytes());
+            term.set_selection(Some(Selection::new(Point::new(0, 0), SelectionType::Block)));
+            term.process("\u{301}".as_bytes());
+            assert!(term.selection().is_none());
+        }
+        let mut term = Terminal::new(6, 3);
+        term.process("❤x".as_bytes());
+        term.set_selection(Some(Selection::new(Point::new(0, 1), SelectionType::Block)));
+        term.grid_mut().set_cursor(0, 1);
+        term.process("\u{fe0f}".as_bytes());
+        assert!(term.selection().is_none());
+        for point in [Point::new(0, 2), Point::new(1, 0)] {
+            let mut term = Terminal::new(3, 3);
+            term.process("\x1b[2;1HQ\x1b[1;1Hab❤".as_bytes());
+            term.set_selection(Some(Selection::new(point, SelectionType::Block)));
+            term.process("\u{fe0f}".as_bytes());
+            assert!(term.selection().is_none(), "{point:?}");
+        }
+        let mut term = Terminal::new(6, 3);
+        term.process("界x".as_bytes());
+        term.set_selection(Some(Selection::new(Point::new(0, 0), SelectionType::Block)));
+        term.grid_mut().set_cursor(0, 2);
+        term.write_char('y');
+        assert_eq!(term.get_selection_text().as_deref(), Some("界"));
+    }
+
+    #[test]
+    fn ordinary_writes_invalidate_changed_multicell_blocks_but_not_skipped_lower_rows() {
+        let mut term = Terminal::new(10, 4);
+        term.process(b"\x1b]66;s=2:w=2;A\x07");
+        term.set_selection(Some(Selection::new(Point::new(0, 0), SelectionType::Block)));
+        term.grid_mut().set_cursor(1, 0);
+        term.write_char('x'); // Skips the block and writes at column four.
+        assert_eq!(term.get_selection_text().as_deref(), Some("A"));
+        term.set_selection(Some(Selection::new(Point::new(1, 0), SelectionType::Block)));
+        term.grid_mut().set_cursor(0, 1);
+        term.write_char('y');
+        assert!(term.selection().is_none());
+
+        let mut term = Terminal::new(10, 4);
+        term.process(b"\x1b]66;s=2;A\x07");
+        term.set_selection(Some(Selection::new(Point::new(1, 1), SelectionType::Block)));
+        term.process("\u{301}".as_bytes());
+        assert!(term.selection().is_none());
+
+        let mut term = Terminal::new(12, 4);
+        term.process(b"....\x1b]66;s=2;A\x07");
+        term.set_selection(Some(Selection::new(Point::new(1, 4), SelectionType::Block)));
+        term.process(b"\x1b[H\x1b[4hx");
+        assert!(term.selection().is_none());
+        assert!(term.grid().multicell_region_at(1, 4).is_none());
     }
 
     #[test]
