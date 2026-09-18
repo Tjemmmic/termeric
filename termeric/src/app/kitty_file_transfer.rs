@@ -3187,9 +3187,11 @@ mod unix {
                 .strip_prefix("fid:")
                 .or_else(|| text.strip_prefix("fid_abs:"))
             {
+                // Symbolic links can name any transferred entry, including a
+                // directory. Resolve its destination path without following it;
+                // only hard links require the regular-file restriction above.
                 self.entries
                     .get(target_id)
-                    .filter(|entry| !matches!(entry.kind, EntryKind::Directory))
                     .map(|entry| entry.path.clone())
                     .ok_or_else(|| {
                         TransactionError::invalid(file_id, "link names unknown file id")
@@ -3615,6 +3617,172 @@ mod unix {
                 data: data.into(),
                 bypass_present: false,
                 reply_uses_8bit_controls: false,
+            }
+        }
+
+        #[test]
+        fn directory_symlinks_resolve_forward_relative_and_absolute_targets() {
+            let root = tempdir().unwrap();
+            let directory = root.path().join("tree");
+            let file = directory.join("file");
+            let relative = root.path().join("links/relative");
+            let absolute = root.path().join("absolute");
+            let cancel = AtomicBool::new(false);
+            let mut transaction = DownloadTransaction::new("session".into());
+            // Announce both links before the directory they name. Resolution
+            // belongs to finish, once the complete transfer inventory exists.
+            for (id, path, target) in [
+                ("r", &relative, b"fid:d".as_slice()),
+                ("a", &absolute, b"fid_abs:d".as_slice()),
+            ] {
+                transaction
+                    .handle(
+                        command(
+                            KittyFileTransferAction::File,
+                            id,
+                            Some(path),
+                            KittyFileTransferType::Symlink,
+                            b"",
+                        ),
+                        &cancel,
+                    )
+                    .unwrap();
+                transaction
+                    .handle(
+                        command(
+                            KittyFileTransferAction::EndData,
+                            id,
+                            None,
+                            KittyFileTransferType::Symlink,
+                            target,
+                        ),
+                        &cancel,
+                    )
+                    .unwrap();
+            }
+            let mut dir = command(
+                KittyFileTransferAction::File,
+                "d",
+                Some(&directory),
+                KittyFileTransferType::Directory,
+                b"",
+            );
+            dir.permissions = Some(0o750);
+            transaction.handle(dir, &cancel).unwrap();
+            let mut metadata = command(
+                KittyFileTransferAction::File,
+                "f",
+                Some(&file),
+                KittyFileTransferType::Regular,
+                b"content",
+            );
+            metadata.data = Box::default();
+            metadata.parent = Some("d".into());
+            transaction.handle(metadata, &cancel).unwrap();
+            transaction
+                .handle(
+                    command(
+                        KittyFileTransferAction::EndData,
+                        "f",
+                        None,
+                        KittyFileTransferType::Regular,
+                        b"content",
+                    ),
+                    &cancel,
+                )
+                .unwrap();
+            for path in [&directory, &relative, &absolute] {
+                assert!(
+                    fs::symlink_metadata(path).is_err(),
+                    "published early: {path:?}"
+                );
+            }
+            assert!(matches!(
+                transaction
+                    .handle(
+                        command(
+                            KittyFileTransferAction::Finish,
+                            "",
+                            None,
+                            KittyFileTransferType::Regular,
+                            b"",
+                        ),
+                        &cancel
+                    )
+                    .unwrap(),
+                TransactionResult::Finished {
+                    files: 4,
+                    bytes: 21
+                }
+            ));
+            assert_eq!(fs::read_link(&relative).unwrap(), PathBuf::from("../tree"));
+            assert_eq!(fs::read_link(&absolute).unwrap(), directory);
+            for path in [&relative, &absolute] {
+                assert!(fs::symlink_metadata(path).unwrap().file_type().is_symlink());
+                assert_eq!(fs::read(path.join("file")).unwrap(), b"content");
+            }
+            assert_eq!(
+                fs::metadata(&directory).unwrap().permissions().mode() & 0o777,
+                0o750
+            );
+        }
+
+        #[test]
+        fn directory_hardlinks_and_unknown_symlink_ids_fail_with_rollback() {
+            for (kind, target) in [
+                (KittyFileTransferType::HardLink, b"d".as_slice()),
+                (KittyFileTransferType::Symlink, b"fid:unknown".as_slice()),
+                (
+                    KittyFileTransferType::Symlink,
+                    b"fid_abs:unknown".as_slice(),
+                ),
+            ] {
+                let root = tempdir().unwrap();
+                let directory = root.path().join("tree");
+                let link = root.path().join("link");
+                let cancel = AtomicBool::new(false);
+                let mut transaction = DownloadTransaction::new("session".into());
+                transaction
+                    .handle(
+                        command(
+                            KittyFileTransferAction::File,
+                            "d",
+                            Some(&directory),
+                            KittyFileTransferType::Directory,
+                            b"",
+                        ),
+                        &cancel,
+                    )
+                    .unwrap();
+                transaction
+                    .handle(
+                        command(KittyFileTransferAction::File, "l", Some(&link), kind, b""),
+                        &cancel,
+                    )
+                    .unwrap();
+                transaction
+                    .handle(
+                        command(KittyFileTransferAction::EndData, "l", None, kind, target),
+                        &cancel,
+                    )
+                    .unwrap();
+                let error = transaction
+                    .handle(
+                        command(
+                            KittyFileTransferAction::Finish,
+                            "",
+                            None,
+                            KittyFileTransferType::Regular,
+                            b"",
+                        ),
+                        &cancel,
+                    )
+                    .err()
+                    .expect("invalid target must fail");
+                assert_eq!(error.file_id, "l");
+                assert_eq!(error.code, KittyFileTransferStatusCode::Invalid);
+                drop(transaction);
+                assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
             }
         }
 

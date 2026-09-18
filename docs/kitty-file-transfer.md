@@ -72,7 +72,11 @@ publication uses no-clobber rename semantics.
 
 Hard links may name only a regular file ID in the same transfer. Symbolic links
 support Kitty's `fid:`, `fid_abs:`, and `path:` forms. `fid` targets must name an
-entry in the same transfer. A `path:` target may intentionally point outside
+entry in the same transfer, including a directory. Relative and absolute links
+can name entries declared later: their destination paths are resolved at commit
+without dereferencing them. Hard links to directories and unknown target IDs
+are rejected, with transaction rollback covered by local tests. A `path:` target
+may intentionally point outside
 the transfer so ordinary relative, absolute, and broken symlinks can be
 preserved; the approval dialog calls out that the remote side controls symbolic
 link targets. The link destination itself remains subject to every path and
