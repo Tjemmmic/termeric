@@ -499,11 +499,9 @@ fn append_row_text(grid: &Grid, row_index: i32, text: &mut String, spans: &mut V
     let Some(row) = grid.row_at_offset(row_index) else {
         return;
     };
-    for col in 0..grid.cols() {
+    for col in row.reflow_columns() {
         let Some(cell) = row.get(col) else { break };
-        if cell.flags.contains(CellFlags::WIDE_CHAR_SPACER)
-            || (cell.multicell.is_present() && !cell.multicell.is_leader())
-        {
+        if cell.multicell.is_present() && !cell.multicell.is_leader() {
             continue;
         }
         let byte_start = text.len();
@@ -596,14 +594,17 @@ pub fn semantic_matches(terminal: &Terminal, patterns: &[(String, Regex)]) -> Ve
             }
             if let Some(value) = terminal.get_hyperlink_url(id) {
                 let continues_wrapped_link = start == 0
-                    && grid
-                        .row_at_offset(row_index.saturating_sub(1))
-                        .is_some_and(|previous| previous.is_wrapped())
                     && matches.last().is_some_and(|previous| {
                         previous.source == "OSC 8 link"
                             && previous.value == value
                             && previous.end.row == row_index.saturating_sub(1)
-                            && previous.end.col + 1 == grid.cols()
+                            && grid.row_at_offset(previous.end.row).is_some_and(|row| {
+                                row.is_wrapped()
+                                    && previous.end.col + 1
+                                        == row.len().saturating_sub(usize::from(
+                                            row.has_wide_wrap_padding(),
+                                        ))
+                            })
                     });
                 if continues_wrapped_link {
                     if let Some(previous) = matches.last_mut() {
@@ -758,6 +759,109 @@ mod tests {
         assert_eq!(matches[0].value, "/tmp/example");
         assert_eq!(matches[0].start, Point::new(0, 3));
         assert_eq!(matches[0].end, Point::new(2, 4));
+    }
+
+    #[test]
+    fn quick_select_regex_ignores_only_synthetic_wide_wrap_padding() {
+        for text in ["ab界Z", "ab👩\u{200d}💻Z"] {
+            let patterns = vec![("unicode".into(), Regex::new(&regex::escape(text)).unwrap())];
+            for archived in [false, true] {
+                let mut terminal = Terminal::new(3, 3);
+                terminal.process(text.as_bytes());
+                if archived {
+                    terminal.process(b"\r\nx\r\ny\r\nz\r\nw");
+                    let history = terminal.grid().scrollback_len();
+                    terminal.grid_mut().set_scroll_offset(history);
+                }
+                let first = -(terminal.grid().scroll_offset() as i32);
+                let matches = semantic_matches(&terminal, &patterns);
+                assert_eq!(matches.len(), 1, "text={text} archived={archived}");
+                assert_eq!(matches[0].value, text);
+                assert_eq!(matches[0].start, Point::new(first, 0));
+                assert_eq!(matches[0].end, Point::new(first + 1, 2));
+            }
+        }
+
+        let mut terminal = Terminal::new(3, 3);
+        terminal.process("ab界Z".as_bytes());
+        terminal.process(b"\x1b[1;3H "); // A real blank replaces synthetic padding.
+        let patterns = vec![("blank".into(), Regex::new("ab ?界Z").unwrap())];
+        let matches = semantic_matches(&terminal, &patterns);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].value, "ab 界Z");
+
+        let mut terminal = Terminal::new(3, 3);
+        terminal.process("ab\r\n界Z".as_bytes());
+        assert!(semantic_matches(&terminal, &patterns).is_empty());
+    }
+
+    #[test]
+    fn quick_select_osc_link_crosses_synthetic_padding_but_not_real_gaps() {
+        let mut terminal = Terminal::new(3, 3);
+        terminal.process("\x1b]8;;https://example.test\x1b\\ab界Z\x1b]8;;\x1b\\".as_bytes());
+        let patterns = vec![("unicode".into(), Regex::new("ab界Z").unwrap())];
+        let matches = semantic_matches(&terminal, &patterns);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].source, "OSC 8 link");
+        assert_eq!(matches[0].start, Point::new(0, 0));
+        assert_eq!(matches[0].end, Point::new(1, 2));
+
+        terminal.process(b"\x1b[1;3H ");
+        assert_eq!(semantic_matches(&terminal, &patterns).len(), 2);
+
+        let mut terminal = Terminal::new(3, 3);
+        terminal.process(
+            "\x1b]8;;https://example.test\x1b\\ab界Z\x1b]8;;\x1b\\\r\nx\r\ny\r\nz\r\nw".as_bytes(),
+        );
+        let history = terminal.grid().scrollback_len();
+        terminal.grid_mut().set_scroll_offset(history);
+        let matches = semantic_matches(&terminal, &patterns);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].start, Point::new(-(history as i32), 0));
+        assert_eq!(matches[0].end, Point::new(1 - history as i32, 2));
+
+        let mut terminal = Terminal::new(3, 3);
+        terminal.process("\x1b]8;;https://example.test\x1b\\ab\r\n界Z\x1b]8;;\x1b\\".as_bytes());
+        assert_eq!(semantic_matches(&terminal, &patterns).len(), 2);
+    }
+
+    #[test]
+    fn quick_select_unicode_hints_survive_padding_created_by_reflow() {
+        let patterns = vec![("unicode".into(), Regex::new("ab界Z").unwrap())];
+        for linked in [false, true] {
+            let mut terminal = Terminal::new(5, 6);
+            if linked {
+                terminal.process(b"\x1b]8;;https://example.test\x1b\\");
+            }
+            terminal.process("ab界Z".as_bytes());
+            terminal.process(b"\x1b]8;;\x1b\\");
+            let mut mode = CopyMode::default();
+            mode.enter(terminal.grid());
+            mode.start_quick_select(&terminal, &patterns, HintAction::Copy);
+            for (cols, end) in [
+                (3, Point::new(1, 2)),
+                (1, Point::new(3, 0)),
+                (5, Point::new(0, 4)),
+            ] {
+                mode.prepare_reflow(terminal.grid());
+                terminal.resize(cols, 6);
+                mode.finish_reflow(terminal.grid_mut());
+                mode.refresh_quick_select(&terminal, &patterns);
+                let quick = mode.quick_select().unwrap();
+                assert_eq!(quick.action, HintAction::Copy);
+                assert_eq!(quick.matches.len(), 1, "cols={cols} linked={linked}");
+                assert_eq!(quick.matches[0].start, Point::new(0, 0));
+                assert_eq!(quick.matches[0].end, end);
+                assert_eq!(
+                    quick.matches[0].value,
+                    if linked {
+                        "https://example.test"
+                    } else {
+                        "ab界Z"
+                    }
+                );
+            }
+        }
     }
 
     #[test]

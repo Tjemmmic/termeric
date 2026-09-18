@@ -458,7 +458,9 @@ impl<'a> RowView<'a> {
         })
     }
 
-    pub(crate) fn has_wide_wrap_padding(&self) -> bool {
+    /// Whether the final column is synthetic padding before a wrapped wide
+    /// grapheme, rather than an ordinary blank belonging to the logical text.
+    pub fn has_wide_wrap_padding(&self) -> bool {
         match self.inner {
             RowViewInner::Visible(row) => row.has_wide_wrap_padding(),
             RowViewInner::History(row) => row.wide_wrap_padding,
@@ -1144,9 +1146,13 @@ impl GridStorage {
                     {
                         row_cells.push(cells.next().expect("peeked spacer exists").1);
                     } else {
-                        // Create spacer if missing
-                        let mut spacer = Cell::default();
-                        spacer.flags.insert(CellFlags::WIDE_CHAR_SPACER);
+                        // Rebuild coverage from the surviving leader after a
+                        // one-column collapse. Preserve its hyperlink and
+                        // rendition without cloning the grapheme payload.
+                        let spacer = CellStyle::from_cell(
+                            row_cells.last().expect("wide leader was just appended"),
+                        )
+                        .apply(CompactCellContent::WideSpacer);
                         row_cells.push(spacer);
                         if cursor.is_some_and(|offset| offset > index) {
                             mapped_cursor = mapped_cursor.map(|offset| offset.saturating_add(1));
@@ -1637,6 +1643,32 @@ mod tests {
         assert_eq!(view.reflow_unit_count(), view.reflow_columns().count());
         let empty = CompactRow::from_row(Row::new(3));
         assert_eq!(RowView::history(&empty).reflow_unit_count(), 3);
+    }
+
+    #[test]
+    fn reflow_recreates_spacer_style_from_surviving_wide_leader() {
+        let mut leader = Cell::default();
+        leader.set_grapheme("👩\u{200d}💻");
+        leader.flags = CellFlags::WIDE_CHAR | CellFlags::PROTECTED | CellFlags::HYPERLINK;
+        leader.hyperlink_id = Some(7);
+        leader.fg_spec = ColorSpec::Indexed(2);
+        leader.bg_spec = ColorSpec::Indexed(4);
+        leader.attrs = CellAttrs::BOLD;
+        let style = CellStyle::from_cell(&leader);
+        let spacer = style.apply(CompactCellContent::WideSpacer);
+        let mut narrow = Vec::new();
+        GridStorage::rewrap_line(&mut narrow, vec![leader, spacer], 1);
+        let cells = narrow
+            .into_iter()
+            .flat_map(Row::into_reflow_cells)
+            .collect();
+        let mut wide = Vec::new();
+        GridStorage::rewrap_line(&mut wide, cells, 2);
+        assert_eq!(wide.len(), 1);
+        assert_eq!(wide[0].get(0).unwrap().content.to_text(), "👩\u{200d}💻");
+        let spacer = wide[0].get(1).unwrap();
+        assert!(spacer.is_wide_char_spacer());
+        assert_eq!(CellStyle::from_cell(spacer), style);
     }
 
     #[test]

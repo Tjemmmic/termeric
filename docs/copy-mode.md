@@ -65,10 +65,21 @@ OSC 8 links take precedence over overlapping regex matches across every row of
 a wrapped link. Resize reflow rebuilds visible matches and their cell
 coordinates while preserving the chosen open/copy action. Configured
 matches follow soft-wrapped logical lines instead of truncating a path or URL
-at a physical row edge. Scans are limited to the focused pane's visible rows,
+at a physical row edge. Wide-character spacers and synthetic wrap padding do
+not insert spaces into regex text. OSC 8 link hints likewise join across a
+synthetic padding column, but not across an ordinary unlinked blank or a hard
+line break. Byte-to-cell spans retain the physical positions for highlighting;
+this also applies to compact history when scrolled into view. Scans are limited
+to the focused pane's visible rows,
 at most 32 configured patterns, regexes of at most 4096 bytes, and 4096 visible
 hints. Invalid regex configuration is rejected before it can replace the last
 working runtime configuration.
+
+When widening after a one-column collapse, reflow reconstructs a wide glyph's
+spacer with the surviving leader's hyperlink and rendition. Regression tests
+cover regex and OSC 8 hints through narrow/wide round trips, wide CJK and emoji
+text, compact history, explicit spaces, and hard line breaks. These are local
+grid/state-machine checks, not additional native desktop-opener acceptance.
 
 Defaults detect URLs, local/relative paths, and 7-40 digit hexadecimal hashes.
 Replace the list with TOML array entries when different project semantics are
