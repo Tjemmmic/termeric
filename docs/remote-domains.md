@@ -280,10 +280,17 @@ fixture replaces `ssh` with a local command spy, creates/lists/kills a real
 daemon domain through pipes, relays live output, streams a multi-frame binary
 file into its exact cwd, rejects overwrite, checks every forced OpenSSH option,
 and verifies no token appears in argv. A separate early-disconnect
-fixture must fail promptly. No fixture contacts a network host or uses
+fixture must fail promptly. No fixture contacts a network host or uses remote
 credentials. An executable-level check also proves the protocol-version probe
-is machine-readable and creates no daemon socket or token. Native-window
-attachment to a real remote host remains a manual acceptance step. Headless GUI
+is machine-readable and creates no daemon socket or token. The separate
+[`bridge_lifecycle.rs`](../termeric/tests/bridge_lifecycle.rs) executable lane
+runs the actual bridge against an owned foreground daemon in private runtime
+and config directories. It sends negotiation and a list request together,
+requires the exact complete response with stdin both closed and held open,
+checks stdout/stderr for token leakage, and verifies rejected negotiation
+creates no daemon state. Child waits have five-second fixture deadlines and
+exact-child kill/reap cleanup; no SSH executable or network host is used.
+Native-window attachment to a real remote host remains a manual acceptance step. Headless GUI
 tests cover authority-specific disconnect text, one-warning outage
 deduplication, equal-revision recovery, route-mismatch rejection, and
 domain-close cleanup without opening an SSH connection.

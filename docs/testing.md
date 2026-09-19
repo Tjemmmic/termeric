@@ -1601,6 +1601,14 @@ real daemon create/list/kill lifecycle entirely through stdio pipes. It checks
 strict OpenSSH arguments and token non-disclosure. Separate fixtures reject a
 token-bearing outer handshake, partial frames that exceed their deadline,
 unsafe destinations, nested transports, and disconnects before negotiation.
+The [`bridge_lifecycle.rs`](../termeric/tests/bridge_lifecycle.rs) executable
+lane also drives the actual bridge and an owned foreground daemon in private
+runtime/config directories, without even a fake SSH executable. Coalesced
+negotiation/request bytes must produce an exact response with stdin either
+closed or still open; invalid negotiation must leave the runtime empty, and
+the daemon token must not appear on stdout/stderr. Five-second child deadlines
+and exact-child kill/reap guards keep fixture regressions bounded. This is
+local process/wire evidence, not native SSH or remote-window acceptance.
 Parser and authority tests prove remote GUI attachment retains the selected SSH
 destination for topology, controls, focus, reconnect, and relay argv while
 identically named local and remote domains remain disjoint. The fake SSH also
