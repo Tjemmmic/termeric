@@ -2900,6 +2900,19 @@ impl GraphicsManager {
         self.scroll_history_up(alternate_screen, 0, history_lines, None);
     }
 
+    /// Follow actual row archival on a same-column resize, not the window's
+    /// height delta (blank-tail trimming and cursor pinning can differ).
+    /// Relative children resolve from their translated parent; pixel/source
+    /// geometry and below-viewport clipping remain unchanged.
+    pub(crate) fn adjust_for_height_resize(
+        &mut self,
+        alternate_screen: bool,
+        archived_rows: usize,
+        history_lines: usize,
+    ) {
+        self.scroll_history_up(alternate_screen, archived_rows, history_lines, None);
+    }
+
     fn scroll_history_up(
         &mut self,
         alternate_screen: bool,

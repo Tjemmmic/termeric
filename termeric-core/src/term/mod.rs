@@ -6,6 +6,8 @@
 mod cursor;
 #[cfg(test)]
 mod graphics_history;
+#[cfg(test)]
+mod graphics_resize;
 mod keyboard;
 mod mode;
 mod multicell;
@@ -2387,11 +2389,39 @@ impl Terminal {
         } else {
             self.alt_grid.repair_multicells(&resize_blank);
         }
+        if same_columns {
+            self.graphics.adjust_for_height_resize(
+                false,
+                primary_shift,
+                self.grid.scrollback_len(),
+            );
+            self.graphics.adjust_for_height_resize(
+                true,
+                alternate_shift,
+                self.alt_grid.scrollback_len(),
+            );
+        }
         if let Some(snapshot) = &mut self.synchronized_output_snapshot {
             if snapshot.grid.cols() != cols || snapshot.grid.rows() != rows {
                 snapshot.selection = None;
             }
-            snapshot.grid.resize(cols, rows);
+            let same_snapshot_columns = snapshot.grid.cols() == cols;
+            let archived = snapshot.grid.resize_with_row_shift(cols, rows);
+            if same_snapshot_columns {
+                let shift = i64::try_from(archived).unwrap_or(i64::MAX);
+                let oldest = -i64::try_from(snapshot.grid.scrollback_len()).unwrap_or(i64::MAX);
+                // Snapshot images are already resolved renderer instances,
+                // not a live parent graph. Follow this frozen grid's movement,
+                // independently of either live screen's cursor or history.
+                snapshot.images.retain_mut(|image| {
+                    image.placement.row = image.placement.row.saturating_sub(shift);
+                    image
+                        .placement
+                        .row
+                        .saturating_add(i64::from(image.placement.height.unwrap_or(1)))
+                        > oldest
+                });
+            }
             snapshot.grid.repair_multicells(&resize_blank);
         }
         self.resize_extra_cursors(cols, rows);

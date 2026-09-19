@@ -262,8 +262,25 @@ switches cannot move the captured frame. The `renderer::image::tests` tests
 prefixed `synchronized_images_` compare the actual renderer geometry and texture
 coordinates before/after capture for classic, Unicode, relative, and Sixel
 images, including clipping and fragmented mode sequences. This evidence covers
-capture and release at unchanged dimensions, not image tracking during resize;
-height-resize movement and column-reflow placement remain separate audit work.
+capture and release at unchanged dimensions. Height-only resize has separate
+coverage below; ordinary-placement column-reflow tracking remains audit work.
+
+When only the row count changes, ordinary images move by the exact number of
+rows that their owning grid archives, not by the window-height difference or
+net history growth. Primary and alternate grids use their own cursor-dependent
+movement and history limits. Relative placements follow their parent once, and
+evicting a parent cascades through its descendants. Blank-tail trimming and
+viewport growth do not shift images. Source crops, pixel geometry, and raster
+rectangles extending below the viewport are preserved; viewport clipping is
+not permanent image erasure. Frozen renderer instances follow the frozen grid's
+separate resize movement and retained captured rows, never hidden live output.
+The `term::graphics_resize` regressions cover both screens, cursor positions,
+line/byte eviction, grow/shrink cycles, relative lifetime, tall pixel-sized
+images, and actual anonymous-pixel release after a frozen snapshot ends. The
+renderer test `height_resize_moves_frozen_images_with_their_own_text_not_hidden_output`
+also checks clipped geometry/UVs for ordinary, relative, and Unicode instances
+and restores captured image rows by scrolling the resized snapshot. This is
+core/geometry evidence, not native resize acceptance or column-reflow coverage.
 
 The `term::scroll_graphics` regressions pair images with uniquely labeled text
 rows across SU, DL, and LF; cover batched scrolling, zero/capped/growing history,

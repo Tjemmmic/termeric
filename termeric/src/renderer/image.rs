@@ -763,6 +763,72 @@ mod tests {
     }
 
     #[test]
+    fn height_resize_moves_frozen_images_with_their_own_text_not_hidden_output() {
+        let mut terminal = scrolled_graphics_fixture();
+        terminal.grid_mut().set_scroll_offset(4);
+        terminal.process(b"\x1b[?2026h");
+        // The frozen cursor is on row two; the hidden live cursor is on row
+        // zero, so only the frozen grid archives a row on this resize.
+        terminal.process(b"\x1b[1;1H");
+        terminal.resize(8, 2);
+        assert_eq!(terminal.grid().scrollback_len(), 4);
+        assert_eq!(terminal.presentation_grid().scrollback_len(), 1);
+        let frozen = terminal.presentation_images();
+        let parent = frozen
+            .iter()
+            .find(|p| p.placement.image_id == ImageId(7))
+            .unwrap();
+        assert_eq!(parent.placement.row, -1);
+        let geometry = presentation_geometry(parent, 10.0, 20.0, 0, Some((80.0, 40.0))).unwrap();
+        assert_eq!(
+            (geometry.y, geometry.height, geometry.v_min),
+            (0.0, 20.0, 0.5)
+        );
+        let child = frozen
+            .iter()
+            .find(|p| p.placement.image_id == ImageId(8))
+            .unwrap();
+        assert_eq!(child.placement.row, 0);
+        let placeholder_rows: Vec<_> = frozen
+            .iter()
+            .filter(|p| p.placement.image_id == ImageId(42))
+            .map(|p| p.placement.row)
+            .collect();
+        assert_eq!(placeholder_rows, vec![-1, 0]);
+        let pixels = parent.image.data.clone();
+        terminal.presentation_grid_mut().set_scroll_offset(1);
+        let restored = rendered_images(&terminal, (10.0, 20.0));
+        let parent_geometry = restored
+            .iter()
+            .find(|(id, _)| *id == ImageId(7))
+            .unwrap()
+            .1
+            .unwrap();
+        assert_eq!(
+            (
+                parent_geometry.y,
+                parent_geometry.height,
+                parent_geometry.v_min
+            ),
+            (0.0, 40.0, 0.0)
+        );
+        terminal.resize(8, 4);
+        let parent = terminal
+            .presentation_images()
+            .into_iter()
+            .find(|p| p.placement.image_id == ImageId(7))
+            .unwrap();
+        assert_eq!(parent.placement.row, -1);
+        assert!(std::sync::Arc::ptr_eq(&pixels, &parent.image.data));
+        terminal.process(b"\x1b[?2026l");
+        let live = terminal
+            .graphics_placements()
+            .find(|p| p.image_id == ImageId(7))
+            .unwrap();
+        assert_eq!(live.row, -4);
+    }
+
+    #[test]
     fn source_destination_aspect_offsets_and_viewport_clipping_share_one_geometry_path() {
         let image = StoredImage {
             id: ImageId(1),
