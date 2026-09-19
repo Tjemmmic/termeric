@@ -165,6 +165,10 @@ liveness after acquiring that lock. Successful geometry is deduplicated only
 after the frame is written. Intentional shutdown remains normal; the existing
 250-ms poll and unbounded write/mutex waits are unchanged. Hermetic tests cover
 partial writes, flush failure, poison/unwind, and cell/pixel geometry deduplication.
+Input and resize share a guarded frame-send transaction, so input errors and
+panics likewise stop both producers and close the channel before unlocking the
+writer. A paused-cleanup fixture verifies this lock ordering without an SSH
+process; successful frame bytes and intentional shutdown behavior are unchanged.
 Separately, attachment snapshot replay bounds each frame read to ten seconds
 and the full replay to five minutes; complete fragments cannot renew that total.
 Expiry closes the owned transport before workers start. Text writes and the

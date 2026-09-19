@@ -30,6 +30,8 @@ mod relay_output;
 mod relay_resize;
 #[path = "client_relay_workers.rs"]
 mod relay_workers;
+#[path = "client_relay_write.rs"]
+mod relay_write;
 
 enum UploadAttemptError {
     Retry(anyhow::Error),
@@ -957,19 +959,18 @@ impl DomainClient {
                 match stdin.read(&mut buffer) {
                     Ok(0) => break,
                     Ok(read) => {
-                        let mut writer = writer
-                            .lock()
-                            .map_err(|_| anyhow::anyhow!("domain relay writer mutex poisoned"))?;
-                        if !alive.load(Ordering::Acquire) {
-                            break;
-                        }
-                        protocol::write_frame(
-                            &mut *writer,
+                        if !relay_write::send(
+                            &writer,
+                            &alive,
+                            &closer,
                             &ClientFrame::Input {
                                 data: buffer[..read].to_vec(),
                             },
                         )
-                        .context("write attached terminal input")?;
+                        .context("write attached terminal input")?
+                        {
+                            break;
+                        }
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
                     Err(error) => return Err(error).context("read attached terminal input"),

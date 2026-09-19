@@ -1,6 +1,6 @@
 //! Resize publication for one attached relay, sharing its transport lifetime.
 use super::relay_workers::Completion;
-use super::{ClientFrame, DomainCloser, protocol};
+use super::{ClientFrame, DomainCloser, relay_write};
 use anyhow::Context;
 use std::io::Write;
 use std::sync::Mutex;
@@ -20,30 +20,20 @@ pub(super) fn run(
         if let Some(size) = size()
             && previous != Some(size)
         {
-            let mut writer = writer
-                .lock()
-                .map_err(|_| anyhow::anyhow!("domain relay writer mutex poisoned"))?;
-            // A sibling may have stopped the relay while we waited for input
-            // to release the shared writer. Never append to its failed frame.
-            if !alive.load(Ordering::Acquire) {
-                break;
-            }
-            if let Err(error) = protocol::write_frame(
-                &mut *writer,
+            if !relay_write::send(
+                writer,
+                alive,
+                closer,
                 &ClientFrame::Resize {
                     cols: size.cols,
                     rows: size.rows,
                     pixel_width: size.pixel_width,
                     pixel_height: size.pixel_height,
                 },
-            ) {
-                // Close before releasing the writer mutex, preventing another
-                // producer from appending to a partially written resize frame.
-                if alive.swap(false, Ordering::AcqRel) {
-                    closer.close();
-                    return Err(error).context("write attached terminal resize");
-                }
-                return Ok(()); // Interrupted by an already-requested shutdown.
+            )
+            .context("write attached terminal resize")?
+            {
+                break;
             }
             previous = Some(size);
         }
@@ -55,6 +45,7 @@ pub(super) fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::protocol;
     use std::cell::Cell;
     use std::io::{ErrorKind, Read};
     use std::os::unix::net::UnixStream;

@@ -340,6 +340,12 @@ cleanup on failure or unwinding and returns write/flush/poison errors to the
 joining caller. It records geometry only after a successful frame write, never
 retries a partial frame, and closes a failed transport before releasing its
 writer lock. Both input and resize recheck liveness after acquiring that lock.
+They now use one guarded frame-send transaction: input failure, a writer panic,
+or an already poisoned writer also clears liveness and closes the transport
+before unlocking. No producer retries or appends to an incomplete frame after
+that failure. Successful frames preserve the wire bytes and keep the transport
+open. A deterministic local fixture pauses transport cleanup and verifies the
+writer remains locked on both error and unwind; it starts no SSH process.
 Local shutdown interrupting a resize write is normal cleanup, not a new failure.
 Cell and pixel geometry deduplication and the 250-ms polling interval are
 unchanged; this adds no write or mutex-wait deadline. Local fixtures inject
