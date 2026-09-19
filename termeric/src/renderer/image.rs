@@ -613,6 +613,155 @@ impl ImagePipeline {
 mod tests {
     use super::*;
 
+    fn scrolled_graphics_fixture() -> termeric_core::Terminal {
+        let mut terminal = termeric_core::Terminal::new(8, 3);
+        terminal.set_pixel_geometry(80, 60);
+        terminal.handle_graphics_command(b"a=T,i=7,p=1,c=2,r=2,C=1,f=32,s=1,v=1,q=2;AQIDBA==");
+        for id in [8, 9] {
+            terminal.handle_graphics_command(
+                format!("a=t,i={id},f=32,s=1,v=1,q=2;AQIDBA==").as_bytes(),
+            );
+        }
+        terminal.handle_graphics_command(b"a=p,i=8,P=7,Q=1,H=-1,V=1,c=2,r=1,q=2");
+        terminal.handle_graphics_command(
+            b"a=T,U=1,i=42,p=7,c=2,r=2,f=32,s=2,v=2,q=2;AQIDBAUGBwgJCgsMDQ4PEA==",
+        );
+        terminal.process("\x1b[1;4H\x1b[38;5;42;58;5;7m\u{10eeee}\u{0305}\u{0305}\u{10eeee}\x1b[2;4H\u{10eeee}\u{030d}\u{0305}\u{10eeee}\x1b[0m".as_bytes());
+        terminal.handle_graphics_command(b"a=p,i=9,P=42,Q=7,H=2,c=1,r=1,q=2");
+        terminal.process(b"\x1b[3;1Hbottom\r\none\r\ntwo\r\nthree\r\nfour");
+        assert_eq!(terminal.grid().scrollback_len(), 4);
+        terminal
+    }
+
+    fn rendered_images(
+        terminal: &termeric_core::Terminal,
+        cell: (f32, f32),
+    ) -> Vec<(ImageId, Option<PlacementGeometry>)> {
+        let grid = terminal.presentation_grid();
+        terminal
+            .presentation_images()
+            .iter()
+            .map(|presentation| {
+                (
+                    presentation.placement.image_id,
+                    presentation_geometry(
+                        presentation,
+                        cell.0,
+                        cell.1,
+                        grid.scroll_offset(),
+                        Some((grid.cols() as f32 * cell.0, grid.rows() as f32 * cell.1)),
+                    ),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn synchronized_images_keep_render_geometry_when_scrolled_text_is_rebased() {
+        for offset in 0..=4 {
+            let mut terminal = scrolled_graphics_fixture();
+            terminal.grid_mut().set_scroll_offset(offset);
+            let before = rendered_images(&terminal, (10.0, 20.0));
+            if offset == 4 {
+                for id in [7, 8, 9, 42] {
+                    assert!(
+                        before
+                            .iter()
+                            .any(|(image, geometry)| *image == ImageId(id) && geometry.is_some())
+                    );
+                }
+            }
+            let text: Vec<_> = (0..3)
+                .map(|row| {
+                    terminal
+                        .grid()
+                        .row_at_offset(row - offset as i32)
+                        .unwrap()
+                        .to_string()
+                })
+                .collect();
+            let original = terminal.presentation_images();
+            terminal.process(b"\x1b[?2026h");
+            assert_eq!(terminal.presentation_grid().scroll_offset(), 0);
+            assert_eq!(
+                rendered_images(&terminal, (10.0, 20.0)),
+                before,
+                "offset={offset}"
+            );
+            let frozen = terminal.presentation_images();
+            assert_eq!(original.len(), frozen.len());
+            for (live, frozen) in original.iter().zip(&frozen) {
+                assert_eq!(frozen.placement.row, live.placement.row + offset as i64);
+                assert_eq!(frozen.pixel_rect, live.pixel_rect);
+                assert_eq!(frozen.source_uv, live.source_uv);
+                assert!(std::sync::Arc::ptr_eq(&frozen.image.data, &live.image.data));
+            }
+            for (row, text) in text.iter().enumerate() {
+                assert_eq!(
+                    terminal.presentation_grid().row(row).unwrap().to_string(),
+                    *text
+                );
+            }
+            // Repeated DECSET must not apply the original offset a second time.
+            terminal.process(b"\x1b[?2026h");
+            assert_eq!(rendered_images(&terminal, (10.0, 20.0)), before);
+            terminal.process(b"\x1b[?2026l");
+            assert_eq!(rendered_images(&terminal, (10.0, 20.0)), before);
+        }
+    }
+
+    #[test]
+    fn synchronized_images_ignore_hidden_output_navigation_and_screen_changes() {
+        let mut terminal = scrolled_graphics_fixture();
+        terminal.grid_mut().set_scroll_offset(4);
+        let before = rendered_images(&terminal, (10.0, 20.0));
+        terminal.process(b"\x1b[?2026h");
+        terminal.grid_mut().set_scroll_offset(0);
+        terminal.process(b"\x1b[3J\x1b[?1049h");
+        terminal.handle_graphics_command(b"a=T,i=50,c=1,r=1,C=1,f=32,s=1,v=1,q=2;BQYHCA==");
+        assert!(!terminal.presentation_alternate_screen_active());
+        assert_eq!(rendered_images(&terminal, (10.0, 20.0)), before);
+        terminal.process(b"\x1b[?2026l");
+        assert!(terminal.presentation_alternate_screen_active());
+        let alternate = rendered_images(&terminal, (10.0, 20.0));
+        assert_eq!(alternate.len(), 1);
+        assert_eq!(alternate[0].0, ImageId(50));
+        assert!(alternate[0].1.is_some());
+        terminal.process(b"\x1b[?2026h");
+        assert_eq!(rendered_images(&terminal, (10.0, 20.0)), alternate);
+        terminal.process(b"\x1b[?2026l\x1b[?1049l");
+        terminal.grid_mut().set_scroll_offset(0);
+        let primary = rendered_images(&terminal, (10.0, 20.0));
+        terminal.process(b"\x1b[?2026h");
+        assert_eq!(rendered_images(&terminal, (10.0, 20.0)), primary);
+    }
+
+    #[test]
+    fn synchronized_images_preserve_pixel_sized_clipping_across_fragmented_capture() {
+        let mode = b"\x1b[?2026h";
+        for split in 0..=mode.len() {
+            for offset in [2, 3, 4] {
+                let mut terminal = termeric_core::Terminal::new(8, 3);
+                terminal.set_pixel_geometry(16, 9);
+                terminal.process(b"\x1bPq\"1;1!4~\x1b\\\x1b[3S\x1b[S");
+                terminal.grid_mut().set_scroll_offset(offset);
+                let before = rendered_images(&terminal, (2.0, 3.0));
+                if offset > 2 {
+                    let geometry = before[0].1.unwrap();
+                    assert_eq!(geometry.height, if offset == 3 { 3.0 } else { 6.0 });
+                    assert_eq!(geometry.v_min, if offset == 3 { 0.5 } else { 0.0 });
+                }
+                terminal.process(&mode[..split]);
+                terminal.process(&mode[split..]);
+                assert_eq!(
+                    rendered_images(&terminal, (2.0, 3.0)),
+                    before,
+                    "split={split} offset={offset}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn source_destination_aspect_offsets_and_viewport_clipping_share_one_geometry_path() {
         let image = StoredImage {

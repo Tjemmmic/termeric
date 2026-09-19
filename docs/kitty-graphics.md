@@ -253,6 +253,18 @@ presentation. `term::graphics_history` regressions cover these ownership rules,
 line/byte reductions, both clear entry points, non-resurrection after regrowth,
 explicit reuse, and actual anonymous-pixel release after snapshot teardown.
 
+When synchronized output starts while viewing scrollback, captured image rows
+are rebased into the frozen viewport's row-zero coordinates, matching its text.
+Only placement metadata changes: source crops, sub-cell texture coordinates,
+pixel offsets, and reference-counted pixel storage are preserved. Repeated
+DECSET 2026 does not rebase again, and hidden output, live scrolling, or screen
+switches cannot move the captured frame. The `renderer::image::tests` tests
+prefixed `synchronized_images_` compare the actual renderer geometry and texture
+coordinates before/after capture for classic, Unicode, relative, and Sixel
+images, including clipping and fragmented mode sequences. This evidence covers
+capture and release at unchanged dimensions, not image tracking during resize;
+height-resize movement and column-reflow placement remain separate audit work.
+
 The `term::scroll_graphics` regressions pair images with uniquely labeled text
 rows across SU, DL, and LF; cover batched scrolling, zero/capped/growing history,
 byte-budget eviction, preserved source geometry, fixed/cross-boundary images,

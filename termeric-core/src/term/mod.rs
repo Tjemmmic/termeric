@@ -5140,7 +5140,14 @@ impl Terminal {
         if mode == TerminalMode::SYNCHRONIZED_OUTPUT {
             if enable {
                 if self.synchronized_output_snapshot.is_none() {
-                    let images = self.presentation_images();
+                    let mut images = self.presentation_images();
+                    // visible_snapshot rebases the scrolled text viewport to
+                    // row zero. Rebase resolved images once into that same
+                    // coordinate space; pixel rectangles and UVs stay local.
+                    let offset = i64::try_from(self.grid().scroll_offset()).unwrap_or(i64::MAX);
+                    for image in &mut images {
+                        image.placement.row = image.placement.row.saturating_add(offset);
+                    }
                     self.synchronized_output_snapshot = Some(SynchronizedOutputSnapshot {
                         grid: self.grid().visible_snapshot(),
                         selection: self.selection_for_snapshot(),
