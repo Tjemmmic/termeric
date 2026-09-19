@@ -254,6 +254,15 @@ pane or tab, canceling, timing out, closing the window, or shutting down the app
 drops the transaction, closes approved read descriptors, and removes staged
 download files.
 
+Hermetic download-worker shutdown tests first verify that an empty or nonempty
+file has actually been staged, then exercise cancellation with a queued
+`finish`, rejected completion delivery, sender disconnect, idle expiry, and
+invalid data followed by a queued `finish`. Each unsuccessful exit removes its
+staging file, preserves an unrelated file, and neither publishes the destination
+nor reports `Finished`. A successful-commit control verifies exact published
+contents and counts with no leftover staging file. These are local worker and
+filesystem checks, not native-client acceptance evidence.
+
 Download commit checks cancellation between entries, during final directory
 metadata updates, and once more after all filesystem work before accepting
 completion. Cancellation observed at that final check returns `Canceled` and

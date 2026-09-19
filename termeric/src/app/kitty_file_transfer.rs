@@ -4736,6 +4736,164 @@ mod unix {
         use flate2::{Compression, write::ZlibEncoder};
         use tempfile::tempdir;
 
+        #[test]
+        fn worker_shutdown_cleans_staging_and_does_not_process_queued_finish() {
+            #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+            enum Exit {
+                Cancel,
+                DeliveryRejected,
+                Disconnect,
+                Timeout,
+                InvalidData,
+                Commit,
+            }
+            for exit in [
+                Exit::Cancel,
+                Exit::DeliveryRejected,
+                Exit::Disconnect,
+                Exit::Timeout,
+                Exit::InvalidData,
+                Exit::Commit,
+            ] {
+                for payload in [b"".as_slice(), b"staged payload"] {
+                    let temp = tempdir().unwrap();
+                    let destination = temp.path().join("received.bin");
+                    let unrelated = temp.path().join("keep.bin");
+                    fs::write(&unrelated, b"keep").unwrap();
+                    let cancellation = Arc::new(AtomicBool::new(false));
+                    let (sender, receiver) = sync_channel(4);
+                    let mut metadata = command(
+                        KittyFileTransferAction::File,
+                        "f",
+                        Some(&destination),
+                        KittyFileTransferType::Regular,
+                        &[],
+                    );
+                    metadata.size = Some(payload.len() as i64);
+                    sender.send(WorkerCommand { command: metadata }).unwrap();
+                    sender
+                        .send(WorkerCommand {
+                            command: command(
+                                KittyFileTransferAction::EndData,
+                                "f",
+                                None,
+                                KittyFileTransferType::Regular,
+                                payload,
+                            ),
+                        })
+                        .unwrap();
+                    if exit == Exit::InvalidData {
+                        sender
+                            .send(WorkerCommand {
+                                command: command(
+                                    KittyFileTransferAction::Data,
+                                    "f",
+                                    None,
+                                    KittyFileTransferType::Regular,
+                                    b"unexpected",
+                                ),
+                            })
+                            .unwrap();
+                    }
+                    if !matches!(exit, Exit::Disconnect | Exit::Timeout) {
+                        sender
+                            .send(WorkerCommand {
+                                command: command(
+                                    KittyFileTransferAction::Finish,
+                                    "",
+                                    None,
+                                    KittyFileTransferType::Regular,
+                                    &[],
+                                ),
+                            })
+                            .unwrap();
+                    }
+                    // Keep a sender only for the actual inactivity-expiry case.
+                    let retained_sender = (exit == Exit::Timeout).then_some(sender);
+                    let mut completions = Vec::new();
+                    run_worker(
+                        receiver,
+                        "session".into(),
+                        true,
+                        cancellation.clone(),
+                        Duration::from_millis(1),
+                        |completion| {
+                            completions.push(completion);
+                            if completions.len() == 2 {
+                                // Verify that the case actually staged a file,
+                                // including an empty file, before shutting down.
+                                let staged: Vec<_> = fs::read_dir(temp.path())
+                                    .unwrap()
+                                    .map(|entry| entry.unwrap().path())
+                                    .filter(|path| path != &unrelated)
+                                    .collect();
+                                assert_eq!(staged.len(), 1, "{exit:?}");
+                                assert_ne!(staged[0], destination);
+                                assert_eq!(fs::read(&staged[0]).unwrap(), payload);
+                                assert!(!destination.exists());
+                                if exit == Exit::Cancel {
+                                    cancellation.store(true, Ordering::Release);
+                                }
+                                if exit == Exit::DeliveryRejected {
+                                    return false;
+                                }
+                            }
+                            true
+                        },
+                    );
+                    drop(retained_sender);
+                    assert_eq!(fs::read(&unrelated).unwrap(), b"keep");
+                    let remaining: Vec<_> = fs::read_dir(temp.path())
+                        .unwrap()
+                        .map(|entry| entry.unwrap().path())
+                        .filter(|path| path != &unrelated)
+                        .collect();
+                    if exit == Exit::Commit {
+                        assert_eq!(remaining, vec![destination.clone()]);
+                        assert_eq!(fs::read(&destination).unwrap(), payload);
+                        assert_eq!(completions.len(), 3);
+                        assert!(
+                            matches!(completions[2].disposition, WorkerDisposition::Finished { files: 1, bytes } if bytes == payload.len() as u64)
+                        );
+                    } else {
+                        assert!(remaining.is_empty(), "{exit:?}: {remaining:?}");
+                        assert!(!destination.exists());
+                        assert!(completions.iter().all(|completion| !matches!(
+                            completion.disposition,
+                            WorkerDisposition::Finished { .. }
+                        )));
+                        if matches!(exit, Exit::Timeout | Exit::InvalidData) {
+                            assert_eq!(completions.len(), 3);
+                            let final_reply = &completions[2];
+                            assert_eq!(final_reply.reply_uses_8bit_controls, exit == Exit::Timeout);
+                            let WorkerDisposition::Status {
+                                status,
+                                terminal,
+                                files,
+                                bytes,
+                            } = &final_reply.disposition
+                            else {
+                                panic!("expected terminal error");
+                            };
+                            assert!(*terminal);
+                            assert_eq!(*files, 1);
+                            assert_eq!(*bytes, payload.len() as u64);
+                            assert_eq!(
+                                status.code,
+                                if exit == Exit::Timeout {
+                                    KittyFileTransferStatusCode::TimedOut
+                                } else {
+                                    KittyFileTransferStatusCode::Invalid
+                                }
+                            );
+                        } else {
+                            assert_eq!(completions.len(), 2);
+                        }
+                    }
+                }
+            }
+        }
+
         fn command(
             action: KittyFileTransferAction,
             file_id: &str,
