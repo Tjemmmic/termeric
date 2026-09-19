@@ -82,10 +82,23 @@ smaller:
 - Relative paths and `~/` resolve against the host home directory. Empty,
   traversal, repeated, display-control, oversized-component, and
   oversized-total paths fail before consent.
-- Approved files are opened through Linux `openat2` with `RESOLVE_NO_SYMLINKS`,
+- Approved paths are first pinned through Linux `openat2` with `O_PATH` and
+  `RESOLVE_NO_SYMLINKS`,
   rejecting a link in any component and failing closed if the kernel cannot
-  provide that guarantee. The opened descriptor must be regular and must match
-  the path's re-read device and inode before metadata is returned.
+  provide that guarantee. This is a
+  [metadata-only handle, not a data open](https://man7.org/linux/man-pages/man2/open.2.html).
+  A source must be regular with a link count of one, and must match the path's
+  re-read device and inode. Only then is its trusted `/proc/self/fd` reference
+  opened for reading and its regular-file identity/link count rechecked before
+  metadata is returned. Accessible procfs is required; there is no original-name
+  reopening fallback. FIFO, socket, device, directory, and multiply linked
+  sources are rejected before a data open. Regressions cover a writer-free FIFO
+  with no retained reader, metadata-only handles for rejected source types,
+  zero exported metadata/payload on rejection, and reading the original inode
+  after its name is replaced by a file or symlink.
+  This avoids FIFO-open waits and device data-open side effects; general
+  filesystem lookup/read operations can still block. It is not an immutable
+  snapshot or a lock against later same-inode changes.
 - The aggregate opened size is capped at 64 MiB. Contents stream one file at a
   time in 4,096-byte protocol chunks. At most eight chunks enter one UI event,
   and the worker waits for exact-origin PTY acknowledgement before producing

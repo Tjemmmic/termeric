@@ -1596,6 +1596,78 @@ fn start_upload_worker(
 }
 
 #[cfg(target_os = "linux")]
+fn pin_upload_path(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    use std::ffi::CString;
+    use std::fs::File;
+    use std::os::fd::FromRawFd;
+    use std::os::unix::ffi::OsStrExt;
+    #[repr(C)]
+    struct OpenHow {
+        flags: u64,
+        mode: u64,
+        resolve: u64,
+    }
+
+    let path = CString::new(path.as_os_str().as_bytes()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "approved path contains NUL",
+        )
+    })?;
+    let how = OpenHow {
+        flags: (libc::O_PATH | libc::O_CLOEXEC) as u64,
+        mode: 0,
+        resolve: libc::RESOLVE_NO_SYMLINKS,
+    };
+    // SAFETY: `path` is a live NUL-terminated CString, `how` points to a
+    // fully initialized `open_how` for the supplied size, and a successful
+    // syscall transfers ownership of one new descriptor to this function.
+    let descriptor = unsafe {
+        libc::syscall(
+            libc::SYS_openat2,
+            libc::AT_FDCWD,
+            path.as_ptr(),
+            &how,
+            std::mem::size_of::<OpenHow>(),
+        )
+    };
+    if descriptor < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: `openat2` returned a new owned descriptor and it has not been
+    // wrapped or closed elsewhere.
+    Ok(unsafe { File::from_raw_fd(descriptor as libc::c_int) })
+}
+
+#[cfg(target_os = "linux")]
+fn reopen_upload_regular_file(pinned: &std::fs::File) -> std::io::Result<std::fs::File> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::MetadataExt;
+
+    let identity = pinned.metadata()?;
+    if !identity.is_file() || identity.nlink() != 1 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "approved source is not a single-link regular file",
+        ));
+    }
+    // Only the validated regular inode is opened for data. Never retry its
+    // original name, which may now refer to a FIFO, device, link, or other file.
+    let file = std::fs::File::open(format!("/proc/self/fd/{}", pinned.as_raw_fd()))?;
+    let opened = file.metadata()?;
+    if !opened.is_file()
+        || opened.nlink() != 1
+        || (opened.dev(), opened.ino()) != (identity.dev(), identity.ino())
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "read handle does not match the approved regular-file identity",
+        ));
+    }
+    Ok(file)
+}
+
+#[cfg(target_os = "linux")]
 fn run_upload_worker(
     receiver: Receiver<UploadWorkerCommand>,
     session_id: String,
@@ -1604,11 +1676,8 @@ fn run_upload_worker(
     cancellation: Arc<AtomicBool>,
     mut emit: impl FnMut(UploadWorkerCompletion) -> bool,
 ) {
-    use std::ffi::CString;
     use std::fs::File;
     use std::io::Read;
-    use std::os::fd::FromRawFd;
-    use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::MetadataExt;
 
     struct Source {
@@ -1617,45 +1686,6 @@ fn run_upload_worker(
         file: File,
         size: u64,
         sent: bool,
-    }
-
-    fn open_without_symlinks(path: &std::path::Path) -> std::io::Result<File> {
-        #[repr(C)]
-        struct OpenHow {
-            flags: u64,
-            mode: u64,
-            resolve: u64,
-        }
-
-        let path = CString::new(path.as_os_str().as_bytes()).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "approved path contains NUL",
-            )
-        })?;
-        let how = OpenHow {
-            flags: (libc::O_RDONLY | libc::O_CLOEXEC) as u64,
-            mode: 0,
-            resolve: libc::RESOLVE_NO_SYMLINKS,
-        };
-        // SAFETY: `path` is a live NUL-terminated CString, `how` points to a
-        // fully initialized `open_how` for the supplied size, and a successful
-        // syscall transfers ownership of one new descriptor to this function.
-        let descriptor = unsafe {
-            libc::syscall(
-                libc::SYS_openat2,
-                libc::AT_FDCWD,
-                path.as_ptr(),
-                &how,
-                std::mem::size_of::<OpenHow>(),
-            )
-        };
-        if descriptor < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        // SAFETY: `openat2` returned a new owned descriptor and it has not been
-        // wrapped or closed elsewhere.
-        Ok(unsafe { File::from_raw_fd(descriptor as libc::c_int) })
     }
 
     fn error_frame(
@@ -1711,7 +1741,7 @@ fn run_upload_worker(
         if cancellation.load(Ordering::Acquire) {
             return;
         }
-        let file = match open_without_symlinks(&path.path) {
+        let file = match pin_upload_path(&path.path) {
             Ok(file) => file,
             Err(error) => {
                 let message = format!("could not open approved regular file: {error}");
@@ -1735,9 +1765,9 @@ fn run_upload_worker(
             }
         };
         let metadata = match file.metadata() {
-            Ok(metadata) if metadata.is_file() => metadata,
+            Ok(metadata) if metadata.is_file() && metadata.nlink() == 1 => metadata,
             Ok(_) => {
-                let message = "approved path is not a regular file".to_string();
+                let message = "approved path is not a single-link regular file".to_string();
                 let _ = emit_with_ack(
                     &mut emit,
                     &cancellation,
@@ -1866,6 +1896,31 @@ fn run_upload_worker(
                 reply_uses_8bit_controls,
             );
             return;
+        };
+        let file = match reopen_upload_regular_file(&file) {
+            Ok(file) => file,
+            Err(error) => {
+                let message = format!("could not read pinned regular file: {error}");
+                let code = match error.kind() {
+                    std::io::ErrorKind::InvalidInput => KittyFileTransferStatusCode::Invalid,
+                    std::io::ErrorKind::PermissionDenied => {
+                        KittyFileTransferStatusCode::PermissionDenied
+                    }
+                    _ => KittyFileTransferStatusCode::Io,
+                };
+                let _ = emit_with_ack(
+                    &mut emit,
+                    &cancellation,
+                    vec![error_frame(&session_id, &path.file_id, code, &message)],
+                    true,
+                    0,
+                    total_files,
+                    0,
+                    Some(message),
+                    reply_uses_8bit_controls,
+                );
+                return;
+            }
         };
         let mtime_ns = metadata
             .mtime()
@@ -2265,6 +2320,190 @@ mod upload_worker_tests {
             bypass_present: false,
             reply_uses_8bit_controls: true,
         }
+    }
+
+    #[test]
+    fn upload_read_handle_stays_on_the_pinned_regular_inode() {
+        use std::io::Read;
+        use std::os::unix::fs::MetadataExt;
+
+        for symbolic in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join("approved");
+            let moved = root.path().join("moved");
+            let victim = root.path().join("victim");
+            std::fs::write(&path, b"approved bytes").unwrap();
+            let pinned = pin_upload_path(&path).unwrap();
+            let identity = pinned.metadata().unwrap();
+            std::fs::rename(&path, &moved).unwrap();
+            if symbolic {
+                std::fs::write(&victim, b"must not read").unwrap();
+                std::os::unix::fs::symlink(&victim, &path).unwrap();
+            } else {
+                std::fs::write(&path, b"must not read").unwrap();
+            }
+            let mut file = reopen_upload_regular_file(&pinned).unwrap();
+            let opened = file.metadata().unwrap();
+            assert_eq!(
+                (opened.dev(), opened.ino()),
+                (identity.dev(), identity.ino())
+            );
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes).unwrap();
+            assert_eq!(bytes, b"approved bytes");
+        }
+    }
+
+    #[test]
+    fn upload_worker_rejects_nonregular_and_multiply_linked_sources_before_metadata() {
+        for kind in ["directory", "socket", "device", "hardlink"] {
+            let root = tempfile::tempdir().unwrap();
+            let local = root.path().join("source");
+            let mut socket = None;
+            let path = match kind {
+                "directory" => {
+                    std::fs::create_dir(&local).unwrap();
+                    local
+                }
+                "socket" => {
+                    socket = Some(std::os::unix::net::UnixListener::bind(&local).unwrap());
+                    local
+                }
+                "device" => std::path::PathBuf::from("/dev/null"),
+                "hardlink" => {
+                    std::fs::write(&local, b"must not export").unwrap();
+                    std::fs::hard_link(&local, root.path().join("alias")).unwrap();
+                    local
+                }
+                _ => unreachable!(),
+            };
+            let pinned = pin_upload_path(&path).unwrap();
+            use std::os::fd::AsRawFd;
+            // SAFETY: pinned owns a live descriptor; F_GETFL has no third argument.
+            let flags = unsafe { libc::fcntl(pinned.as_raw_fd(), libc::F_GETFL) };
+            assert!(flags >= 0);
+            assert_ne!(
+                flags & libc::O_PATH,
+                0,
+                "{kind} must not receive a data open"
+            );
+            assert_eq!(
+                reopen_upload_regular_file(&pinned).unwrap_err().kind(),
+                std::io::ErrorKind::InvalidInput
+            );
+            let (_sender, receiver) = sync_channel(1);
+            let mut completions = Vec::new();
+            run_upload_worker(
+                receiver,
+                "type-test".into(),
+                vec![UploadPath {
+                    file_id: "f1".into(),
+                    requested_name: path.to_str().unwrap().into(),
+                    path,
+                }],
+                true,
+                Arc::new(AtomicBool::new(false)),
+                |mut completion| {
+                    if let Some(acknowledge) = completion.acknowledge.take() {
+                        acknowledge.send(true).unwrap();
+                    }
+                    completions.push(completion);
+                    true
+                },
+            );
+            assert_eq!(completions.len(), 1, "{kind}");
+            assert!(completions[0].terminal);
+            assert_eq!(completions[0].bytes, 0);
+            assert_eq!(completions[0].frames.len(), 1);
+            let frame = String::from_utf8(completions[0].frames[0].clone()).unwrap();
+            assert!(frame.contains(";ac=status;id=type-test;fid=f1;"));
+            assert_eq!(
+                completions[0].frames[0],
+                transfer_status(
+                    "type-test",
+                    "f1",
+                    KittyFileTransferStatusCode::Invalid,
+                    "approved path is not a single-link regular file"
+                )
+                .canonical_reply()
+            );
+            drop(socket);
+        }
+    }
+
+    #[test]
+    fn upload_worker_rejects_fifo_without_waiting_for_a_writer() {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let fifo = root.path().join("fifo");
+        let name = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        // SAFETY: name is a live NUL-terminated path in our private tempdir.
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        let worker_path = fifo.clone();
+        let (done_sender, done_receiver) = sync_channel(1);
+        let worker = std::thread::spawn(move || {
+            let (_sender, receiver) = sync_channel(1);
+            let mut completions = Vec::new();
+            run_upload_worker(
+                receiver,
+                "fifo-test".into(),
+                vec![UploadPath {
+                    file_id: "f1".into(),
+                    requested_name: worker_path.to_str().unwrap().into(),
+                    path: worker_path,
+                }],
+                true,
+                Arc::new(AtomicBool::new(false)),
+                |mut completion| {
+                    if let Some(acknowledge) = completion.acknowledge.take() {
+                        acknowledge.send(true).unwrap();
+                    }
+                    completions.push(completion);
+                    true
+                },
+            );
+            done_sender.send(completions).unwrap();
+        });
+        let mut completed_without_writer = true;
+        let completions = match done_receiver.recv_timeout(Duration::from_secs(2)) {
+            Ok(completions) => completions,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                completed_without_writer = false;
+                // Release the old blocking open before failing the regression.
+                let _rescue = std::fs::OpenOptions::new()
+                    .write(true)
+                    .custom_flags(libc::O_NONBLOCK)
+                    .open(&fifo)
+                    .unwrap();
+                done_receiver.recv_timeout(Duration::from_secs(2)).unwrap()
+            }
+            Err(error) => panic!("worker disconnected: {error}"),
+        };
+        worker.join().unwrap();
+        assert!(
+            completed_without_writer,
+            "upload worker waited for a FIFO writer"
+        );
+        assert_eq!(completions.len(), 1);
+        assert!(completions[0].terminal);
+        assert_eq!(completions[0].bytes, 0);
+        assert_eq!(completions[0].frames.len(), 1);
+        let frame = String::from_utf8(completions[0].frames[0].clone()).unwrap();
+        assert!(frame.contains(";ac=status;id=fifo-test;fid=f1;"));
+        assert!(!frame.contains(";ac=file;"));
+        let error = std::fs::OpenOptions::new()
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&fifo)
+            .unwrap_err();
+        assert_eq!(
+            error.raw_os_error(),
+            Some(libc::ENXIO),
+            "no FIFO reader may remain"
+        );
     }
 
     #[test]
