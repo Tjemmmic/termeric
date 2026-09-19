@@ -24,6 +24,8 @@ const UPLOAD_RETRY_DELAY: Duration = Duration::from_millis(100);
 
 #[path = "client_attachment_snapshot.rs"]
 mod attachment_snapshot;
+#[path = "client_bridge.rs"]
+mod bridge;
 #[path = "client_relay_frame_writer.rs"]
 mod relay_frame_writer;
 #[path = "client_relay_output.rs"]
@@ -1295,7 +1297,7 @@ fn read_frame_with_timeout<T: serde::de::DeserializeOwned>(
 /// only this helper reads the remote token, and it never writes that secret to
 /// stdout or across the SSH connection.
 pub fn run_ssh_stdio_bridge() -> anyhow::Result<()> {
-    let mut stdin = std::io::stdin().lock();
+    let mut stdin = bridge::clone_input(libc::STDIN_FILENO)?;
     let mut stdout = std::io::stdout().lock();
     let hello = protocol::read_frame::<ClientFrame>(&mut stdin)
         .context("read SSH domain bridge negotiation")?;
@@ -1332,8 +1334,6 @@ pub fn run_ssh_stdio_bridge() -> anyhow::Result<()> {
             return Ok(());
         }
     }
-    drop(stdin);
-
     let client = match DomainClient::connect_or_start() {
         Ok(client) => client,
         Err(error) => {
@@ -1364,18 +1364,10 @@ pub fn run_ssh_stdio_bridge() -> anyhow::Result<()> {
             version: protocol::PROTOCOL_VERSION,
         },
     )?;
-    let (mut reader, mut writer, closer) = stream.split()?;
-    thread::Builder::new()
-        .name("termeric-domain-ssh-input".into())
-        .spawn(move || {
-            let mut stdin = std::io::stdin().lock();
-            let _ = copy_with_flush(&mut stdin, &mut writer);
-        })?;
-    let result = copy_with_flush(&mut reader, &mut stdout)
-        .context("forward remote domain frames to SSH stdout");
-    let _ = stdout.flush();
-    closer.close();
-    result.map(|_| ())
+    let DomainStream::Local(stream) = stream else {
+        anyhow::bail!("SSH forwarding bridge requires a local daemon socket");
+    };
+    bridge::run(stream, &mut stdout, move || stdin)
 }
 
 /// Forward a framed byte stream without retaining a partial frame in a

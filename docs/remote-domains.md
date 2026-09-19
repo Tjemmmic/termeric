@@ -120,12 +120,24 @@ cap, resource limits, and exact version requirement as local domains. Initial
 negotiation and one-shot responses have a ten-second, partial-frame-aware
 deadline. A peer cannot send only a length prefix and hold a client forever.
 
-The bridge uses fixed-size `io::copy` buffers and kernel pipes; it does not
+The bridge uses fixed-size 16 KiB forwarding buffers and kernel pipes; it does not
 accumulate an unbounded user-space queue. If a client stops reading, the remote
 daemon's existing five-second socket-write deadline disconnects that client
 without blocking PTY draining. Topology/output queues remain bounded at the
 daemon. Killing SSH, losing the network, or closing the local command removes
 only that attachment; remote PTYs and domain state remain owned by the daemon.
+Its input worker is scoped and joined before the bridge returns, including
+output errors, final-flush failures, and unwinding. Input read/write failures or
+panics close the shared socket and wake output forwarding instead of silently
+leaving it blocked. Output-side completion cancels idle input on at most 500-ms
+poll intervals and closes the socket before joining, also waking socket writes.
+Normal input EOF instead half-closes the socket's write side so final daemon
+responses can drain. Negotiation and forwarding share one unbuffered owned
+stdin descriptor, preventing prefetched request bytes from being stranded
+behind descriptor polling. Local fixtures cover coalesced negotiation/request
+bytes, half-close response draining, error/panic cleanup, and joined input
+ownership. They invoke no SSH process and do not establish native acceptance;
+blocked stdout and bridge forwarding deadlines remain separate limitations.
 The next command creates a fresh SSH channel and can reconnect. An attached GUI
 retries its topology subscription with bounded exponential backoff, identifies
 the exact domain and pinned SSH destination in one warning per outage, and

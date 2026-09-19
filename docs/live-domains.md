@@ -366,7 +366,12 @@ the same close-before-unlock failure path. Socket and anonymous-pipe fixtures
 cover stalled/slow readers, header-to-flush expiry, fresh budgets, unchanged wire
 bytes, and reader flags without invoking SSH. This does not bound mutex waits,
 serialization, connection setup, local stdout, or the separate forwarding
-bridge. Local fixtures inject
+bridge. The separate SSH bridge now scopes and joins its input worker, closes
+both directions on failure/unwind, and half-closes only input on normal EOF to
+drain final daemon responses. Negotiation and forwarding share unbuffered stdin
+ownership; local socket fixtures cover pipelined requests and teardown without
+running SSH. Its idle input cancellation uses 500-ms polls, but bridge forwarding
+and blocked stdout still have no overall teardown deadline. Local fixtures inject
 zero/partial/full-start exits, input failure and unwinding, worker failures,
 blocked socket writes, and inert-child cleanup; they do not exhaust the OS
 thread limit. This is not a global teardown deadline: connection setup and a
