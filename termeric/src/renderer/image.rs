@@ -794,9 +794,19 @@ mod tests {
             .filter(|p| p.placement.image_id == ImageId(42))
             .map(|p| p.placement.row)
             .collect();
-        assert_eq!(placeholder_rows, vec![-1, 0]);
+        // Only cells in the displayed viewport produce placeholder instances.
+        assert_eq!(placeholder_rows, vec![0]);
         let pixels = parent.image.data.clone();
         terminal.presentation_grid_mut().set_scroll_offset(1);
+        assert_eq!(
+            terminal
+                .presentation_images()
+                .iter()
+                .filter(|p| p.placement.image_id == ImageId(42))
+                .map(|p| p.placement.row)
+                .collect::<Vec<_>>(),
+            vec![-1, 0]
+        );
         let restored = rendered_images(&terminal, (10.0, 20.0));
         let parent_geometry = restored
             .iter()
@@ -826,6 +836,54 @@ mod tests {
             .find(|p| p.image_id == ImageId(7))
             .unwrap();
         assert_eq!(live.row, -4);
+    }
+
+    #[test]
+    fn frozen_unicode_images_reflow_from_captured_cells_and_pixels() {
+        let mut frozen = scrolled_graphics_fixture();
+        frozen.grid_mut().set_scroll_offset(4);
+        frozen.process(b"\x1b[?2026h");
+        // Build an independent reference with exactly the captured viewport.
+        // The fixture's first three rows have no omitted logical-line prefix.
+        let mut reference = termeric_core::Terminal::new(8, 3);
+        reference.set_pixel_geometry(80, 60);
+        reference.handle_graphics_command(
+            b"a=T,U=1,i=42,p=7,c=2,r=2,f=32,s=2,v=2,q=2;AQIDBAUGBwgJCgsMDQ4PEA==",
+        );
+        reference.handle_graphics_command(b"a=t,i=9,f=32,s=1,v=1,q=2;AQIDBA==");
+        reference.handle_graphics_command(b"a=p,i=9,P=42,Q=7,H=2,c=1,r=1,q=2");
+        reference.process("\x1b[1;4H\x1b[38;5;42;58;5;7m\u{10eeee}\u{0305}\u{0305}\u{10eeee}\x1b[2;4H\u{10eeee}\u{030d}\u{0305}\u{10eeee}\x1b[0m\x1b[3;1Hbottom\x1b[3;5H".as_bytes());
+        // Delete and reuse the live image ID, then switch screens. Neither
+        // metadata nor replacement pixels may leak into the frozen frame.
+        frozen.handle_graphics_command(b"a=d,d=A,q=2");
+        frozen.handle_graphics_command(b"a=T,U=1,i=42,p=7,c=1,r=1,f=32,s=1,v=1,q=2;AQIDBQ==");
+        frozen.enter_alt_screen();
+        for columns in [4, 2, 8, 12] {
+            reference.resize(columns, 3);
+            frozen.resize(columns, 3);
+            for offset in 0..=reference.grid().scrollback_len() {
+                reference.grid_mut().set_scroll_offset(offset);
+                frozen.presentation_grid_mut().set_scroll_offset(offset);
+                let expected = rendered_images(&reference, (10.0, 20.0));
+                let actual: Vec<_> = rendered_images(&frozen, (10.0, 20.0))
+                    .into_iter()
+                    .filter(|(id, _)| matches!(id.0, 9 | 42))
+                    .collect();
+                assert_eq!(actual, expected, "columns={columns} offset={offset}");
+                for image in frozen
+                    .presentation_images()
+                    .iter()
+                    .filter(|image| image.placement.image_id == ImageId(42))
+                {
+                    assert_eq!(
+                        &*image.image.data,
+                        &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+                    );
+                }
+            }
+        }
+        frozen.process(b"\x1b[?2026l");
+        assert!(frozen.presentation_images().is_empty());
     }
 
     #[test]

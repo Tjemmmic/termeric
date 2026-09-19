@@ -272,7 +272,7 @@ movement and history limits. Relative placements follow their parent once, and
 evicting a parent cascades through its descendants. Blank-tail trimming and
 viewport growth do not shift images. Source crops, pixel geometry, and raster
 rectangles extending below the viewport are preserved; viewport clipping is
-not permanent image erasure. Frozen renderer instances follow the frozen grid's
+not permanent image erasure. Captured ordinary placements follow the frozen grid's
 separate resize movement and retained captured rows, never hidden live output.
 The `term::graphics_resize` regressions cover both screens, cursor positions,
 line/byte eviction, grow/shrink cycles, relative lifetime, tall pixel-sized
@@ -290,7 +290,7 @@ Unicode placeholders in the live grid instead follow their text cells. Width
 reflow may reduce retained history: roots wholly above its new boundary are
 retired immediately, with relative descendants and unplaced anonymous pixels.
 Partly retained tall images, reusable Kitty root data, and right-of-viewport
-placements survive; clipping must not erase source geometry. Frozen instances
+placements survive; clipping must not erase source geometry. Captured placements
 are pruned against their own resized snapshot, not the hidden live history.
 `column_resize_keeps_coordinates_but_retires_unretained_image_roots` covers
 width/height combinations, inactive primary state, alternate isolation, and
@@ -299,8 +299,32 @@ checks actual pixel release and independent snapshot ownership; renderer test
 `column_resize_clips_fixed_images_without_erasing_their_geometry` checks
 clipping/UVs and restoration after widening, both live and frozen. These tests
 establish the ordinary-placement coordinate/retention policy, not complete
-Kitty resize parity. Rebuilding frozen Unicode-placeholder instances after
-column reflow and native visual resize acceptance remain unverified.
+Kitty resize parity; native visual resize acceptance remains deferred.
+
+Synchronized capture retains a read-only placement graph and virtual prototypes
+for the captured screen, with one immutable active-frame pixel reference per
+referenced image. It does not copy pixel buffers, unused reusable images,
+pending transmissions, other-screen placements, or animation clocks. Metadata
+inherits the live caps of 1,024 ordinary and 1,024 virtual placements and 256
+images; retained active-frame pixels are bounded by the 64-MiB root-image budget.
+Both live and frozen presentations use the same placeholder decoder and crop
+geometry path. Frozen instances are resolved from the current frozen grid, so
+column reflow, height changes, and navigation through its captured history
+move placeholder crops and their relative descendants with the displayed cells.
+Hidden deletion, image-ID reuse, screen changes, and animation advancement
+cannot change captured pixels or placement metadata. Ordinary-image resize
+rules remain separate, and evicted frozen roots retire relative chains and
+unreferenced captured pixels.
+
+Renderer regression `frozen_unicode_images_reflow_from_captured_cells_and_pixels`
+compares crops and relative-child geometry against an independently populated
+live reference across widths 2/4/8/12 and every retained scroll offset, while
+hidden output deletes/reuses an image ID and switches screens. The existing
+height-resize regression checks viewport-only placeholder instances and their
+restoration from captured history. `graphics::presentation::tests` verifies
+active-frame-only capture, shared pixel ownership, exclusion of unused and
+other-screen data, and relative-chain pixel release. This is deterministic
+core/renderer-geometry evidence, not native visual acceptance.
 
 The `term::scroll_graphics` regressions pair images with uniquely labeled text
 rows across SU, DL, and LF; cover batched scrolling, zero/capped/growing history,

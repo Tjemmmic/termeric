@@ -64,9 +64,9 @@ const MAX_PENDING_NOTIFICATION_ICON_EVENT_BYTES: usize = 2 * MAX_NOTIFICATION_IC
 use crate::ansi::Processor;
 use crate::event::TerminalEvent;
 use crate::graphics::{
-    GraphicsManager, GraphicsRelaySnapshot, GraphicsResponse, ImageId, ImagePlacement,
-    KittyCommand, MAX_GRAPHICS_RELAY_METADATA_BYTES, MAX_KITTY_APC_BYTES, PresentationImage,
-    StoredImage,
+    GraphicsManager, GraphicsRelaySnapshot, GraphicsResponse, GraphicsSnapshot, ImageId,
+    ImagePlacement, KittyCommand, MAX_GRAPHICS_RELAY_METADATA_BYTES, MAX_KITTY_APC_BYTES,
+    PresentationImage, StoredImage,
 };
 use crate::grid::{
     Cell, CellAttrs, CellContent, CellFlags, Color, ColorSpec, Grid, HyperlinkRegistry, MultiCell,
@@ -134,7 +134,7 @@ struct SynchronizedOutputSnapshot {
     cursor_style: Option<TerminalCursorStyle>,
     cursor_blink_override: Option<bool>,
     extra_cursors: ExtraCursorState,
-    images: Vec<PresentationImage>,
+    graphics: GraphicsSnapshot,
     started_at: Instant,
 }
 
@@ -2430,24 +2430,11 @@ impl Terminal {
             }
             let same_snapshot_columns = snapshot.grid.cols() == cols;
             let archived = snapshot.grid.resize_with_row_shift(cols, rows);
-            let shift = if same_snapshot_columns {
-                i64::try_from(archived).unwrap_or(i64::MAX)
-            } else {
-                0
-            };
-            let oldest = -i64::try_from(snapshot.grid.scrollback_len()).unwrap_or(i64::MAX);
-            // Snapshot images are already resolved renderer instances,
-            // not a live parent graph. Follow this frozen grid's movement
-            // only on height-only resize, but always prune its lost history,
-            // independently of either live screen's cursor or history.
-            snapshot.images.retain_mut(|image| {
-                image.placement.row = image.placement.row.saturating_sub(shift);
-                image
-                    .placement
-                    .row
-                    .saturating_add(i64::from(image.placement.height.unwrap_or(1)))
-                    > oldest
-            });
+            snapshot.graphics.resize(
+                same_snapshot_columns,
+                archived,
+                snapshot.grid.scrollback_len(),
+            );
             snapshot.grid.repair_multicells(&resize_blank);
         }
         self.resize_extra_cursors(cols, rows);
@@ -4577,7 +4564,7 @@ impl Terminal {
     /// synchronized update from leaking into an intermediate frame.
     pub fn presentation_images(&self) -> Vec<PresentationImage> {
         if let Some(snapshot) = &self.synchronized_output_snapshot {
-            snapshot.images.clone()
+            snapshot.graphics.presentation_images(&snapshot.grid)
         } else {
             self.graphics.presentation_images(
                 self.grid(),
@@ -5196,14 +5183,13 @@ impl Terminal {
         if mode == TerminalMode::SYNCHRONIZED_OUTPUT {
             if enable {
                 if self.synchronized_output_snapshot.is_none() {
-                    let mut images = self.presentation_images();
-                    // visible_snapshot rebases the scrolled text viewport to
-                    // row zero. Rebase resolved images once into that same
-                    // coordinate space; pixel rectangles and UVs stay local.
-                    let offset = i64::try_from(self.grid().scroll_offset()).unwrap_or(i64::MAX);
-                    for image in &mut images {
-                        image.placement.row = image.placement.row.saturating_add(offset);
-                    }
+                    let graphics = GraphicsSnapshot::capture(
+                        &self.graphics,
+                        self.grid(),
+                        self.alt_screen_active,
+                        self.cell_pixel_width,
+                        self.cell_pixel_height,
+                    );
                     self.synchronized_output_snapshot = Some(SynchronizedOutputSnapshot {
                         grid: self.grid().visible_snapshot(),
                         selection: self.selection_for_snapshot(),
@@ -5213,7 +5199,7 @@ impl Terminal {
                         cursor_style: self.cursor_style,
                         cursor_blink_override: self.cursor_blink_override,
                         extra_cursors: self.extra_cursors.clone(),
-                        images,
+                        graphics,
                         started_at: Instant::now(),
                     });
                 }

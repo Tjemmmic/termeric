@@ -4,6 +4,7 @@ mod image;
 mod iterm2;
 mod kitty;
 mod placeholder;
+mod presentation;
 mod sixel;
 
 pub use image::{ImageId, ImagePlacement, ImageStorage, PresentationImage, StoredImage};
@@ -13,6 +14,7 @@ pub use kitty::{
     KittyParseError, KittyPlacement, KittyTransmission, MAX_APC_BYTES as MAX_KITTY_APC_BYTES,
 };
 pub use placeholder::IMAGE_PLACEHOLDER;
+pub(crate) use presentation::GraphicsSnapshot;
 pub(crate) use sixel::SixelCommand;
 
 use crate::grid::Grid;
@@ -2474,8 +2476,7 @@ impl GraphicsManager {
         })
     }
 
-    /// Build renderer-owned instances for ordinary placements and for the
-    /// visible Unicode placeholder cells backed by virtual placements.
+    /// Resolve current placements against the displayed grid.
     pub(crate) fn presentation_images(
         &self,
         grid: &Grid,
@@ -2483,139 +2484,12 @@ impl GraphicsManager {
         cell_width: u32,
         cell_height: u32,
     ) -> Vec<PresentationImage> {
-        let mut placeholder_presentations = Vec::new();
-        let mut virtual_origins: HashMap<PlacementUid, (i64, i64)> = HashMap::new();
-        let cell_width = cell_width.max(1);
-        let cell_height = cell_height.max(1);
-        let row_offset = i64::try_from(grid.scroll_offset()).unwrap_or(i64::MAX);
-        if self
-            .virtual_placements
-            .iter()
-            .any(|placement| placement.alternate_screen == alternate_screen)
-        {
-            for visual_row in 0..grid.rows() {
-                let mut decoder = PlaceholderDecoder::default();
-                for col in 0..grid.cols() {
-                    let Some(cell) = grid.cell_scrolled(visual_row, col) else {
-                        decoder = PlaceholderDecoder::default();
-                        continue;
-                    };
-                    let Some(decoded) = decoder.decode(&cell) else {
-                        continue;
-                    };
-                    let Some(prototype) = self.virtual_placement_for(
-                        ImageId(decoded.image_id),
-                        decoded.placement_id,
-                        alternate_screen,
-                    ) else {
-                        continue;
-                    };
-                    let Some(image) = self.current_image(prototype.image_id) else {
-                        continue;
-                    };
-                    let screen_col = u32::try_from(col).unwrap_or(u32::MAX);
-                    let screen_row = i64::try_from(visual_row)
-                        .unwrap_or(i64::MAX)
-                        .saturating_sub(row_offset);
-                    let Some(presentation) = placeholder_presentation(
-                        &image,
-                        prototype,
-                        decoded.image_col,
-                        decoded.image_row,
-                        screen_col,
-                        screen_row,
-                        cell_width,
-                        cell_height,
-                    ) else {
-                        continue;
-                    };
-                    virtual_origins
-                        .entry(prototype.uid)
-                        .and_modify(|origin| {
-                            origin.0 = origin.0.min(i64::from(screen_col));
-                            origin.1 = origin.1.min(screen_row);
-                        })
-                        .or_insert((i64::from(screen_col), screen_row));
-                    if !merge_adjacent_placeholder_presentation(
-                        placeholder_presentations.last_mut(),
-                        &presentation,
-                        cell_width,
-                    ) && placeholder_presentations.len() < MAX_IMAGE_PLACEMENTS
-                    {
-                        placeholder_presentations.push(presentation);
-                    }
-                }
-            }
+        presentation::PresentationView {
+            placements: &self.placements,
+            virtual_placements: &self.virtual_placements,
+            image: &|id| self.current_image(id),
         }
-
-        let placements_by_uid: HashMap<PlacementUid, &ManagedImagePlacement> = self
-            .placements
-            .iter()
-            .map(|placement| (placement.uid, placement))
-            .collect();
-        let mut result: Vec<PresentationImage> = self
-            .placements
-            .iter()
-            .filter(|placement| placement.alternate_screen == alternate_screen)
-            .filter_map(|placement| {
-                let image = self.current_image(placement.image_id)?;
-                let (col, row) = self.resolved_placement_position(
-                    placement.uid,
-                    &placements_by_uid,
-                    &virtual_origins,
-                )?;
-                let mut resolved = placement.placement.clone();
-                resolved.row = row;
-                if col < 0 {
-                    relative_negative_presentation(resolved, &image, col, cell_width, cell_height)
-                } else {
-                    resolved.col = u32::try_from(col).ok()?;
-                    Some(PresentationImage::from_placement(&resolved, &image))
-                }
-            })
-            .collect();
-        result.extend(placeholder_presentations);
-        result
-    }
-
-    fn resolved_placement_position(
-        &self,
-        mut uid: PlacementUid,
-        placements_by_uid: &HashMap<PlacementUid, &ManagedImagePlacement>,
-        virtual_origins: &HashMap<PlacementUid, (i64, i64)>,
-    ) -> Option<(i64, i64)> {
-        let mut horizontal = 0i64;
-        let mut vertical = 0i64;
-        for _ in 0..=MAX_RELATIVE_PLACEMENT_DEPTH {
-            if let Some(placement) = placements_by_uid.get(&uid) {
-                if let Some(relative) = placement.relative {
-                    horizontal = horizontal.checked_add(i64::from(relative.horizontal_offset))?;
-                    vertical = vertical.checked_add(i64::from(relative.vertical_offset))?;
-                    uid = relative.parent;
-                    continue;
-                }
-                return Some((
-                    i64::from(placement.col).checked_add(horizontal)?,
-                    placement.row.checked_add(vertical)?,
-                ));
-            }
-            let (col, row) = *virtual_origins.get(&uid)?;
-            return Some((col.checked_add(horizontal)?, row.checked_add(vertical)?));
-        }
-        None
-    }
-
-    fn virtual_placement_for(
-        &self,
-        image_id: ImageId,
-        placement_id: Option<u32>,
-        alternate_screen: bool,
-    ) -> Option<&VirtualImagePlacement> {
-        self.virtual_placements.iter().find(|placement| {
-            placement.image_id == image_id
-                && placement.alternate_screen == alternate_screen
-                && placement_id.is_none_or(|id| placement.placement_id == Some(id))
-        })
+        .presentation_images(grid, alternate_screen, cell_width, cell_height)
     }
 
     pub fn get_image(&self, id: ImageId) -> Option<&StoredImage> {
