@@ -1525,10 +1525,27 @@ relay replica, including after config reapplication.
 Compressed-local fixtures distinguish raw input ceilings from PNG decompressed
 sizes, cover short local objects and malformed streams, and prove cleanup before
 decode. The opt-in llvmpipe lane reads back a 52-row color fixture rendered as
-one negative-z classic image and 52 positive-z Unicode-placeholder slices.
+one negative-z classic image and 52 negative-z Unicode-placeholder slices.
 Every pixel must agree in the initial frame, after output scroll clips three
 rows, and after scrollback restores them, so draw submission alone cannot
-masquerade as a graphics pass. The native X11 workspace scenario runs current
+masquerade as a graphics pass.
+
+The same opt-in lane also performs 64 parser-to-GPU complete-frame checks for
+partial-cell crops. Byte-fragmented Kitty RGBA, Sixel palette bands, and iTerm2
+PNG sequences produce a 14×6-pixel, four-color image in 8×4-pixel cells; a fourth
+fixture adds Kitty `X=3,Y=3` offsets. Regional scroll up/down, DECCRA copy, and
+DECERA erase each pass through initial, edited, frozen-after-hidden-erase, and
+released frames. An independent CPU pixel-copy reference checks every RGBA
+channel, including the black area outside surviving images, with a three-byte
+GPU color tolerance. It does not call placement geometry or crop helpers.
+GPU-free regressions validate all three decoders against the same explicit
+quadrants and require the oracle to reject missing images/pixels, stale frames,
+and overpainting. The required GPU run prints its adapter and the 64-frame
+completion line; ordinary workspace tests validate the oracle but do not
+silently substitute for this opt-in readback. This is software-renderer evidence,
+not native window, hardware-driver, arbitrary scaling, or visual acceptance.
+
+The native X11 workspace scenario runs current
 `kitten icat` classic and Unicode-placeholder streams, stdin-backed temporary-
 file and POSIX shared-memory transfers, plus independent `timg -pk` direct-PNG
 output against one deterministic 64-by-64 multi-row PNG. It binds every fixed

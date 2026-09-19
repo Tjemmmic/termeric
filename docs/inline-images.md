@@ -96,7 +96,13 @@ outward when display scaling makes the cut fractional; this is not a promise of
 sub-texel source precision after destructive crops. Core tests cover both screen
 buffers, both scroll directions, copy/erase, offset coverage, and an independent
 covered-pixel oracle. Parser-to-renderer geometry/UV tests cover regional scroll
-and subsequent synchronized capture. Native visual acceptance remains deferred.
+and subsequent synchronized capture. The opt-in software-GPU lane additionally
+feeds fragmented Kitty/Sixel/iTerm2 wire fixtures through the parser and image
+pipeline, checking 64 full framebuffers against an independent CPU pixel-copy
+reference across edits and frozen/released output. Its four-color image has
+partial final rows/columns, and its Kitty variant includes pixel offsets.
+See the [test method and limits](testing.md#linux-software-renderer-smoke-lane).
+Native visual acceptance remains deferred.
 
 ## Resource and security boundaries
 

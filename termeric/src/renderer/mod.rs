@@ -9,6 +9,8 @@
 mod background_image;
 mod glyph_cache;
 mod image;
+#[cfg(test)]
+mod image_crop_smoke;
 mod ime;
 mod rect;
 mod row_cache;
@@ -2748,6 +2750,7 @@ pub(crate) fn headless_image_render_smoke(device: &Device, queue: &Queue) -> Res
 
     let pixels = render_headless_image_state(device, queue, &mut pipeline, key, &scrolled, 3)?;
     verify_headless_image_state(&pixels, 0, HEADLESS_IMAGE_ROWS, "scrollback restore")?;
+    image_crop_smoke::run(device, queue)?;
     Ok(())
 }
 
