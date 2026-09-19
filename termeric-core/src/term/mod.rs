@@ -4,6 +4,8 @@
 //! cursor handling, and the interface for processing escape sequences.
 
 mod cursor;
+#[cfg(test)]
+mod graphics_history;
 mod keyboard;
 mod mode;
 mod multicell;
@@ -2023,6 +2025,8 @@ impl Terminal {
         self.grid.set_scrollback_byte_limit(bytes);
         self.alt_grid.set_scrollback_limit(0);
         self.alt_grid.set_scrollback_byte_limit(0);
+        self.graphics
+            .prune_scrollback(false, self.grid.scrollback_len());
         let oldest = -(self.grid.scrollback_len() as i32);
         self.shell.prompt_tracker.adjust_for_scroll(0, oldest);
         self.retain_prompt_navigation(oldest);
@@ -2030,10 +2034,11 @@ impl Terminal {
         self.prune_unreferenced_hyperlinks();
     }
 
-    /// Clear saved lines from the active screen and retire any primary-shell
-    /// metadata whose backing history was removed.
+    /// Clear saved lines from the active screen and retire graphics placements
+    /// and primary-shell metadata whose backing history was removed.
     pub fn clear_scrollback(&mut self) {
         self.grid_mut().clear_scrollback();
+        self.graphics.prune_scrollback(self.alt_screen_active, 0);
         self.clear_selection_if_evicted();
         if !self.alt_screen_active {
             self.shell.prompt_tracker.adjust_for_scroll(0, 0);

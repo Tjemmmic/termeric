@@ -240,6 +240,19 @@ relative descendants follow their parent or are removed with it. Last-placement
 removal releases anonymous Sixel/iTerm2 storage, while a synchronized snapshot
 can retain its independent presentation until release.
 
+CSI 3 J, the application Clear Scrollback API, and line/byte budget reductions
+also immediately retire placements wholly older than the resulting retained
+history, without waiting for subsequent output. Relative descendants are
+removed with their parent even if an offset placed the child on-screen. Images
+still intersecting retained rows keep their geometry; virtual prototypes and
+reusable Kitty image data retain their normal independent cache lifetime.
+Clearing alternate-screen history does not affect primary graphics, while a
+global history-budget reduction prunes primary history even when the alternate
+screen is active. These operations affect live state, not a frozen synchronized
+presentation. `term::graphics_history` regressions cover these ownership rules,
+line/byte reductions, both clear entry points, non-resurrection after regrowth,
+explicit reuse, and actual anonymous-pixel release after snapshot teardown.
+
 The `term::scroll_graphics` regressions pair images with uniquely labeled text
 rows across SU, DL, and LF; cover batched scrolling, zero/capped/growing history,
 byte-budget eviction, preserved source geometry, fixed/cross-boundary images,

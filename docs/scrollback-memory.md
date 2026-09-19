@@ -52,6 +52,14 @@ without discarding fully retained historical marks. Completed identities stay
 inside the existing bounded tracker so consumers observe each completion at
 most once, but no erased coordinate can authorize a later grid read.
 
+Graphics placements wholly outside retained history are retired immediately on
+clear or budget reduction, along with relative descendants. Last-placement
+removal frees anonymous Sixel/iTerm2 pixels; reusable Kitty data remains in its
+independently bounded image cache. Images intersecting retained rows and frozen
+synchronized-output presentations are preserved. See the
+[graphics lifetime evidence](kitty-graphics.md#evidence); this does not fold
+image storage into the compact text-history budget.
+
 ## Viewing retained history during output
 
 A scrolled-back viewport follows its retained top row when new history is

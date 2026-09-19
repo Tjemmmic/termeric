@@ -2892,6 +2892,14 @@ impl GraphicsManager {
         self.scroll_history_up(false, count, history_lines, Some(bottom));
     }
 
+    /// Retire ordinary placements wholly outside retained history without
+    /// moving surviving coordinates. Parent removal cascades to relatives;
+    /// anonymous protocol pixels are freed when their last placement is gone.
+    /// Reusable Kitty data and virtual prototypes keep their normal cache life.
+    pub(crate) fn prune_scrollback(&mut self, alternate_screen: bool, history_lines: usize) {
+        self.scroll_history_up(alternate_screen, 0, history_lines, None);
+    }
+
     fn scroll_history_up(
         &mut self,
         alternate_screen: bool,
