@@ -3024,8 +3024,21 @@ mod unix {
 
             let mut created = Vec::<CreatedPath>::new();
             let result = self.commit_inner(cancellation, &mut created);
+            self.complete_commit(result, cancellation, &created)
+        }
+
+        fn complete_commit(
+            &self,
+            result: Result<(), TransactionError>,
+            cancellation: &AtomicBool,
+            created: &[CreatedPath],
+        ) -> Result<TransactionResult, TransactionError> {
+            // Final acceptance boundary: cancellation observed after the last
+            // filesystem operation still rolls back. Preserve an earlier error
+            // rather than replacing its diagnostics with a cancellation status.
+            let result = result.and_then(|()| check_cancel(cancellation, ""));
             if let Err(error) = result {
-                rollback_paths(&created);
+                rollback_paths(created);
                 return Err(error);
             }
             Ok(TransactionResult::Finished {
@@ -3135,6 +3148,7 @@ mod unix {
 
             directories.sort_by_key(|(_, path)| std::cmp::Reverse(path.components().count()));
             for (id, path) in directories {
+                check_cancel(cancellation, &id)?;
                 let entry = self.entries.get(&id).expect("directory id exists");
                 finalize_directory(&path, entry.mode, entry.mtime_ns, created)
                     .map_err(|error| TransactionError::io(&id, "set directory metadata", error))?;
@@ -4143,6 +4157,150 @@ mod unix {
                 data: data.into(),
                 bypass_present: false,
                 reply_uses_8bit_controls: false,
+            }
+        }
+
+        #[cfg(target_os = "linux")]
+        fn completed_filesystem_fixture(root: &Path) -> (DownloadTransaction, Vec<CreatedPath>) {
+            let cancellation = AtomicBool::new(false);
+            let mut transaction = DownloadTransaction::new("session".into());
+            for (id, relative, kind, payload) in [
+                (
+                    "d",
+                    "tree",
+                    KittyFileTransferType::Directory,
+                    b"".as_slice(),
+                ),
+                (
+                    "c",
+                    "tree/child",
+                    KittyFileTransferType::Directory,
+                    b"".as_slice(),
+                ),
+                (
+                    "f",
+                    "tree/child/file",
+                    KittyFileTransferType::Regular,
+                    b"payload".as_slice(),
+                ),
+                (
+                    "s",
+                    "tree/child/symlink",
+                    KittyFileTransferType::Symlink,
+                    b"fid:f".as_slice(),
+                ),
+                (
+                    "h",
+                    "tree/child/hardlink",
+                    KittyFileTransferType::HardLink,
+                    b"f".as_slice(),
+                ),
+            ] {
+                let path = root.join(relative);
+                let mut metadata =
+                    command(KittyFileTransferAction::File, id, Some(&path), kind, b"");
+                metadata.permissions = Some(0o000);
+                if kind == KittyFileTransferType::Regular {
+                    metadata.size = Some(payload.len() as i64);
+                }
+                transaction.handle(metadata, &cancellation).unwrap();
+                if kind != KittyFileTransferType::Directory {
+                    transaction
+                        .handle(
+                            command(KittyFileTransferAction::EndData, id, None, kind, payload),
+                            &cancellation,
+                        )
+                        .unwrap();
+                }
+            }
+            let mut created = Vec::new();
+            transaction
+                .commit_inner(&cancellation, &mut created)
+                .unwrap();
+            assert_eq!(created.len(), 5);
+            for entry in &created {
+                let metadata = entry._identity_guard.as_ref().unwrap().metadata().unwrap();
+                assert_eq!(
+                    (metadata.dev(), metadata.ino()),
+                    (entry.device, entry.inode)
+                );
+                if entry.kind == CreatedKind::Directory {
+                    assert_eq!(metadata.permissions().mode() & 0o777, 0o000);
+                }
+            }
+            (transaction, created)
+        }
+
+        #[test]
+        #[cfg(target_os = "linux")]
+        fn cancellation_after_filesystem_commit_rolls_back_instead_of_finishing() {
+            let root = tempdir().unwrap();
+            let existing = root.path().join("existing");
+            fs::write(&existing, b"keep").unwrap();
+            let (transaction, created) = completed_filesystem_fixture(root.path());
+            let cancellation = AtomicBool::new(true);
+            let result = transaction.complete_commit(Ok(()), &cancellation, &created);
+            assert!(
+                matches!(result, Err(ref error) if error.code == KittyFileTransferStatusCode::Canceled)
+            );
+            assert!(!root.path().join("tree").exists());
+            assert_eq!(fs::read(&existing).unwrap(), b"keep");
+            assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+        }
+
+        #[test]
+        #[cfg(target_os = "linux")]
+        fn commit_completion_preserves_success_and_does_not_revoke_it_later() {
+            let root = tempdir().unwrap();
+            let (transaction, created) = completed_filesystem_fixture(root.path());
+            let cancellation = AtomicBool::new(false);
+            let result = transaction
+                .complete_commit(Ok(()), &cancellation, &created)
+                .unwrap();
+            assert!(matches!(
+                result,
+                TransactionResult::Finished {
+                    files: 5,
+                    bytes: 13
+                }
+            ));
+            cancellation.store(true, Ordering::Release);
+            drop(transaction);
+            assert!(root.path().join("tree").is_dir());
+            assert_eq!(
+                fs::metadata(root.path().join("tree"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o000
+            );
+            // Test-only cleanup: cancellation after acceptance does not request
+            // this rollback in production.
+            rollback_paths(&created);
+            assert!(!root.path().join("tree").exists());
+        }
+
+        #[test]
+        #[cfg(target_os = "linux")]
+        fn commit_failure_preserves_original_error_and_rolls_back_when_canceled() {
+            for canceled in [false, true] {
+                let root = tempdir().unwrap();
+                let (transaction, created) = completed_filesystem_fixture(root.path());
+                let cancellation = AtomicBool::new(canceled);
+                let result = transaction.complete_commit(
+                    Err(TransactionError::invalid("f", "original failure")),
+                    &cancellation,
+                    &created,
+                );
+                let Err(error) = result else {
+                    panic!("failed commit must not finish");
+                };
+                assert_eq!(error.code, KittyFileTransferStatusCode::Invalid);
+                assert_eq!(error.file_id, "f");
+                assert_eq!(error.message, "original failure");
+                assert!(!root.path().join("tree").exists());
+                assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
             }
         }
 

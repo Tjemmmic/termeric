@@ -216,6 +216,22 @@ pane or tab, canceling, timing out, closing the window, or shutting down the app
 drops the transaction, closes approved read descriptors, and removes staged
 download files.
 
+Download commit checks cancellation between entries, during final directory
+metadata updates, and once more after all filesystem work before accepting
+completion. Cancellation observed at that final check returns `Canceled` and
+attempts transaction rollback instead of reporting `Finished`. An existing
+filesystem error retains its original status and diagnostics while also taking
+the rollback path. Hermetic regressions cancel after real mixed-file commit
+work, including nested directories finalized to mode `000`, and verify cleanup
+of regular files, both link types, and owned directories while preserving an
+unrelated file. They also verify unchanged successful file/byte counts and
+original-error preservation.
+
+Cancellation is cooperative: it cannot interrupt an in-progress filesystem
+call, and arrival after the final successful check does not revoke an already
+accepted transfer. Rollback remains best effort with the identity/cleanup
+limitations above; cancellation is not a filesystem-wide atomic transaction.
+
 After approval, filesystem work runs on a bounded worker rather than the
 render/input path. A persistent toast reports only entry and byte counts; it
 does not expose paths. Replies use the captured origin even if focus changes.
