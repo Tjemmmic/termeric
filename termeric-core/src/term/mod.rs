@@ -10,6 +10,8 @@ mod multicell;
 mod multiple_cursors;
 mod notification;
 mod pointer;
+#[cfg(test)]
+mod scroll_limits;
 mod selection;
 mod selection_damage;
 mod title;
@@ -2918,6 +2920,9 @@ impl Terminal {
 
     /// Scroll the screen up by n lines
     pub fn scroll_up(&mut self, n: usize) {
+        // A single scroll request cannot move more than the region's height.
+        // Keep history, selection, and image movement on the same capped count.
+        let n = n.min(self.scroll_bottom.saturating_sub(self.scroll_top));
         if n == 0 {
             return;
         }
@@ -2998,6 +3003,7 @@ impl Terminal {
 
     /// Scroll the screen down by n lines
     pub fn scroll_down(&mut self, n: usize) {
+        let n = n.min(self.scroll_bottom.saturating_sub(self.scroll_top));
         if n == 0 {
             return;
         }
@@ -4850,6 +4856,7 @@ impl Terminal {
         if self.row_inside_vertical_margins(cursor.row)
             && self.col_inside_horizontal_margins(cursor.col)
         {
+            let count = count.min(scroll_bottom - cursor.row);
             let blank = self.erase_cell();
             let full_width = scroll_left == 0 && scroll_right == self.cols;
             if !full_width {
@@ -4917,6 +4924,7 @@ impl Terminal {
         if self.row_inside_vertical_margins(cursor.row)
             && self.col_inside_horizontal_margins(cursor.col)
         {
+            let count = count.min(scroll_bottom - cursor.row);
             let blank = self.erase_cell();
             let full_width = scroll_left == 0 && scroll_right == self.cols;
             if !full_width {

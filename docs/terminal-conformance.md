@@ -41,6 +41,23 @@ caps, and deterministic arbitrary-byte/resize interleavings. Non-unsupported
 manifest rows must link to an actual test function or fixture; naming an
 untested implementation helper is rejected.
 
+Vertical repetition is bounded by the affected rows: SU/SD cap to the scrolling
+region's height; IL/DL cap to the rows from the in-region cursor through the
+bottom margin. This follows the count bounds in xterm's
+[`xtermScroll`, `RevScroll`, `InsertLine`, and `DeleteLine`](https://github.com/ThomasDickey/xterm-snapshots/blob/master/util.c).
+The capped count is shared by text, selection, and graphics updates. In
+particular, oversized SU no longer appends thousands of synthetic blank history
+rows and evicts real output. Direct zero counts remain no-ops, while CSI's
+omitted/zero parameters retain their protocol default of one.
+
+The `term::scroll_limits` tests compare oversized operations with their exact
+effective counts across primary/alternate screens, full/partial margins,
+inside/outside cursor rows, retained history, wide/multicell text, selection,
+and image placements. Row-movement revision deltas prove that work is bounded
+without a machine-dependent timeout. Every split of omitted, zero, maximum
+16-bit, and overflowing decimal wire counts is also tested. This establishes
+core behavior, not a native rendering or throughput claim.
+
 ## Coverage-guided lane
 
 The reviewed text fixtures are converted to binary seeds in a temporary
