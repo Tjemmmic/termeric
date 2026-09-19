@@ -9,6 +9,37 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use termeric_core::{CellFlags, Terminal};
 
+#[cfg(unix)]
+pub(crate) fn seed_pixel_geometry_retention_probe(terminal: &mut Terminal) {
+    assert_eq!((terminal.grid().cols(), terminal.grid().rows()), (8, 5));
+    terminal.set_scrollback_limits(0, 0);
+    terminal.process(b"\x1bPq\"1;1!4~\x1b\\\x1b[5;1HX");
+    let image = terminal.graphics_placements().next().unwrap();
+    assert_eq!((image.width, image.height), (Some(2), Some(2)));
+    terminal.process(b"\x1b[?2026h");
+    terminal.presentation_grid_mut().set_scrollback_limit(0);
+}
+
+#[cfg(unix)]
+pub(crate) fn assert_pixel_geometry_retention_probe(terminal: &Terminal) {
+    assert_eq!((terminal.grid().cols(), terminal.grid().rows()), (8, 2));
+    assert_eq!(terminal.grid().scrollback_len(), 0);
+    let live = terminal.graphics_placements().next().unwrap();
+    let frozen = terminal.presentation_images();
+    assert_eq!(frozen.len(), 1);
+    for image in [live, &frozen[0].placement] {
+        assert_eq!(
+            (image.row, image.width, image.height),
+            (-3, Some(4), Some(6))
+        );
+        assert_eq!((image.pixel_width, image.pixel_height), (Some(4), Some(6)));
+    }
+    assert!(std::sync::Arc::ptr_eq(
+        &terminal.get_image(live.image_id).unwrap().data,
+        &frozen[0].image.data
+    ));
+}
+
 #[derive(Serialize)]
 struct BenchmarkMetric<'a> {
     name: &'a str,

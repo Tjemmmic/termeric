@@ -40,6 +40,13 @@ padding, pane split/close, and divider movement all synchronize the complete
 four-field geometry. Synchronization is not conditional on rows or columns
 changing, so a pixel-only scale or font change still reaches the PTY.
 
+Single-tab, split-pane, and daemon-owned terminals apply those dimensions through
+the core's atomic `resize_with_pixel_geometry` path. Live and frozen image cell
+footprints are updated for the new metrics before grid resize can retire lost
+rows. This preserves still-visible pixel images during simultaneous font/scale
+and viewport changes. Pixel-only changes update derived image geometry without
+resetting margins, cursor, or the captured content of synchronized output.
+
 Authenticated live-domain protocol version 9 forwards the same four fields
 from each relay PTY to its daemon-owned application PTY. A daemon pane starts
 with a nonzero 8×16-pixel-per-cell bootstrap matching the terminal core's
@@ -87,6 +94,12 @@ and proportional preservation for a zero-pixel external relay. Deterministic
 parser and conformance tests verify the three read-only geometry replies,
 both reply framings, exact versus rounded geometry, resize updates, and
 rejection of unsupported forms.
+
+The three real-PTY owner tests also shrink an 8×5 grid with 2×3-pixel cells to
+8×2 with 1×1-pixel cells and no history. A 4×6-pixel Sixel must remain partially
+visible in both live and frozen state, with its original pixel storage, while
+the kernel receives the new four-field geometry. This is automated ownership
+and geometry evidence, not native font/DPI visual acceptance.
 
 Linux provides current runtime evidence. macOS and Windows retain the platform
 verification status documented in [platform support](platform-support.md).

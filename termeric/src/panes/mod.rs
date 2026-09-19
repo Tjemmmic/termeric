@@ -400,11 +400,12 @@ impl Pane {
     /// Resize the terminal and PTY
     pub(crate) fn resize_geometry(&mut self, geometry: TerminalGeometry) -> anyhow::Result<()> {
         if geometry != self.geometry {
-            if (geometry.cols, geometry.rows) != (self.geometry.cols, self.geometry.rows) {
-                self.terminal.resize(geometry.cols, geometry.rows);
-            }
-            self.terminal
-                .set_pixel_geometry(geometry.pixel_width.into(), geometry.pixel_height.into());
+            self.terminal.resize_with_pixel_geometry(
+                geometry.cols,
+                geometry.rows,
+                geometry.pixel_width.into(),
+                geometry.pixel_height.into(),
+            );
             self.pty.resize(geometry.pty_size())?;
             self.geometry = geometry;
         }
@@ -3002,6 +3003,14 @@ mod tests {
             );
             assert_eq!(pane.pty.size().unwrap(), expected.pty_size());
         }
+        let pane = panes.get_pane_mut(PaneId(0)).unwrap();
+        pane.resize_geometry(TerminalGeometry::from_cells(8, 5, 2.0, 3.0))
+            .unwrap();
+        crate::test_support::seed_pixel_geometry_retention_probe(&mut pane.terminal);
+        let scaled = TerminalGeometry::from_cells(8, 2, 1.0, 1.0);
+        pane.resize_geometry(scaled).unwrap();
+        assert_eq!(pane.pty.size().unwrap(), scaled.pty_size());
+        crate::test_support::assert_pixel_geometry_retention_probe(&pane.terminal);
     }
 
     #[cfg(unix)]

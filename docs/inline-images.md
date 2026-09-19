@@ -65,8 +65,10 @@ therefore uses one clipping, texture, cache-revision, and pane-composition path
 for Kitty, Sixel, and iTerm2 images.
 
 Exact pixel dimensions remain stable while grid footprints are recomputed when
-cell pixel geometry changes. Placements follow primary scrollback, scroll
-regions clip their source and destination extents together, and primary and
+cell pixel geometry changes, including in a frozen synchronized presentation.
+Host geometry updates refresh live and frozen footprints before resizing the
+grid, so retention uses the new cell size. Placements follow primary scrollback;
+scroll regions clip their source and destination extents together, and primary and
 alternate screens remain isolated. ED2, RIS, alternate-screen cleanup, or
 scrolling the final placement out of retained history immediately releases
 unaddressable Sixel/iTerm2 decoded pixels. Stale GPU textures are collected when

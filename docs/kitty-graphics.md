@@ -326,6 +326,21 @@ active-frame-only capture, shared pixel ownership, exclusion of unused and
 other-screen data, and relative-chain pixel release. This is deterministic
 core/renderer-geometry evidence, not native visual acceptance.
 
+Host font/scale changes update the frozen frame's cell metrics without replacing
+its captured pixels, image revisions, or parent graph. Placeholder crops and
+negative-column relative rectangles are recomputed for the current cells.
+Pixel-addressed images keep their exact pixel dimensions while both live and
+frozen cell footprints are recalculated. The atomic host geometry path updates
+those footprints before grid resize/eviction, so a smaller cell cannot cause
+still-visible image pixels to be discarded using an obsolete row count.
+Pixel-only updates do not reset terminal margins or cursor state.
+`frozen_images_use_current_cell_geometry_without_taking_live_content` compares
+live/frozen renderer geometry through zoom, shrink, aspect changes, and return
+to the original metrics, while hidden output deletes images, reuses an ID, and
+switches screens. Core and real-PTY owner regressions cover simultaneous
+cell/viewport shrink, zero history, preserved source pixels, and eventual
+snapshot pixel release. Native font/DPI visual acceptance remains deferred.
+
 The `term::scroll_graphics` regressions pair images with uniquely labeled text
 rows across SU, DL, and LF; cover batched scrolling, zero/capped/growing history,
 byte-budget eviction, preserved source geometry, fixed/cross-boundary images,

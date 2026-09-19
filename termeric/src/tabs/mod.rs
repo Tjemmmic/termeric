@@ -3634,6 +3634,19 @@ mod tests {
                 .cols(),
             80
         );
+        manager.resize_geometry(TerminalGeometry::from_cells(8, 5, 2.0, 3.0));
+        crate::test_support::seed_pixel_geometry_retention_probe(
+            manager
+                .active_tab_mut()
+                .unwrap()
+                .focused_terminal_mut()
+                .unwrap(),
+        );
+        let scaled = TerminalGeometry::from_cells(8, 2, 1.0, 1.0);
+        manager.resize_geometry(scaled);
+        let tab = manager.active_tab().unwrap();
+        assert_eq!(tab.single_pty_size(), Some(scaled.pty_size()));
+        crate::test_support::assert_pixel_geometry_retention_probe(tab.focused_terminal().unwrap());
     }
 
     #[cfg(unix)]

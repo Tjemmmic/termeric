@@ -3137,11 +3137,12 @@ impl PaneRuntime {
         }
 
         self.pty.resize(size)?;
-        if (size.cols, size.rows) != (self.cols, self.rows) {
-            self.terminal.resize(size.cols as usize, size.rows as usize);
-        }
-        self.terminal
-            .set_pixel_geometry(size.pixel_width.into(), size.pixel_height.into());
+        self.terminal.resize_with_pixel_geometry(
+            size.cols as usize,
+            size.rows as usize,
+            size.pixel_width.into(),
+            size.pixel_height.into(),
+        );
         self.cols = size.cols;
         self.rows = size.rows;
         self.pixel_width = size.pixel_width;
@@ -4095,6 +4096,23 @@ mod tests {
             (pane.terminal.grid().cols(), pane.terminal.grid().rows()),
             (41, 19)
         );
+        pane.resize(PtySize {
+            cols: 8,
+            rows: 5,
+            pixel_width: 16,
+            pixel_height: 15,
+        })
+        .unwrap();
+        crate::test_support::seed_pixel_geometry_retention_probe(&mut pane.terminal);
+        let scaled = PtySize {
+            cols: 8,
+            rows: 2,
+            pixel_width: 8,
+            pixel_height: 2,
+        };
+        pane.resize(scaled).unwrap();
+        assert_eq!(pane.pty.size().unwrap(), scaled);
+        crate::test_support::assert_pixel_geometry_retention_probe(&pane.terminal);
     }
 
     #[test]

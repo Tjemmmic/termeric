@@ -75,6 +75,16 @@ impl GraphicsSnapshot {
         )
     }
 
+    /// Freeze content, not host display metrics. Font/scale changes must use
+    /// current cell sizes for derived rectangles and retained pixel coverage.
+    pub(crate) fn set_cell_pixel_geometry(&mut self, cell_width: u32, cell_height: u32) {
+        self.cell_width = cell_width.max(1);
+        self.cell_height = cell_height.max(1);
+        for placement in &mut self.placements {
+            placement.update_cell_footprint(self.cell_width, self.cell_height);
+        }
+    }
+
     pub(crate) fn resize(&mut self, same_columns: bool, archived: usize, history: usize) {
         let shift = if same_columns {
             i64::try_from(archived).unwrap_or(i64::MAX)

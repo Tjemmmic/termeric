@@ -1,5 +1,112 @@
 use super::*;
 
+#[test]
+fn atomic_host_resize_updates_live_and_frozen_pixel_coverage_before_eviction() {
+    for frozen in [false, true] {
+        let mut terminal = Terminal::new(8, 5);
+        terminal.set_scrollback_limits(0, 0);
+        terminal.set_pixel_geometry(16, 15);
+        terminal.process(b"\x1bPq\"1;1!4~\x1b\\\x1b[5;1HX");
+        let id = terminal.graphics_placements().next().unwrap().image_id;
+        let pixels = terminal.get_image(id).unwrap().data.clone();
+        if frozen {
+            terminal.process(b"\x1b[?2026h");
+            terminal.presentation_grid_mut().set_scrollback_limit(0);
+        }
+        terminal.resize_with_pixel_geometry(8, 2, 8, 2);
+        let live = terminal
+            .graphics_placements()
+            .next()
+            .expect("new pixel footprint remains partly visible");
+        assert_eq!((live.row, live.width, live.height), (-3, Some(4), Some(6)));
+        assert_eq!(terminal.grid().scrollback_len(), 0);
+        let presented = terminal.presentation_images();
+        assert_eq!(presented.len(), 1);
+        assert_eq!(
+            (presented[0].placement.row, presented[0].placement.height),
+            (-3, Some(6))
+        );
+        assert!(std::sync::Arc::ptr_eq(&pixels, &presented[0].image.data));
+    }
+}
+
+#[test]
+fn pixel_only_host_geometry_preserves_margins_and_cursor() {
+    let mut terminal = Terminal::new(8, 5);
+    terminal.process(b"\x1b[2;4r\x1b[?69h\x1b[2;7s\x1b[3;4H");
+    let cursor = terminal.grid().cursor();
+    let margins = (
+        terminal.scroll_top,
+        terminal.scroll_bottom,
+        terminal.scroll_left,
+        terminal.scroll_right,
+    );
+    assert_eq!(margins, (1, 4, 1, 7));
+    terminal.resize_with_pixel_geometry(8, 5, 24, 20);
+    assert_eq!(
+        (
+            terminal.scroll_top,
+            terminal.scroll_bottom,
+            terminal.scroll_left,
+            terminal.scroll_right
+        ),
+        margins
+    );
+    assert_eq!(
+        (terminal.grid().cursor().row, terminal.grid().cursor().col),
+        (cursor.row, cursor.col)
+    );
+    assert_eq!(
+        (terminal.cell_pixel_width, terminal.cell_pixel_height),
+        (3, 4)
+    );
+}
+
+#[test]
+fn frozen_pixel_images_update_retention_footprints_when_cells_shrink() {
+    let mut terminal = Terminal::new(8, 5);
+    terminal.set_pixel_geometry(16, 15);
+    terminal.process(b"\x1bPq\"1;1!4~\x1b\\\x1b[5;1HX");
+    let original = terminal.graphics_placements().next().unwrap().clone();
+    let pixels = std::sync::Arc::downgrade(&terminal.get_image(original.image_id).unwrap().data);
+    assert_eq!((original.width, original.height), (Some(2), Some(2)));
+    terminal.process(b"\x1b[?2026h");
+    terminal.handle_graphics_command(b"a=d,d=A,q=2");
+    assert!(terminal.get_image(original.image_id).is_none());
+    // The frozen copy is the only remaining pixel owner. Its viewport may
+    // shrink without retaining any captured history.
+    terminal.presentation_grid_mut().set_scrollback_limit(0);
+    terminal.set_pixel_geometry(8, 5);
+    {
+        let images = terminal.presentation_images();
+        assert_eq!(images.len(), 1);
+        let updated = &images[0].placement;
+        assert_eq!((updated.width, updated.height), (Some(4), Some(6)));
+        assert_eq!(
+            (updated.pixel_width, updated.pixel_height),
+            (Some(4), Some(6))
+        );
+        assert_eq!(
+            (updated.source_width, updated.source_height),
+            (original.source_width, original.source_height)
+        );
+    }
+    terminal.resize(8, 2);
+    {
+        let images = terminal.presentation_images();
+        assert_eq!(
+            images.len(),
+            1,
+            "partly visible pixels must not be evicted using the old footprint"
+        );
+        assert_eq!(images[0].placement.row, -3);
+        assert_eq!(images[0].placement.height, Some(6));
+    }
+    assert!(pixels.upgrade().is_some());
+    terminal.process(b"\x1b[?2026l");
+    assert!(pixels.upgrade().is_none());
+}
+
 fn populate(terminal: &mut Terminal, start: u32, letters: &[u8]) {
     for (index, letter) in letters.iter().enumerate() {
         if index > 0 {

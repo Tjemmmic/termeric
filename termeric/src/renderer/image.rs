@@ -839,6 +839,49 @@ mod tests {
     }
 
     #[test]
+    fn frozen_images_use_current_cell_geometry_without_taking_live_content() {
+        let mut reference = scrolled_graphics_fixture();
+        let mut frozen = scrolled_graphics_fixture();
+        reference.grid_mut().set_scroll_offset(4);
+        frozen.grid_mut().set_scroll_offset(4);
+        let captured = frozen.presentation_images();
+        frozen.process(b"\x1b[?2026h");
+        frozen.handle_graphics_command(b"a=d,d=A,q=2");
+        frozen.enter_alt_screen();
+        frozen.handle_graphics_command(b"a=T,i=42,c=1,r=1,C=1,f=32,s=1,v=1,q=2;BQYHCA==");
+
+        // Include proportional zoom, shrink, changed cell aspect, and a
+        // return to the original metrics. No terminal text is reflowed here.
+        for (width, height) in [(20, 40), (5, 10), (14, 9), (10, 20)] {
+            reference.set_pixel_geometry(8 * width, 3 * height);
+            frozen.set_pixel_geometry(8 * width, 3 * height);
+            let cell = (width as f32, height as f32);
+            let expected = rendered_images(&reference, cell);
+            assert!(expected.iter().all(|(_, geometry)| geometry.is_some()));
+            assert_eq!(
+                rendered_images(&frozen, cell),
+                expected,
+                "cell size={width}x{height}"
+            );
+            for image in frozen.presentation_images() {
+                let original = captured
+                    .iter()
+                    .find(|original| original.placement.image_id == image.placement.image_id)
+                    .unwrap();
+                assert_eq!(image.image.revision, original.image.revision);
+                assert!(std::sync::Arc::ptr_eq(
+                    &image.image.data,
+                    &original.image.data
+                ));
+            }
+        }
+        frozen.process(b"\x1b[?2026l");
+        let live = frozen.presentation_images();
+        assert_eq!(live.len(), 1);
+        assert_eq!(&*live[0].image.data, &[5, 6, 7, 8]);
+    }
+
+    #[test]
     fn frozen_unicode_images_reflow_from_captured_cells_and_pixels() {
         let mut frozen = scrolled_graphics_fixture();
         frozen.grid_mut().set_scroll_offset(4);

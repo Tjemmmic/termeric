@@ -2541,18 +2541,43 @@ impl Terminal {
     /// Update the physical drawable extent represented by the current grid.
     /// Cell values are rounded up and never become zero.
     pub fn set_pixel_geometry(&mut self, pixel_width: u32, pixel_height: u32) {
+        self.update_pixel_geometry(self.cols, self.rows, pixel_width, pixel_height);
+    }
+
+    /// Apply one host geometry change. Pixel footprints must use the new cell
+    /// size before resizing can retire placements outside retained rows.
+    /// Pixel-only changes must not reset margins, cursor, or selection state.
+    pub fn resize_with_pixel_geometry(
+        &mut self,
+        cols: usize,
+        rows: usize,
+        pixel_width: u32,
+        pixel_height: u32,
+    ) {
+        self.update_pixel_geometry(cols, rows, pixel_width, pixel_height);
+        if (self.cols, self.rows) != (cols, rows) {
+            self.resize(cols, rows);
+        }
+    }
+
+    fn update_pixel_geometry(
+        &mut self,
+        cols: usize,
+        rows: usize,
+        pixel_width: u32,
+        pixel_height: u32,
+    ) {
         self.grid_pixel_width = pixel_width.max(1);
         self.grid_pixel_height = pixel_height.max(1);
-        self.cell_pixel_width = self
-            .grid_pixel_width
-            .div_ceil(self.cols.max(1) as u32)
-            .max(1);
-        self.cell_pixel_height = self
-            .grid_pixel_height
-            .div_ceil(self.rows.max(1) as u32)
-            .max(1);
+        self.cell_pixel_width = self.grid_pixel_width.div_ceil(cols.max(1) as u32).max(1);
+        self.cell_pixel_height = self.grid_pixel_height.div_ceil(rows.max(1) as u32).max(1);
         self.graphics
             .set_cell_pixel_geometry(self.cell_pixel_width, self.cell_pixel_height);
+        if let Some(snapshot) = &mut self.synchronized_output_snapshot {
+            snapshot
+                .graphics
+                .set_cell_pixel_geometry(self.cell_pixel_width, self.cell_pixel_height);
+        }
     }
 
     /// Emit one of the safe, terminal-local XTWINOPS geometry reports.

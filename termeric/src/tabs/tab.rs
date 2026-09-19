@@ -730,16 +730,15 @@ impl Tab {
         if self.geometry == geometry {
             return Ok(());
         }
-        if (self.geometry.cols, self.geometry.rows) != (geometry.cols, geometry.rows) {
-            self.terminal
-                .as_mut()
-                .context("single terminal owner is detached")?
-                .resize(geometry.cols, geometry.rows);
-        }
         self.terminal
             .as_mut()
             .context("single terminal owner is detached")?
-            .set_pixel_geometry(geometry.pixel_width.into(), geometry.pixel_height.into());
+            .resize_with_pixel_geometry(
+                geometry.cols,
+                geometry.rows,
+                geometry.pixel_width.into(),
+                geometry.pixel_height.into(),
+            );
         self.pty
             .as_ref()
             .context("single PTY owner is detached")?

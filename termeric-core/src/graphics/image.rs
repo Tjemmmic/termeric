@@ -66,6 +66,19 @@ pub struct ImagePlacement {
     pub z_index: i32,
 }
 
+impl ImagePlacement {
+    /// Update only the cell footprint of a pixel-addressed placement. Exact
+    /// pixel extent, source crop, and explicit cell-sized destinations persist.
+    pub(super) fn update_cell_footprint(&mut self, cell_width: u32, cell_height: u32) {
+        if let Some(pixel_width) = self.pixel_width {
+            self.width = Some(pixel_width.div_ceil(cell_width.max(1)).max(1));
+        }
+        if let Some(pixel_height) = self.pixel_height {
+            self.height = Some(pixel_height.div_ceil(cell_height.max(1)).max(1));
+        }
+    }
+}
+
 /// One renderer-ready image instance. Ordinary protocol placements use their
 /// semantic placement geometry directly. Derived instances such as Unicode
 /// placeholder tiles and relative placements extending left of column zero

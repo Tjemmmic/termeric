@@ -2940,12 +2940,7 @@ impl GraphicsManager {
         self.cell_pixel_width = cell_width;
         self.cell_pixel_height = cell_height;
         for placement in &mut self.placements {
-            if let Some(pixel_width) = placement.pixel_width {
-                placement.width = Some(pixel_width.div_ceil(cell_width).max(1));
-            }
-            if let Some(pixel_height) = placement.pixel_height {
-                placement.height = Some(pixel_height.div_ceil(cell_height).max(1));
-            }
+            placement.update_cell_footprint(cell_width, cell_height);
         }
     }
 
