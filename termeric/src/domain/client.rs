@@ -22,6 +22,9 @@ const RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_UPLOAD_ATTEMPTS: usize = 4;
 const UPLOAD_RETRY_DELAY: Duration = Duration::from_millis(100);
 
+#[path = "client_relay_output.rs"]
+mod relay_output;
+
 enum UploadAttemptError {
     Retry(anyhow::Error),
     Busy(Duration),
@@ -917,30 +920,15 @@ impl DomainClient {
 
         let (mut reader, writer, closer) = stream.split()?;
         let writer = Arc::new(Mutex::new(writer));
+        let closer = Arc::new(closer);
         let alive = Arc::new(AtomicBool::new(true));
         let output_alive = Arc::clone(&alive);
+        let output_closer = Arc::clone(&closer);
         let output = thread::Builder::new()
             .name("termeric-domain-relay-output".into())
             .spawn(move || -> anyhow::Result<()> {
                 let mut stdout = std::io::stdout().lock();
-                loop {
-                    match protocol::read_frame::<ServerFrame>(&mut reader) {
-                        Ok(ServerFrame::Output { data, .. }) => {
-                            stdout.write_all(&data)?;
-                            stdout.flush()?;
-                        }
-                        Ok(ServerFrame::Closed { exit_message }) => {
-                            writeln!(stdout, "\r\n[Termeric domain: {exit_message}]")?;
-                            stdout.flush()?;
-                            break;
-                        }
-                        Ok(ServerFrame::Error { message }) => anyhow::bail!("{message}"),
-                        Ok(_) => anyhow::bail!("unexpected frame in attached domain stream"),
-                        Err(_) => break,
-                    }
-                }
-                output_alive.store(false, Ordering::Release);
-                Ok(())
+                relay_output::run(&mut reader, &mut stdout, &output_alive, &output_closer)
             })?;
 
         let resize_alive = Arc::clone(&alive);

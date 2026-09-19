@@ -301,6 +301,17 @@ Normal closure still queues `Closed` after preceding output; if that frame
 cannot fit, the connection is shut down without claiming successful delivery.
 Local fixtures cover queue-full/disconnected-receiver shutdown, stale/replaced
 reader rejection, closed-pane refusal, and live replacement input/resize.
+
+On the client, every started output-worker exit clears relay liveness and closes
+the shared transport, including server/unexpected-frame errors, output write or
+flush failures, and unwinding. Cleanup never takes the input/resize writer mutex:
+socket shutdown or the existing owned-child cleanup must first wake a writer
+blocked on that connection. Normal EOF and `Closed` retain their output behavior,
+and repeated main-thread cleanup is idempotent. Local fixtures cover these exits,
+an actually blocked socket writer, and reaping an inert transport stand-in child.
+This is output-worker lifecycle coverage, not a claim of deadline-bounded relay
+startup or every input-side failure path.
+
 These checks are not native remote-host acceptance. Topology subscriptions
 also retain one shutdown descriptor within their eight-per-domain ceiling:
 overflow, receiver loss, or explicit detach closes only that subscription's

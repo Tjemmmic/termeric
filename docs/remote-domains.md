@@ -142,6 +142,15 @@ channel instead of delivering stale work after cancellation is observed.
 Local socket fixtures cover the subscription lifecycle; they do not constitute
 real-SSH acceptance or change SSH connection/authentication policy.
 
+An attached relay's started output worker owns completion cleanup: any exit
+clears its shared liveness flag and closes the connection without acquiring the
+input/resize writer mutex. For SSH this uses the existing child owner, which
+reaps an exited process or terminates and reaps its still-running child. Local
+socket and inert-child tests cover output errors, sink failures, unwinding,
+normal completion, and blocked-writer release. No real SSH process or remote
+host is needed for those tests; they do not broaden the startup/input-side
+deadline guarantees.
+
 The helper starts the remote user's daemon on demand using the same private
 runtime-directory checks as a local invocation. One SSH process is used per
 request, topology subscription, or pane relay. There is no shared
