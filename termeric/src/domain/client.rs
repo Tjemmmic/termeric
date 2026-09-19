@@ -22,6 +22,8 @@ const RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_UPLOAD_ATTEMPTS: usize = 4;
 const UPLOAD_RETRY_DELAY: Duration = Duration::from_millis(100);
 
+#[path = "client_attachment_snapshot.rs"]
+mod attachment_snapshot;
 #[path = "client_relay_output.rs"]
 mod relay_output;
 #[path = "client_relay_workers.rs"]
@@ -907,17 +909,7 @@ impl DomainClient {
 
         let _raw_terminal = RawTerminal::enter(libc::STDIN_FILENO)?;
         let mut stdout = std::io::stdout().lock();
-        stdout.write_all(&snapshot)?;
-        stdout.flush()?;
-        loop {
-            match protocol::read_frame::<ServerFrame>(&mut stream)? {
-                ServerFrame::SnapshotOutput { data } => stdout.write_all(data.as_bytes())?,
-                ServerFrame::SnapshotComplete => break,
-                ServerFrame::Error { message } => anyhow::bail!("{message}"),
-                frame => anyhow::bail!("unexpected frame in domain attachment snapshot {frame:?}"),
-            }
-        }
-        stdout.flush()?;
+        attachment_snapshot::replay(&mut stream, &mut stdout, &snapshot)?;
         drop(stdout);
 
         let (mut reader, writer, closer) = stream.split()?;

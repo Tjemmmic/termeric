@@ -152,7 +152,13 @@ host is needed for those tests. A scope-owned worker set closes and joins every
 thread that started on input/poll errors, later spawn failure, normal input EOF,
 and unwinding, without waiting to append `Detach` to a blocked writer. Early-exit
 and partial-start fixtures cover that ownership boundary. These changes do not
-add connection/snapshot deadlines or make a blocked local stdout sink cancellable.
+add connection deadlines or make a blocked local stdout sink cancellable.
+Separately, attachment snapshot replay bounds each frame read to ten seconds
+and the full replay to five minutes; complete fragments cannot renew that total.
+Expiry closes the owned transport before workers start. Text writes and the
+final flush count toward the replay budget, but synchronous blocked stdout is
+only checked once it returns. Local socket tests cover these read limits and
+successful handoff to live output, not real SSH/network acceptance.
 
 The helper starts the remote user's daemon on demand using the same private
 runtime-directory checks as a local invocation. One SSH process is used per

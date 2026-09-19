@@ -187,6 +187,17 @@ virtual prototypes, relative-parent identity, and animation playback clocks.
 Incomplete in-flight graphics uploads are not decoded state and are not
 transferred; later complete graphics commands still flow live in order.
 
+After the initial `Attached` reply, client snapshot replay allows ten seconds
+per complete frame (header and payload together) and five minutes for the whole
+replay, including text output and the final flush. Complete fragments do not
+renew the overall budget. Expiry fails the attachment before relay workers
+start and closes the owned transport; a partly consumed stream is not retried.
+Local socket regressions cover trickled headers/payloads, progressing fragments,
+late final flushes, rejected frames, and the exact handoff to live output.
+These are read deadlines, not cancellation of a blocked local stdout write:
+an expired output write/flush is detected only once it returns. Connection and
+request setup are separate phases; native SSH acceptance remains deferred.
+
 Pixel buffers are reference-counted at the atomic attachment point and encoded
 outside the daemon state lock. The server sends small `SnapshotOutput` frames
 before `SnapshotComplete`; live PTY output after the captured sequence waits in
@@ -319,8 +330,9 @@ and input write failures cannot silently become success. A server/output error
 takes precedence over a secondary broken input pipe. Local fixtures inject
 zero/partial/full-start exits, input failure and unwinding, worker failures,
 blocked socket writes, and inert-child cleanup; they do not exhaust the OS
-thread limit. This is not a global teardown deadline: connection/snapshot setup
-and a blocked local stdout sink retain their separate limitations.
+thread limit. This is not a global teardown deadline: connection setup and a
+blocked local stdout sink retain their separate limitations. Pre-worker snapshot
+reads have the per-frame and overall replay budgets described above.
 
 These checks are not native remote-host acceptance. Topology subscriptions
 also retain one shutdown descriptor within their eight-per-domain ceiling:
