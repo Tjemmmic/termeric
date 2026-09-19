@@ -679,6 +679,7 @@ impl App {
                 "Limits: at most {MAX_KITTY_DOWNLOAD_FILES} entries and {} MiB",
                 MAX_KITTY_DOWNLOAD_BYTES / (1024 * 1024)
             ),
+            "The entry limit includes automatically created parent directories.".into(),
             String::new(),
             "The remote side chooses destination paths and symbolic-link targets.".into(),
             "Existing entries will not be replaced.".into(),
@@ -2601,6 +2602,8 @@ mod unix {
                 KittyFileTransferStatusCode::AlreadyExists
             } else if error.kind() == io::ErrorKind::PermissionDenied {
                 KittyFileTransferStatusCode::PermissionDenied
+            } else if error.kind() == io::ErrorKind::FileTooLarge {
+                KittyFileTransferStatusCode::TooLarge
             } else {
                 KittyFileTransferStatusCode::Io
             };
@@ -3021,6 +3024,8 @@ mod unix {
                     TransactionError::io("", "destination changed before commit", error)
                 })?;
             }
+            validate_creation_budget(&self.paths)
+                .map_err(|error| TransactionError::io("", "expanded destination limit", error))?;
 
             let mut created = Vec::<CreatedPath>::new();
             let result = self.commit_inner(cancellation, &mut created);
@@ -3080,6 +3085,8 @@ mod unix {
                 create_missing_parents(&entry.path, &self.paths, created).map_err(|error| {
                     TransactionError::io(&id, "create destination parent", error)
                 })?;
+                ensure_creation_capacity(created)
+                    .map_err(|error| TransactionError::io(&id, "publish file", error))?;
                 let temporary = match &mut entry.kind {
                     EntryKind::Regular { temporary, .. } => temporary.take(),
                     _ => None,
@@ -3339,6 +3346,7 @@ mod unix {
         destination: &Path,
         created: &mut Vec<CreatedPath>,
     ) -> io::Result<()> {
+        ensure_creation_capacity(created)?;
         #[cfg(target_os = "linux")]
         {
             // source is only a transaction lookup key. Its current pathname
@@ -3555,6 +3563,7 @@ mod unix {
         }
 
         fn create_symlink(self, target: &Path, created: &mut Vec<CreatedPath>) -> io::Result<()> {
+            ensure_creation_capacity(created)?;
             // Keep the pinned parent alive through both creation and identity
             // capture. The original path is only a rollback lookup key, never
             // a fallback if the trusted procfs reference fails.
@@ -3565,6 +3574,7 @@ mod unix {
         }
 
         fn create_directory(self, created: &mut Vec<CreatedPath>) -> io::Result<()> {
+            ensure_creation_capacity(created)?;
             // Creation and identity capture share the retained parent. Restore
             // access through the new directory's handle, never its old pathname.
             fs::DirBuilder::new().mode(0o700).create(&self.path)?;
@@ -3715,6 +3725,53 @@ mod unix {
                 return Err("zlib decoder made no progress".into());
             }
         }
+    }
+
+    fn creation_limit_error() -> io::Error {
+        io::Error::new(
+            io::ErrorKind::FileTooLarge,
+            "transfer exceeds the destination entry limit including implicit parents",
+        )
+    }
+
+    fn ensure_creation_capacity(created: &[CreatedPath]) -> io::Result<()> {
+        if created.len() >= MAX_KITTY_DOWNLOAD_FILES {
+            Err(creation_limit_error())
+        } else {
+            Ok(())
+        }
+    }
+
+    fn validate_creation_budget(paths: &HashSet<PathBuf>) -> io::Result<()> {
+        if paths.len() > MAX_KITTY_DOWNLOAD_FILES {
+            return Err(creation_limit_error());
+        }
+        let mut planned = paths.clone();
+        for path in paths {
+            let mut ancestor = path.parent();
+            while let Some(candidate) = ancestor {
+                match fs::symlink_metadata(candidate) {
+                    Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+                        break;
+                    }
+                    Ok(_) => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::PermissionDenied,
+                            "destination ancestor is not a real directory",
+                        ));
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                        planned.insert(candidate.to_owned());
+                        if planned.len() > MAX_KITTY_DOWNLOAD_FILES {
+                            return Err(creation_limit_error());
+                        }
+                        ancestor = candidate.parent();
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+        Ok(())
     }
 
     fn create_missing_parents(
@@ -4894,6 +4951,127 @@ mod unix {
                 );
                 assert_eq!(fs::read_link(&symlink).unwrap(), PathBuf::from("file"));
             }
+        }
+
+        #[test]
+        #[cfg(target_os = "linux")]
+        fn expanded_creation_budget_counts_implicit_parents_once() {
+            let root = tempdir().unwrap();
+            let parent = root.path().join("missing-parent");
+            let mut paths: HashSet<_> = (0..MAX_KITTY_DOWNLOAD_FILES - 1)
+                .map(|index| parent.join(format!("file-{index}")))
+                .collect();
+            assert!(validate_creation_budget(&paths).is_ok());
+            paths.insert(parent.clone());
+            assert!(
+                validate_creation_budget(&paths).is_ok(),
+                "explicit parent must not count twice"
+            );
+            paths.remove(&parent);
+            paths.insert(parent.join("one-too-many"));
+            let error = validate_creation_budget(&paths).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::FileTooLarge);
+            assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
+            fs::create_dir(&parent).unwrap();
+            assert!(
+                validate_creation_budget(&paths).is_ok(),
+                "existing parents do not consume creation budget"
+            );
+        }
+
+        #[test]
+        #[cfg(target_os = "linux")]
+        fn excessive_implicit_tree_is_rejected_before_any_destination_creation() {
+            let root = tempdir().unwrap();
+            let mut path = root.path().to_owned();
+            for _ in 0..=MAX_KITTY_DOWNLOAD_FILES {
+                path.push("d");
+            }
+            let cancellation = AtomicBool::new(false);
+            let mut transaction = DownloadTransaction::new("session".into());
+            transaction
+                .handle(
+                    command(
+                        KittyFileTransferAction::File,
+                        "d",
+                        Some(&path),
+                        KittyFileTransferType::Directory,
+                        b"",
+                    ),
+                    &cancellation,
+                )
+                .unwrap();
+            let result = transaction.handle(
+                command(
+                    KittyFileTransferAction::Finish,
+                    "",
+                    None,
+                    KittyFileTransferType::Regular,
+                    b"",
+                ),
+                &cancellation,
+            );
+            assert!(
+                matches!(result, Err(ref error) if error.code == KittyFileTransferStatusCode::TooLarge)
+            );
+            assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
+        }
+
+        #[test]
+        #[cfg(target_os = "linux")]
+        fn runtime_creation_budget_bounds_growth_and_preserves_existing_state() {
+            let root = tempdir().unwrap();
+            // Synthetic bookkeeping exercises the boundary without creating a
+            // thousand files or relying on the test runner's descriptor limit.
+            let mut created: Vec<_> = (0..MAX_KITTY_DOWNLOAD_FILES - 1)
+                .map(|_| CreatedPath {
+                    path: root.path().join("uncreated"),
+                    device: 0,
+                    inode: 0,
+                    kind: CreatedKind::File,
+                    _identity_guard: None,
+                })
+                .collect();
+            let owned_start = created.len();
+            let first = root.path().join("first");
+            let error =
+                create_missing_parents(&first.join("second/file"), &HashSet::new(), &mut created)
+                    .unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::FileTooLarge);
+            assert_eq!(created.len(), MAX_KITTY_DOWNLOAD_FILES);
+            assert!(first.is_dir());
+            assert!(!first.join("second").exists());
+            let blocked = root.path().join("blocked");
+            assert_eq!(
+                PublicationTarget::open(&blocked)
+                    .unwrap()
+                    .create_directory(&mut created)
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::FileTooLarge
+            );
+            assert_eq!(
+                PublicationTarget::open(&blocked)
+                    .unwrap()
+                    .create_symlink(Path::new("target"), &mut created)
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::FileTooLarge
+            );
+            assert_eq!(
+                create_hard_link(Path::new("unused"), &blocked, &mut created)
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::FileTooLarge
+            );
+            assert_eq!(
+                ensure_creation_capacity(&created).unwrap_err().kind(),
+                io::ErrorKind::FileTooLarge
+            );
+            assert!(!blocked.exists());
+            assert_eq!(created.len(), MAX_KITTY_DOWNLOAD_FILES);
+            rollback_paths(&created[owned_start..]);
+            assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
         }
 
         #[test]

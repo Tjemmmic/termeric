@@ -26,9 +26,21 @@ and failure paths have hermetic coverage; native client acceptance is deferred.
   bytes, concatenated streams, and declared-size mismatches are rejected.
 - `send`, `file`, `data`, `end_data`, `cancel`, and `finish`, with canonical
   status/progress replies in the requesting terminal's S7C1T/S8C1T mode.
-- At most 4 active transfers, 1,024 entries per transfer, 4,096 decoded bytes
+- At most 4 active transfers, 1,024 destination entries per transfer (including
+  automatically created parent directories), 4,096 decoded bytes
   per data command, 64 MiB of declared/uncompressed payload per transfer, a
   1,024-command worker queue, and 10 minutes of inactivity.
+  Commit preflight counts unique announced destinations and missing ancestors;
+  shared parents count once and pre-existing directories do not consume the
+  creation budget. Known excess fails with `EFBIG` before destination creation.
+  Every destination creation also checks the running count, so filesystem
+  changes cannot expand a transaction beyond the limit after preflight; failure
+  takes the usual best-effort rollback path. Temporary staging files have their
+  separate bound of at most one per announced regular file. Progress/completion
+  counts still describe announced entries, not inferred parents. Hermetic tests
+  cover exact-limit planning, shared/explicit/existing parents, a deep implicit
+  tree rejected without writes, and runtime exhaustion/cleanup without requiring
+  thousands of real files or descriptors. OS resource limits may reject earlier.
 - File contents staged outside the visible destination, individual regular
   files published without overwrite, and best-effort transaction rollback if
   a later entry fails during `finish`.
