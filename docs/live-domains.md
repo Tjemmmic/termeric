@@ -184,6 +184,19 @@ permission on success or failure. Ordinary panes ignore that APC. Restore
 commands use quiet graphics loads and therefore cannot manufacture replies to
 the daemon-owned application PTY.
 
+Import begin and failure cleanup preserve the receiving host's cell-pixel
+geometry; replacing decoded graphics must not reset font/DPI metrics to the
+bootstrap defaults. At metadata commit, pixel-sized placement footprints are
+recomputed for the current receiving cells, including offsets and both screen
+buffers. Exact image pixels, source crops, explicit cell-sized destinations,
+and relative-parent identities remain unchanged. This also handles a host
+font/scale update while fragmented metadata is in flight. Core regressions
+cover success/failure cleanup, different sender/receiver metrics, mid-import
+metric changes, subsequent image commands, and immediate regional cropping
+without a second host resize. The opt-in GPU lane repeats all partial-cell
+image edit cases after fragmented relay import; native remote-host acceptance
+remains separate and deferred.
+
 ## Protocol and security boundary
 
 The current client wire version is available offline through `termeric domain

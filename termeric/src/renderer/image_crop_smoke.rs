@@ -203,9 +203,31 @@ fn verify(actual: &[u8], expected: &[u8], label: &str) -> Result<()> {
 
 pub(super) fn run(device: &Device, queue: &Queue) -> Result<()> {
     let mut frames = 0;
-    for fixture in FIXTURES {
+    for (fixture, relayed) in FIXTURES
+        .into_iter()
+        .flat_map(|fixture| [(fixture, false), (fixture, true)])
+    {
         for edit in EDITS {
             let mut terminal = fixture.terminal()?;
+            if relayed {
+                let mut replica = Terminal::new(8, HEADLESS_IMAGE_HEIGHT as usize / 4);
+                replica.set_pixel_geometry(HEADLESS_IMAGE_WIDTH, HEADLESS_IMAGE_HEIGHT);
+                replica.set_graphics_relay_snapshot_allowed(true);
+                terminal
+                    .graphics_relay_snapshot(std::time::Instant::now())
+                    .for_each_escape_chunk(|chunk| {
+                        for fragment in chunk.as_bytes().chunks(3) {
+                            replica.process(fragment);
+                        }
+                        true
+                    })
+                    .map_err(anyhow::Error::msg)?;
+                ensure!(
+                    replica.drain_events().is_empty(),
+                    "relay emitted unexpected side effects"
+                );
+                terminal = replica;
+            }
             let images = terminal.presentation_images();
             ensure!(
                 images.len() == 1,
@@ -254,14 +276,18 @@ pub(super) fn run(device: &Device, queue: &Queue) -> Result<()> {
                     &presentations,
                     terminal.presentation_grid().scroll_offset(),
                 )?;
-                verify(&pixels, &expected, &format!("{fixture:?}/{edit:?}/{phase}"))?;
+                verify(
+                    &pixels,
+                    &expected,
+                    &format!("{fixture:?}/relayed={relayed}/{edit:?}/{phase}"),
+                )?;
                 frames += 1;
             }
         }
     }
-    ensure!(frames == 64, "partial-cell image coverage lost scenarios");
+    ensure!(frames == 128, "partial-cell image coverage lost scenarios");
     eprintln!(
-        "parser-to-GPU partial-cell image crops: {frames} complete-frame checks passed (Kitty/Sixel/iTerm2, offsets, scroll/copy/erase, frozen/released)"
+        "parser-to-GPU partial-cell image crops: {frames} complete-frame checks passed (Kitty/Sixel/iTerm2, local/relayed, offsets, scroll/copy/erase, frozen/released)"
     );
     Ok(())
 }

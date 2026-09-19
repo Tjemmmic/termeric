@@ -7,6 +7,8 @@ mod cursor;
 #[cfg(test)]
 mod graphics_history;
 #[cfg(test)]
+mod graphics_relay_geometry;
+#[cfg(test)]
 mod graphics_resize;
 mod keyboard;
 mod mode;

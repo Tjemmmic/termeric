@@ -729,8 +729,12 @@ impl GraphicsManager {
 
     pub(crate) fn reset_for_relay_snapshot(&mut self) {
         let allow_file_transmission = self.allow_file_transmission;
+        let cell_pixels = (self.cell_pixel_width, self.cell_pixel_height);
         *self = Self::new();
         self.allow_file_transmission = allow_file_transmission;
+        // A relay replaces decoded content, not the receiving host's display
+        // geometry. Keep this on failure cleanup as well as import begin.
+        self.set_cell_pixel_geometry(cell_pixels.0, cell_pixels.1);
     }
 
     pub(crate) fn apply_relay_metadata(
@@ -863,7 +867,13 @@ impl GraphicsManager {
         self.placements = metadata
             .placements
             .iter()
-            .map(relay_managed_placement)
+            .map(|placement| {
+                let mut placement = relay_managed_placement(placement);
+                // The sender may have different cells, or this host may have
+                // changed font/scale while the fragmented import was pending.
+                placement.update_cell_footprint(self.cell_pixel_width, self.cell_pixel_height);
+                placement
+            })
             .collect();
         self.virtual_placements = metadata
             .virtual_placements

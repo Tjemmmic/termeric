@@ -1530,17 +1530,19 @@ Every pixel must agree in the initial frame, after output scroll clips three
 rows, and after scrollback restores them, so draw submission alone cannot
 masquerade as a graphics pass.
 
-The same opt-in lane also performs 64 parser-to-GPU complete-frame checks for
+The same opt-in lane also performs 128 parser-to-GPU complete-frame checks for
 partial-cell crops. Byte-fragmented Kitty RGBA, Sixel palette bands, and iTerm2
 PNG sequences produce a 14×6-pixel, four-color image in 8×4-pixel cells; a fourth
 fixture adds Kitty `X=3,Y=3` offsets. Regional scroll up/down, DECCRA copy, and
 DECERA erase each pass through initial, edited, frozen-after-hidden-erase, and
-released frames. An independent CPU pixel-copy reference checks every RGBA
+released frames, both locally and after a fragmented graphics relay import.
+The receiving terminal keeps the same non-default cell metrics without an
+extra resize event after import. An independent CPU pixel-copy reference checks every RGBA
 channel, including the black area outside surviving images, with a three-byte
 GPU color tolerance. It does not call placement geometry or crop helpers.
 GPU-free regressions validate all three decoders against the same explicit
 quadrants and require the oracle to reject missing images/pixels, stale frames,
-and overpainting. The required GPU run prints its adapter and the 64-frame
+and overpainting. The required GPU run prints its adapter and the 128-frame
 completion line; ordinary workspace tests validate the oracle but do not
 silently substitute for this opt-in readback. This is software-renderer evidence,
 not native window, hardware-driver, arbitrary scaling, or visual acceptance.
