@@ -4,6 +4,8 @@
 //! as a 2D grid of cells.
 
 mod cell;
+#[cfg(test)]
+mod history_view;
 mod hyperlink;
 mod resize_tracking;
 mod row;
@@ -563,45 +565,30 @@ impl Grid {
     /// Scroll the grid up by one line, pushing the top line to scrollback
     pub fn scroll_up(&mut self) -> usize {
         self.mark_rows_changed();
-        let old_len = self.storage.scrollback_len();
-        let was_at_max = self.scroll_offset > 0 && self.scroll_offset >= old_len;
-
         let evicted = self.storage.scroll_up();
-        let new_len = self.storage.scrollback_len();
-
-        // If user is scrolled into history, maintain their view position
-        if self.scroll_offset > 0 {
-            if was_at_max {
-                // User was at max scroll - keep them at max (viewing oldest content)
-                self.scroll_offset = new_len;
-            } else if new_len > old_len {
-                // Scrollback grew - increment offset to maintain position
-                self.scroll_offset += 1;
-            }
-            // If scrollback didn't grow (at capacity), content shifts but we can't
-            // maintain the exact same view since the oldest line was deleted
-        }
+        self.preserve_history_view_after_append(usize::from(self.rows > 0));
         evicted
     }
 
     /// Copy the active viewport into compact history without moving it.
     pub(crate) fn archive_visible(&mut self) -> usize {
         self.mark_rows_changed();
-        let old_len = self.storage.scrollback_len();
-        let was_at_max = self.scroll_offset > 0 && self.scroll_offset >= old_len;
         let evicted = self.storage.archive_visible();
-        let new_len = self.storage.scrollback_len();
-        if self.scroll_offset > 0 {
-            if was_at_max {
-                self.scroll_offset = new_len;
-            } else {
-                self.scroll_offset = self
-                    .scroll_offset
-                    .saturating_add(new_len.saturating_sub(old_len))
-                    .min(new_len);
-            }
-        }
+        self.preserve_history_view_after_append(self.rows);
         evicted
+    }
+
+    /// History coordinates are relative to its newest row, even when an
+    /// append evicts old rows and the total length stays constant or shrinks.
+    /// Follow a retained viewing anchor; only eviction clamps it to the oldest
+    /// remaining row. Offset zero deliberately continues following live output.
+    fn preserve_history_view_after_append(&mut self, appended: usize) {
+        if self.scroll_offset > 0 {
+            self.scroll_offset = self
+                .scroll_offset
+                .saturating_add(appended)
+                .min(self.storage.scrollback_len());
+        }
     }
 
     /// Scroll the grid down by one line (reverse scroll)
@@ -613,7 +600,11 @@ impl Grid {
     /// Scroll a region up by one line
     pub fn scroll_region_up(&mut self, top: usize, bottom: usize) -> usize {
         self.mark_rows_changed();
-        self.storage.scroll_region_up(top, bottom)
+        let evicted = self.storage.scroll_region_up(top, bottom);
+        if top == 0 && bottom > 0 && bottom <= self.rows {
+            self.preserve_history_view_after_append(1);
+        }
+        evicted
     }
 
     /// Scroll a region down by one line

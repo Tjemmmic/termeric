@@ -52,6 +52,23 @@ without discarding fully retained historical marks. Completed identities stay
 inside the existing bounded tracker so consumers observe each completion at
 most once, but no erased coordinate can authorize a later grid read.
 
+## Viewing retained history during output
+
+A scrolled-back viewport follows its retained top row when new history is
+appended, even when the line cap keeps history length constant or a larger row
+causes several byte-budget evictions. Full-screen scrolling, full-width regions
+starting at row zero (such as output above a fixed footer), and whole-viewport
+archival share this rule. If the viewed row is actually evicted, the viewport
+clamps to the oldest remaining row; if no history remains, the offset becomes
+zero. Offset zero continues following live output. Interior or invalid scroll
+regions do not change the history view.
+
+This uses one constant-time offset adjustment, not a retained-row search or
+extra history copy. Tests use unique row contents as an independent identity
+oracle, cover line and multi-row byte eviction, and replay SU, DL, and LF above
+an unchanged footer. This evidence concerns viewport anchoring; selection,
+command-region, and image-coordinate tracking are separate consumers.
+
 ## Diagnostics
 
 `Terminal::memory_usage()` reports:
