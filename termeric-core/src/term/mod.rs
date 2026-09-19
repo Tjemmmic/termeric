@@ -172,6 +172,7 @@ struct PromptNavigationState {
     scroll_offset: usize,
 }
 
+#[cfg(test)]
 fn shell_logical_anchor(grid: &Grid, target_row: i32) -> Option<ShellLogicalAnchor> {
     let oldest = -(grid.scrollback_len() as i32);
     let newest = grid.rows().saturating_sub(1) as i32;
@@ -180,8 +181,7 @@ fn shell_logical_anchor(grid: &Grid, target_row: i32) -> Option<ShellLogicalAnch
     }
     let mut line = 0_usize;
     let mut cell = 0_usize;
-    for row_index in oldest..=newest {
-        let row = grid.row_at_offset(row_index)?;
+    for (row_index, row) in shell_anchor_rows(grid) {
         if row_index == target_row {
             return Some(ShellLogicalAnchor { line, cell });
         }
@@ -195,13 +195,11 @@ fn shell_logical_anchor(grid: &Grid, target_row: i32) -> Option<ShellLogicalAnch
     None
 }
 
+#[cfg(test)]
 fn shell_row_from_anchor(grid: &Grid, target: ShellLogicalAnchor) -> Option<i32> {
-    let oldest = -(grid.scrollback_len() as i32);
-    let newest = grid.rows().saturating_sub(1) as i32;
     let mut line = 0_usize;
     let mut remaining = target.cell;
-    for row_index in oldest..=newest {
-        let row = grid.row_at_offset(row_index)?;
+    for (row_index, row) in shell_anchor_rows(grid) {
         if line == target.line {
             let units = row.reflow_unit_count();
             if remaining < units || !row.is_wrapped() {
@@ -218,6 +216,90 @@ fn shell_row_from_anchor(grid: &Grid, target: ShellLogicalAnchor) -> Option<i32>
         }
     }
     None
+}
+
+#[cfg(test)]
+thread_local! {
+    static SHELL_REFLOW_ROW_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn shell_anchor_rows(grid: &Grid) -> impl Iterator<Item = (i32, crate::grid::RowView<'_>)> {
+    let oldest = -(grid.scrollback_len() as i32);
+    let newest = grid.rows().saturating_sub(1) as i32;
+    (oldest..=newest)
+        .map_while(|index| grid.row_at_offset(index).map(|row| (index, row)))
+        .inspect(|_| {
+            #[cfg(test)]
+            SHELL_REFLOW_ROW_VISITS.with(|visits| visits.set(visits.get() + 1));
+        })
+}
+
+fn capture_shell_anchors(grid: &Grid, mut rows: Vec<i32>) -> Vec<(i32, ShellLogicalAnchor)> {
+    let oldest = -(grid.scrollback_len() as i32);
+    let newest = grid.rows().saturating_sub(1) as i32;
+    rows.retain(|row| (oldest..=newest).contains(row));
+    rows.sort_unstable();
+    rows.dedup();
+    let mut result = Vec::with_capacity(rows.len());
+    let mut targets = rows.into_iter().peekable();
+    if targets.peek().is_none() {
+        return result;
+    }
+    let mut anchor = ShellLogicalAnchor { line: 0, cell: 0 };
+    // Sorted physical rows share one logical-line walk, including boundaries
+    // on blank cells. Never scan all history separately for each command.
+    for (index, row) in shell_anchor_rows(grid) {
+        if targets.peek() == Some(&index) {
+            result.push((index, anchor));
+            targets.next();
+            if targets.peek().is_none() {
+                break;
+            }
+        }
+        if row.is_wrapped() {
+            anchor.cell = anchor.cell.saturating_add(row.reflow_unit_count());
+        } else {
+            anchor.line = anchor.line.saturating_add(1);
+            anchor.cell = 0;
+        }
+    }
+    result
+}
+
+fn restore_shell_anchors(
+    grid: &Grid,
+    mut anchors: Vec<(i32, ShellLogicalAnchor)>,
+) -> HashMap<i32, i32> {
+    anchors.sort_unstable_by_key(|(old_row, anchor)| (anchor.line, anchor.cell, *old_row));
+    let mut result = HashMap::with_capacity(anchors.len());
+    let mut targets = anchors.into_iter().peekable();
+    if targets.peek().is_none() {
+        return result;
+    }
+    let mut start = ShellLogicalAnchor { line: 0, cell: 0 };
+    for (index, row) in shell_anchor_rows(grid) {
+        let end_cell = start.cell.saturating_add(row.reflow_unit_count());
+        while let Some(&(old_row, target)) = targets.peek() {
+            // At a hard line end, preserve the old resolver's clamping of a
+            // boundary beyond trimmed trailing blanks. Wrapped boundaries
+            // belong to the next row, using wide-grapheme-independent units.
+            if target.line != start.line || (row.is_wrapped() && target.cell >= end_cell) {
+                break;
+            }
+            result.insert(old_row, index);
+            targets.next();
+        }
+        if targets.peek().is_none() {
+            break;
+        }
+        if row.is_wrapped() {
+            start.cell = end_cell;
+        } else {
+            start.line = start.line.saturating_add(1);
+            start.cell = 0;
+        }
+    }
+    result
 }
 
 impl TerminalRect {
@@ -2324,17 +2406,13 @@ impl Terminal {
 
     /// Resize the terminal
     pub fn resize(&mut self, cols: usize, rows: usize) {
-        let prompt_navigation_anchor = self
+        let prompt_navigation_row = self
             .prompt_navigation
             .filter(|navigation| navigation.scroll_offset == self.grid.scroll_offset())
-            .and_then(|navigation| shell_logical_anchor(&self.grid, navigation.row));
-        let shell_anchors = self
-            .shell
-            .prompt_tracker
-            .tracked_rows()
-            .into_iter()
-            .filter_map(|row| shell_logical_anchor(&self.grid, row).map(|anchor| (row, anchor)))
-            .collect::<Vec<_>>();
+            .map(|navigation| navigation.row);
+        let mut shell_rows = self.shell.prompt_tracker.tracked_rows();
+        shell_rows.extend(prompt_navigation_row);
+        let shell_anchors = capture_shell_anchors(&self.grid, shell_rows);
         let same_columns = self.cols == cols;
         if !same_columns {
             self.navigation_cursor = None;
@@ -2362,19 +2440,18 @@ impl Terminal {
         } else {
             self.grid.repair_multicells(&resize_blank);
         }
-        let remapped_shell_rows = shell_anchors
+        let retained_shell_anchors = shell_anchors
             .into_iter()
             .filter_map(|(old_row, anchor)| {
                 anchor
                     .retained_after_resize(primary_resize)
-                    .and_then(|anchor| shell_row_from_anchor(&self.grid, anchor))
-                    .map(|new_row| (old_row, new_row))
+                    .map(|anchor| (old_row, anchor))
             })
-            .collect::<HashMap<_, _>>();
+            .collect();
+        let remapped_shell_rows = restore_shell_anchors(&self.grid, retained_shell_anchors);
         self.shell.prompt_tracker.remap_rows(&remapped_shell_rows);
-        self.prompt_navigation = prompt_navigation_anchor
-            .and_then(|anchor| anchor.retained_after_resize(primary_resize))
-            .and_then(|anchor| shell_row_from_anchor(&self.grid, anchor))
+        self.prompt_navigation = prompt_navigation_row
+            .and_then(|row| remapped_shell_rows.get(&row).copied())
             .filter(|row| {
                 self.shell
                     .prompt_tracker

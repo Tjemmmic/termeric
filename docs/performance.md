@@ -1265,6 +1265,42 @@ empty/single/multi-row grids, invalid regions, repeated scrolling, and line or
 byte eviction limits. This does not establish an end-to-end PTY speedup or
 change the native comparison conclusions above.
 
+### Batched shell-boundary resize mapping
+
+Resize previously captured each OSC 133 boundary by scanning from the oldest
+retained row, then repeated another oldest-to-target scan for every restored
+boundary. Prompt navigation performed additional separate scans. With `R`
+retained rows and `B` boundaries, the mapping alone could visit `O(R × B)` rows.
+Capture and restoration now sort bounded target batches and each walk history
+at most once: `O(R + B log B)` row/target operations, with `O(B)` temporary
+metadata and no history copy. Compact history supplies cached wide-unit counts;
+counting units in visible rows can additionally inspect their cells. Prompt
+navigation uses the same resulting row map. Empty or
+invalid-only capture batches and empty restoration batches perform no row
+lookups. The exact logical-prefix eviction translation remains unchanged.
+
+Run the deterministic diagnostic with:
+
+```bash
+cargo test -p termeric-core --locked shell_anchor_mapping_scans -- --nocapture
+```
+
+For the same 1,001-target, 10,001-row round trip, the pre-change mapper visited
+10,012,002 rows and the batched mapper visits 20,002. The test enforces at most
+one scan per direction, rather than a timing threshold. The local instrumented
+test observations were 21.22 ms before and 99.71 µs after; these single samples
+include test-only counting and are **not** production latency, whole-resize,
+PTY-throughput, RSS, or hardware performance claims. Setup and grid destruction
+are outside the measured mapping interval.
+
+`batched_shell_anchors_match_scalar_mapping_through_reflow_and_eviction`
+compares the preserved scalar mapper across column/height changes, zero/capped
+history, wide and combined text, empty lines, duplicate/unsorted/invalid targets,
+and anchors inside or beyond logical-line ends. Existing independently labeled
+command-ID, navigation, partial-wide-line eviction, and active-completion tests
+remain part of the ordinary lane; the optimization must not re-authorize
+evicted command text.
+
 ## Profiling recipes
 
 The core resource soak now includes a persistent diff history with 80 synthetic

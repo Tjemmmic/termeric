@@ -64,6 +64,15 @@ caps, width/height changes, partial wide-line eviction, blank boundaries,
 navigation, and active-command completion. The eviction report is constant-size
 metadata collected while removing rows, not a history copy or per-cell map.
 
+Shell-boundary capture and restoration each scan retained rows at most once,
+with sorted bounded target batches shared by command regions and prompt
+navigation. Empty/invalid batches do not scan history. This replaces separate
+oldest-to-target walks for every boundary, without changing blank-line,
+wide-grapheme, trimmed-line-end, or eviction semantics. Differential tests keep
+the former scalar mapper as a reference; a thread-local row-visit counter
+guards the linear scan bound independently of machine timing. See the
+[shell resize work measurement](performance.md#batched-shell-boundary-resize-mapping).
+
 Graphics placements wholly outside retained history are retired immediately on
 clear or budget reduction, along with relative descendants. Last-placement
 removal frees anonymous Sixel/iTerm2 pixels; reusable Kitty data remains in its

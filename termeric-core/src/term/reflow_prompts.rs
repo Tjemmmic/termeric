@@ -1,6 +1,119 @@
 use super::*;
 
 #[test]
+fn batched_shell_anchors_match_scalar_mapping_through_reflow_and_eviction() {
+    for columns in [1, 2, 3, 5, 8] {
+        for limit in [0, 1, 20] {
+            for new_columns in [1, 3, 4, 12] {
+                for new_rows in [1, 3, 6] {
+                    let mut terminal = Terminal::new(columns, 4);
+                    terminal.set_scrollback_limits(limit, 1024 * 1024);
+                    terminal
+                        .process("ab界XQr界S\r\n\r\nabcdefghi\r\n👩‍💻e\u{301}界\r\nlast".as_bytes());
+                    let oldest = -(terminal.grid().scrollback_len() as i32);
+                    let mut targets: Vec<_> = (oldest - 2..6).rev().collect();
+                    targets.extend([0, 0, i32::MIN, i32::MAX]);
+                    let actual = capture_shell_anchors(terminal.grid(), targets.clone());
+                    targets.sort_unstable();
+                    targets.dedup();
+                    let expected: Vec<_> = targets
+                        .into_iter()
+                        .filter_map(|row| {
+                            shell_logical_anchor(terminal.grid(), row).map(|anchor| (row, anchor))
+                        })
+                        .collect();
+                    assert_eq!(actual, expected);
+                    let outcome = terminal.grid_mut().resize_with_points(
+                        new_columns,
+                        new_rows,
+                        &mut [None; 2],
+                    );
+                    let retained: Vec<_> = actual
+                        .into_iter()
+                        .filter_map(|(row, anchor)| {
+                            anchor
+                                .retained_after_resize(outcome)
+                                .map(|anchor| (row, anchor))
+                        })
+                        .collect();
+                    let expected: HashMap<_, _> = retained
+                        .iter()
+                        .filter_map(|&(old_row, anchor)| {
+                            shell_row_from_anchor(terminal.grid(), anchor).map(|row| (old_row, row))
+                        })
+                        .collect();
+                    assert_eq!(
+                        restore_shell_anchors(terminal.grid(), retained),
+                        expected,
+                        "{columns}x4 -> {new_columns}x{new_rows}, limit={limit}"
+                    );
+                    // Probe starts, interiors, trimmed ends, and nonexistent
+                    // logical lines independently of captured row boundaries.
+                    let mut probes: Vec<_> = (0..10)
+                        .flat_map(|line| {
+                            [0, 1, 2, 3, 10, usize::MAX]
+                                .into_iter()
+                                .map(move |cell| ShellLogicalAnchor { line, cell })
+                        })
+                        .enumerate()
+                        .map(|(id, anchor)| (id as i32, anchor))
+                        .collect();
+                    probes.reverse();
+                    let expected: HashMap<_, _> = probes
+                        .iter()
+                        .filter_map(|&(id, anchor)| {
+                            shell_row_from_anchor(terminal.grid(), anchor).map(|row| (id, row))
+                        })
+                        .collect();
+                    assert_eq!(restore_shell_anchors(terminal.grid(), probes), expected);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn empty_shell_anchor_batches_do_not_scan_history() {
+    let terminal = Terminal::new(8, 3);
+    SHELL_REFLOW_ROW_VISITS.with(|visits| visits.set(0));
+    assert!(capture_shell_anchors(terminal.grid(), vec![]).is_empty());
+    assert!(capture_shell_anchors(terminal.grid(), vec![i32::MIN, i32::MAX]).is_empty());
+    assert!(restore_shell_anchors(terminal.grid(), vec![]).is_empty());
+    assert_eq!(SHELL_REFLOW_ROW_VISITS.with(|visits| visits.get()), 0);
+}
+
+#[test]
+fn shell_anchor_mapping_scans_history_at_most_once_per_pass() {
+    let mut terminal = Terminal::new(8, 3);
+    terminal.set_scrollback_limits(20_000, 64 * 1024 * 1024);
+    for _ in 0..10_000 {
+        terminal.process(b"row\r\n");
+    }
+    let grid = terminal.grid();
+    let oldest = -(grid.scrollback_len() as i32);
+    let targets: Vec<_> = (oldest..3).step_by(10).collect();
+    SHELL_REFLOW_ROW_VISITS.with(|visits| visits.set(0));
+    let started = Instant::now();
+    let captured = capture_shell_anchors(grid, targets.clone());
+    let restored = restore_shell_anchors(grid, captured);
+    let elapsed = started.elapsed();
+    let visits = SHELL_REFLOW_ROW_VISITS.with(|visits| visits.get());
+    assert_eq!(restored.len(), targets.len());
+    for row in targets {
+        assert_eq!(restored[&row], row);
+    }
+    eprintln!(
+        "shell anchor round trip: {} targets, {} rows, {visits} visits, {elapsed:?}",
+        restored.len(),
+        grid.scrollback_len() + grid.rows()
+    );
+    assert!(
+        visits <= 2 * (grid.scrollback_len() + grid.rows()),
+        "repeated history scans: {visits}"
+    );
+}
+
+#[test]
 fn resize_eviction_cannot_rebind_commands_to_new_oldest_lines() {
     let mut terminal = Terminal::new(8, 4);
     terminal.set_scrollback_limits(3, 1024 * 1024);
