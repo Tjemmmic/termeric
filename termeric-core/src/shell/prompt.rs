@@ -392,6 +392,73 @@ impl PromptTracker {
             region.content_available &= region.prompt_row >= oldest_retained_row;
         }
     }
+
+    /// Follow a single archived row from a full-width, top-origin region.
+    /// History and rows above `bottom` move together; the footer does not.
+    /// Regions spanning both cannot safely resolve one contiguous text range.
+    /// The active cursor bounds output that has not yet received an OSC 133 D.
+    pub(crate) fn adjust_for_archival_region(
+        &mut self,
+        bottom: usize,
+        oldest_retained_row: i32,
+        cursor_row: usize,
+    ) {
+        let bottom = bounded_row(bottom);
+        self.marks.retain_mut(|mark| {
+            if mark.row < bottom {
+                mark.row = mark.row.saturating_sub(1);
+            }
+            mark.row >= oldest_retained_row
+        });
+        for region in &mut self.regions {
+            shift_archival_region(region, bottom, oldest_retained_row, None);
+        }
+        if let Some(region) = &mut self.current_region {
+            shift_archival_region(
+                region,
+                bottom,
+                oldest_retained_row,
+                Some(bounded_row(cursor_row)),
+            );
+        }
+    }
+}
+
+fn shift_archival_region(
+    region: &mut CommandRegion,
+    bottom: i32,
+    oldest_retained_row: i32,
+    active_cursor: Option<i32>,
+) {
+    let mut first = region.prompt_row;
+    let mut last = first;
+    for row in [
+        region.command_row,
+        region.output_row,
+        region.finish_row,
+        active_cursor,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        first = first.min(row);
+        last = last.max(row);
+    }
+    region.content_available &= !(first < bottom && last >= bottom);
+    for row in std::iter::once(&mut region.prompt_row).chain(
+        [
+            &mut region.command_row,
+            &mut region.output_row,
+            &mut region.finish_row,
+        ]
+        .into_iter()
+        .flatten(),
+    ) {
+        if *row < bottom {
+            *row = row.saturating_sub(1);
+        }
+        region.content_available &= *row >= oldest_retained_row;
+    }
 }
 
 fn bounded_row(row: usize) -> i32 {

@@ -67,8 +67,21 @@ This uses one constant-time offset adjustment, not a retained-row search or
 extra history copy. Tests use unique row contents as an independent identity
 oracle, cover line and multi-row byte eviction, and replay SU, DL, and LF above
 an unchanged footer. Selection and copy-cursor archival have their own
-[identity and mixed-motion checks](copy-mode.md); command-region and
-image-coordinate tracking remain separate consumers.
+[identity and mixed-motion checks](copy-mode.md). OSC 133 marks, command
+boundaries, and prompt-navigation anchors also follow top-origin, full-width
+archival (including DL). Historical and moving rows shift together; fixed-footer
+marks stay put. A command spanning both parts loses live-text authority rather
+than resolving a range containing unrelated cells. Active command extents
+include the current cursor; valid commands can continue and complete with the
+same stable identity. Line/byte eviction prunes marks and retires command text
+without discarding completion identity or exit status. This bounded tracker
+update does not scan or copy history.
+
+The `term::scroll_prompts` tests cover retained-text identity across SU/DL/LF,
+mixed-motion retirement, active completion, fixed footers, line/byte eviction,
+prompt navigation, and isolation from non-archiving operations. These are core
+regressions, not native shell or graphics acceptance; image-coordinate tracking
+remains a separate consumer.
 
 ## Diagnostics
 

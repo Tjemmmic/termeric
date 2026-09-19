@@ -15,6 +15,8 @@ mod scroll_bce;
 #[cfg(test)]
 mod scroll_limits;
 #[cfg(test)]
+mod scroll_prompts;
+#[cfg(test)]
 mod scroll_selection;
 mod selection;
 mod selection_damage;
@@ -2962,17 +2964,13 @@ impl Terminal {
                 let evicted = self.grid_mut().scroll_up();
                 self.shift_selection_after_full_scroll(1);
                 self.note_history_eviction(evicted);
-                if !self.alt_screen_active {
-                    let oldest = -(self.grid().scrollback_len() as i32);
-                    self.shell.prompt_tracker.adjust_for_scroll(1, oldest);
-                    if let Some(navigation) = &mut self.prompt_navigation {
-                        navigation.row = navigation.row.saturating_sub(1);
-                    }
-                    self.retain_prompt_navigation(oldest);
-                }
+                self.shift_prompts_after_archival_scroll(scroll_bottom);
             } else if full_width {
                 let evicted = self.grid_mut().scroll_region_up(scroll_top, scroll_bottom);
                 self.shift_selection_after_region_scroll_up(scroll_top..scroll_bottom, evicted);
+                if scroll_top == 0 {
+                    self.shift_prompts_after_archival_scroll(scroll_bottom);
+                }
             } else {
                 self.shift_selection_in_region(
                     scroll_top..scroll_bottom,
@@ -4628,6 +4626,23 @@ impl Terminal {
         });
     }
 
+    fn shift_prompts_after_archival_scroll(&mut self, bottom: usize) {
+        if self.alt_screen_active {
+            return;
+        }
+        let oldest = -(self.grid().scrollback_len() as i32);
+        let cursor_row = self.grid().cursor().row;
+        self.shell
+            .prompt_tracker
+            .adjust_for_archival_region(bottom, oldest, cursor_row);
+        if let Some(navigation) = &mut self.prompt_navigation
+            && navigation.row < i32::try_from(bottom).unwrap_or(i32::MAX)
+        {
+            navigation.row = navigation.row.saturating_sub(1);
+        }
+        self.retain_prompt_navigation(oldest);
+    }
+
     fn retain_prompt_navigation(&mut self, oldest_retained_row: i32) {
         let retained = self.prompt_navigation.is_some_and(|navigation| {
             navigation.row >= oldest_retained_row
@@ -4946,6 +4961,7 @@ impl Terminal {
         if self.row_inside_vertical_margins(cursor.row)
             && self.col_inside_horizontal_margins(cursor.col)
         {
+            self.invalidate_prompt_navigation_after_manual_scroll();
             let count = count.min(scroll_bottom - cursor.row);
             let blank = self.erase_cell();
             let full_width = scroll_left == 0 && scroll_right == self.cols;
@@ -4973,6 +4989,9 @@ impl Terminal {
                     let evicted = self.grid_mut().scroll_region_up(cursor.row, scroll_bottom);
                     self.apply_scroll_row_background(scroll_bottom - 1, &blank);
                     self.shift_selection_after_region_scroll_up(cursor.row..scroll_bottom, evicted);
+                    if cursor.row == 0 {
+                        self.shift_prompts_after_archival_scroll(scroll_bottom);
+                    }
                 } else {
                     self.shift_selection_in_region(
                         cursor.row..scroll_bottom,
