@@ -290,6 +290,12 @@ Each shell receives a private `HOME` and configuration directory. The fixture
 proves that the user's rc file still runs, submits a multiline command and a
 failing command through a real PTY, returns terminal capability replies to the
 originating PTY, and checks the resulting semantic command exit regions.
+Because these fixture commands do not change directories, every accepted cwd
+transition must match the private directory. An observation-only bytewise
+replay additionally rejects transient wrong reports even if a later report in
+the same PTY read corrects them. First-prompt and final cwd presence are still
+required independently. The hermetic replay tests do not replace a real-shell
+run or resolve the documented Nushell producer limitation.
 Nushell uses its own OSC producers rather than generated prompt hooks. Elvish's
 isolated user rc imports the generated module exactly as documented; the module
 appends rather than replaces hooks and restores the original `XDG_DATA_DIRS`.

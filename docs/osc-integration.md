@@ -461,6 +461,18 @@ producer or Termeric-owned startup/reporting path are possible approaches;
 emitting a late correction alone does not satisfy first-prompt correctness.
 The remaining gap does not block unrelated implementation or deferred testing.
 
+The shared native shell-semantics probe additionally replays its complete PTY
+output through the real parser one byte at a time and checks every accepted
+cwd transition against the fixture's unchanged directory. This prevents a
+wrong report followed by a correction in the same PTY read from passing merely
+because the final state is correct. It retains the separate first-prompt and
+final presence checks; replay never sends protocol replies or performs app
+side effects. Hermetic `cwd_probe_` regressions exercise initial and
+post-command transient misreports, literal-percent corruption, exact repeated
+Unicode paths, BEL/ST terminators, and raw C1 framing. They validate the probe,
+not a fix for Nushell's producer. The known-failure ignore remains in place,
+and no new native Nushell pass is claimed when `nu` is unavailable.
+
 Normal interactive Bash, Zsh, and Fish launches emit a hostless OSC 7 report at
 each prompt, with literal percent signs escaped before transmission. An
 unambiguous Nushell REPL launch enables Nushell's native OSC 7 and OSC 133
