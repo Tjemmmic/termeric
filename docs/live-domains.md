@@ -98,6 +98,20 @@ its atomic initial snapshot closes the describe/subscribe race, and monotonic
 whole-domain revisions add, remove, split, collapse, rearrange, title, pin,
 order, and focus routes without replacing relay PTYs whose stable identities
 still exist.
+
+Client topology reads are cancellable after authentication: the initial
+subscription response has a ten-second frame budget, and each later frame has
+one ten-second header/body budget starting when input becomes readable. Partial
+progress cannot renew it. Waiting between revisions has no inactivity timeout.
+Cancellation is checked between reads and on poll intervals capped at 500 ms;
+partially read or just-completed frames are discarded when cancellation is
+observed, and that stream is closed rather than reused. Callback refusal keeps
+the explicit detach path. These read guarantees do not extend to connection
+setup, SSH authentication, or request writes. Socket-only regressions exercise
+partial initial/update headers and bodies, trickled updates, idle survival,
+ordered revisions/closure, pre-cancellation, and callback-driven detach. Native
+remote-host acceptance remains deferred.
+
 Each nested divider has its own stable daemon split ID, so a drag cannot become
 ambiguous when several ancestors share an orientation. The GUI previews the
 exact selected divider, commits its final 100-900 thousandths ratio on release,

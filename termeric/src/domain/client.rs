@@ -68,6 +68,7 @@ struct SshChild(Mutex<Option<Child>>);
 struct DeadlineReader<'a> {
     stream: &'a mut DomainStream,
     deadline: Instant,
+    alive: Option<&'a AtomicBool>,
 }
 
 struct FocusQueue {
@@ -95,6 +96,15 @@ impl Read for DomainStream {
 impl Read for DeadlineReader<'_> {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
         loop {
+            if self
+                .alive
+                .is_some_and(|alive| !alive.load(Ordering::Acquire))
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionAborted,
+                    "domain subscription cancelled",
+                ));
+            }
             let remaining = self.deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 return Err(std::io::Error::new(
@@ -102,8 +112,11 @@ impl Read for DeadlineReader<'_> {
                     "domain response deadline elapsed",
                 ));
             }
-            let timeout_millis =
+            let mut timeout_millis =
                 remaining.as_millis().max(1).min(libc::c_int::MAX as u128) as libc::c_int;
+            if self.alive.is_some() {
+                timeout_millis = timeout_millis.min(500);
+            }
             if stdin_ready(self.stream.poll_descriptor(), timeout_millis)? {
                 return self.stream.read(buffer);
             }
@@ -866,51 +879,9 @@ impl DomainClient {
         &self,
         domain: String,
         alive: &AtomicBool,
-        mut receive: impl FnMut(DomainTopologyEvent) -> bool,
+        receive: impl FnMut(DomainTopologyEvent) -> bool,
     ) -> anyhow::Result<()> {
-        let mut stream = self.connect()?;
-        protocol::write_frame(
-            &mut stream,
-            &ClientFrame::Request {
-                request: Request::SubscribeTopology {
-                    domain: domain.clone(),
-                },
-            },
-        )?;
-        let initial = match read_frame_with_timeout(&mut stream, RESPONSE_TIMEOUT)? {
-            ServerFrame::Response {
-                response: Response::TopologySubscribed { revision, domain },
-            } => DomainTopologyEvent::Snapshot { revision, domain },
-            ServerFrame::Error { message } => anyhow::bail!("{message}"),
-            frame => anyhow::bail!("unexpected topology subscription response {frame:?}"),
-        };
-        if !receive(initial) {
-            let _ = protocol::write_frame(&mut stream, &ClientFrame::Detach);
-            return Ok(());
-        }
-
-        while alive.load(Ordering::Acquire) {
-            if !stdin_ready(stream.poll_descriptor(), 500)? {
-                continue;
-            }
-            let event = match protocol::read_frame::<ServerFrame>(&mut stream)? {
-                ServerFrame::TopologyChanged { revision, domain } => {
-                    DomainTopologyEvent::Snapshot { revision, domain }
-                }
-                ServerFrame::DomainClosed { domain, message } => {
-                    receive(DomainTopologyEvent::Closed { domain, message });
-                    return Ok(());
-                }
-                ServerFrame::Error { message } => anyhow::bail!("{message}"),
-                frame => anyhow::bail!("unexpected frame in topology subscription {frame:?}"),
-            };
-            if !receive(event) {
-                let _ = protocol::write_frame(&mut stream, &ClientFrame::Detach);
-                return Ok(());
-            }
-        }
-        let _ = protocol::write_frame(&mut stream, &ClientFrame::Detach);
-        Ok(())
+        subscribe_topology_stream(self.connect()?, domain, alive, RESPONSE_TIMEOUT, receive)
     }
 
     pub fn relay(&self, domain: String, pane: u32) -> anyhow::Result<()> {
@@ -1235,6 +1206,91 @@ fn connect_ssh(destination: &str) -> anyhow::Result<DomainStream> {
     }
 }
 
+fn subscribe_topology_stream(
+    mut stream: DomainStream,
+    domain: String,
+    alive: &AtomicBool,
+    frame_timeout: Duration,
+    mut receive: impl FnMut(DomainTopologyEvent) -> bool,
+) -> anyhow::Result<()> {
+    if !alive.load(Ordering::Acquire) {
+        return Ok(());
+    }
+    protocol::write_frame(
+        &mut stream,
+        &ClientFrame::Request {
+            request: Request::SubscribeTopology {
+                domain: domain.clone(),
+            },
+        },
+    )?;
+    let Some(initial) = read_frame_while_alive(&mut stream, frame_timeout, alive)? else {
+        return Ok(());
+    };
+    let initial = match initial {
+        ServerFrame::Response {
+            response: Response::TopologySubscribed { revision, domain },
+        } => DomainTopologyEvent::Snapshot { revision, domain },
+        ServerFrame::Error { message } => anyhow::bail!("{message}"),
+        frame => anyhow::bail!("unexpected topology subscription response {frame:?}"),
+    };
+    if !receive(initial) {
+        let _ = protocol::write_frame(&mut stream, &ClientFrame::Detach);
+        return Ok(());
+    }
+
+    while alive.load(Ordering::Acquire) {
+        if !stdin_ready(stream.poll_descriptor(), 500)? {
+            continue;
+        }
+        // Idle subscriptions have no expiry. Once bytes arrive, one deadline
+        // covers the complete header/body and cannot be renewed by trickling.
+        let Some(frame) = read_frame_while_alive(&mut stream, frame_timeout, alive)? else {
+            return Ok(());
+        };
+        let event = match frame {
+            ServerFrame::TopologyChanged { revision, domain } => {
+                DomainTopologyEvent::Snapshot { revision, domain }
+            }
+            ServerFrame::DomainClosed { domain, message } => {
+                receive(DomainTopologyEvent::Closed { domain, message });
+                return Ok(());
+            }
+            ServerFrame::Error { message } => anyhow::bail!("{message}"),
+            frame => anyhow::bail!("unexpected frame in topology subscription {frame:?}"),
+        };
+        if !receive(event) {
+            let _ = protocol::write_frame(&mut stream, &ClientFrame::Detach);
+            return Ok(());
+        }
+    }
+    let _ = protocol::write_frame(&mut stream, &ClientFrame::Detach);
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "client_topology_tests.rs"]
+mod topology_tests;
+
+fn read_frame_while_alive<T: serde::de::DeserializeOwned>(
+    stream: &mut DomainStream,
+    timeout: Duration,
+    alive: &AtomicBool,
+) -> anyhow::Result<Option<T>> {
+    let result = protocol::read_frame(&mut DeadlineReader {
+        stream,
+        deadline: Instant::now() + timeout,
+        alive: Some(alive),
+    });
+    if !alive.load(Ordering::Acquire) {
+        // Discard partial or just-completed input on cancellation. The caller
+        // drops this stream; it must not reuse the partially consumed frame.
+        Ok(None)
+    } else {
+        result.map(Some)
+    }
+}
+
 fn read_frame_with_timeout<T: serde::de::DeserializeOwned>(
     stream: &mut DomainStream,
     timeout: Duration,
@@ -1242,6 +1298,7 @@ fn read_frame_with_timeout<T: serde::de::DeserializeOwned>(
     protocol::read_frame(&mut DeadlineReader {
         stream,
         deadline: Instant::now() + timeout,
+        alive: None,
     })
 }
 

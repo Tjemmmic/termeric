@@ -134,6 +134,14 @@ reconciled. An unchanged equal-revision snapshot confirms the new channel;
 mismatched frames and reconciliation failures cannot clear the disconnected
 state.
 
+Once authenticated, topology frame reads use the same cancellable deadline
+reader for local sockets and SSH stdout. Initial replies and started updates
+have a ten-second complete-frame budget; idle revision waits remain unlimited.
+Partial reads check cancellation on at most 500-ms poll intervals and close the
+channel instead of delivering stale work after cancellation is observed.
+Local socket fixtures cover the subscription lifecycle; they do not constitute
+real-SSH acceptance or change SSH connection/authentication policy.
+
 The helper starts the remote user's daemon on demand using the same private
 runtime-directory checks as a local invocation. One SSH process is used per
 request, topology subscription, or pane relay. There is no shared
