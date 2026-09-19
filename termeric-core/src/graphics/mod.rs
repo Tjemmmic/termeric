@@ -1993,7 +1993,7 @@ impl GraphicsManager {
         );
         let movement = (relative.is_none() && !placement.do_not_move_cursor)
             .then_some((display.columns, display.rows));
-        self.push_placement(ManagedImagePlacement {
+        let mut managed = ManagedImagePlacement {
             uid,
             relative,
             placement: ImagePlacement {
@@ -2014,7 +2014,9 @@ impl GraphicsManager {
                 pixel_height: display.pixel_height,
                 z_index: placement.z_index.unwrap_or(0),
             },
-        });
+        };
+        managed.update_cell_footprint(self.cell_pixel_width, self.cell_pixel_height);
+        self.push_placement(managed);
         Ok(movement)
     }
 
@@ -2602,7 +2604,12 @@ impl GraphicsManager {
             ];
             let mut retained_original = false;
             for fragment in fragments {
-                if let Some(fragment) = crop_placement(&placement, fragment) {
+                if let Some(fragment) = crop_placement(
+                    &placement,
+                    fragment,
+                    self.cell_pixel_width,
+                    self.cell_pixel_height,
+                ) {
                     let preserve_identity = !retained_original;
                     let uid = if preserve_identity {
                         retained_original = true;
@@ -2666,7 +2673,12 @@ impl GraphicsManager {
             .filter(|placement| placement.relative.is_none())
             .filter_map(|placement| {
                 let intersection = placement_rect(placement).intersection(source)?;
-                let mut copy = crop_placement(placement, intersection)?;
+                let mut copy = crop_placement(
+                    placement,
+                    intersection,
+                    self.cell_pixel_width,
+                    self.cell_pixel_height,
+                )?;
                 copy.col = destination
                     .left
                     .saturating_add(intersection.left - source.left);
@@ -2744,8 +2756,18 @@ impl GraphicsManager {
                 if clipped_rows >= rows {
                     return false;
                 }
-                clip_placement_top(placement, clipped_rows, rows);
-                placement.row = top;
+                let mut retained = placement_rect(placement);
+                retained.top = top + count;
+                let Some(mut cropped) = crop_placement(
+                    placement,
+                    retained,
+                    self.cell_pixel_width,
+                    self.cell_pixel_height,
+                ) else {
+                    return false;
+                };
+                cropped.row = top;
+                placement.placement = cropped;
                 true
             }
         });
@@ -2849,7 +2871,17 @@ impl GraphicsManager {
                 placement.row = row;
                 let visible_rows = u32::try_from(bottom - row).unwrap_or(u32::MAX).min(rows);
                 if visible_rows < rows {
-                    clip_placement_bottom(placement, visible_rows, rows);
+                    let mut retained = placement_rect(placement);
+                    retained.bottom = bottom;
+                    let Some(cropped) = crop_placement(
+                        placement,
+                        retained,
+                        self.cell_pixel_width,
+                        self.cell_pixel_height,
+                    ) else {
+                        return false;
+                    };
+                    placement.placement = cropped;
                 }
                 true
             }
@@ -3237,7 +3269,12 @@ fn placement_rect(placement: &ImagePlacement) -> PlacementRect {
     }
 }
 
-fn crop_placement(placement: &ImagePlacement, requested: PlacementRect) -> Option<ImagePlacement> {
+fn crop_placement(
+    placement: &ImagePlacement,
+    requested: PlacementRect,
+    cell_width: u32,
+    cell_height: u32,
+) -> Option<ImagePlacement> {
     let bounds = placement_rect(placement);
     let crop = bounds.intersection(requested)?;
     let width = bounds.right - bounds.left;
@@ -3247,38 +3284,98 @@ fn crop_placement(placement: &ImagePlacement, requested: PlacementRect) -> Optio
     let top = u32::try_from(crop.top - bounds.top).ok()?;
     let bottom = u32::try_from(crop.bottom - bounds.top).ok()?;
 
-    let scaled_range = |extent: u32, start: u32, end: u32, total: u32| {
-        let start = (u64::from(extent) * u64::from(start) / u64::from(total)) as u32;
-        let end = (u64::from(extent) * u64::from(end)).div_ceil(u64::from(total)) as u32;
-        (start, end.saturating_sub(start))
-    };
     let source_width = placement.source_width.unwrap_or(0);
     let source_height = placement.source_height.unwrap_or(0);
-    let (source_left, source_width) = scaled_range(source_width, left, right, width);
-    let (source_top, source_height) = scaled_range(source_height, top, bottom, height);
+    let horizontal = crop_axis(
+        source_width,
+        placement.pixel_width,
+        placement.x_offset,
+        cell_width,
+        left..right,
+        width,
+    )?;
+    let vertical = crop_axis(
+        source_height,
+        placement.pixel_height,
+        placement.y_offset,
+        cell_height,
+        top..bottom,
+        height,
+    )?;
 
     let mut result = placement.clone();
     result.col = crop.left;
     result.row = crop.top;
-    result.source_x = result.source_x.saturating_add(source_left);
-    result.source_y = result.source_y.saturating_add(source_top);
-    result.source_width = Some(source_width);
-    result.source_height = Some(source_height);
+    result.source_x = result.source_x.saturating_add(horizontal.source_start);
+    result.source_y = result.source_y.saturating_add(vertical.source_start);
+    result.source_width = Some(horizontal.source_extent);
+    result.source_height = Some(vertical.source_extent);
     result.width = Some(crop.right - crop.left);
     result.height = Some(u32::try_from(crop.bottom - crop.top).ok()?);
-    if left > 0 {
-        result.x_offset = 0;
-    }
-    if top > 0 {
-        result.y_offset = 0;
-    }
-    if let Some(pixel_width) = placement.pixel_width {
-        result.pixel_width = Some(scaled_range(pixel_width, left, right, width).1);
-    }
-    if let Some(pixel_height) = placement.pixel_height {
-        result.pixel_height = Some(scaled_range(pixel_height, top, bottom, height).1);
-    }
+    result.x_offset = horizontal.offset;
+    result.y_offset = vertical.offset;
+    result.pixel_width = horizontal.pixel_extent;
+    result.pixel_height = vertical.pixel_extent;
+    result.update_cell_footprint(cell_width, cell_height);
     Some(result)
+}
+
+struct AxisCrop {
+    source_start: u32,
+    source_extent: u32,
+    offset: u32,
+    pixel_extent: Option<u32>,
+}
+
+/// Cell bounds are not proportional slices of a pixel-sized image: its last
+/// cell may be only partly covered. Intersect in destination pixels first,
+/// then map to source texels using the existing outward rounding policy.
+fn crop_axis(
+    source_extent: u32,
+    pixel_extent: Option<u32>,
+    offset: u32,
+    cell_pixels: u32,
+    cells: std::ops::Range<u32>,
+    total_cells: u32,
+) -> Option<AxisCrop> {
+    let (start, end, total, offset, pixel_extent) = if let Some(pixels) = pixel_extent {
+        let cell_pixels = u64::from(cell_pixels.max(1));
+        let cell_start = u64::from(cells.start) * cell_pixels;
+        let cell_end = u64::from(cells.end) * cell_pixels;
+        let image_start = u64::from(offset);
+        let image_end = image_start + u64::from(pixels);
+        let start = cell_start.max(image_start);
+        let end = cell_end.min(image_end);
+        if start >= end {
+            return None;
+        }
+        (
+            start - image_start,
+            end - image_start,
+            u64::from(pixels),
+            u32::try_from(start - cell_start).ok()?,
+            Some(u32::try_from(end - start).ok()?),
+        )
+    } else {
+        (
+            u64::from(cells.start),
+            u64::from(cells.end),
+            u64::from(total_cells),
+            if cells.start == 0 { offset } else { 0 },
+            None,
+        )
+    };
+    if total == 0 || start >= end {
+        return None;
+    }
+    let source_start = (u64::from(source_extent) * start / total) as u32;
+    let source_end = (u64::from(source_extent) * end).div_ceil(total) as u32;
+    Some(AxisCrop {
+        source_start,
+        source_extent: source_end.saturating_sub(source_start),
+        offset,
+        pixel_extent,
+    })
 }
 
 fn relative_negative_presentation(
@@ -3353,32 +3450,6 @@ fn relative_negative_presentation(
             source_y.saturating_add(source_height) as f32 / image.height as f32,
         ]),
     })
-}
-
-fn clip_placement_top(placement: &mut ImagePlacement, clipped_rows: u32, total_rows: u32) {
-    let source_height = placement.source_height.unwrap_or(0);
-    let clipped_pixels = ((source_height as u64 * clipped_rows as u64) / total_rows as u64) as u32;
-    placement.source_y = placement.source_y.saturating_add(clipped_pixels);
-    placement.source_height = Some(source_height.saturating_sub(clipped_pixels));
-    placement.height = Some(total_rows - clipped_rows);
-    if let Some(pixel_height) = placement.pixel_height {
-        placement.pixel_height = Some(
-            ((u64::from(pixel_height) * u64::from(total_rows - clipped_rows))
-                / u64::from(total_rows)) as u32,
-        );
-    }
-}
-
-fn clip_placement_bottom(placement: &mut ImagePlacement, visible_rows: u32, total_rows: u32) {
-    let source_height = placement.source_height.unwrap_or(0);
-    placement.source_height =
-        Some(((source_height as u64 * visible_rows as u64) / total_rows as u64) as u32);
-    placement.height = Some(visible_rows);
-    if let Some(pixel_height) = placement.pixel_height {
-        placement.pixel_height = Some(
-            ((u64::from(pixel_height) * u64::from(visible_rows)) / u64::from(total_rows)) as u32,
-        );
-    }
 }
 
 fn prepare_transmission_data(
@@ -6159,8 +6230,84 @@ mod tests {
     }
 
     #[test]
+    fn partial_cell_pixel_images_scroll_at_pixel_boundaries() {
+        for alternate in [false, true] {
+            for down in [false, true] {
+                let mut manager = GraphicsManager::new();
+                manager.set_cell_pixel_geometry(4, 4);
+                manager
+                    .handle_sixel(b"7q\"1;1;6;6!6~", 0, 0, (4, 4), alternate)
+                    .unwrap();
+                let original = manager
+                    .current_image(manager.placements(alternate).next().unwrap().image_id)
+                    .unwrap();
+                if down {
+                    manager.scroll_down(alternate, 0..2, 0..2, 1);
+                } else {
+                    manager.scroll_up(alternate, 0..2, 0..2, 1, false, 0);
+                }
+                let p = manager.placements(alternate).next().unwrap();
+                assert_eq!(
+                    (p.source_y, p.source_height, p.pixel_height),
+                    if down {
+                        (0, Some(4), Some(4))
+                    } else {
+                        (4, Some(2), Some(2))
+                    }
+                );
+                assert_eq!((p.row, p.height), (i64::from(down), Some(1)));
+                assert!(std::sync::Arc::ptr_eq(
+                    &original.data,
+                    &manager.current_image(p.image_id).unwrap().data
+                ));
+                manager.clear_screen(alternate);
+                assert_eq!(manager.memory_usage(), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn partial_cell_pixel_images_copy_and_erase_exact_coverage() {
+        let mut manager = GraphicsManager::new();
+        manager.set_cell_pixel_geometry(4, 4);
+        manager
+            .handle_sixel(b"7q\"1;1;6;6!6~", 0, 0, (4, 4), false)
+            .unwrap();
+        manager.copy_rect(false, 1..2, 1..2, 4, 4);
+        let copied = manager.placements(false).find(|p| p.row == 4).unwrap();
+        assert_eq!((copied.source_x, copied.source_y), (4, 4));
+        assert_eq!(
+            (copied.source_width, copied.source_height),
+            (Some(2), Some(2))
+        );
+        assert_eq!(
+            (copied.pixel_width, copied.pixel_height),
+            (Some(2), Some(2))
+        );
+        manager.erase_rect(false, 0..1, 0..1);
+        let bottom = manager.placements(false).find(|p| p.row == 1).unwrap();
+        assert_eq!(
+            (bottom.source_y, bottom.source_height, bottom.pixel_height),
+            (4, Some(2), Some(2))
+        );
+        let right = manager
+            .placements(false)
+            .find(|p| p.col == 1 && p.row == 0)
+            .unwrap();
+        assert_eq!(
+            (right.source_x, right.source_width, right.pixel_width),
+            (4, Some(2), Some(2))
+        );
+        assert_eq!(
+            (right.source_height, right.pixel_height),
+            (Some(4), Some(4))
+        );
+    }
+
+    #[test]
     fn pixel_protocol_placements_clip_reflow_and_release_unreachable_pixels() {
         let mut manager = GraphicsManager::new();
+        manager.set_cell_pixel_geometry(2, 3);
         manager
             .handle_sixel(b"q\"1;1!4~", 0, 0, (2, 3), false)
             .unwrap();
@@ -6237,6 +6384,7 @@ mod tests {
         ];
 
         let mut manager = GraphicsManager::new();
+        manager.set_cell_pixel_geometry(2, 3);
         for alternate_screen in [false, true] {
             manager
                 .handle_sixel(b"7q\"1;1;4;6!4~", 0, 0, (2, 3), alternate_screen)
@@ -6271,6 +6419,76 @@ mod tests {
         assert_eq!(manager.image_count(), 0);
         assert_eq!(manager.placement_count(), 0);
         assert_eq!(manager.memory_usage(), 0);
+    }
+
+    #[test]
+    fn offset_pixel_images_keep_and_crop_their_last_covered_cell() {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        let mut manager = GraphicsManager::new();
+        manager.set_cell_pixel_geometry(4, 4);
+        let pixels = STANDARD.encode(vec![255; 6 * 6 * 4]);
+        manager.handle_command(
+            command(format!("a=T,i=1,f=32,s=6,v=6,X=3,Y=3,C=1;{pixels}").as_bytes()),
+            false,
+        );
+        let p = manager.placements(false).next().unwrap();
+        assert_eq!((p.width, p.height), (Some(3), Some(3)));
+        manager.copy_rect(false, 2..3, 2..3, 4, 4);
+        let p = manager.placements(false).find(|p| p.row == 4).unwrap();
+        assert_eq!((p.source_x, p.source_y), (5, 5));
+        assert_eq!((p.pixel_width, p.pixel_height), (Some(1), Some(1)));
+        assert_eq!((p.x_offset, p.y_offset), (0, 0));
+        manager.erase_rect(false, 0..1, 0..1);
+        let p = manager.placements(false).find(|p| p.row == 1).unwrap();
+        assert_eq!((p.source_y, p.pixel_height, p.y_offset), (1, Some(5), 0));
+        assert_eq!((p.source_x, p.pixel_width, p.x_offset), (0, Some(6), 3));
+        manager.set_cell_pixel_geometry(2, 2);
+        let p = manager.placements(false).find(|p| p.row == 1).unwrap();
+        assert_eq!((p.width, p.height), (Some(5), Some(3)));
+    }
+
+    #[test]
+    fn pixel_crop_axis_matches_independent_covered_pixel_oracle() {
+        for cell in 1_u32..=7 {
+            for offset in 0_u32..=7 {
+                for extent in 1..=13 {
+                    let footprint = (offset + extent).div_ceil(cell);
+                    for start in 0..footprint {
+                        for end in start + 1..=footprint {
+                            let pixels: Vec<_> = (offset..offset + extent)
+                                .filter(|pixel| (start * cell..end * cell).contains(pixel))
+                                .collect();
+                            let actual = crop_axis(
+                                extent,
+                                Some(extent),
+                                offset,
+                                cell,
+                                start..end,
+                                footprint,
+                            );
+                            if pixels.is_empty() {
+                                assert!(actual.is_none());
+                            } else {
+                                let actual = actual.unwrap();
+                                assert_eq!(actual.source_start, pixels[0] - offset);
+                                assert_eq!(actual.source_extent, pixels.len() as u32);
+                                assert_eq!(actual.pixel_extent, Some(pixels.len() as u32));
+                                assert_eq!(actual.offset, pixels[0] - start * cell);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let scaled = crop_axis(6, Some(12), 0, 5, 1..3, 3).unwrap();
+        assert_eq!(
+            (
+                scaled.source_start,
+                scaled.source_extent,
+                scaled.pixel_extent
+            ),
+            (2, 4, Some(7))
+        );
     }
 
     #[test]

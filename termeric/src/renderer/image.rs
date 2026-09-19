@@ -657,6 +657,35 @@ mod tests {
     }
 
     #[test]
+    fn pixel_image_margin_scroll_crops_actual_pixels_before_rendering() {
+        for down in [false, true] {
+            let mut terminal = termeric_core::Terminal::new(4, 4);
+            terminal.set_pixel_geometry(16, 16);
+            // A non-top-origin region cannot archive removed image rows.
+            terminal.process(b"\x1b[2;3r\x1b[2;1H\x1bP7q\"1;1;6;6!6~\x1b\\");
+            terminal.process(if down { b"\x1b[T" } else { b"\x1b[S" });
+            let images = rendered_images(&terminal, (4.0, 4.0));
+            assert_eq!(images.len(), 1);
+            let geometry = images[0].1.unwrap();
+            assert_eq!((geometry.x, geometry.width), (0.0, 6.0));
+            assert_eq!(
+                (geometry.y, geometry.height),
+                if down { (8.0, 4.0) } else { (4.0, 2.0) }
+            );
+            assert_eq!(
+                (geometry.v_min, geometry.v_max),
+                if down {
+                    (0.0, 4.0 / 6.0)
+                } else {
+                    (4.0 / 6.0, 1.0)
+                }
+            );
+            terminal.process(b"\x1b[?2026h");
+            assert_eq!(rendered_images(&terminal, (4.0, 4.0)), images);
+        }
+    }
+
+    #[test]
     fn synchronized_images_keep_render_geometry_when_scrolled_text_is_rebased() {
         for offset in 0..=4 {
             let mut terminal = scrolled_graphics_fixture();

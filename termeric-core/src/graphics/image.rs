@@ -70,11 +70,16 @@ impl ImagePlacement {
     /// Update only the cell footprint of a pixel-addressed placement. Exact
     /// pixel extent, source crop, and explicit cell-sized destinations persist.
     pub(super) fn update_cell_footprint(&mut self, cell_width: u32, cell_height: u32) {
+        let footprint = |pixels: u32, offset: u32, cell: u32| {
+            (u64::from(pixels) + u64::from(offset))
+                .div_ceil(u64::from(cell.max(1)))
+                .clamp(1, u64::from(u32::MAX)) as u32
+        };
         if let Some(pixel_width) = self.pixel_width {
-            self.width = Some(pixel_width.div_ceil(cell_width.max(1)).max(1));
+            self.width = Some(footprint(pixel_width, self.x_offset, cell_width));
         }
         if let Some(pixel_height) = self.pixel_height {
-            self.height = Some(pixel_height.div_ceil(cell_height.max(1)).max(1));
+            self.height = Some(footprint(pixel_height, self.y_offset, cell_height));
         }
     }
 }

@@ -69,7 +69,11 @@ The end-to-end PTY, terminal, storage, and GPU path supports:
   above or below terminal text;
 - `C=1` no-movement placement, or cursor movement using the explicit or
   pixel-derived cell footprint. Natural and single-axis placements retain
-  exact pixel extents while cell geometry remains authoritative for scrolling;
+  exact pixel extents while cell geometry remains authoritative for scrolling.
+  Pixel-sized placement retention includes `X/Y` offsets; regional scroll and
+  rectangle copy/erase use actual destination pixel boundaries, including
+  partially covered final cells. Source texel bounds round outward when a
+  scaled crop falls between texels (see [shared cropping policy](inline-images.md));
 - quiet replies (`q=1/2`) and typed `EINVAL`, `EPERM`, `ENOENT`, `ENOPARENT`,
   `ECYCLE`, `ETOODEEP`, `ENOTSUP`, `ENOSPC`, `E2BIG`, and `EIO` failures;
 - deletion by visible screen, image/placement ID, cursor or specified cell,

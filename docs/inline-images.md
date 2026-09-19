@@ -87,6 +87,17 @@ overwrite. DECSERA remains character-selective and does not reinterpret image
 pixels as DECSCA-protected text. Cropping adjusts source and display extents
 together and retains the independent 1,024-placement bound.
 
+For pixel-sized images, regional scrolling and rectangular copy/erase intersect
+the destination with actual cell-pixel boundaries, not fractions of the rounded
+cell footprint. A 6-pixel image in 4-pixel cells therefore retains 2 pixels after
+its first cell is removed, not 3. Pixel offsets remain part of the occupied
+footprint, and crops preserve the surviving offset. Source texel bounds round
+outward when display scaling makes the cut fractional; this is not a promise of
+sub-texel source precision after destructive crops. Core tests cover both screen
+buffers, both scroll directions, copy/erase, offset coverage, and an independent
+covered-pixel oracle. Parser-to-renderer geometry/UV tests cover regional scroll
+and subsequent synchronized capture. Native visual acceptance remains deferred.
+
 ## Resource and security boundaries
 
 - DCS and OSC capture is capped at 16 MiB and releases its peak buffer after a
