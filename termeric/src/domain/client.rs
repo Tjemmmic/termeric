@@ -24,6 +24,8 @@ const UPLOAD_RETRY_DELAY: Duration = Duration::from_millis(100);
 
 #[path = "client_attachment_snapshot.rs"]
 mod attachment_snapshot;
+#[path = "client_relay_frame_writer.rs"]
+mod relay_frame_writer;
 #[path = "client_relay_output.rs"]
 mod relay_output;
 #[path = "client_relay_resize.rs"]
@@ -926,7 +928,7 @@ impl DomainClient {
         drop(stdout);
 
         let (mut reader, writer, closer) = stream.split()?;
-        let writer = Arc::new(Mutex::new(writer));
+        let writer = Arc::new(Mutex::new(relay_frame_writer::Writer::new(writer)?));
         let closer = Arc::new(closer);
         let alive = Arc::new(AtomicBool::new(true));
         let mut workers = relay_workers::Workers::new(Arc::clone(&alive), Arc::clone(&closer));

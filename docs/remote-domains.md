@@ -168,7 +168,14 @@ through the joined worker result instead of silently dropping them. A failed
 resize closes the transport before unlocking the writer, and producers recheck
 liveness after acquiring that lock. Successful geometry is deduplicated only
 after the frame is written. Intentional shutdown remains normal; the existing
-250-ms poll and unbounded write/mutex waits are unchanged. Hermetic tests cover
+250-ms poll is unchanged. Attached frame writes now have one ten-second budget
+from header through flush; progress cannot renew it, and each successful flush
+resets it for the next frame. Per-call nonblocking socket sends preserve reader
+flags; only the separately owned SSH stdin pipe becomes nonblocking. Local
+socket/anonymous-pipe tests cover stalls, slow readers, full-frame expiry, and
+successful wire bytes without launching SSH. Mutex waits, serialization,
+connection setup, stdout, and the separate forwarding bridge are not bounded
+by this write budget. Hermetic tests cover
 partial writes, flush failure, poison/unwind, and cell/pixel geometry deduplication.
 Input and resize share a guarded frame-send transaction, so input errors and
 panics likewise stop both producers and close the channel before unlocking the

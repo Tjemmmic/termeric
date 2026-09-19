@@ -356,7 +356,17 @@ open. A deterministic local fixture pauses transport cleanup and verifies the
 writer remains locked on both error and unwind; it starts no SSH process.
 Local shutdown interrupting a resize write is normal cleanup, not a new failure.
 Cell and pixel geometry deduplication and the 250-ms polling interval are
-unchanged; this adds no write or mutex-wait deadline. Local fixtures inject
+unchanged. Attached input/resize writes now share one ten-second budget from
+the first header write through payload and flush; partial progress does not
+renew it. Successful flush resets the budget for the next frame, and idle time
+between writes does not count. Socket sends use per-call nonblocking flags,
+preserving the concurrent reader's descriptor flags. The separately owned SSH
+stdin pipe is made nonblocking without changing its stdout reader. Expiry uses
+the same close-before-unlock failure path. Socket and anonymous-pipe fixtures
+cover stalled/slow readers, header-to-flush expiry, fresh budgets, unchanged wire
+bytes, and reader flags without invoking SSH. This does not bound mutex waits,
+serialization, connection setup, local stdout, or the separate forwarding
+bridge. Local fixtures inject
 zero/partial/full-start exits, input failure and unwinding, worker failures,
 blocked socket writes, and inert-child cleanup; they do not exhaust the OS
 thread limit. This is not a global teardown deadline: connection setup and a
