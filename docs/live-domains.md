@@ -309,8 +309,18 @@ socket shutdown or the existing owned-child cleanup must first wake a writer
 blocked on that connection. Normal EOF and `Closed` retain their output behavior,
 and repeated main-thread cleanup is idempotent. Local fixtures cover these exits,
 an actually blocked socket writer, and reaping an inert transport stand-in child.
-This is output-worker lifecycle coverage, not a claim of deadline-bounded relay
-startup or every input-side failure path.
+A scope-owned worker set also closes first and joins every successfully started
+thread when input/poll processing returns an error, a later thread cannot start,
+or the relay unwinds. Normal input EOF uses this same close-before-join path;
+it does not wait for a writer mutex to append a `Detach` frame. The daemon's
+existing EOF handler retires only the exact attachment. Both worker handles
+are joined before either worker error is returned, repeated cleanup is safe,
+and input write failures cannot silently become success. A server/output error
+takes precedence over a secondary broken input pipe. Local fixtures inject
+zero/partial/full-start exits, input failure and unwinding, worker failures,
+blocked socket writes, and inert-child cleanup; they do not exhaust the OS
+thread limit. This is not a global teardown deadline: connection/snapshot setup
+and a blocked local stdout sink retain their separate limitations.
 
 These checks are not native remote-host acceptance. Topology subscriptions
 also retain one shutdown descriptor within their eight-per-domain ceiling:

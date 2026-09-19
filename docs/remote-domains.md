@@ -148,8 +148,11 @@ input/resize writer mutex. For SSH this uses the existing child owner, which
 reaps an exited process or terminates and reaps its still-running child. Local
 socket and inert-child tests cover output errors, sink failures, unwinding,
 normal completion, and blocked-writer release. No real SSH process or remote
-host is needed for those tests; they do not broaden the startup/input-side
-deadline guarantees.
+host is needed for those tests. A scope-owned worker set closes and joins every
+thread that started on input/poll errors, later spawn failure, normal input EOF,
+and unwinding, without waiting to append `Detach` to a blocked writer. Early-exit
+and partial-start fixtures cover that ownership boundary. These changes do not
+add connection/snapshot deadlines or make a blocked local stdout sink cancellable.
 
 The helper starts the remote user's daemon on demand using the same private
 runtime-directory checks as a local invocation. One SSH process is used per

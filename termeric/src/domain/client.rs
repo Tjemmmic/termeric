@@ -24,6 +24,8 @@ const UPLOAD_RETRY_DELAY: Duration = Duration::from_millis(100);
 
 #[path = "client_relay_output.rs"]
 mod relay_output;
+#[path = "client_relay_workers.rs"]
+mod relay_workers;
 
 enum UploadAttemptError {
     Retry(anyhow::Error),
@@ -922,77 +924,76 @@ impl DomainClient {
         let writer = Arc::new(Mutex::new(writer));
         let closer = Arc::new(closer);
         let alive = Arc::new(AtomicBool::new(true));
+        let mut workers = relay_workers::Workers::new(Arc::clone(&alive), Arc::clone(&closer));
         let output_alive = Arc::clone(&alive);
         let output_closer = Arc::clone(&closer);
-        let output = thread::Builder::new()
-            .name("termeric-domain-relay-output".into())
-            .spawn(move || -> anyhow::Result<()> {
-                let mut stdout = std::io::stdout().lock();
-                relay_output::run(&mut reader, &mut stdout, &output_alive, &output_closer)
-            })?;
+        workers.output = Some(
+            thread::Builder::new()
+                .name("termeric-domain-relay-output".into())
+                .spawn(move || -> anyhow::Result<()> {
+                    let mut stdout = std::io::stdout().lock();
+                    relay_output::run(&mut reader, &mut stdout, &output_alive, &output_closer)
+                })?,
+        );
 
         let resize_alive = Arc::clone(&alive);
         let resize_writer = Arc::clone(&writer);
-        let resize = thread::Builder::new()
-            .name("termeric-domain-relay-resize".into())
-            .spawn(move || {
-                let mut previous = None;
-                while resize_alive.load(Ordering::Acquire) {
-                    if let Some(size) = terminal_size(libc::STDIN_FILENO)
-                        && previous != Some(size)
-                    {
-                        previous = Some(size);
-                        if let Ok(mut writer) = resize_writer.lock() {
-                            let _ = protocol::write_frame(
-                                &mut *writer,
-                                &ClientFrame::Resize {
-                                    cols: size.cols,
-                                    rows: size.rows,
-                                    pixel_width: size.pixel_width,
-                                    pixel_height: size.pixel_height,
-                                },
-                            );
+        workers.resize = Some(
+            thread::Builder::new()
+                .name("termeric-domain-relay-resize".into())
+                .spawn(move || {
+                    let mut previous = None;
+                    while resize_alive.load(Ordering::Acquire) {
+                        if let Some(size) = terminal_size(libc::STDIN_FILENO)
+                            && previous != Some(size)
+                        {
+                            previous = Some(size);
+                            if let Ok(mut writer) = resize_writer.lock() {
+                                let _ = protocol::write_frame(
+                                    &mut *writer,
+                                    &ClientFrame::Resize {
+                                        cols: size.cols,
+                                        rows: size.rows,
+                                        pixel_width: size.pixel_width,
+                                        pixel_height: size.pixel_height,
+                                    },
+                                );
+                            }
                         }
+                        thread::sleep(Duration::from_millis(250));
                     }
-                    thread::sleep(Duration::from_millis(250));
-                }
-            })?;
+                })?,
+        );
 
-        let mut stdin = std::io::stdin().lock();
-        let mut buffer = vec![0u8; 16 * 1024];
-        while alive.load(Ordering::Acquire) {
-            if !stdin_ready(libc::STDIN_FILENO, 250)? {
-                continue;
-            }
-            match stdin.read(&mut buffer) {
-                Ok(0) => break,
-                Ok(read) => {
-                    let mut writer = writer.lock().unwrap();
-                    if protocol::write_frame(
-                        &mut *writer,
-                        &ClientFrame::Input {
-                            data: buffer[..read].to_vec(),
-                        },
-                    )
-                    .is_err()
-                    {
-                        break;
-                    }
+        let input_result = (|| -> anyhow::Result<()> {
+            let mut stdin = std::io::stdin().lock();
+            let mut buffer = vec![0u8; 16 * 1024];
+            while alive.load(Ordering::Acquire) {
+                if !stdin_ready(libc::STDIN_FILENO, 250)? {
+                    continue;
                 }
-                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(error) => return Err(error).context("read attached terminal input"),
+                match stdin.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(read) => {
+                        let mut writer = writer.lock().unwrap();
+                        protocol::write_frame(
+                            &mut *writer,
+                            &ClientFrame::Input {
+                                data: buffer[..read].to_vec(),
+                            },
+                        )
+                        .context("write attached terminal input")?;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(error) => return Err(error).context("read attached terminal input"),
+                }
             }
-        }
-        alive.store(false, Ordering::Release);
-        if let Ok(mut writer) = writer.lock() {
-            let _ = protocol::write_frame(&mut *writer, &ClientFrame::Detach);
-        }
-        closer.close();
-        let _ = resize.join();
-        output
-            .join()
-            .map_err(|_| anyhow::anyhow!("domain output relay panicked"))??;
-        Ok(())
+            Ok(())
+        })();
+        // Preserve a server/output error over a secondary broken input pipe,
+        // but never turn an input failure into success after cleanup.
+        workers.finish()?;
+        input_result
     }
 
     fn connect(&self) -> anyhow::Result<DomainStream> {
