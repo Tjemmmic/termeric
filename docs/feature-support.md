@@ -802,6 +802,14 @@ Both outcomes are retained as a predictable-duration correction and its cost,
 not an across-the-board optimization; see
 [the native cursor evidence](performance.md#native-cursor-follow-up-at-8f3154f).
 
+Clean `2edd584` now has a preserved provider-free release benchmark refresh:
+67 measured metrics pass their producer contracts and all 40 budgets with
+measurements pass. Six displayed-window metric rows remain explicitly skipped;
+three associated budget decisions are skip-allowed, not measured successes.
+The offscreen adapter was software llvmpipe/Vulkan. This refresh does not prove
+native acceptance, a hardware performance ranking, or a before/after speedup;
+see the [raw report and measurement limits](performance.md#headless-budget-refresh-at-2edd584).
+
 ## Release gates
 
 Termeric may be tagged as a Linux beta only when all of these are true on the

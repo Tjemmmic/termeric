@@ -96,6 +96,63 @@ Producers must update the workload description or versioned context whenever
 fixture inputs or measurement boundaries change; identical labels alone are
 not a content hash or proof of equivalent runtime load.
 
+## Headless budget refresh at `2edd584`
+
+The [preserved raw report](../benchmarks/results/2edd584-headless.json) records
+clean `2edd584dff72eda42db576fdbe44e22e135466a2`, captured at
+`2026-09-19T04:09:00Z`. Its SHA-256 is
+`5c9586aae3c05c4b6ba1056b98b451965314b112b1f7d66b7935516ec60f4a7a`.
+This is a retained observation, not a replacement for the checked-in baseline.
+
+The existing runner completed one release-suite process per producer, with
+five samples per measured metric, on an AMD Ryzen 9 7900X3D / Linux
+`7.2.6-arch2-1`. Offscreen rendering used Mesa `26.2.3-arch1.1` llvmpipe through
+Vulkan, explicitly selecting the software ICD. No displayed window or AI
+provider was launched; PTY fixtures used `/bin/cat` and `/bin/true`.
+
+```bash
+CARGO_NET_OFFLINE=true WGPU_BACKEND=vulkan \
+VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json \
+python3 scripts/run_benchmarks.py --skip-displayed \
+  --output target/benchmarks/2edd584-headless-refresh.json
+```
+
+The metric contract passed with 73 rows: 67 measured and six explicitly
+skipped displayed-window rows. All 40 budgets with measurements passed.
+Three displayed idle CPU/frame-count/RSS budgets were accepted under their
+existing `allow_skipped` policy, **not measured successes**. Displayed
+key-to-present latency, idle RSS/PSS/private memory, CPU, and frame counts
+remain unmeasured by this artifact. The inherited display environment fields
+describe the host, not evidence that those probes ran.
+
+Selected timings (milliseconds):
+
+| Workload | Median | p95 |
+| --- | ---: | ---: |
+| Parse 4 MiB plain text | 190.421 | 218.104 |
+| Process 100,000 styled lines | 274.015 | 321.747 |
+| 10,000-line history, 50 resizes | 74.773 | 75.522 |
+| Cooperative search, 100,000 lines | 76.944 | 77.791 |
+| Offscreen frame build/upload/submit | 2.581 | 2.667 |
+| One-row renderer-cache update | 0.01236 | 0.01307 |
+
+The 100,000-line fixture retained 117,287,496 estimated compact row-owned bytes
+and requested 150,498,169 cumulative allocator bytes in 900,075 calls. The
+50-resize fixture requested 145,192,607 bytes in 67,032 calls. Those counts
+were identical across their five samples; cumulative requests are not peak
+live heap or RSS. Warm steady rendering allocated no new pipeline buffers;
+one-cell updates rebuilt one row, and shaping pressure caused no new physical
+glyph rasterizations after warmup.
+
+All raw-sample summaries, producer contracts, and 43 budget decisions were
+independently recomputed from the saved JSON before recording this evidence.
+The artifact does not establish a before/after improvement, vendor-GPU or
+compositor latency, leak freedom, multi-process repeatability, or a comparison
+with other terminals. In particular, its ordinary reflow fixture does not
+isolate the preceding shell-boundary optimization; that has its own
+[deterministic work-count evidence](#batched-shell-boundary-resize-mapping).
+Native visual/provider acceptance and the broader Linux beta gates remain open.
+
 ## Workloads and boundaries
 
 The current suite measures:
