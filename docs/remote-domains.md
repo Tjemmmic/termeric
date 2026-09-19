@@ -148,7 +148,12 @@ input/resize writer mutex. For SSH this uses the existing child owner, which
 reaps an exited process or terminates and reaps its still-running child. Local
 socket and inert-child tests cover output errors, sink failures, unwinding,
 normal completion, and blocked-writer release. No real SSH process or remote
-host is needed for those tests. A scope-owned worker set closes and joins every
+host is needed for those tests. Live output now reports malformed/truncated
+frames and transport read errors instead of treating all read failures as clean
+EOF. EOF before a new frame remains normal; read interruption caused by local
+owner shutdown is also normal, while decode errors remain errors. Local fixtures
+cover these distinctions without adding live-output deadlines or SSH acceptance.
+A scope-owned worker set closes and joins every
 thread that started on input/poll errors, later spawn failure, normal input EOF,
 and unwinding, without waiting to append `Detach` to a blocked writer. Early-exit
 and partial-start fixtures cover that ownership boundary. These changes do not

@@ -1,5 +1,6 @@
 //! Output-worker completion and transport ownership for one attached relay.
 use super::{DomainCloser, ServerFrame, protocol};
+use anyhow::Context;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -17,6 +18,24 @@ impl Drop for Completion<'_> {
     }
 }
 
+// Keep the shared length/JSON validator and avoid buffering or prefetching live
+// bytes. read_exact reports UnexpectedEof for both an empty stream and a cut
+// frame; only an observed zero-byte read before any frame bytes is clean EOF.
+struct FrameRead<'a, R> {
+    reader: &'a mut R,
+    started: bool,
+    eof: bool,
+}
+
+impl<R: Read> Read for FrameRead<'_, R> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let count = self.reader.read(buffer)?;
+        self.started |= count != 0;
+        self.eof |= count == 0 && !buffer.is_empty();
+        Ok(count)
+    }
+}
+
 pub(super) fn run(
     reader: &mut impl Read,
     output: &mut impl Write,
@@ -25,7 +44,12 @@ pub(super) fn run(
 ) -> anyhow::Result<()> {
     let _completion = Completion { alive, closer };
     loop {
-        match protocol::read_frame::<ServerFrame>(reader) {
+        let mut frame_reader = FrameRead {
+            reader,
+            started: false,
+            eof: false,
+        };
+        match protocol::read_frame::<ServerFrame>(&mut frame_reader) {
             Ok(ServerFrame::Output { data, .. }) => {
                 output.write_all(&data)?;
                 output.flush()?;
@@ -37,7 +61,20 @@ pub(super) fn run(
             }
             Ok(ServerFrame::Error { message }) => anyhow::bail!("{message}"),
             Ok(_) => anyhow::bail!("unexpected frame in attached domain stream"),
-            Err(_) => break,
+            Err(error) => {
+                if frame_reader.eof && !frame_reader.started {
+                    break;
+                }
+                // The worker owner clears liveness before shutting down the
+                // transport. That local teardown can interrupt a partial read;
+                // it is not peer corruption. Decode errors remain errors.
+                if !alive.load(Ordering::Acquire)
+                    && error.downcast_ref::<std::io::Error>().is_some()
+                {
+                    break;
+                }
+                return Err(error).context("read attached domain output");
+            }
         }
     }
     Ok(())
@@ -66,6 +103,137 @@ mod tests {
         peer.set_read_timeout(Some(Duration::from_millis(200)))
             .unwrap();
         (DomainCloser::Local(client), peer)
+    }
+
+    #[test]
+    fn relay_output_rejects_corrupt_or_truncated_frames_without_forwarding_them() {
+        let valid = wire(&[ServerFrame::Output {
+            sequence: 1,
+            data: b"visible".to_vec(),
+        }])
+        .into_inner();
+        let mut failures = vec![
+            0u32.to_be_bytes().to_vec(),
+            ((protocol::MAX_FRAME_BYTES + 1) as u32)
+                .to_be_bytes()
+                .to_vec(),
+            [1u32.to_be_bytes().as_slice(), b"{"].concat(),
+        ];
+        // Every incomplete header and payload boundary, not just empty JSON.
+        failures.extend((1..valid.len()).map(|end| valid[..end].to_vec()));
+        for suffix in failures {
+            let (closer, mut peer) = transport();
+            let alive = AtomicBool::new(true);
+            let mut output = Vec::new();
+            let bytes = [valid.as_slice(), suffix.as_slice()].concat();
+            let result = run(&mut bytes.as_slice(), &mut output, &alive, &closer);
+            assert!(result.is_err(), "bad frame became success: {suffix:?}");
+            assert_eq!(output, b"visible");
+            assert!(!alive.load(Ordering::Acquire));
+            assert_eq!(peer.read(&mut [0]).unwrap(), 0);
+        }
+    }
+
+    #[test]
+    fn relay_output_transport_errors_are_not_clean_eof() {
+        struct FailedRead(ErrorKind);
+        impl Read for FailedRead {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(self.0.into())
+            }
+        }
+        for kind in [
+            ErrorKind::ConnectionReset,
+            ErrorKind::UnexpectedEof,
+            ErrorKind::TimedOut,
+        ] {
+            let (closer, mut peer) = transport();
+            let alive = AtomicBool::new(true);
+            let error = run(&mut FailedRead(kind), &mut Vec::new(), &alive, &closer).unwrap_err();
+            assert_eq!(error.downcast_ref::<std::io::Error>().unwrap().kind(), kind);
+            assert!(!alive.load(Ordering::Acquire));
+            assert_eq!(peer.read(&mut [0]).unwrap(), 0);
+        }
+    }
+
+    #[test]
+    fn relay_output_decode_errors_are_not_hidden_by_local_shutdown() {
+        let (closer, mut peer) = transport();
+        let alive = AtomicBool::new(false);
+        let bytes = [1u32.to_be_bytes().as_slice(), b"{"].concat();
+        let error = run(&mut bytes.as_slice(), &mut Vec::new(), &alive, &closer).unwrap_err();
+        assert!(error.downcast_ref::<serde_json::Error>().is_some());
+        assert_eq!(peer.read(&mut [0]).unwrap(), 0);
+    }
+
+    #[test]
+    fn relay_output_fragmented_interrupted_frames_still_complete() {
+        struct Fragmented {
+            bytes: Cursor<Vec<u8>>,
+            interrupt: bool,
+        }
+        impl Read for Fragmented {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                self.interrupt = !self.interrupt;
+                if self.interrupt {
+                    Err(ErrorKind::Interrupted.into())
+                } else {
+                    let count = buffer.len().min(1);
+                    self.bytes.read(&mut buffer[..count])
+                }
+            }
+        }
+        let (closer, _peer) = transport();
+        let alive = AtomicBool::new(true);
+        let mut output = Vec::new();
+        run(
+            &mut Fragmented {
+                bytes: wire(&[ServerFrame::Output {
+                    sequence: 1,
+                    data: b"exact".to_vec(),
+                }]),
+                interrupt: false,
+            },
+            &mut output,
+            &alive,
+            &closer,
+        )
+        .unwrap();
+        assert_eq!(output, b"exact");
+    }
+
+    #[test]
+    fn relay_output_local_shutdown_during_partial_frame_is_not_a_peer_failure() {
+        struct CancelledRead<'a> {
+            alive: &'a AtomicBool,
+            first: bool,
+        }
+        impl Read for CancelledRead<'_> {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                if self.first {
+                    self.first = false;
+                    buffer[0] = 0;
+                    return Ok(1);
+                }
+                self.alive.store(false, Ordering::Release);
+                Ok(0)
+            }
+        }
+        let (closer, mut peer) = transport();
+        let alive = AtomicBool::new(true);
+        let mut output = Vec::new();
+        run(
+            &mut CancelledRead {
+                alive: &alive,
+                first: true,
+            },
+            &mut output,
+            &alive,
+            &closer,
+        )
+        .unwrap();
+        assert!(output.is_empty());
+        assert_eq!(peer.read(&mut [0]).unwrap(), 0);
     }
 
     #[test]

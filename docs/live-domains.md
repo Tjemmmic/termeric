@@ -320,6 +320,14 @@ socket shutdown or the existing owned-child cleanup must first wake a writer
 blocked on that connection. Normal EOF and `Closed` retain their output behavior,
 and repeated main-thread cleanup is idempotent. Local fixtures cover these exits,
 an actually blocked socket writer, and reaping an inert transport stand-in child.
+The output worker distinguishes EOF before a new frame from a truncated header
+or payload. Invalid lengths, malformed JSON, and transport read failures now
+return an error instead of silently reporting a successful disconnect. A local
+owner-initiated shutdown can interrupt a partial read without manufacturing a
+peer failure; decoder errors are not suppressed by that exception. Tests cover
+every truncated byte boundary of a representative output frame, invalid lengths
+and JSON, connection reset, fragmented/interrupted reads, and local cancellation.
+This does not add live-output read deadlines or change the wire format.
 A scope-owned worker set also closes first and joins every successfully started
 thread when input/poll processing returns an error, a later thread cannot start,
 or the relay unwinds. Normal input EOF uses this same close-before-join path;
