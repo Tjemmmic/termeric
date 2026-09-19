@@ -2056,6 +2056,21 @@ fn run_upload_worker(
                 }
                 .canonical_reply(),
             );
+            // No read-loop iteration will flush this frame. Empty files still
+            // require end_data and the same delivery acknowledgement as payloads.
+            if !emit_with_ack(
+                &mut emit,
+                &cancellation,
+                std::mem::take(&mut batch),
+                false,
+                files_sent + 1,
+                total_files,
+                bytes_sent,
+                None,
+                reply_uses_8bit_controls,
+            ) {
+                return;
+            }
         }
         while remaining > 0 {
             if cancellation.load(Ordering::Acquire) {
@@ -2663,6 +2678,201 @@ mod upload_worker_tests {
         let error = String::from_utf8(completions[0].frames[0].clone()).unwrap();
         assert!(error.contains("st=RUZCSUc6"));
         assert!(!error.contains("ac=file"));
+    }
+
+    #[test]
+    fn upload_worker_completes_empty_files_in_mixed_batches() {
+        let root = tempfile::tempdir().unwrap();
+        let payloads: [&[u8]; 3] = [b"", b"payload", b""];
+        let (sender, receiver) = sync_channel(payloads.len());
+        let mut paths = Vec::new();
+        for (index, payload) in payloads.iter().enumerate() {
+            let file_id = format!("f{index}");
+            let path = root.path().join(&file_id);
+            std::fs::write(&path, payload).unwrap();
+            let name = path.to_str().unwrap().to_string();
+            sender
+                .send(UploadWorkerCommand {
+                    command: request("empty-test", &file_id, &name),
+                })
+                .unwrap();
+            paths.push(UploadPath {
+                file_id,
+                requested_name: name,
+                path,
+            });
+        }
+        drop(sender);
+        let mut completions = Vec::new();
+        run_upload_worker(
+            receiver,
+            "empty-test".into(),
+            paths,
+            true,
+            Arc::new(AtomicBool::new(false)),
+            |mut completion| {
+                completion.acknowledge.take().unwrap().send(true).unwrap();
+                completions.push(completion);
+                true
+            },
+        );
+        assert_eq!(
+            completions.len(),
+            4,
+            "metadata plus one completion per file"
+        );
+        assert_eq!(completions[0].frames.len(), 4);
+        let mut bytes = 0;
+        for (index, payload) in payloads.iter().enumerate() {
+            bytes += payload.len() as u64;
+            let completion = &completions[index + 1];
+            assert_eq!(
+                completion.frames,
+                vec![
+                    KittyFileTransferReply::Data {
+                        id: "empty-test".into(),
+                        file_id: format!("f{index}"),
+                        data: (*payload).into(),
+                        last: true,
+                    }
+                    .canonical_reply()
+                ]
+            );
+            assert_eq!(completion.files, index + 1);
+            assert_eq!(completion.total_files, 3);
+            assert_eq!(completion.bytes, bytes);
+            assert!(completion.reply_uses_8bit_controls);
+            assert!(!completion.terminal);
+            assert!(completion.error.is_none());
+        }
+    }
+
+    #[test]
+    fn upload_worker_stops_after_unacknowledged_or_canceled_empty_completion() {
+        for cancel_on_empty in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let (sender, receiver) = sync_channel(2);
+            let mut paths = Vec::new();
+            for (file_id, payload) in [
+                ("empty", b"".as_slice()),
+                ("later", b"must not send".as_slice()),
+            ] {
+                let path = root.path().join(file_id);
+                std::fs::write(&path, payload).unwrap();
+                let name = path.to_str().unwrap().to_string();
+                sender
+                    .send(UploadWorkerCommand {
+                        command: request("empty-stop", file_id, &name),
+                    })
+                    .unwrap();
+                paths.push(UploadPath {
+                    file_id: file_id.into(),
+                    requested_name: name,
+                    path,
+                });
+            }
+            drop(sender);
+            let cancellation = Arc::new(AtomicBool::new(false));
+            let mut completions = Vec::new();
+            run_upload_worker(
+                receiver,
+                "empty-stop".into(),
+                paths,
+                false,
+                cancellation.clone(),
+                |mut completion| {
+                    let empty_completion = completion.files == 1;
+                    if empty_completion && cancel_on_empty {
+                        cancellation.store(true, Ordering::Release);
+                    }
+                    completion
+                        .acknowledge
+                        .take()
+                        .unwrap()
+                        .send(!empty_completion || cancel_on_empty)
+                        .unwrap();
+                    completions.push(completion);
+                    true
+                },
+            );
+            assert_eq!(completions.len(), 2, "later payload must not be delivered");
+            assert_eq!(
+                completions[1].frames,
+                vec![
+                    KittyFileTransferReply::Data {
+                        id: "empty-stop".into(),
+                        file_id: "empty".into(),
+                        data: Box::default(),
+                        last: true,
+                    }
+                    .canonical_reply()
+                ]
+            );
+            assert_eq!(completions[1].bytes, 0);
+            assert!(!completions[1].reply_uses_8bit_controls);
+        }
+    }
+
+    #[test]
+    fn upload_worker_emits_empty_completion_once_before_rejecting_duplicate() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("empty");
+        std::fs::write(&path, b"").unwrap();
+        let name = path.to_str().unwrap().to_string();
+        let (sender, receiver) = sync_channel(2);
+        for _ in 0..2 {
+            sender
+                .send(UploadWorkerCommand {
+                    command: request("empty-once", "f", &name),
+                })
+                .unwrap();
+        }
+        drop(sender);
+        let mut completions = Vec::new();
+        run_upload_worker(
+            receiver,
+            "empty-once".into(),
+            vec![UploadPath {
+                file_id: "f".into(),
+                requested_name: name,
+                path,
+            }],
+            false,
+            Arc::new(AtomicBool::new(false)),
+            |mut completion| {
+                completion.acknowledge.take().unwrap().send(true).unwrap();
+                completions.push(completion);
+                true
+            },
+        );
+        assert_eq!(completions.len(), 3);
+        assert_eq!(
+            completions[1].frames,
+            vec![
+                KittyFileTransferReply::Data {
+                    id: "empty-once".into(),
+                    file_id: "f".into(),
+                    data: Box::default(),
+                    last: true,
+                }
+                .canonical_reply()
+            ]
+        );
+        assert_eq!(
+            completions[2].frames,
+            vec![
+                transfer_status(
+                    "empty-once",
+                    "f",
+                    KittyFileTransferStatusCode::Invalid,
+                    "file was already sent or its path did not match approval"
+                )
+                .canonical_reply()
+            ]
+        );
+        assert!(completions[2].terminal);
+        assert_eq!(completions[2].files, 1);
+        assert_eq!(completions[2].bytes, 0);
     }
 
     #[test]

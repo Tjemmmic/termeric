@@ -103,6 +103,13 @@ smaller:
   time in 4,096-byte protocol chunks. At most eight chunks enter one UI event,
   and the worker waits for exact-origin PTY acknowledgement before producing
   the next batch, so the event loop cannot accumulate a whole transfer.
+- Empty files emit one empty `end_data` frame through that same acknowledged
+  delivery path. They increment the completed-file count without adding bytes;
+  rejected delivery or cancellation stops later files, and duplicate requests
+  cannot emit another completion. Hermetic worker tests cover isolated and
+  interleaved empty files, exact canonical frames, captured S7/S8 mode flags,
+  cumulative file/byte counts, negative acknowledgement, cancellation, and
+  duplicate rejection. Native interoperability remains deferred.
 - Metadata and payload use the session's captured S7C1T/S8C1T framing. A file
   can be requested once and its request must repeat the approved ID and path.
 
