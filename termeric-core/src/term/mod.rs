@@ -2415,6 +2415,14 @@ impl Terminal {
                 alternate_shift,
                 self.alt_grid.scrollback_len(),
             );
+        } else {
+            // Ordinary raster placements retain fixed coordinates across a
+            // width change (unlike grid-owned Unicode placeholders). Reflow
+            // can still shorten history, so retire now-unreachable roots.
+            self.graphics
+                .prune_scrollback(false, self.grid.scrollback_len());
+            self.graphics
+                .prune_scrollback(true, self.alt_grid.scrollback_len());
         }
         if let Some(snapshot) = &mut self.synchronized_output_snapshot {
             if snapshot.grid.cols() != cols || snapshot.grid.rows() != rows {
@@ -2422,21 +2430,24 @@ impl Terminal {
             }
             let same_snapshot_columns = snapshot.grid.cols() == cols;
             let archived = snapshot.grid.resize_with_row_shift(cols, rows);
-            if same_snapshot_columns {
-                let shift = i64::try_from(archived).unwrap_or(i64::MAX);
-                let oldest = -i64::try_from(snapshot.grid.scrollback_len()).unwrap_or(i64::MAX);
-                // Snapshot images are already resolved renderer instances,
-                // not a live parent graph. Follow this frozen grid's movement,
-                // independently of either live screen's cursor or history.
-                snapshot.images.retain_mut(|image| {
-                    image.placement.row = image.placement.row.saturating_sub(shift);
-                    image
-                        .placement
-                        .row
-                        .saturating_add(i64::from(image.placement.height.unwrap_or(1)))
-                        > oldest
-                });
-            }
+            let shift = if same_snapshot_columns {
+                i64::try_from(archived).unwrap_or(i64::MAX)
+            } else {
+                0
+            };
+            let oldest = -i64::try_from(snapshot.grid.scrollback_len()).unwrap_or(i64::MAX);
+            // Snapshot images are already resolved renderer instances,
+            // not a live parent graph. Follow this frozen grid's movement
+            // only on height-only resize, but always prune its lost history,
+            // independently of either live screen's cursor or history.
+            snapshot.images.retain_mut(|image| {
+                image.placement.row = image.placement.row.saturating_sub(shift);
+                image
+                    .placement
+                    .row
+                    .saturating_add(i64::from(image.placement.height.unwrap_or(1)))
+                    > oldest
+            });
             snapshot.grid.repair_multicells(&resize_blank);
         }
         self.resize_extra_cursors(cols, rows);

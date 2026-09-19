@@ -262,8 +262,8 @@ switches cannot move the captured frame. The `renderer::image::tests` tests
 prefixed `synchronized_images_` compare the actual renderer geometry and texture
 coordinates before/after capture for classic, Unicode, relative, and Sixel
 images, including clipping and fragmented mode sequences. This evidence covers
-capture and release at unchanged dimensions. Height-only resize has separate
-coverage below; ordinary-placement column-reflow tracking remains audit work.
+capture and release at unchanged dimensions. Resize coverage and its limits
+are described below.
 
 When only the row count changes, ordinary images move by the exact number of
 rows that their owning grid archives, not by the window-height difference or
@@ -280,7 +280,27 @@ images, and actual anonymous-pixel release after a frozen snapshot ends. The
 renderer test `height_resize_moves_frozen_images_with_their_own_text_not_hidden_output`
 also checks clipped geometry/UVs for ordinary, relative, and Unicode instances
 and restores captured image rows by scrolling the resized snapshot. This is
-core/geometry evidence, not native resize acceptance or column-reflow coverage.
+core/geometry evidence, not native resize acceptance.
+
+On a column-count change (including a simultaneous height change), ordinary
+placements keep their existing row/column coordinates rather than attaching to
+reflowed text. This matches the coordinate policy in Kitty's
+[`grman_resize` reference implementation](https://github.com/kovidgoyal/kitty/blob/master/kitty/graphics.c).
+Unicode placeholders in the live grid instead follow their text cells. Width
+reflow may reduce retained history: roots wholly above its new boundary are
+retired immediately, with relative descendants and unplaced anonymous pixels.
+Partly retained tall images, reusable Kitty root data, and right-of-viewport
+placements survive; clipping must not erase source geometry. Frozen instances
+are pruned against their own resized snapshot, not the hidden live history.
+`column_resize_keeps_coordinates_but_retires_unretained_image_roots` covers
+width/height combinations, inactive primary state, alternate isolation, and
+relative lifetime. `column_resize_releases_unretained_anonymous_pixels_without_resurrection`
+checks actual pixel release and independent snapshot ownership; renderer test
+`column_resize_clips_fixed_images_without_erasing_their_geometry` checks
+clipping/UVs and restoration after widening, both live and frozen. These tests
+establish the ordinary-placement coordinate/retention policy, not complete
+Kitty resize parity. Rebuilding frozen Unicode-placeholder instances after
+column reflow and native visual resize acceptance remain unverified.
 
 The `term::scroll_graphics` regressions pair images with uniquely labeled text
 rows across SU, DL, and LF; cover batched scrolling, zero/capped/growing history,

@@ -829,6 +829,61 @@ mod tests {
     }
 
     #[test]
+    fn column_resize_clips_fixed_images_without_erasing_their_geometry() {
+        for frozen in [false, true] {
+            let mut terminal = termeric_core::Terminal::new(8, 4);
+            terminal.set_pixel_geometry(80, 80);
+            terminal.process(b"\x1b[1;7H");
+            terminal.handle_graphics_command(b"a=T,i=7,p=1,c=2,r=2,C=1,f=32,s=1,v=1,q=2;AQIDBA==");
+            terminal.handle_graphics_command(b"a=t,i=8,f=32,s=1,v=1,q=2;AQIDBA==");
+            terminal.handle_graphics_command(b"a=p,i=8,P=7,Q=1,H=-1,V=1,c=2,r=1,q=2");
+            let original = terminal.presentation_images();
+            if frozen {
+                terminal.process(b"\x1b[?2026h");
+            }
+            for columns in [7, 4, 8, 12] {
+                terminal.resize(columns, 4);
+                let images = terminal.presentation_images();
+                assert_eq!(images.len(), 2);
+                for (image, before) in images.iter().zip(&original) {
+                    assert_eq!(
+                        format!("{:?}", image.placement),
+                        format!("{:?}", before.placement)
+                    );
+                    assert!(std::sync::Arc::ptr_eq(
+                        &image.image.data,
+                        &before.image.data
+                    ));
+                }
+                let rendered = rendered_images(&terminal, (10.0, 20.0));
+                if columns == 4 {
+                    assert!(rendered.iter().all(|(_, geometry)| geometry.is_none()));
+                } else {
+                    let parent = rendered
+                        .iter()
+                        .find(|(id, _)| *id == ImageId(7))
+                        .unwrap()
+                        .1
+                        .unwrap();
+                    assert_eq!((parent.x, parent.y, parent.height), (60.0, 0.0, 40.0));
+                    assert_eq!(parent.width, if columns == 7 { 10.0 } else { 20.0 });
+                    assert_eq!(parent.u_max, if columns == 7 { 0.5 } else { 1.0 });
+                    let child = rendered
+                        .iter()
+                        .find(|(id, _)| *id == ImageId(8))
+                        .unwrap()
+                        .1
+                        .unwrap();
+                    assert_eq!(
+                        (child.x, child.y, child.width, child.height),
+                        (50.0, 20.0, 20.0, 20.0)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn source_destination_aspect_offsets_and_viewport_clipping_share_one_geometry_path() {
         let image = StoredImage {
             id: ImageId(1),
