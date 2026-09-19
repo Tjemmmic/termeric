@@ -103,6 +103,12 @@ smaller:
   time in 4,096-byte protocol chunks. At most eight chunks enter one UI event,
   and the worker waits for exact-origin PTY acknowledgement before producing
   the next batch, so the event loop cannot accumulate a whole transfer.
+- If a source is truncated or a read fails, terminal error progress retains
+  completed-file bytes plus acknowledged batches from the current file. Bytes
+  buffered but not delivered are excluded, and the incomplete file is not
+  counted as completed. Deterministic same-inode truncation tests cover zero,
+  one, and two delivered batches, discarded partial batches, and prior empty
+  or nonempty files. This records local PTY delivery, not remote persistence.
 - Empty files emit one empty `end_data` frame through that same acknowledged
   delivery path. They increment the completed-file count without adding bytes;
   rejected delivery or cancellation stops later files, and duplicate requests

@@ -2045,6 +2045,9 @@ fn run_upload_worker(
             return;
         }
         let mut remaining = source.size;
+        // Reads may fill a partial batch that is never delivered on failure.
+        // Preserve only acknowledged current-file bytes in terminal errors.
+        let mut acknowledged_bytes = 0;
         let mut batch = Vec::with_capacity(UPLOAD_BATCH_CHUNKS);
         if remaining == 0 {
             batch.push(
@@ -2093,7 +2096,7 @@ fn run_upload_worker(
                         true,
                         files_sent,
                         total_files,
-                        bytes_sent,
+                        bytes_sent + acknowledged_bytes,
                         Some(message),
                         reply_uses_8bit_controls,
                     );
@@ -2114,7 +2117,7 @@ fn run_upload_worker(
                         true,
                         files_sent,
                         total_files,
-                        bytes_sent,
+                        bytes_sent + acknowledged_bytes,
                         Some(message),
                         reply_uses_8bit_controls,
                     );
@@ -2146,6 +2149,7 @@ fn run_upload_worker(
                 ) {
                     return;
                 }
+                acknowledged_bytes = source.size - remaining;
             }
         }
         bytes_sent = bytes_sent.saturating_add(source.size);
@@ -2920,6 +2924,110 @@ mod upload_worker_tests {
                 .unwrap()
                 .contains("ac=end_data")
         );
+    }
+
+    #[test]
+    fn upload_worker_truncation_retains_only_acknowledged_progress() {
+        let chunk_size = termeric_core::MAX_KITTY_TRANSFER_DATA_BYTES;
+        let batch_bytes = UPLOAD_BATCH_CHUNKS * chunk_size;
+        for prior_size in [0, 7] {
+            for acknowledged_batches in [0, 1, 2] {
+                for buffered_bytes in [0, 17] {
+                    let temp = tempfile::tempdir().unwrap();
+                    let prior = temp.path().join("prior.bin");
+                    let path = temp.path().join("truncated.bin");
+                    std::fs::write(&prior, vec![0x41; prior_size]).unwrap();
+                    std::fs::write(&path, vec![0x5a; batch_bytes * 3]).unwrap();
+                    let (sender, receiver) = sync_channel(2);
+                    let mut paths = Vec::new();
+                    for (file_id, source) in [("prior", &prior), ("current", &path)] {
+                        let name = source.to_str().unwrap().to_string();
+                        sender
+                            .send(UploadWorkerCommand {
+                                command: request("truncate", file_id, &name),
+                            })
+                            .unwrap();
+                        paths.push(UploadPath {
+                            file_id: file_id.into(),
+                            requested_name: name,
+                            path: source.clone(),
+                        });
+                    }
+                    drop(sender);
+                    let mut completions = Vec::new();
+                    run_upload_worker(
+                        receiver,
+                        "truncate".into(),
+                        paths,
+                        true,
+                        Arc::new(AtomicBool::new(false)),
+                        |mut completion| {
+                            // Mutate the same inode at an exact delivery boundary,
+                            // with no timing race or dependence on worker speed.
+                            if completions.len() == 1 + acknowledged_batches {
+                                std::fs::OpenOptions::new()
+                                    .write(true)
+                                    .open(&path)
+                                    .unwrap()
+                                    .set_len(
+                                        (acknowledged_batches * batch_bytes + buffered_bytes)
+                                            as u64,
+                                    )
+                                    .unwrap();
+                            }
+                            completion.acknowledge.take().unwrap().send(true).unwrap();
+                            completions.push(completion);
+                            true
+                        },
+                    );
+                    assert_eq!(completions.len(), 3 + acknowledged_batches);
+                    for (index, batch) in
+                        completions[2..2 + acknowledged_batches].iter().enumerate()
+                    {
+                        assert_eq!(
+                            batch.frames,
+                            vec![
+                                KittyFileTransferReply::Data {
+                                    id: "truncate".into(),
+                                    file_id: "current".into(),
+                                    data: vec![0x5a; chunk_size].into_boxed_slice(),
+                                    last: false,
+                                }
+                                .canonical_reply();
+                                UPLOAD_BATCH_CHUNKS
+                            ]
+                        );
+                        assert_eq!(batch.bytes, (prior_size + (index + 1) * batch_bytes) as u64);
+                        assert_eq!(batch.files, 1);
+                        assert!(!batch.terminal);
+                        assert!(batch.error.is_none());
+                    }
+                    let failure = completions.last().unwrap();
+                    let message = "approved file changed or ended while being read";
+                    assert_eq!(
+                        failure.frames,
+                        vec![
+                            transfer_status(
+                                "truncate",
+                                "current",
+                                KittyFileTransferStatusCode::Io,
+                                message
+                            )
+                            .canonical_reply()
+                        ]
+                    );
+                    assert!(failure.terminal);
+                    assert!(failure.reply_uses_8bit_controls);
+                    assert_eq!(failure.error.as_deref(), Some(message));
+                    assert_eq!(failure.total_files, 2);
+                    assert_eq!(failure.files, 1);
+                    assert_eq!(
+                        failure.bytes,
+                        (prior_size + acknowledged_batches * batch_bytes) as u64
+                    );
+                }
+            }
+        }
     }
 
     #[test]
