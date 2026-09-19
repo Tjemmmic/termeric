@@ -152,7 +152,7 @@ family = "CSI"
 syntax = "IL, DL"
 layer = "core"
 status = "supported"
-evidence = ["fixture:insert-delete-lines", "test:src/term/scroll_limits.rs#oversized_line_operations_match_effective_regions_and_bounded_work", "test:src/term/scroll_limits.rs#parser_line_counts_default_saturate_and_survive_fragmentation"]
+evidence = ["fixture:insert-delete-lines", "test:src/term/scroll_limits.rs#oversized_line_operations_match_effective_regions_and_bounded_work", "test:src/term/scroll_limits.rs#parser_line_counts_default_saturate_and_survive_fragmentation", "test:src/term/scroll_bce.rs#vertical_edits_fill_only_exposed_cells_with_the_active_background"]
 notes = "Operates within the active scroll region. Counts are capped to the rows between the cursor and bottom margin before text, selection, and image movement. Outside-margin cursors remain no-ops."
 
 [[sequence]]
@@ -161,7 +161,7 @@ family = "CSI"
 syntax = "SU, SD, DECSTBM"
 layer = "core"
 status = "supported"
-evidence = ["fixture:scroll-region", "test:src/term/scroll_limits.rs#oversized_scroll_up_preserves_real_history_without_synthetic_blank_rows", "test:src/term/scroll_limits.rs#oversized_line_operations_match_effective_regions_and_bounded_work", "test:src/term/scroll_limits.rs#parser_line_counts_default_saturate_and_survive_fragmentation"]
+evidence = ["fixture:scroll-region", "test:src/term/scroll_limits.rs#oversized_scroll_up_preserves_real_history_without_synthetic_blank_rows", "test:src/term/scroll_limits.rs#oversized_line_operations_match_effective_regions_and_bounded_work", "test:src/term/scroll_limits.rs#parser_line_counts_default_saturate_and_survive_fragmentation", "test:src/term/scroll_bce.rs#vertical_edits_fill_only_exposed_cells_with_the_active_background", "test:src/term/scroll_bce.rs#implicit_scrolling_uses_bce_for_linefeed_index_reverse_index_and_wrap", "test:src/term/scroll_bce.rs#scrolled_backgrounds_survive_history_and_respect_synchronized_presentation"]
 notes = "Top/bottom scroll-region state and movement are covered. SU/SD counts are capped to the region height; oversized requests cannot append synthetic blank history beyond one region or move images/selection by an uncapped count."
 
 [[sequence]]

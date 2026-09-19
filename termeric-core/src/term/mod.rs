@@ -11,6 +11,8 @@ mod multiple_cursors;
 mod notification;
 mod pointer;
 #[cfg(test)]
+mod scroll_bce;
+#[cfg(test)]
 mod scroll_limits;
 mod selection;
 mod selection_damage;
@@ -2986,6 +2988,9 @@ impl Terminal {
                     false,
                 );
             }
+            if full_width {
+                self.apply_scroll_row_background(scroll_bottom - 1, &blank);
+            }
         }
         self.repair_multicells_with_selection(&blank);
         let preserve_history =
@@ -3047,6 +3052,9 @@ impl Terminal {
                     &blank,
                     true,
                 );
+            }
+            if full_width {
+                self.apply_scroll_row_background(scroll_top, &blank);
             }
         }
         self.repair_multicells_with_selection(&blank);
@@ -3870,6 +3878,21 @@ impl Terminal {
             bg_spec: self.current_bg_spec,
             flags: CellFlags::DIRTY,
             ..Cell::default()
+        }
+    }
+
+    /// Full-width grid scrolling recycles an already-cleared default row.
+    /// Apply only BCE's background; do not inherit live text attributes or
+    /// touch surviving cells/selection. Default backgrounds need no extra pass.
+    fn apply_scroll_row_background(&mut self, row: usize, blank: &Cell) {
+        if blank.bg_spec == ColorSpec::Default && blank.bg == Color::default_bg() {
+            return;
+        }
+        if let Some(row) = self.grid_mut().row_mut(row) {
+            for cell in row.iter_mut() {
+                cell.bg = blank.bg;
+                cell.bg_spec = blank.bg_spec;
+            }
         }
     }
 
@@ -4882,6 +4905,7 @@ impl Terminal {
                     );
                     self.grid_mut()
                         .scroll_region_down(cursor.row, scroll_bottom);
+                    self.apply_scroll_row_background(cursor.row, &blank);
                     self.shift_selection_in_region(
                         cursor.row..scroll_bottom,
                         scroll_left..scroll_right,
@@ -4949,6 +4973,7 @@ impl Terminal {
                         &blank,
                     );
                     self.grid_mut().scroll_region_up(cursor.row, scroll_bottom);
+                    self.apply_scroll_row_background(scroll_bottom - 1, &blank);
                     self.shift_selection_in_region(
                         cursor.row..scroll_bottom,
                         scroll_left..scroll_right,

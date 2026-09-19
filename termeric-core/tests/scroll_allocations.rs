@@ -2,6 +2,7 @@
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
+use termeric_core::Terminal;
 use termeric_core::grid::Grid;
 
 thread_local! {
@@ -87,4 +88,27 @@ fn nonarchiving_scrolls_reuse_rows_without_allocations() {
         failures.is_empty(),
         "unexpected allocation traffic: {failures:?}"
     );
+}
+
+#[test]
+fn colored_terminal_scrolls_preserve_allocation_free_row_reuse() {
+    for operation in *b"STLM" {
+        let mut terminal = Terminal::new(80, 30);
+        // An alternate screen has no archival allocation. Exercise the actual
+        // terminal-level BCE path, not just its underlying grid operations.
+        terminal.process(b"\x1b[?1049h\x1b[44m");
+        TRAFFIC.with(|traffic| traffic.set(Some((0, 0))));
+        for _ in 0..1_000 {
+            match operation {
+                b'S' => terminal.scroll_up(1),
+                b'T' => terminal.scroll_down(1),
+                b'L' => terminal.insert_lines(1),
+                b'M' => terminal.delete_lines(1),
+                _ => unreachable!(),
+            }
+        }
+        let measured = TRAFFIC.with(|traffic| traffic.replace(None).unwrap());
+        assert_eq!(measured, (0, 0), "operation={}", operation as char);
+        assert_eq!(terminal.grid().scrollback_len(), 0);
+    }
 }

@@ -16,8 +16,17 @@ fill path to tmux; the other rectangular controls have no corresponding tmux
 terminfo feature flag.
 `bce` claim is backed by
 ED/EL/ECH/ICH/DCH tests that preserve the cursor and populate erased/inserted
-cells with the active background color; ED 3 clears saved lines without
-destroying the viewport. `is2` and `rs2` use the non-destructive DECSTR soft
+cells with the active background color, plus SU/SD/IL/DL and implicit
+LF/IND/NEL/RI/wrap scrolling tests. Newly exposed cells carry only the active
+background, not text attributes, protection, or hyperlink identity. Default,
+indexed, and truecolor identities survive full/partial margins and both
+screens; colored blanks retain their background in history, and synchronized
+output keeps them hidden until release. This matches the
+[ncurses BCE scrolling contract](https://invisible-island.net/ncurses/ncurses.faq.html).
+The default-background path retains its no-extra-fill-pass behavior; colored
+terminal scrolling on the alternate screen also has a zero-allocation rail.
+ED 3 clears saved lines without destroying the viewport.
+`is2` and `rs2` use the non-destructive DECSTR soft
 reset, whose reset-versus-preserve contract is independently fixture-tested;
 they do not clear the screen, scrollback, or custom tab stops.
 
