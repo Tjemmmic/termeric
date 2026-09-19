@@ -3371,6 +3371,8 @@ mod unix {
     struct StagedFile {
         file: File,
         path: TempPath,
+        // Must remain open through Drop's identity check and unlink.
+        _parent: Option<File>,
     }
 
     impl From<NamedTempFile> for StagedFile {
@@ -3379,7 +3381,11 @@ mod unix {
             // Never let TempPath blindly unlink a replacement during failure,
             // cancellation, or successful publication. Our Drop checks identity.
             path.disable_cleanup(true);
-            Self { file, path }
+            Self {
+                file,
+                path,
+                _parent: None,
+            }
         }
     }
 
@@ -3412,6 +3418,79 @@ mod unix {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    fn open_pinned_directory(path: &Path) -> io::Result<File> {
+        use std::os::fd::FromRawFd;
+
+        #[repr(C)]
+        struct OpenHow {
+            flags: u64,
+            mode: u64,
+            resolve: u64,
+        }
+
+        let path = CString::new(path.as_os_str().as_bytes())
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "NUL in parent"))?;
+        let how = OpenHow {
+            flags: (libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC) as u64,
+            mode: 0,
+            resolve: libc::RESOLVE_NO_SYMLINKS,
+        };
+        // SAFETY: path and initialized open_how live through the syscall.
+        // Success transfers ownership of one new descriptor to this function.
+        let descriptor = unsafe {
+            libc::syscall(
+                libc::SYS_openat2,
+                libc::AT_FDCWD,
+                path.as_ptr(),
+                &how,
+                std::mem::size_of::<OpenHow>(),
+            )
+        };
+        if descriptor < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: the successful syscall's descriptor has no other owner.
+        Ok(unsafe { File::from_raw_fd(descriptor as _) })
+    }
+
+    struct StagingDirectory {
+        #[cfg(target_os = "linux")]
+        parent: File,
+        path: PathBuf,
+    }
+
+    impl StagingDirectory {
+        fn open(path: &Path) -> io::Result<Self> {
+            #[cfg(target_os = "linux")]
+            {
+                use std::os::fd::AsRawFd;
+
+                let parent = open_pinned_directory(path)?;
+                let path = PathBuf::from(format!("/proc/self/fd/{}", parent.as_raw_fd()));
+                Ok(Self { parent, path })
+            }
+            #[cfg(not(target_os = "linux"))]
+            Ok(Self { path: path.into() })
+        }
+
+        fn create_file(self) -> io::Result<StagedFile> {
+            let temporary = tempfile::Builder::new()
+                .prefix(".termeric-transfer-")
+                .tempfile_in(&self.path)?;
+            #[cfg(target_os = "linux")]
+            {
+                let mut staged = StagedFile::from(temporary);
+                // TempPath preserves this trusted procfs path. Keep its parent
+                // descriptor alive until StagedFile::drop finishes cleanup.
+                staged._parent = Some(self.parent);
+                Ok(staged)
+            }
+            #[cfg(not(target_os = "linux"))]
+            Ok(StagedFile::from(temporary))
+        }
+    }
+
     struct PublicationTarget {
         #[cfg(target_os = "linux")]
         parent: File,
@@ -3440,38 +3519,9 @@ mod unix {
             }
             #[cfg(target_os = "linux")]
             {
-                use std::os::fd::{AsRawFd, FromRawFd};
+                use std::os::fd::AsRawFd;
 
-                #[repr(C)]
-                struct OpenHow {
-                    flags: u64,
-                    mode: u64,
-                    resolve: u64,
-                }
-
-                let parent = CString::new(path.parent().unwrap().as_os_str().as_bytes())
-                    .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "NUL in parent"))?;
-                let how = OpenHow {
-                    flags: (libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC) as u64,
-                    mode: 0,
-                    resolve: libc::RESOLVE_NO_SYMLINKS,
-                };
-                // SAFETY: the NUL-terminated path and initialized open_how live
-                // throughout the call. Success returns a new owned descriptor.
-                let descriptor = unsafe {
-                    libc::syscall(
-                        libc::SYS_openat2,
-                        libc::AT_FDCWD,
-                        parent.as_ptr(),
-                        &how,
-                        std::mem::size_of::<OpenHow>(),
-                    )
-                };
-                if descriptor < 0 {
-                    return Err(io::Error::last_os_error());
-                }
-                // SAFETY: the successful syscall's descriptor has no other owner.
-                let parent = unsafe { File::from_raw_fd(descriptor as _) };
+                let parent = open_pinned_directory(path.parent().unwrap())?;
                 let original_path = path.to_owned();
                 let path =
                     PathBuf::from(format!("/proc/self/fd/{}", parent.as_raw_fd())).join(name);
@@ -3561,10 +3611,7 @@ mod unix {
         while let Some(candidate) = ancestor {
             match fs::symlink_metadata(candidate) {
                 Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
-                    return tempfile::Builder::new()
-                        .prefix(".termeric-transfer-")
-                        .tempfile_in(candidate)
-                        .map(StagedFile::from);
+                    return StagingDirectory::open(candidate)?.create_file();
                 }
                 Ok(_) => {
                     return Err(io::Error::new(
@@ -4693,6 +4740,136 @@ mod unix {
 
         #[test]
         #[cfg(target_os = "linux")]
+        fn staging_rejects_symlink_ancestors_and_uses_nearest_existing_parent() {
+            let root = tempdir().unwrap();
+            let real = root.path().join("real");
+            fs::create_dir_all(real.join("nested")).unwrap();
+            let link = root.path().join("link");
+            std::os::unix::fs::symlink(&real, &link).unwrap();
+            for directory in [&link, &link.join("nested")] {
+                assert!(StagingDirectory::open(directory).is_err());
+                assert!(stage_file(&directory.join("destination")).is_err());
+            }
+            assert_eq!(fs::read_dir(&real).unwrap().count(), 1);
+            assert_eq!(fs::read_dir(real.join("nested")).unwrap().count(), 0);
+            let staged = stage_file(&real.join("missing/deeper/file")).unwrap();
+            let parent = staged._parent.as_ref().unwrap().metadata().unwrap();
+            let expected = fs::metadata(&real).unwrap();
+            assert_eq!(
+                (parent.dev(), parent.ino()),
+                (expected.dev(), expected.ino())
+            );
+            assert!(!real.join("missing").exists());
+            drop(staged);
+            assert_eq!(fs::read_dir(&real).unwrap().count(), 1);
+        }
+
+        #[test]
+        #[cfg(target_os = "linux")]
+        fn pinned_staging_cleanup_runs_after_publication_success_and_failure() {
+            for collision in [false, true] {
+                let root = tempdir().unwrap();
+                let parent = root.path().join("parent");
+                let moved = root.path().join("moved");
+                fs::create_dir(&parent).unwrap();
+                let mut staged = stage_file(&parent.join("destination")).unwrap();
+                staged.as_file_mut().write_all(b"approved payload").unwrap();
+                prepare_staged_file(staged.as_file(), 0o400, Some(-1)).unwrap();
+                let identity = staged.as_file().metadata().unwrap();
+                let name = staged.path.file_name().unwrap().to_owned();
+                fs::rename(&parent, &moved).unwrap();
+                fs::create_dir(&parent).unwrap();
+                let replacement = parent.join(&name);
+                fs::write(&replacement, b"keep replacement").unwrap();
+                let destination = root.path().join("published");
+                if collision {
+                    fs::write(&destination, b"keep destination").unwrap();
+                }
+                let result = PublicationTarget::open(&destination)
+                    .unwrap()
+                    .publish(staged);
+                if collision {
+                    assert_eq!(result.unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+                    assert_eq!(fs::read(&destination).unwrap(), b"keep destination");
+                } else {
+                    let published = result.unwrap();
+                    let after = published.metadata().unwrap();
+                    assert_eq!((after.dev(), after.ino()), (identity.dev(), identity.ino()));
+                    assert_eq!(after.permissions().mode() & 0o777, 0o400);
+                    assert_eq!((after.mtime(), after.mtime_nsec()), (-1, 999_999_999));
+                    assert_eq!(fs::read(&destination).unwrap(), b"approved payload");
+                }
+                assert!(!moved.join(&name).exists());
+                assert_eq!(fs::read(&replacement).unwrap(), b"keep replacement");
+            }
+        }
+
+        #[test]
+        #[cfg(target_os = "linux")]
+        fn staging_creation_and_cleanup_retain_replaced_ancestors() {
+            for symbolic in [false, true] {
+                for replace_ancestor in [false, true] {
+                    for replace_before_creation in [false, true] {
+                        let root = tempdir().unwrap();
+                        let ancestor = root.path().join("ancestor");
+                        let parent = ancestor.join("parent");
+                        fs::create_dir_all(&parent).unwrap();
+                        let mut directory = Some(StagingDirectory::open(&parent).unwrap());
+                        let staged = if replace_before_creation {
+                            None
+                        } else {
+                            Some(directory.take().unwrap().create_file().unwrap())
+                        };
+                        let replaced = if replace_ancestor { &ancestor } else { &parent };
+                        let moved = root.path().join("moved");
+                        fs::rename(replaced, &moved).unwrap();
+                        let outside = root.path().join("outside");
+                        let replacement = if symbolic { &outside } else { replaced };
+                        fs::create_dir(replacement).unwrap();
+                        let replacement_parent = if replace_ancestor {
+                            let nested = replacement.join("parent");
+                            fs::create_dir(&nested).unwrap();
+                            nested
+                        } else {
+                            replacement.clone()
+                        };
+                        if symbolic {
+                            std::os::unix::fs::symlink(&outside, replaced).unwrap();
+                        }
+                        let mut staged = staged
+                            .unwrap_or_else(|| directory.take().unwrap().create_file().unwrap());
+                        let moved_parent = if replace_ancestor {
+                            moved.join("parent")
+                        } else {
+                            moved
+                        };
+                        let original_file = moved_parent.join(staged.path.file_name().unwrap());
+                        assert!(
+                            original_file.is_file(),
+                            "staging must stay in pinned directory"
+                        );
+                        assert_eq!(fs::read_dir(&replacement_parent).unwrap().count(), 0);
+                        staged.as_file_mut().write_all(b"approved payload").unwrap();
+                        assert_eq!(fs::read(&original_file).unwrap(), b"approved payload");
+                        let replacement_file =
+                            replacement_parent.join(staged.path.file_name().unwrap());
+                        fs::write(&replacement_file, b"keep").unwrap();
+                        let before = fs::metadata(&replacement_file).unwrap();
+                        drop(staged);
+                        assert!(
+                            !original_file.exists(),
+                            "cleanup must use the retained parent"
+                        );
+                        let after = fs::metadata(&replacement_file).unwrap();
+                        assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+                        assert_eq!(fs::read(&replacement_file).unwrap(), b"keep");
+                    }
+                }
+            }
+        }
+
+        #[test]
+        #[cfg(target_os = "linux")]
         fn directory_creation_rejects_existing_entries_and_symlink_ancestors() {
             for kind in ["file", "directory", "symlink", "ancestor"] {
                 let root = tempdir().unwrap();
@@ -5111,7 +5288,9 @@ mod unix {
             for replacement_kind in ["file", "link", "directory", "none"] {
                 let root = tempdir().unwrap();
                 let staged = stage_file(&root.path().join("destination")).unwrap();
-                let source = staged.path.to_path_buf();
+                // The procfs path intentionally expires with the retained
+                // parent descriptor. Inspect the real entry after drop.
+                let source = root.path().join(staged.path.file_name().unwrap());
                 if replacement_kind == "none" {
                     drop(staged);
                     assert!(!source.exists());

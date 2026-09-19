@@ -109,13 +109,23 @@ source with no remaining links fails closed. Regressions replace staging names
 with regular files or symlinks and check destination bytes, inode, permissions,
 timestamps, untouched replacements, and rejection of unlinked originals.
 
+On Linux, staging pins its nearest existing parent with no-symlink `openat2`
+resolution before creating a temporary file through that parent's trusted
+procfs reference. The staged file retains one additional directory descriptor
+until cleanup finishes. Creation requires `openat2` and accessible procfs, with
+no original-path fallback. Missing destination directories are still deferred
+until commit. Regressions replace immediate parents and higher ancestors before
+creation and after creation, preserve replacement-directory entries, and verify
+cleanup on drop and after successful/refused publication.
+
 Staging cleanup on cancellation, failure, and successful publication compares
 the remaining name's no-follow identity with the retained file before unlinking.
-Unknown or replaced names are left alone, and moved staging files are not searched
-for. This cleanup and transaction rollback remain best effort: neither
-identity-check-then-unlink is atomic, and either may leave an orphan. Ancestor
-races during other creation operations and same-inode content mutation by a
-process with write authority also remain outside these publication guarantees.
+It uses the retained parent even if that directory or an ancestor was renamed.
+Unknown or replaced leaf names are left alone; individually renamed staging
+files are not searched for. This cleanup and transaction rollback remain best
+effort: neither identity-check-then-unlink is atomic, and either may leave an
+orphan. Same-type substitutions before identity capture and same-inode content
+mutation by a process with write authority also remain outside these guarantees.
 
 Hard links may name only a regular file ID in the same transfer. On Linux,
 creation uses that source's recorded regular-file handle after validating its
@@ -153,10 +163,11 @@ that creation and timestamps stay on the original link, preserve target content
 and metadata, retain literal relative/absolute/dangling targets, refuse existing
 file/directory/link destinations, and exercise ordinary rollback. This does not
 make creation and identity capture atomic: same-type directory or symbolic-link
-leaf substitutions between those operations, staging-file creation through a
-mutable ancestor pathname, and check-then-unlink cleanup remain separate
-limitations. A moved original directory can retain created entries after
-best-effort rollback; pinning does not chase renamed paths for cleanup.
+leaf substitutions between those operations and check-then-unlink cleanup
+remain separate limitations. A moved original destination directory can retain
+published entries after best-effort rollback; transaction rollback does not
+chase renamed paths. Staging cleanup has its own retained parent as described
+above.
 
 Linux rollback bookkeeping retains created entry identities through file
 handles; symlink identities use metadata-only, no-follow handles.
@@ -183,7 +194,7 @@ open symbolic-link targets as data files, so links to FIFOs do not wait for a ta
 writer. Local regressions cover
 writer-free FIFO-link commit, target preservation, dangling-link identity, and
 preserving a replacement link during rollback. General filesystem calls can
-still block; this fix does not eliminate ancestor-path replacement races.
+still block; these protections do not eliminate every filesystem race.
 
 Created-entry bookkeeping rejects observed types that do not match the entry
 being created. A failed identity lookup or type mismatch grants no rollback
