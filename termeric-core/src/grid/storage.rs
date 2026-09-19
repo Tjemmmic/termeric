@@ -752,11 +752,12 @@ impl GridStorage {
             return;
         }
 
-        // Remove bottom row (discarded)
-        self.rows.pop();
-
-        // Add new empty row at top
-        self.rows.insert(0, Row::new(self.cols));
+        let recycled = self
+            .rows
+            .pop()
+            .expect("nonempty grid")
+            .into_blank(self.cols);
+        self.rows.insert(0, recycled);
     }
 
     /// Scroll a region up by one line
@@ -768,15 +769,14 @@ impl GridStorage {
         // Remove the top line of the region
         let removed = self.rows.remove(top);
 
-        // Insert new line at bottom of region
-        self.rows.insert(bottom - 1, Row::new(self.cols));
-
-        // Optionally push to scrollback if top == 0
-        if top == 0 {
-            self.push_scrollback(removed)
+        // Archive before clearing when this region owns the history boundary.
+        let (evicted, recycled) = if top == 0 {
+            self.push_scrollback_recycling(removed)
         } else {
-            0
-        }
+            (0, removed.into_blank(self.cols))
+        };
+        self.rows.insert(bottom - 1, recycled);
+        evicted
     }
 
     /// Scroll a region down by one line
@@ -785,11 +785,8 @@ impl GridStorage {
             return;
         }
 
-        // Remove the bottom line of the region
-        self.rows.remove(bottom - 1);
-
-        // Insert new line at top of region
-        self.rows.insert(top, Row::new(self.cols));
+        let recycled = self.rows.remove(bottom - 1).into_blank(self.cols);
+        self.rows.insert(top, recycled);
     }
 
     /// Scroll a partial-width rectangle up by one row without affecting
@@ -1464,6 +1461,112 @@ impl GridStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recycled_scrolling_matches_fresh_row_reference() {
+        // Freeze the pre-recycling operations as an independent semantic oracle.
+        fn reference(grid: &mut GridStorage, kind: u8, top: usize, bottom: usize) -> usize {
+            if kind == 0 {
+                if !grid.rows.is_empty() {
+                    grid.rows.pop();
+                    grid.rows.insert(0, Row::new(grid.cols));
+                }
+            } else if top < bottom && bottom <= grid.rows.len() {
+                if kind == 1 {
+                    let removed = grid.rows.remove(top);
+                    grid.rows.insert(bottom - 1, Row::new(grid.cols));
+                    if top == 0 {
+                        return grid.push_scrollback(removed);
+                    }
+                } else {
+                    grid.rows.remove(bottom - 1);
+                    grid.rows.insert(top, Row::new(grid.cols));
+                }
+            }
+            0
+        }
+        for cols in [0, 1, 8] {
+            for rows in [0, 1, 5] {
+                for (line_limit, byte_limit) in [(0, usize::MAX), (3, usize::MAX), (3, 0), (3, 128)]
+                {
+                    for (kind, top, bottom) in [
+                        (0, 0, rows),
+                        (1, 0, rows),
+                        (1, 0, 3),
+                        (1, 1, 4),
+                        (2, 1, 4),
+                        (2, 0, rows),
+                        (1, 2, 2),
+                        (2, 3, 2),
+                        (1, 0, rows + 1),
+                    ] {
+                        let mut actual = GridStorage::new(cols, rows);
+                        let mut expected = GridStorage::new(cols, rows);
+                        for grid in [&mut actual, &mut expected] {
+                            grid.set_scrollback_limit(line_limit);
+                            grid.set_scrollback_byte_limit(byte_limit);
+                            for (index, row) in grid.rows.iter_mut().enumerate() {
+                                for cell in row.iter_mut() {
+                                    cell.set_grapheme("e\u{301}");
+                                    cell.bg_spec = ColorSpec::Indexed(index as u8);
+                                    cell.attrs.insert(CellAttrs::ITALIC);
+                                    cell.flags
+                                        .insert(CellFlags::PROTECTED | CellFlags::HYPERLINK);
+                                    cell.hyperlink_id = Some(index as u32);
+                                    cell.multicell = MultiCell::new(
+                                        2,
+                                        1,
+                                        0,
+                                        0,
+                                        Default::default(),
+                                        Default::default(),
+                                        0,
+                                        0,
+                                    )
+                                    .unwrap();
+                                }
+                                row.set_wrapped(index % 2 == 0);
+                                row.has_multicells();
+                                row.set_clean();
+                            }
+                        }
+                        for _ in 0..8 {
+                            let evicted = match kind {
+                                0 => {
+                                    actual.scroll_down();
+                                    0
+                                }
+                                1 => actual.scroll_region_up(top, bottom),
+                                _ => {
+                                    actual.scroll_region_down(top, bottom);
+                                    0
+                                }
+                            };
+                            assert_eq!(evicted, reference(&mut expected, kind, top, bottom));
+                            assert_eq!(actual.scrollback_bytes, expected.scrollback_bytes);
+                            assert_eq!(actual.scrollback.len(), expected.scrollback.len());
+                            assert_eq!(actual.rows.len(), expected.rows.len());
+                            for (a, b) in actual.rows.iter_mut().zip(&mut expected.rows) {
+                                assert!(a.iter().eq(b.iter()));
+                                assert_eq!(a.is_wrapped(), b.is_wrapped());
+                                assert_eq!(a.has_wide_wrap_padding(), b.has_wide_wrap_padding());
+                                assert_eq!(a.is_dirty(), b.is_dirty());
+                                assert_eq!(a.has_multicells(), b.has_multicells());
+                            }
+                            for (a, b) in actual.scrollback.iter().zip(&expected.scrollback) {
+                                assert_eq!(a.wrapped, b.wrapped);
+                                assert_eq!(a.wide_wrap_padding, b.wide_wrap_padding);
+                                assert_eq!(a.wide_spacers, b.wide_spacers);
+                                for col in 0..cols {
+                                    assert_eq!(a.get(col), b.get(col));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn test_storage_creation() {

@@ -32,6 +32,19 @@ impl Row {
         }
     }
 
+    /// Reuse a discarded viewport row's allocation with exactly `new` state.
+    /// Unlike `clear`, fresh cells have no per-cell DIRTY flags; the row itself
+    /// is dirty. Dropping old cells also releases graphemes and other content.
+    pub(crate) fn into_blank(mut self, cols: usize) -> Self {
+        self.cells.clear();
+        self.cells.resize_with(cols, Cell::default);
+        self.dirty = true;
+        self.wrapped = false;
+        self.wide_wrap_padding = false;
+        self.multicells_present = Some(false);
+        self
+    }
+
     /// Create a row from a vec of cells
     pub fn from_cells(cells: Vec<Cell>, wrapped: bool) -> Self {
         Self {
@@ -860,6 +873,36 @@ mod tests {
             )
             .unwrap(),
             ..Cell::with_char('x')
+        }
+    }
+
+    #[test]
+    fn recycled_blank_has_fresh_row_state_and_reuses_capacity() {
+        for cols in [0, 2, 8, 16] {
+            let mut row = Row::new(8);
+            row[0] = descriptor_cell();
+            row[1].set_grapheme("e\u{301}");
+            row[1].hyperlink_id = Some(17);
+            row[1].attrs.insert(CellAttrs::BOLD);
+            row[1]
+                .flags
+                .insert(CellFlags::HYPERLINK | CellFlags::PROTECTED);
+            row.set_wrapped(true);
+            row.mark_wide_wrap_padding();
+            assert!(row.has_wide_wrap_padding());
+            assert!(row.has_multicells());
+            row.set_clean();
+            let pointer = row.cells.as_ptr();
+            let row = row.into_blank(cols);
+            assert_eq!(row.cells, vec![Cell::default(); cols]);
+            assert!(row.is_dirty());
+            assert!(!row.is_wrapped());
+            assert!(!row.has_wide_wrap_padding());
+            assert_eq!(row.multicells_present, Some(false));
+            if cols <= 8 {
+                assert_eq!(row.cells.as_ptr(), pointer);
+                assert_eq!(row.capacity(), 8);
+            }
         }
     }
 

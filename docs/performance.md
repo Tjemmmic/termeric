@@ -1234,6 +1234,37 @@ are excluded and original `/tmp/` paths map to archive names. Forced teardown
 is not graceful-close acceptance; manual visual feel and hardware-GPU resource
 testing remain separate checks.
 
+### Reverse and region scrolling allocation rail
+
+Reverse scrolling and full-width region scrolling now recycle the discarded
+row's cell buffer instead of allocating another full-width row. Upward regions
+starting at row zero still compact the outgoing content into history before
+reusing its buffer; history limits and eviction counts are unchanged. Fresh
+rows reset content, styles, links, protection, wrapping, and multicell cache
+state, with row dirtiness identical to a newly allocated row.
+
+The ordinary test lane includes a thread-local allocation counter:
+
+```bash
+cargo test -p termeric-core --locked --test scroll_allocations -- --nocapture
+```
+
+It excludes grid construction and destruction, and measures 1,000 iterations
+each of reverse scrolling, downward/upward interior-region scrolling, and
+row-zero region scrolling with history disabled, at 1, 80, and 240 columns.
+Before recycling, each case requested 1,000 allocations: 64,000, 5,120,000, or
+15,360,000 bytes respectively on this 64-bit build. After recycling, every case
+requests zero allocations. This is cumulative allocation traffic, **not** RSS,
+peak memory, or a throughput measurement. Archival history still allocates.
+The test counts successful allocation, zeroed-allocation, and reallocation
+requests only on its own thread, excluding test-runner activity.
+
+A frozen pre-change reference separately checks exact visible cells, row
+metadata, compact history, eviction counts, and history byte accounting across
+empty/single/multi-row grids, invalid regions, repeated scrolling, and line or
+byte eviction limits. This does not establish an end-to-end PTY speedup or
+change the native comparison conclusions above.
+
 ## Profiling recipes
 
 The core resource soak now includes a persistent diff history with 80 synthetic
