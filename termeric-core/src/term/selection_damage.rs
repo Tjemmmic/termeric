@@ -5,6 +5,39 @@ use crate::grid::{Cell, Grid};
 use std::ops::Range;
 
 impl Terminal {
+    /// Follow a full-width upward region move after the grid has archived or
+    /// discarded its top row. Primary row-zero regions append to history even
+    /// when a fixed footer remains below them; history coordinates move too.
+    pub(super) fn shift_selection_after_region_scroll_up(
+        &mut self,
+        rows: Range<usize>,
+        evicted: usize,
+    ) {
+        if self.alt_screen_active || rows.start != 0 {
+            self.shift_selection_in_region(rows, 0..self.cols, -1);
+            return;
+        }
+        let bottom = i32::try_from(rows.end).unwrap_or(i32::MAX);
+        for slot in [&mut self.selection, &mut self.navigation_cursor] {
+            if let Some(selection) = slot {
+                let (start, end) = selection.bounds();
+                if start.row >= bottom {
+                    continue;
+                }
+                if end.row >= bottom {
+                    // Mixed movement would insert unrelated blanks into the
+                    // selected range. Do not invent a discontiguous selection.
+                    *slot = None;
+                } else {
+                    selection.start.row = selection.start.row.saturating_sub(1);
+                    selection.end.row = selection.end.row.saturating_sub(1);
+                }
+            }
+        }
+        self.clear_selection_if_evicted();
+        self.note_history_eviction(evicted);
+    }
+
     pub(super) fn selection_reflow_points(&self) -> [Option<(i32, usize)>; 2] {
         self.selection
             .as_ref()

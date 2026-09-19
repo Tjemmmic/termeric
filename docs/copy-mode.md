@@ -81,6 +81,19 @@ selections and cover unselected navigation, damaged/evicted ranges, ownership,
 screen transitions, and frozen/resize compatibility. This does not establish
 all protocols' mutation coverage or native desktop acceptance.
 
+Primary full-width upward regions beginning at row zero archive their outgoing
+rows even when a fixed footer remains below the region. Selection endpoints and
+the invisible copy cursor now follow that archival, including already-negative
+history coordinates. Footer-only ranges stay stationary; selections crossing
+the moving/fixed boundary retire because their surviving text is no longer one
+contiguous range. The copy cursor follows its own point independently. Actual
+line/byte eviction clears lost anchors rather than clamping them onto other
+text. Alternate-screen, interior, and partial-width regions retain their
+non-archiving deletion rules. Frozen selections remain separate from these live
+updates. Hermetic SU/DL/LF tests cover all four selection types, both endpoint
+directions, history/live/footer ranges, byte eviction, and full-height DL; this
+does not establish native painting or clipboard acceptance.
+
 ## Quick select
 
 Quick select labels visible OSC 8 links and configured regex matches with stable

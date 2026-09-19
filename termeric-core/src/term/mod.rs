@@ -14,6 +14,8 @@ mod pointer;
 mod scroll_bce;
 #[cfg(test)]
 mod scroll_limits;
+#[cfg(test)]
+mod scroll_selection;
 mod selection;
 mod selection_damage;
 mod title;
@@ -2969,12 +2971,8 @@ impl Terminal {
                     self.retain_prompt_navigation(oldest);
                 }
             } else if full_width {
-                self.grid_mut().scroll_region_up(scroll_top, scroll_bottom);
-                self.shift_selection_in_region(
-                    scroll_top..scroll_bottom,
-                    scroll_left..scroll_right,
-                    -1,
-                );
+                let evicted = self.grid_mut().scroll_region_up(scroll_top, scroll_bottom);
+                self.shift_selection_after_region_scroll_up(scroll_top..scroll_bottom, evicted);
             } else {
                 self.shift_selection_in_region(
                     scroll_top..scroll_bottom,
@@ -4972,13 +4970,9 @@ impl Terminal {
                         scroll_right,
                         &blank,
                     );
-                    self.grid_mut().scroll_region_up(cursor.row, scroll_bottom);
+                    let evicted = self.grid_mut().scroll_region_up(cursor.row, scroll_bottom);
                     self.apply_scroll_row_background(scroll_bottom - 1, &blank);
-                    self.shift_selection_in_region(
-                        cursor.row..scroll_bottom,
-                        scroll_left..scroll_right,
-                        -1,
-                    );
+                    self.shift_selection_after_region_scroll_up(cursor.row..scroll_bottom, evicted);
                 } else {
                     self.shift_selection_in_region(
                         cursor.row..scroll_bottom,

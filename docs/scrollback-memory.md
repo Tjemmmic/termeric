@@ -66,8 +66,9 @@ regions do not change the history view.
 This uses one constant-time offset adjustment, not a retained-row search or
 extra history copy. Tests use unique row contents as an independent identity
 oracle, cover line and multi-row byte eviction, and replay SU, DL, and LF above
-an unchanged footer. This evidence concerns viewport anchoring; selection,
-command-region, and image-coordinate tracking are separate consumers.
+an unchanged footer. Selection and copy-cursor archival have their own
+[identity and mixed-motion checks](copy-mode.md); command-region and
+image-coordinate tracking remain separate consumers.
 
 ## Diagnostics
 
