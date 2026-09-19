@@ -3,7 +3,56 @@ use super::relay_workers::Completion;
 use super::{DomainCloser, ServerFrame, protocol};
 use anyhow::Context;
 use std::io::{Read, Write};
+use std::os::fd::{AsRawFd, RawFd};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
+
+struct FrameBudget<'a> {
+    descriptor: RawFd,
+    timeout: Duration,
+    deadline: Option<Instant>,
+    alive: &'a AtomicBool,
+}
+
+impl FrameBudget<'_> {
+    fn check(&self) -> std::io::Result<()> {
+        if !self.alive.load(Ordering::Acquire) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::ConnectionAborted,
+                "domain output relay cancelled",
+            ));
+        }
+        if self
+            .deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "domain output frame deadline elapsed",
+            ));
+        }
+        Ok(())
+    }
+
+    fn wait_ready(&mut self) -> std::io::Result<()> {
+        loop {
+            self.check()?;
+            let millis = self.deadline.map_or(500, |deadline| {
+                deadline
+                    .saturating_duration_since(Instant::now())
+                    .as_millis()
+                    .clamp(1, 500) as libc::c_int
+            });
+            if super::stdin_ready(self.descriptor, millis)? {
+                // Idle waits have no expiry. Readiness starts one budget for
+                // the entire frame; later header/body reads never renew it.
+                self.deadline
+                    .get_or_insert_with(|| Instant::now() + self.timeout);
+                return self.check();
+            }
+        }
+    }
+}
 
 // Keep the shared length/JSON validator and avoid buffering or prefetching live
 // bytes. read_exact reports UnexpectedEof for both an empty stream and a cut
@@ -12,10 +61,17 @@ struct FrameRead<'a, R> {
     reader: &'a mut R,
     started: bool,
     eof: bool,
+    budget: Option<FrameBudget<'a>>,
 }
 
 impl<R: Read> Read for FrameRead<'_, R> {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        if buffer.is_empty() {
+            return Ok(0);
+        }
+        if let Some(budget) = &mut self.budget {
+            budget.wait_ready()?;
+        }
         let count = self.reader.read(buffer)?;
         self.started |= count != 0;
         self.eof |= count == 0 && !buffer.is_empty();
@@ -24,10 +80,41 @@ impl<R: Read> Read for FrameRead<'_, R> {
 }
 
 pub(super) fn run(
+    reader: &mut (impl Read + AsRawFd),
+    output: &mut impl Write,
+    alive: &AtomicBool,
+    closer: &DomainCloser,
+) -> anyhow::Result<()> {
+    run_with_limits(reader, output, alive, closer, super::RESPONSE_TIMEOUT)
+}
+
+fn run_with_limits(
+    reader: &mut (impl Read + AsRawFd),
+    output: &mut impl Write,
+    alive: &AtomicBool,
+    closer: &DomainCloser,
+    timeout: Duration,
+) -> anyhow::Result<()> {
+    let descriptor = reader.as_raw_fd();
+    run_inner(reader, output, alive, closer, Some((descriptor, timeout)))
+}
+
+#[cfg(test)]
+fn run_unbounded(
     reader: &mut impl Read,
     output: &mut impl Write,
     alive: &AtomicBool,
     closer: &DomainCloser,
+) -> anyhow::Result<()> {
+    run_inner(reader, output, alive, closer, None)
+}
+
+fn run_inner(
+    reader: &mut impl Read,
+    output: &mut impl Write,
+    alive: &AtomicBool,
+    closer: &DomainCloser,
+    budget: Option<(RawFd, Duration)>,
 ) -> anyhow::Result<()> {
     let _completion = Completion { alive, closer };
     loop {
@@ -35,8 +122,20 @@ pub(super) fn run(
             reader,
             started: false,
             eof: false,
+            budget: budget.map(|(descriptor, timeout)| FrameBudget {
+                descriptor,
+                timeout,
+                deadline: None,
+                alive,
+            }),
         };
-        match protocol::read_frame::<ServerFrame>(&mut frame_reader) {
+        let frame = protocol::read_frame::<ServerFrame>(&mut frame_reader).and_then(|frame| {
+            if let Some(budget) = &frame_reader.budget {
+                budget.check()?;
+            }
+            Ok(frame)
+        });
+        match frame {
             Ok(ServerFrame::Output { data, .. }) => {
                 output.write_all(&data)?;
                 output.flush()?;
@@ -69,6 +168,7 @@ pub(super) fn run(
 
 #[cfg(test)]
 mod tests {
+    use super::run_unbounded as run;
     use super::*;
     use std::io::{Cursor, ErrorKind};
     use std::os::fd::AsRawFd;
@@ -414,3 +514,7 @@ mod tests {
         assert!(!alive.load(Ordering::Acquire));
     }
 }
+
+#[cfg(test)]
+#[path = "client_relay_read_tests.rs"]
+mod read_tests;

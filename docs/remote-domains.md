@@ -152,7 +152,12 @@ host is needed for those tests. Live output now reports malformed/truncated
 frames and transport read errors instead of treating all read failures as clean
 EOF. EOF before a new frame remains normal; read interruption caused by local
 owner shutdown is also normal, while decode errors remain errors. Local fixtures
-cover these distinctions without adding live-output deadlines or SSH acceptance.
+cover these distinctions without claiming SSH acceptance. Live-output reads
+allow unlimited idle time between frames, then apply a ten-second deadline to
+each started header/payload without renewing it as bytes arrive. Cancellation
+checks occur at most every 500 ms of polling, including partial reads. Local
+socket tests cover stalls, trickles, idle delivery, and cancellation; these do
+not establish native network acceptance or cancellation of blocked stdout.
 A scope-owned worker set closes and joins every
 thread that started on input/poll errors, later spawn failure, normal input EOF,
 and unwinding, without waiting to append `Detach` to a blocked writer. Early-exit

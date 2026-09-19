@@ -206,6 +206,15 @@ impl Read for DomainReader {
     }
 }
 
+impl AsRawFd for DomainReader {
+    fn as_raw_fd(&self) -> RawFd {
+        match self {
+            Self::Local(stream) => stream.as_raw_fd(),
+            Self::Ssh(stream) => stream.as_raw_fd(),
+        }
+    }
+}
+
 impl Write for DomainWriter {
     fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
         match self {
