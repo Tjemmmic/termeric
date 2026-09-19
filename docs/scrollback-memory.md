@@ -80,8 +80,10 @@ update does not scan or copy history.
 The `term::scroll_prompts` tests cover retained-text identity across SU/DL/LF,
 mixed-motion retirement, active completion, fixed footers, line/byte eviction,
 prompt navigation, and isolation from non-archiving operations. These are core
-regressions, not native shell or graphics acceptance; image-coordinate tracking
-remains a separate consumer.
+regressions, not native shell or graphics acceptance. The separate
+[graphics archival checks](kitty-graphics.md#evidence) preserve source geometry
+and image/text row identity, leave fixed-footer placements stationary, and
+retire fully evicted placements with their relative descendants.
 
 ## Diagnostics
 

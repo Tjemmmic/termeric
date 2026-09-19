@@ -13,6 +13,8 @@ mod pointer;
 #[cfg(test)]
 mod scroll_bce;
 #[cfg(test)]
+mod scroll_graphics;
+#[cfg(test)]
 mod scroll_limits;
 #[cfg(test)]
 mod scroll_prompts;
@@ -2989,17 +2991,35 @@ impl Terminal {
             }
         }
         self.repair_multicells_with_selection(&blank);
-        let preserve_history =
-            !self.alt_screen_active && full_width && scroll_top == 0 && scroll_bottom == self.rows;
+        self.scroll_graphics_up(scroll_top..scroll_bottom, scroll_left..scroll_right, n);
+    }
+
+    /// Match graphics archival to the actual full-width grid movement. DL
+    /// from row zero archives too, including when it covers the whole screen.
+    fn scroll_graphics_up(
+        &mut self,
+        rows: std::ops::Range<usize>,
+        columns: std::ops::Range<usize>,
+        count: usize,
+    ) {
+        let preserve_history = !self.alt_screen_active
+            && rows.start == 0
+            && columns.start == 0
+            && columns.end == self.cols;
         let history_lines = self.grid().scrollback_len();
-        self.graphics.scroll_up(
-            self.alt_screen_active,
-            scroll_top..scroll_bottom,
-            scroll_left..scroll_right,
-            n,
-            preserve_history,
-            history_lines,
-        );
+        if preserve_history && rows.end < self.rows {
+            self.graphics
+                .scroll_archival_region_up(rows.end, count, history_lines);
+        } else {
+            self.graphics.scroll_up(
+                self.alt_screen_active,
+                rows,
+                columns,
+                count,
+                preserve_history,
+                history_lines,
+            );
+        }
     }
 
     /// Scroll the screen down by n lines
@@ -5007,14 +5027,7 @@ impl Terminal {
                 }
             }
             self.repair_multicells_with_selection(&blank);
-            self.graphics.scroll_up(
-                self.alt_screen_active,
-                cursor.row..scroll_bottom,
-                scroll_left..scroll_right,
-                count,
-                false,
-                self.grid().scrollback_len(),
-            );
+            self.scroll_graphics_up(cursor.row..scroll_bottom, scroll_left..scroll_right, count);
             self.grid_mut().set_cursor(cursor.row, scroll_left);
         }
     }

@@ -78,7 +78,8 @@ The end-to-end PTY, terminal, storage, and GPU path supports:
   Unicode placeholders, coordinate/all-visible selectors leave virtual
   prototypes intact while ID, number, and ID-range selectors remove them;
 - placement movement during full-page and fully enclosed DECLRMM rectangular
-  terminal scrolling, primary/alternate-screen
+  terminal scrolling, including primary full-width top-origin archival above
+  a fixed footer and DL from row zero, primary/alternate-screen
   isolation, alternate-screen cleanup, ED2 cleanup, RIS cleanup, storage LRU,
   and renderer cache invalidation when an image ID is reused.
 - protocol-v8-and-later live-domain attachment/reconnect snapshots for complete decoded
@@ -224,6 +225,28 @@ early parser and framing-limit errors, so replies cannot leak into the invoking
 shell after a quiet client exits.
 
 ## Evidence
+
+Top-origin archival moves ordinary placements wholly above the fixed footer,
+including negative history coordinates, without cropping their source or exact
+pixel geometry at row zero. Footer placements and placements crossing the fixed
+boundary remain stationary, consistent with the existing fully-enclosed margin
+policy (see Kitty's
+[margin-scroll implementation](https://github.com/kovidgoyal/kitty/blob/master/kitty/graphics.c)).
+This is Termeric's archival policy, not a claim that all terminals retain history
+for the same margin operations. Full-page scrolling and full-height DL retain
+their unbounded image movement, including images taller than the viewport.
+On archival appends, placements wholly older than retained history are removed;
+relative descendants follow their parent or are removed with it. Last-placement
+removal releases anonymous Sixel/iTerm2 storage, while a synchronized snapshot
+can retain its independent presentation until release.
+
+The `term::scroll_graphics` regressions pair images with uniquely labeled text
+rows across SU, DL, and LF; cover batched scrolling, zero/capped/growing history,
+byte-budget eviction, preserved source geometry, fixed/cross-boundary images,
+relative-parent motion and eviction, alternate/interior/horizontal-margin
+isolation, tall full-page images, and pixel-sized Sixel snapshot ownership.
+They do not establish native visual acceptance or resolve the separately
+reported row-at-a-time reveal without a native retest.
 
 Core unit tests cover strict parsing, raw/PNG/zlib decoding, queries, chunk
 continuations, default-denied ordinary files, opted-in range reads without

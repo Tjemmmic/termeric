@@ -2837,27 +2837,12 @@ impl GraphicsManager {
         preserve_history: bool,
         history_lines: usize,
     ) {
-        let placement_uids_before = self.placement_uids();
-        let count = count as i64;
         if preserve_history {
-            let history_top = -(history_lines as i64);
-            self.placements.retain_mut(|placement| {
-                if placement.alternate_screen != alternate_screen {
-                    return true;
-                }
-                if placement.relative.is_some() {
-                    return true;
-                }
-                placement.row = placement.row.saturating_sub(count);
-                placement
-                    .row
-                    .saturating_add(i64::from(placement.height.unwrap_or(1)))
-                    > history_top
-            });
-            self.cascade_implicitly_removed(placement_uids_before);
-            self.remove_unplaced_protocol_images();
+            self.scroll_history_up(alternate_screen, count, history_lines, None);
             return;
         }
+        let placement_uids_before = self.placement_uids();
+        let count = count as i64;
         let top = rows.start as i64;
         let bottom = rows.end as i64;
         let left = columns.start as u32;
@@ -2889,6 +2874,46 @@ impl GraphicsManager {
                 placement.row = top;
                 true
             }
+        });
+        self.cascade_implicitly_removed(placement_uids_before);
+        self.remove_unplaced_protocol_images();
+    }
+
+    /// Archive full-width primary rows above a fixed footer. The moving area
+    /// includes retained history, so crossing row zero must not crop an image.
+    /// As with other margin scrolling, placements crossing the fixed boundary
+    /// stay stationary; relative children continue to resolve from their parent.
+    pub(crate) fn scroll_archival_region_up(
+        &mut self,
+        bottom: usize,
+        count: usize,
+        history_lines: usize,
+    ) {
+        self.scroll_history_up(false, count, history_lines, Some(bottom));
+    }
+
+    fn scroll_history_up(
+        &mut self,
+        alternate_screen: bool,
+        count: usize,
+        history_lines: usize,
+        fixed_boundary: Option<usize>,
+    ) {
+        let placement_uids_before = self.placement_uids();
+        let count = i64::try_from(count).unwrap_or(i64::MAX);
+        let history_top = -i64::try_from(history_lines).unwrap_or(i64::MAX);
+        self.placements.retain_mut(|placement| {
+            if placement.alternate_screen != alternate_screen || placement.relative.is_some() {
+                return true;
+            }
+            let height = i64::from(placement.height.unwrap_or(1));
+            if fixed_boundary.is_some_and(|bottom| {
+                placement.row.saturating_add(height) > i64::try_from(bottom).unwrap_or(i64::MAX)
+            }) {
+                return true;
+            }
+            placement.row = placement.row.saturating_sub(count);
+            placement.row.saturating_add(height) > history_top
         });
         self.cascade_implicitly_removed(placement_uids_before);
         self.remove_unplaced_protocol_images();
