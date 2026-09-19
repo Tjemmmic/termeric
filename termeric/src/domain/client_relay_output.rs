@@ -1,22 +1,9 @@
 //! Output-worker completion and transport ownership for one attached relay.
+use super::relay_workers::Completion;
 use super::{DomainCloser, ServerFrame, protocol};
 use anyhow::Context;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-
-struct Completion<'a> {
-    alive: &'a AtomicBool,
-    closer: &'a DomainCloser,
-}
-
-impl Drop for Completion<'_> {
-    fn drop(&mut self) {
-        self.alive.store(false, Ordering::Release);
-        // Do not acquire the shared writer mutex: its owner may be blocked
-        // writing to the peer. Closing the transport wakes that write first.
-        self.closer.close();
-    }
-}
 
 // Keep the shared length/JSON validator and avoid buffering or prefetching live
 // bytes. read_exact reports UnexpectedEof for both an empty stream and a cut

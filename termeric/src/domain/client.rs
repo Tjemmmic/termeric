@@ -26,6 +26,8 @@ const UPLOAD_RETRY_DELAY: Duration = Duration::from_millis(100);
 mod attachment_snapshot;
 #[path = "client_relay_output.rs"]
 mod relay_output;
+#[path = "client_relay_resize.rs"]
+mod relay_resize;
 #[path = "client_relay_workers.rs"]
 mod relay_workers;
 
@@ -930,30 +932,18 @@ impl DomainClient {
 
         let resize_alive = Arc::clone(&alive);
         let resize_writer = Arc::clone(&writer);
+        let resize_closer = Arc::clone(&closer);
         workers.resize = Some(
             thread::Builder::new()
                 .name("termeric-domain-relay-resize".into())
                 .spawn(move || {
-                    let mut previous = None;
-                    while resize_alive.load(Ordering::Acquire) {
-                        if let Some(size) = terminal_size(libc::STDIN_FILENO)
-                            && previous != Some(size)
-                        {
-                            previous = Some(size);
-                            if let Ok(mut writer) = resize_writer.lock() {
-                                let _ = protocol::write_frame(
-                                    &mut *writer,
-                                    &ClientFrame::Resize {
-                                        cols: size.cols,
-                                        rows: size.rows,
-                                        pixel_width: size.pixel_width,
-                                        pixel_height: size.pixel_height,
-                                    },
-                                );
-                            }
-                        }
-                        thread::sleep(Duration::from_millis(250));
-                    }
+                    relay_resize::run(
+                        &resize_writer,
+                        &resize_alive,
+                        &resize_closer,
+                        || terminal_size(libc::STDIN_FILENO),
+                        || thread::sleep(Duration::from_millis(250)),
+                    )
                 })?,
         );
 
@@ -967,7 +957,12 @@ impl DomainClient {
                 match stdin.read(&mut buffer) {
                     Ok(0) => break,
                     Ok(read) => {
-                        let mut writer = writer.lock().unwrap();
+                        let mut writer = writer
+                            .lock()
+                            .map_err(|_| anyhow::anyhow!("domain relay writer mutex poisoned"))?;
+                        if !alive.load(Ordering::Acquire) {
+                            break;
+                        }
                         protocol::write_frame(
                             &mut *writer,
                             &ClientFrame::Input {

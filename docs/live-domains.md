@@ -335,7 +335,14 @@ it does not wait for a writer mutex to append a `Detach` frame. The daemon's
 existing EOF handler retires only the exact attachment. Both worker handles
 are joined before either worker error is returned, repeated cleanup is safe,
 and input write failures cannot silently become success. A server/output error
-takes precedence over a secondary broken input pipe. Local fixtures inject
+takes precedence over resize/input errors. The resize worker also owns completion
+cleanup on failure or unwinding and returns write/flush/poison errors to the
+joining caller. It records geometry only after a successful frame write, never
+retries a partial frame, and closes a failed transport before releasing its
+writer lock. Both input and resize recheck liveness after acquiring that lock.
+Local shutdown interrupting a resize write is normal cleanup, not a new failure.
+Cell and pixel geometry deduplication and the 250-ms polling interval are
+unchanged; this adds no write or mutex-wait deadline. Local fixtures inject
 zero/partial/full-start exits, input failure and unwinding, worker failures,
 blocked socket writes, and inert-child cleanup; they do not exhaust the OS
 thread limit. This is not a global teardown deadline: connection setup and a

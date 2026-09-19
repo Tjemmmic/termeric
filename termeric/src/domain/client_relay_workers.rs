@@ -4,11 +4,24 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 
+pub(super) struct Completion<'a> {
+    pub(super) alive: &'a AtomicBool,
+    pub(super) closer: &'a DomainCloser,
+}
+
+impl Drop for Completion<'_> {
+    fn drop(&mut self) {
+        self.alive.store(false, Ordering::Release);
+        // Never take the writer mutex: closing first wakes blocked writers.
+        self.closer.close();
+    }
+}
+
 pub(super) struct Workers {
     alive: Arc<AtomicBool>,
     closer: Arc<DomainCloser>,
     pub(super) output: Option<JoinHandle<anyhow::Result<()>>>,
-    pub(super) resize: Option<JoinHandle<()>>,
+    pub(super) resize: Option<JoinHandle<anyhow::Result<()>>>,
 }
 
 impl Workers {
@@ -33,8 +46,8 @@ impl Workers {
         if let Some(output) = output {
             output.map_err(|_| anyhow::anyhow!("domain output relay panicked"))??;
         }
-        if resize.is_some_and(|result| result.is_err()) {
-            anyhow::bail!("domain resize relay panicked");
+        if let Some(resize) = resize {
+            resize.map_err(|_| anyhow::anyhow!("domain resize relay panicked"))??;
         }
         Ok(())
     }
@@ -104,6 +117,7 @@ mod tests {
                         workers.resize = Some(thread::spawn(move || {
                             let result = writer.write_all(&vec![0; 1024 * 1024]);
                             let _ = resize_tx.send(result);
+                            Ok(())
                         }));
                         // Real send progress followed by a blocked large write;
                         // an unscheduled thread cannot satisfy the fixture.
@@ -143,7 +157,7 @@ mod tests {
 
     #[test]
     fn relay_worker_finish_joins_every_handle_before_reporting_errors() {
-        for failure in 0..4 {
+        for failure in 0..5 {
             let (client, _peer) = UnixStream::pair().unwrap();
             let alive = Arc::new(AtomicBool::new(true));
             let mut workers =
@@ -163,6 +177,10 @@ mod tests {
                 }
                 completed.store(true, Ordering::Release);
                 assert_ne!(failure, 2, "fixture resize panic");
+                if failure == 4 {
+                    anyhow::bail!("fixture resize failure");
+                }
+                Ok(())
             }));
             let result = workers.finish();
             assert!(resize_done.load(Ordering::Acquire));
@@ -172,6 +190,7 @@ mod tests {
                 let expected = match failure {
                     0 => "fixture output failure",
                     1 => "domain output relay panicked",
+                    4 => "fixture resize failure",
                     _ => "domain resize relay panicked",
                 };
                 assert!(result.unwrap_err().to_string().contains(expected));

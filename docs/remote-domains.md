@@ -158,6 +158,13 @@ thread that started on input/poll errors, later spawn failure, normal input EOF,
 and unwinding, without waiting to append `Detach` to a blocked writer. Early-exit
 and partial-start fixtures cover that ownership boundary. These changes do not
 add connection deadlines or make a blocked local stdout sink cancellable.
+Resize workers now share completion cleanup and return write/flush/poison errors
+through the joined worker result instead of silently dropping them. A failed
+resize closes the transport before unlocking the writer, and producers recheck
+liveness after acquiring that lock. Successful geometry is deduplicated only
+after the frame is written. Intentional shutdown remains normal; the existing
+250-ms poll and unbounded write/mutex waits are unchanged. Hermetic tests cover
+partial writes, flush failure, poison/unwind, and cell/pixel geometry deduplication.
 Separately, attachment snapshot replay bounds each frame read to ten seconds
 and the full replay to five minutes; complete fragments cannot renew that total.
 Expiry closes the owned transport before workers start. Text writes and the
