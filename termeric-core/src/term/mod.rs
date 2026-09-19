@@ -15,6 +15,8 @@ mod multiple_cursors;
 mod notification;
 mod pointer;
 #[cfg(test)]
+mod reflow_prompts;
+#[cfg(test)]
 mod scroll_bce;
 #[cfg(test)]
 mod scroll_graphics;
@@ -155,6 +157,13 @@ struct TerminalRect {
 struct ShellLogicalAnchor {
     line: usize,
     cell: usize,
+}
+
+impl ShellLogicalAnchor {
+    fn retained_after_resize(self, outcome: crate::grid::ResizeOutcome) -> Option<Self> {
+        let (line, cell) = outcome.retained_anchor(self.line, self.cell)?;
+        Some(Self { line, cell })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2335,9 +2344,10 @@ impl Terminal {
         } else {
             [None; 2]
         };
-        let primary_shift = self
+        let primary_resize = self
             .grid
             .resize_with_points(cols, rows, &mut primary_points);
+        let primary_shift = primary_resize.archived_rows;
         let resize_blank = Cell {
             flags: CellFlags::DIRTY,
             ..Cell::default()
@@ -2355,11 +2365,15 @@ impl Terminal {
         let remapped_shell_rows = shell_anchors
             .into_iter()
             .filter_map(|(old_row, anchor)| {
-                shell_row_from_anchor(&self.grid, anchor).map(|new_row| (old_row, new_row))
+                anchor
+                    .retained_after_resize(primary_resize)
+                    .and_then(|anchor| shell_row_from_anchor(&self.grid, anchor))
+                    .map(|new_row| (old_row, new_row))
             })
             .collect::<HashMap<_, _>>();
         self.shell.prompt_tracker.remap_rows(&remapped_shell_rows);
         self.prompt_navigation = prompt_navigation_anchor
+            .and_then(|anchor| anchor.retained_after_resize(primary_resize))
             .and_then(|anchor| shell_row_from_anchor(&self.grid, anchor))
             .filter(|row| {
                 self.shell
@@ -2378,7 +2392,8 @@ impl Terminal {
         };
         let alternate_shift = self
             .alt_grid
-            .resize_with_points(cols, rows, &mut alternate_points);
+            .resize_with_points(cols, rows, &mut alternate_points)
+            .archived_rows;
         if self.alt_screen_active {
             if same_columns {
                 self.remap_selection_after_height_resize(alternate_shift, rows);

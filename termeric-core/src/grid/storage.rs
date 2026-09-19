@@ -11,6 +11,39 @@ use std::ops::Deref;
 // a per-cell map or a second copy of retained history.
 type ReflowPoints<const N: usize> = [Option<(usize, usize)>; N];
 
+/// Exact row movement and discarded logical prefix from one resize.
+/// Bookmark units exclude wide spacers and synthetic wrap padding, matching
+/// RowView::reflow_unit_count at both old and new widths.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct ResizeOutcome {
+    pub archived_rows: usize,
+    evicted_lines: usize,
+    evicted_units: usize,
+}
+
+impl ResizeOutcome {
+    fn record_eviction(&mut self, row: RowView<'_>) {
+        if row.is_wrapped() {
+            self.evicted_units = self.evicted_units.saturating_add(row.reflow_unit_count());
+        } else {
+            self.evicted_lines = self.evicted_lines.saturating_add(1);
+            self.evicted_units = 0;
+        }
+    }
+
+    /// Translate a logical bookmark relative to the old oldest row. Reject
+    /// anchors inside the discarded prefix instead of rebinding to new text.
+    pub(crate) fn retained_anchor(&self, line: usize, unit: usize) -> Option<(usize, usize)> {
+        let line = line.checked_sub(self.evicted_lines)?;
+        let unit = if line == 0 {
+            unit.checked_sub(self.evicted_units)?
+        } else {
+            unit
+        };
+        Some((line, unit))
+    }
+}
+
 fn capture_line_points<const N: usize>(
     source: ReflowPoints<N>,
     row: usize,
@@ -659,15 +692,26 @@ impl GridStorage {
     }
 
     fn push_scrollback(&mut self, row: Row) -> usize {
+        self.push_scrollback_with_eviction(row, &mut |_| {})
+    }
+
+    fn push_scrollback_with_eviction(
+        &mut self,
+        row: Row,
+        on_eviction: &mut impl FnMut(RowView<'_>),
+    ) -> usize {
         // A zero limit is used by viewport-only buffers such as the alternate
         // screen. Avoid allocating a compact row merely to evict it again.
         if self.scrollback_limit == 0 || self.scrollback_byte_limit == 0 {
+            on_eviction(RowView {
+                inner: RowViewInner::Visible(&row),
+            });
             return 1;
         }
         let compact = CompactRow::from_row(row);
         self.scrollback_bytes = self.scrollback_bytes.saturating_add(compact.owned_bytes());
         self.scrollback.push_back(compact);
-        self.enforce_scrollback_limits()
+        self.enforce_scrollback_limits_with_eviction(on_eviction)
     }
 
     fn push_scrollback_recycling(&mut self, row: Row) -> (usize, Row) {
@@ -687,6 +731,13 @@ impl GridStorage {
     }
 
     fn enforce_scrollback_limits(&mut self) -> usize {
+        self.enforce_scrollback_limits_with_eviction(&mut |_| {})
+    }
+
+    fn enforce_scrollback_limits_with_eviction(
+        &mut self,
+        on_eviction: &mut impl FnMut(RowView<'_>),
+    ) -> usize {
         let mut evicted = 0;
         while self.scrollback.len() > self.scrollback_limit
             || self.scrollback_bytes > self.scrollback_byte_limit
@@ -694,6 +745,9 @@ impl GridStorage {
             let Some(row) = self.scrollback.pop_front() else {
                 break;
             };
+            on_eviction(RowView {
+                inner: RowViewInner::History(&row),
+            });
             self.scrollback_bytes = self.scrollback_bytes.saturating_sub(row.owned_bytes());
             evicted += 1;
         }
@@ -866,7 +920,9 @@ impl GridStorage {
         cursor_row: usize,
         cursor_col: usize,
     ) -> ((usize, usize), usize) {
-        self.resize_with_points(new_cols, new_rows, cursor_row, cursor_col, &mut [None; 2])
+        let (cursor, outcome) =
+            self.resize_with_points(new_cols, new_rows, cursor_row, cursor_col, &mut [None; 2]);
+        (cursor, outcome.archived_rows)
     }
 
     pub fn resize_with_points<const N: usize>(
@@ -876,7 +932,7 @@ impl GridStorage {
         cursor_row: usize,
         cursor_col: usize,
         points: &mut [Option<(i32, usize)>; N],
-    ) -> ((usize, usize), usize) {
+    ) -> ((usize, usize), ResizeOutcome) {
         let old_cols = self.cols;
         let mut new_cursor = (cursor_row, cursor_col);
         let history = self.scrollback.len();
@@ -887,6 +943,7 @@ impl GridStorage {
             })
         });
         let mut evicted = 0;
+        let mut outcome = ResizeOutcome::default();
 
         if new_cols != old_cols {
             // A wrapped history tail continues into the first visible row.
@@ -971,7 +1028,9 @@ impl GridStorage {
             if max_push > 0 {
                 let visible = self.rows.split_off(max_push);
                 for row in std::mem::replace(&mut self.rows, visible) {
-                    evicted += self.push_scrollback(row);
+                    evicted += self.push_scrollback_with_eviction(row, &mut |row| {
+                        outcome.record_eviction(row)
+                    });
                 }
             }
             rows_pushed_top = max_push;
@@ -992,7 +1051,8 @@ impl GridStorage {
         new_cursor.1 = new_cursor.1.min(new_cols.saturating_sub(1));
 
         // Enforce scrollback limit after reflow (reflow can change line count)
-        evicted += self.enforce_scrollback_limits();
+        evicted +=
+            self.enforce_scrollback_limits_with_eviction(&mut |row| outcome.record_eviction(row));
 
         let history = self.scrollback.len();
         *points = mapped.map(|point| {
@@ -1007,7 +1067,8 @@ impl GridStorage {
         });
 
         self.cols = new_cols;
-        (new_cursor, rows_pushed_top)
+        outcome.archived_rows = rows_pushed_top;
+        (new_cursor, outcome)
     }
 
     /// Reflow compact history one logical line at a time. This avoids expanding

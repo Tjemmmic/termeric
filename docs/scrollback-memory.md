@@ -52,6 +52,18 @@ without discarding fully retained historical marks. Completed identities stay
 inside the existing bounded tracker so consumers observe each completion at
 most once, but no erased coordinate can authorize a later grid read.
 
+Resize reports the exact discarded logical-line prefix, including a partially
+retained wrapped line. OSC 133 command boundaries and prompt navigation subtract
+that prefix before resolving their new coordinates. An evicted marker cannot
+rebind to unrelated text that happens to become the new oldest line. Wide
+spacers and synthetic wrap padding do not count as bookmark units; retained
+blank command boundaries remain valid. Completed and active commands retain
+their monotonic identity and exit status even when live-text authority is lost.
+The `term::reflow_prompts` tests use independently labeled text across line/byte
+caps, width/height changes, partial wide-line eviction, blank boundaries,
+navigation, and active-command completion. The eviction report is constant-size
+metadata collected while removing rows, not a history copy or per-cell map.
+
 Graphics placements wholly outside retained history are retired immediately on
 clear or budget reduction, along with relative descendants. Last-placement
 removal frees anonymous Sixel/iTerm2 pixels; reusable Kitty data remains in its

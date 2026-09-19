@@ -17,6 +17,7 @@ pub use cell::{
 pub use hyperlink::{Hyperlink, HyperlinkRegistry};
 pub use resize_tracking::ResizeTrackingToken;
 pub use row::Row;
+pub(crate) use storage::ResizeOutcome;
 pub use storage::{CellRef, DEFAULT_SCROLLBACK_MEMORY_BYTES, GridMemoryUsage, RowView};
 
 use std::collections::{HashMap, HashSet};
@@ -177,6 +178,7 @@ impl Grid {
     /// is a selection translation only when the column count is unchanged.
     pub(crate) fn resize_with_row_shift(&mut self, cols: usize, rows: usize) -> usize {
         self.resize_with_points(cols, rows, &mut [None; 2])
+            .archived_rows
     }
 
     pub(crate) fn resize_with_points(
@@ -184,7 +186,7 @@ impl Grid {
         cols: usize,
         rows: usize,
         points: &mut [Option<(i32, usize)>; 2],
-    ) -> usize {
+    ) -> ResizeOutcome {
         let mut tracking = self.take_valid_resize_tracking();
         if self.cols != cols
             && let Some(tracking) = &mut tracking
@@ -198,7 +200,7 @@ impl Grid {
         if self.cols != cols || self.rows != rows {
             self.mark_rows_changed();
         }
-        let ((new_row, new_col), rows_pushed_top) = if let Some(tracking) = &mut tracking {
+        let ((new_row, new_col), outcome) = if let Some(tracking) = &mut tracking {
             let mut combined = [points[0], points[1], tracking.points[0], tracking.points[1]];
             let result = self.storage.resize_with_points(
                 cols,
@@ -223,7 +225,7 @@ impl Grid {
         // Clamp scroll offset
         self.scroll_offset = self.scroll_offset.min(self.storage.scrollback_len());
         self.restore_resize_tracking(tracking);
-        rows_pushed_top
+        outcome
     }
 
     /// Get the number of columns
