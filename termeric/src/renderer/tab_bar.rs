@@ -1,11 +1,14 @@
 //! Tab bar rendering and hit-testing
 
 use super::types::*;
-use super::{Renderer, adjust_alpha, contrast_text};
+use super::{Renderer, adjust_alpha, contrast_text, mix};
 use crate::tabs::{TabInfo, TabType};
 
-const MIN_TAB_WIDTH: f32 = 80.0;
-const MAX_TAB_WIDTH: f32 = 200.0;
+/// Logical tab widths before display scaling.
+const MIN_TAB_WIDTH: f32 = 96.0;
+const MAX_TAB_WIDTH: f32 = 240.0;
+/// Logical gap before the first tab when the strip does not overflow.
+const TAB_STRIP_INSET: f32 = 4.0;
 const PREFERRED_VERTICAL_TAB_WIDTH: f32 = 220.0;
 const MIN_VERTICAL_TAB_WIDTH: f32 = 160.0;
 const MIN_TERMINAL_CONTENT_WIDTH: f32 = 160.0;
@@ -210,7 +213,7 @@ fn vertical_tab_bar_hit_test(
     x: f32,
     y: f32,
     rail_width: f32,
-    close_size: f32,
+    chrome: TabChrome,
 ) -> TabBarClick {
     if x < 0.0 || x >= rail_width {
         return TabBarClick::None;
@@ -222,9 +225,7 @@ fn vertical_tab_bar_hit_test(
     ] {
         if layout
             .control_rect(target, rail_width)
-            .is_some_and(|(left, top, width, height)| {
-                x >= left && x < left + width && y >= top && y < top + height
-            })
+            .is_some_and(|rect| contains(rect, x, y))
         {
             return target;
         }
@@ -233,13 +234,9 @@ fn vertical_tab_bar_hit_test(
         if y < slot.y || y >= slot.y + slot.height {
             continue;
         }
-        let close_x = rail_width - close_size - 6.0;
-        let close_y = slot.y + (slot.height - close_size) / 2.0;
+        let surface = chrome.vertical_surface(slot, rail_width);
         if tab_animation_multiplier(&tabs[slot.index]) > 0.3
-            && x >= close_x
-            && x <= close_x + close_size
-            && y >= close_y
-            && y <= close_y + close_size
+            && contains(chrome.close_rect(surface), x, y)
         {
             return TabBarClick::CloseTab(slot.index);
         }
@@ -248,12 +245,26 @@ fn vertical_tab_bar_hit_test(
     TabBarClick::None
 }
 
-fn tab_bar_layout(tabs: &[TabInfo], window_width: f32, height: f32, anchor: usize) -> TabBarLayout {
+fn tab_bar_layout(
+    tabs: &[TabInfo],
+    window_width: f32,
+    height: f32,
+    anchor: usize,
+    scale: f32,
+) -> TabBarLayout {
+    let scale = scale.max(0.1);
+    let (min_width, max_width) = (
+        (MIN_TAB_WIDTH * scale).round(),
+        (MAX_TAB_WIDTH * scale).round(),
+    );
     let tab_strip_end = (window_width - height * 4.0).max(0.0);
-    let overflow = !tabs.is_empty() && tabs.len() as f32 * MIN_TAB_WIDTH > tab_strip_end;
+    let overflow = !tabs.is_empty() && tabs.len() as f32 * min_width > tab_strip_end;
     if !overflow {
-        let width = (tab_strip_end / tabs.len().max(1) as f32).clamp(MIN_TAB_WIDTH, MAX_TAB_WIDTH);
-        let mut x = 0.0;
+        let left = (TAB_STRIP_INSET * scale).round();
+        let width = ((tab_strip_end - left) / tabs.len().max(1) as f32)
+            .clamp(min_width, max_width)
+            .floor();
+        let mut x = left;
         let slots = tabs
             .iter()
             .enumerate()
@@ -281,7 +292,7 @@ fn tab_bar_layout(tabs: &[TabInfo], window_width: f32, height: f32, anchor: usiz
     // tab reaches either end.
     let viewport_x = height;
     let viewport_width = (tab_strip_end - height * 2.0).max(1.0);
-    let visible_count = ((viewport_width / MIN_TAB_WIDTH).floor() as usize)
+    let visible_count = ((viewport_width / min_width).floor() as usize)
         .max(1)
         .min(tabs.len());
     let anchor = anchor.min(tabs.len() - 1);
@@ -289,7 +300,9 @@ fn tab_bar_layout(tabs: &[TabInfo], window_width: f32, height: f32, anchor: usiz
         .saturating_sub(visible_count / 2)
         .min(tabs.len() - visible_count);
     let end = start + visible_count;
-    let width = (viewport_width / visible_count as f32).min(MAX_TAB_WIDTH);
+    let width = (viewport_width / visible_count as f32)
+        .min(max_width)
+        .floor();
     let mut x = viewport_x;
     let slots = tabs[start..end]
         .iter()
@@ -313,6 +326,186 @@ fn tab_bar_layout(tabs: &[TabInfo], window_width: f32, height: f32, anchor: usiz
     }
 }
 
+/// Pixel rectangle: x, y, width, height.
+type Rect = (f32, f32, f32, f32);
+
+fn contains(rect: Rect, x: f32, y: f32) -> bool {
+    x >= rect.0 && x < rect.0 + rect.2 && y >= rect.1 && y < rect.1 + rect.3
+}
+
+/// Whole-pixel chrome geometry at one display scale. Rendering, hit testing,
+/// keyboard focus, and accessibility all derive tab rectangles from here so
+/// they cannot drift apart.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TabChrome {
+    scale: f32,
+}
+
+impl TabChrome {
+    fn new(scale: f32) -> Self {
+        Self {
+            scale: scale.max(0.1),
+        }
+    }
+
+    /// A logical length in whole physical pixels, never below one.
+    fn px(self, logical: f32) -> f32 {
+        (logical * self.scale).round().max(1.0)
+    }
+
+    /// Stroke width for vector icons.
+    fn stroke(self) -> f32 {
+        (1.5 * self.scale).max(1.0)
+    }
+
+    fn corner_radius(self) -> f32 {
+        self.px(6.0)
+    }
+
+    /// Visible surface of a top-bar tab slot.
+    fn horizontal_surface(self, slot: &TabSlot, bar_height: f32) -> Rect {
+        let (inset_x, inset_y) = (self.px(2.0), self.px(4.0));
+        (
+            slot.x + inset_x,
+            inset_y,
+            (slot.width - inset_x * 2.0).max(0.0),
+            (bar_height - inset_y * 2.0).max(0.0),
+        )
+    }
+
+    /// Visible surface of a left-rail tab slot.
+    fn vertical_surface(self, slot: &VerticalTabSlot, rail_width: f32) -> Rect {
+        let (inset_x, inset_y) = (self.px(4.0), self.px(2.0));
+        (
+            inset_x,
+            slot.y + inset_y,
+            (rail_width - inset_x * 2.0).max(0.0),
+            (slot.height - inset_y * 2.0).max(0.0),
+        )
+    }
+
+    /// Close button inside a tab surface.
+    fn close_rect(self, surface: Rect) -> Rect {
+        let size = self.px(16.0).min(surface.3).min(surface.2);
+        (
+            surface.0 + surface.2 - self.px(6.0) - size,
+            (surface.1 + (surface.3 - size) / 2.0).round(),
+            size,
+            size,
+        )
+    }
+}
+
+/// Which edge of the active tab carries the accent indicator.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AccentEdge {
+    Bottom,
+    Left,
+}
+
+/// Commands, workspace, and settings buttons at the right of the top strip.
+fn toolbar_control_rect(target: TabBarClick, window_width: f32, height: f32) -> Option<Rect> {
+    let offset = match target {
+        TabBarClick::CommandsButton => 3.0,
+        TabBarClick::SessionDropdown => 2.0,
+        TabBarClick::Gear => 1.0,
+        _ => return None,
+    };
+    Some((window_width - height * offset, 0.0, height, height))
+}
+
+fn horizontal_tab_bar_element_rect(
+    layout: &TabBarLayout,
+    target: TabBarClick,
+    window_width: f32,
+    height: f32,
+    chrome: TabChrome,
+) -> Option<Rect> {
+    let surface = |index: usize| {
+        layout
+            .tabs
+            .iter()
+            .find(|slot| slot.index == index)
+            .map(|slot| chrome.horizontal_surface(slot, height))
+    };
+    match target {
+        TabBarClick::Tab(index) => surface(index),
+        TabBarClick::CloseTab(index) => surface(index).map(|surface| chrome.close_rect(surface)),
+        TabBarClick::NewTab => Some((layout.add_x, 0.0, height, height)),
+        TabBarClick::PreviousTab => layout.previous_x.map(|x| (x, 0.0, height, height)),
+        TabBarClick::NextTab => layout.next_x.map(|x| (x, 0.0, height, height)),
+        TabBarClick::CommandsButton | TabBarClick::SessionDropdown | TabBarClick::Gear => {
+            toolbar_control_rect(target, window_width, height)
+        }
+        TabBarClick::None => None,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn horizontal_tab_bar_hit_test(
+    layout: &TabBarLayout,
+    tabs: &[TabInfo],
+    x: f32,
+    y: f32,
+    window_width: f32,
+    height: f32,
+    chrome: TabChrome,
+) -> TabBarClick {
+    if y < 0.0 || y >= height {
+        return TabBarClick::None;
+    }
+    for target in [
+        TabBarClick::Gear,
+        TabBarClick::SessionDropdown,
+        TabBarClick::CommandsButton,
+        TabBarClick::PreviousTab,
+        TabBarClick::NextTab,
+        TabBarClick::NewTab,
+    ] {
+        if horizontal_tab_bar_element_rect(layout, target, window_width, height, chrome)
+            .is_some_and(|rect| contains(rect, x, y))
+        {
+            return target;
+        }
+    }
+    for slot in &layout.tabs {
+        if x < slot.x || x >= slot.x + slot.width {
+            continue;
+        }
+        let surface = chrome.horizontal_surface(slot, height);
+        if tab_animation_multiplier(&tabs[slot.index]) > 0.3
+            && contains(chrome.close_rect(surface), x, y)
+        {
+            return TabBarClick::CloseTab(slot.index);
+        }
+        return TabBarClick::Tab(slot.index);
+    }
+    TabBarClick::None
+}
+
+/// A tab's single status marker, in priority order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TabStatus {
+    BroadcastActive,
+    BroadcastArmed,
+    ReadOnly,
+    Pinned,
+}
+
+fn tab_status(tab: &TabInfo) -> Option<TabStatus> {
+    if tab.broadcast_active {
+        Some(TabStatus::BroadcastActive)
+    } else if tab.broadcast_armed {
+        Some(TabStatus::BroadcastArmed)
+    } else if tab.read_only {
+        Some(TabStatus::ReadOnly)
+    } else if tab.pinned {
+        Some(TabStatus::Pinned)
+    } else {
+        None
+    }
+}
+
 impl Renderer {
     /// Width reserved by a vertical tab rail for the current viewport.
     pub fn tab_bar_width(&self) -> f32 {
@@ -323,6 +516,18 @@ impl Renderer {
     pub fn tab_bar_width_for(&self, window_width: f32) -> f32 {
         if self.tab_bar_position == crate::config::TabBarPosition::Left {
             vertical_tab_bar_width(window_width, self.scale_factor)
+        } else {
+            0.0
+        }
+    }
+
+    fn tab_chrome(&self) -> TabChrome {
+        TabChrome::new(self.scale_factor)
+    }
+
+    fn hover_progress(&self, target: TabBarClick) -> f32 {
+        if self.tab_bar_hover == Some(target) {
+            self.tab_bar_hover_progress
         } else {
             0.0
         }
@@ -339,465 +544,417 @@ impl Renderer {
             self.build_vertical_tab_bar(tabs, window_width, window_height, tab_bar_height);
             return;
         }
-        let tab_bar_bg = self.ui.tab_bar_bg;
+        let chrome = self.tab_chrome();
         self.rect_pipeline
-            .push_rect(0.0, 0.0, window_width, tab_bar_height, tab_bar_bg);
-
-        let active_tab_bg = self.ui.tab_active;
-        let inactive_tab_bg = self.ui.tab_inactive;
-        let activity_indicator = self.ui.tab_activity;
-        let active_text_color = self.ui.tab_text_active;
-        let inactive_text_color = self.ui.tab_text_inactive;
-
-        // Reserve space for the session dropdown and gear icon on the right.
-        // The + button floats after the last tab, not in the reserved zone.
-        let gear_button_width = tab_bar_height;
-        let session_button_width = tab_bar_height;
-        let commands_button_width = tab_bar_height;
-        let right_buttons_width = gear_button_width + session_button_width + commands_button_width;
+            .push_rect(0.0, 0.0, window_width, tab_bar_height, self.ui.tab_bar_bg);
         let layout = self.tab_bar_layout(tabs, window_width);
-        let tab_padding = 8.0;
-        let tab_height = tab_bar_height - 4.0; // Leave some margin
-        let show_close_buttons = true;
-        // Reserve space for close button inside tab
-        let close_btn_size = self.cell_height;
-        let close_btn_margin = 4.0;
-
         for slot in &layout.tabs {
-            let i = slot.index;
-            let tab = &tabs[i];
-            // Calculate animation multiplier based on slide-in and close animations
-            let anim_multiplier = tab_animation_multiplier(tab);
-
-            // Animated tab width
-            let tab_width = slot.width;
-
-            let x = slot.x;
-            let y = 2.0; // Small top margin
-
-            // Only render if the tab has some visible width
-            if tab_width > 2.0 {
-                // Tab background with animated alpha for fade effect
-                let base_bg_color = if tab.is_active {
-                    active_tab_bg
-                } else if tab.has_activity {
-                    activity_indicator
-                } else {
-                    inactive_tab_bg
-                };
-
-                // Fade the background based on animation progress
-                let bg_color = [
-                    base_bg_color[0],
-                    base_bg_color[1],
-                    base_bg_color[2],
-                    base_bg_color[3] * anim_multiplier,
-                ];
-
-                self.rect_pipeline.push_rounded_rect(
-                    x + 1.0,
-                    y,
-                    tab_width - 2.0,
-                    tab_height,
-                    bg_color,
-                    4.0,
-                );
-
-                // Tab text - only render when animation progress is significant
-                if anim_multiplier > 0.3 {
-                    let text_alpha = ((anim_multiplier - 0.3) / 0.7).min(1.0); // Fade text
-
-                    let base_text_color = if tab.is_active {
-                        active_text_color
-                    } else {
-                        inactive_text_color
-                    };
-
-                    let text_color = [
-                        base_text_color[0],
-                        base_text_color[1],
-                        base_text_color[2],
-                        base_text_color[3] * text_alpha,
-                    ];
-
-                    // Render tab title (truncate if needed)
-                    // Reserve space for close button when visible
-                    let right_reserve = if show_close_buttons {
-                        close_btn_size + close_btn_margin * 2.0
-                    } else {
-                        tab_padding
-                    };
-                    let title = if tab.title.chars().count() > 15 {
-                        format!("{}...", tab.title.chars().take(12).collect::<String>())
-                    } else {
-                        tab.title.clone()
-                    };
-
-                    // Add tab number prefix
-                    let status = if tab.broadcast_active {
-                        "!! "
-                    } else if tab.broadcast_armed {
-                        "?? "
-                    } else if tab.read_only {
-                        "RO "
-                    } else if tab.pinned {
-                        "PIN "
-                    } else {
-                        ""
-                    };
-                    let label = format!("{}{}: {}", status, i + 1, title);
-
-                    // Render each character of the label
-                    let text_y = y + (tab_height - self.cell_height) / 2.0; // Center vertically
-                    let mut text_x = x + tab_padding;
-
-                    // Plugin accent bar before the label — a short vertical
-                    // stripe rather than a single glyph dot, so AI-backed
-                    // tabs read as distinct at a glance even in crowded
-                    // tab bars.
-                    if matches!(&tab.tab_type, TabType::Plugin { .. }) {
-                        let bar_x = text_x;
-                        let bar_w = 3.0;
-                        let bar_y = y + tab_height * 0.18;
-                        let bar_h = tab_height * 0.64;
-                        let accent = [
-                            self.ui.palette_accent[0],
-                            self.ui.palette_accent[1],
-                            self.ui.palette_accent[2],
-                            text_alpha,
-                        ];
-                        self.rect_pipeline
-                            .push_rounded_rect(bar_x, bar_y, bar_w, bar_h, accent, 1.5);
-                        text_x += bar_w + self.cell_width * 0.5;
-                    }
-
-                    for c in label.chars() {
-                        if text_x + self.cell_width > x + tab_width - right_reserve {
-                            break; // Don't overflow into close button area
-                        }
-                        if !c.is_whitespace() {
-                            self.text_pipeline.push_char(c, text_x, text_y, text_color);
-                        }
-                        text_x += self.cell_width * 0.85;
-                    }
-
-                    // Diff count pill badge
-                    if tab.unreviewed_diff_count > 0 {
-                        let badge_x = text_x + 2.0;
-                        let badge_y = text_y + 1.0;
-                        let badge_w = self.cell_width * 1.8;
-                        let badge_h = self.cell_height - 2.0;
-                        // Only show if there's room before the close button
-                        if badge_x + badge_w < x + tab_width - right_reserve {
-                            let badge_color = [
-                                self.ui.palette_accent[0],
-                                self.ui.palette_accent[1],
-                                self.ui.palette_accent[2],
-                                0.8 * text_alpha,
-                            ];
-                            self.rect_pipeline.push_rounded_rect(
-                                badge_x,
-                                badge_y,
-                                badge_w,
-                                badge_h,
-                                badge_color,
-                                3.0,
-                            );
-                            // Badge text (diff count)
-                            let count_str = format!("{}", tab.unreviewed_diff_count);
-                            let count_x = badge_x
-                                + (badge_w - count_str.len() as f32 * self.cell_width * 0.85) / 2.0;
-                            let count_color = [0.0, 0.0, 0.0, text_alpha];
-                            for c in count_str.chars() {
-                                self.text_pipeline
-                                    .push_char(c, count_x, text_y, count_color);
-                            }
-                        }
-                    }
-
-                    // ── Close (×) button ──
-                    if show_close_buttons {
-                        let close_x = x + tab_width - close_btn_size - close_btn_margin - 2.0;
-                        let close_y = y + (tab_height - close_btn_size) / 2.0;
-
-                        // Subtle rounded background for close button
-                        let close_bg = adjust_alpha(inactive_tab_bg, 0.4 * text_alpha);
-                        self.rect_pipeline.push_rounded_rect(
-                            close_x,
-                            close_y,
-                            close_btn_size,
-                            close_btn_size,
-                            close_bg,
-                            3.0,
-                        );
-
-                        // Draw × close icon — two smooth anti-aliased diagonal lines
-                        {
-                            let close_hover = matches!(self.tab_bar_hover, Some(TabBarClick::CloseTab(idx)) if idx == i);
-                            let hover_t = if close_hover {
-                                self.tab_bar_hover_progress
-                            } else {
-                                0.0
-                            };
-                            let scale = 1.0 + hover_t * 0.2;
-                            let base_alpha = text_color[3] * (0.5 + hover_t * 0.5);
-                            let close_color = [
-                                (text_color[0] + hover_t * 0.3).min(1.0),
-                                text_color[1],
-                                text_color[2],
-                                base_alpha,
-                            ];
-                            let arm = (close_btn_size * 0.25).min(4.5) * scale;
-                            let line_w = 1.5 + hover_t * 0.5;
-                            let cx = close_x + close_btn_size / 2.0;
-                            let cy = close_y + close_btn_size / 2.0;
-                            // Top-left to bottom-right
-                            self.rect_pipeline.push_line(
-                                cx - arm,
-                                cy - arm,
-                                cx + arm,
-                                cy + arm,
-                                line_w,
-                                close_color,
-                            );
-                            // Top-right to bottom-left
-                            self.rect_pipeline.push_line(
-                                cx + arm,
-                                cy - arm,
-                                cx - arm,
-                                cy + arm,
-                                line_w,
-                                close_color,
-                            );
-                        }
-                    }
-                }
-            }
+            let surface = chrome.horizontal_surface(slot, tab_bar_height);
+            self.build_tab_item(&tabs[slot.index], slot.index, surface, AccentEdge::Bottom);
         }
+        let separator = chrome.px(1.0);
+        self.rect_pipeline.push_rect(
+            0.0,
+            tab_bar_height - separator,
+            window_width,
+            separator,
+            adjust_alpha(self.ui.tab_border, 0.6),
+        );
 
-        let border_color = adjust_alpha(self.ui.tab_border, 0.7);
-        self.rect_pipeline
-            .push_rect(0.0, tab_bar_height - 1.0, window_width, 1.0, border_color);
-
-        // Helper: compute hover animation for a specific button
-        let hover_for = |target: TabBarClick| -> f32 {
-            if self.tab_bar_hover == Some(target) {
-                self.tab_bar_hover_progress
-            } else {
-                0.0
-            }
-        };
-
-        // ── Tab overflow controls ──
-        for (target, x, points_right) in [
-            (TabBarClick::PreviousTab, 0.0, false),
-            (
-                TabBarClick::NextTab,
-                window_width - right_buttons_width - tab_bar_height * 2.0,
-                true,
-            ),
+        let overflow = layout.previous_x.is_some() || layout.next_x.is_some();
+        for target in [
+            TabBarClick::PreviousTab,
+            TabBarClick::NextTab,
+            TabBarClick::NewTab,
+            TabBarClick::CommandsButton,
+            TabBarClick::SessionDropdown,
+            TabBarClick::Gear,
         ] {
+            let rect = match target {
+                // Overflow arrows keep a fixed, dimmed slot while either end
+                // still has hidden tabs, so the strip never jumps.
+                TabBarClick::PreviousTab if overflow => {
+                    Some((0.0, 0.0, tab_bar_height, tab_bar_height))
+                }
+                TabBarClick::NextTab if overflow => Some((
+                    window_width - tab_bar_height * 5.0,
+                    0.0,
+                    tab_bar_height,
+                    tab_bar_height,
+                )),
+                _ => horizontal_tab_bar_element_rect(
+                    &layout,
+                    target,
+                    window_width,
+                    tab_bar_height,
+                    chrome,
+                ),
+            };
             let enabled = match target {
                 TabBarClick::PreviousTab => layout.previous_x.is_some(),
                 TabBarClick::NextTab => layout.next_x.is_some(),
-                _ => false,
+                _ => true,
             };
-            if layout.previous_x.is_none() && layout.next_x.is_none() && !enabled {
-                continue;
+            if let Some(rect) = rect {
+                self.build_toolbar_button(target, rect, enabled, false);
             }
-            let hover_t = if enabled { hover_for(target) } else { 0.0 };
-            let alpha = if enabled { 0.75 + hover_t * 0.25 } else { 0.22 };
-            let bg = adjust_alpha(self.ui.tab_inactive, 0.35 + hover_t * 0.25);
+        }
+    }
+
+    /// Draw one tab: its surface, accent indicator, markers, label, and the
+    /// close button or activity dot.
+    fn build_tab_item(&mut self, tab: &TabInfo, index: usize, surface: Rect, edge: AccentEdge) {
+        let chrome = self.tab_chrome();
+        let animation = tab_animation_multiplier(tab);
+        if surface.2 <= 2.0 || surface.3 <= 2.0 {
+            return;
+        }
+        let hovered = matches!(
+            self.tab_bar_hover,
+            Some(TabBarClick::Tab(hovered) | TabBarClick::CloseTab(hovered)) if hovered == index
+        );
+        let hover = if hovered {
+            self.tab_bar_hover_progress
+        } else {
+            0.0
+        };
+        let (x, y, width, height) = surface;
+        let radius = chrome.corner_radius();
+        if tab.is_active {
             self.rect_pipeline.push_rounded_rect(
-                x + 2.0,
-                2.0,
-                tab_bar_height - 4.0,
-                tab_bar_height - 6.0,
-                bg,
-                4.0,
+                x,
+                y,
+                width,
+                height,
+                adjust_alpha(self.ui.tab_active, self.ui.tab_active[3] * animation),
+                radius,
             );
-            let cx = x + tab_bar_height / 2.0;
-            let cy = tab_bar_height / 2.0;
-            let arm = (tab_bar_height * 0.16).min(5.5) * (1.0 + hover_t * 0.15);
-            let direction = if points_right { 1.0 } else { -1.0 };
-            let color = adjust_alpha(self.ui.tab_text_inactive, alpha);
-            self.rect_pipeline.push_line(
-                cx - direction * arm * 0.45,
-                cy - arm,
-                cx + direction * arm * 0.45,
-                cy,
-                1.5 + hover_t * 0.3,
-                color,
-            );
-            self.rect_pipeline.push_line(
-                cx + direction * arm * 0.45,
-                cy,
-                cx - direction * arm * 0.45,
-                cy + arm,
-                1.5 + hover_t * 0.3,
-                color,
+            let accent = adjust_alpha(self.ui.tab_accent, animation);
+            let thickness = chrome.px(2.0);
+            let inset = chrome.px(10.0);
+            match edge {
+                AccentEdge::Bottom if width > inset * 2.0 => self.rect_pipeline.push_rounded_rect(
+                    x + inset,
+                    y + height - thickness,
+                    width - inset * 2.0,
+                    thickness,
+                    accent,
+                    thickness / 2.0,
+                ),
+                AccentEdge::Left if height > inset => self.rect_pipeline.push_rounded_rect(
+                    x,
+                    y + inset / 2.0,
+                    thickness,
+                    height - inset,
+                    accent,
+                    thickness / 2.0,
+                ),
+                _ => {}
+            }
+        } else if hover > 0.0 {
+            self.rect_pipeline.push_rounded_rect(
+                x,
+                y,
+                width,
+                height,
+                adjust_alpha(self.ui.tab_inactive, hover * animation),
+                radius,
             );
         }
-
-        // ── Add (+) tab button — positioned right after the last tab ──
-        let add_size = tab_bar_height;
-        let add_x = layout.add_x;
-        let add_y = 0.0;
-        {
-            let hover_t = hover_for(TabBarClick::NewTab);
-            let bg_alpha = 0.35 + hover_t * 0.25;
-            let add_bg = adjust_alpha(self.ui.tab_inactive, bg_alpha);
-            self.rect_pipeline.push_rounded_rect(
-                add_x + 2.0,
-                add_y + 2.0,
-                add_size - 4.0,
-                tab_bar_height - 6.0,
-                add_bg,
-                4.0,
-            );
-            // Plus icon — two perpendicular lines
-            let scale = 1.0 + hover_t * 0.15;
-            let arm = (add_size * 0.16).min(5.5) * scale;
-            let line_w = 1.5 + hover_t * 0.3;
-            let cx = add_x + add_size / 2.0;
-            let cy = add_y + tab_bar_height / 2.0;
-            let brightness = 1.0 + hover_t * 0.3;
-            let color = [
-                (self.ui.tab_text_inactive[0] * brightness).min(1.0),
-                (self.ui.tab_text_inactive[1] * brightness).min(1.0),
-                (self.ui.tab_text_inactive[2] * brightness).min(1.0),
-                self.ui.tab_text_inactive[3],
-            ];
-            // Horizontal bar
-            self.rect_pipeline
-                .push_line(cx - arm, cy, cx + arm, cy, line_w, color);
-            // Vertical bar
-            self.rect_pipeline
-                .push_line(cx, cy - arm, cx, cy + arm, line_w, color);
+        if animation <= 0.3 {
+            return;
         }
 
-        // ── Session dropdown button ──
-        let session_size = tab_bar_height;
-        let session_x = window_width - gear_button_width - session_size;
-        let session_y = 0.0;
-        {
-            let hover_t = hover_for(TabBarClick::SessionDropdown);
-            let bg_alpha = 0.35 + hover_t * 0.25;
-            let session_bg = adjust_alpha(self.ui.tab_inactive, bg_alpha);
+        let text_alpha = ((animation - 0.3) / 0.7).min(1.0);
+        let base_text = if tab.is_active {
+            self.ui.tab_text_active
+        } else {
+            mix(self.ui.tab_text_inactive, self.ui.tab_text_active, hover)
+        };
+        let text_color = adjust_alpha(base_text, base_text[3] * text_alpha);
+        let center_y = y + height / 2.0;
+        let close = chrome.close_rect(surface);
+        let mut text_x = x + chrome.px(10.0);
+
+        if matches!(&tab.tab_type, TabType::Plugin { .. }) {
+            let dot = chrome.px(6.0);
             self.rect_pipeline.push_rounded_rect(
-                session_x + 2.0,
-                session_y + 2.0,
-                session_size - 4.0,
-                tab_bar_height - 6.0,
-                session_bg,
-                4.0,
+                text_x,
+                (center_y - dot / 2.0).round(),
+                dot,
+                dot,
+                adjust_alpha(self.ui.palette_accent, text_alpha),
+                dot / 2.0,
             );
-            // Chevron (▾) — two angled lines forming a V shape
-            let scale = 1.0 + hover_t * 0.15;
-            let arm = (session_size * 0.18).min(6.0) * scale;
-            let cx = session_x + session_size / 2.0;
-            let cy = session_y + tab_bar_height / 2.0;
-            let line_w = 1.5 + hover_t * 0.3;
-            let brightness = 1.0 + hover_t * 0.3;
-            let color = [
-                (self.ui.tab_text_inactive[0] * brightness).min(1.0),
-                (self.ui.tab_text_inactive[1] * brightness).min(1.0),
-                (self.ui.tab_text_inactive[2] * brightness).min(1.0),
-                self.ui.tab_text_inactive[3],
-            ];
-            let half_h = arm * 0.55;
-            // Left arm: top-left to center-bottom
-            self.rect_pipeline
-                .push_line(cx - arm, cy - half_h, cx, cy + half_h, line_w, color);
-            // Right arm: center-bottom to top-right
-            self.rect_pipeline
-                .push_line(cx, cy + half_h, cx + arm, cy - half_h, line_w, color);
+            text_x += dot + chrome.px(6.0);
+        }
+        if let Some(status) = tab_status(tab) {
+            let size = chrome.px(12.0);
+            let surface_color = if tab.is_active {
+                self.ui.tab_active
+            } else {
+                mix(self.ui.tab_bar_bg, self.ui.tab_inactive, hover)
+            };
+            self.build_status_icon(
+                status,
+                (text_x, center_y - size / 2.0, size, size),
+                text_color,
+                surface_color,
+            );
+            text_x += size + chrome.px(5.0);
         }
 
-        // ── Commands button (⚡) ──
-        let commands_size = tab_bar_height;
-        let commands_x = window_width - gear_button_width - session_button_width - commands_size;
-        let commands_y = 0.0;
-        {
-            let hover_t = hover_for(TabBarClick::CommandsButton);
-            let bg_alpha = 0.35 + hover_t * 0.25;
-            let commands_bg = adjust_alpha(self.ui.tab_inactive, bg_alpha);
-            self.rect_pipeline.push_rounded_rect(
-                commands_x + 2.0,
-                commands_y + 2.0,
-                commands_size - 4.0,
-                tab_bar_height - 6.0,
-                commands_bg,
-                4.0,
-            );
-            // ⚡ lightning bolt icon — drawn as two angled segments
-            let scale = 1.0 + hover_t * 0.15;
-            let cx = commands_x + commands_size / 2.0;
-            let cy = commands_y + tab_bar_height / 2.0;
-            let h = (commands_size * 0.28).min(9.0) * scale;
-            let w = h * 0.4;
-            let line_w = 1.5 + hover_t * 0.3;
-            let brightness = 1.0 + hover_t * 0.3;
-            let color = [
-                (self.ui.tab_text_inactive[0] * brightness).min(1.0),
-                (self.ui.tab_text_inactive[1] * brightness).min(1.0),
-                (self.ui.tab_text_inactive[2] * brightness).min(1.0),
-                self.ui.tab_text_inactive[3],
-            ];
-            // Top segment: upper-right to center-left
-            self.rect_pipeline
-                .push_line(cx + w * 0.3, cy - h, cx - w * 0.5, cy, line_w, color);
-            // Middle bar: left to right through center
-            self.rect_pipeline.push_line(
-                cx - w * 0.3,
-                cy - line_w * 0.25,
-                cx + w * 0.7,
-                cy - line_w * 0.25,
-                line_w,
-                color,
-            );
-            // Bottom segment: center-right to lower-left
-            self.rect_pipeline
-                .push_line(cx + w * 0.5, cy, cx - w * 0.3, cy + h, line_w, color);
+        let size_px = self.ui_label_px();
+        let badge_text =
+            (tab.unreviewed_diff_count > 0).then(|| tab.unreviewed_diff_count.to_string());
+        let badge_width = badge_text.as_deref().map_or(0.0, |count| {
+            (self.ui_text_width(count, size_px * 0.85) + chrome.px(12.0)).max(chrome.px(18.0))
+        });
+        let badge_reserve = if badge_width > 0.0 {
+            badge_width + chrome.px(6.0)
+        } else {
+            0.0
+        };
+        let label_right = close.0 - chrome.px(6.0) - badge_reserve;
+        let drawn = self.push_ui_label(
+            &tab.title,
+            text_x,
+            y,
+            height,
+            label_right - text_x,
+            size_px,
+            text_color,
+        );
+
+        if let Some(count) = badge_text {
+            let badge_height = chrome.px(16.0).min(height);
+            let badge_x = (text_x + drawn + chrome.px(6.0)).round();
+            let badge_y = (center_y - badge_height / 2.0).round();
+            if badge_x + badge_width <= close.0 - chrome.px(4.0) {
+                let fill = adjust_alpha(self.ui.palette_accent, 0.9 * text_alpha);
+                self.rect_pipeline.push_rounded_rect(
+                    badge_x,
+                    badge_y,
+                    badge_width,
+                    badge_height,
+                    fill,
+                    badge_height / 2.0,
+                );
+                let count_size = size_px * 0.85;
+                let count_width = self.ui_text_width(&count, count_size);
+                let count_color = adjust_alpha(contrast_text(self.ui.palette_accent), text_alpha);
+                self.push_ui_label(
+                    &count,
+                    badge_x + (badge_width - count_width) / 2.0,
+                    badge_y,
+                    badge_height,
+                    badge_width,
+                    count_size,
+                    count_color,
+                );
+            }
         }
 
-        // ── Settings icon button (right side of tab bar) ──
-        let gear_size = tab_bar_height;
-        let gear_x = window_width - gear_size;
-        let gear_y = 0.0;
-        {
-            let hover_t = hover_for(TabBarClick::Gear);
-            let bg_alpha = 0.5 + hover_t * 0.2;
-            let gear_bg = adjust_alpha(self.ui.tab_inactive, bg_alpha);
-            self.rect_pipeline.push_rounded_rect(
-                gear_x + 2.0,
-                gear_y + 2.0,
-                gear_size - 4.0,
-                tab_bar_height - 6.0,
-                gear_bg,
-                4.0,
+        if tab.is_active || hovered {
+            let close_hover = self.hover_progress(TabBarClick::CloseTab(index));
+            if close_hover > 0.0 {
+                self.rect_pipeline.push_rounded_rect(
+                    close.0,
+                    close.1,
+                    close.2,
+                    close.3,
+                    adjust_alpha(self.ui.tab_text_active, 0.14 * close_hover * text_alpha),
+                    close.2 / 2.0,
+                );
+            }
+            let color = adjust_alpha(
+                mix(
+                    self.ui.tab_text_inactive,
+                    self.ui.tab_text_active,
+                    close_hover,
+                ),
+                text_alpha,
             );
-            // Three horizontal bars (hamburger) with varying widths
-            let scale = 1.0 + hover_t * 0.15;
-            let base_w = (gear_size * 0.16).min(5.5) * scale;
-            let gap = 3.0_f32;
-            let total_h = gap * 2.0;
-            let cx = gear_x + gear_size / 2.0;
-            let top_y = gear_y + (tab_bar_height - total_h) / 2.0;
-            let line_w = 1.5 + hover_t * 0.3;
-            let brightness = 1.0 + hover_t * 0.3;
-            let color = [
-                (self.ui.tab_text_inactive[0] * brightness).min(1.0),
-                (self.ui.tab_text_inactive[1] * brightness).min(1.0),
-                (self.ui.tab_text_inactive[2] * brightness).min(1.0),
-                self.ui.tab_text_inactive[3],
-            ];
-            let widths = [base_w * 0.8, base_w, base_w * 0.8];
-            for (i, w) in widths.into_iter().enumerate() {
-                let y = top_y + i as f32 * gap;
+            let arm = 3.5 * chrome.scale;
+            let (cx, cy) = (close.0 + close.2 / 2.0, close.1 + close.3 / 2.0);
+            let stroke = chrome.stroke() * 0.9;
+            self.rect_pipeline
+                .push_line(cx - arm, cy - arm, cx + arm, cy + arm, stroke, color);
+            self.rect_pipeline
+                .push_line(cx + arm, cy - arm, cx - arm, cy + arm, stroke, color);
+        } else if tab.has_activity {
+            let dot = chrome.px(6.0);
+            self.rect_pipeline.push_rounded_rect(
+                (close.0 + (close.2 - dot) / 2.0).round(),
+                (close.1 + (close.3 - dot) / 2.0).round(),
+                dot,
+                dot,
+                adjust_alpha(self.ui.tab_activity, text_alpha),
+                dot / 2.0,
+            );
+        }
+    }
+
+    /// Small vector marker for a tab's broadcast, read-only, or pinned state.
+    fn build_status_icon(
+        &mut self,
+        status: TabStatus,
+        rect: Rect,
+        color: [f32; 4],
+        surface: [f32; 4],
+    ) {
+        let chrome = self.tab_chrome();
+        let (x, y, size, _) = rect;
+        let (cx, cy) = (x + size / 2.0, y + size / 2.0);
+        let stroke = chrome.stroke() * 0.8;
+        match status {
+            TabStatus::BroadcastActive | TabStatus::BroadcastArmed => {
+                let dot = (size * 0.66).round();
+                let dot_color = adjust_alpha(self.ui.tab_activity, color[3]);
+                self.rect_pipeline.push_rounded_rect(
+                    (cx - dot / 2.0).round(),
+                    (cy - dot / 2.0).round(),
+                    dot,
+                    dot,
+                    dot_color,
+                    dot / 2.0,
+                );
+                if status == TabStatus::BroadcastArmed {
+                    // Armed but idle: a ring rather than a filled dot.
+                    let inner = (dot - stroke * 2.0).max(1.0);
+                    self.rect_pipeline.push_rounded_rect(
+                        cx - inner / 2.0,
+                        cy - inner / 2.0,
+                        inner,
+                        inner,
+                        surface,
+                        inner / 2.0,
+                    );
+                }
+            }
+            TabStatus::ReadOnly => {
+                // Padlock: a body with a shackle above it.
+                let body_width = size * 0.72;
+                let body_height = size * 0.5;
+                let body_top = y + size - body_height;
+                self.rect_pipeline.push_rounded_rect(
+                    cx - body_width / 2.0,
+                    body_top,
+                    body_width,
+                    body_height,
+                    color,
+                    chrome.px(1.0),
+                );
+                let shackle = size * 0.22;
+                let top = y + stroke / 2.0;
+                self.rect_pipeline.push_line(
+                    cx - shackle,
+                    body_top,
+                    cx - shackle,
+                    top + shackle,
+                    stroke,
+                    color,
+                );
+                self.rect_pipeline.push_line(
+                    cx + shackle,
+                    body_top,
+                    cx + shackle,
+                    top + shackle,
+                    stroke,
+                    color,
+                );
                 self.rect_pipeline
-                    .push_line(cx - w, y, cx + w, y, line_w, color);
+                    .push_line(cx - shackle, top + shackle, cx, top, stroke, color);
+                self.rect_pipeline
+                    .push_line(cx, top, cx + shackle, top + shackle, stroke, color);
             }
+            TabStatus::Pinned => {
+                // Push pin: a round head over a short needle.
+                let head = (size * 0.5).round();
+                self.rect_pipeline.push_rounded_rect(
+                    (cx - head / 2.0).round(),
+                    y,
+                    head,
+                    head,
+                    color,
+                    head / 2.0,
+                );
+                self.rect_pipeline
+                    .push_line(cx, y + head, cx, y + size, stroke, color);
+            }
+        }
+    }
+
+    /// Draw a toolbar button: a rounded hover surface and its vector icon.
+    /// `vertical` orients overflow arrows for the left rail.
+    fn build_toolbar_button(
+        &mut self,
+        target: TabBarClick,
+        rect: Rect,
+        enabled: bool,
+        vertical: bool,
+    ) {
+        let chrome = self.tab_chrome();
+        let hover = if enabled {
+            self.hover_progress(target)
+        } else {
+            0.0
+        };
+        let (x, y, width, height) = rect;
+        let side = (width.min(height) - chrome.px(8.0)).max(0.0);
+        if hover > 0.0 && side > 0.0 {
+            self.rect_pipeline.push_rounded_rect(
+                (x + (width - side) / 2.0).round(),
+                (y + (height - side) / 2.0).round(),
+                side,
+                side,
+                adjust_alpha(self.ui.tab_inactive, hover),
+                chrome.corner_radius(),
+            );
+        }
+        let base = if enabled {
+            mix(self.ui.tab_text_inactive, self.ui.tab_text_active, hover)
+        } else {
+            adjust_alpha(self.ui.tab_text_inactive, 0.25)
+        };
+        let (cx, cy) = ((x + width / 2.0).round(), (y + height / 2.0).round());
+        let unit = chrome.scale;
+        let stroke = chrome.stroke();
+        let mut segment = |points: &[(f32, f32)]| {
+            for pair in points.windows(2) {
+                self.rect_pipeline.push_line(
+                    cx + pair[0].0 * unit,
+                    cy + pair[0].1 * unit,
+                    cx + pair[1].0 * unit,
+                    cy + pair[1].1 * unit,
+                    stroke,
+                    base,
+                );
+            }
+        };
+        match target {
+            TabBarClick::NewTab => {
+                segment(&[(-5.5, 0.0), (5.5, 0.0)]);
+                segment(&[(0.0, -5.5), (0.0, 5.5)]);
+            }
+            TabBarClick::PreviousTab if vertical => {
+                segment(&[(-4.5, 2.0), (0.0, -2.5), (4.5, 2.0)])
+            }
+            TabBarClick::NextTab if vertical => segment(&[(-4.5, -2.0), (0.0, 2.5), (4.5, -2.0)]),
+            TabBarClick::PreviousTab => segment(&[(2.0, -4.5), (-2.5, 0.0), (2.0, 4.5)]),
+            TabBarClick::NextTab => segment(&[(-2.0, -4.5), (2.5, 0.0), (-2.0, 4.5)]),
+            TabBarClick::SessionDropdown => segment(&[(-4.5, -2.0), (0.0, 2.5), (4.5, -2.0)]),
+            TabBarClick::CommandsButton => {
+                // A shell prompt, "›_", for the custom commands panel.
+                segment(&[(-6.0, -4.5), (-1.5, 0.0), (-6.0, 4.5)]);
+                segment(&[(1.0, 4.5), (6.5, 4.5)]);
+            }
+            TabBarClick::Gear => {
+                for row in [-4.5, 0.0, 4.5] {
+                    segment(&[(-6.5, row), (6.5, row)]);
+                }
+            }
+            TabBarClick::Tab(_) | TabBarClick::CloseTab(_) | TabBarClick::None => {}
         }
     }
 
@@ -808,6 +965,7 @@ impl Renderer {
         window_height: f32,
         row_height: f32,
     ) {
+        let chrome = self.tab_chrome();
         let rail_width = self.tab_bar_width_for(window_width);
         let tab_bar_bg = self.ui.tab_bar_bg;
         self.rect_pipeline
@@ -821,317 +979,40 @@ impl Renderer {
         );
 
         let layout = self.vertical_tab_bar_layout(tabs, window_height);
-        let tab_padding = 8.0;
-        let close_size = self.cell_height;
-        let close_margin = 4.0;
         for slot in &layout.tabs {
-            let tab = &tabs[slot.index];
-            let animation = tab_animation_multiplier(tab);
-            if slot.height <= 2.0 {
-                continue;
-            }
-            let y = slot.y + 1.0;
-            let height = (slot.height - 2.0).max(0.0);
-            let base = if tab.is_active {
-                self.ui.tab_active
-            } else if tab.has_activity {
-                self.ui.tab_activity
-            } else {
-                self.ui.tab_inactive
-            };
-            self.rect_pipeline.push_rounded_rect(
-                2.0,
-                y,
-                (rail_width - 4.0).max(0.0),
-                height,
-                [base[0], base[1], base[2], base[3] * animation],
-                4.0,
-            );
-            if animation <= 0.3 {
-                continue;
-            }
-
-            let text_alpha = ((animation - 0.3) / 0.7).min(1.0);
-            let base_text = if tab.is_active {
-                self.ui.tab_text_active
-            } else {
-                self.ui.tab_text_inactive
-            };
-            let text_color = [
-                base_text[0],
-                base_text[1],
-                base_text[2],
-                base_text[3] * text_alpha,
-            ];
-            let status = if tab.broadcast_active {
-                "!! "
-            } else if tab.broadcast_armed {
-                "?? "
-            } else if tab.read_only {
-                "RO "
-            } else if tab.pinned {
-                "PIN "
-            } else {
-                ""
-            };
-            let label = format!("{}{}: {}", status, slot.index + 1, tab.title);
-            let text_y = y + (height - self.cell_height) / 2.0;
-            let mut text_x = tab_padding;
-            if matches!(&tab.tab_type, TabType::Plugin { .. }) {
-                let bar_h = height * 0.64;
-                self.rect_pipeline.push_rounded_rect(
-                    text_x,
-                    y + height * 0.18,
-                    3.0,
-                    bar_h,
-                    adjust_alpha(self.ui.palette_accent, text_alpha),
-                    1.5,
-                );
-                text_x += 3.0 + self.cell_width * 0.5;
-            }
-            let right_reserve = close_size + close_margin * 2.0;
-            for character in label.chars() {
-                if text_x + self.cell_width > rail_width - right_reserve {
-                    break;
-                }
-                if !character.is_whitespace() {
-                    self.text_pipeline
-                        .push_char(character, text_x, text_y, text_color);
-                }
-                text_x += self.cell_width * 0.85;
-            }
-            if tab.unreviewed_diff_count > 0 {
-                let badge_w = self.cell_width * 1.8;
-                let badge_h = (self.cell_height - 2.0).max(1.0);
-                let badge_x = text_x + 2.0;
-                if badge_x + badge_w < rail_width - right_reserve {
-                    self.rect_pipeline.push_rounded_rect(
-                        badge_x,
-                        text_y + 1.0,
-                        badge_w,
-                        badge_h,
-                        adjust_alpha(self.ui.palette_accent, 0.8 * text_alpha),
-                        3.0,
-                    );
-                    let count = tab.unreviewed_diff_count.to_string();
-                    let mut count_x =
-                        badge_x + (badge_w - count.len() as f32 * self.cell_width * 0.85) / 2.0;
-                    for character in count.chars() {
-                        self.text_pipeline.push_char(
-                            character,
-                            count_x,
-                            text_y,
-                            [0.0, 0.0, 0.0, text_alpha],
-                        );
-                        count_x += self.cell_width * 0.85;
-                    }
-                }
-            }
-
-            let close_x = rail_width - close_size - close_margin - 2.0;
-            let close_y = y + (height - close_size) / 2.0;
-            let close_hover = matches!(self.tab_bar_hover, Some(TabBarClick::CloseTab(index)) if index == slot.index);
-            let hover = if close_hover {
-                self.tab_bar_hover_progress
-            } else {
-                0.0
-            };
-            self.rect_pipeline.push_rounded_rect(
-                close_x,
-                close_y,
-                close_size,
-                close_size,
-                adjust_alpha(self.ui.tab_inactive, 0.4 * text_alpha),
-                3.0,
-            );
-            let arm = (close_size * 0.25).min(4.5) * (1.0 + hover * 0.2);
-            let center_x = close_x + close_size / 2.0;
-            let center_y = close_y + close_size / 2.0;
-            let close_color = adjust_alpha(text_color, 0.5 + hover * 0.5);
-            self.rect_pipeline.push_line(
-                center_x - arm,
-                center_y - arm,
-                center_x + arm,
-                center_y + arm,
-                1.5 + hover * 0.5,
-                close_color,
-            );
-            self.rect_pipeline.push_line(
-                center_x + arm,
-                center_y - arm,
-                center_x - arm,
-                center_y + arm,
-                1.5 + hover * 0.5,
-                close_color,
-            );
+            let surface = chrome.vertical_surface(slot, rail_width);
+            self.build_tab_item(&tabs[slot.index], slot.index, surface, AccentEdge::Left);
         }
-
-        let hover_for = |target: TabBarClick| {
-            if self.tab_bar_hover == Some(target) {
-                self.tab_bar_hover_progress
-            } else {
-                0.0
-            }
-        };
         for target in [
             TabBarClick::PreviousTab,
             TabBarClick::NextTab,
             TabBarClick::NewTab,
         ] {
-            let Some((x, y, width, height)) = layout.control_rect(target, rail_width) else {
-                continue;
-            };
-            let inset = 2.0_f32.min(width / 2.0).min(height / 2.0);
-            let hover = hover_for(target);
-            self.rect_pipeline.push_rounded_rect(
-                x + inset,
-                y + inset,
-                (width - inset * 2.0).max(0.0),
-                (height - inset * 2.0).max(0.0),
-                adjust_alpha(self.ui.tab_inactive, 0.35 + hover * 0.25),
-                4.0,
-            );
-            let center_x = x + width / 2.0;
-            let center_y = y + height / 2.0;
-            let arm = (height.min(width) * 0.16).min(5.5) * (1.0 + hover * 0.15);
-            let thickness = (1.5 + hover * 0.3).min(height * 0.5).min(width * 0.5);
-            if target == TabBarClick::NewTab {
-                let color = adjust_alpha(self.ui.tab_text_inactive, 0.9 + hover * 0.1);
-                self.rect_pipeline.push_line(
-                    center_x - arm,
-                    center_y,
-                    center_x + arm,
-                    center_y,
-                    thickness,
-                    color,
-                );
-                self.rect_pipeline.push_line(
-                    center_x,
-                    center_y - arm,
-                    center_x,
-                    center_y + arm,
-                    thickness,
-                    color,
-                );
-                continue;
+            if let Some(rect) = layout.control_rect(target, rail_width) {
+                self.build_toolbar_button(target, rect, true, true);
             }
-            let direction = if target == TabBarClick::NextTab {
-                1.0
-            } else {
-                -1.0
-            };
-            let color = adjust_alpha(self.ui.tab_text_inactive, 0.75 + hover * 0.25);
-            self.rect_pipeline.push_line(
-                center_x - arm,
-                center_y - direction * arm * 0.45,
-                center_x,
-                center_y + direction * arm * 0.45,
-                thickness,
-                color,
-            );
-            self.rect_pipeline.push_line(
-                center_x,
-                center_y + direction * arm * 0.45,
-                center_x + arm,
-                center_y - direction * arm * 0.45,
-                thickness,
-                color,
-            );
+        }
+        for target in [
+            TabBarClick::CommandsButton,
+            TabBarClick::SessionDropdown,
+            TabBarClick::Gear,
+        ] {
+            if let Some(rect) = toolbar_control_rect(target, window_width, row_height) {
+                self.build_toolbar_button(target, rect, true, false);
+            }
         }
 
-        self.build_top_toolbar_controls(window_width, row_height);
-        let border = adjust_alpha(self.ui.tab_border, 0.7);
+        let border = adjust_alpha(self.ui.tab_border, 0.6);
+        let line = chrome.px(1.0);
         self.rect_pipeline
-            .push_rect(0.0, row_height - 1.0, window_width, 1.0, border);
+            .push_rect(0.0, row_height - line, window_width, line, border);
         self.rect_pipeline.push_rect(
-            rail_width - 1.0,
+            rail_width - line,
             row_height,
-            1.0,
+            line,
             (window_height - row_height).max(0.0),
             border,
         );
-    }
-
-    fn build_top_toolbar_controls(&mut self, window_width: f32, height: f32) {
-        let hover_for = |target: TabBarClick| {
-            if self.tab_bar_hover == Some(target) {
-                self.tab_bar_hover_progress
-            } else {
-                0.0
-            }
-        };
-        for (offset, target) in [
-            (3.0, TabBarClick::CommandsButton),
-            (2.0, TabBarClick::SessionDropdown),
-            (1.0, TabBarClick::Gear),
-        ] {
-            let x = window_width - height * offset;
-            let hover = hover_for(target);
-            self.rect_pipeline.push_rounded_rect(
-                x + 2.0,
-                2.0,
-                height - 4.0,
-                height - 6.0,
-                adjust_alpha(self.ui.tab_inactive, 0.4 + hover * 0.25),
-                4.0,
-            );
-            let center_x = x + height / 2.0;
-            let center_y = height / 2.0;
-            let arm = (height * 0.16).min(5.5) * (1.0 + hover * 0.15);
-            let color = adjust_alpha(self.ui.tab_text_inactive, 0.8 + hover * 0.2);
-            match target {
-                TabBarClick::CommandsButton => {
-                    self.rect_pipeline.push_line(
-                        center_x + arm * 0.25,
-                        center_y - arm,
-                        center_x - arm * 0.45,
-                        center_y,
-                        1.5 + hover * 0.3,
-                        color,
-                    );
-                    self.rect_pipeline.push_line(
-                        center_x + arm * 0.45,
-                        center_y,
-                        center_x - arm * 0.25,
-                        center_y + arm,
-                        1.5 + hover * 0.3,
-                        color,
-                    );
-                }
-                TabBarClick::SessionDropdown => {
-                    self.rect_pipeline.push_line(
-                        center_x - arm,
-                        center_y - arm * 0.4,
-                        center_x,
-                        center_y + arm * 0.4,
-                        1.5 + hover * 0.3,
-                        color,
-                    );
-                    self.rect_pipeline.push_line(
-                        center_x,
-                        center_y + arm * 0.4,
-                        center_x + arm,
-                        center_y - arm * 0.4,
-                        1.5 + hover * 0.3,
-                        color,
-                    );
-                }
-                TabBarClick::Gear => {
-                    for (index, width) in [0.8, 1.0, 0.8].into_iter().enumerate() {
-                        let y = center_y + (index as f32 - 1.0) * 3.0;
-                        self.rect_pipeline.push_line(
-                            center_x - arm * width,
-                            y,
-                            center_x + arm * width,
-                            y,
-                            1.5 + hover * 0.3,
-                            color,
-                        );
-                    }
-                }
-                _ => {}
-            }
-        }
     }
 
     /// Draw a warm, high-contrast focus outline without covering tab content.
@@ -1147,7 +1028,7 @@ impl Renderer {
         else {
             return;
         };
-        let inset = 3.0;
+        let inset = 1.0;
         let left = x + inset;
         let top = y + inset;
         let right = x + width - inset;
@@ -1177,64 +1058,33 @@ impl Renderer {
         window_height: f32,
     ) -> Option<(f32, f32, f32, f32)> {
         let height = self.tab_bar_height();
+        let chrome = self.tab_chrome();
         if self.tab_bar_position == crate::config::TabBarPosition::Left {
             let rail_width = self.tab_bar_width_for(window_width);
             let layout = self.vertical_tab_bar_layout(tabs, window_height);
+            let surface = |index: usize| {
+                layout
+                    .tabs
+                    .iter()
+                    .find(|slot| slot.index == index)
+                    .map(|slot| chrome.vertical_surface(slot, rail_width))
+            };
             return match target {
-                TabBarClick::Tab(index) => {
-                    let slot = layout.tabs.iter().find(|slot| slot.index == index)?;
-                    Some((0.0, slot.y, rail_width, slot.height))
-                }
+                TabBarClick::Tab(index) => surface(index),
                 TabBarClick::CloseTab(index) => {
-                    let slot = layout.tabs.iter().find(|slot| slot.index == index)?;
-                    let size = self.cell_height;
-                    Some((
-                        rail_width - size - 6.0,
-                        slot.y + (slot.height - size) / 2.0,
-                        size,
-                        size,
-                    ))
+                    surface(index).map(|surface| chrome.close_rect(surface))
                 }
                 TabBarClick::NewTab | TabBarClick::PreviousTab | TabBarClick::NextTab => {
                     layout.control_rect(target, rail_width)
                 }
-                TabBarClick::CommandsButton => {
-                    Some((window_width - height * 3.0, 0.0, height, height))
+                TabBarClick::CommandsButton | TabBarClick::SessionDropdown | TabBarClick::Gear => {
+                    toolbar_control_rect(target, window_width, height)
                 }
-                TabBarClick::SessionDropdown => {
-                    Some((window_width - height * 2.0, 0.0, height, height))
-                }
-                TabBarClick::Gear => Some((window_width - height, 0.0, height, height)),
                 TabBarClick::None => None,
             };
         }
         let layout = self.tab_bar_layout(tabs, window_width);
-        let tab_height = height - 4.0;
-        match target {
-            TabBarClick::Tab(index) => {
-                let slot = layout.tabs.iter().find(|slot| slot.index == index)?;
-                Some((slot.x, 2.0, slot.width, tab_height))
-            }
-            TabBarClick::CloseTab(index) => {
-                let slot = layout.tabs.iter().find(|slot| slot.index == index)?;
-                let size = self.cell_height;
-                Some((
-                    slot.x + slot.width - size - 6.0,
-                    2.0 + (tab_height - size) / 2.0,
-                    size,
-                    size,
-                ))
-            }
-            TabBarClick::NewTab => Some((layout.add_x, 0.0, height, height)),
-            TabBarClick::PreviousTab => layout.previous_x.map(|x| (x, 0.0, height, height)),
-            TabBarClick::NextTab => layout.next_x.map(|x| (x, 0.0, height, height)),
-            TabBarClick::CommandsButton => Some((window_width - height * 3.0, 0.0, height, height)),
-            TabBarClick::SessionDropdown => {
-                Some((window_width - height * 2.0, 0.0, height, height))
-            }
-            TabBarClick::Gear => Some((window_width - height, 0.0, height, height)),
-            TabBarClick::None => None,
-        }
+        horizontal_tab_bar_element_rect(&layout, target, window_width, height, chrome)
     }
 
     pub fn tab_bar_hit_test(
@@ -1246,113 +1096,45 @@ impl Renderer {
         window_height: f32,
     ) -> TabBarClick {
         let tab_bar_height = self.tab_bar_height();
+        let chrome = self.tab_chrome();
 
         if self.tab_bar_position == crate::config::TabBarPosition::Left {
             if y < tab_bar_height {
-                if x >= window_width - tab_bar_height {
-                    return TabBarClick::Gear;
-                }
-                if x >= window_width - tab_bar_height * 2.0 {
-                    return TabBarClick::SessionDropdown;
-                }
-                if x >= window_width - tab_bar_height * 3.0 {
-                    return TabBarClick::CommandsButton;
-                }
-                return TabBarClick::None;
+                return [
+                    TabBarClick::Gear,
+                    TabBarClick::SessionDropdown,
+                    TabBarClick::CommandsButton,
+                ]
+                .into_iter()
+                .find(|&target| {
+                    toolbar_control_rect(target, window_width, tab_bar_height)
+                        .is_some_and(|rect| contains(rect, x, y))
+                })
+                .unwrap_or(TabBarClick::None);
             }
             let rail_width = self.tab_bar_width_for(window_width);
             if x >= rail_width || y >= window_height {
                 return TabBarClick::None;
             }
             let layout = self.vertical_tab_bar_layout(tabs, window_height);
-            return vertical_tab_bar_hit_test(&layout, tabs, x, y, rail_width, self.cell_height);
-        }
-
-        // Only handle clicks within the tab bar vertical bounds
-        if y >= tab_bar_height {
-            return TabBarClick::None;
-        }
-
-        let gear_button_width = tab_bar_height;
-        let session_button_width = tab_bar_height;
-        let commands_button_width = tab_bar_height;
-
-        // ── Gear icon (rightmost) ──
-        let gear_x = window_width - gear_button_width;
-        if x >= gear_x {
-            return TabBarClick::Gear;
-        }
-
-        // ── Session dropdown (▾) button (left of gear) ──
-        let session_x = window_width - gear_button_width - session_button_width;
-        if x >= session_x {
-            return TabBarClick::SessionDropdown;
-        }
-
-        // ── Commands (⚡) button (left of session) ──
-        let commands_x =
-            window_width - gear_button_width - session_button_width - commands_button_width;
-        if x >= commands_x {
-            return TabBarClick::CommandsButton;
+            return vertical_tab_bar_hit_test(&layout, tabs, x, y, rail_width, chrome);
         }
 
         let layout = self.tab_bar_layout(tabs, window_width);
-        let tab_height = tab_bar_height - 4.0;
-        let show_close_buttons = true;
-        let close_btn_size = self.cell_height;
-        let close_btn_margin = 4.0;
-
-        if layout
-            .previous_x
-            .is_some_and(|left| x >= left && x < left + tab_bar_height)
-        {
-            return TabBarClick::PreviousTab;
-        }
-        if layout
-            .next_x
-            .is_some_and(|left| x >= left && x < left + tab_bar_height)
-        {
-            return TabBarClick::NextTab;
-        }
-
-        // ── Add (+) button — right after last tab ──
-        if x >= layout.add_x && x < layout.add_x + tab_bar_height {
-            return TabBarClick::NewTab;
-        }
-
-        for slot in &layout.tabs {
-            let i = slot.index;
-            let tab = &tabs[i];
-            let anim_multiplier = tab_animation_multiplier(tab);
-            let tab_width = slot.width;
-
-            if x >= slot.x && x < slot.x + tab_width {
-                // Click is within this tab — check if it hit the close button
-                if show_close_buttons && tab_width > 2.0 && anim_multiplier > 0.3 {
-                    let tab_y = 2.0;
-                    let close_x = slot.x + tab_width - close_btn_size - close_btn_margin - 2.0;
-                    let close_y = tab_y + (tab_height - close_btn_size) / 2.0;
-
-                    if x >= close_x
-                        && x <= close_x + close_btn_size
-                        && y >= close_y
-                        && y <= close_y + close_btn_size
-                    {
-                        return TabBarClick::CloseTab(i);
-                    }
-                }
-                return TabBarClick::Tab(i);
-            }
-        }
-
-        TabBarClick::None
+        horizontal_tab_bar_hit_test(&layout, tabs, x, y, window_width, tab_bar_height, chrome)
     }
 }
 
 impl Renderer {
     fn tab_bar_layout(&self, tabs: &[TabInfo], window_width: f32) -> TabBarLayout {
         let anchor = self.tab_bar_viewport_anchor.resolve(tabs);
-        tab_bar_layout(tabs, window_width, self.tab_bar_height(), anchor)
+        tab_bar_layout(
+            tabs,
+            window_width,
+            self.tab_bar_height(),
+            anchor,
+            self.scale_factor,
+        )
     }
 
     fn vertical_tab_bar_layout(
@@ -1399,7 +1181,7 @@ mod tests {
     #[test]
     fn crowded_tab_bar_keeps_active_tab_inside_bounded_viewport() {
         let tabs = tabs(12, 10);
-        let layout = tab_bar_layout(&tabs, 640.0, 32.0, 10);
+        let layout = tab_bar_layout(&tabs, 640.0, 32.0, 10, 1.0);
 
         assert!(layout.previous_x.is_some());
         assert!(layout.tabs.iter().any(|slot| slot.index == 10));
@@ -1411,12 +1193,12 @@ mod tests {
     #[test]
     fn crowded_tab_bar_reveals_hidden_tabs_from_each_end() {
         let tabs = tabs(12, 0);
-        let first = tab_bar_layout(&tabs, 640.0, 32.0, 0);
+        let first = tab_bar_layout(&tabs, 640.0, 32.0, 0, 1.0);
         assert!(first.previous_x.is_none());
         assert!(first.next_x.is_some());
         assert_eq!(first.tabs.first().map(|slot| slot.index), Some(0));
 
-        let last = tab_bar_layout(&tabs, 640.0, 32.0, 11);
+        let last = tab_bar_layout(&tabs, 640.0, 32.0, 11, 1.0);
         assert!(last.previous_x.is_some());
         assert!(last.next_x.is_none());
         assert_eq!(last.tabs.last().map(|slot| slot.index), Some(11));
@@ -1425,7 +1207,7 @@ mod tests {
     #[test]
     fn ordinary_tab_bar_preserves_full_strip_without_overflow_controls() {
         let tabs = tabs(3, 1);
-        let layout = tab_bar_layout(&tabs, 640.0, 32.0, 1);
+        let layout = tab_bar_layout(&tabs, 640.0, 32.0, 1, 1.0);
 
         assert_eq!(layout.tabs.len(), 3);
         assert!(layout.previous_x.is_none());
@@ -1441,13 +1223,13 @@ mod tests {
             for index in 0..20 {
                 let mut anchor = TabBarViewportAnchor::default();
                 anchor.set_focus(Some(TabBarClick::CloseTab(index)));
-                let horizontal = tab_bar_layout(&tabs, 640.0, 32.0, anchor.resolve(&tabs));
+                let horizontal = tab_bar_layout(&tabs, 640.0, 32.0, anchor.resolve(&tabs), 1.0);
                 let vertical = vertical_tab_bar_layout(&tabs, 240.0, 32.0, anchor.resolve(&tabs));
                 for target in [TabBarClick::PreviousTab, TabBarClick::NextTab] {
                     anchor.set_focus(Some(TabBarClick::CloseTab(index)));
                     anchor.set_focus(Some(target));
                     assert_eq!(
-                        tab_bar_layout(&tabs, 640.0, 32.0, anchor.resolve(&tabs)),
+                        tab_bar_layout(&tabs, 640.0, 32.0, anchor.resolve(&tabs), 1.0),
                         horizontal,
                         "horizontal active={active} keyboard={index} control={target:?}"
                     );
@@ -1503,7 +1285,7 @@ mod tests {
                 20.0,
                 active.y + active.height / 2.0,
                 220.0,
-                18.0,
+                TabChrome::new(1.0),
             ),
             TabBarClick::Tab(10)
         );
@@ -1534,7 +1316,7 @@ mod tests {
                                         x + w / 2.0,
                                         y + h / 2.0,
                                         220.0,
-                                        18.0,
+                                        TabChrome::new(1.0),
                                     ),
                                     target
                                 );
@@ -1553,7 +1335,7 @@ mod tests {
                                     20.0,
                                     slot.y + slot.height / 2.0,
                                     220.0,
-                                    18.0,
+                                    TabChrome::new(1.0),
                                 ),
                                 TabBarClick::Tab(slot.index)
                             );
@@ -1593,7 +1375,14 @@ mod tests {
             .find(|slot| slot.index == 17)
             .expect("active slot");
         assert_eq!(
-            vertical_tab_bar_hit_test(&layout, &tabs, 20.0, active.y + 5.0, 220.0, 18.0),
+            vertical_tab_bar_hit_test(
+                &layout,
+                &tabs,
+                20.0,
+                active.y + 5.0,
+                220.0,
+                TabChrome::new(1.0)
+            ),
             TabBarClick::Tab(17)
         );
         assert_eq!(
@@ -1603,7 +1392,7 @@ mod tests {
                 205.0,
                 active.y + active.height / 2.0,
                 220.0,
-                18.0,
+                TabChrome::new(1.0),
             ),
             TabBarClick::CloseTab(17)
         );
@@ -1614,13 +1403,104 @@ mod tests {
                 20.0,
                 layout.previous_y.unwrap() + 5.0,
                 220.0,
-                18.0,
+                TabChrome::new(1.0),
             ),
             TabBarClick::PreviousTab
         );
         assert_eq!(
-            vertical_tab_bar_hit_test(&layout, &tabs, 20.0, layout.add_y + 5.0, 220.0, 18.0),
+            vertical_tab_bar_hit_test(
+                &layout,
+                &tabs,
+                20.0,
+                layout.add_y + 5.0,
+                220.0,
+                TabChrome::new(1.0)
+            ),
             TabBarClick::NewTab
         );
+    }
+
+    #[test]
+    fn horizontal_hit_testing_and_element_bounds_share_one_geometry() {
+        for scale in [1.0, 1.25, 2.0] {
+            let chrome = TabChrome::new(scale);
+            let height = (34.0_f32 * scale).round();
+            for (count, width) in [(3, 900.0 * scale), (14, 900.0 * scale)] {
+                let tabs = tabs(count, 1);
+                let layout = tab_bar_layout(&tabs, width, height, 1, scale);
+                let mut targets = vec![
+                    TabBarClick::NewTab,
+                    TabBarClick::CommandsButton,
+                    TabBarClick::SessionDropdown,
+                    TabBarClick::Gear,
+                    TabBarClick::PreviousTab,
+                    TabBarClick::NextTab,
+                ];
+                for slot in &layout.tabs {
+                    targets.push(TabBarClick::Tab(slot.index));
+                    targets.push(TabBarClick::CloseTab(slot.index));
+                }
+                for target in targets {
+                    let Some(rect) =
+                        horizontal_tab_bar_element_rect(&layout, target, width, height, chrome)
+                    else {
+                        continue;
+                    };
+                    // Tab bodies report the close button at their centre only
+                    // when it overlaps; probe a point clear of it.
+                    let probe_x = match target {
+                        TabBarClick::Tab(_) => rect.0 + 4.0,
+                        _ => rect.0 + rect.2 / 2.0,
+                    };
+                    let probe_y = rect.1 + rect.3 / 2.0;
+                    assert_eq!(
+                        horizontal_tab_bar_hit_test(
+                            &layout, &tabs, probe_x, probe_y, width, height, chrome
+                        ),
+                        target,
+                        "scale={scale} count={count} rect={rect:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn tab_chrome_rectangles_stay_on_whole_pixels_at_fractional_scales() {
+        for scale in [1.0, 1.25, 1.5, 1.75, 2.0] {
+            let chrome = TabChrome::new(scale);
+            let height = (34.0_f32 * scale).round();
+            let tabs = tabs(4, 0);
+            let layout = tab_bar_layout(&tabs, 1000.0 * scale, height, 0, scale);
+            for slot in &layout.tabs {
+                let surface = chrome.horizontal_surface(slot, height);
+                let close = chrome.close_rect(surface);
+                for value in [
+                    surface.0, surface.1, surface.2, surface.3, close.0, close.1, close.2,
+                ] {
+                    assert_eq!(
+                        value.fract(),
+                        0.0,
+                        "scale={scale} surface={surface:?} close={close:?}"
+                    );
+                }
+                assert!(close.0 >= surface.0 && close.0 + close.2 <= surface.0 + surface.2);
+                assert!(close.1 >= surface.1 && close.1 + close.3 <= surface.1 + surface.3);
+            }
+        }
+    }
+
+    #[test]
+    fn tab_status_markers_follow_priority_order() {
+        let mut tab = tabs(1, 0).remove(0);
+        assert_eq!(tab_status(&tab), None);
+        tab.pinned = true;
+        assert_eq!(tab_status(&tab), Some(TabStatus::Pinned));
+        tab.read_only = true;
+        assert_eq!(tab_status(&tab), Some(TabStatus::ReadOnly));
+        tab.broadcast_armed = true;
+        assert_eq!(tab_status(&tab), Some(TabStatus::BroadcastArmed));
+        tab.broadcast_active = true;
+        assert_eq!(tab_status(&tab), Some(TabStatus::BroadcastActive));
     }
 }

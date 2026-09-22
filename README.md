@@ -142,7 +142,7 @@ max_memory_mib = 128
 bindings = "vi" # or "emacs"
 ```
 
-Settings are also editable live from within the terminal — press the gear icon in the tab bar, or open the settings modal via the command palette.
+Settings are also editable live from within the terminal — press the settings (≡) button at the right of the tab bar, or open the settings modal via the command palette.
 Font → Normal Weight and Bold Weight apply validated OpenType `wght` values
 live; variable fonts use their real weight axis while static fonts select the
 closest face.

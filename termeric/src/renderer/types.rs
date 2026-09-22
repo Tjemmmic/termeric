@@ -117,7 +117,7 @@ pub enum TabBarClick {
     NextTab,
     /// Clicked the session dropdown (▾) button
     SessionDropdown,
-    /// Clicked the commands (⚡) button
+    /// Clicked the commands (›_) button
     CommandsButton,
     /// Clicked the gear icon
     Gear,

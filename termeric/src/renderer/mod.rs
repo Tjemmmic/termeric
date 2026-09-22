@@ -37,6 +37,7 @@ mod shortcuts_render;
 mod tab_bar;
 mod toasts;
 pub mod types;
+mod ui_text;
 
 pub use types::*;
 
@@ -225,9 +226,14 @@ pub(crate) struct UiPalette {
     pub(crate) selection_text: Option<[f32; 4]>,
     pub(crate) cursor: [f32; 4],
     pub(crate) cursor_text: [f32; 4],
+    /// Chrome strip behind the tabs, a step off the terminal background.
     pub(crate) tab_bar_bg: [f32; 4],
+    /// Raised surface of the active tab.
     pub(crate) tab_active: [f32; 4],
+    /// Hover surface of inactive tabs and toolbar buttons.
     pub(crate) tab_inactive: [f32; 4],
+    /// Theme accent for the active-tab indicator.
+    pub(crate) tab_accent: [f32; 4],
     pub(crate) tab_activity: [f32; 4],
     pub(crate) tab_border: [f32; 4],
     pub(crate) tab_text_active: [f32; 4],
@@ -276,8 +282,14 @@ impl UiPalette {
         let tab_inactive = theme.ui.tab_inactive;
         let tab_border = theme.ui.border;
 
-        let tab_text_active = contrast_text(tab_active.to_f32_array());
-        let tab_text_inactive = adjust_alpha(fg.to_f32_array(), 0.9);
+        // Quiet chrome: the theme's inactive-tab color is the strip, raised and
+        // hover surfaces step from it toward the foreground (so light and dark
+        // themes both work), and the theme's active-tab color is reserved for
+        // the thin active indicator.
+        let strip = adjust_alpha(tab_inactive.to_f32_array(), 1.0);
+        let chrome = |amount: f32| mix(strip, fg.to_f32_array(), amount);
+        let tab_text_active = fg.to_f32_array();
+        let tab_text_inactive = adjust_alpha(fg.to_f32_array(), 0.62);
         let mut palette = Self {
             background: bg.to_wgpu(),
             selection: selection.to_f32_array(),
@@ -285,9 +297,10 @@ impl UiPalette {
             selection_text: theme.ui.selection_text.map(|c| c.to_f32_array()),
             cursor: cursor.to_f32_array(),
             cursor_text: theme.ui.cursor_text.to_f32_array(),
-            tab_bar_bg: shade(tab_inactive.to_f32_array(), 0.85),
-            tab_active: tab_active.to_f32_array(),
-            tab_inactive: tab_inactive.to_f32_array(),
+            tab_bar_bg: strip,
+            tab_active: chrome(0.08),
+            tab_inactive: chrome(0.05),
+            tab_accent: tab_active.to_f32_array(),
             tab_activity: theme.primary.yellow.to_f32_array(),
             tab_border: tab_border.to_f32_array(),
             tab_text_active,
@@ -345,7 +358,8 @@ impl UiPalette {
         self.tab_active[3] = 1.0;
         self.tab_inactive[3] = 1.0;
         self.tab_text_active = high_contrast_text(self.tab_active);
-        self.tab_text_inactive = high_contrast_text(self.tab_inactive);
+        self.tab_text_inactive = high_contrast_text(self.tab_bar_bg);
+        self.tab_accent = self.tab_text_active;
         self.tab_border = high_contrast_text(self.tab_bar_bg);
 
         self.search_bg[3] = 1.0;
@@ -384,7 +398,7 @@ pub(crate) fn adjust_alpha(mut color: [f32; 4], alpha: f32) -> [f32; 4] {
     color
 }
 
-fn mix(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
+pub(super) fn mix(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
     let t = t.clamp(0.0, 1.0);
     [
         a[0] + (b[0] - a[0]) * t,
@@ -393,6 +407,9 @@ fn mix(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
         a[3] + (b[3] - a[3]) * t,
     ]
 }
+
+/// Logical height of the tab bar, sized for 10pt UI labels.
+const TAB_BAR_HEIGHT: f32 = 34.0;
 
 /// Desktop reference density: a point is 1/72 inch and a logical pixel 1/96
 /// inch, so configured sizes match other applications' point sizes.
@@ -965,7 +982,7 @@ impl Renderer {
 
     /// Get the tab bar height
     pub fn tab_bar_height(&self) -> f32 {
-        (self.cell_height * 1.1).round().max(18.0) + 10.0
+        (TAB_BAR_HEIGHT * self.scale_factor).round()
     }
 
     /// Get current font size
@@ -3005,6 +3022,63 @@ pub(crate) fn headless_theme_color_fidelity_smoke(device: &Device, queue: &Queue
     Ok(())
 }
 
+/// Chrome labels shape in the desktop's UI face through the shared atlas,
+/// measure consistently with what is drawn, and land on whole pixels.
+#[cfg(test)]
+pub(crate) fn headless_ui_text_smoke(device: &Device, queue: &Queue) -> Result<()> {
+    let mut glyph_cache = GlyphCache::new(
+        device,
+        queue,
+        16.0,
+        "monospace",
+        &[],
+        &[],
+        400,
+        700,
+        1.2,
+        false,
+    )?;
+    let size = physical_font_size(ui_text::UI_LABEL_POINTS, 1.0);
+    let metrics = glyph_cache.ui_font_metrics(size);
+    anyhow::ensure!(
+        metrics.ascent > metrics.descent && metrics.descent > 0.0,
+        "implausible UI font metrics {metrics:?}"
+    );
+    let width = glyph_cache.ui_text_width("~/dev/termeric", size);
+    anyhow::ensure!(width > size * 4.0, "UI label measured only {width}px");
+    anyhow::ensure!(
+        glyph_cache.ui_text_width("~/dev/termeric", size) == width,
+        "UI width memo changed its answer"
+    );
+    let baseline = metrics.centered_baseline(0.0, 34.0);
+    let mut text = TextPipeline::new(device, TextureFormat::Rgba8Unorm, &glyph_cache)?;
+    text.push_ui_text("~/dev/termeric", 10.4, baseline, size, [1.0; 4], None);
+    let queued = text.take_queued_since(0);
+    let batch = TextPipeline::build_batch(queued, queue, &mut glyph_cache);
+    anyhow::ensure!(
+        batch.vertices.len() >= 4 * 12,
+        "UI label produced {} vertices",
+        batch.vertices.len()
+    );
+    for vertex in &batch.vertices {
+        anyhow::ensure!(
+            vertex.position[0].fract() == 0.0 && vertex.position[1].fract() == 0.0,
+            "UI glyph quad at fractional position {:?}",
+            vertex.position
+        );
+    }
+    let right = batch
+        .vertices
+        .iter()
+        .map(|vertex| vertex.position[0])
+        .fold(f32::MIN, f32::max);
+    anyhow::ensure!(
+        (right - (10.0 + width)).abs() <= size,
+        "drawn label ends at {right}, measured {width} from 10"
+    );
+    Ok(())
+}
+
 /// Shape and submit representative multi-scalar terminal graphemes through the
 /// real text atlas/pipeline. The queued-content assertions act as a small
 /// geometry golden: no case may collapse to its first scalar before shaping.
@@ -3099,6 +3173,9 @@ pub(crate) fn headless_unicode_render_smoke(device: &Device, queue: &Queue) -> R
             }
             text::QueuedContent::MultiCell { .. } => {
                 anyhow::bail!("standalone Unicode golden unexpectedly became a multicell");
+            }
+            text::QueuedContent::UiText { .. } => {
+                anyhow::bail!("terminal Unicode golden unexpectedly became UI text");
             }
         }
     }
@@ -4588,6 +4665,7 @@ mod ui_palette_accessibility_tests {
                 (palette.settings_text, palette.settings_bg),
                 (palette.settings_text_dim, palette.settings_bg),
                 (palette.tab_text_active, palette.tab_active),
+                (palette.tab_text_inactive, palette.tab_bar_bg),
                 (palette.tab_text_inactive, palette.tab_inactive),
                 (palette.search_text, palette.search_bg),
                 (palette.search_indicator, palette.search_bg),

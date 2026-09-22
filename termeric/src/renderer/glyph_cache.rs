@@ -167,6 +167,8 @@ pub struct LigatureKey {
     pub bold_weight: u16,
     /// Whether glyph offsets follow the cell grid or the shaped advances.
     pub placement: GlyphPlacement,
+    /// Terminal font configuration or the desktop's UI sans-serif face.
+    pub face: TextFace,
 }
 
 impl LigatureKey {
@@ -184,6 +186,7 @@ impl LigatureKey {
         normal_weight: u16,
         bold_weight: u16,
         placement: GlyphPlacement,
+        face: TextFace,
     ) -> Self {
         Self {
             text: text.to_string(),
@@ -198,9 +201,37 @@ impl LigatureKey {
             normal_weight,
             bold_weight,
             placement,
+            face,
         }
     }
 }
+
+/// Which font family a shaped run uses.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub enum TextFace {
+    /// The configured terminal family, fallbacks, weights, and features.
+    Terminal,
+    /// The desktop's generic sans-serif family, for application chrome.
+    UiSans,
+}
+
+/// Vertical metrics of the UI face at one pixel size.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct UiFontMetrics {
+    pub ascent: f32,
+    pub descent: f32,
+}
+
+impl UiFontMetrics {
+    /// Whole-pixel baseline that centres the face's ascent and descent in a
+    /// box starting at `top` with `height` pixels.
+    pub fn centered_baseline(self, top: f32, height: f32) -> f32 {
+        (top + (height - (self.ascent + self.descent)) / 2.0 + self.ascent).round()
+    }
+}
+
+/// Bounded memo of UI text widths, keyed by pixel size then text.
+const MAX_UI_WIDTH_ENTRIES: usize = 4096;
 
 /// How shaped glyph positions map onto terminal cells.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
@@ -730,6 +761,10 @@ pub struct GlyphCache {
     /// Parsed `wght`-axis capability by resolved face. Variation axes are
     /// intrinsic to a face, so this avoids reparsing `fvar` on glyph misses.
     weight_axis_faces: HashMap<cosmic_text::fontdb::ID, bool>,
+    /// UI text widths by pixel size, bounded by `MAX_UI_WIDTH_ENTRIES`.
+    ui_widths: HashMap<u32, HashMap<Box<str>, f32>>,
+    /// UI face vertical metrics by pixel size.
+    ui_metrics: HashMap<u32, UiFontMetrics>,
 }
 
 impl GlyphCache {
@@ -746,7 +781,7 @@ impl GlyphCache {
         line_height_multiplier: f32,
         ligatures: bool,
     ) -> Result<Self> {
-        let mut font_system = FontSystem::new();
+        let mut font_system = desktop_font_system();
         let rasterizer = GlyphRasterizer::new();
         let fallback_families = fallback_families.to_vec();
         let font_family = resolve_configured_family(&font_system, font_family, &fallback_families);
@@ -935,6 +970,8 @@ impl GlyphCache {
             font_feature_overrides: FontFeatures::new(),
             reported_synthetic_styles: HashSet::new(),
             weight_axis_faces: HashMap::new(),
+            ui_widths: HashMap::new(),
+            ui_metrics: HashMap::new(),
         })
     }
 
@@ -1430,7 +1467,100 @@ impl GlyphCache {
             self.font_weight.0,
             self.bold_font_weight.0,
             placement,
+            TextFace::Terminal,
         );
+        self.shape_keyed(key, text, style, metrics, queue)
+    }
+
+    /// Shape application-chrome text in the desktop's sans-serif face at an
+    /// explicit pixel size. Positions follow the shaped advances.
+    pub(super) fn shape_ui_text(
+        &mut self,
+        text: &str,
+        size_px: f32,
+        queue: &Queue,
+    ) -> Option<LigatureRun> {
+        if text.is_empty() {
+            return None;
+        }
+        let metrics = ui_text_metrics(size_px);
+        let key = LigatureKey::new(
+            text,
+            metrics.font_size,
+            metrics.line_height,
+            FontStyle::default(),
+            false,
+            FontFeatures::new(),
+            "",
+            &[],
+            false,
+            Weight::NORMAL.0,
+            Weight::BOLD.0,
+            GlyphPlacement::Shaped,
+            TextFace::UiSans,
+        );
+        self.shape_keyed(key, text, FontStyle::default(), metrics, queue)
+    }
+
+    /// Advance width of UI text without rasterizing it.
+    pub(super) fn ui_text_width(&mut self, text: &str, size_px: f32) -> f32 {
+        if text.is_empty() {
+            return 0.0;
+        }
+        if let Some(width) = self
+            .ui_widths
+            .get(&size_px.to_bits())
+            .and_then(|sizes| sizes.get(text))
+        {
+            return *width;
+        }
+        let mut buffer = Buffer::new(&mut self.font_system, ui_text_metrics(size_px));
+        buffer.set_text(text, &ui_attrs(), Shaping::Advanced, None);
+        buffer.shape_until_scroll(&mut self.font_system, false);
+        let width = buffer
+            .layout_runs()
+            .map(|run| run.line_w)
+            .fold(0.0, f32::max);
+        if self.ui_widths.values().map(HashMap::len).sum::<usize>() >= MAX_UI_WIDTH_ENTRIES {
+            self.ui_widths.clear();
+        }
+        self.ui_widths
+            .entry(size_px.to_bits())
+            .or_default()
+            .insert(text.into(), width);
+        width
+    }
+
+    /// Ascent and descent of the UI face at a pixel size.
+    pub(super) fn ui_font_metrics(&mut self, size_px: f32) -> UiFontMetrics {
+        if let Some(metrics) = self.ui_metrics.get(&size_px.to_bits()) {
+            return *metrics;
+        }
+        let mut buffer = Buffer::new(&mut self.font_system, ui_text_metrics(size_px));
+        buffer.set_text("Hg", &ui_attrs(), Shaping::Advanced, None);
+        let metrics = buffer
+            .line_layout(&mut self.font_system, 0)
+            .and_then(|lines| lines.first())
+            .map(|line| UiFontMetrics {
+                ascent: line.max_ascent,
+                descent: line.max_descent,
+            })
+            .unwrap_or(UiFontMetrics {
+                ascent: size_px * 0.8,
+                descent: size_px * 0.2,
+            });
+        self.ui_metrics.insert(size_px.to_bits(), metrics);
+        metrics
+    }
+
+    fn shape_keyed(
+        &mut self,
+        key: LigatureKey,
+        text: &str,
+        style: FontStyle,
+        metrics: Metrics,
+        queue: &Queue,
+    ) -> Option<LigatureRun> {
         if let Some(run) = self.ligature_cache.get(&key).cloned() {
             self.shaping_cache_metrics.hits += 1;
             self.atlas_hits += run.glyphs.len() as u64;
@@ -1449,7 +1579,7 @@ impl GlyphCache {
         }
         self.shaping_cache_metrics.misses += 1;
         let (run, retry_next_frame) =
-            self.shape_text_internal(text, style, metrics, placement, queue)?;
+            self.shape_text_internal(text, style, metrics, key.placement, key.face, queue)?;
         if retry_next_frame {
             self.shaping_cache_metrics.evictions +=
                 self.deferred_ligature_cache.insert(key, &run) as u64;
@@ -1520,11 +1650,19 @@ impl GlyphCache {
         style: FontStyle,
         metrics: Metrics,
         placement: GlyphPlacement,
+        face: TextFace,
         queue: &Queue,
     ) -> Option<(LigatureRun, bool)> {
         let mut placed = Vec::new();
 
-        {
+        if face == TextFace::UiSans {
+            let mut buffer = Buffer::new(&mut self.font_system, metrics);
+            buffer.set_text(text, &ui_attrs(), Shaping::Advanced, None);
+            buffer.shape_until_scroll(&mut self.font_system, false);
+            for run in buffer.layout_runs() {
+                placed.extend(place_glyphs(text, run.glyphs, placement));
+            }
+        } else {
             let mut buffer = Buffer::new(&mut self.font_system, metrics);
 
             let default_family = if self.use_monospace_fallback {
@@ -2084,6 +2222,34 @@ fn replacement_glyph_bitmap() -> Vec<u8> {
         }
     }
     pixels
+}
+
+/// Load installed fonts while keeping fontconfig's generic `sans-serif`
+/// alias, so chrome text uses the desktop's UI face. `FontSystem::new` would
+/// replace that alias with a fixed family; its monospace and serif defaults
+/// are kept so terminal text resolves exactly as before.
+fn desktop_font_system() -> FontSystem {
+    let mut database = cosmic_text::fontdb::Database::new();
+    database.load_system_fonts();
+    database.set_monospace_family("Noto Sans Mono");
+    database.set_serif_family("DejaVu Serif");
+    let locale = sys_locale::get_locale().unwrap_or_else(|| {
+        log::warn!("failed to get system locale, falling back to en-US");
+        String::from("en-US")
+    });
+    log::info!(
+        "UI font family: {}",
+        database.family_name(&cosmic_text::fontdb::Family::SansSerif)
+    );
+    FontSystem::new_with_locale_and_db(locale, database)
+}
+
+fn ui_attrs() -> Attrs<'static> {
+    Attrs::new().family(Family::SansSerif)
+}
+
+fn ui_text_metrics(size_px: f32) -> Metrics {
+    Metrics::new(size_px, (size_px * 1.25).ceil())
 }
 
 fn font_attrs(
@@ -2867,6 +3033,7 @@ mod tests {
             400,
             700,
             GlyphPlacement::CellGrid,
+            TextFace::Terminal,
         );
         let run = LigatureRun {
             glyphs: vec![
@@ -3683,6 +3850,7 @@ mod tests {
                 400,
                 700,
                 GlyphPlacement::CellGrid,
+                TextFace::Terminal,
             ),
             LigatureKey::new(
                 "e\u{301}",
@@ -3697,6 +3865,7 @@ mod tests {
                 400,
                 700,
                 GlyphPlacement::CellGrid,
+                TextFace::Terminal,
             )
         );
         let grid = |placement| {
@@ -3713,6 +3882,7 @@ mod tests {
                 400,
                 700,
                 placement,
+                TextFace::Terminal,
             )
         };
         assert_ne!(
@@ -3743,6 +3913,7 @@ mod tests {
                 350,
                 700,
                 GlyphPlacement::CellGrid,
+                TextFace::Terminal,
             ),
             LigatureKey::new(
                 "fi",
@@ -3757,6 +3928,7 @@ mod tests {
                 450,
                 800,
                 GlyphPlacement::CellGrid,
+                TextFace::Terminal,
             ),
             "configured weight pair must participate in shaped-run identity"
         );
@@ -3954,6 +4126,7 @@ mod tests {
             400,
             700,
             GlyphPlacement::CellGrid,
+            TextFace::Terminal,
         );
         let custom = compile_font_feature_overrides(&enabled);
         let custom_key = LigatureKey::new(
@@ -3969,6 +4142,7 @@ mod tests {
             400,
             700,
             GlyphPlacement::CellGrid,
+            TextFace::Terminal,
         );
         assert_ne!(default_key, custom_key);
     }

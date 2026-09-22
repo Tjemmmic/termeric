@@ -249,6 +249,7 @@ fn linux_headless_gpu_render_smoke_when_requested() {
     .expect("headless GPU device request failed");
     crate::renderer::headless_unicode_render_smoke(&device, &queue)
         .expect("Unicode grapheme render smoke failed");
+    crate::renderer::headless_ui_text_smoke(&device, &queue).expect("UI text smoke failed");
     crate::renderer::headless_color_emoji_render_smoke(&device, &queue)
         .expect("color emoji render smoke failed");
     crate::renderer::headless_glyph_atlas_stress_smoke(&device, &queue)

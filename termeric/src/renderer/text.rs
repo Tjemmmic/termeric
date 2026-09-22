@@ -77,6 +77,12 @@ pub(super) enum QueuedContent {
         text: String,
         cell_width: f32,
     },
+    /// Application-chrome text in the desktop's sans-serif face. Its queued
+    /// `y` is the baseline rather than a cell top.
+    UiText {
+        text: Box<str>,
+        size_px: f32,
+    },
 }
 
 /// Pixel-space clipping bounds for terminal glyph overhangs at pane edges.
@@ -234,6 +240,15 @@ fn queued_glyphs(
             }),
         QueuedContent::MultiCell { text, font_scale } => glyph_cache
             .shape_multicell_styled(text, queued.style, *font_scale, queue)
+            .map(|run| {
+                run.glyphs
+                    .into_iter()
+                    .map(|glyph| (glyph.entry, glyph.x_offset))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        QueuedContent::UiText { text, size_px } => glyph_cache
+            .shape_ui_text(text, *size_px, queue)
             .map(|run| {
                 run.glyphs
                     .into_iter()
@@ -599,6 +614,7 @@ impl TextPipeline {
         for character in &queued {
             let character_baseline = match character.content {
                 QueuedContent::MultiCell { font_scale, .. } => baseline * font_scale,
+                QueuedContent::UiText { .. } => 0.0,
                 _ => baseline,
             };
             for (entry, x_offset) in queued_glyphs(character, glyph_cache, queue) {
@@ -669,6 +685,31 @@ impl TextPipeline {
             style: FontStyle::default(),
             clip: None,
         });
+    }
+
+    /// Queue chrome text in the UI face with its baseline at `baseline_y`.
+    pub(super) fn push_ui_text(
+        &mut self,
+        text: &str,
+        x: f32,
+        baseline_y: f32,
+        size_px: f32,
+        color: [f32; 4],
+        clip: Option<TextClip>,
+    ) {
+        if !text.is_empty() {
+            self.queued.push(QueuedChar {
+                content: QueuedContent::UiText {
+                    text: text.into(),
+                    size_px,
+                },
+                x,
+                y: baseline_y,
+                color,
+                style: FontStyle::default(),
+                clip,
+            });
+        }
     }
 
     /// Queue a terminal character with resolved SGR face and pane clipping.
@@ -848,6 +889,7 @@ impl TextPipeline {
 
             let queued_baseline = match queued.content {
                 QueuedContent::MultiCell { font_scale, .. } => baseline * font_scale,
+                QueuedContent::UiText { .. } => 0.0,
                 _ => baseline,
             };
             for (entry, x_offset) in queued_glyphs(queued, glyph_cache, queue) {

@@ -169,7 +169,7 @@ Termeric avoids sharp corners. Things should look **knobby and organic**, like a
 | Element              | Radius / Treatment                                                         |
 |----------------------|-----------------------------------------------------------------------------|
 | **Window corners**   | Use OS-native rounded corners (platform default or custom if available)     |
-| **Tab bar**          | Tabs have pill-shaped or rounded-rectangle active indicators                |
+| **Tab bar**          | Active tab is a rounded raised surface with a thin accent underline         |
 | **Settings panel**   | Rounded selection highlights, soft accent bars                              |
 | **Cursor**           | Block cursor has 2px corner radius; beam cursor has rounded caps            |
 | **Scrollbar**        | Thin, rounded, semi-transparent — appears on hover, fades away             |
@@ -196,16 +196,16 @@ Less is more. The terminal content is king; the UI is the soil.
 - **Hover effects**: Gentle background tint change, not color explosion
 - **Notifications**: Minimal, non-intrusive. Prefer status text over modals
 - **Settings panel**: A quiet sidebar companion, not a modal dialog
-- **Tab bar**: Compact, understated. Active tab is clear but not loud
+- **Tab bar**: Compact, understated, "quiet native". The strip uses the theme's `tab_inactive` color; the active tab is a slightly raised surface with a 2px `tab_active` accent line (a left bar in the vertical rail); inactive titles are dimmed; × appears on the active or hovered tab, and background activity shows as a small dot in its place. Never fill a whole tab with a saturated color
 
 ---
 
 ## 4. Typography
 
-- **Terminal font**: Respect the user's configured monospace font. Default to system `monospace`
-- **UI text** (settings labels, tab titles): Same monospace font as terminal, keeps things unified
+- **Terminal font**: Respect the user's configured monospace font. Default to system `monospace`. `font.size` is in points (96/72 logical pixels per point)
+- **UI text** (tab titles, toolbar labels): The desktop's sans-serif UI face at 10pt, resolved through fontconfig, so chrome reads like the rest of the desktop. Draw it with `Renderer::push_ui_label`, which measures proportionally, centres on the face's own metrics, and shortens with an ellipsis. The tab bar uses it today; settings, palette, and panel text still use the terminal font and should move to the UI face when they are redesigned
 - **Font scaling**: Minimum 8pt, maximum 72pt. Step by 1pt
-- **Character spacing**: Standard monospace grid. No custom letter-spacing
+- **Character spacing**: Terminal text keeps the standard monospace grid. No custom letter-spacing or squeezed advances anywhere
 - **Emoji**: Rendered inline if the font supports it. Fall back gracefully
 
 ---
@@ -282,9 +282,9 @@ pub fn malanga() -> Self {
 - Clamp to `[0.0, 1.0]` before applying
 - Duration constant: `const ANIMATION_DURATION: f32 = 0.2;` (200ms default)
 
-### Rectangle drawing (future: rounded)
+### Rectangle drawing
 
-When the renderer gains rounded-rect support, apply these radii:
+`RectPipeline::push_rounded_rect` draws anti-aliased rounded rectangles, and a radius of half the height makes a pill or circle. Use these radii, scaled by the display factor and rounded to whole pixels:
 
 ```rust
 const CORNER_RADIUS_SM: f32 = 4.0;   // buttons, selection highlights
@@ -292,7 +292,7 @@ const CORNER_RADIUS_MD: f32 = 8.0;   // panels, cards
 const CORNER_RADIUS_LG: f32 = 12.0;  // overlays, dialogs
 ```
 
-Until then, use the existing `push_rect` with these values stored for future use.
+Chrome geometry must land on whole physical pixels, and rendering, hit testing, keyboard focus, and accessibility bounds must come from one shared function (see `TabChrome` in `renderer/tab_bar.rs`).
 
 ---
 

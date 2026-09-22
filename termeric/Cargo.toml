@@ -32,6 +32,8 @@ bytemuck = { version = "1.21", features = ["derive"] }
 
 # Text rendering (0.19+ fixes variable-font matching through the `wght` axis)
 cosmic-text = "0.19"
+# Locale for the desktop font system; the version cosmic-text already uses.
+sys-locale = "0.3"
 unicode-segmentation = "=1.13.3"
 unicode_names2 = "=4.0.0"
 

@@ -15,6 +15,28 @@ Changing it, reloading the configuration, or resetting settings immediately
 recalculates every local PTY and split-pane pixel geometry; running processes
 are resized rather than restarted.
 
+## Appearance
+
+Both placements share one "quiet native" tab design. The strip uses the
+theme's `tab_inactive` color. The active tab is a slightly raised, rounded
+surface marked by a thin accent line in the theme's `tab_active` color, along
+the bottom edge on top placement and the left edge in the rail. Titles use the
+desktop's sans-serif UI face at 10pt (resolved through fontconfig), are dimmed
+on inactive tabs, and are shortened with an ellipsis to the measured space
+instead of a fixed character count. Tab numbers are not drawn.
+
+The close button appears on the active tab and on the tab under the pointer.
+An inactive tab with new background output shows a small activity dot in the
+close button's place. Plugin tabs lead with an accent dot, and the single
+highest-priority state among broadcast active, broadcast armed, read-only, and
+pinned is drawn as a small icon before the title. Unreviewed diffs show as a
+count pill after it. Commands (a `›_` prompt), Workspaces (a chevron), and
+Settings (a menu icon) sit at the right of the toolbar.
+
+All tab and control rectangles come from one whole-pixel geometry shared by
+rendering, hit testing, keyboard focus, and accessibility bounds, so a visible
+control is exactly the area that responds to it.
+
 ## Left-rail contract
 
 Left placement keeps Commands, Workspaces, and Settings in the existing top

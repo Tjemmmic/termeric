@@ -1106,6 +1106,17 @@ Versioning once public beta tags begin.
 
 ### Changed
 
+- The tab bar has a quiet, native design. Titles use the desktop's sans-serif
+  UI face at 10pt, resolved through fontconfig, and are shortened with an
+  ellipsis to the measured space instead of cut at 15 characters and squeezed
+  to 85% width. The active tab is a raised surface with a thin theme-accent
+  line rather than a saturated fill; × shows on the active or hovered tab; tab
+  numbers and the `!!`/`??`/`RO`/`PIN` text markers are replaced by small icons
+  and an activity dot; and toolbar icons are redrawn at consistent scaled
+  sizes, with a `›_` prompt for Commands. Tab and control geometry is scaled for
+  the display, whole-pixel, and shared by rendering, hit testing, focus, and
+  accessibility. The bar is 34 logical pixels tall regardless of terminal font.
+
 - Root themes keep ANSI color meaning. Their palettes were mapped literally
   from plant parts, so cyan was green in eleven of twelve themes, several
   yellows, blues, and magentas belonged to other hue families, and some slots
