@@ -15,8 +15,12 @@ const LIMIT: Duration = Duration::from_secs(5);
 struct OwnedChild(Option<Child>);
 
 impl OwnedChild {
-    fn output(mut self) -> Output {
-        let deadline = Instant::now() + LIMIT;
+    fn output(self) -> Output {
+        self.output_with_timeout(LIMIT)
+    }
+
+    fn output_with_timeout(mut self, timeout: Duration) -> Output {
+        let deadline = Instant::now() + timeout;
         loop {
             let child = self.0.as_mut().unwrap();
             if child.try_wait().unwrap().is_some() {
@@ -211,4 +215,33 @@ fn real_bridge_rejects_invalid_negotiation_without_starting_a_daemon() {
             "rejected negotiation created daemon state"
         );
     }
+}
+
+#[test]
+fn real_bridge_times_out_partial_negotiation_before_starting_a_daemon() {
+    let fixture = Fixture::new();
+    let mut child = OwnedChild(Some(
+        fixture
+            .command(&["domain", "proxy-stdio"])
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    ));
+    let mut input = child.0.as_mut().unwrap().stdin.take().unwrap();
+    input.write_all(&1024u32.to_be_bytes()).unwrap();
+    // Keep the input pipe open with an incomplete payload. The production
+    // ten-second budget must expire before this fifteen-second safety net.
+    let output = child.output_with_timeout(Duration::from_secs(15));
+    drop(input);
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("bridge negotiation") && stderr.contains("deadline elapsed"),
+        "{stderr}"
+    );
+    assert!(
+        fs::read_dir(&fixture.runtime).unwrap().next().is_none(),
+        "incomplete negotiation created daemon state"
+    );
 }

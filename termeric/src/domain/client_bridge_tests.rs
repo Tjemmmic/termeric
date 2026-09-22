@@ -3,6 +3,44 @@ use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 #[test]
+fn unbuffered_negotiation_deadline_covers_trickled_header_and_payload() {
+    use super::super::{ClientFrame, protocol, read_frame_with_timeout};
+    for prefix in [1, 4] {
+        let (input, mut source) = UnixStream::pair().unwrap();
+        let mut input = clone_input(input.as_raw_fd()).unwrap();
+        let mut wire = Vec::new();
+        protocol::write_frame(
+            &mut wire,
+            &ClientFrame::Hello {
+                version: protocol::PROTOCOL_VERSION,
+                token: String::new(),
+            },
+        )
+        .unwrap();
+        source.write_all(&wire[..prefix]).unwrap();
+        let sender = thread::spawn(move || {
+            for byte in &wire[prefix..] {
+                thread::sleep(Duration::from_millis(3));
+                if source.write_all(&[*byte]).is_err() {
+                    return;
+                }
+            }
+        });
+        let result = read_frame_with_timeout::<ClientFrame>(&mut input, Duration::from_millis(40));
+        drop(input);
+        sender.join().unwrap();
+        assert_eq!(
+            result
+                .unwrap_err()
+                .downcast_ref::<std::io::Error>()
+                .unwrap()
+                .kind(),
+            std::io::ErrorKind::TimedOut
+        );
+    }
+}
+
+#[test]
 fn input_eof_half_closes_and_drains_final_daemon_response() {
     let (bridge, mut daemon) = UnixStream::pair().unwrap();
     daemon

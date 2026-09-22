@@ -80,8 +80,8 @@ enum DomainCloser {
 
 struct SshChild(Mutex<Option<Child>>);
 
-struct DeadlineReader<'a> {
-    stream: &'a mut DomainStream,
+struct DeadlineReader<'a, R> {
+    stream: &'a mut R,
     deadline: Instant,
     alive: Option<&'a AtomicBool>,
 }
@@ -108,7 +108,7 @@ impl Read for DomainStream {
     }
 }
 
-impl Read for DeadlineReader<'_> {
+impl<R: Read + AsRawFd> Read for DeadlineReader<'_, R> {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
         loop {
             if self
@@ -132,7 +132,7 @@ impl Read for DeadlineReader<'_> {
             if self.alive.is_some() {
                 timeout_millis = timeout_millis.min(500);
             }
-            if stdin_ready(self.stream.poll_descriptor(), timeout_millis)? {
+            if stdin_ready(self.stream.as_raw_fd(), timeout_millis)? {
                 return self.stream.read(buffer);
             }
         }
@@ -163,8 +163,8 @@ impl Write for DomainStream {
     }
 }
 
-impl DomainStream {
-    fn poll_descriptor(&self) -> RawFd {
+impl AsRawFd for DomainStream {
+    fn as_raw_fd(&self) -> RawFd {
         match self {
             Self::Local(stream) => stream.as_raw_fd(),
             Self::Ssh(stream) => stream
@@ -174,7 +174,9 @@ impl DomainStream {
                 .as_raw_fd(),
         }
     }
+}
 
+impl DomainStream {
     fn split(mut self) -> anyhow::Result<(DomainReader, DomainWriter, DomainCloser)> {
         match &mut self {
             Self::Local(stream) => Ok((
@@ -1230,7 +1232,7 @@ fn subscribe_topology_stream(
     }
 
     while alive.load(Ordering::Acquire) {
-        if !stdin_ready(stream.poll_descriptor(), 500)? {
+        if !stdin_ready(stream.as_raw_fd(), 500)? {
             continue;
         }
         // Idle subscriptions have no expiry. Once bytes arrive, one deadline
@@ -1282,7 +1284,7 @@ fn read_frame_while_alive<T: serde::de::DeserializeOwned>(
 }
 
 fn read_frame_with_timeout<T: serde::de::DeserializeOwned>(
-    stream: &mut DomainStream,
+    stream: &mut (impl Read + AsRawFd),
     timeout: Duration,
 ) -> anyhow::Result<T> {
     protocol::read_frame(&mut DeadlineReader {
@@ -1299,7 +1301,7 @@ fn read_frame_with_timeout<T: serde::de::DeserializeOwned>(
 pub fn run_ssh_stdio_bridge() -> anyhow::Result<()> {
     let mut stdin = bridge::clone_input(libc::STDIN_FILENO)?;
     let mut stdout = std::io::stdout().lock();
-    let hello = protocol::read_frame::<ClientFrame>(&mut stdin)
+    let hello = read_frame_with_timeout::<ClientFrame>(&mut stdin, RESPONSE_TIMEOUT)
         .context("read SSH domain bridge negotiation")?;
     match hello {
         ClientFrame::Hello { version, .. } if version != protocol::PROTOCOL_VERSION => {
