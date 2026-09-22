@@ -66,6 +66,19 @@ probe only when every explicit family fails. Inspection neither populates nor
 invalidates the raster/shaping atlases and never runs during normal row
 construction.
 
+## Hinting and pixel alignment
+
+Swash applies light, vertical-only hinting: horizontal edges such as baselines
+and x-heights snap to the pixel grid, while vertical stems keep the outline's
+horizontal position. This matches the fontconfig `hintslight` default that Qt
+and GTK terminals use on most Linux desktops. Termeric supplies the rest of the
+alignment: cells, the baseline, and every glyph quad are whole pixels, and a
+glyph's subpixel remainder is rasterized once rather than resampled. Rendered
+through this path, Hack at 10pt matches Konsole's cell size and glyph shapes on
+a `hintslight` desktop, with a slightly higher share of full-intensity stem
+pixels (22% against 18%). Full hinting, which also moves vertical stems, is not
+offered.
+
 ## Diagnostics and verification
 
 Shaped-run retention has two independent owned-byte budgets: 8 MiB for
