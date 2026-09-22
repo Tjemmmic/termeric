@@ -7,7 +7,7 @@ use anyhow::{Result, ensure};
 use wgpu::*;
 
 const CLEAR: [f32; 4] = [0.02, 0.03, 0.04, 1.0];
-const FORMAT: TextureFormat = TextureFormat::Rgba8UnormSrgb;
+const FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
 
 #[derive(Clone, Copy, Debug)]
 struct Case {
@@ -21,24 +21,16 @@ struct Case {
 struct ReferenceImage {
     width: u32,
     height: u32,
-    linear: Vec<[f32; 4]>,
+    encoded: Vec<[f32; 4]>,
 }
 
-fn to_linear(value: u8) -> f32 {
-    let value = f32::from(value) / 255.0;
-    if value <= 0.04045 {
-        value / 12.92
-    } else {
-        ((value + 0.055) / 1.055).powf(2.4)
-    }
+// The renderer filters and blends sRGB-encoded values directly (see
+// `ENCODED_RGBA_FORMAT`), so the oracle works on normalized stored values.
+fn to_unit(value: u8) -> f32 {
+    f32::from(value) / 255.0
 }
 
-fn to_srgb(value: f32) -> u8 {
-    let value = if value <= 0.0031308 {
-        value * 12.92
-    } else {
-        1.055 * value.powf(1.0 / 2.4) - 0.055
-    };
+fn to_byte(value: f32) -> u8 {
     (value.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
@@ -47,17 +39,17 @@ impl ReferenceImage {
         Self {
             width: decoded.width,
             height: decoded.height,
-            linear: decoded
+            encoded: decoded
                 .rgba
                 .as_chunks::<4>()
                 .0
                 .iter()
                 .map(|pixel| {
                     [
-                        to_linear(pixel[0]),
-                        to_linear(pixel[1]),
-                        to_linear(pixel[2]),
-                        f32::from(pixel[3]) / 255.0,
+                        to_unit(pixel[0]),
+                        to_unit(pixel[1]),
+                        to_unit(pixel[2]),
+                        to_unit(pixel[3]),
                     ]
                 })
                 .collect(),
@@ -70,7 +62,7 @@ impl ReferenceImage {
         let tx = x - x0;
         let ty = y - y0;
         let at = |x: f32, y: f32| {
-            self.linear[y.clamp(0.0, self.height as f32 - 1.0) as usize * self.width as usize
+            self.encoded[y.clamp(0.0, self.height as f32 - 1.0) as usize * self.width as usize
                 + x.clamp(0.0, self.width as f32 - 1.0) as usize]
         };
         let samples = [
@@ -131,7 +123,7 @@ fn reference_frame(source: Option<&ReferenceImage>, case: Case) -> Vec<u8> {
             {
                 color = [0.0, 1.0, 1.0, 1.0];
             }
-            pixels.extend([to_srgb(color[0]), to_srgb(color[1]), to_srgb(color[2]), 255]);
+            pixels.extend([to_byte(color[0]), to_byte(color[1]), to_byte(color[2]), 255]);
         }
     }
     pixels
@@ -387,7 +379,7 @@ fn background_pixel_oracle_rejects_missing_image_and_chrome_bleed() {
     let source = ReferenceImage {
         width: 2,
         height: 2,
-        linear: vec![[1.0, 0.0, 0.0, 1.0]; 4],
+        encoded: vec![[1.0, 0.0, 0.0, 1.0]; 4],
     };
     let case = Case {
         size: (64, 64),
@@ -411,7 +403,7 @@ fn background_pixel_oracle_distinguishes_fits_and_opacity() {
     let source = ReferenceImage {
         width: 48,
         height: 16,
-        linear: (0..48 * 16)
+        encoded: (0..48 * 16)
             .map(|index| [if index % 48 < 16 { 1.0 } else { 0.0 }, 0.3, 0.0, 1.0])
             .collect(),
     };

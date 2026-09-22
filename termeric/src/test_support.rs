@@ -261,6 +261,8 @@ fn linux_headless_gpu_render_smoke_when_requested() {
         .expect("palette input geometry smoke failed");
     crate::renderer::headless_image_render_smoke(&device, &queue)
         .expect("Kitty graphics render smoke failed");
+    crate::renderer::headless_theme_color_fidelity_smoke(&device, &queue)
+        .expect("theme color fidelity smoke failed");
     crate::renderer::headless_background_render_smoke(&device, &queue)
         .expect("background image render smoke failed");
     let (pixels, width, height) = crate::renderer::headless_gui_visual_snapshot(&device, &queue)
@@ -283,7 +285,7 @@ fn linux_headless_gpu_render_smoke_when_requested() {
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        format: wgpu::TextureFormat::Rgba8Unorm,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         view_formats: &[],
     });

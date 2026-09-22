@@ -239,7 +239,7 @@ pub(super) fn run(device: &Device, queue: &Queue) -> Result<()> {
                 "{fixture:?}: decoded pixels differ"
             );
             let key = (1, image.id);
-            let mut pipeline = ImagePipeline::new(device, TextureFormat::Rgba8UnormSrgb)?;
+            let mut pipeline = ImagePipeline::new(device, TextureFormat::Rgba8Unorm)?;
             pipeline.resize(queue, HEADLESS_IMAGE_WIDTH, HEADLESS_IMAGE_HEIGHT);
             for phase in ["initial", "edited", "frozen after hidden erase", "released"] {
                 let expected = match phase {

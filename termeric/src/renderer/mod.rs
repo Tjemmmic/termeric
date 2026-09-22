@@ -394,6 +394,91 @@ fn mix(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
     ]
 }
 
+/// Termeric composes in display-encoded sRGB space, as Qt, GTK and browsers
+/// do: theme hex values reach the screen unchanged and alpha blends operate on
+/// encoded values. Render targets therefore use non-sRGB views, so the GPU
+/// never encodes those values a second time, and textures that store
+/// sRGB-encoded pixels (images, color glyphs) use this format so sampling
+/// returns the stored values instead of decoding them to linear light.
+pub(crate) const ENCODED_RGBA_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
+
+/// The presentation format a surface is configured with and the non-sRGB
+/// view format that frames are rendered into.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SurfaceFormats {
+    surface: TextureFormat,
+    render: TextureFormat,
+}
+
+/// Prefer 8-bit formats because wider or floating-point presentation formats
+/// can carry different transfer semantics. An sRGB-only surface is still
+/// usable: frames render through a non-sRGB view of the same texture.
+fn select_surface_formats(available: &[TextureFormat]) -> Option<SurfaceFormats> {
+    const PREFERRED: [TextureFormat; 4] = [
+        TextureFormat::Bgra8Unorm,
+        TextureFormat::Rgba8Unorm,
+        TextureFormat::Bgra8UnormSrgb,
+        TextureFormat::Rgba8UnormSrgb,
+    ];
+    let surface = PREFERRED
+        .into_iter()
+        .find(|format| available.contains(format))
+        .or_else(|| available.iter().copied().find(|format| !format.is_srgb()))
+        .or_else(|| available.first().copied())?;
+    Some(SurfaceFormats {
+        surface,
+        render: surface.remove_srgb_suffix(),
+    })
+}
+
+#[cfg(test)]
+mod surface_format_tests {
+    use super::*;
+
+    #[test]
+    fn prefers_a_non_srgb_eight_bit_surface_even_when_srgb_is_listed_first() {
+        let formats = select_surface_formats(&[
+            TextureFormat::Bgra8UnormSrgb,
+            TextureFormat::Rgba16Float,
+            TextureFormat::Bgra8Unorm,
+        ]);
+        assert_eq!(
+            formats,
+            Some(SurfaceFormats {
+                surface: TextureFormat::Bgra8Unorm,
+                render: TextureFormat::Bgra8Unorm,
+            })
+        );
+    }
+
+    #[test]
+    fn srgb_only_surfaces_render_through_a_non_srgb_view() {
+        let formats = select_surface_formats(&[TextureFormat::Rgba8UnormSrgb]);
+        assert_eq!(
+            formats,
+            Some(SurfaceFormats {
+                surface: TextureFormat::Rgba8UnormSrgb,
+                render: TextureFormat::Rgba8Unorm,
+            })
+        );
+    }
+
+    #[test]
+    fn unlisted_formats_fall_back_without_ever_rendering_through_srgb() {
+        let wide = select_surface_formats(&[TextureFormat::Rgb10a2Unorm]).unwrap();
+        assert_eq!(wide.render, TextureFormat::Rgb10a2Unorm);
+        for available in [
+            vec![TextureFormat::Bgra8UnormSrgb],
+            vec![TextureFormat::Rgba8UnormSrgb, TextureFormat::Bgra8UnormSrgb],
+            vec![TextureFormat::Rgb10a2Unorm, TextureFormat::Rgba8UnormSrgb],
+        ] {
+            let formats = select_surface_formats(&available).unwrap();
+            assert!(!formats.render.is_srgb(), "{available:?} -> {formats:?}");
+        }
+        assert_eq!(select_surface_formats(&[]), None);
+    }
+}
+
 fn apply_brightness(color: [f32; 4], brightness: f32) -> [f32; 4] {
     [
         (color[0] * brightness).clamp(0.0, 1.0),
@@ -510,6 +595,8 @@ pub struct Renderer {
     queue: Queue,
     diagnostics: RendererDiagnostics,
     config: SurfaceConfiguration,
+    /// Non-sRGB view format of the surface texture; see [`ENCODED_RGBA_FORMAT`].
+    render_format: TextureFormat,
     size: (u32, u32),
     // Rendering pipelines
     text_pipeline: TextPipeline,
@@ -679,12 +766,7 @@ impl Renderer {
 
         // Configure surface
         let surface_caps = surface.get_capabilities(&adapter);
-        let surface_format = surface_caps
-            .formats
-            .iter()
-            .copied()
-            .find(|f| f.is_srgb())
-            .or_else(|| surface_caps.formats.first().copied())
+        let formats = select_surface_formats(&surface_caps.formats)
             .ok_or_else(|| anyhow::anyhow!("selected adapter exposes no presentation format"))?;
         let alpha_mode =
             if surface_caps
@@ -700,12 +782,16 @@ impl Renderer {
 
         let config = SurfaceConfiguration {
             usage: TextureUsages::RENDER_ATTACHMENT,
-            format: surface_format,
+            format: formats.surface,
             width: size.width,
             height: size.height,
             present_mode: PresentMode::Fifo,
             alpha_mode,
-            view_formats: vec![],
+            view_formats: if formats.render == formats.surface {
+                vec![]
+            } else {
+                vec![formats.render]
+            },
             desired_maximum_frame_latency: 2,
         };
         surface.configure(&device, &config);
@@ -728,10 +814,10 @@ impl Renderer {
         let (cell_width, cell_height) = glyph_cache.cell_size();
 
         // Create pipelines
-        let text_pipeline = TextPipeline::new(&device, surface_format, &glyph_cache)?;
-        let rect_pipeline = RectPipeline::new(&device, surface_format)?;
-        let background_image_pipeline = ImagePipeline::new(&device, surface_format)?;
-        let image_pipeline = ImagePipeline::new(&device, surface_format)?;
+        let text_pipeline = TextPipeline::new(&device, formats.render, &glyph_cache)?;
+        let rect_pipeline = RectPipeline::new(&device, formats.render)?;
+        let background_image_pipeline = ImagePipeline::new(&device, formats.render)?;
+        let image_pipeline = ImagePipeline::new(&device, formats.render)?;
 
         let padding_physical = (padding * scale_factor).round().max(0.0);
         let acceptance_surface_loss_trigger =
@@ -755,6 +841,7 @@ impl Renderer {
             queue,
             diagnostics,
             config,
+            render_format: formats.render,
             size: (size.width, size.height),
             text_pipeline,
             rect_pipeline,
@@ -1226,9 +1313,10 @@ impl Renderer {
             });
         }
         let output = self.surface.get_current_texture()?;
-        let view = output
-            .texture
-            .create_view(&TextureViewDescriptor::default());
+        let view = output.texture.create_view(&TextureViewDescriptor {
+            format: Some(self.render_format),
+            ..Default::default()
+        });
 
         let mut encoder = self
             .device
@@ -2557,7 +2645,7 @@ fn render_headless_image_state(
         mip_level_count: 1,
         sample_count: 1,
         dimension: TextureDimension::D2,
-        format: TextureFormat::Rgba8UnormSrgb,
+        format: TextureFormat::Rgba8Unorm,
         usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
         view_formats: &[],
     });
@@ -2734,7 +2822,7 @@ mod headless_image_readback_tests {
 /// complete image again without incrementally discovering rows.
 #[cfg(test)]
 pub(crate) fn headless_image_render_smoke(device: &Device, queue: &Queue) -> Result<()> {
-    let mut pipeline = ImagePipeline::new(device, TextureFormat::Rgba8UnormSrgb)?;
+    let mut pipeline = ImagePipeline::new(device, TextureFormat::Rgba8Unorm)?;
     pipeline.resize(queue, HEADLESS_IMAGE_WIDTH, HEADLESS_IMAGE_HEIGHT);
     let image = headless_image_fixture();
     let key = (1, image.id);
@@ -2754,12 +2842,156 @@ pub(crate) fn headless_image_render_smoke(device: &Device, queue: &Queue) -> Res
     Ok(())
 }
 
+/// Theme hex values and image pixels must reach the frame byte for byte. The
+/// target uses the view format selected for an sRGB-only surface, the hardest
+/// case: rendering through an sRGB view or sampling an sRGB-decoding texture
+/// lightens every mid-tone (Turnip's `#18151A` background presents as
+/// `#56515A`), which fails the exact comparisons below.
+#[cfg(test)]
+pub(crate) fn headless_theme_color_fidelity_smoke(device: &Device, queue: &Queue) -> Result<()> {
+    use crate::config::theme::Color as ThemeColor;
+
+    // Readback rows must be 256-byte aligned: 64 RGBA pixels.
+    const WIDTH: u32 = 64;
+    const HEIGHT: u32 = 4;
+    let background = ThemeColor::hex("#18151A");
+    let rect_color = ThemeColor::hex("#9B5BA0");
+    let image_pixel = [0x7B, 0x9B, 0x5C, 0xFF];
+    let format = select_surface_formats(&[TextureFormat::Rgba8UnormSrgb])
+        .ok_or_else(|| anyhow::anyhow!("sRGB-only surface produced no render format"))?
+        .render;
+
+    let mut rects = RectPipeline::new(device, format)?;
+    rects.resize(queue, WIDTH, HEIGHT);
+    rects.push_rect(0.0, 0.0, 16.0, HEIGHT as f32, rect_color.to_f32_array());
+    rects.upload(device, queue);
+
+    let mut images = ImagePipeline::new(device, format)?;
+    images.resize(queue, WIDTH, HEIGHT);
+    let image = termeric_core::StoredImage {
+        id: termeric_core::ImageId(1),
+        width: 1,
+        height: 1,
+        data: image_pixel.to_vec().into(),
+        revision: 1,
+    };
+    let key = (1, image.id);
+    images.upload_image(device, queue, key, &image);
+    images.push_image(
+        key,
+        16.0,
+        0.0,
+        16.0,
+        HEIGHT as f32,
+        0.0,
+        0.0,
+        1.0,
+        1.0,
+        1.0,
+        0,
+    );
+    images.upload(device, queue);
+
+    let extent = Extent3d {
+        width: WIDTH,
+        height: HEIGHT,
+        depth_or_array_layers: 1,
+    };
+    let target = device.create_texture(&TextureDescriptor {
+        label: Some("Theme color fidelity target"),
+        size: extent,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: TextureDimension::D2,
+        format,
+        usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let readback = device.create_buffer(&BufferDescriptor {
+        label: Some("Theme color fidelity readback"),
+        size: u64::from(WIDTH * HEIGHT * 4),
+        usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let view = target.create_view(&TextureViewDescriptor::default());
+    let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+        label: Some("Theme color fidelity encoder"),
+    });
+    {
+        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+            label: Some("Theme color fidelity pass"),
+            color_attachments: &[Some(RenderPassColorAttachment {
+                view: &view,
+                resolve_target: None,
+                ops: Operations {
+                    load: LoadOp::Clear(background.to_wgpu()),
+                    store: StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        rects.draw_layer(&mut pass, 0);
+        images.draw_above_text(&mut pass);
+    }
+    encoder.copy_texture_to_buffer(
+        TexelCopyTextureInfo {
+            texture: &target,
+            mip_level: 0,
+            origin: Origin3d::ZERO,
+            aspect: TextureAspect::All,
+        },
+        TexelCopyBufferInfo {
+            buffer: &readback,
+            layout: TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(WIDTH * 4),
+                rows_per_image: Some(HEIGHT),
+            },
+        },
+        extent,
+    );
+    let submission = queue.submit([encoder.finish()]);
+    let (sender, receiver) = std::sync::mpsc::channel();
+    readback
+        .slice(..)
+        .map_async(MapMode::Read, move |result| sender.send(result).unwrap());
+    let _ = device.poll(Maintain::wait_for(submission));
+    receiver.recv()?.map_err(|error| anyhow::anyhow!(error))?;
+    let pixels = readback.slice(..).get_mapped_range().to_vec();
+    readback.unmap();
+
+    let rect_rgb = [rect_color.r, rect_color.g, rect_color.b];
+    let image_rgb = [image_pixel[0], image_pixel[1], image_pixel[2]];
+    let background_rgb = [background.r, background.g, background.b];
+    for y in 0..HEIGHT {
+        for x in 0..WIDTH {
+            let (label, expected) = match x {
+                0..16 => ("theme rectangle", rect_rgb),
+                16..32 => ("image pixel", image_rgb),
+                _ => ("theme background", background_rgb),
+            };
+            let offset = ((y * WIDTH + x) * 4) as usize;
+            let actual = &pixels[offset..offset + 3];
+            anyhow::ensure!(
+                actual
+                    .iter()
+                    .zip(expected)
+                    .all(|(actual, expected)| actual.abs_diff(expected) <= 1),
+                "{label} at ({x}, {y}) presented {actual:?}, expected {expected:?}"
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Shape and submit representative multi-scalar terminal graphemes through the
 /// real text atlas/pipeline. The queued-content assertions act as a small
 /// geometry golden: no case may collapse to its first scalar before shaping.
 #[cfg(test)]
 pub(crate) fn headless_unicode_render_smoke(device: &Device, queue: &Queue) -> Result<()> {
-    const FORMAT: TextureFormat = TextureFormat::Rgba8UnormSrgb;
+    const FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
     const WIDTH: u32 = 512;
     const HEIGHT: u32 = 96;
     let mut glyph_cache = GlyphCache::new(
@@ -2942,7 +3174,7 @@ pub(crate) fn headless_color_emoji_render_smoke(device: &Device, queue: &Queue) 
         "emoji RGBA data fell back to the monochrome atlas"
     );
 
-    let mut text = TextPipeline::new(device, TextureFormat::Rgba8UnormSrgb, &glyph_cache)?;
+    let mut text = TextPipeline::new(device, TextureFormat::Rgba8Unorm, &glyph_cache)?;
     text.resize(queue, 96, 64);
     text.push_grapheme("😀", 8.0, 8.0, [0.1, 0.9, 0.2, 1.0]);
     text.upload(device, queue, &mut glyph_cache);
@@ -2959,7 +3191,7 @@ pub(crate) fn headless_color_emoji_render_smoke(device: &Device, queue: &Queue) 
 /// are pinned and the permanent replacement glyph is required.
 #[cfg(test)]
 pub(crate) fn headless_glyph_atlas_stress_smoke(device: &Device, queue: &Queue) -> Result<()> {
-    const FORMAT: TextureFormat = TextureFormat::Rgba8UnormSrgb;
+    const FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
     const GLYPHS: usize = 2_048;
     let mut glyph_cache = GlyphCache::new(
         device,
@@ -3245,7 +3477,7 @@ fn render_queued_text_snapshot(
     glyph_cache: &mut GlyphCache,
     queue_content: impl FnOnce(&mut TextPipeline, f32),
 ) -> Result<Vec<u8>> {
-    const FORMAT: TextureFormat = TextureFormat::Rgba8UnormSrgb;
+    const FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
     const WIDTH: u32 = 256;
     const HEIGHT: u32 = 64;
     text.clear();
@@ -3338,7 +3570,7 @@ pub(crate) fn headless_gui_visual_snapshot(
 ) -> Result<(Vec<u8>, u32, u32)> {
     const WIDTH: u32 = 256;
     const HEIGHT: u32 = 64;
-    const FORMAT: TextureFormat = TextureFormat::Rgba8UnormSrgb;
+    const FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
     let mut glyph_cache = GlyphCache::new(
         device,
         queue,
@@ -3372,7 +3604,7 @@ pub(crate) fn headless_gui_visual_snapshot(
 /// atlas and GPU pipeline, and verify unchanged frames reuse shaped runs.
 #[cfg(test)]
 pub(crate) fn headless_ligature_render_smoke(device: &Device, queue: &Queue) -> Result<()> {
-    const FORMAT: TextureFormat = TextureFormat::Rgba8UnormSrgb;
+    const FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
     let mut glyph_cache = GlyphCache::new(
         device,
         queue,
@@ -3529,7 +3761,7 @@ pub(crate) fn headless_ligature_render_smoke(device: &Device, queue: &Queue) -> 
 /// clipping without depending on platform-specific font pixels.
 #[cfg(test)]
 pub(crate) fn headless_sgr_render_smoke(device: &Device, queue: &Queue) -> Result<()> {
-    const FORMAT: TextureFormat = TextureFormat::Rgba8UnormSrgb;
+    const FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
     const WIDTH: u32 = 256;
     const HEIGHT: u32 = 128;
     let theme = Theme::load_builtin("turmeric")?;
@@ -3747,7 +3979,7 @@ pub(crate) fn benchmark_headless_renderer() -> Result<Option<HeadlessRendererBen
     const ROWS: usize = 40;
     const SAMPLES: usize = 5;
     const FRAMES_PER_SAMPLE: usize = 10;
-    const FORMAT: TextureFormat = TextureFormat::Rgba8UnormSrgb;
+    const FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
 
     let instance_descriptor = InstanceDescriptor::from_env_or_default();
     let enabled_backends = instance_descriptor.backends;

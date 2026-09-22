@@ -2,7 +2,7 @@
 
 Termeric renders monochrome masks and native color-font bitmaps from separate,
 bounded GPU atlases. The mask texture is an eight-layer `R8Unorm` array and the
-color texture is a four-layer `Rgba8UnormSrgb` array; every layer is 1024×1024.
+color texture is a four-layer `Rgba8Unorm` array; every layer is 1024×1024.
 Their fixed payload is 8 MiB plus 16 MiB, excluding small driver metadata. Both
 views and the text bind group remain valid for the renderer lifetime.
 
@@ -31,8 +31,9 @@ temporary replacement remain frame-local rather than poisoning the persistent
 shaping cache. Permanently oversized masks use the same visible fallback and
 are cached normally.
 
-Color glyphs preserve Swash's source RGBA bytes and sample the sRGB color
-texture without applying terminal foreground color. Only final opacity is
+Color glyphs preserve Swash's source RGBA bytes and sample those sRGB-encoded
+values unchanged, matching the renderer's encoded-space composition, without
+applying terminal foreground color. Only final opacity is
 applied. Mask and subpixel-mask glyphs remain compact R8 data and continue to
 use the theme/SGR foreground. Synthetic bold is not applied to authored color
 artwork.

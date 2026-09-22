@@ -27,7 +27,7 @@ pub(crate) fn headless_palette_input_smoke(
         "Fira Mono",
         queue,
     );
-    let mut text = TextPipeline::new(device, wgpu::TextureFormat::Rgba8UnormSrgb, &glyphs)?;
+    let mut text = TextPipeline::new(device, wgpu::TextureFormat::Rgba8Unorm, &glyphs)?;
     for width in [320.0, 800.0] {
         let layout = PaletteLayout::calculate(width, 600.0, 10.0, 24.0, 1.0, 0);
         for query in [

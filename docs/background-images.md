@@ -101,8 +101,9 @@ The opt-in headless GPU lane now checks 104 offscreen frames through the same
 background upload, queue, clear, texture cache, and image shader used by the
 window renderer. Real PNG/JPEG decoding feeds all four fits at opacity 0, 0.35,
 and 1 across four shifted/resized content rectangles, including a viewport
-smaller than the image. An independent inverse-mapping/bilinear/sRGB reference
-checks every output pixel (three byte-values of channel tolerance), including
+smaller than the image. An independent inverse-mapping/bilinear reference in
+the renderer's sRGB-encoded blending space checks every output pixel (three
+byte-values of channel tolerance), including
 PNG alpha, clipping, letterboxing, and an opaque foreground rectangle.
 Repeated-frame and replacement checks verify pixels survive CPU-RGBA release,
 one texture remains after replacement, clearing removes that cache entry, and

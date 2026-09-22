@@ -462,7 +462,9 @@ This lane includes 104 background-image pixel checks through the production
 upload/queue/clear paths: PNG/JPEG, four fits, three opacities, shifted/resized
 viewports, foreground rectangles, repeated frames, replacement, cache removal,
 and pipeline recreation. Every pixel is compared to an independent CPU inverse-
-mapping/sRGB reference. Two GPU-free oracle regressions check rejection of
+mapping reference in the renderer's sRGB-encoded blending space. A color-fidelity
+check also requires theme colors, the clear color, and image pixels to present
+byte-exact through the view format chosen for an sRGB-only surface. Two GPU-free oracle regressions check rejection of
 missing or misplaced images and incorrect fit/opacity. It verifies CPU-RGBA
 release and retained texture counts, not actual driver allocation usage or
 full native UI layering; see [background evidence](background-images.md).

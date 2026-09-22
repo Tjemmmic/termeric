@@ -1155,6 +1155,15 @@ Versioning once public beta tags begin.
 
 ### Fixed
 
+- Theme, SGR, and chrome colors now present exactly as written. The renderer
+  drew sRGB hex values into an sRGB surface, so the GPU encoded them a second
+  time: every theme looked washed out, with dark backgrounds lifted to grey
+  (Turnip's `#18151A` presented as `#56515A`) and palettes desaturated.
+  Frames now render through a non-sRGB view and compose in encoded space as
+  Qt, GTK, and browsers do; image and color-glyph textures keep their stored
+  sRGB values. Anti-aliased text edges are correspondingly less bright on dark
+  backgrounds. A GPU readback check requires byte-exact theme and image colors.
+
 - Harvest retains a separate 4-KiB command snapshot instead of rerunning its
   normalized/shortened display caption after live text disappears. Interior
   whitespace and complete longer commands are preserved. Live and retained
