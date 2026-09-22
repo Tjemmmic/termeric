@@ -394,6 +394,24 @@ fn mix(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
     ]
 }
 
+/// Desktop reference density: a point is 1/72 inch and a logical pixel 1/96
+/// inch, so configured sizes match other applications' point sizes.
+const PIXELS_PER_POINT: f32 = 96.0 / 72.0;
+
+/// Physical rasterization size for a configured `font.size` in points.
+fn physical_font_size(points: f32, scale_factor: f32) -> f32 {
+    (points * PIXELS_PER_POINT * scale_factor).max(1.0)
+}
+
+#[cfg(test)]
+#[test]
+fn configured_points_convert_to_physical_pixels() {
+    assert_eq!(physical_font_size(12.0, 1.0), 16.0);
+    assert_eq!(physical_font_size(12.0, 2.0), 32.0);
+    assert_eq!(physical_font_size(9.0, 1.25), 15.0);
+    assert_eq!(physical_font_size(0.1, 1.0), 1.0);
+}
+
 /// Termeric composes in display-encoded sRGB space, as Qt, GTK and browsers
 /// do: theme hex values reach the screen unchanged and alpha blends operate on
 /// encoded values. Render targets therefore use non-sRGB views, so the GPU
@@ -797,7 +815,7 @@ impl Renderer {
         surface.configure(&device, &config);
 
         // Create glyph cache
-        let scaled_font_size = (font_size * scale_factor).max(1.0);
+        let scaled_font_size = physical_font_size(font_size, scale_factor);
         let mut glyph_cache = GlyphCache::new(
             &device,
             &queue,
@@ -959,7 +977,7 @@ impl Renderer {
     pub fn set_font_size(&mut self, font_size: f32) {
         self.invalidate_terminal_rows();
         self.font_size = font_size;
-        let scaled = (font_size * self.scale_factor).max(1.0);
+        let scaled = physical_font_size(font_size, self.scale_factor);
         self.glyph_cache.set_font_size(scaled, &self.queue);
         let (cell_width, cell_height) = self.glyph_cache.cell_size();
         self.cell_width = cell_width;
@@ -1024,7 +1042,7 @@ impl Renderer {
         self.glyph_cache.font_family()
     }
 
-    /// Get the unscaled font size from the glyph cache
+    /// Get the physical pixel size the glyph cache rasterizes at
     pub fn glyph_font_size(&self) -> f32 {
         self.glyph_cache.font_size()
     }
@@ -1094,7 +1112,7 @@ impl Renderer {
     pub fn set_scale_factor(&mut self, scale_factor: f32) {
         self.invalidate_terminal_rows();
         self.scale_factor = scale_factor.max(0.1);
-        let scaled = (self.font_size * self.scale_factor).max(1.0);
+        let scaled = physical_font_size(self.font_size, self.scale_factor);
         self.glyph_cache.set_font_size(scaled, &self.queue);
         let (cell_width, cell_height) = self.glyph_cache.cell_size();
         self.cell_width = cell_width;

@@ -1106,6 +1106,12 @@ Versioning once public beta tags begin.
 
 ### Changed
 
+- `font.size` is now applied in points, as documented and as other terminals
+  and desktop applications use it (96/72 logical pixels per point before
+  display scaling). It was previously used as logical pixels, so an existing
+  configuration renders about one third larger; divide the old value by 4/3
+  (for example 16 becomes 12) to keep the previous size.
+
 - Terminal search now scans retained history in cancellable render-frame
   slices, publishes results atomically, retains exact totals and filter rows,
   bounds recent navigation/highlight occurrences below an 8 MiB index budget,

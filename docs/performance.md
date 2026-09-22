@@ -524,9 +524,10 @@ It uses a fresh process and isolated XDG
 configuration per sample, requests the same font family, numeric size, grid,
 opacity, padding, retention controls, warmups, and byte stream, and records
 every executable and version plus its SHA-256 digest. The artifact records each
-adapter's font-size unit because Termeric configures logical pixels while the
-other current adapters configure point sizes; the numeric inputs are not
-silently treated as proof of equal physical glyph size. Actual initial/final
+adapter's font-size unit. Termeric configures points (96/72 logical pixels per
+point) like the other current adapters, but equal numeric inputs are still not
+silently treated as proof of equal physical glyph size. Runs recorded before
+this change used Termeric logical pixels. Actual initial/final
 PTY grids and native pixel geometry remain the comparison authority. Sample
 order rotates between terminals on each
 round so one participant does not always inherit the coldest or hottest slot.
@@ -560,8 +561,8 @@ runs lacking those probes. No package is installed or user font configuration
 changed by the runner.
 
 For pixel/grid calibration, `--termeric-font-size` overrides only Termeric's
-logical-pixel size (8–72); the other adapters keep `--font-size` in their
-recorded units. `--termeric-line-height` sets Termeric's font-size multiplier
+point size (8–72); the other adapters keep `--font-size` in their recorded
+units. `--termeric-line-height` sets Termeric's font-size multiplier
 (0.8–3.0). Both the report settings and Termeric's per-terminal controls retain
 the requested values. Without overrides, the historical common numeric size
 and Termeric line-height multiplier 1.0 are unchanged. There is no implicit DPI

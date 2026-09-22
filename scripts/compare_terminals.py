@@ -310,7 +310,7 @@ def build_launch_spec(
         controls["line_height_requested"] = settings.termeric_line_height
         controls["line_height_unit"] = "font-size multiplier"
         controls["display_backend_control"] = "empty Wayland selectors; DISPLAY selected"
-        controls["font_size_unit"] = "Termeric logical pixels before display scaling"
+        controls["font_size_unit"] = "points (96/72 logical pixels per point before display scaling)"
         config = run_dir / "xdg-config" / "termeric" / "config.toml"
         write_text(
             config,
@@ -1089,7 +1089,7 @@ def main() -> int:
     parser.add_argument("--font-size", type=float, default=12.0)
     parser.add_argument(
         "--termeric-font-size", type=float,
-        help="override only Termeric's logical-pixel font size (8–72); other adapters retain --font-size in their recorded units",
+        help="override only Termeric's point size (8–72); other adapters retain --font-size in their recorded units",
     )
     parser.add_argument(
         "--termeric-line-height", type=float, default=1.0,
@@ -1104,9 +1104,9 @@ def main() -> int:
     if any(not math.isfinite(value) or value <= 0 for value in (args.idle_seconds, args.timeout_seconds, args.font_size)):
         parser.error("idle duration, timeout, and font size must be finite and positive")
     if args.termeric_font_size is not None and not 8 <= args.termeric_font_size <= 72:
-        parser.error("Termeric font size must be finite and between 8 and 72 logical pixels")
+        parser.error("Termeric font size must be finite and between 8 and 72 points")
     if "termeric" in args.terminal and args.termeric_font_size is None and not 8 <= args.font_size <= 72:
-        parser.error("Termeric requires a font size between 8 and 72 logical pixels; use --termeric-font-size to override the common value")
+        parser.error("Termeric requires a font size between 8 and 72 points; use --termeric-font-size to override the common value")
     if not 0.8 <= args.termeric_line_height <= 3.0:
         parser.error("Termeric line height must be finite and between 0.8 and 3.0")
     if platform.system() != "Linux" or not Path("/proc/self/status").is_file():
