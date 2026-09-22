@@ -246,7 +246,7 @@ fn queued_glyphs(
             .map(|run| {
                 run.glyphs
                     .into_iter()
-                    .map(|glyph| (glyph.entry, glyph.x_offset))
+                    .map(|glyph| (glyph.entry, glyph.run_offset(*cell_width)))
                     .collect()
             })
             .unwrap_or_else(|| {
@@ -318,8 +318,11 @@ fn append_glyph_quad(
     if entry.width == 0 || entry.height == 0 {
         return;
     }
-    let original_x0 = x + entry.bearing_x as f32;
-    let original_y0 = y + baseline - entry.bearing_y as f32;
+    // Rasterized bitmaps already contain any subpixel offset, so the quad must
+    // sit on whole pixels: a fractional origin makes the sampler blend
+    // neighbouring texels and smears every stem.
+    let original_x0 = x.round() + entry.bearing_x as f32;
+    let original_y0 = (y + baseline).round() - entry.bearing_y as f32;
     let original_x1 = original_x0 + entry.width as f32;
     let original_y1 = original_y0 + entry.height as f32;
     let (x0, y0, x1, y1) = clip.map_or(
@@ -588,8 +591,7 @@ impl TextPipeline {
         glyph_cache: &mut GlyphCache,
     ) -> TextBatch {
         let (atlas_width, atlas_height) = glyph_cache.atlas_size();
-        let (_, cell_height) = glyph_cache.cell_size();
-        let baseline = cell_height * 0.8;
+        let baseline = glyph_cache.cell_baseline();
         let mut vertices = Vec::with_capacity(queued.len() * 4);
         let mut indices = Vec::with_capacity(queued.len() * 6);
         let mut atlas_pages = Vec::new();
@@ -804,8 +806,7 @@ impl TextPipeline {
         let atlas_w = atlas_w as f32;
         let atlas_h = atlas_h as f32;
 
-        let (_cell_width, cell_height) = glyph_cache.cell_size();
-        let baseline = cell_height * 0.8; // Approximate baseline
+        let baseline = glyph_cache.cell_baseline();
 
         self.upload_queued(queue, glyph_cache, atlas_w, atlas_h, baseline);
 

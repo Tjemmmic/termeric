@@ -32,6 +32,13 @@ leader/spacer, or a multi-scalar grapheme. Graphemes keep their dedicated
 cluster-shaping path, while wide cells remain anchored to their existing grid
 geometry.
 
+Each shaped glyph is placed at the origin of the cell holding its cluster,
+plus its offset within that cluster, rather than at the font's accumulated
+advance. Fractional advances therefore cannot drift text off the whole-pixel
+cell grid, fallback faces with other advances stay in their cells, and glyph
+quads land on whole pixels with any subpixel remainder rasterized once. A
+ligature glyph starts at its first cell.
+
 Ligatures change only glyph selection and placement. Cursor coordinates,
 selection/search ranges, URL hit testing, copied text, pane clipping, and cell
 background/decorations continue to use terminal cells. A block cursor redraws
@@ -40,7 +47,7 @@ move surrounding cells.
 
 ## Caching and invalidation
 
-The shaping cache key includes run content, font size and line height, both
+The shaping cache key includes run content, cell-grid or shaped placement, font size and line height, both
 configured `wght` values, bold/italic request, the effective ordered feature
 values, primary family, ordered fallback families, and fallback resolution. Unicode-range or OpenType
 feature policy changes synchronously clear this cache and persistent row

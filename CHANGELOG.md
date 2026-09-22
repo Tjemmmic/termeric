@@ -1164,6 +1164,14 @@ Versioning once public beta tags begin.
   sRGB values. Anti-aliased text edges are correspondingly less bright on dark
   backgrounds. A GPU readback check requires byte-exact theme and image colors.
 
+- Terminal text is crisp instead of smeared. Glyph quads were placed at
+  fractional pixels and sampled bilinearly, shaped runs applied their subpixel
+  offset twice and drifted off the cell grid by the font's fractional advance,
+  and every row used a guessed `cell_height * 0.8` baseline. Runs now place
+  each glyph at its cell origin, quads land on whole pixels with any remainder
+  rasterized once, and the baseline comes from the face's ascent and descent.
+  Chrome-bar and left-rail offsets are whole pixels so the grid stays aligned.
+
 - Harvest retains a separate 4-KiB command snapshot instead of rerunning its
   normalized/shortened display caption after live text disappears. Interior
   whitespace and complete longer commands are preserved. Live and retained

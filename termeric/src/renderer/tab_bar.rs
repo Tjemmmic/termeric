@@ -94,9 +94,11 @@ fn vertical_tab_bar_width(window_width: f32, scale_factor: f32) -> f32 {
     let max_rail = (window_width - MIN_TERMINAL_CONTENT_WIDTH * scale_factor)
         .max(window_width * 0.5)
         .min(window_width);
+    // Whole pixels keep the terminal grid beside the rail pixel-aligned.
     (PREFERRED_VERTICAL_TAB_WIDTH * scale_factor)
         .min(max_rail)
         .max((MIN_VERTICAL_TAB_WIDTH * scale_factor).min(max_rail))
+        .floor()
 }
 
 fn vertical_tab_bar_layout(

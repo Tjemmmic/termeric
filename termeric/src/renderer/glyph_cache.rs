@@ -165,6 +165,8 @@ pub struct LigatureKey {
     pub normal_weight: u16,
     /// Configured bold-text OpenType `wght` value.
     pub bold_weight: u16,
+    /// Whether glyph offsets follow the cell grid or the shaped advances.
+    pub placement: GlyphPlacement,
 }
 
 impl LigatureKey {
@@ -181,6 +183,7 @@ impl LigatureKey {
         monospace_fallback: bool,
         normal_weight: u16,
         bold_weight: u16,
+        placement: GlyphPlacement,
     ) -> Self {
         Self {
             text: text.to_string(),
@@ -194,8 +197,20 @@ impl LigatureKey {
             monospace_fallback,
             normal_weight,
             bold_weight,
+            placement,
         }
     }
+}
+
+/// How shaped glyph positions map onto terminal cells.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub enum GlyphPlacement {
+    /// Keep shaped positions relative to the run origin. Used for text that
+    /// occupies one cell (a grapheme) or one scaled block (OSC 66).
+    Shaped,
+    /// Every scalar is one terminal cell. Glyphs start at their cell's origin
+    /// so fractional font advances cannot drift off the whole-pixel grid.
+    CellGrid,
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
@@ -464,8 +479,75 @@ impl PagedAtlasAllocator {
 pub struct ShapedGlyph {
     /// Atlas entry for this glyph
     pub entry: GlyphEntry,
-    /// X offset from start of run
+    /// Cell holding the glyph's cluster; always zero for shaped placement.
+    pub cell: u32,
+    /// Whole-pixel x offset from that cell's origin. Any subpixel remainder is
+    /// already rasterized into the atlas bitmap.
     pub x_offset: f32,
+}
+
+impl ShapedGlyph {
+    /// Offset from the run origin when each cell advances by `cell_width`.
+    pub fn run_offset(&self, cell_width: f32) -> f32 {
+        self.cell as f32 * cell_width + self.x_offset
+    }
+}
+
+/// A laid-out glyph resolved to its cell, whole-pixel offset, and raster key.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PlacedGlyph {
+    cache_key: CacheKey,
+    font_id: cosmic_text::fontdb::ID,
+    cell: u32,
+    x_offset: f32,
+}
+
+/// Resolve one laid-out line into cells and raster keys.
+///
+/// Each glyph is rasterized at its final position: the whole-pixel part
+/// becomes the quad offset and only the remainder selects a subpixel bin, so a
+/// fractional position is never applied twice. With cell-grid placement every
+/// scalar is a cell, and a glyph keeps only its offset from the first glyph of
+/// its cell, so a cluster's leading glyph lands exactly on the cell origin.
+fn place_glyphs(
+    text: &str,
+    glyphs: &[cosmic_text::LayoutGlyph],
+    placement: GlyphPlacement,
+) -> Vec<PlacedGlyph> {
+    let cell_starts: Vec<usize> = match placement {
+        GlyphPlacement::Shaped => Vec::new(),
+        GlyphPlacement::CellGrid => text.char_indices().map(|(start, _)| start).collect(),
+    };
+    // The shaped x of the first glyph seen in the current cell.
+    let mut cell_origin: Option<(u32, f32)> = None;
+    glyphs
+        .iter()
+        .map(|glyph| {
+            let (cell, position) = match placement {
+                GlyphPlacement::Shaped => (0, glyph.x),
+                GlyphPlacement::CellGrid => {
+                    let cell = cell_starts
+                        .partition_point(|&start| start <= glyph.start)
+                        .saturating_sub(1) as u32;
+                    let origin_x = match cell_origin {
+                        Some((origin_cell, origin_x)) if origin_cell == cell => origin_x,
+                        _ => {
+                            cell_origin = Some((cell, glyph.x));
+                            glyph.x
+                        }
+                    };
+                    (cell, glyph.x - origin_x)
+                }
+            };
+            let physical = glyph.physical((position - glyph.x, 0.0), 1.0);
+            PlacedGlyph {
+                cache_key: physical.cache_key,
+                font_id: glyph.font_id,
+                cell,
+                x_offset: physical.x as f32,
+            }
+        })
+        .collect()
 }
 
 /// A cached ligature run (sequence of shaped glyphs)
@@ -617,9 +699,8 @@ pub struct GlyphCache {
     atlas_hits: u64,
     atlas_misses: u64,
     fallback_entry: GlyphEntry,
-    /// Cell dimensions
-    cell_width: f32,
-    cell_height: f32,
+    /// Cell dimensions and baseline of the primary face
+    cell: CellMetrics,
     /// Font size
     font_size: f32,
     /// OpenType `wght` request for ordinary terminal text.
@@ -681,8 +762,7 @@ impl GlyphCache {
         let metrics = Metrics::new(font_size, line_height);
 
         // Measure a character to get cell dimensions and check if font was found
-        let (cell_width, cell_height, use_monospace_fallback) =
-            measure_cell(&mut font_system, &metrics, &font_family, font_weight);
+        let cell = measure_cell(&mut font_system, &metrics, &font_family, font_weight);
 
         // Create a fixed-capacity texture array. Logical pages are activated
         // lazily, but the bind group and texture lifetime stay frame-stable.
@@ -840,8 +920,7 @@ impl GlyphCache {
             atlas_hits: 0,
             atlas_misses: 0,
             fallback_entry,
-            cell_width,
-            cell_height,
+            cell,
             font_size,
             font_weight,
             bold_font_weight,
@@ -851,7 +930,7 @@ impl GlyphCache {
             configured_families,
             range_overrides: range_overrides.to_vec(),
             configured_range_overrides,
-            use_monospace_fallback,
+            use_monospace_fallback: cell.use_monospace_fallback,
             ligatures_enabled: ligatures,
             font_feature_overrides: FontFeatures::new(),
             reported_synthetic_styles: HashSet::new(),
@@ -861,7 +940,18 @@ impl GlyphCache {
 
     /// Get cell dimensions
     pub fn cell_size(&self) -> (f32, f32) {
-        (self.cell_width, self.cell_height)
+        (self.cell.width, self.cell.height)
+    }
+
+    /// Whole-pixel distance from a cell's top edge to the glyph baseline.
+    pub fn cell_baseline(&self) -> f32 {
+        self.cell.baseline
+    }
+
+    /// Adopt freshly measured primary-face metrics.
+    fn apply_cell_metrics(&mut self, cell: CellMetrics) {
+        self.cell = cell;
+        self.use_monospace_fallback = cell.use_monospace_fallback;
     }
 
     /// Get the atlas size
@@ -1275,7 +1365,7 @@ impl GlyphCache {
         style: FontStyle,
         queue: &Queue,
     ) -> Option<LigatureRun> {
-        self.shape_cached(text, style, 1.0, queue)
+        self.shape_cached(text, style, 1.0, GlyphPlacement::CellGrid, queue)
     }
 
     /// Shape a multi-scalar grapheme regardless of the programming-ligature
@@ -1287,7 +1377,7 @@ impl GlyphCache {
         style: FontStyle,
         queue: &Queue,
     ) -> Option<LigatureRun> {
-        self.shape_cached(text, style, 1.0, queue)
+        self.shape_cached(text, style, 1.0, GlyphPlacement::Shaped, queue)
     }
 
     /// Shape OSC 66 content at a bounded multiple of the configured base font.
@@ -1301,7 +1391,13 @@ impl GlyphCache {
         if font_scale <= 0.0 {
             return None;
         }
-        self.shape_cached(text, style, font_scale.clamp(1.0 / 15.0, 7.0), queue)
+        self.shape_cached(
+            text,
+            style,
+            font_scale.clamp(1.0 / 15.0, 7.0),
+            GlyphPlacement::Shaped,
+            queue,
+        )
     }
 
     fn shape_cached(
@@ -1309,6 +1405,7 @@ impl GlyphCache {
         text: &str,
         style: FontStyle,
         font_scale: f32,
+        placement: GlyphPlacement,
         queue: &Queue,
     ) -> Option<LigatureRun> {
         if text.is_empty() {
@@ -1332,6 +1429,7 @@ impl GlyphCache {
             self.use_monospace_fallback,
             self.font_weight.0,
             self.bold_font_weight.0,
+            placement,
         );
         if let Some(run) = self.ligature_cache.get(&key).cloned() {
             self.shaping_cache_metrics.hits += 1;
@@ -1350,7 +1448,8 @@ impl GlyphCache {
             return Some(run);
         }
         self.shaping_cache_metrics.misses += 1;
-        let (run, retry_next_frame) = self.shape_text_internal(text, style, metrics, queue)?;
+        let (run, retry_next_frame) =
+            self.shape_text_internal(text, style, metrics, placement, queue)?;
         if retry_next_frame {
             self.shaping_cache_metrics.evictions +=
                 self.deferred_ligature_cache.insert(key, &run) as u64;
@@ -1393,15 +1492,16 @@ impl GlyphCache {
         self.configured_range_overrides.clear();
         self.configured_families =
             collect_configured_families(&self.font_system, family, &self.fallback_families);
-        self.use_monospace_fallback = false;
-        let (width, height, _) = measure_cell(
+        let cell = measure_cell(
             &mut self.font_system,
             &self.metrics,
             family,
             self.font_weight,
         );
-        self.cell_width = width;
-        self.cell_height = height;
+        self.apply_cell_metrics(CellMetrics {
+            use_monospace_fallback: false,
+            ..cell
+        });
         self.clear_atlas(queue);
     }
 
@@ -1419,10 +1519,10 @@ impl GlyphCache {
         text: &str,
         style: FontStyle,
         metrics: Metrics,
+        placement: GlyphPlacement,
         queue: &Queue,
     ) -> Option<(LigatureRun, bool)> {
-        let mut glyph_infos: Vec<(cosmic_text::CacheKey, cosmic_text::fontdb::ID, f32, f32)> =
-            Vec::new();
+        let mut placed = Vec::new();
 
         {
             let mut buffer = Buffer::new(&mut self.font_system, metrics);
@@ -1464,16 +1564,19 @@ impl GlyphCache {
             buffer.shape_until_scroll(&mut self.font_system, false);
 
             for run in buffer.layout_runs() {
-                for glyph in run.glyphs.iter() {
-                    let physical = glyph.physical((0.0, 0.0), 1.0);
-                    glyph_infos.push((physical.cache_key, glyph.font_id, glyph.x, glyph.w));
-                }
+                placed.extend(place_glyphs(text, run.glyphs, placement));
             }
         }
 
         let mut glyphs = Vec::new();
         let mut retry_next_frame = false;
-        for (cache_key, font_id, x_offset, _width) in glyph_infos {
+        for PlacedGlyph {
+            cache_key,
+            font_id,
+            cell,
+            x_offset,
+        } in placed
+        {
             let shaped_key = ShapedGlyphKey { cache_key, style };
             let entry = if let Some(entry) = self.shaped_entries.get(&shaped_key).copied() {
                 self.atlas_hits += 1;
@@ -1525,6 +1628,7 @@ impl GlyphCache {
                         }
                         glyphs.push(ShapedGlyph {
                             entry: self.fallback_entry,
+                            cell,
                             x_offset,
                         });
                         continue;
@@ -1569,7 +1673,11 @@ impl GlyphCache {
                 self.fallback_entry
             };
 
-            glyphs.push(ShapedGlyph { entry, x_offset });
+            glyphs.push(ShapedGlyph {
+                entry,
+                cell,
+                x_offset,
+            });
         }
 
         Some((LigatureRun { glyphs }, retry_next_frame))
@@ -1721,23 +1829,21 @@ impl GlyphCache {
         self.metrics = Metrics::new(font_size, line_height);
 
         // Remeasure cell dimensions
-        let (cell_width, cell_height, use_fallback) = measure_cell(
+        let cell = measure_cell(
             &mut self.font_system,
             &self.metrics,
             &self.font_family,
             self.font_weight,
         );
-        self.cell_width = cell_width;
-        self.cell_height = cell_height;
-        self.use_monospace_fallback = use_fallback;
+        self.apply_cell_metrics(cell);
 
         self.clear_atlas(queue);
 
         log::info!(
             "Font size changed to {}, cell size: {}x{}",
             font_size,
-            cell_width,
-            cell_height
+            cell.width,
+            cell.height
         );
     }
 
@@ -1754,23 +1860,21 @@ impl GlyphCache {
             &self.fallback_families,
         );
 
-        let (cell_width, cell_height, use_fallback) = measure_cell(
+        let cell = measure_cell(
             &mut self.font_system,
             &self.metrics,
             &self.font_family,
             self.font_weight,
         );
-        self.cell_width = cell_width;
-        self.cell_height = cell_height;
-        self.use_monospace_fallback = use_fallback;
+        self.apply_cell_metrics(cell);
 
         self.clear_atlas(queue);
 
         log::info!(
             "Font family changed to {}, cell size: {}x{}",
             self.font_family,
-            cell_width,
-            cell_height
+            cell.width,
+            cell.height
         );
     }
 
@@ -1809,15 +1913,13 @@ impl GlyphCache {
         }
         self.line_height_multiplier = multiplier;
         self.metrics = Metrics::new(self.font_size, self.font_size * multiplier);
-        let (cell_width, cell_height, use_fallback) = measure_cell(
+        let cell = measure_cell(
             &mut self.font_system,
             &self.metrics,
             &self.font_family,
             self.font_weight,
         );
-        self.cell_width = cell_width;
-        self.cell_height = cell_height;
-        self.use_monospace_fallback = use_fallback;
+        self.apply_cell_metrics(cell);
         self.clear_atlas(queue);
     }
 
@@ -1836,15 +1938,13 @@ impl GlyphCache {
         }
         self.font_weight = font_weight;
         self.bold_font_weight = bold_font_weight;
-        let (cell_width, cell_height, use_fallback) = measure_cell(
+        let cell = measure_cell(
             &mut self.font_system,
             &self.metrics,
             &self.font_family,
             self.font_weight,
         );
-        self.cell_width = cell_width;
-        self.cell_height = cell_height;
-        self.use_monospace_fallback = use_fallback;
+        self.apply_cell_metrics(cell);
         self.clear_atlas(queue);
         true
     }
@@ -2562,19 +2662,29 @@ fn is_font_default_ignorable(character: char) -> bool {
         || ('\u{E0000}'..='\u{E0FFF}').contains(&character)
 }
 
+/// Whole-pixel terminal cell geometry for the primary face.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CellMetrics {
+    width: f32,
+    height: f32,
+    /// Distance from the cell top to the glyph baseline. It comes from the
+    /// face's ascent and descent centred in the line height, as cosmic-text
+    /// lays out lines, and is whole so every row's baseline is pixel-aligned.
+    baseline: f32,
+    use_monospace_fallback: bool,
+}
+
 /// Measure cell dimensions for monospace grid
 ///
 /// For terminal rendering, we need a consistent cell width. We measure the
 /// advance width of a single character with basic shaping. Using 'M' as it's
 /// typically representative of monospace font width.
-///
-/// Returns (cell_width, cell_height, use_monospace_fallback)
 fn measure_cell(
     font_system: &mut FontSystem,
     metrics: &Metrics,
     font_family: &str,
     font_weight: Weight,
-) -> (f32, f32, bool) {
+) -> CellMetrics {
     let family = family_for(font_family);
     let attrs = Attrs::new().family(family).weight(font_weight);
 
@@ -2585,7 +2695,9 @@ fn measure_cell(
 
     let mut measured_width: f32 = 0.0;
     let mut font_id: Option<cosmic_text::fontdb::ID> = None;
+    let mut baseline: Option<f32> = None;
     if let Some(run) = buffer.layout_runs().next() {
+        baseline = Some(run.line_y);
         if let Some(glyph) = run.glyphs.first() {
             measured_width = glyph.w;
             font_id = Some(glyph.font_id);
@@ -2645,6 +2757,7 @@ fn measure_cell(
 
         let mut mono_width: f32 = 0.0;
         if let Some(run) = mono_buffer.layout_runs().next() {
+            baseline = Some(run.line_y);
             if let Some(glyph) = run.glyphs.first() {
                 mono_width = glyph.w;
             }
@@ -2673,19 +2786,26 @@ fn measure_cell(
     };
 
     let height = metrics.line_height.round().max(1.0);
+    let baseline = baseline.unwrap_or(height * 0.8).round().clamp(1.0, height);
 
     log::info!(
-        "Cell size for '{}' (actual='{}', found={}, fallback={}): {}x{} (measured_w={:.2})",
+        "Cell size for '{}' (actual='{}', found={}, fallback={}): {}x{}, baseline {} (measured_w={:.2})",
         font_family,
         actual_font_name,
         font_was_found,
         use_fallback,
         width,
         height,
+        baseline,
         measured_width
     );
 
-    (width, height, use_fallback)
+    CellMetrics {
+        width,
+        height,
+        baseline,
+        use_monospace_fallback: use_fallback,
+    }
 }
 
 fn family_for(font_family: &str) -> Family<'_> {
@@ -2746,6 +2866,7 @@ mod tests {
             false,
             400,
             700,
+            GlyphPlacement::CellGrid,
         );
         let run = LigatureRun {
             glyphs: vec![
@@ -2760,6 +2881,7 @@ mod tests {
                         bearing_x: 0,
                         bearing_y: 0
                     },
+                    cell: 0,
                     x_offset: 0.0,
                 };
                 count
@@ -3510,8 +3632,12 @@ mod tests {
     fn cell_height_uses_configured_line_height() {
         let mut font_system = FontSystem::new();
         let metrics = Metrics::new(14.0, 21.0);
-        let (_, height, _) = measure_cell(&mut font_system, &metrics, "monospace", Weight::NORMAL);
-        assert_eq!(height, 21.0);
+        let cell = measure_cell(&mut font_system, &metrics, "monospace", Weight::NORMAL);
+        assert_eq!(cell.height, 21.0);
+        // The baseline comes from the face, not a fixed fraction of the cell,
+        // and is whole so glyph rows cannot straddle pixel boundaries.
+        assert_eq!(cell.baseline.fract(), 0.0);
+        assert!(cell.baseline > 0.0 && cell.baseline <= cell.height);
     }
 
     #[test]
@@ -3556,6 +3682,7 @@ mod tests {
                 false,
                 400,
                 700,
+                GlyphPlacement::CellGrid,
             ),
             LigatureKey::new(
                 "e\u{301}",
@@ -3569,7 +3696,29 @@ mod tests {
                 false,
                 400,
                 700,
+                GlyphPlacement::CellGrid,
             )
+        );
+        let grid = |placement| {
+            LigatureKey::new(
+                "ab",
+                14.0,
+                16.8,
+                regular,
+                true,
+                FontFeatures::new(),
+                "Mono",
+                &[],
+                false,
+                400,
+                700,
+                placement,
+            )
+        };
+        assert_ne!(
+            grid(GlyphPlacement::CellGrid),
+            grid(GlyphPlacement::Shaped),
+            "cell-grid and shaped offsets must not share a cached run"
         );
         let attrs = font_attrs(Family::Monospace, bold_italic, Weight(350), Weight(775));
         assert_eq!(attrs.weight, Weight(775));
@@ -3593,6 +3742,7 @@ mod tests {
                 false,
                 350,
                 700,
+                GlyphPlacement::CellGrid,
             ),
             LigatureKey::new(
                 "fi",
@@ -3606,6 +3756,7 @@ mod tests {
                 false,
                 450,
                 800,
+                GlyphPlacement::CellGrid,
             ),
             "configured weight pair must participate in shaped-run identity"
         );
@@ -3802,6 +3953,7 @@ mod tests {
             false,
             400,
             700,
+            GlyphPlacement::CellGrid,
         );
         let custom = compile_font_feature_overrides(&enabled);
         let custom_key = LigatureKey::new(
@@ -3816,7 +3968,62 @@ mod tests {
             false,
             400,
             700,
+            GlyphPlacement::CellGrid,
         );
         assert_ne!(default_key, custom_key);
+    }
+
+    fn fira_mono_layout(text: &str) -> Vec<cosmic_text::LayoutGlyph> {
+        let source = cosmic_text::fontdb::Source::Binary(Arc::new(deterministic_test_font_data()));
+        let mut font_system = FontSystem::new_with_fonts([source]);
+        let mut buffer = Buffer::new(&mut font_system, Metrics::new(16.0, 20.0));
+        buffer.set_text(
+            text,
+            &Attrs::new().family(Family::Name("Fira Mono")),
+            Shaping::Advanced,
+            None,
+        );
+        buffer.shape_until_scroll(&mut font_system, false);
+        buffer
+            .layout_runs()
+            .flat_map(|run| run.glyphs.iter().cloned())
+            .collect()
+    }
+
+    #[test]
+    fn cell_grid_placement_puts_every_glyph_on_its_whole_pixel_cell_origin() {
+        let text = "drwxr-xr-x 17";
+        let glyphs = fira_mono_layout(text);
+        assert!(
+            glyphs.iter().any(|glyph| glyph.x.fract() != 0.0),
+            "the fixture must exercise fractional shaped advances"
+        );
+        let placed = place_glyphs(text, &glyphs, GlyphPlacement::CellGrid);
+        assert_eq!(placed.len(), text.chars().count());
+        for (index, glyph) in placed.iter().enumerate() {
+            assert_eq!(glyph.cell, index as u32);
+            assert_eq!(glyph.x_offset, 0.0);
+            assert_eq!(glyph.cache_key.x_bin, cosmic_text::SubpixelBin::Zero);
+        }
+    }
+
+    #[test]
+    fn shaped_placement_applies_a_fractional_position_exactly_once() {
+        let text = "drwxr-xr-x";
+        let glyphs = fira_mono_layout(text);
+        let placed = place_glyphs(text, &glyphs, GlyphPlacement::Shaped);
+        assert_eq!(placed.len(), glyphs.len());
+        for (glyph, placed) in glyphs.iter().zip(placed) {
+            assert_eq!(placed.cell, 0);
+            assert_eq!(placed.x_offset.fract(), 0.0);
+            // The quad offset plus the rasterized bin reproduce the shaped
+            // position to the quarter-pixel bin resolution.
+            let expected = glyph.x + glyph.font_size * glyph.x_offset;
+            let presented = placed.x_offset + placed.cache_key.x_bin.as_float();
+            assert!(
+                (presented - expected).abs() <= 0.125,
+                "{presented} presented for shaped position {expected}"
+            );
+        }
     }
 }

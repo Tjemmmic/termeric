@@ -1232,7 +1232,8 @@ impl Renderer {
     /// Height of the chrome bar (0 if no chrome bar is active)
     pub fn chrome_bar_height(&self) -> f32 {
         if self.chrome_bar.is_some() {
-            self.cell_height * 1.4
+            // Whole pixels keep the terminal grid below the bar pixel-aligned.
+            (self.cell_height * 1.4).round()
         } else {
             0.0
         }
