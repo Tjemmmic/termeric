@@ -25,9 +25,19 @@ import sys
 import tempfile
 
 if __package__:
-    from scripts.check_debian_package import CheckError, validate_desktop_entry
+    from scripts.check_debian_package import (
+        ICON_FILES,
+        CheckError,
+        validate_desktop_entry,
+        validate_icons,
+    )
 else:
-    from check_debian_package import CheckError, validate_desktop_entry
+    from check_debian_package import (
+        ICON_FILES,
+        CheckError,
+        validate_desktop_entry,
+        validate_icons,
+    )
 
 
 PACKAGE_NAME = "termeric-git"
@@ -38,7 +48,7 @@ SYNTHETIC_PREDECESSOR_VERSION = "0.0.0.r0.g0000000-1"
 EXPECTED_FILES = {
     "usr/bin/termeric": 0o755,
     "usr/share/applications/termeric.desktop": 0o644,
-    "usr/share/icons/hicolor/1024x1024/apps/termeric.png": 0o644,
+    **{path: 0o644 for path in ICON_FILES},
     "usr/share/terminfo/x/xterm-termeric": 0o644,
     "usr/share/licenses/termeric-git/LICENSE": 0o644,
     "usr/share/doc/termeric/README.md": 0o644,
@@ -229,9 +239,7 @@ def validate_layout(root: Path, *, exercise_native_tools: bool = True) -> None:
     binary = root / "usr/bin/termeric"
     if binary.read_bytes()[:4] != b"\x7fELF":
         raise CheckError("/usr/bin/termeric is not an ELF executable")
-    icon = root / "usr/share/icons/hicolor/1024x1024/apps/termeric.png"
-    if icon.read_bytes()[:8] != b"\x89PNG\r\n\x1a\n":
-        raise CheckError("installed icon is not a PNG file")
+    validate_icons(root)
     desktop = root / "usr/share/applications/termeric.desktop"
     validate_desktop_entry(desktop)
     notice = root / "usr/share/doc/termeric/THIRD_PARTY_NOTICES.md"

@@ -9,6 +9,7 @@ from unittest import mock
 from scripts.check_debian_package import (
     CheckError,
     EXPECTED_FILES,
+    ICON_FILES,
     LIFECYCLE_OPT_IN,
     parse_desktop_entry,
     parse_os_release,
@@ -36,6 +37,12 @@ Exec=termeric --new-window
 """
 
 
+def png_fixture(relative: str) -> bytes:
+    """A PNG signature and IHDR prefix sized for the icon's directory."""
+    size = ICON_FILES[relative].to_bytes(4, "big")
+    return b"\x89PNG\r\n\x1a\n" + (13).to_bytes(4, "big") + b"IHDR" + size + size
+
+
 class DebianPackageCheckTests(unittest.TestCase):
     def test_layout_contract_accepts_expected_files_and_modes(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -46,7 +53,7 @@ class DebianPackageCheckTests(unittest.TestCase):
                 if relative == "usr/bin/termeric":
                     contents = b"\x7fELFfixture"
                 elif relative.endswith(".png"):
-                    contents = b"\x89PNG\r\n\x1a\nfixture"
+                    contents = png_fixture(relative)
                 elif relative.endswith(".desktop"):
                     contents = DESKTOP_ENTRY.encode()
                 elif relative.endswith("THIRD_PARTY_NOTICES.md"):
@@ -63,6 +70,32 @@ class DebianPackageCheckTests(unittest.TestCase):
             with self.assertRaisesRegex(CheckError, "Unicode License v3"):
                 validate_layout(root, exercise_native_tools=False)
 
+    def test_layout_contract_rejects_an_icon_in_the_wrong_size_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for relative, mode in EXPECTED_FILES.items():
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                if relative == "usr/bin/termeric":
+                    contents = b"\x7fELFfixture"
+                elif relative.endswith(".png"):
+                    contents = png_fixture(relative)
+                elif relative.endswith(".desktop"):
+                    contents = DESKTOP_ENTRY.encode()
+                elif relative.endswith("THIRD_PARTY_NOTICES.md"):
+                    contents = b"Unicode License v3\n"
+                else:
+                    contents = b"fixture"
+                path.write_bytes(contents)
+                path.chmod(mode)
+
+            misplaced = "usr/share/icons/hicolor/48x48/apps/termeric.png"
+            (root / misplaced).write_bytes(
+                png_fixture("usr/share/icons/hicolor/512x512/apps/termeric.png")
+            )
+            with self.assertRaisesRegex(CheckError, "is 512x512, expected 48x48"):
+                validate_layout(root, exercise_native_tools=False)
+
     def test_layout_contract_rejects_an_executable_mode_regression(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -73,7 +106,7 @@ class DebianPackageCheckTests(unittest.TestCase):
                 if relative == "usr/bin/termeric":
                     contents = b"\x7fELFfixture"
                 elif relative.endswith(".png"):
-                    contents = b"\x89PNG\r\n\x1a\nfixture"
+                    contents = png_fixture(relative)
                 elif relative.endswith("THIRD_PARTY_NOTICES.md"):
                     contents = b"Unicode License v3\n"
                 path.write_bytes(contents)

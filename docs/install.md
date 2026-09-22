@@ -18,10 +18,35 @@ cargo build --release --locked
 sudo install -Dm755 target/release/termeric /usr/local/bin/termeric
 sudo install -Dm644 assets/termeric.desktop \
   /usr/local/share/applications/termeric.desktop
-sudo install -Dm644 assets/icons/termeric.png \
-  /usr/local/share/icons/hicolor/1024x1024/apps/termeric.png
+for icon in assets/icons/hicolor/*/apps/termeric.png; do
+  sudo install -Dm644 "$icon" "/usr/local/share/icons/${icon#assets/icons/}"
+done
 sudo tic -x -o /usr/local/share/terminfo assets/terminfo/xterm-termeric.terminfo
 ```
+
+### Desktop integration for a source checkout
+
+Wayland compositors such as KDE Plasma and GNOME take a window's icon and
+taskbar identity from the installed desktop entry whose name matches its app
+ID (`termeric`); the icon embedded in the binary is used only on X11. Running
+`target/release/termeric` without an installed entry therefore shows a generic
+icon. To integrate a checkout for the current user without installing the
+binary system-wide:
+
+```bash
+cargo build --release --locked
+for icon in assets/icons/hicolor/*/apps/termeric.png; do
+  install -Dm644 "$icon" "$HOME/.local/share/icons/${icon#assets/icons/}"
+done
+mkdir -p "$HOME/.local/share/applications"
+sed "s|^Exec=termeric|Exec=$PWD/target/release/termeric|" assets/termeric.desktop \
+  > "$HOME/.local/share/applications/termeric.desktop"
+```
+
+Restart Termeric afterwards. The icon set comes from
+`scripts/generate_icons.py`, which renders every size the hicolor theme
+declares from `assets/icons/termeric.png`; desktops do not search undeclared
+sizes such as 1024×1024.
 
 Alternatively, build the Debian artifact with `cargo-deb`:
 
@@ -71,14 +96,17 @@ repeat the same `makepkg -si` command; Pacman performs the owned-file upgrade.
 ## Upgrade or uninstall
 
 For a source installation, fetch the desired audited revision and repeat the
-locked release build and three `install` commands. Remove it with:
+locked release build and install commands. Remove it with:
 
 ```bash
 sudo rm /usr/local/bin/termeric
 sudo rm /usr/local/share/applications/termeric.desktop
-sudo rm /usr/local/share/icons/hicolor/1024x1024/apps/termeric.png
+sudo rm /usr/local/share/icons/hicolor/*/apps/termeric.png
 sudo rm /usr/local/share/terminfo/x/xterm-termeric
 ```
+
+Remove a per-user checkout integration with
+`rm ~/.local/share/applications/termeric.desktop ~/.local/share/icons/hicolor/*/apps/termeric.png`.
 
 For a Debian installation, use `sudo apt install ./new-package.deb` to upgrade
 and `sudo apt remove termeric` to uninstall. User configuration and session

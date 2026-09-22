@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from unittest import mock
 
+from scripts.test_check_debian_package import png_fixture
 from scripts.check_arch_package import (
     CheckError,
     EXPECTED_FILES,
@@ -280,7 +281,7 @@ class ArchPackageCheckTests(unittest.TestCase):
                 if relative == "usr/bin/termeric":
                     contents = b"\x7fELFfixture"
                 elif relative.endswith(".png"):
-                    contents = b"\x89PNG\r\n\x1a\nfixture"
+                    contents = png_fixture(relative)
                 elif relative.endswith(".desktop"):
                     contents = DESKTOP_ENTRY.encode()
                 elif relative.endswith("THIRD_PARTY_NOTICES.md"):
@@ -306,7 +307,7 @@ class ArchPackageCheckTests(unittest.TestCase):
                 if relative == "usr/bin/termeric":
                     contents = b"\x7fELFfixture"
                 elif relative.endswith(".png"):
-                    contents = b"\x89PNG\r\n\x1a\nfixture"
+                    contents = png_fixture(relative)
                 elif relative.endswith("THIRD_PARTY_NOTICES.md"):
                     contents = b"Unicode License v3\n"
                 path.write_bytes(contents)

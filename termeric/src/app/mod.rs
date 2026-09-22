@@ -1493,14 +1493,15 @@ impl App {
     ///
     /// The icon is embedded directly in the binary at compile time,
     /// so it works on all platforms without requiring external files.
+    /// Wayland compositors ignore it and resolve the icon from the desktop
+    /// entry matching the app ID instead.
     fn load_icon() -> Option<Icon> {
-        // Icon is embedded in the binary at compile time
-        let icon_bytes = include_bytes!("../../../assets/icons/termeric.png");
+        // The pre-rendered 256px theme icon avoids embedding the 1 MiB master
+        // artwork and resampling it on every launch.
+        let icon_bytes = include_bytes!("../../../assets/icons/hicolor/256x256/apps/termeric.png");
 
         match image::load_from_memory(icon_bytes) {
             Ok(img) => {
-                // Resize to 256x256 for optimal display across platforms
-                let img = img.resize_exact(256, 256, image::imageops::FilterType::Lanczos3);
                 let rgba = img.to_rgba8();
                 let (width, height) = rgba.dimensions();
                 let icon_data = rgba.into_raw();

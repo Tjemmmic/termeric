@@ -62,8 +62,10 @@ package() {
     "${pkgdir}/usr/bin/termeric"
   install -Dm644 assets/termeric.desktop \
     "${pkgdir}/usr/share/applications/termeric.desktop"
-  install -Dm644 assets/icons/termeric.png \
-    "${pkgdir}/usr/share/icons/hicolor/1024x1024/apps/termeric.png"
+  local icon
+  for icon in assets/icons/hicolor/*/apps/termeric.png; do
+    install -Dm644 "${icon}" "${pkgdir}/usr/share/icons/${icon#assets/icons/}"
+  done
   install -Dm644 LICENSE \
     "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
   install -Dm644 README.md CHANGELOG.md termeric/THIRD_PARTY_NOTICES.md -t \

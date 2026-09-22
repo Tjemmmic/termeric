@@ -1178,6 +1178,15 @@ Versioning once public beta tags begin.
   rasterized once, and the baseline comes from the face's ascent and descent.
   Chrome-bar and left-rail offsets are whole pixels so the grid stays aligned.
 
+- Desktops now find Termeric's application icon. Packages and the documented
+  source install shipped a single 1024×1024 PNG, a size the hicolor theme does
+  not declare, so icon lookups fell back to a generic icon. A generated set
+  covers every declared size from 16 to 512 pixels, package checks verify each
+  icon's dimensions, and the install guide adds per-user desktop integration for
+  source checkouts, which Wayland needs to associate the window with its icon.
+  The X11 window icon embeds the 256-pixel variant instead of resampling the
+  master artwork at every launch.
+
 - Harvest retains a separate 4-KiB command snapshot instead of rerunning its
   normalized/shortened display caption after live text disappears. Interior
   whitespace and complete longer commands are preserved. Live and retained
