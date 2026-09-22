@@ -7,7 +7,7 @@ use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
 /// A complete color theme
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Theme {
     /// Theme metadata
     pub meta: ThemeMeta,
@@ -52,6 +52,14 @@ const BUILTIN_THEME_NAMES: [&str; 26] = [
     "kanagawa",
     "everforest",
 ];
+
+impl Default for Theme {
+    /// The house palette, parsed from the embedded `turmeric.toml` so the
+    /// fallback can never drift from the built-in theme it stands in for.
+    fn default() -> Self {
+        Self::load_builtin("turmeric").expect("embedded turmeric theme is valid TOML")
+    }
+}
 
 impl Theme {
     /// Load theme from a TOML file
@@ -214,61 +222,6 @@ pub struct PrimaryColors {
     pub white: Color,
 }
 
-impl Default for PrimaryColors {
-    fn default() -> Self {
-        Self {
-            black: Color {
-                r: 0x1C,
-                g: 0x14,
-                b: 0x10,
-                a: 1.0,
-            },
-            red: Color {
-                r: 0xC7,
-                g: 0x56,
-                b: 0x46,
-                a: 1.0,
-            },
-            green: Color {
-                r: 0x5D,
-                g: 0x8C,
-                b: 0x4A,
-                a: 1.0,
-            },
-            yellow: Color {
-                r: 0xC9,
-                g: 0xA2,
-                b: 0x27,
-                a: 1.0,
-            },
-            blue: Color {
-                r: 0x6B,
-                g: 0x8E,
-                b: 0x9B,
-                a: 1.0,
-            },
-            magenta: Color {
-                r: 0xA6,
-                g: 0x7B,
-                b: 0x8A,
-                a: 1.0,
-            },
-            cyan: Color {
-                r: 0x4A,
-                g: 0x8C,
-                b: 0x7B,
-                a: 1.0,
-            },
-            white: Color {
-                r: 0xD4,
-                g: 0xC4,
-                b: 0xA8,
-                a: 1.0,
-            },
-        }
-    }
-}
-
 /// Bright ANSI colors (8-15)
 #[derive(Debug, Clone, Deserialize)]
 pub struct BrightColors {
@@ -280,61 +233,6 @@ pub struct BrightColors {
     pub magenta: Color,
     pub cyan: Color,
     pub white: Color,
-}
-
-impl Default for BrightColors {
-    fn default() -> Self {
-        Self {
-            black: Color {
-                r: 0x3D,
-                g: 0x30,
-                b: 0x28,
-                a: 1.0,
-            },
-            red: Color {
-                r: 0xE0,
-                g: 0x7B,
-                b: 0x5F,
-                a: 1.0,
-            },
-            green: Color {
-                r: 0x7C,
-                g: 0xB8,
-                b: 0x6A,
-                a: 1.0,
-            },
-            yellow: Color {
-                r: 0xE8,
-                g: 0xA8,
-                b: 0x38,
-                a: 1.0,
-            },
-            blue: Color {
-                r: 0x8B,
-                g: 0xB0,
-                b: 0xC0,
-                a: 1.0,
-            },
-            magenta: Color {
-                r: 0xC8,
-                g: 0x99,
-                b: 0xA8,
-                a: 1.0,
-            },
-            cyan: Color {
-                r: 0x6B,
-                g: 0xB8,
-                b: 0x9E,
-                a: 1.0,
-            },
-            white: Color {
-                r: 0xF5,
-                g: 0xEB,
-                b: 0xD9,
-                a: 1.0,
-            },
-        }
-    }
 }
 
 /// UI-specific colors
@@ -352,74 +250,6 @@ pub struct UiColors {
     pub tab_inactive: Color,
     pub search_match: Color,
     pub url: Color,
-}
-
-impl Default for UiColors {
-    fn default() -> Self {
-        Self {
-            background: Color {
-                r: 0x1C,
-                g: 0x14,
-                b: 0x10,
-                a: 1.0,
-            },
-            foreground: Color {
-                r: 0xD4,
-                g: 0xC4,
-                b: 0xA8,
-                a: 1.0,
-            },
-            cursor: Color {
-                r: 0xE0,
-                g: 0x7B,
-                b: 0x20,
-                a: 1.0,
-            },
-            cursor_text: Color {
-                r: 0x1C,
-                g: 0x14,
-                b: 0x10,
-                a: 1.0,
-            },
-            selection: Color {
-                r: 0xC9,
-                g: 0xA2,
-                b: 0x27,
-                a: 0.35,
-            },
-            selection_text: None,
-            border: Color {
-                r: 0x3D,
-                g: 0x30,
-                b: 0x28,
-                a: 1.0,
-            },
-            tab_active: Color {
-                r: 0xE0,
-                g: 0x7B,
-                b: 0x20,
-                a: 1.0,
-            },
-            tab_inactive: Color {
-                r: 0x2D,
-                g: 0x24,
-                b: 0x20,
-                a: 1.0,
-            },
-            search_match: Color {
-                r: 0x7C,
-                g: 0xB8,
-                b: 0x6A,
-                a: 0.4,
-            },
-            url: Color {
-                r: 0x6B,
-                g: 0xB8,
-                b: 0x9E,
-                a: 1.0,
-            },
-        }
-    }
 }
 
 /// A color with optional alpha channel
@@ -543,6 +373,183 @@ mod tests {
         assert!(Theme::load_builtin("nord").is_ok());
         assert!(Theme::load_builtin("solarized-dark").is_ok());
         assert!(Theme::load_builtin("unknown").is_err());
+    }
+
+    fn relative_luminance(color: &Color) -> f64 {
+        let linear = |channel: u8| {
+            let value = f64::from(channel) / 255.0;
+            if value <= 0.04045 {
+                value / 12.92
+            } else {
+                ((value + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * linear(color.r) + 0.7152 * linear(color.g) + 0.0722 * linear(color.b)
+    }
+
+    fn contrast(first: &Color, second: &Color) -> f64 {
+        let (first, second) = (relative_luminance(first), relative_luminance(second));
+        (first.max(second) + 0.05) / (first.min(second) + 0.05)
+    }
+
+    /// HSL hue in degrees and saturation in `0..=1`.
+    fn hue_and_saturation(color: &Color) -> (f64, f64) {
+        let [r, g, b] = [color.r, color.g, color.b].map(|channel| f64::from(channel) / 255.0);
+        let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+        let delta = max - min;
+        if delta == 0.0 {
+            return (0.0, 0.0);
+        }
+        let lightness = (max + min) / 2.0;
+        let saturation = delta / (1.0 - (2.0 * lightness - 1.0).abs());
+        let hue = if max == r {
+            60.0 * ((g - b) / delta).rem_euclid(6.0)
+        } else if max == g {
+            60.0 * ((b - r) / delta + 2.0)
+        } else {
+            60.0 * ((r - g) / delta + 4.0)
+        };
+        (hue, saturation)
+    }
+
+    /// Hue families (degrees) in which each ANSI slot stays recognisable.
+    fn in_hue_family(slot: &str, hue: f64) -> bool {
+        match slot {
+            "red" => !(20.0..345.0).contains(&hue),
+            "yellow" => (35.0..70.0).contains(&hue),
+            "green" => (75.0..155.0).contains(&hue),
+            "cyan" => (160.0..200.0).contains(&hue),
+            "blue" => (200.0..255.0).contains(&hue),
+            "magenta" => (275.0..345.0).contains(&hue),
+            _ => unreachable!("unknown chromatic slot {slot}"),
+        }
+    }
+
+    fn root_palette_violations(name: &str, theme: &Theme) -> Vec<String> {
+        let background = &theme.ui.background;
+        let mut violations = Vec::new();
+        let mut require = |ok: bool, message: String| {
+            if !ok {
+                violations.push(format!("{name}: {message}"));
+            }
+        };
+        let fg_contrast = contrast(&theme.ui.foreground, background);
+        require(
+            fg_contrast >= 7.0,
+            format!("foreground contrast {fg_contrast:.1} < 7"),
+        );
+        let (p, b) = (&theme.primary, &theme.bright);
+        let chromatic = [
+            ("red", &p.red, &b.red),
+            ("green", &p.green, &b.green),
+            ("yellow", &p.yellow, &b.yellow),
+            ("blue", &p.blue, &b.blue),
+            ("magenta", &p.magenta, &b.magenta),
+            ("cyan", &p.cyan, &b.cyan),
+        ];
+        for (slot, primary, bright) in chromatic {
+            for (variant, color, minimum) in [("", primary, 3.0), ("bright ", bright, 4.5)] {
+                let (hue, saturation) = hue_and_saturation(color);
+                require(
+                    in_hue_family(slot, hue),
+                    format!("{variant}{slot} hue {hue:.0} is outside the {slot} family"),
+                );
+                require(
+                    saturation >= 0.25,
+                    format!("{variant}{slot} saturation {saturation:.2} < 0.25"),
+                );
+                let ratio = contrast(color, background);
+                require(
+                    ratio >= minimum,
+                    format!("{variant}{slot} contrast {ratio:.1} < {minimum}"),
+                );
+            }
+            require(
+                relative_luminance(bright) > relative_luminance(primary),
+                format!("bright {slot} is not lighter than {slot}"),
+            );
+        }
+        for (variant, colors) in [
+            (
+                "",
+                [&p.red, &p.yellow, &p.green, &p.cyan, &p.blue, &p.magenta],
+            ),
+            (
+                "bright ",
+                [&b.red, &b.yellow, &b.green, &b.cyan, &b.blue, &b.magenta],
+            ),
+        ] {
+            let names = ["red", "yellow", "green", "cyan", "blue", "magenta"];
+            for index in 0..names.len() {
+                let next = (index + 1) % names.len();
+                let (first, _) = hue_and_saturation(colors[index]);
+                let (second, _) = hue_and_saturation(colors[next]);
+                let distance = (first - second).abs() % 360.0;
+                let separation = distance.min(360.0 - distance);
+                require(
+                    separation >= 25.0,
+                    format!(
+                        "{variant}{} and {variant}{} hues are only {separation:.0} degrees apart",
+                        names[index], names[next]
+                    ),
+                );
+            }
+        }
+        let black = contrast(&p.black, background);
+        require(
+            black >= 1.15,
+            format!("black contrast {black:.2} < 1.15 against background"),
+        );
+        let bright_black = contrast(&b.black, background);
+        require(
+            bright_black >= 3.0,
+            format!("bright black contrast {bright_black:.1} < 3"),
+        );
+        let white = contrast(&p.white, background);
+        require(white >= 4.5, format!("white contrast {white:.1} < 4.5"));
+        let bright_white = contrast(&b.white, background);
+        require(
+            bright_white >= 7.0,
+            format!("bright white contrast {bright_white:.1} < 7"),
+        );
+        violations
+    }
+
+    /// Root palettes are tinted toward their plant, but applications rely on
+    /// ANSI meaning (red for errors, green for success, dim bright-black
+    /// hints), so every slot must stay in its hue family and readable.
+    #[test]
+    fn root_theme_palettes_keep_ansi_meaning_and_contrast() {
+        let mut violations = Vec::new();
+        let mut roots = 0;
+        for name in Theme::list_available() {
+            let theme = Theme::load_builtin(name).unwrap();
+            if theme.meta.author == "Termeric" {
+                roots += 1;
+                violations.extend(root_palette_violations(name, &theme));
+            }
+        }
+        assert_eq!(roots, 12, "every root theme must be checked");
+        assert!(
+            violations.is_empty(),
+            "root palette contract violations:\n{}",
+            violations.join("\n")
+        );
+    }
+
+    #[test]
+    fn default_theme_is_the_embedded_turmeric_palette() {
+        let fallback = Theme::default();
+        let turmeric = Theme::load_builtin("turmeric").unwrap();
+        assert_eq!(fallback.meta.name, "Turmeric");
+        assert_eq!(
+            fallback.ui.background.to_f32_array(),
+            turmeric.ui.background.to_f32_array()
+        );
+        assert_eq!(
+            fallback.primary.red.to_f32_array(),
+            turmeric.primary.red.to_f32_array()
+        );
     }
 
     #[test]

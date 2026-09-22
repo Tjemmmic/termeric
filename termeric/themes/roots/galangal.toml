@@ -4,23 +4,23 @@ author = "Termeric"
 description = "Pale pinkish-tan with hot pink shoots — lesser ginger"
 
 [primary]
-black = "#1A1418"   # Deep galangal bark
-red = "#E05A8C"     # Hot pink shoot
-green = "#4A7D3C"   # Long blade leaf green
-yellow = "#D4B878"  # Resinous golden flesh
-blue = "#7A7890"    # Cool purple shadow
-magenta = "#C84080" # Bright magenta shoot
-cyan = "#68A050"    # Tropical blade green
+black = "#30252C"   # Deep galangal bark, lifted off the background
+red = "#D85A5A"     # Red tinted toward hot pink shoot
+green = "#4D883D"   # Long blade leaf green, lifted for contrast
+yellow = "#CEAE64"  # Resinous golden flesh, lifted for contrast
+blue = "#7871BF"    # Cool purple shadow, richer so it reads as blue
+magenta = "#CB4A8F" # Bright magenta shoot, lifted for contrast
+cyan = "#4AA696"    # Cyan tinted toward tropical blade green
 white = "#F5F0E4"   # Pale ivory flesh
 
 [bright]
-black = "#3D3038"   # Medium bark
-red = "#E878A0"     # Light hot pink
-green = "#68A050"   # Bright blade green
-yellow = "#E0C890"  # Light golden
-blue = "#9898B0"    # Light purple
-magenta = "#E060A0" # Bright pink
-cyan = "#88C068"    # Bright tropical
+black = "#7C6172"   # Medium bark, lifted for readable dim text
+red = "#DE8282"     # Bright red tinted toward light hot pink
+green = "#66A64A"   # Bright blade green, richer so it reads as green
+yellow = "#E0C88F"  # Light golden, lifted for contrast
+blue = "#8F8FCD"    # Light purple, richer so it reads as blue
+magenta = "#DA73AA" # Bright pink, softened
+cyan = "#68C0B1"    # Bright cyan tinted toward bright tropical
 white = "#FAF5F0"   # Bright ivory
 
 [ui]

@@ -4,23 +4,23 @@ author = "Termeric"
 description = "Dusty brown skin, pale lavender flesh, purple veins — elephant ear"
 
 [primary]
-black = "#181418"   # Deep taro soil
-red = "#9B6880"     # Muted purple-rose
-green = "#2D4A30"   # Giant elephant ear leaf
-yellow = "#E8D88C"  # Creamy spadix flower
-blue = "#7B5C9B"    # Purple vein blue
-magenta = "#8858A0" # Purple flesh vein
-cyan = "#4A6848"    # Velvety leaf green
+black = "#2D252D"   # Deep taro soil, lifted off the background
+red = "#C75656"     # Red tinted toward muted purple-rose
+green = "#3D8945"   # Giant elephant ear leaf, richer so it reads as green
+yellow = "#D8C25A"  # Creamy spadix flower, softened
+blue = "#7770BF"    # Blue tinted toward purple vein blue
+magenta = "#9C63B9" # Purple flesh vein, richer so it reads as magenta
+cyan = "#3C8679"    # Cyan tinted toward velvety leaf green
 white = "#E8E0F0"   # Pale lavender flesh
 
 [bright]
-black = "#5C4A40"   # Dark dusty brown skin
-red = "#B880A0"     # Light purple-rose
-green = "#4A6848"   # Bright leaf green
-yellow = "#F0E8A8"  # Light flower yellow
-blue = "#9B80B8"    # Light violet
-magenta = "#A878C0" # Bright purple
-cyan = "#689868"    # Bright velvety green
+black = "#7D6557"   # Dark dusty brown skin, lifted for readable dim text
+red = "#D37C7C"     # Bright red tinted toward light purple-rose
+green = "#51A74B"   # Bright leaf green, richer so it reads as green
+yellow = "#E1D88E"  # Light flower yellow, softened
+blue = "#928DCC"    # Bright blue tinted toward light violet
+magenta = "#B184C8" # Bright purple, lifted for contrast
+cyan = "#50B0A0"    # Bright cyan tinted toward bright velvety green
 white = "#F0E8F8"   # Bright lavender
 
 [ui]

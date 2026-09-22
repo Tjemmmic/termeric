@@ -4,23 +4,23 @@ author = "Termeric"
 description = "Sandy tan skin with sharp white flesh — bold and pungent"
 
 [primary]
-black = "#181610"   # Dark root earth
-red = "#B06848"     # Sandy reddish-brown
-green = "#3D5C2D"   # Large crinkled leaf green
-yellow = "#F0E8B8"  # Pale yellow core
-blue = "#688090"    # Cool earth shadow
-magenta = "#988068"  # Warm sandy tan
-cyan = "#5A8040"    # Bold leaf green
+black = "#2C281D"   # Dark root earth, lifted off the background
+red = "#C65753"     # Red tinted toward sandy reddish-brown
+green = "#56873D"   # Large crinkled leaf green, lifted for contrast
+yellow = "#D8C65A"  # Pale yellow core, lifted for contrast
+blue = "#4D85AB"    # Cool earth shadow, richer so it reads as blue
+magenta = "#B65C89"  # Magenta tinted toward warm sandy tan
+cyan = "#3C867A"    # Cyan tinted toward bold leaf green
 white = "#FAFAF8"   # Sharp white flesh
 
 [bright]
-black = "#4A4030"   # Rough scarred skin
-red = "#C88868"     # Light sandy tan
-green = "#5A8040"   # Bright bold leaf
-yellow = "#F8F0D0"  # Bright pale yellow
-blue = "#88A0B0"    # Light blue
-magenta = "#B0A088" # Light sandy
-cyan = "#78A058"    # Mid leaf green
+black = "#77684F"   # Rough scarred skin, lifted for readable dim text
+red = "#D37E7B"     # Bright red tinted toward light sandy tan
+green = "#6EA44A"   # Bright bold leaf, richer so it reads as green
+yellow = "#E1D08E"  # Bright pale yellow, softened
+blue = "#76A4C2"    # Light blue, richer so it reads as blue
+magenta = "#C681A4" # Bright magenta tinted toward light sandy
+cyan = "#4DAB9B"    # Bright cyan tinted toward mid leaf green
 white = "#FEFEFE"   # Brightest white
 
 [ui]

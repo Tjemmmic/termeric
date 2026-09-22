@@ -4,23 +4,23 @@ author = "Termeric"
 description = "Bark-brown skin with bright starchy white flesh — cassava root"
 
 [primary]
-black = "#1A1410"   # Dark bark
-red = "#D4A090"     # Pink-coral inner bark
-green = "#2D5C28"   # Deep tropical leaf green
-yellow = "#C8A870"  # Woody tan bark
-blue = "#688080"    # Cool tropical shadow
-magenta = "#A87878" # Warm coral
-cyan = "#4A8040"    # Tropical green
+black = "#2F251F"   # Dark bark, lifted off the background
+red = "#CC6966"     # Red tinted toward pink-coral inner bark
+green = "#43883B"   # Deep tropical leaf green, lifted for contrast
+yellow = "#C6A56C"  # Woody tan bark, lifted for contrast
+blue = "#4D7DAC"    # Blue tinted toward cool tropical shadow
+magenta = "#BA6690" # Magenta tinted toward warm coral
+cyan = "#3C867A"    # Cyan tinted toward tropical green
 white = "#FAFAF8"   # Bright starchy white flesh
 
 [bright]
-black = "#5C4030"   # Rough woody bark
-red = "#E0B8A8"     # Light coral
-green = "#4A8040"   # Bright tropical
+black = "#7F6455"   # Rough woody bark, lifted for readable dim text
+red = "#DB9694"     # Bright red tinted toward light coral
+green = "#59A64B"   # Bright tropical, richer so it reads as green
 yellow = "#D8C090"  # Light bark tan
-blue = "#88A0A0"    # Light teal
-magenta = "#C09898" # Light warm coral
-cyan = "#68A058"    # Mid tropical
+blue = "#7198BF"    # Bright blue tinted toward light teal
+magenta = "#CC8CAC" # Bright magenta tinted toward light warm coral
+cyan = "#4DAB9B"    # Bright cyan tinted toward mid tropical
 white = "#FEFEFE"   # Chalky white
 
 [ui]

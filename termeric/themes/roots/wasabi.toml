@@ -4,23 +4,23 @@ author = "Termeric"
 description = "Bright green rhizome with vivid chartreuse flesh"
 
 [primary]
-black = "#101810"   # Deep green-black soil
-red = "#A0684A"     # Earthy brown-red
+black = "#1D2C1D"   # Deep green-black soil, lifted off the background
+red = "#C65854"     # Red tinted toward earthy brown-red
 green = "#5C8C32"   # Bright rhizome green skin
-yellow = "#A0C850"  # Fresh chartreuse flesh
-blue = "#4A786A"    # Cool green-teal
-magenta = "#887050" # Warm earth
-cyan = "#7BC828"    # Vivid wasabi paste green
+yellow = "#C8C850"  # Yellow tinted toward fresh chartreuse flesh
+blue = "#4E7EAE"    # Blue tinted toward cool green-teal
+magenta = "#B65D89" # Magenta tinted toward warm earth
+cyan = "#2EC2AA"    # Cyan tinted toward vivid wasabi paste green
 white = "#C8D8A0"   # Warm pale green flesh
 
 [bright]
-black = "#2D5C2D"   # Dark heart-shaped leaf
-red = "#C08868"     # Light earthy brown
-green = "#7BC828"   # Bright grated wasabi
-yellow = "#C0E068"  # Bright chartreuse
-blue = "#6A9888"    # Light green-teal
-magenta = "#A08868" # Light earth
-cyan = "#98E040"    # Vivid bright green
+black = "#4C724C"   # Dark heart-shaped leaf, lifted for readable dim text
+red = "#D37E7B"     # Bright red tinted toward light earthy brown
+green = "#71BE32"   # Bright grated wasabi, nudged apart from neighbouring hues
+yellow = "#D9D96F"  # Bright yellow tinted toward bright chartreuse
+blue = "#7399C0"    # Bright blue tinted toward light green-teal
+magenta = "#C67FA3" # Bright magenta tinted toward light earth
+cyan = "#50D0BB"    # Bright cyan tinted toward vivid bright green
 white = "#D8E8B8"   # Light green-white
 
 [ui]

@@ -1106,6 +1106,16 @@ Versioning once public beta tags begin.
 
 ### Changed
 
+- Root themes keep ANSI color meaning. Their palettes were mapped literally
+  from plant parts, so cyan was green in eleven of twelve themes, several
+  yellows, blues, and magentas belonged to other hue families, and some slots
+  fell to 1.5:1 contrast. Every slot now stays in its hue family, tinted toward
+  the plant, with readable contrast, separated neighbouring hues, and a black
+  that shows against the background. A palette contract test enforces this for
+  all root themes, and the style guide's mapping table documents it. Guest
+  themes are unchanged. The load-failure fallback now reads the embedded
+  Turmeric theme instead of a hand-copied duplicate.
+
 - `font.size` is now applied in points, as documented and as other terminals
   and desktop applications use it (96/72 logical pixels per point before
   display scaling). It was previously used as logical pixels, so an existing

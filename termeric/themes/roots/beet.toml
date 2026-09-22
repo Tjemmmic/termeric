@@ -4,23 +4,23 @@ author = "Termeric"
 description = "Deep burgundy and vivid crimson from the beetroot"
 
 [primary]
-black = "#1A0810"   # Deepest beet skin
-red = "#C41E3A"     # Vivid crimson flesh
-green = "#3D4A28"   # Dark red-green leaves
-yellow = "#D44D6E"  # Magenta-pink streak
-blue = "#6A4060"    # Deep purple shadow
-magenta = "#8B2252"  # Dark beet magenta
-cyan = "#5A6840"    # Beet leaf vein
+black = "#2E1F26"   # Deepest beet skin, lifted off the background
+red = "#D34242"     # Red tinted toward vivid crimson flesh
+green = "#647E39"   # Dark red-green leaves, richer so it reads as green
+yellow = "#D4B24D"  # Yellow tinted toward magenta-pink streak
+blue = "#736CBD"    # Blue tinted toward deep purple shadow
+magenta = "#CF3A8A"  # Dark beet magenta, nudged apart from neighbouring hues
+cyan = "#3A8276"    # Cyan tinted toward beet leaf vein
 white = "#F0D0D8"   # Pale pink-white rings
 
 [bright]
-black = "#4A1028"   # Dark burgundy
-red = "#E04060"     # Bright beet red
-green = "#5A6840"   # Beet leaf
-yellow = "#E878A0"  # Light magenta
-blue = "#8A6880"    # Light purple
-magenta = "#C83868" # Bright magenta
-cyan = "#7A8858"    # Bright leaf
+black = "#84586A"   # Dark burgundy, lifted for readable dim text
+red = "#D97272"     # Bright red tinted toward bright beet red
+green = "#7D9B45"   # Beet leaf, richer so it reads as green
+yellow = "#DEC782"  # Bright yellow tinted toward light magenta
+blue = "#8E89CA"    # Bright blue tinted toward light purple
+magenta = "#D66CA5" # Bright magenta, nudged apart from neighbouring hues
+cyan = "#479E90"    # Bright cyan tinted toward bright leaf
 white = "#F8E0E8"   # Light blush
 
 [ui]

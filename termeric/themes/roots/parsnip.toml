@@ -4,23 +4,23 @@ author = "Termeric"
 description = "Off-white cream skin with sweet flesh and celery green leaves"
 
 [primary]
-black = "#181810"   # Deep parsnip earth
-red = "#B08858"     # Warm tan
+black = "#2A2A1C"   # Deep parsnip earth, lifted off the background
+red = "#C75A56"     # Red tinted toward warm tan
 green = "#5C8C3C"   # Celery green leaf
-yellow = "#E8D898"  # Faint yellow core
-blue = "#708898"    # Cool shadow
-magenta = "#A09070" # Dusty cream-tan
-cyan = "#B4C890"    # Stem green-white
+yellow = "#D8BF5A"  # Faint yellow core, lifted for contrast
+blue = "#558DB3"    # Cool shadow, richer so it reads as blue
+magenta = "#B75E8B" # Magenta tinted toward dusty cream-tan
+cyan = "#72C0B3"    # Cyan tinted toward stem green-white
 white = "#FAF5E4"   # Sweet cream flesh
 
 [bright]
-black = "#3A3828"   # Medium earth
-red = "#C8A878"     # Light warm tan
-green = "#80B060"   # Bright celery leaf
-yellow = "#F0E8B8"  # Bright yellow core
-blue = "#90A8B8"    # Light blue
-magenta = "#C0B090" # Light dusty cream
-cyan = "#C8D8A0"    # Ferny bright green
+black = "#706C4D"   # Medium earth, lifted for readable dim text
+red = "#D37F7C"     # Bright red tinted toward light warm tan
+green = "#7FB55B"   # Bright celery leaf, richer so it reads as green
+yellow = "#E1D58E"  # Bright yellow core, softened
+blue = "#81ABC7"    # Light blue, richer so it reads as blue
+magenta = "#C987A8" # Bright magenta tinted toward light dusty cream
+cyan = "#9AD5CB"    # Bright cyan tinted toward ferny bright green
 white = "#FEFAF0"   # Brightest cream
 
 [ui]

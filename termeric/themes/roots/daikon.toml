@@ -4,23 +4,23 @@ author = "Termeric"
 description = "Crisp whites and greens from the Japanese radish"
 
 [primary]
-black = "#1A1F18"   # Deep soil
-red = "#A85C50"     # Radish blush
-green = "#3D5E38"   # Dark leathery leaf
-yellow = "#B8C080"  # Pale green top
-blue = "#6A8090"    # Cool shadow
-magenta = "#9B7088" # Muted rose
-cyan = "#6BA34F"    # Bright leaf green
+black = "#283025"   # Deep soil, lifted off the background
+red = "#C66353"     # Radish blush, richer so it reads as red
+green = "#4B9041"   # Dark leathery leaf, richer so it reads as green
+yellow = "#B6C072"  # Pale green top, richer so it reads as yellow
+blue = "#4E86AE"    # Cool shadow, richer so it reads as blue
+magenta = "#B96493" # Muted rose, richer so it reads as magenta
+cyan = "#4BA798"    # Cyan tinted toward bright leaf green
 white = "#F0EDE8"   # Clean white skin
 
 [bright]
-black = "#3A4238"   # Dark earth
-red = "#C07868"     # Warm blush
-green = "#6BA34F"   # Bright radish leaf
-yellow = "#D4E0C4"  # Pale green fade
-blue = "#8AA0B0"    # Light blue
-magenta = "#B88898" # Light rose
-cyan = "#88C470"    # Spring green
+black = "#647261"   # Dark earth, lifted for readable dim text
+red = "#D28979"     # Warm blush, richer so it reads as red
+green = "#6CAA4D"   # Bright radish leaf, lifted for contrast
+yellow = "#D3D39C"  # Bright yellow tinted toward pale green fade
+blue = "#78A3C2"    # Light blue, richer so it reads as blue
+magenta = "#CA88A0" # Light rose, richer so it reads as magenta
+cyan = "#70C4B6"    # Bright cyan tinted toward spring green
 white = "#FAFAF5"   # Crisp translucent white
 
 [ui]

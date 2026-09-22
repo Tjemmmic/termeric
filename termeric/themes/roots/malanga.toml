@@ -4,23 +4,23 @@ author = "Termeric"
 description = "Grey-brown skin with purple splotches — tropical root vibes"
 
 [primary]
-black = "#1C1818"   # Deep root bark
-red = "#7B4A5C"     # Purple-red skin blush
-green = "#2D4A2D"   # Dark earthy leaf green
-yellow = "#D4A82A"  # Rich yellow flower
-blue = "#6A7088"    # Cool grey-violet
-magenta = "#4A2D5C" # Dark purple splotch
-cyan = "#3D5C3D"    # Deep forest green
+black = "#2F2828"   # Deep root bark, lifted off the background
+red = "#C85959"     # Red tinted toward purple-red skin blush
+green = "#3F8C3F"   # Dark earthy leaf green, richer so it reads as green
+yellow = "#CEA530"  # Rich yellow flower, softened
+blue = "#697ABC"    # Cool grey-violet, richer so it reads as blue
+magenta = "#9B67BB" # Dark purple splotch, lifted for contrast
+cyan = "#3E897D"    # Cyan tinted toward deep forest green
 white = "#F0E8DC"   # Creamy white flesh
 
 [bright]
-black = "#3D3838"   # Medium grey-brown
-red = "#9B6878"     # Light purple-rose
-green = "#4A6A4A"   # Bright earthy green
-yellow = "#E0C040"  # Bright gold flower
-blue = "#8A90A8"    # Light violet-grey
-magenta = "#6B4878" # Medium purple
-cyan = "#5A7A5A"    # Mid forest
+black = "#746A6A"   # Medium grey-brown, lifted for readable dim text
+red = "#D58080"     # Bright red tinted toward light purple-rose
+green = "#4CAA4C"   # Bright earthy green, richer so it reads as green
+yellow = "#D0B750"  # Bright gold flower, softened
+blue = "#8996CA"    # Light violet-grey, richer so it reads as blue
+magenta = "#B786C9" # Medium purple, richer so it reads as magenta
+cyan = "#4AA696"    # Bright cyan tinted toward mid forest
 white = "#FAF4E8"   # Bright cream
 
 [ui]

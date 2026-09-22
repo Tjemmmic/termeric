@@ -4,23 +4,23 @@ author = "Termeric"
 description = "Pale sandy tones from ginger root — warm and understated"
 
 [primary]
-black = "#1E1810"   # Dark ginger bark
-red = "#C47B5A"     # Pink ginger shoot
-green = "#6B7D3C"   # Warm olive leaf
+black = "#2F2920"   # Dark ginger bark, lifted off the background
+red = "#C75B57"     # Red tinted toward pink ginger shoot
+green = "#71853C"   # Warm olive leaf, lifted for contrast
 yellow = "#C8A86A"  # Pale straw flesh
-blue = "#7A8C8C"    # Cool ginger shadows
-magenta = "#D4A0A0" # Pink young ginger
-cyan = "#8FA55A"    # Reed green leaf
+blue = "#5483B2"    # Blue tinted toward cool ginger shadows
+magenta = "#C07299" # Magenta tinted toward pink young ginger
+cyan = "#4FB0A0"    # Cyan tinted toward reed green leaf
 white = "#EDE0C0"   # Fibrous cream flesh
 
 [bright]
-black = "#3D3428"   # Medium bark
-red = "#D4907A"     # Light coral
-green = "#8FA55A"   # Bright reed green
-yellow = "#E0C888"  # Bright straw
-blue = "#9AACAC"    # Light blue-grey
-magenta = "#E0B8B8" # Light pink
-cyan = "#A8C470"    # Bright leaf
+black = "#7A6851"   # Medium bark, lifted for readable dim text
+red = "#D5817E"     # Bright red tinted toward light coral
+green = "#94B04F"   # Bright reed green, richer so it reads as green
+yellow = "#DFC889"  # Bright straw, lifted for contrast
+blue = "#80A3C6"    # Bright blue tinted toward light blue-grey
+magenta = "#D49CB8" # Bright magenta tinted toward light pink
+cyan = "#70C4B6"    # Bright cyan tinted toward bright leaf
 white = "#F5EDD8"   # Light fibrous cream
 
 [ui]

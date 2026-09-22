@@ -26,25 +26,38 @@ Third-party / community themes (Solarized, Catppuccin, etc.) keep their original
 
 ## 2. Root-Themed Color Palettes
 
-Every root theme **must** derive its colors from the **actual plant**. Study photos of the root's skin, flesh, leaves, and flowers, then map those hues to terminal slots.
+Every root theme **must** derive its colors from the **actual plant**. Study photos of the root's skin, flesh, leaves, and flowers, then use those hues to *tint* each terminal slot.
+
+ANSI colors carry meaning that programs rely on: red for errors, green for success, yellow for warnings, blue for directories, dim bright-black for hints. A root theme therefore keeps every slot in its own hue family and only leans it toward the plant. Turnip's red is a rose-tinted red rather than the purple top itself, and a leaf becomes a leaf-tinted teal for `cyan` rather than another green.
 
 ### Color-mapping template
 
-| Terminal Slot | Derived From                             |
-|---------------|------------------------------------------|
-| `background`  | The root's deepest skin/bark tone (dark) |
-| `foreground`  | The root's lightest flesh (cream/ivory)  |
-| `cursor`      | The most vibrant part of the flesh       |
-| `black`       | Dried/darkest form of the root skin      |
-| `white`       | Lightest interior or pith                |
-| `red`         | Skin blush, or red/purple flesh streaks  |
-| `green`       | Leaf color of the plant                  |
-| `yellow`      | Flower color, or golden inner flesh      |
-| `blue`        | Muted tone from stems, or cool shadows  |
-| `magenta`     | Flower or purple flesh highlights        |
-| `cyan`        | Young leaf or shoot color                |
-| `selection`   | Semi-transparent inner flesh tone        |
-| `url`         | Bright leaf or shoot color               |
+| Terminal Slot | Hue family | Tinted toward                              |
+|---------------|------------|--------------------------------------------|
+| `background`  | —          | The root's deepest skin/bark tone (dark)   |
+| `foreground`  | —          | The root's lightest flesh (cream/ivory)    |
+| `cursor`      | —          | The most vibrant part of the flesh         |
+| `black`       | neutral    | Dried skin, a step above the background    |
+| `white`       | neutral    | Lightest interior or pith                  |
+| `red`         | red        | Skin blush or red/purple flesh streaks     |
+| `green`       | green      | Leaf color of the plant                    |
+| `yellow`      | yellow     | Flower color or golden inner flesh         |
+| `blue`        | blue       | Stems or cool shadows                      |
+| `magenta`     | magenta    | Flower or purple flesh highlights          |
+| `cyan`        | cyan       | Young leaves or shoots                     |
+| `selection`   | —          | Semi-transparent inner flesh tone          |
+| `url`         | —          | Bright leaf or shoot color                 |
+
+### Palette contract
+
+`root_theme_palettes_keep_ansi_meaning_and_contrast` in `config/theme.rs` enforces these rules for every theme authored `"Termeric"`:
+
+- Each chromatic slot stays in its hue family (HSL degrees): red below 20 or from 345, yellow 35–70, green 75–155, cyan 160–200, blue 200–255, magenta 275–345.
+- Saturation is at least 0.25, so tinted colors still read as colors. Avoid the other extreme too: keep saturation near or below 0.6 so nothing turns neon.
+- Contrast against the background is at least 3:1 for primary slots and 4.5:1 for bright slots, and every bright slot is lighter than its primary.
+- Neighbouring families (red/yellow, yellow/green, green/cyan, cyan/blue, blue/magenta, magenta/red) stay at least 25° apart.
+- `black` is visibly lighter than the background (at least 1.15:1), bright black is readable dim text (at least 3:1), and whites reach 4.5:1 and 7:1.
+- Foreground text reaches at least 7:1.
 
 ### Reference palettes
 

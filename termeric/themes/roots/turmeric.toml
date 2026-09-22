@@ -4,23 +4,23 @@ author = "Termeric"
 description = "Colors inspired by the turmeric root — skin, flesh, and leaves"
 
 [primary]
-black = "#1C1410"   # Deep brown-black (dried skin)
-red = "#C75646"     # Earthy red
-green = "#5D8C4A"   # Turmeric leaf green
-yellow = "#C9A227"  # Earthy yellow (inner layer)
-blue = "#6B8E9B"    # Muted teal
-magenta = "#A67B8A" # Dusty rose
-cyan = "#4A8C7B"    # Leaf green-cyan
+black = "#302520"   # Deep brown-black (dried skin), lifted off the background
+red = "#C85848"     # Earthy red, lifted for contrast
+green = "#5A9442"   # Turmeric leaf green, richer so it reads as green
+yellow = "#C29F2E"  # Earthy yellow (inner layer), softened
+blue = "#5483B2"    # Blue tinted toward muted teal
+magenta = "#BA6789" # Dusty rose, richer so it reads as magenta
+cyan = "#42947F"    # Leaf green-cyan, richer so it reads as cyan
 white = "#D4C4A8"   # Cream/tan (turmeric skin)
 
 [bright]
-black = "#3D3028"   # Lighter brown
-red = "#E07B5F"     # Warm coral
-green = "#7CB86A"   # Bright leaf green
-yellow = "#E8A838"  # Bright orange-yellow (turmeric core)
-blue = "#8BB0C0"    # Lighter teal
-magenta = "#C899A8" # Light dusty rose
-cyan = "#6BB89E"    # Bright leaf green
+black = "#7E6454"   # Lighter brown, lifted for readable dim text
+red = "#DB7A76"     # Bright red tinted toward warm coral
+green = "#7ABB67"   # Bright leaf green, lifted for contrast
+yellow = "#D0A250"  # Bright orange-yellow (turmeric core), softened
+blue = "#83A5C8"    # Bright blue tinted toward lighter teal
+magenta = "#CE93B1" # Light dusty rose, nudged apart from neighbouring hues
+cyan = "#68BBAD"    # Bright cyan tinted toward bright leaf green
 white = "#F5EBD9"   # Light cream
 
 [ui]
