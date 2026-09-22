@@ -570,13 +570,14 @@ conversion or automatic claim that glyph metrics match.
 
 On the chosen isolated X11 display, this is a starting point based on the
 previously calibrated 100×30 / 901×601 geometry, now explicitly requesting
-the installed Noto Sans Mono family:
+the installed Noto Sans Mono family. That calibration used a 14.67 logical-pixel
+Termeric override, which is 11 points now that Termeric's size is in points:
 
 ```bash
 python3 scripts/compare_terminals.py \
   --terminal termeric --terminal kitty \
   --font-family 'Noto Sans Mono' \
-  --font-size 11 --termeric-font-size 14.67 --termeric-line-height 1.3 \
+  --font-size 11 --termeric-line-height 1.3 \
   --window-width 901 --window-height 601 \
   --samples 1 --warmups 0 \
   --output target/terminal-comparison/calibration.json

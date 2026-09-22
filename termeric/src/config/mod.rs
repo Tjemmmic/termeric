@@ -925,7 +925,7 @@ impl Default for FontConfig {
     fn default() -> Self {
         Self {
             family: "monospace".to_string(),
-            size: 14.0,
+            size: 12.0,
             weight: DEFAULT_FONT_WEIGHT,
             bold_weight: DEFAULT_BOLD_FONT_WEIGHT,
             line_height: 1.2,

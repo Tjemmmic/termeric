@@ -2778,17 +2778,17 @@ mod tests {
         let config = Config::default();
         let registry = default_registry();
 
-        // Font size is first selectable entry (selected = 0), default 14.0.
+        // Font size is first selectable entry (selected = 0), default 12.0.
         // Right on a Numeric adjusts (Right on a Dropdown would open it).
         let action = panel.handle_key(SettingsKey::Right, &config, &registry);
         match action {
-            SettingsAction::SetFontSize(size) => assert_eq!(size, 15.0),
+            SettingsAction::SetFontSize(size) => assert_eq!(size, 13.0),
             _ => panic!("Expected SetFontSize"),
         }
 
         let action = panel.handle_key(SettingsKey::Left, &config, &registry);
         match action {
-            SettingsAction::SetFontSize(size) => assert_eq!(size, 13.0),
+            SettingsAction::SetFontSize(size) => assert_eq!(size, 11.0),
             _ => panic!("Expected SetFontSize"),
         }
     }
@@ -3316,7 +3316,7 @@ mod tests {
             10.0,
             20.0,
         );
-        assert!(matches!(decrease, SettingsAction::SetFontSize(13.0)));
+        assert!(matches!(decrease, SettingsAction::SetFontSize(11.0)));
 
         let increase = panel.handle_click(
             layout.numeric_increment_x(value_char_count) + layout.cell_width * 0.5,
@@ -3328,7 +3328,7 @@ mod tests {
             10.0,
             20.0,
         );
-        assert!(matches!(increase, SettingsAction::SetFontSize(15.0)));
+        assert!(matches!(increase, SettingsAction::SetFontSize(13.0)));
 
         let value_click = panel.handle_click(
             layout.value_text_x() + layout.cell_width * 0.5,

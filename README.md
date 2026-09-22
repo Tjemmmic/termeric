@@ -97,7 +97,7 @@ Termeric reads `~/.config/termeric/config.toml`. A starter config lives in [`ass
 ```toml
 [font]
 family = "monospace"
-size   = 14.0
+size   = 12.0 # points
 weight = 400
 bold_weight = 700
 fallback = ["Noto Sans Mono", "Noto Color Emoji"] # ordered, up to 16
