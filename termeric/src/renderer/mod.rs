@@ -1113,12 +1113,6 @@ impl Renderer {
         self.visible_text_blink
     }
 
-    /// Clear the glyph cache (e.g., after font changes)
-    pub fn clear_glyph_cache(&mut self) {
-        self.invalidate_terminal_rows();
-        self.glyph_cache.clear(&self.queue);
-    }
-
     /// Get current padding
     pub fn padding(&self) -> f32 {
         self.padding

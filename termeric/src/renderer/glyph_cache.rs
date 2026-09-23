@@ -1348,6 +1348,7 @@ impl GlyphCache {
     }
 
     /// Clear the glyph cache, resetting atlas and entries.
+    #[cfg(test)]
     pub fn clear(&mut self, queue: &Queue) {
         self.clear_atlas(queue);
     }

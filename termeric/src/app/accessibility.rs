@@ -3523,7 +3523,7 @@ impl App {
         {
             let mut node = Node::new(Role::ListBoxOption);
             node.set_label(entry.title.clone());
-            let mut description = format!("{} command", entry.category);
+            let mut description = format!("{} {}", entry.category, info.item_noun);
             if entry.destructive {
                 description.push_str(", destructive");
             }
@@ -3557,13 +3557,13 @@ impl App {
         let mut dialog_children = vec![PALETTE_INPUT, PALETTE_LIST];
         if visible_entries.is_empty() {
             let mut empty = Node::new(Role::Status);
-            empty.set_label("No matching commands");
+            empty.set_label(format!("No matching {}s", info.item_noun));
             empty.set_live(Live::Polite);
             nodes.push((PALETTE_EMPTY, empty));
             dialog_children.push(PALETTE_EMPTY);
         }
         let mut dialog = Node::new(Role::Dialog);
-        dialog.set_label("Command palette");
+        dialog.set_label(info.dialog_label);
         dialog.set_modal();
         dialog.set_bounds(rect(
             layout.panel_x,

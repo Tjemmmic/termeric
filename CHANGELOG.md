@@ -1106,6 +1106,15 @@ Versioning once public beta tags begin.
 
 ### Changed
 
+- The 26 "Theme: …" command palette entries are replaced by one **Change
+  Theme…** picker. It lists every built-in and custom theme by origin
+  (Termeric, Guest, Custom), starts on the current theme, previews the
+  highlighted theme across the whole window, saves the chosen one on Enter,
+  and restores the original on Escape. It runs on a new palette quick-pick mode
+  that reuses the palette's keyboard, pointer, IME, and accessibility paths.
+  Switching themes no longer discards the glyph atlas, since glyphs are tinted
+  per vertex.
+
 - Command palette content is tidier: commands are listed alphabetically after
   recently used ones instead of by category; Show Version (a subset of About)
   and the core Export Session (a duplicate of each AI plugin's export) are

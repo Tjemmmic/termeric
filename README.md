@@ -279,8 +279,10 @@ See the [third-party plugin API and security model](docs/plugins.md).
 
 Bundled themes live under [`termeric/themes/`](termeric/themes/). Put personal
 themes in `~/.config/termeric/themes/` (or point `[theme].path` at an explicit
-file) and they appear in both theme pickers, survive restart, and reload when
-the active file changes. A malformed edit keeps the last valid colors active
+file) and they appear in Settings and in **Change Theme…**, survive restart, and
+reload when the active file changes. **Change Theme…** in the command palette
+previews each theme as you move through the list; Enter keeps it and Escape
+restores the previous one. A malformed edit keeps the last valid colors active
 and reports the file error in-app.
 
 The built-in Codex integration is tested against `codex-cli 0.137.0`. Its

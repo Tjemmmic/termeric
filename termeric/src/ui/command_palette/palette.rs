@@ -69,8 +69,34 @@ pub enum PaletteResult {
     RunAction(String),
     /// Run a plugin command by ID
     RunPluginCommand(String),
+    /// An entry of an active quick pick was chosen.
+    Picked { kind: PickKind, id: String },
     /// No-op (cancelled)
     Cancelled,
+}
+
+/// Temporary lists the palette can show in place of its commands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PickKind {
+    Theme,
+}
+
+impl PickKind {
+    fn dialog_label(self) -> &'static str {
+        match self {
+            Self::Theme => "Choose theme",
+        }
+    }
+}
+
+/// A list shown instead of the registered commands until it is picked from
+/// or cancelled. Registry updates keep applying underneath it.
+#[derive(Clone, Debug)]
+struct QuickPick {
+    kind: PickKind,
+    items: Vec<RegisteredCommand>,
+    placeholder: String,
+    item_noun: String,
 }
 
 /// Geometry for the centered command palette modal — single source of truth
@@ -195,6 +221,8 @@ pub struct PaletteInfo {
     pub item_noun: String,
     /// Whether rows show their category as right-aligned detail text.
     pub show_category: bool,
+    /// Accessible name of the palette dialog.
+    pub dialog_label: &'static str,
 }
 
 /// Display info for a single palette entry
@@ -231,6 +259,7 @@ pub struct CommandPalette {
     placeholder: String,
     item_noun: String,
     show_category: bool,
+    pick: Option<QuickPick>,
 }
 
 impl CommandPalette {
@@ -248,6 +277,7 @@ impl CommandPalette {
             placeholder: "Search commands…".into(),
             item_noun: "command".into(),
             show_category: true,
+            pick: None,
         }
     }
 
@@ -272,11 +302,7 @@ impl CommandPalette {
             self.registry.retain(|c| &c.source != source);
         }
         self.registry.extend(commands);
-        // Titles are what the palette shows, so an empty query lists them
-        // alphabetically (after recently used commands) across all sources.
-        // The sort is stable, so equal titles keep their registration order.
-        self.registry
-            .sort_by_cached_key(|command| command.title.to_lowercase());
+        self.sort_registry();
     }
 
     /// Replace the complete registry for a dedicated palette instance.
@@ -311,16 +337,20 @@ impl CommandPalette {
         self.scroll_offset = 0;
     }
 
-    /// Replace every plugin-owned command while preserving core/theme entries.
+    /// Titles are what the palette shows, so an empty query lists them
+    /// alphabetically (after recently used commands) across all sources.
+    /// The sort is stable, so equal titles keep their registration order.
+    fn sort_registry(&mut self) {
+        self.registry
+            .sort_by_cached_key(|command| command.title.to_lowercase());
+    }
+
+    /// Replace every plugin-owned command while preserving core entries.
     pub fn replace_plugin_commands(&mut self, commands: Vec<RegisteredCommand>) {
         self.registry
             .retain(|command| !matches!(command.source, CommandSource::Plugin(_)));
         self.registry.extend(commands);
-        self.registry.sort_by(|a, b| {
-            a.category
-                .cmp(&b.category)
-                .then_with(|| a.title.cmp(&b.title))
-        });
+        self.sort_registry();
         if self.animation.is_active() {
             self.update_entries();
         }
@@ -331,11 +361,7 @@ impl CommandPalette {
         self.registry
             .retain(|command| command.source != CommandSource::LaunchProfiles);
         self.registry.extend(commands);
-        self.registry.sort_by(|a, b| {
-            a.category
-                .cmp(&b.category)
-                .then_with(|| a.title.cmp(&b.title))
-        });
+        self.sort_registry();
         if self.animation.is_active() {
             self.update_entries();
         }
@@ -343,6 +369,7 @@ impl CommandPalette {
 
     /// Open the palette
     pub fn open(&mut self) {
+        self.pick = None;
         self.input.clear();
         self.selected = 0;
         self.scroll_offset = 0;
@@ -352,7 +379,56 @@ impl CommandPalette {
 
     /// Close the palette immediately (no close animation).
     pub fn close(&mut self) {
+        self.pick = None;
         self.animation.close_immediately();
+    }
+
+    /// Show `items` instead of the registered commands, opening the palette
+    /// if needed and selecting `selected` when it is listed.
+    pub fn begin_pick(
+        &mut self,
+        kind: PickKind,
+        items: Vec<RegisteredCommand>,
+        placeholder: &str,
+        item_noun: &str,
+        selected: Option<&str>,
+    ) {
+        self.pick = Some(QuickPick {
+            kind,
+            items,
+            placeholder: placeholder.into(),
+            item_noun: item_noun.into(),
+        });
+        self.input.clear();
+        self.selected = 0;
+        self.scroll_offset = 0;
+        if !self.animation.is_active() {
+            self.animation.open();
+        }
+        self.update_entries();
+        if let Some(id) = selected {
+            self.select_command(id);
+        }
+    }
+
+    /// The quick pick currently shown, if any.
+    pub fn active_pick(&self) -> Option<PickKind> {
+        self.pick.as_ref().map(|pick| pick.kind)
+    }
+
+    /// Identifier of the selected row.
+    pub fn highlighted_id(&self) -> Option<&str> {
+        let entry = self.entries.get(self.selected)?;
+        self.items()
+            .get(entry.registry_index)
+            .map(|item| item.id.as_str())
+    }
+
+    /// The list rows are drawn from: the active pick, or the commands.
+    fn items(&self) -> &[RegisteredCommand] {
+        self.pick
+            .as_ref()
+            .map_or(self.registry.as_slice(), |pick| pick.items.as_slice())
     }
 
     /// Check if palette is active
@@ -360,11 +436,11 @@ impl CommandPalette {
         self.animation.is_active()
     }
 
-    /// Stable identifiers in the current registry. Accessibility uses this
-    /// borrowed view to retire removed command nodes without cloning the whole
-    /// registry into every renderer snapshot.
+    /// Stable identifiers of the listed items: the active quick pick, or the
+    /// registry. Accessibility uses this borrowed view to retire removed
+    /// nodes without cloning the list into every renderer snapshot.
     pub fn command_ids(&self) -> impl Iterator<Item = &str> {
-        self.registry.iter().map(|command| command.id.as_str())
+        self.items().iter().map(|command| command.id.as_str())
     }
 
     /// Keep keyboard selection and wheel scrolling aligned with the rows the
@@ -524,6 +600,15 @@ impl CommandPalette {
 
     /// Execute the currently selected command
     pub fn execute(&mut self) -> PaletteResult {
+        if let Some(pick) = &self.pick {
+            let kind = pick.kind;
+            let id = self.highlighted_id().map(str::to_owned);
+            self.close();
+            return id.map_or(PaletteResult::Cancelled, |id| PaletteResult::Picked {
+                kind,
+                id,
+            });
+        }
         if let Some(entry) = self.entries.get(self.selected) {
             let cmd = &self.registry[entry.registry_index];
             let id = cmd.id.clone();
@@ -552,8 +637,9 @@ impl CommandPalette {
     /// the announced command rather than to a row that can change after a
     /// filter or registry update.
     pub fn select_command(&mut self, id: &str) -> bool {
+        let items = self.items();
         let Some(index) = self.entries.iter().position(|entry| {
-            self.registry
+            items
                 .get(entry.registry_index)
                 .is_some_and(|command| command.id == id)
         }) else {
@@ -578,10 +664,11 @@ impl CommandPalette {
         let visible_start = self.scroll_offset;
         let visible_end = (self.scroll_offset + self.max_visible).min(self.entries.len());
 
+        let items = self.items();
         let entries = self.entries[visible_start..visible_end]
             .iter()
             .map(|e| {
-                let cmd = &self.registry[e.registry_index];
+                let cmd = &items[e.registry_index];
                 PaletteEntryInfo {
                     id: cmd.id.clone(),
                     title: cmd.title.clone(),
@@ -601,12 +688,22 @@ impl CommandPalette {
             entries,
             selected: self.selected.saturating_sub(self.scroll_offset),
             scroll_offset: self.scroll_offset,
-            total_count: self.registry.len(),
+            total_count: items.len(),
             total_entries: self.entries.len(),
             animation: self.animation.eased(),
-            placeholder: self.placeholder.clone(),
-            item_noun: self.item_noun.clone(),
-            show_category: self.show_category,
+            placeholder: self
+                .pick
+                .as_ref()
+                .map_or_else(|| self.placeholder.clone(), |pick| pick.placeholder.clone()),
+            item_noun: self
+                .pick
+                .as_ref()
+                .map_or_else(|| self.item_noun.clone(), |pick| pick.item_noun.clone()),
+            show_category: self.show_category || self.pick.is_some(),
+            dialog_label: self
+                .pick
+                .as_ref()
+                .map_or("Command palette", |pick| pick.kind.dialog_label()),
         }
     }
 
@@ -616,15 +713,15 @@ impl CommandPalette {
 
         if self.input.text().is_empty() {
             // Show all commands, recently used first
+            let recency = self.pick.is_none();
             let mut scored: Vec<PaletteEntry> = self
-                .registry
+                .items()
                 .iter()
                 .enumerate()
                 .map(|(i, cmd)| {
-                    let recency_bonus = self
-                        .recently_used
-                        .iter()
-                        .position(|r| r == &cmd.id)
+                    let recency_bonus = recency
+                        .then(|| self.recently_used.iter().position(|r| r == &cmd.id))
+                        .flatten()
                         .map(|pos| 1_000_000 - (pos as i64 * 10_000))
                         .unwrap_or(0);
                     PaletteEntry {
@@ -640,7 +737,7 @@ impl CommandPalette {
             let query = self.input.text();
 
             let mut scored: Vec<PaletteEntry> = self
-                .registry
+                .items()
                 .iter()
                 .enumerate()
                 .filter_map(|(i, cmd)| {
@@ -1220,39 +1317,21 @@ pub fn core_commands(
         });
     }
 
-    // ── Theme commands — generated dynamically from all available themes ──
-    for name in crate::config::theme::Theme::list_available() {
-        let display = theme_display_name(name);
-        commands.push(RegisteredCommand {
-            id: format!("core.theme.{}", name),
-            title: format!("Theme: {}", display),
-            category: "Theme".into(),
-            shortcut: None,
-            icon: None,
-            source: CommandSource::Core,
-            destructive: false,
-        });
-    }
-
-    // ── Custom themes from user's themes directory ──
-    for name in crate::config::theme::Theme::list_custom() {
-        let display = theme_display_name(&name);
-        commands.push(RegisteredCommand {
-            id: format!("core.theme.{}", name),
-            title: format!("Theme: {} (Custom)", display),
-            category: "Theme".into(),
-            shortcut: None,
-            icon: None,
-            source: CommandSource::Core,
-            destructive: false,
-        });
-    }
+    commands.push(RegisteredCommand {
+        id: "core.change-theme".into(),
+        title: "Change Theme…".into(),
+        category: "Appearance".into(),
+        shortcut: None,
+        icon: None,
+        source: CommandSource::Core,
+        destructive: false,
+    });
 
     commands
 }
 
 /// Convert a theme slug (e.g., "catppuccin-mocha") to display name ("Catppuccin Mocha")
-fn theme_display_name(slug: &str) -> String {
+pub fn theme_display_name(slug: &str) -> String {
     slug.split('-')
         .map(|word| {
             let mut chars = word.chars();

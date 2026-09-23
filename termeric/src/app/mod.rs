@@ -37,6 +37,7 @@ mod system_accessibility;
 mod tab_drag;
 #[cfg(test)]
 mod tests;
+mod theme_picker;
 mod transcripts;
 mod unicode_picker;
 mod workspace_actions;
@@ -1170,6 +1171,8 @@ pub struct App {
     keybinding_manager: KeyBindingManager,
     /// Application runtime state (for first boot tracking, etc.)
     app_state: AppState,
+    /// The theme in effect while "Change Theme…" previews others.
+    theme_preview: Option<theme_picker::ThemePreview>,
     /// The toolbar Workspaces menu while it is open.
     workspace_menu:
         Option<crate::ui::popup_menu::PopupMenu<crate::ui::workspace_menu::WorkspaceMenuAction>>,
@@ -1425,6 +1428,7 @@ impl App {
                 AppState::default()
             },
             workspace_menu: None,
+            theme_preview: None,
             session_panel: crate::session::panel::SessionPanel::new(),
             commands_panel: crate::ui::commands::panel::CommandsPanel::new(),
             input_line_buffer: String::new(),
@@ -2104,6 +2108,9 @@ impl App {
         let ime_preedit_info = self.ime_preedit_render_info(&pane_info);
         let chrome_focus_target = self.chrome_focus_render_target();
         let broadcast_render = self.broadcast_render_targets();
+        // Before the frame borrows the renderer: a picker preview may change
+        // the theme it draws with.
+        self.sync_theme_preview();
         let workspace_menu_info = self.workspace_menu_render_info();
 
         let Some(renderer) = &mut self.renderer else {
@@ -3627,6 +3634,10 @@ impl App {
     /// Handle the result of executing a command from the palette
     fn handle_palette_result(&mut self, result: PaletteResult) {
         match result {
+            PaletteResult::Picked {
+                kind: crate::ui::command_palette::palette::PickKind::Theme,
+                id,
+            } => self.commit_theme(&id),
             PaletteResult::RunAction(id) => {
                 if let Some(value) = id.strip_prefix("plugin-pane.") {
                     self.open_plugin_pane_command(value);
@@ -3851,32 +3862,8 @@ impl App {
                         self.navigate_focused_pane(crate::panes::PaneDir::Right);
                         return;
                     }
-                    id if id.starts_with("core.theme.") => {
-                        let theme_name = id.strip_prefix("core.theme.").unwrap_or("");
-                        match Theme::resolve(theme_name, None) {
-                            Ok((theme, source)) => {
-                                self.config.theme.name = theme_name.to_string();
-                                self.config.theme.path = None;
-                                self.apply_theme(theme, source);
-                                match self.save_config() {
-                                    Ok(msg) => {
-                                        log::info!("Theme changed to {}: {}", theme_name, msg);
-                                        self.toasts.info(format!("Theme: {}", theme_name));
-                                    }
-                                    Err(e) => {
-                                        log::error!("Theme applied but save failed: {}", e);
-                                        self.toasts.warning(format!(
-                                            "Theme '{}' applied but not saved: {}",
-                                            theme_name, e
-                                        ));
-                                    }
-                                }
-                            }
-                            Err(err) => {
-                                self.toasts
-                                    .error(format!("Theme '{}' failed: {}", theme_name, err));
-                            }
-                        }
+                    "core.change-theme" => {
+                        self.open_theme_picker();
                         return;
                     }
                     _ => {

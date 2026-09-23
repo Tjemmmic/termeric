@@ -718,10 +718,10 @@ impl App {
                 .ok()
         });
         self.active_theme_path = source;
+        // Glyphs are coverage masks tinted per vertex, so only the colors
+        // change; the atlas stays valid and previews switch without stalls.
         if let Some(renderer) = &mut self.renderer {
             renderer.set_theme(&self.theme);
-            // Clear glyph cache so text is re-rasterized with new colors
-            renderer.clear_glyph_cache();
         }
         if let Some(window) = &self.window {
             window.request_redraw();
