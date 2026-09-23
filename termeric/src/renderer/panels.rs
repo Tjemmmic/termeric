@@ -480,7 +480,7 @@ impl Renderer {
         window_width: f32,
         window_height: f32,
     ) {
-        use crate::session::panel::{SessionPanelControl, SessionPanelLayout, SessionPanelRect};
+        use crate::session::panel::{SessionPanelControl, SessionPanelLayout};
 
         let anim = info.animation;
         if anim <= 0.0 {
@@ -505,7 +505,6 @@ impl Renderer {
         let size = self.ui_label_px();
         let text = self.ui.menu_text;
         let dim = self.ui.menu_text_dim;
-        let stroke = (1.5 * scale).max(1.0);
 
         self.build_side_panel_frame(panel, anim);
 
@@ -717,26 +716,10 @@ impl Renderer {
                 size,
                 link_color,
             );
-            let chevron = SessionPanelRect {
-                x: link.x + link.width - padding_x * 1.5,
-                ..link
-            };
-            let (cx, cy) = (chevron.x, chevron.y + chevron.height / 2.0);
-            let arm = 4.0 * scale;
-            self.rect_pipeline.push_line(
-                cx - arm * 0.5,
-                cy - arm,
-                cx + arm * 0.5,
-                cy,
-                stroke,
-                link_color,
-            );
-            self.rect_pipeline.push_line(
-                cx + arm * 0.5,
-                cy,
-                cx - arm * 0.5,
-                cy + arm,
-                stroke,
+            self.push_icon(
+                Icon::ChevronRight,
+                link.x + link.width - padding_x * 1.5,
+                link.y + link.height / 2.0,
                 link_color,
             );
         }
