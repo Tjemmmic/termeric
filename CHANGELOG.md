@@ -1106,6 +1106,14 @@ Versioning once public beta tags begin.
 
 ### Changed
 
+- Command palette content is tidier: commands are listed alphabetically after
+  recently used ones instead of by category; Show Version (a subset of About)
+  and the core Export Session (a duplicate of each AI plugin's export) are
+  removed; titles use a real ellipsis; Workspace Manager is Manage Workspaces…;
+  and plugin pane commands read like the core splits ("Split Right with Claude
+  Code", "Split Down with Codex (review profile)"). About now links the actual
+  repository and drops its implementation note.
+
 - The command palette and the host and Unicode pickers built on it are
   restyled: rows use the UI face with measured ellipsis and proportional match
   highlighting, the selected row is a quiet rounded highlight, shortcuts are

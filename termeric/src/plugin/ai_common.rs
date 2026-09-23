@@ -93,7 +93,7 @@ pub fn standard_ai_commands(prefix: &str, display_name: &str) -> Vec<PluginComma
         },
         PluginCommand {
             id: format!("{}.insert-context", prefix),
-            name: format!("{}: Insert Context...", display_name),
+            name: format!("{}: Insert Context…", display_name),
             description: format!(
                 "Open context picker to assemble and inject context into {}",
                 display_name

@@ -3743,34 +3743,8 @@ impl App {
                     "core.font-size-reset" => Action::ResetFontSize,
                     "core.copy" => Action::Copy,
                     "core.paste" => Action::Paste,
-                    "core.version" => {
-                        self.info_overlay.show_version();
-                        return;
-                    }
                     "core.about" => {
                         self.info_overlay.show_about();
-                        return;
-                    }
-                    "core.export-session" => {
-                        // Export the active plugin tab's transcript
-                        let plugin_id = self
-                            .tabs
-                            .as_ref()
-                            .and_then(|tabs| tabs.active_tab())
-                            .and_then(|tab| {
-                                if let crate::tabs::TabType::Plugin { plugin_id } = &tab.tab_type {
-                                    Some(plugin_id.clone())
-                                } else {
-                                    None
-                                }
-                            });
-                        if let Some(id) = plugin_id {
-                            self.export_plugin_session(&id);
-                        } else {
-                            log::info!("No plugin tab active for export");
-                            self.toasts
-                                .warning("Activate an AI plugin tab before exporting");
-                        }
                         return;
                     }
                     "core.harvest-cellar" => {

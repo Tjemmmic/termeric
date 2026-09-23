@@ -113,7 +113,8 @@ local launch and archive behavior, not provider readiness or native appearance.
 
 ## User workflow
 
-Use **Save Workspace** and **Workspace Manager** in the command palette. The
+Use **Save Workspace** and **Manage Workspaces…** in the command palette or the
+toolbar Workspaces menu. The
 manager lists archives and provides Load, Rename, and Delete controls. Rename is
 an inline text field: Enter submits and Escape cancels. The existing `[session]`
 configuration keys retain their names for compatibility; `auto_save` now saves

@@ -17,17 +17,15 @@ impl App {
             }
             profiles.sort();
             for profile in std::iter::once(None).chain(profiles.iter().map(Some)) {
-                for (direction, placement) in [("vertical", "Right"), ("horizontal", "Below")] {
-                    let selection = profile.map_or_else(
-                        || "Automatic profile".into(),
-                        |name| format!("Profile: {name}"),
-                    );
+                for (direction, placement) in [("vertical", "Right"), ("horizontal", "Down")] {
+                    let selection =
+                        profile.map_or_else(String::new, |name| format!(" ({name} profile)"));
                     commands.push(RegisteredCommand {
                         id: format!(
                             "plugin-pane.{direction}.{id}.{}",
                             profile.map_or("", String::as_str)
                         ),
-                        title: format!("New {name} Pane ({placement}) — {selection}"),
+                        title: format!("Split {placement} with {name}{selection}"),
                         category: "Plugin Panes".into(),
                         shortcut: None,
                         icon: None,

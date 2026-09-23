@@ -271,15 +271,12 @@ impl InfoOverlay {
                 format!("Version {}", env!("CARGO_PKG_VERSION")),
                 String::new(),
                 "A GPU-accelerated terminal emulator".into(),
-                "Built with wgpu + winit".into(),
                 String::new(),
-                "github.com/termeric-terminal/termeric".into(),
+                env!("CARGO_PKG_REPOSITORY")
+                    .trim_start_matches("https://")
+                    .into(),
             ],
         )
-    }
-
-    pub fn show_version(&mut self) -> u64 {
-        self.show("Termeric", vec![format!("v{}", env!("CARGO_PKG_VERSION"))])
     }
 
     pub fn show(&mut self, title: impl Into<String>, lines: Vec<String>) -> u64 {

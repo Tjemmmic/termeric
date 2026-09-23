@@ -2022,7 +2022,7 @@ impl App {
         {
             self.toggle_terminal_transcript(identity);
         } else {
-            self.toasts.warning("No active plugin terminal");
+            self.toasts.warning("No active terminal");
         }
     }
 

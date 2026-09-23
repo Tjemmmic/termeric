@@ -1,9 +1,11 @@
 # Explicit plugin panes
 
-The command palette includes **New Codex Pane**, **New Claude Code Pane**, and
-equivalent commands for enabled, registered declarative plugins with launch
-profiles. Choose **Right** (vertical divider) or **Below** (horizontal divider),
-then the command for **Automatic profile** or an explicit **Profile: NAME**.
+The command palette includes **Split Right with Codex**, **Split Down with
+Claude Code**, and equivalent commands for enabled, registered declarative
+plugins with launch profiles. **Right** adds a vertical divider and **Down** a
+horizontal one. The plain command uses the automatic profile; each named
+profile has its own command, such as **Split Right with Codex (review
+profile)**.
 These commands start a fresh process; they do not resume a provider conversation.
 Existing New Tab/Open/Resume commands retain their existing behavior.
 

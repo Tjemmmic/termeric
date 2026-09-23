@@ -272,12 +272,11 @@ impl CommandPalette {
             self.registry.retain(|c| &c.source != source);
         }
         self.registry.extend(commands);
-        // Re-sort by visible category/title across core, profile, and plugin sources.
-        self.registry.sort_by(|a, b| {
-            a.category
-                .cmp(&b.category)
-                .then_with(|| a.title.cmp(&b.title))
-        });
+        // Titles are what the palette shows, so an empty query lists them
+        // alphabetically (after recently used commands) across all sources.
+        // The sort is stable, so equal titles keep their registration order.
+        self.registry
+            .sort_by_cached_key(|command| command.title.to_lowercase());
     }
 
     /// Replace the complete registry for a dedicated palette instance.
@@ -742,7 +741,7 @@ pub fn core_commands(
         },
         RegisteredCommand {
             id: "core.attach-domain".into(),
-            title: "Attach Live Domain...".into(),
+            title: "Attach Live Domain…".into(),
             category: "Core".into(),
             shortcut: None,
             icon: None,
@@ -824,7 +823,7 @@ pub fn core_commands(
         },
         RegisteredCommand {
             id: "core.unicode-picker".into(),
-            title: "Insert Unicode Character...".into(),
+            title: "Insert Unicode Character…".into(),
             category: "Search".into(),
             shortcut: shortcut(BindableAction::OpenUnicodePicker),
             icon: None,
@@ -889,7 +888,7 @@ pub fn core_commands(
         },
         RegisteredCommand {
             id: "core.workspace-manager".into(),
-            title: "Workspace Manager".into(),
+            title: "Manage Workspaces…".into(),
             category: "Workspaces".into(),
             shortcut: None,
             icon: None,
@@ -926,15 +925,6 @@ pub fn core_commands(
             destructive: false,
         },
         // ── Help ──
-        RegisteredCommand {
-            id: "core.version".into(),
-            title: "Show Version".into(),
-            category: "Help".into(),
-            shortcut: None,
-            icon: None,
-            source: CommandSource::Core,
-            destructive: false,
-        },
         RegisteredCommand {
             id: "core.about".into(),
             title: "About Termeric".into(),
@@ -973,15 +963,6 @@ pub fn core_commands(
             destructive: false,
         },
         // ── Export ──
-        RegisteredCommand {
-            id: "core.export-session".into(),
-            title: "Export Session".into(),
-            category: "Sessions".into(),
-            shortcut: None,
-            icon: None,
-            source: CommandSource::Core,
-            destructive: false,
-        },
         // ── Copy/Paste ──
         RegisteredCommand {
             id: "core.copy".into(),
@@ -1462,7 +1443,7 @@ mod tests {
     fn live_domain_picker_is_discoverable() {
         let commands = core_commands(false, &ShortcutRegistry::new());
         assert!(commands.iter().any(|command| {
-            command.id == "core.attach-domain" && command.title == "Attach Live Domain..."
+            command.id == "core.attach-domain" && command.title == "Attach Live Domain…"
         }));
     }
 
@@ -1486,7 +1467,7 @@ mod tests {
         }));
         assert!(commands.iter().any(|command| {
             command.id == "core.workspace-manager"
-                && command.title == "Workspace Manager"
+                && command.title == "Manage Workspaces…"
                 && command.category == "Workspaces"
         }));
     }
