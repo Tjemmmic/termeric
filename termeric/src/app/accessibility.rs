@@ -32,6 +32,9 @@ const SETTINGS_INPUT: NodeId = NodeId(31);
 const SETTINGS_LIST: NodeId = NodeId(32);
 const SETTINGS_EMPTY: NodeId = NodeId(33);
 const SETTINGS_DROPDOWN: NodeId = NodeId(34);
+const SETTINGS_CLOSE: NodeId = NodeId(35);
+const SETTINGS_SAVE: NodeId = NodeId(36);
+const SETTINGS_PAGES: NodeId = NodeId(37);
 const COMMANDS_DIALOG: NodeId = NodeId(40);
 const COMMANDS_NEW: NodeId = NodeId(41);
 const COMMANDS_CLOSE: NodeId = NodeId(42);
@@ -114,6 +117,7 @@ const WORKSPACE_MENU_ENTRY_BASE: u64 = 1 << 47;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum SettingsSemanticTarget {
+    Page(crate::ui::settings::SettingsPage),
     Header(crate::ui::settings::SettingsSection),
     Setting {
         section: crate::ui::settings::SettingsSection,
@@ -382,7 +386,14 @@ impl AccessibilityState {
     fn is_settings_node(&self, node: NodeId) -> bool {
         matches!(
             node,
-            SETTINGS_DIALOG | SETTINGS_INPUT | SETTINGS_LIST | SETTINGS_EMPTY | SETTINGS_DROPDOWN
+            SETTINGS_DIALOG
+                | SETTINGS_INPUT
+                | SETTINGS_LIST
+                | SETTINGS_EMPTY
+                | SETTINGS_DROPDOWN
+                | SETTINGS_CLOSE
+                | SETTINGS_SAVE
+                | SETTINGS_PAGES
         ) || self.settings_targets.contains_key(&node)
     }
 
@@ -1831,6 +1842,22 @@ impl App {
             }
             return;
         }
+        if matches!(request.target_node, SETTINGS_CLOSE | SETTINGS_SAVE) {
+            match request.action {
+                Action::Focus => self.accessibility.focus_override = Some(request.target_node),
+                Action::Click if request.target_node == SETTINGS_CLOSE => {
+                    self.settings_panel.close();
+                    self.accessibility.focus_override = None;
+                }
+                Action::Click => {
+                    self.apply_settings_action(crate::ui::settings::SettingsAction::SaveConfig);
+                }
+                _ => {}
+            }
+            self.redraw_scheduler
+                .request(redraw_scheduler::RedrawReason::Accessibility);
+            return;
+        }
         let Some(target) = self
             .accessibility
             .settings_targets
@@ -1844,6 +1871,16 @@ impl App {
 
         use crate::ui::settings::SettingsAction;
         match target {
+            SettingsSemanticTarget::Page(page) => match request.action {
+                Action::Click => {
+                    self.settings_panel.select_page(page);
+                    self.accessibility.focus_override = Some(request.target_node);
+                    self.redraw_scheduler
+                        .request(redraw_scheduler::RedrawReason::Accessibility);
+                }
+                Action::Focus => self.accessibility.focus_override = Some(request.target_node),
+                _ => {}
+            },
             SettingsSemanticTarget::Header(_) => {}
             SettingsSemanticTarget::Setting { section, label } => match request.action {
                 Action::Focus => {
@@ -4874,6 +4911,7 @@ impl App {
         info = self
             .settings_panel
             .build_info(&self.config, &self.shortcut_registry);
+        info.unsaved = self.config_has_unsaved_changes();
         layout = self.settings_accessibility_layout(&info);
         let end = (info.scroll_offset + layout.visible_count).min(info.entries.len());
         let visible_entries = &info.entries[info.scroll_offset..end];
@@ -4885,8 +4923,8 @@ impl App {
         root.set_children([SETTINGS_DIALOG]);
 
         let mut input = Node::new(Role::SearchInput);
-        input.set_label("Filter settings");
-        input.set_placeholder("Filter settings...");
+        input.set_label("Search settings");
+        input.set_placeholder("Search settings");
         input.set_value(info.filter.clone());
         input.set_character_lengths(
             info.filter
@@ -4942,12 +4980,8 @@ impl App {
             };
             let node_id = self.accessibility.settings_node(target);
             list_children.push(node_id);
-            let bounds = rect(
-                layout.panel_x + layout.padding * 0.5,
-                layout.list_y + row as f32 * layout.row_height,
-                layout.panel_width - layout.padding,
-                layout.row_height,
-            );
+            let row_rect = layout.row_rect(row);
+            let bounds = rect(row_rect.x, row_rect.y, row_rect.width, row_rect.height);
 
             if entry.is_header {
                 let mut node = Node::new(Role::Heading);
@@ -5041,18 +5075,82 @@ impl App {
         nodes.push((SETTINGS_INPUT, input));
 
         let mut list = Node::new(Role::List);
-        list.set_label("Settings");
+        list.set_label(if info.filter.is_empty() {
+            info.page.label()
+        } else {
+            "Search results"
+        });
         list.set_orientation(accesskit::Orientation::Vertical);
+        let first_row = layout.row_rect(0);
         list.set_bounds(rect(
-            layout.panel_x + layout.padding * 0.5,
+            first_row.x,
             layout.list_y,
-            layout.panel_width - layout.padding,
+            first_row.width,
             layout.list_height,
         ));
         list.set_children(list_children);
         nodes.push((SETTINGS_LIST, list));
 
-        let mut dialog_children = vec![SETTINGS_INPUT, SETTINGS_LIST];
+        // Sidebar pages are tabs selecting what the list shows.
+        let mut page_ids = Vec::new();
+        for (index, page) in crate::ui::settings::SettingsPage::all().iter().enumerate() {
+            let id = self
+                .accessibility
+                .settings_node(SettingsSemanticTarget::Page(*page));
+            let bounds = layout.page_rect(index);
+            let mut tab = Node::new(Role::Tab);
+            tab.set_label(page.label());
+            tab.set_selected(info.filter.is_empty() && *page == info.page);
+            tab.set_controls([SETTINGS_LIST]);
+            tab.set_bounds(rect(bounds.x, bounds.y, bounds.width, bounds.height));
+            tab.add_action(Action::Click);
+            tab.add_action(Action::Focus);
+            nodes.push((id, tab));
+            page_ids.push(id);
+        }
+        let mut pages = Node::new(Role::TabList);
+        pages.set_label("Settings pages");
+        pages.set_orientation(accesskit::Orientation::Vertical);
+        pages.set_bounds(rect(
+            layout.sidebar.x,
+            layout.sidebar.y,
+            layout.sidebar.width,
+            layout.sidebar.height,
+        ));
+        pages.set_children(page_ids);
+        nodes.push((SETTINGS_PAGES, pages));
+
+        for (id, label, description, bounds) in [
+            (SETTINGS_CLOSE, "Close settings", None, layout.close_button),
+            (
+                SETTINGS_SAVE,
+                "Save settings",
+                Some(if info.unsaved {
+                    "There are unsaved changes"
+                } else {
+                    "Settings match the saved file"
+                }),
+                layout.save_button,
+            ),
+        ] {
+            let mut button = Node::new(Role::Button);
+            button.set_label(label);
+            if let Some(description) = description {
+                button.set_description(description);
+            }
+            button.set_bounds(rect(bounds.x, bounds.y, bounds.width, bounds.height));
+            button.add_action(Action::Click);
+            button.add_action(Action::Focus);
+            nodes.push((id, button));
+        }
+
+        let mut dialog_children = vec![
+            SETTINGS_INPUT,
+            SETTINGS_CLOSE,
+            SETTINGS_PAGES,
+            SETTINGS_LIST,
+            SETTINGS_SAVE,
+        ];
         if info.entries.is_empty() {
             let mut empty = Node::new(Role::Status);
             empty.set_label("No matching settings");
@@ -7081,10 +7179,11 @@ mod tests {
 
     #[test]
     fn settings_is_one_modal_tree_with_typed_controls_and_shared_geometry() {
-        use crate::ui::settings::SettingsSection;
+        use crate::ui::settings::{SettingsPage, SettingsSection};
 
         let mut app = App::new_headless(Config::default()).unwrap();
         app.settings_panel.toggle();
+        app.settings_panel.select_page(SettingsPage::Font);
         let info = app
             .settings_panel
             .build_info(&app.config, &app.shortcut_registry);
@@ -7105,7 +7204,17 @@ mod tests {
         assert_eq!(node(SETTINGS_INPUT).role(), Role::SearchInput);
         assert_eq!(node(SETTINGS_INPUT).controls(), &[SETTINGS_LIST]);
         assert_eq!(node(SETTINGS_LIST).role(), Role::List);
+        assert_eq!(node(SETTINGS_LIST).label(), Some("Font"));
         assert_eq!(snapshot.focus, SETTINGS_INPUT);
+        assert_eq!(node(SETTINGS_PAGES).role(), Role::TabList);
+        let pages = node(SETTINGS_PAGES).children();
+        assert_eq!(pages.len(), SettingsPage::all().len());
+        let font_tab =
+            app.accessibility.settings_nodes[&SettingsSemanticTarget::Page(SettingsPage::Font)];
+        assert_eq!(node(font_tab).role(), Role::Tab);
+        assert_eq!(node(font_tab).is_selected(), Some(true));
+        assert_eq!(node(SETTINGS_CLOSE).label(), Some("Close settings"));
+        assert_eq!(node(SETTINGS_SAVE).role(), Role::Button);
 
         let size = app
             .accessibility
@@ -7133,11 +7242,13 @@ mod tests {
         assert!(node(normal_weight).supports_action(Action::Increment));
         let actual = node(size).bounds().unwrap();
         let dialog = node(SETTINGS_DIALOG).bounds().unwrap();
+        // Size is the Font page's first row, in the content column.
+        let row = layout.row_rect(0);
         let expected = rect(
-            dialog.x0 as f32 + layout.padding * 0.5,
-            dialog.y0 as f32 + (layout.list_y - layout.panel_y) + layout.row_height,
-            layout.panel_width - layout.padding,
-            layout.row_height,
+            dialog.x0 as f32 + (row.x - layout.panel_x),
+            dialog.y0 as f32 + (row.y - layout.panel_y),
+            row.width,
+            row.height,
         );
         for (actual, expected) in [
             (actual.x0, expected.x0),
@@ -7248,6 +7359,8 @@ mod tests {
 
         let mut app = App::new_headless(Config::default()).unwrap();
         app.settings_panel.toggle();
+        app.settings_panel
+            .select_page(SettingsSection::Plugins.page());
         assert!(app.settings_panel.accessibility_focus_setting(
             SettingsSection::Plugins,
             "Manage Third-party Plugins",
@@ -7289,6 +7402,7 @@ mod tests {
 
         let mut app = App::new_headless(Config::default()).unwrap();
         app.settings_panel.toggle();
+        app.settings_panel.select_page(SettingsSection::Font.page());
         assert!(app.settings_panel.accessibility_focus_setting(
             SettingsSection::Font,
             "Range Overrides",
@@ -7382,6 +7496,7 @@ mod tests {
 
         let mut app = App::new_headless(Config::default()).unwrap();
         app.settings_panel.toggle();
+        app.settings_panel.select_page(SettingsSection::Font.page());
         assert!(app.settings_panel.accessibility_focus_setting(
             SettingsSection::Font,
             "OpenType Features",

@@ -345,8 +345,7 @@ mod tests {
         app.alt_graph_active = false;
         app.settings_panel
             .handle_key(SettingsKey::Escape, &app.config, &app.shortcut_registry);
-        app.settings_panel
-            .handle_key(SettingsKey::Down, &app.config, &app.shortcut_registry);
+        // Appearance's first row is the Theme dropdown.
         app.settings_panel
             .handle_key(SettingsKey::Right, &app.config, &app.shortcut_registry);
         assert!(app.settings_panel.is_dropdown_open());
@@ -399,5 +398,34 @@ mod tests {
                 .filter_cursor,
             4
         );
+    }
+
+    #[test]
+    fn settings_report_unsaved_changes_until_the_file_matches_again() {
+        use crate::ui::settings::SettingsAction;
+        let mut app = App::new_headless(Config::default()).unwrap();
+        assert!(!app.config_has_unsaved_changes());
+        let visual = app.config.bell.visual;
+        app.apply_settings_action(SettingsAction::SetVisualBell(!visual));
+        assert!(app.config_has_unsaved_changes());
+        app.apply_settings_action(SettingsAction::SetVisualBell(visual));
+        assert!(
+            !app.config_has_unsaved_changes(),
+            "undoing a change is clean"
+        );
+        app.apply_settings_action(SettingsAction::SetVisualBell(!visual));
+        // Saving or reloading records the file's contents as the baseline.
+        app.mark_config_saved();
+        assert!(!app.config_has_unsaved_changes());
+    }
+
+    #[test]
+    fn keyboard_page_hands_off_to_the_shortcuts_dialog() {
+        use crate::ui::settings::SettingsAction;
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.settings_panel.toggle();
+        app.apply_settings_action(SettingsAction::OpenKeyboardShortcuts);
+        assert!(!app.settings_panel.is_active());
+        assert!(app.shortcuts_panel.is_active());
     }
 }

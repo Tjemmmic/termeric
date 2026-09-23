@@ -346,6 +346,7 @@ impl App {
                             self.toasts
                                 .warning(format!("Config reload rejected: {error}"));
                         } else {
+                            self.mark_config_saved();
                             log::info!("Config hot-reloaded");
                             self.toasts.info("Config reloaded");
                         }
@@ -991,6 +992,14 @@ impl App {
             },
             SettingsAction::ManageRuntimePlugins => {
                 self.open_runtime_plugin_manager();
+                return;
+            }
+            SettingsAction::OpenKeyboardShortcuts => {
+                self.settings_panel.close();
+                self.shortcuts_panel.open();
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
                 return;
             }
             SettingsAction::None => return,

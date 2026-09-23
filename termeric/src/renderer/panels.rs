@@ -29,6 +29,23 @@ impl From<crate::session::panel::SessionPanelRect> for PanelBox {
     }
 }
 
+impl From<crate::ui::settings::SettingsInputRect> for PanelBox {
+    fn from(rect: crate::ui::settings::SettingsInputRect) -> Self {
+        let crate::ui::settings::SettingsInputRect {
+            x,
+            y,
+            width,
+            height,
+        } = rect;
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+}
+
 impl From<crate::ui::commands::panel::CommandsPanelRect> for PanelBox {
     fn from(rect: crate::ui::commands::panel::CommandsPanelRect) -> Self {
         let crate::ui::commands::panel::CommandsPanelRect {

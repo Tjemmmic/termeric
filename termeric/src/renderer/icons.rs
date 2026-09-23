@@ -8,7 +8,9 @@ use super::Renderer;
 pub(super) enum Icon {
     Close,
     Plus,
+    Minus,
     Back,
+    ChevronRight,
     ChevronUp,
     ChevronDown,
     /// Three narrowing lines: show only matching lines.
@@ -24,9 +26,14 @@ impl Renderer {
         let lines: &[(f32, f32, f32, f32)] = match icon {
             Icon::Close => &[(-arm, -arm, arm, arm), (arm, -arm, -arm, arm)],
             Icon::Plus => &[(-arm, 0.0, arm, 0.0), (0.0, -arm, 0.0, arm)],
+            Icon::Minus => &[(-arm, 0.0, arm, 0.0)],
             Icon::Back => &[
                 (arm * 0.5, -arm, -arm * 0.5, 0.0),
                 (-arm * 0.5, 0.0, arm * 0.5, arm),
+            ],
+            Icon::ChevronRight => &[
+                (-arm * 0.5, -arm, arm * 0.5, 0.0),
+                (arm * 0.5, 0.0, -arm * 0.5, arm),
             ],
             Icon::ChevronUp => &[
                 (-arm, arm * 0.5, 0.0, -arm * 0.5),

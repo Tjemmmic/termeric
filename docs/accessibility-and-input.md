@@ -298,9 +298,13 @@ Headless routing tests stop before client construction and never open a local
 socket or SSH process.
 
 The settings panel follows the same modal isolation rule. Its semantic tree
-contains a UTF-8-aware filter input, section headings, numeric spin buttons
-with bounded increment/decrement actions, expandable combo boxes and their
-currently rendered options, and read-only labels. Stable identities use the
+contains a UTF-8-aware search input, a tab list of sidebar pages (the selected
+tab controls the settings list), Close and Save buttons (Save describes whether
+changes are unsaved), section headings, numeric spin buttons with bounded
+increment/decrement actions, expandable combo boxes and their currently
+rendered options, and read-only labels. Only the current page's settings, or
+every page's matches while searching, are exposed; a request for a setting on
+another page is refused rather than switching pages. Stable identities use the
 setting's section and label rather than its filtered row number; dropdown
 options are resolved by their announced value so a stale request cannot choose
 a different item after a dynamic option list changes. Selection, scrolling,

@@ -45,27 +45,41 @@ fn font_fallback_index(label: &str) -> Option<usize> {
         .position(|candidate| *candidate == label)
 }
 
-/// Geometry for the centered settings modal — single source of truth shared
-/// by the renderer, hit-testing, scroll, and hover code paths.
+/// Geometry for the centered settings dialog — single source of truth shared
+/// by the renderer, hit-testing, scroll, hover, IME, and accessibility.
+///
+/// A header holds the title, filter field, and close button; a sidebar lists
+/// pages; the content column shows the page (or search results) as rows; a
+/// footer holds the save status and Save button.
 #[derive(Debug, Clone, Copy)]
 pub struct SettingsModalLayout {
+    /// The filter field in the header.
     pub input: SettingsInputRect,
     pub panel_x: f32,
     pub panel_y: f32,
     pub panel_width: f32,
     pub panel_height: f32,
     pub padding: f32,
-    pub gap: f32,
-    pub separator_height: f32,
+    pub header_height: f32,
+    pub close_button: SettingsInputRect,
+    pub sidebar: SettingsInputRect,
+    pub page_height: f32,
+    /// Left edge and width of the rows' text column.
+    pub content_x: f32,
+    pub content_width: f32,
+    /// Top of the page heading above the rows.
+    pub content_title_y: f32,
     pub row_height: f32,
-    pub input_height: f32,
     pub scrollbar_width: f32,
-    pub footer_area: f32,
     pub list_y: f32,
     pub list_height: f32,
     pub rows_that_fit: usize,
     pub visible_count: usize,
+    /// Left edge of the value column.
     pub value_x: f32,
+    pub footer_y: f32,
+    pub footer_height: f32,
+    pub save_button: SettingsInputRect,
     pub cell_width: f32,
 }
 
@@ -108,17 +122,15 @@ impl SettingsModalLayout {
         TextInputViewport::calculate(
             text,
             cursor,
-            self.input.x + self.cell_width * 2.2,
+            self.input.x + self.cell_width * crate::ui::constants::FILTER_TEXT_INSET_CELLS,
             self.input.y + (self.input.height - cell_height) / 2.0,
             self.input.x + self.input.width - self.cell_width * 0.8,
             self.cell_width,
         )
     }
 
-    /// Compute the modal geometry. `entry_count` is the length of
-    /// `SettingsPanelInfo::entries`; it controls `visible_count` and the
-    /// final `panel_height` so a short list doesn't render a giant empty
-    /// panel.
+    /// Compute the dialog geometry. The dialog keeps one size while pages
+    /// and results change; `entry_count` only limits `visible_count`.
     pub fn calculate(
         window_width: f32,
         window_height: f32,
@@ -127,53 +139,82 @@ impl SettingsModalLayout {
         animation: f32,
         entry_count: usize,
     ) -> Self {
-        let panel_width = (cell_width * 60.0).max(500.0).min(window_width * 0.7);
+        let panel_width = (cell_width * 100.0)
+            .clamp(560.0, 900.0)
+            .min((window_width - cell_width * 4.0).max(0.0));
+        let panel_height = (window_height * 0.82)
+            .clamp(320.0, 640.0)
+            .min((window_height - cell_height * 2.0).max(0.0));
         let panel_x = (window_width - panel_width) / 2.0;
+        let panel_y = (window_height - panel_height) * 0.4 + (1.0 - animation) * -30.0;
         let padding = cell_width * 1.5;
+        let control = cell_height * 1.5;
+
+        let header_height = cell_height * 3.0;
+        let close_button = SettingsInputRect {
+            x: panel_x + panel_width - padding * 0.5 - control,
+            y: panel_y + (header_height - control) / 2.0,
+            width: control,
+            height: control,
+        };
+        let input_height = cell_height * 1.7;
+        let input_width = (panel_width * 0.36).min(cell_width * 36.0);
+        let input = SettingsInputRect {
+            x: close_button.x - cell_width * 0.75 - input_width,
+            y: panel_y + (header_height - input_height) / 2.0,
+            width: input_width,
+            height: input_height,
+        };
+
+        let footer_height = cell_height * 2.8;
+        let footer_y = panel_y + panel_height - footer_height;
+        let body_y = panel_y + header_height;
+        let sidebar = SettingsInputRect {
+            x: panel_x,
+            y: body_y,
+            width: (cell_width * 22.0).clamp(150.0, 220.0),
+            height: (footer_y - body_y).max(0.0),
+        };
+        let content_x = sidebar.x + sidebar.width + padding;
+        let content_width = (panel_x + panel_width - padding - content_x).max(0.0);
+        let content_title_y = body_y + padding * 0.5;
         let row_height = cell_height * 2.0;
-        let input_height = cell_height * 2.0;
-        let footer_height = cell_height * 1.6;
-        let gap = 6.0;
-        let separator_height = 1.0;
-        let scrollbar_width = 4.0;
-
-        let header_area =
-            padding + cell_height * 1.4 + gap + input_height + gap + separator_height + gap;
-        let footer_area = footer_height + padding * 0.5;
-
-        let max_panel_height = window_height * 0.75;
-        let max_list_height = (max_panel_height - header_area - footer_area).max(row_height);
-        let rows_that_fit = (max_list_height / row_height).floor().max(1.0) as usize;
+        let list_y = content_title_y + cell_height * 2.2;
+        let list_space = (footer_y - padding * 0.5 - list_y).max(0.0);
+        let rows_that_fit = (list_space / row_height).floor().max(1.0) as usize;
         let visible_count = entry_count.min(rows_that_fit);
-        let list_height = visible_count as f32 * row_height;
-        let panel_height = header_area + list_height + footer_area;
-        let panel_y = (window_height * 0.10) + (1.0 - animation) * -30.0;
-        let list_y = panel_y + header_area;
-        let value_x = panel_x + panel_width * 0.50;
+        let save_height = cell_height * 1.6;
+        let save_width = cell_width * 9.0;
 
         Self {
-            input: SettingsInputRect {
-                x: panel_x + padding,
-                y: panel_y + padding + cell_height * 1.4 + gap,
-                width: panel_width - padding * 2.0,
-                height: input_height,
-            },
+            input,
             panel_x,
             panel_y,
             panel_width,
             panel_height,
             padding,
-            gap,
-            separator_height,
+            header_height,
+            close_button,
+            sidebar,
+            page_height: cell_height * 2.0,
+            content_x,
+            content_width,
+            content_title_y,
             row_height,
-            input_height,
-            scrollbar_width,
-            footer_area,
+            scrollbar_width: 3.0,
             list_y,
-            list_height,
+            list_height: visible_count as f32 * row_height,
             rows_that_fit,
             visible_count,
-            value_x,
+            value_x: content_x + content_width * 0.5,
+            footer_y,
+            footer_height,
+            save_button: SettingsInputRect {
+                x: panel_x + panel_width - padding - save_width,
+                y: footer_y + (footer_height - save_height) / 2.0,
+                width: save_width,
+                height: save_height,
+            },
             cell_width,
         }
     }
@@ -185,46 +226,81 @@ impl SettingsModalLayout {
             && y <= self.panel_y + self.panel_height
     }
 
-    /// Map a y-coordinate to a 0-based row within the visible window, if any.
-    pub fn visible_row_at(&self, y: f32) -> Option<usize> {
+    /// Sidebar row for the `index`th page.
+    pub fn page_rect(&self, index: usize) -> SettingsInputRect {
+        SettingsInputRect {
+            x: self.sidebar.x + self.padding * 0.5,
+            y: self.sidebar.y + self.padding * 0.5 + index as f32 * self.page_height,
+            width: self.sidebar.width - self.padding,
+            height: self.page_height,
+        }
+    }
+
+    /// The sidebar page under a point.
+    pub fn page_at(&self, x: f32, y: f32) -> Option<SettingsPage> {
+        SettingsPage::all()
+            .iter()
+            .enumerate()
+            .find(|(index, _)| self.page_rect(*index).contains(x, y))
+            .map(|(_, page)| *page)
+    }
+
+    /// Bounds of the `row`th visible entry, spanning the content column.
+    pub fn row_rect(&self, row: usize) -> SettingsInputRect {
+        SettingsInputRect {
+            x: self.content_x - self.padding * 0.5,
+            y: self.list_y + row as f32 * self.row_height,
+            width: self.content_width + self.padding,
+            height: self.row_height,
+        }
+    }
+
+    /// Map a point to a 0-based row within the visible window, if any.
+    pub fn visible_row_at(&self, x: f32, y: f32) -> Option<usize> {
+        let first = self.row_rect(0);
+        if x < first.x || x > first.x + first.width {
+            return None;
+        }
         if y < self.list_y || y >= self.list_y + self.list_height {
             return None;
         }
         let row = ((y - self.list_y) / self.row_height) as usize;
-        if row < self.visible_count {
-            Some(row)
-        } else {
-            None
-        }
+        (row < self.visible_count).then_some(row)
     }
 
-    /// Horizontal origin of setting values. Keeping this calculation here
-    /// prevents the renderer and mouse hit-test from drifting apart.
+    /// Width of a numeric stepper's − and + buttons.
+    fn stepper_button_width(&self) -> f32 {
+        self.cell_width * 2.5
+    }
+
+    /// Width of the value box between a stepper's buttons.
+    pub fn stepper_value_width(&self) -> f32 {
+        self.cell_width * 8.0
+    }
+
+    /// Left edge of a numeric value box, between the stepper buttons.
     pub fn value_text_x(&self) -> f32 {
-        self.value_x + self.cell_width * 2.0
+        self.value_x + self.stepper_button_width()
     }
 
-    /// Horizontal origin of the numeric decrement button.
+    /// Left edge of the numeric decrement button.
     pub fn numeric_decrement_x(&self) -> f32 {
         self.value_x
     }
 
-    /// Horizontal origin of the numeric increment button.
-    pub fn numeric_increment_x(&self, value_char_count: usize) -> f32 {
-        self.value_text_x() + value_char_count as f32 * self.cell_width + self.cell_width
+    /// Left edge of the numeric increment button.
+    pub fn numeric_increment_x(&self) -> f32 {
+        self.value_text_x() + self.stepper_value_width()
     }
 
-    /// Resolve a click against the two rendered numeric arrow buttons.
-    /// The half-cell padding makes the small glyphs comfortable to click
-    /// without treating the displayed value itself as an increment button.
-    pub fn numeric_adjustment_at(&self, x: f32, value_char_count: usize) -> Option<i32> {
-        let hit_padding = self.cell_width * 0.5;
-        let contains =
-            |origin: f32| x >= origin - hit_padding && x < origin + self.cell_width + hit_padding;
-
+    /// Resolve a click against the stepper's − and + buttons. Values keep a
+    /// fixed box so the buttons never move as the number changes.
+    pub fn numeric_adjustment_at(&self, x: f32) -> Option<i32> {
+        let width = self.stepper_button_width();
+        let contains = |origin: f32| x >= origin && x < origin + width;
         if contains(self.numeric_decrement_x()) {
             Some(-1)
-        } else if contains(self.numeric_increment_x(value_char_count)) {
+        } else if contains(self.numeric_increment_x()) {
             Some(1)
         } else {
             None
@@ -263,12 +339,11 @@ impl SettingsModalLayout {
         let dd_height = visible_options as f32 * option_h + 8.0;
 
         let min_dd_width = (max_option_len as f32 + 4.0) * self.cell_width;
-        let remaining = self.panel_x + self.panel_width - self.padding - self.value_x;
-        let dd_width = min_dd_width.max(remaining).min(self.panel_width * 0.4);
-        let dd_x = self.value_x;
+        let remaining = self.content_x + self.content_width - self.value_x;
+        let dd_width = min_dd_width.max(remaining).min(self.content_width * 0.7);
 
         Some(DropdownRect {
-            x: dd_x,
+            x: self.value_x,
             y: anchor_y,
             width: dd_width,
             height: dd_height,
@@ -312,6 +387,62 @@ impl DropdownRect {
     }
 }
 
+/// Pages in the settings sidebar. Each page shows one or more sections.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SettingsPage {
+    Appearance,
+    Font,
+    Terminal,
+    Keyboard,
+    Sessions,
+    Accessibility,
+    Plugins,
+    Experimental,
+}
+
+impl SettingsPage {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Appearance => "Appearance",
+            Self::Font => "Font",
+            Self::Terminal => "Terminal",
+            Self::Keyboard => "Keyboard",
+            Self::Sessions => "Sessions",
+            Self::Accessibility => "Accessibility",
+            Self::Plugins => "Plugins",
+            Self::Experimental => "Experimental",
+        }
+    }
+
+    /// Sidebar order.
+    pub fn all() -> &'static [SettingsPage] {
+        &[
+            Self::Appearance,
+            Self::Font,
+            Self::Terminal,
+            Self::Keyboard,
+            Self::Sessions,
+            Self::Accessibility,
+            Self::Plugins,
+            Self::Experimental,
+        ]
+    }
+
+    fn index(self) -> usize {
+        Self::all()
+            .iter()
+            .position(|page| *page == self)
+            .unwrap_or(0)
+    }
+
+    /// The page `step` places after this one in sidebar order, wrapping.
+    fn cycle(self, step: isize) -> Self {
+        let pages = Self::all();
+        let count = pages.len() as isize;
+        pages[(self.index() as isize + step).rem_euclid(count) as usize]
+    }
+}
+
 /// Sections in the settings panel — used for categorizing items
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SettingsSection {
@@ -323,6 +454,7 @@ pub enum SettingsSection {
     Scrollback,
     Startup,
     Shell,
+    Keyboard,
     Sessions,
     Harvest,
     Accessibility,
@@ -341,28 +473,25 @@ impl SettingsSection {
             Self::Startup => "Startup",
             Self::Shell => "Shell",
             Self::Sessions => "Sessions",
-            Self::Harvest => "Harvest (Experimental)",
+            Self::Keyboard => "Keyboard",
+            Self::Harvest => "Harvest",
             Self::Accessibility => "Accessibility",
             Self::Plugins => "Plugins",
         }
     }
 
-    pub fn all() -> &'static [SettingsSection] {
-        static ALL: [SettingsSection; 12] = [
-            SettingsSection::Font,
-            SettingsSection::Theme,
-            SettingsSection::Window,
-            SettingsSection::Cursor,
-            SettingsSection::Bell,
-            SettingsSection::Scrollback,
-            SettingsSection::Startup,
-            SettingsSection::Shell,
-            SettingsSection::Sessions,
-            SettingsSection::Harvest,
-            SettingsSection::Accessibility,
-            SettingsSection::Plugins,
-        ];
-        ALL.as_slice()
+    /// The sidebar page that shows this section.
+    pub fn page(self) -> SettingsPage {
+        match self {
+            Self::Theme | Self::Window => SettingsPage::Appearance,
+            Self::Font => SettingsPage::Font,
+            Self::Cursor | Self::Scrollback | Self::Bell | Self::Shell => SettingsPage::Terminal,
+            Self::Keyboard => SettingsPage::Keyboard,
+            Self::Startup | Self::Sessions => SettingsPage::Sessions,
+            Self::Accessibility => SettingsPage::Accessibility,
+            Self::Plugins => SettingsPage::Plugins,
+            Self::Harvest => SettingsPage::Experimental,
+        }
     }
 }
 
@@ -496,6 +625,8 @@ pub enum SettingsAction {
     SetHighContrast(AccessibilityPreference),
     /// Open the installed third-party plugin manager.
     ManageRuntimePlugins,
+    /// Leave Settings for the Keyboard Shortcuts dialog.
+    OpenKeyboardShortcuts,
     /// Save current config
     SaveConfig,
     /// Reset to default config
@@ -504,10 +635,22 @@ pub enum SettingsAction {
     None,
 }
 
+/// Header, footer, and sidebar controls that show pointer hover.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsControl {
+    Close,
+    Save,
+    Page(SettingsPage),
+}
+
 /// State for the centered settings panel.
 pub struct SettingsPanel {
     /// Panel animation releases input immediately while retaining close motion.
     animation: super::animation::PanelAnimation,
+    /// Sidebar page shown while the filter is empty. Kept across reopenings.
+    page: SettingsPage,
+    /// Header, footer, or sidebar control under the pointer.
+    hovered_control: Option<SettingsControl>,
     /// Search filter text
     filter: String,
     /// Cursor position in filter text (byte offset)
@@ -549,6 +692,8 @@ impl SettingsPanel {
             animation: super::animation::PanelAnimation::with_duration(
                 super::animation::DEFAULT_PANEL_DURATION,
             ),
+            page: SettingsPage::Appearance,
+            hovered_control: None,
             filter: String::new(),
             filter_cursor: 0,
             selected: 0,
@@ -594,15 +739,30 @@ impl SettingsPanel {
             self.scroll_offset = 0;
             self.selection_visibility_pending = true;
             self.dropdown_open = false;
+            self.hovered_item = None;
+            self.hovered_control = None;
             self.animation.open();
         } else {
             self.animation.close();
         }
     }
 
-    /// Open the panel and jump selection to the first item in `section`.
-    /// Does not filter — the full list is still browsable.
+    /// Show `page`, leaving any search. Selection starts at its first row.
+    pub fn select_page(&mut self, page: SettingsPage) {
+        self.page = page;
+        self.filter.clear();
+        self.filter_cursor = 0;
+        self.selected = 0;
+        self.scroll_offset = 0;
+        self.dropdown_open = false;
+        self.hovered_item = None;
+        self.selection_visibility_pending = true;
+    }
+
+    /// Open the panel on `section`'s page with its first item selected.
+    /// Does not filter — the rest of the page stays browsable.
     pub fn open_to_section(&mut self, section: SettingsSection) {
+        self.page = section.page();
         self.filter.clear();
         self.filter_cursor = 0;
         self.scroll_offset = 0;
@@ -661,7 +821,7 @@ impl SettingsPanel {
     fn all_items(
         &self,
         config: &Config,
-        _registry: &ShortcutRegistry,
+        registry: &ShortcutRegistry,
     ) -> Vec<(SettingsSection, Vec<SettingItem>)> {
         let mut result = Vec::new();
 
@@ -1151,6 +1311,25 @@ impl SettingsPanel {
             ));
         }
 
+        // Keyboard: the shortcuts editor is its own dialog.
+        {
+            let customized = registry.user_overrides().len();
+            result.push((
+                SettingsSection::Keyboard,
+                vec![SettingItem {
+                    label: "Keyboard Shortcuts",
+                    value: match customized {
+                        0 => "Defaults".to_string(),
+                        1 => "1 changed".to_string(),
+                        count => format!("{count} changed"),
+                    },
+                    kind: SettingKind::Action {
+                        action: SettingsAction::OpenKeyboardShortcuts,
+                    },
+                }],
+            ));
+        }
+
         // Sessions
         {
             let on_off = vec!["On".into(), "Off".into()];
@@ -1423,14 +1602,25 @@ impl SettingsPanel {
         result
     }
 
-    /// Build filtered flat entries from all settings, with category headers
+    /// Rows to show: the current page's settings, or while searching every
+    /// page's matches. Section headings appear when a list spans sections.
     pub fn build_entries(&self, config: &Config, registry: &ShortcutRegistry) -> Vec<SettingEntry> {
         let all = self.all_items(config, registry);
         let filter_lower = self.filter.to_lowercase();
         let has_filter = !filter_lower.is_empty();
+        // Without a search only the current page shows, and a page made of
+        // one section needs no heading beneath the page title.
+        let sections_on_page = all
+            .iter()
+            .filter(|(section, _)| section.page() == self.page)
+            .count();
+        let show_headers = has_filter || sections_on_page > 1;
 
         let mut entries = Vec::new();
         for (section, items) in &all {
+            if !has_filter && section.page() != self.page {
+                continue;
+            }
             // Collect matching items in this section
             let matching: Vec<(usize, &SettingItem)> = items
                 .iter()
@@ -1439,10 +1629,15 @@ impl SettingsPanel {
                     if !has_filter {
                         return true;
                     }
-                    // Match against label, value, or section name
+                    // Match against label, value, section, or page name
                     item.label.to_lowercase().contains(&filter_lower)
                         || item.value.to_lowercase().contains(&filter_lower)
                         || section.label().to_lowercase().contains(&filter_lower)
+                        || section
+                            .page()
+                            .label()
+                            .to_lowercase()
+                            .contains(&filter_lower)
                 })
                 .collect();
 
@@ -1450,14 +1645,15 @@ impl SettingsPanel {
                 continue;
             }
 
-            // Add category header
-            entries.push(SettingEntry {
-                label: section.label(),
-                value: String::new(),
-                kind: SettingKind::ReadOnly,
-                is_header: true,
-                section: *section,
-            });
+            if show_headers {
+                entries.push(SettingEntry {
+                    label: section.label(),
+                    value: String::new(),
+                    kind: SettingKind::ReadOnly,
+                    is_header: true,
+                    section: *section,
+                });
+            }
 
             // Add matching items
             for (_, item) in matching {
@@ -1557,19 +1753,15 @@ impl SettingsPanel {
                     SettingsAction::None
                 }
             }
-            SettingsKey::Tab => {
-                if let Some(current) = Self::nth_selectable(&entries, self.selected) {
-                    let sections = SettingsSection::all();
-                    let current_idx = sections
-                        .iter()
-                        .position(|s| *s == current.section)
-                        .unwrap_or(0);
-                    let next_section = sections[(current_idx + 1) % sections.len()];
-                    if let Some(idx) = Self::first_selectable_in_section(&entries, next_section) {
-                        self.selected = idx;
-                    }
-                }
-                SettingsAction::None
+            SettingsKey::Tab | SettingsKey::BackTab => {
+                let step = if matches!(key, SettingsKey::Tab) {
+                    1
+                } else {
+                    -1
+                };
+                self.select_page(self.shown_page(&entries).cycle(step));
+                // The page's own rows replace the ones built above.
+                return SettingsAction::None;
             }
             SettingsKey::Save => SettingsAction::SaveConfig,
             SettingsKey::Reset => SettingsAction::ResetConfig,
@@ -2191,6 +2383,18 @@ impl SettingsPanel {
             return SettingsAction::None;
         }
 
+        if layout.close_button.contains(x, y) {
+            self.close();
+            return SettingsAction::None;
+        }
+        if layout.save_button.contains(x, y) {
+            return SettingsAction::SaveConfig;
+        }
+        if let Some(page) = layout.page_at(x, y) {
+            self.select_page(page);
+            return SettingsAction::None;
+        }
+
         // Input padding maps to visible slice edges. A collapsed input still
         // consumes the click, and dropdown dismissal above never moves a caret.
         if layout.input.contains(x, y) {
@@ -2200,7 +2404,7 @@ impl SettingsPanel {
         }
 
         // Click on an entry row (respecting scroll).
-        let Some(visible_row) = layout.visible_row_at(y) else {
+        let Some(visible_row) = layout.visible_row_at(x, y) else {
             return SettingsAction::None;
         };
         let abs_idx = self.scroll_offset + visible_row;
@@ -2221,14 +2425,11 @@ impl SettingsPanel {
                 self.dropdown_highlight = *selected;
                 SettingsAction::None
             }
-            SettingKind::Numeric { .. } => {
-                let value_char_count = entry.value.chars().count();
-                layout
-                    .numeric_adjustment_at(x, value_char_count)
-                    .map_or(SettingsAction::None, |direction| {
-                        self.adjust_selected_value(&entries, direction)
-                    })
-            }
+            SettingKind::Numeric { .. } => layout
+                .numeric_adjustment_at(x)
+                .map_or(SettingsAction::None, |direction| {
+                    self.adjust_selected_value(&entries, direction)
+                }),
             SettingKind::Action { action } => action.clone(),
             SettingKind::ReadOnly => SettingsAction::None,
         }
@@ -2289,6 +2490,20 @@ impl SettingsPanel {
     pub fn set_dropdown_hover(&mut self, index: Option<usize>) {
         self.dropdown_hovered = index;
     }
+
+    /// Update header, footer, and sidebar hover from the pointer.
+    pub fn set_control_hover(&mut self, control: Option<SettingsControl>) {
+        self.hovered_control = control;
+    }
+
+    /// The page the sidebar marks: the browsed page, or while searching the
+    /// page of the selected result.
+    fn shown_page(&self, entries: &[SettingEntry]) -> SettingsPage {
+        if self.filter.is_empty() {
+            return self.page;
+        }
+        Self::nth_selectable(entries, self.selected).map_or(self.page, |entry| entry.section.page())
+    }
 }
 
 /// Simplified key events for the settings panel
@@ -2300,7 +2515,10 @@ pub enum SettingsKey {
     Right,
     Enter,
     Escape,
+    /// Next sidebar page.
     Tab,
+    /// Previous sidebar page.
+    BackTab,
     Save,
     Reset,
     /// Backspace in filter
@@ -2331,6 +2549,13 @@ pub struct SettingsPanelInfo {
     pub filter: String,
     /// Cursor position in filter
     pub filter_cursor: usize,
+    /// Page marked in the sidebar.
+    pub page: SettingsPage,
+    /// Header, footer, or sidebar control under the pointer.
+    pub hovered_control: Option<SettingsControl>,
+    /// Whether the live configuration differs from the saved file. The
+    /// application fills this in; the panel cannot see the file.
+    pub unsaved: bool,
 }
 
 impl SettingsPanel {
@@ -2358,7 +2583,6 @@ impl SettingsPanel {
 
         SettingsPanelInfo {
             animation: self.animation_progress(),
-            entries,
             selected: self.selected,
             scroll_offset: self.scroll_offset,
             dropdown_open: self.dropdown_open,
@@ -2367,6 +2591,10 @@ impl SettingsPanel {
             dropdown_hovered: self.dropdown_hovered,
             filter: self.filter.clone(),
             filter_cursor: self.filter_cursor,
+            page: self.shown_page(&entries),
+            hovered_control: self.hovered_control,
+            unsaved: false,
+            entries,
         }
     }
 }
@@ -2546,7 +2774,10 @@ mod tests {
         panel.selected = 2;
         panel.scroll_offset = 1;
         let layout = SettingsModalLayout::calculate(1000.0, 700.0, 8.0, 16.0, 1.0, 0);
-        let (x, y) = (layout.input.x + 2.2 * 8.0 + 6.0, layout.input.y);
+        let (x, y) = (
+            layout.input.x + crate::ui::constants::FILTER_TEXT_INSET_CELLS * 8.0 + 6.0,
+            layout.input.y,
+        );
         let action = panel.handle_click(x, y, &config, &registry, 1000.0, 700.0, 8.0, 16.0);
         let SettingsAction::PlaceFilterCaret(cursor) = action else {
             panic!("expected filter caret");
@@ -2777,8 +3008,9 @@ mod tests {
 
         let config = Config::default();
         let registry = default_registry();
+        panel.select_page(SettingsPage::Font);
 
-        // Font size is first selectable entry (selected = 0), default 12.0.
+        // Font size is the Font page's first entry (selected = 0), default 12.0.
         // Right on a Numeric adjusts (Right on a Dropdown would open it).
         let action = panel.handle_key(SettingsKey::Right, &config, &registry);
         match action {
@@ -2795,7 +3027,8 @@ mod tests {
 
     #[test]
     fn scrollback_memory_budget_is_visible_and_adjustable() {
-        let panel = SettingsPanel::new();
+        let mut panel = SettingsPanel::new();
+        panel.select_page(SettingsPage::Terminal);
         let mut config = Config::default();
         config.scrollback.max_memory_mib = 64;
         let entries = panel.build_entries(&config, &default_registry());
@@ -2827,6 +3060,7 @@ mod tests {
             family: "Symbols Nerd Font Mono".into(),
         }];
         config.font.features.insert("ss01".into(), 1);
+        panel.select_page(SettingsPage::Font);
         let entries = panel.build_entries(&config, &default_registry());
 
         let first = entries
@@ -2993,6 +3227,7 @@ mod tests {
         panel.set_runtime_plugin_summary(
             "task-runner:on req=[process-spawn] grant=[process-spawn]".into(),
         );
+        panel.select_page(SettingsPage::Plugins);
         let entries = panel.build_entries(&Config::default(), &ShortcutRegistry::new());
         let status = entries
             .iter()
@@ -3041,9 +3276,10 @@ mod tests {
             panel.animation_progress(),
             entries.len(),
         );
+        let row = layout.row_rect(1);
         let action = panel.handle_click(
-            layout.panel_x + layout.padding,
-            layout.list_y + layout.row_height * 1.5,
+            row.x + row.width * 0.25,
+            row.y + row.height / 2.0,
             &config,
             &registry,
             1000.0,
@@ -3085,9 +3321,10 @@ mod tests {
             panel.animation_progress(),
             entries.len(),
         );
+        let row = layout.row_rect(1);
         let action = panel.handle_click(
-            layout.panel_x + layout.padding,
-            layout.list_y + layout.row_height * 1.5,
+            row.x + row.width * 0.25,
+            row.y + row.height / 2.0,
             &config,
             &registry,
             1000.0,
@@ -3129,9 +3366,10 @@ mod tests {
             panel.animation_progress(),
             entries.len(),
         );
+        let row = layout.row_rect(1);
         let action = panel.handle_click(
-            layout.panel_x + layout.padding,
-            layout.list_y + layout.row_height * 1.5,
+            row.x + row.width * 0.25,
+            row.y + row.height / 2.0,
             &config,
             &registry,
             1000.0,
@@ -3154,10 +3392,13 @@ mod tests {
         let themes = Theme::list_available();
         let expected_next = themes.get(1).expect("at least 2 themes");
 
-        // Default font rows are Size, Family, Normal Weight, Bold Weight, one
-        // empty fallback slot, range overrides, OpenType features, Line
-        // Height, Ligatures, and Bold Is Bright before Theme.
-        panel.selected = 10;
+        // Appearance opens first, and Theme is its first row.
+        assert_eq!(
+            panel.build_entries(&config, &registry)[1].label,
+            "Theme",
+            "below the Theme heading"
+        );
+        panel.selected = 0;
 
         // Right opens the dropdown for Dropdown kind
         let action = panel.handle_key(SettingsKey::Right, &config, &registry);
@@ -3223,6 +3464,108 @@ mod tests {
     }
 
     #[test]
+    fn pages_scope_the_list_and_search_spans_every_page() {
+        let mut panel = SettingsPanel::new();
+        panel.open();
+        let config = Config::default();
+        let registry = default_registry();
+        let sections = |panel: &SettingsPanel| {
+            let mut sections: Vec<_> = panel
+                .build_entries(&config, &registry)
+                .iter()
+                .map(|entry| entry.section)
+                .collect();
+            sections.dedup();
+            sections
+        };
+        assert_eq!(
+            sections(&panel),
+            [SettingsSection::Theme, SettingsSection::Window]
+        );
+
+        panel.handle_key(SettingsKey::Tab, &config, &registry);
+        assert_eq!(sections(&panel), [SettingsSection::Font]);
+        panel.handle_key(SettingsKey::BackTab, &config, &registry);
+        panel.handle_key(SettingsKey::BackTab, &config, &registry);
+        assert_eq!(sections(&panel), [SettingsSection::Harvest], "wraps");
+
+        // Search reaches settings on every page and marks the result's page.
+        assert!(panel.insert_filter_text("blink"));
+        let info = panel.build_info(&config, &registry);
+        assert!(
+            info.entries
+                .iter()
+                .all(|entry| entry.section == SettingsSection::Cursor
+                    || entry.label.to_lowercase().contains("blink")
+                    || entry.value.to_lowercase().contains("blink"))
+        );
+        assert_eq!(info.page, SettingsPage::Terminal);
+        assert!(panel.accessibility_set_filter("appearance"));
+        let found = sections(&panel);
+        assert!(
+            found.contains(&SettingsSection::Theme) && found.contains(&SettingsSection::Window)
+        );
+
+        // Choosing a page leaves the search.
+        panel.select_page(SettingsPage::Keyboard);
+        let entries = panel.build_entries(&config, &registry);
+        assert_eq!(panel.build_info(&config, &registry).filter, "");
+        assert!(matches!(
+            entries[0].kind,
+            SettingKind::Action {
+                action: SettingsAction::OpenKeyboardShortcuts
+            }
+        ));
+    }
+
+    #[test]
+    fn sidebar_close_and_save_are_hit_in_the_shared_layout() {
+        let mut panel = SettingsPanel::new();
+        panel.open();
+        let config = Config::default();
+        let registry = default_registry();
+        let layout = SettingsModalLayout::calculate(
+            1000.0,
+            800.0,
+            10.0,
+            20.0,
+            panel.animation_progress(),
+            0,
+        );
+        let centre =
+            |rect: SettingsInputRect| (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
+        let click = |panel: &mut SettingsPanel, (x, y): (f32, f32)| {
+            panel.handle_click(x, y, &config, &registry, 1000.0, 800.0, 10.0, 20.0)
+        };
+
+        let plugins = SettingsPage::all()
+            .iter()
+            .position(|page| *page == SettingsPage::Plugins)
+            .unwrap();
+        assert!(matches!(
+            click(&mut panel, centre(layout.page_rect(plugins))),
+            SettingsAction::None
+        ));
+        assert_eq!(
+            panel.build_info(&config, &registry).page,
+            SettingsPage::Plugins
+        );
+        assert!(matches!(
+            click(&mut panel, centre(layout.save_button)),
+            SettingsAction::SaveConfig
+        ));
+        // Rows never extend into the sidebar.
+        let sidebar_point = centre(layout.page_rect(0));
+        assert_eq!(
+            layout.visible_row_at(sidebar_point.0, layout.list_y + 1.0),
+            None
+        );
+        assert!(layout.sidebar.x + layout.sidebar.width < layout.row_rect(0).x);
+        click(&mut panel, centre(layout.close_button));
+        assert!(!panel.is_active());
+    }
+
+    #[test]
     fn test_category_headers_not_selectable() {
         let mut panel = SettingsPanel::new();
         panel.open();
@@ -3232,13 +3575,22 @@ mod tests {
         let config = Config::default();
         let registry = default_registry();
 
+        // Appearance holds two sections, so each gets a heading; Font is one
+        // section under its page title and needs none.
         let entries = panel.build_entries(&config, &registry);
         let headers: Vec<_> = entries.iter().filter(|e| e.is_header).collect();
-        let selectable: Vec<_> = entries.iter().filter(|e| !e.is_header).collect();
-
-        // Should have at least 10 headers (one per section) and many selectable items
-        assert!(headers.len() >= 10);
-        assert!(selectable.len() > headers.len());
+        assert_eq!(headers.len(), 2);
+        assert!(entries.iter().filter(|e| !e.is_header).count() > headers.len());
+        panel.handle_key(SettingsKey::Down, &config, &registry);
+        let second = SettingsPanel::nth_selectable(&entries, panel.selected).unwrap();
+        assert!(!second.is_header);
+        panel.select_page(SettingsPage::Font);
+        assert!(
+            !panel
+                .build_entries(&config, &registry)
+                .iter()
+                .any(|e| e.is_header)
+        );
     }
 
     #[test]
@@ -3290,6 +3642,7 @@ mod tests {
     fn numeric_mouse_controls_use_rendered_arrow_geometry() {
         let mut panel = SettingsPanel::new();
         panel.open();
+        panel.select_page(SettingsPage::Font);
 
         let config = Config::default();
         let registry = default_registry();
@@ -3302,9 +3655,9 @@ mod tests {
             panel.animation_progress(),
             entries.len(),
         );
-        // The first visible row is the Font header; Size is the next row.
-        let y = layout.list_y + layout.row_height * 1.5;
-        let value_char_count = entries[1].value.chars().count();
+        // The Font page is one section, so Size is the first row.
+        assert_eq!(entries[0].label, "Size");
+        let y = layout.list_y + layout.row_height * 0.5;
 
         let decrease = panel.handle_click(
             layout.numeric_decrement_x() + layout.cell_width * 0.5,
@@ -3319,7 +3672,7 @@ mod tests {
         assert!(matches!(decrease, SettingsAction::SetFontSize(11.0)));
 
         let increase = panel.handle_click(
-            layout.numeric_increment_x(value_char_count) + layout.cell_width * 0.5,
+            layout.numeric_increment_x() + layout.cell_width * 0.5,
             y,
             &config,
             &registry,
@@ -3350,7 +3703,7 @@ mod tests {
         thread::sleep(Duration::from_millis(250));
         panel.update_animation();
 
-        // Filter must be empty — the full list stays browsable.
+        // Filter must be empty — the rest of the page stays browsable.
         assert!(panel.filter.is_empty());
 
         // build_info resolves the pending jump.
@@ -3360,6 +3713,7 @@ mod tests {
 
         let selected_entry = SettingsPanel::nth_selectable(&info.entries, info.selected).unwrap();
         assert_eq!(selected_entry.section, SettingsSection::Sessions);
+        assert_eq!(info.page, SettingsPage::Sessions);
     }
 
     #[test]
@@ -3386,7 +3740,8 @@ mod tests {
 
     #[test]
     fn accessibility_preferences_are_visible_and_map_to_typed_actions() {
-        let panel = SettingsPanel::new();
+        let mut panel = SettingsPanel::new();
+        panel.select_page(SettingsPage::Accessibility);
         let mut config = Config::default();
         config.accessibility.reduce_motion = AccessibilityPreference::On;
         let entries = panel.build_entries(&config, &default_registry());

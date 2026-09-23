@@ -1005,6 +1005,9 @@ impl ApplicationHandler<AppEvent> for App {
                             Key::Named(NamedKey::ArrowLeft) => Some(SettingsKey::Left),
                             Key::Named(NamedKey::ArrowRight) => Some(SettingsKey::Right),
                             Key::Named(NamedKey::Enter) => Some(SettingsKey::Enter),
+                            Key::Named(NamedKey::Tab) if self.modifiers.shift_key() => {
+                                Some(SettingsKey::BackTab)
+                            }
                             Key::Named(NamedKey::Tab) => Some(SettingsKey::Tab),
                             Key::Named(NamedKey::Backspace) => Some(SettingsKey::FilterBackspace),
                             Key::Named(NamedKey::Delete) => Some(SettingsKey::Delete),

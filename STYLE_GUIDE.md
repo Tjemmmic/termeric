@@ -195,7 +195,7 @@ Less is more. The terminal content is king; the UI is the soil.
 - **Animations**: Short (150–250ms). Never bouncy or springy — use ease-out only
 - **Hover effects**: Gentle background tint change, not color explosion
 - **Notifications**: Minimal, non-intrusive. Prefer status text over modals
-- **Settings panel**: A quiet sidebar companion, not a modal dialog
+- **Settings**: One centered dialog with a sidebar of pages and a single search across every page. Quiet surfaces and the UI face; values sit in one column with steppers, dropdown chevrons, or a trailing chevron for actions. No key-hint strips: the footer only states whether changes are saved
 - **Tab bar**: Compact, understated, "quiet native". The strip uses the theme's `tab_inactive` color; the active tab is a slightly raised surface with a 2px `tab_active` accent line (a left bar in the vertical rail); inactive titles are dimmed; × appears on the active or hovered tab, and background activity shows as a small dot in its place. Never fill a whole tab with a saturated color
 
 ---

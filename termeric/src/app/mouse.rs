@@ -879,14 +879,24 @@ impl App {
                         entries.len(),
                     );
 
-                    // Row hover (suppressed when the dropdown overlay is open
-                    // so we don't hover-highlight rows behind it).
-                    let hovered = if self.settings_panel.is_dropdown_open() {
-                        None
-                    } else {
-                        layout.visible_row_at(py)
-                    };
+                    // Row and control hover (suppressed while the dropdown
+                    // overlay is open so nothing behind it lights up).
+                    let open = !self.settings_panel.is_dropdown_open();
+                    let hovered = open.then(|| layout.visible_row_at(px, py)).flatten();
                     self.settings_panel.set_hover(hovered);
+                    let control = open
+                        .then(|| {
+                            use crate::ui::settings::SettingsControl;
+                            if layout.close_button.contains(px, py) {
+                                Some(SettingsControl::Close)
+                            } else if layout.save_button.contains(px, py) {
+                                Some(SettingsControl::Save)
+                            } else {
+                                layout.page_at(px, py).map(SettingsControl::Page)
+                            }
+                        })
+                        .flatten();
+                    self.settings_panel.set_control_hover(control);
 
                     // Dropdown option hover (only when the overlay is open).
                     if self.settings_panel.is_dropdown_open() {

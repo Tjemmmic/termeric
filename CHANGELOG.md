@@ -1131,6 +1131,16 @@ Versioning once public beta tags begin.
   bars are gone, a magnifier replaces the `>` prompt, rows are shorter, and the
   scrim is lighter. The query field keeps its existing geometry.
 
+- Settings is a larger dialog with a sidebar of pages (Appearance, Font,
+  Terminal, Keyboard, Sessions, Accessibility, Plugins, Experimental) instead
+  of one long list. Tab and Shift+Tab move between pages, and the search box
+  finds settings on every page while the sidebar marks where the selected
+  result lives. Numbers use − / + steppers that stay in place, dropdowns show
+  a chevron, and actions such as Range Overrides show a trailing chevron. The
+  footer says when changes are unsaved and has a Save button (Ctrl+S still
+  works); the key-hint strip is gone. The Keyboard page opens the Keyboard
+  Shortcuts dialog. Dropdown menus use the popup-menu style.
+
 - The Keyboard Shortcuts dialog matches the command palette: UI-face text, a
   magnifier in the filter, quiet selected rows, and shortcuts as plain text
   instead of keycap boxes ("Not set" for unbound actions). The key-hint strip

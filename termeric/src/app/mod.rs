@@ -1079,6 +1079,9 @@ pub struct App {
     last_config_check: Instant,
     /// Last observed mtime of the config file (for change detection)
     last_config_mtime: Option<std::time::SystemTime>,
+    /// Serialized configuration last known to match the file on disk, so
+    /// Settings can say when live changes have not been saved.
+    saved_config: Option<String>,
     /// Last installed-plugin registry mtime for live enable/update/remove.
     last_plugin_registry_mtime: Option<std::time::SystemTime>,
     /// File backing the active custom/explicit theme, when applicable.
@@ -1373,6 +1376,7 @@ impl App {
             cursor_motion: crate::ui::cursor_motion::CursorMotion::default(),
             last_frame_time: Instant::now(),
             last_config_check: Instant::now(),
+            saved_config: None,
             last_config_mtime: use_system_state
                 .then(|| std::fs::metadata(crate::config::Config::config_path()))
                 .and_then(Result::ok)
@@ -1488,6 +1492,7 @@ impl App {
             &app.shortcut_registry,
         ));
         app.apply_config_side_effects();
+        app.mark_config_saved();
         if let Some(warning) = startup_config_warning {
             log::error!("{}", warning);
             app.toasts.error(warning);
@@ -2115,6 +2120,8 @@ impl App {
         // the theme it draws with.
         self.sync_theme_preview();
         let workspace_menu_info = self.workspace_menu_render_info();
+        let settings_unsaved =
+            self.settings_panel.is_visible() && self.config_has_unsaved_changes();
 
         let Some(renderer) = &mut self.renderer else {
             return false;
@@ -2162,10 +2169,11 @@ impl App {
                 0,
             );
             self.settings_panel.set_max_visible(layout.rows_that_fit);
-            Some(
-                self.settings_panel
-                    .build_info(&self.config, &self.shortcut_registry),
-            )
+            let mut info = self
+                .settings_panel
+                .build_info(&self.config, &self.shortcut_registry);
+            info.unsaved = settings_unsaved;
+            Some(info)
         } else {
             None
         };
@@ -3693,6 +3701,7 @@ impl App {
                                 if let Err(error) = self.apply_config(config) {
                                     self.toasts.error(format!("Reload failed: {error}"));
                                 } else {
+                                    self.mark_config_saved();
                                     log::info!("Configuration reloaded");
                                     self.toasts.success("Configuration reloaded");
                                 }
@@ -4316,6 +4325,30 @@ impl App {
     }
 
     /// Save current configuration to file
+    /// The configuration Save writes: live settings plus values held
+    /// elsewhere (the renderer's font size and recorded shortcuts).
+    fn persisted_config(&self) -> Config {
+        let mut config = self.config.clone();
+        if let Some(renderer) = &self.renderer {
+            config.font.size = renderer.font_size();
+        }
+        config.shortcuts = self.shortcut_registry.user_overrides();
+        config
+    }
+
+    /// Record the live configuration as matching the file, after it was
+    /// loaded or reloaded from disk.
+    fn mark_config_saved(&mut self) {
+        self.saved_config = toml::to_string_pretty(&self.persisted_config()).ok();
+    }
+
+    /// Whether live settings differ from what was last loaded or saved.
+    fn config_has_unsaved_changes(&self) -> bool {
+        self.saved_config.as_ref().is_some_and(|saved| {
+            toml::to_string_pretty(&self.persisted_config()).is_ok_and(|live| live != *saved)
+        })
+    }
+
     fn save_config(&mut self) -> Result<String> {
         let config_path = Config::config_path();
 
@@ -4324,17 +4357,13 @@ impl App {
             std::fs::create_dir_all(parent)?;
         }
 
-        // Build current config, syncing any live values
-        let mut config = self.config.clone();
-        if let Some(renderer) = &self.renderer {
-            config.font.size = renderer.font_size();
-        }
-        config.shortcuts = self.shortcut_registry.user_overrides();
+        let config = self.persisted_config();
         config.validate()?;
 
         let config_content = toml::to_string_pretty(&config)?;
 
-        std::fs::write(&config_path, config_content)?;
+        std::fs::write(&config_path, &config_content)?;
+        self.saved_config = Some(config_content);
         // Capture the new mtime so the hot-reload poller doesn't treat
         // our own write as an external change.
         self.last_config_mtime = std::fs::metadata(&config_path)
