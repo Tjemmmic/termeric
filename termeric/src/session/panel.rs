@@ -737,14 +737,9 @@ mod tests {
             .unwrap();
         super::super::set_test_sessions_base_dir(Some(root.path().to_owned()));
         let restored = super::super::restore::restore_named_session("oversized-fixture");
-        let titles = super::super::list_sessions_with_titles();
         let entries = legacy_session_entries();
         super::super::set_test_sessions_base_dir(None);
         assert!(restored.unwrap_err().to_string().contains("limit"));
-        assert_eq!(
-            titles,
-            [("oversized-fixture".into(), "oversized-fixture".into())]
-        );
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].display_name, "oversized-fixture");
         assert!(entries[0].subtitle.is_empty());

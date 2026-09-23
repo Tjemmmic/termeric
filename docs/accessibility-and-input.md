@@ -596,7 +596,7 @@ distinct; empty, multiline, control-containing, and oversized pastes preserve
 the draft, title preview, and composition. Accepted paste updates only the
 captured tab's preview and clears preedit; it never commits or queues a
 live-domain control request. Escape restores the original override. Higher
-modal owners and the session dropdown retain precedence, while tab rename owns
+modal owners and the Workspaces menu retain precedence, while tab rename owns
 paste ahead of a retained search. Hermetic shortcut/rebinding/disabling,
 Unicode-limit, preview-cancellation, and raw-PTY tests use no real clipboard or
 remote connection. Native clipboard/IME acceptance remains deferred.
@@ -647,7 +647,7 @@ workspace rename draft at its active caret. It shares the 128-scalar/512-byte
 atomic insertion policy, rejects empty/multiline/control/oversized text without
 changing the draft, caret, or preedit, and never saves or submits the name.
 Accepted insertion clears composition and requests redraw. Higher modal owners,
-the session dropdown, and the manager's browse mode retain their clipboard
+the Workspaces menu, and the manager's browse mode retain their clipboard
 guards; a retained search or command form cannot receive the rename paste.
 Hermetic binding/rebinding/disabling, modal-priority, Unicode boundary, and
 raw-PTY tests use in-memory entries and no real clipboard or persisted rename.

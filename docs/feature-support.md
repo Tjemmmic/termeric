@@ -116,7 +116,7 @@ Private Sway verifies palette interruption without focus loss, PTY query leakage
 or background tab reorder; other modal types have unit rather than native checks.
 New presses also respect Settings/Commands/session-panel/dropdown ownership
 before background scrollbar/divider hit tests. The native overflow lane checks
-outside-divider dismissal for Settings, Commands, and the session dropdown;
+outside-divider dismissal for Settings, Commands, and the Workspaces menu;
 workspace-panel and scrollbar-specific native acceptance are not inferred.
 Geometry synchronization now finalizes native gestures across window resize,
 scale, and font/configuration paths, preserving live-domain acknowledgment and
@@ -376,7 +376,7 @@ tests pass; native pointer acceptance and text selection remain outstanding
 Workspace rename now accepts the configured Paste shortcut at its active
 caret under the existing atomic 128-scalar/512-byte single-line limit. Invalid
 or oversized input preserves the draft, caret, and composition; paste never
-submits or saves a rename. Higher modal owners, the session dropdown, and browse
+submits or saves a rename. Higher modal owners, the Workspaces menu, and browse
 mode retain clipboard guards. Hermetic binding, ownership, Unicode-limit, and
 raw-PTY tests pass without a real clipboard or persisted rename. Primary clicks
 place the rename caret at visible whole-grapheme boundaries using the shared

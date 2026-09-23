@@ -622,7 +622,7 @@ impl App {
             || self.settings_panel.is_active()
             || self.commands_panel.is_open()
             || self.session_panel.is_open()
-            || self.session_dropdown_open
+            || self.workspace_menu.is_some()
             || self.search.is_active()
             || self.copy_mode.is_active()
             || self.tab_rename.is_some()

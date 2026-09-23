@@ -122,6 +122,15 @@ restores the stable ordered workspace-ID set recorded in application state, and
 `save_scrollback` controls workspace history capture. Startup never guesses the
 newest directory by timestamp.
 
+The toolbar **Workspaces** menu lists up to six recently saved workspaces with
+their tab counts, marks the current one, and ends with **Save Workspace** and
+**Manage Workspaces…**. An unreadable archive stays listed but disabled so the
+manager remains the place to inspect or delete it. The menu owns the keyboard
+while open: Up/Down, Home/End, and Enter or Space choose an entry, Escape
+closes it, and no key reaches the terminal. Opened with F6 chrome navigation,
+it starts on the first entry; screen readers see a menu of items that focus
+and activate the same way.
+
 Legacy **Save Open Tabs as Legacy Snapshots** remains available for interoperating with
 the older single-terminal snapshot format. Those entries still restore as new
 shells and intentionally do not preserve complete topology.

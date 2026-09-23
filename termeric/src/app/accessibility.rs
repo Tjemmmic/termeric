@@ -90,6 +90,7 @@ const UNICODE_DIALOG: NodeId = NodeId(150);
 const UNICODE_INPUT: NodeId = NodeId(151);
 const UNICODE_LIST: NodeId = NodeId(152);
 const UNICODE_EMPTY: NodeId = NodeId(153);
+const WORKSPACE_MENU: NodeId = NodeId(160);
 const SHORTCUT_CLEAR_ACTION: i32 = 1;
 const TAB_BASE: u64 = 1_000;
 const PANE_BASE: u64 = 10_000;
@@ -107,6 +108,7 @@ const UNICODE_ENTRY_BASE: u64 = 1 << 48;
 const COMMANDS_ENTRY_BASE: u64 = 1 << 58;
 const SETTINGS_ENTRY_BASE: u64 = 1 << 59;
 const PALETTE_ENTRY_BASE: u64 = 1 << 60;
+const WORKSPACE_MENU_ENTRY_BASE: u64 = 1 << 47;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum SettingsSemanticTarget {
@@ -843,12 +845,7 @@ impl App {
                 self.set_chrome_focus(ChromeFocus::Terminal);
                 return;
             }
-            ChromeFocus::Workspaces => {
-                self.session_dropdown_open = !self.session_dropdown_open;
-                if self.session_dropdown_open {
-                    self.session_dropdown_items = crate::session::list_sessions_with_titles();
-                }
-            }
+            ChromeFocus::Workspaces => self.toggle_workspace_menu(true),
             ChromeFocus::Commands => self.commands_panel.toggle(),
             ChromeFocus::Settings => self.toggle_settings_surface(),
         }
@@ -904,6 +901,13 @@ impl App {
         }
         if self.diff_review.is_active() {
             self.handle_diff_accessibility_action(request);
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            return;
+        }
+        if self.workspace_menu.is_some() {
+            self.handle_workspace_menu_accessibility_action(request);
             if let Some(window) = &self.window {
                 window.request_redraw();
             }
@@ -1051,12 +1055,7 @@ impl App {
                     self.accessibility.focus_override = None;
                     self.accessibility.keyboard_focus = ChromeFocus::Terminal;
                 }
-                WORKSPACES => {
-                    self.session_dropdown_open = !self.session_dropdown_open;
-                    if self.session_dropdown_open {
-                        self.session_dropdown_items = crate::session::list_sessions_with_titles();
-                    }
-                }
+                WORKSPACES => self.toggle_workspace_menu(true),
                 COMMANDS => self.commands_panel.toggle(),
                 SETTINGS => self.toggle_settings_surface(),
                 PREVIOUS_TAB => {
@@ -2664,6 +2663,16 @@ impl App {
         if !self.search.is_active() && self.accessibility.focus_override == Some(SEARCH_INPUT) {
             self.accessibility.focus_override = None;
         }
+        if self.workspace_menu.is_some() {
+            return self.workspace_menu_accessibility_snapshot(width, height);
+        }
+        if self
+            .accessibility
+            .focus_override
+            .is_some_and(|node| node == WORKSPACE_MENU || workspace_menu_row(node).is_some())
+        {
+            self.accessibility.focus_override = None;
+        }
 
         let mut nodes = Vec::new();
         let mut root_children = vec![TAB_LIST, NEW_TAB, WORKSPACES, COMMANDS, SETTINGS];
@@ -3348,6 +3357,97 @@ impl App {
             .unwrap_or(default_focus);
         self.accessibility.focus_override = Some(focus);
         SemanticSnapshot { nodes, focus }
+    }
+
+    /// The open Workspaces menu as a menu of items sharing the drawn geometry.
+    fn workspace_menu_accessibility_snapshot(
+        &mut self,
+        window_width: f32,
+        window_height: f32,
+    ) -> SemanticSnapshot {
+        let layout = self.workspace_menu_layout();
+        let Some(menu) = self.workspace_menu.as_ref() else {
+            return SemanticSnapshot {
+                nodes: Vec::new(),
+                focus: ROOT,
+            };
+        };
+        let mut nodes = Vec::new();
+        let mut items = Vec::new();
+        for (row, entry) in menu.rows().iter().enumerate() {
+            let crate::ui::popup_menu::MenuRow::Item(item) = entry else {
+                continue;
+            };
+            let id = workspace_menu_node(row);
+            let mut node = Node::new(Role::MenuItem);
+            node.set_label(item.label.as_str());
+            let description = match (&item.detail, item.checked) {
+                (Some(detail), true) => Some(format!("{detail}, current workspace")),
+                (Some(detail), false) => Some(detail.clone()),
+                (None, true) => Some("Current workspace".into()),
+                (None, false) => None,
+            };
+            if let Some(description) = description {
+                node.set_description(description);
+            }
+            node.set_selected(menu.highlighted() == Some(row));
+            if item.enabled {
+                node.add_action(Action::Focus);
+                node.add_action(Action::Click);
+            } else {
+                node.set_disabled();
+            }
+            if let Some(&(x, y, w, h)) = layout.as_ref().and_then(|layout| layout.rows.get(row)) {
+                node.set_bounds(rect(x, y, w, h));
+            }
+            items.push(id);
+            nodes.push((id, node));
+        }
+        let mut menu_node = Node::new(Role::Menu);
+        menu_node.set_label("Workspaces");
+        menu_node.set_orientation(accesskit::Orientation::Vertical);
+        if let Some((x, y, w, h)) = layout.as_ref().map(|layout| layout.panel) {
+            menu_node.set_bounds(rect(x, y, w, h));
+        }
+        menu_node.set_children(items);
+        nodes.push((WORKSPACE_MENU, menu_node));
+
+        let mut root = Node::new(Role::Window);
+        root.set_label("Termeric terminal emulator");
+        root.set_bounds(rect(0.0, 0.0, window_width, window_height));
+        root.set_children([WORKSPACE_MENU]);
+        nodes.push((ROOT, root));
+
+        let focus = menu
+            .highlighted()
+            .map_or(WORKSPACE_MENU, workspace_menu_node);
+        self.accessibility.focus_override = Some(focus);
+        SemanticSnapshot { nodes, focus }
+    }
+
+    fn handle_workspace_menu_accessibility_action(&mut self, request: ActionRequest) {
+        let Some(row) = workspace_menu_row(request.target_node) else {
+            return;
+        };
+        match request.action {
+            Action::Focus => {
+                if let Some(menu) = self.workspace_menu.as_mut() {
+                    menu.set_highlight(Some(row));
+                }
+                self.accessibility.focus_override = Some(request.target_node);
+            }
+            Action::Click => {
+                let action = self
+                    .workspace_menu
+                    .as_ref()
+                    .and_then(|menu| menu.action_at(row));
+                if let Some(action) = action {
+                    self.activate_workspace_menu(action);
+                }
+                self.accessibility.focus_override = None;
+            }
+            _ => {}
+        }
     }
 
     fn command_palette_accessibility_snapshot(
@@ -5805,6 +5905,18 @@ fn accessible_selection(
     })
 }
 
+fn workspace_menu_node(row: usize) -> NodeId {
+    NodeId(WORKSPACE_MENU_ENTRY_BASE + row as u64)
+}
+
+/// Menu rows are bounded, so the range never reaches the next base.
+fn workspace_menu_row(node: NodeId) -> Option<usize> {
+    node.0
+        .checked_sub(WORKSPACE_MENU_ENTRY_BASE)
+        .filter(|row| *row < 64)
+        .map(|row| row as usize)
+}
+
 fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
     Rect::new(
         x as f64,
@@ -6610,6 +6722,52 @@ mod tests {
                 .unwrap()
                 .contains("truncated at 64 KiB")
         );
+    }
+
+    #[test]
+    fn workspace_menu_is_a_menu_whose_items_focus_and_activate_like_the_keyboard() {
+        let store = tempfile::tempdir().unwrap();
+        crate::workspace::set_test_workspaces_base_dir(Some(store.path().to_path_buf()));
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.toggle_workspace_menu(true);
+        let snapshot = app.accessibility_snapshot();
+        let node = |id: NodeId| {
+            &snapshot
+                .nodes
+                .iter()
+                .find(|(node, _)| *node == id)
+                .unwrap()
+                .1
+        };
+        assert_eq!(node(WORKSPACE_MENU).role(), Role::Menu);
+        let items = node(WORKSPACE_MENU).children().to_vec();
+        let labels: Vec<_> = items
+            .iter()
+            .map(|id| node(*id).label().unwrap().to_owned())
+            .collect();
+        assert_eq!(labels, ["Save Workspace", "Manage Workspaces…"]);
+        assert!(items.iter().all(|id| node(*id).role() == Role::MenuItem));
+        assert_eq!(
+            snapshot.focus, items[0],
+            "focus follows the highlighted item"
+        );
+
+        app.handle_accessibility_action(ActionRequest {
+            action: Action::Focus,
+            target_node: items[1],
+            target_tree: TreeId::ROOT,
+            data: None,
+        });
+        assert_eq!(app.accessibility_snapshot().focus, items[1]);
+        app.handle_accessibility_action(ActionRequest {
+            action: Action::Click,
+            target_node: items[1],
+            target_tree: TreeId::ROOT,
+            data: None,
+        });
+        assert!(app.workspace_menu.is_none());
+        assert!(app.session_panel.is_open() && app.session_panel.is_workspace_mode());
+        crate::workspace::set_test_workspaces_base_dir(None);
     }
 
     #[test]

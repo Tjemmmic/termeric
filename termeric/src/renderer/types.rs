@@ -214,30 +214,6 @@ pub struct GuardrailInfo {
     pub user: String,
 }
 
-/// Info for rendering the session dropdown
-pub struct SessionDropdownInfo {
-    /// List of sessions as (id, display_title) pairs
-    pub sessions: Vec<(String, String)>,
-    /// Mouse-hovered row index (None if not hovering; index = session rows then "Manage Sessions")
-    pub hovered_index: Option<usize>,
-}
-
-/// Result of clicking in the session dropdown
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SessionDropdownClick {
-    /// Clicked on a session by name
-    LoadSession(String),
-    /// Clicked "Manage Sessions…"
-    ManageSessions,
-    /// Clicked outside the dropdown
-    Dismiss,
-    /// No click in dropdown area
-    None,
-}
-
-/// Maximum items shown in session dropdown before scrolling
-pub const SESSION_DROPDOWN_MAX_ITEMS: usize = 5;
-
 /// Render data for a single pane in multi-pane mode.
 ///
 /// Each pane holds a reference to its terminal grid and its pixel-space

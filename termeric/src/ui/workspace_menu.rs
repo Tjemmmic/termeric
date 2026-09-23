@@ -1,0 +1,141 @@
+//! The toolbar Workspaces menu: recent workspaces, then save and manage.
+
+use crate::ui::popup_menu::{MenuItem, MenuRow};
+use crate::workspace::WorkspaceListEntry;
+
+/// Recent workspaces listed before the actions; the manager shows the rest.
+pub const MAX_RECENT_WORKSPACES: usize = 6;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WorkspaceMenuAction {
+    Open(String),
+    Save,
+    Manage,
+}
+
+/// Rows for `workspaces`, which arrive most recently updated first. The
+/// current workspace is checked; an unreadable archive stays visible but
+/// disabled so the manager remains the place to inspect or delete it.
+pub fn workspace_menu_rows(
+    workspaces: &[WorkspaceListEntry],
+    current: Option<&str>,
+) -> Vec<MenuRow<WorkspaceMenuAction>> {
+    let mut rows: Vec<_> = workspaces
+        .iter()
+        .take(MAX_RECENT_WORKSPACES)
+        .map(|workspace| {
+            let readable = workspace.warning.is_none();
+            MenuRow::Item(MenuItem {
+                label: workspace.name.clone(),
+                detail: Some(if readable {
+                    tab_count(workspace.tab_count)
+                } else {
+                    "Unavailable".into()
+                }),
+                checked: current == Some(workspace.id.as_str()),
+                enabled: readable,
+                action: WorkspaceMenuAction::Open(workspace.id.clone()),
+            })
+        })
+        .collect();
+    if !rows.is_empty() {
+        rows.push(MenuRow::Separator);
+    }
+    for (label, action) in [
+        ("Save Workspace", WorkspaceMenuAction::Save),
+        ("Manage Workspaces…", WorkspaceMenuAction::Manage),
+    ] {
+        rows.push(MenuRow::Item(MenuItem {
+            label: label.into(),
+            detail: None,
+            checked: false,
+            enabled: true,
+            action,
+        }));
+    }
+    rows
+}
+
+fn tab_count(count: usize) -> String {
+    match count {
+        1 => "1 tab".into(),
+        count => format!("{count} tabs"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn workspace(id: &str, tabs: usize, warning: bool) -> WorkspaceListEntry {
+        WorkspaceListEntry {
+            id: id.into(),
+            name: format!("Workspace {id}"),
+            updated_at: "2026-09-23T00:00:00Z".into(),
+            tab_count: tabs,
+            pane_count: tabs,
+            warning: warning.then(|| "archive unavailable".into()),
+        }
+    }
+
+    fn labels(rows: &[MenuRow<WorkspaceMenuAction>]) -> Vec<String> {
+        rows.iter()
+            .map(|row| match row {
+                MenuRow::Item(item) => item.label.clone(),
+                MenuRow::Separator => "—".into(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn without_workspaces_only_the_actions_remain() {
+        let rows = workspace_menu_rows(&[], None);
+        assert_eq!(labels(&rows), ["Save Workspace", "Manage Workspaces…"]);
+    }
+
+    #[test]
+    fn recent_workspaces_precede_a_separator_and_mark_the_current_one() {
+        let workspaces = [workspace("a", 3, false), workspace("b", 1, false)];
+        let rows = workspace_menu_rows(&workspaces, Some("b"));
+        assert_eq!(
+            labels(&rows),
+            [
+                "Workspace a",
+                "Workspace b",
+                "—",
+                "Save Workspace",
+                "Manage Workspaces…"
+            ]
+        );
+        let MenuRow::Item(first) = &rows[0] else {
+            panic!("expected an item")
+        };
+        assert_eq!(first.detail.as_deref(), Some("3 tabs"));
+        assert!(!first.checked);
+        let MenuRow::Item(second) = &rows[1] else {
+            panic!("expected an item")
+        };
+        assert_eq!(second.detail.as_deref(), Some("1 tab"));
+        assert!(second.checked);
+        assert_eq!(second.action, WorkspaceMenuAction::Open("b".into()));
+    }
+
+    #[test]
+    fn unreadable_archives_are_listed_but_cannot_be_opened() {
+        let rows = workspace_menu_rows(&[workspace("broken", 0, true)], None);
+        let MenuRow::Item(item) = &rows[0] else {
+            panic!("expected an item")
+        };
+        assert!(!item.enabled);
+        assert_eq!(item.detail.as_deref(), Some("Unavailable"));
+    }
+
+    #[test]
+    fn at_most_six_recent_workspaces_are_listed() {
+        let workspaces: Vec<_> = (0..9)
+            .map(|index| workspace(&index.to_string(), 1, false))
+            .collect();
+        let rows = workspace_menu_rows(&workspaces, None);
+        assert_eq!(rows.len(), MAX_RECENT_WORKSPACES + 3);
+    }
+}

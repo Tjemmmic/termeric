@@ -123,7 +123,7 @@ impl App {
         self.settings_panel.is_active()
             || self.commands_panel.is_open()
             || self.session_panel.is_open()
-            || self.session_dropdown_open
+            || self.workspace_menu.is_some()
     }
 
     /// A modal takes native pointer ownership even if the physical button
@@ -394,38 +394,11 @@ impl App {
                             }
                         }
 
-                        // If session dropdown is open, intercept clicks anywhere
-                        // (dropdown extends below tab bar)
-                        if self.session_dropdown_open {
-                            let window_size = self.window.as_ref().map(|w| w.inner_size());
-                            if let Some(size) = window_size {
-                                use crate::renderer::SessionDropdownClick;
-                                let click = renderer.session_dropdown_hit_test(
-                                    px,
-                                    py,
-                                    &self.session_dropdown_items,
-                                    size.width as f32,
-                                );
-                                match click {
-                                    SessionDropdownClick::LoadSession(name) => {
-                                        self.restore_saved_session(&name);
-                                        self.session_dropdown_open = false;
-                                    }
-
-                                    SessionDropdownClick::ManageSessions => {
-                                        self.session_dropdown_open = false;
-                                        self.session_panel.open_sessions();
-                                    }
-                                    SessionDropdownClick::Dismiss => {
-                                        self.session_dropdown_open = false;
-                                    }
-                                    SessionDropdownClick::None => {}
-                                }
-                                if let Some(window) = &self.window {
-                                    window.request_redraw();
-                                }
-                                return;
-                            }
+                        // An open menu owns every click: rows activate and
+                        // anything outside dismisses it.
+                        if self.workspace_menu.is_some() {
+                            self.click_workspace_menu(px, py);
+                            return;
                         }
 
                         // Settings modal intercepts all clicks (inside: handle;
@@ -550,11 +523,7 @@ impl App {
                                         }
                                     }
                                     TabBarClick::SessionDropdown => {
-                                        self.session_dropdown_open = !self.session_dropdown_open;
-                                        if self.session_dropdown_open {
-                                            self.session_dropdown_items =
-                                                crate::session::list_sessions_with_titles();
-                                        }
+                                        self.toggle_workspace_menu(false);
                                     }
                                     TabBarClick::CommandsButton => {
                                         self.commands_panel.toggle();
@@ -983,45 +952,10 @@ impl App {
             return;
         }
 
-        if self.session_dropdown_open {
-            let px = position.0 as f32;
-            let py = position.1 as f32;
-            if let Some(renderer) = &self.renderer {
-                let window_size = self.window.as_ref().map(|w| w.inner_size());
-                if let Some(size) = window_size {
-                    let (cell_width, cell_height) = renderer.cell_size();
-                    let tab_bar_height = renderer.tab_bar_height();
-                    let window_width = size.width as f32;
-
-                    let gear_button_width = tab_bar_height;
-                    let session_button_width = tab_bar_height;
-                    let dropdown_anchor_x = window_width - gear_button_width - session_button_width;
-
-                    let row_height = (cell_height * 2.0).max(28.0);
-                    let dropdown_width = (cell_width * 22.0).max(200.0);
-                    let dropdown_x =
-                        (dropdown_anchor_x + session_button_width - dropdown_width).max(0.0);
-                    let dropdown_y = tab_bar_height;
-
-                    let session_count = self.session_dropdown_items.len().min(5);
-                    let display_rows = session_count.max(1);
-                    let total_items = display_rows + 1; // + "Manage Sessions"
-                    let dropdown_height = total_items as f32 * row_height + 4.0;
-
-                    self.session_dropdown_hovered = if px >= dropdown_x
-                        && px <= dropdown_x + dropdown_width
-                        && py >= dropdown_y
-                        && py <= dropdown_y + dropdown_height
-                    {
-                        let relative_y = py - dropdown_y - 2.0;
-                        let row = (relative_y / row_height) as usize;
-                        if row < total_items { Some(row) } else { None }
-                    } else {
-                        None
-                    };
-                }
-            }
-            if let Some(window) = &self.window {
+        if self.workspace_menu.is_some() {
+            if self.hover_workspace_menu(position.0 as f32, position.1 as f32)
+                && let Some(window) = &self.window
+            {
                 window.request_redraw();
             }
             return;
@@ -1322,7 +1256,7 @@ impl App {
             || self.settings_panel.is_active()
             || self.commands_panel.is_open()
             || self.session_panel.is_open()
-            || self.session_dropdown_open
+            || self.workspace_menu.is_some()
         {
             return;
         }

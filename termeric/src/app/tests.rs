@@ -3129,8 +3129,13 @@ fn pointer_panel_ownership_tracks_the_full_open_close_lifecycle() {
             |app| app.session_panel.close(),
         ),
         (
-            |app| app.session_dropdown_open = true,
-            |app| app.session_dropdown_open = false,
+            |app| {
+                app.workspace_menu = Some(crate::ui::popup_menu::PopupMenu::new(
+                    crate::ui::workspace_menu::workspace_menu_rows(&[], None),
+                    false,
+                ))
+            },
+            |app| app.workspace_menu = None,
         ),
     ];
     for (open, close) in lifecycles {
@@ -3169,7 +3174,12 @@ fn modal_interruption_finishes_native_gestures_before_pointer_motion() {
         |app| app.domain_picker.open(&app.config.domains),
         |app| app.commands_panel.toggle(),
         |app| app.session_panel.open_workspaces(),
-        |app| app.session_dropdown_open = true,
+        |app| {
+            app.workspace_menu = Some(crate::ui::popup_menu::PopupMenu::new(
+                crate::ui::workspace_menu::workspace_menu_rows(&[], None),
+                false,
+            ))
+        },
     ];
     for open in openers {
         let mut app = App::new_headless(Config::default()).unwrap();

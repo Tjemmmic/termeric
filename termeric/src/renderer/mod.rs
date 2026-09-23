@@ -29,9 +29,9 @@ mod palette;
 #[cfg(test)]
 pub(crate) use palette::headless_palette_input_smoke;
 mod panels;
+mod popup_menu;
 mod quick_select;
 mod search_bar;
-mod sessions;
 mod settings_render;
 mod shortcuts_render;
 mod tab_bar;
@@ -39,6 +39,7 @@ mod toasts;
 pub mod types;
 mod ui_text;
 
+pub use popup_menu::PopupMenuInfo;
 pub use types::*;
 
 #[cfg(test)]
@@ -234,6 +235,12 @@ pub(crate) struct UiPalette {
     pub(crate) tab_inactive: [f32; 4],
     /// Theme accent for the active-tab indicator.
     pub(crate) tab_accent: [f32; 4],
+    // Popup menus
+    pub(crate) menu_bg: [f32; 4],
+    pub(crate) menu_border: [f32; 4],
+    pub(crate) menu_highlight: [f32; 4],
+    pub(crate) menu_text: [f32; 4],
+    pub(crate) menu_text_dim: [f32; 4],
     pub(crate) tab_activity: [f32; 4],
     pub(crate) tab_border: [f32; 4],
     pub(crate) tab_text_active: [f32; 4],
@@ -301,6 +308,11 @@ impl UiPalette {
             tab_active: chrome(0.08),
             tab_inactive: chrome(0.05),
             tab_accent: tab_active.to_f32_array(),
+            menu_bg: chrome(0.03),
+            menu_border: chrome(0.14),
+            menu_highlight: chrome(0.11),
+            menu_text: fg.to_f32_array(),
+            menu_text_dim: adjust_alpha(fg.to_f32_array(), 0.55),
             tab_activity: theme.primary.yellow.to_f32_array(),
             tab_border: tab_border.to_f32_array(),
             tab_text_active,
@@ -360,6 +372,12 @@ impl UiPalette {
         self.tab_text_active = high_contrast_text(self.tab_active);
         self.tab_text_inactive = high_contrast_text(self.tab_bar_bg);
         self.tab_accent = self.tab_text_active;
+
+        self.menu_bg[3] = 1.0;
+        self.menu_highlight[3] = 1.0;
+        self.menu_text = high_contrast_text(self.menu_bg);
+        self.menu_text_dim = self.menu_text;
+        self.menu_border = self.menu_text;
         self.tab_border = high_contrast_text(self.tab_bar_bg);
 
         self.search_bg[3] = 1.0;
@@ -953,6 +971,11 @@ impl Renderer {
     }
 
     /// Get the cell dimensions
+    /// Display scale factor the renderer lays out chrome for.
+    pub fn scale_factor(&self) -> f32 {
+        self.scale_factor
+    }
+
     pub fn cell_size(&self) -> (f32, f32) {
         (self.cell_width, self.cell_height)
     }
@@ -1303,7 +1326,7 @@ impl Renderer {
         url_cache: &UrlCache,
         copy_mode: Option<&CopyModeRenderInfo>,
         images: Option<&[termeric_core::PresentationImage]>,
-        session_dropdown: Option<&SessionDropdownInfo>,
+        workspace_menu: Option<&PopupMenuInfo>,
         session_panel: Option<&crate::session::panel::SessionPanelInfo>,
         commands_panel: Option<&crate::ui::commands::panel::CommandsPanelInfo>,
         command_palette: Option<&PaletteInfo>,
@@ -1379,7 +1402,7 @@ impl Renderer {
             search,
             url_cache,
             copy_mode,
-            session_dropdown,
+            workspace_menu,
             session_panel,
             commands_panel,
             command_palette,
@@ -1595,7 +1618,7 @@ impl Renderer {
         search: &Search,
         url_cache: &UrlCache,
         copy_mode: Option<&CopyModeRenderInfo>,
-        session_dropdown: Option<&SessionDropdownInfo>,
+        workspace_menu: Option<&PopupMenuInfo>,
         session_panel: Option<&crate::session::panel::SessionPanelInfo>,
         commands_panel: Option<&crate::ui::commands::panel::CommandsPanelInfo>,
         command_palette: Option<&PaletteInfo>,
@@ -1865,11 +1888,11 @@ impl Renderer {
             );
         }
 
-        // ── LAYER 8: Session dropdown (on top of everything) ──
+        // ── LAYER 8: Toolbar menus (on top of everything) ──
         self.rect_pipeline.mark_layer();
         self.text_pipeline.mark_layer();
-        if let Some(sd) = session_dropdown {
-            self.build_session_dropdown(sd, window_width);
+        if let Some(menu) = workspace_menu {
+            self.build_popup_menu(menu);
         }
 
         // ── LAYER 9: Session management panel (topmost overlay) ──
@@ -4667,6 +4690,9 @@ mod ui_palette_accessibility_tests {
                 (palette.tab_text_active, palette.tab_active),
                 (palette.tab_text_inactive, palette.tab_bar_bg),
                 (palette.tab_text_inactive, palette.tab_inactive),
+                (palette.menu_text, palette.menu_bg),
+                (palette.menu_text, palette.menu_highlight),
+                (palette.menu_text_dim, palette.menu_bg),
                 (palette.search_text, palette.search_bg),
                 (palette.search_indicator, palette.search_bg),
                 (palette.search_error, palette.search_bg),

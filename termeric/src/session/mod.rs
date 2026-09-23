@@ -264,24 +264,6 @@ pub fn list_sessions() -> Vec<String> {
     sessions
 }
 
-/// List all saved sessions as (id, display_title) pairs
-///
-/// For each session, reads the title from session.toml. Falls back to the
-/// session ID if the title can't be read.
-pub fn list_sessions_with_titles() -> Vec<(String, String)> {
-    list_sessions()
-        .into_iter()
-        .map(|id| {
-            let title = session_file_path(&id)
-                .and_then(|path| snapshot::read_metadata(&path).ok())
-                .map(|session| session.title)
-                .filter(|t| !t.is_empty())
-                .unwrap_or_else(|| id.clone());
-            (id, title)
-        })
-        .collect()
-}
-
 /// Delete a saved session by name
 ///
 /// Returns an error if the name fails sanitization.

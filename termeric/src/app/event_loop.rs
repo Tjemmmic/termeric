@@ -1061,6 +1061,14 @@ impl ApplicationHandler<AppEvent> for App {
                     return;
                 }
 
+                // An open toolbar menu owns every key, so none reaches the PTY.
+                if self.workspace_menu.is_some() {
+                    if event.state == winit::event::ElementState::Pressed {
+                        self.handle_workspace_menu_key(&event.logical_key);
+                    }
+                    return;
+                }
+
                 // Both browse mode and the inline form own modal input.
                 if self.commands_panel.is_open() {
                     if event.state == winit::event::ElementState::Pressed {
@@ -1781,7 +1789,7 @@ impl ApplicationHandler<AppEvent> for App {
                 // Every remaining modal/context surface owns the wheel while
                 // visible, even when it has no scroll action of its own.
                 if self.session_panel.is_open()
-                    || self.session_dropdown_open
+                    || self.workspace_menu.is_some()
                     || self.info_overlay.is_active()
                     || self.diff_review.is_active()
                     || self.context_picker.is_active()

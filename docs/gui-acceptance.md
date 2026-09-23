@@ -814,7 +814,7 @@ the fixed private Sway run passes. Other modal types, native live-domain gesture
 and X11 execution are not promoted by this check.
 
 Schema 7 additionally resizes the existing split to 960×720 and opens Settings,
-Commands, and the session dropdown through F6 navigation. Each click at the
+Commands, and the Workspaces menu through F6 navigation. Each click at the
 background divider's lower end must dismiss the panel and return typing to the
 same focused PTY without changing either pane's geometry. The click helper uses
 the explicit resized surface rather than the compact fixture's dimensions.

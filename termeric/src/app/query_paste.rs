@@ -54,7 +54,7 @@ impl App {
                 PasteTarget::SettingsFilter
             };
         }
-        if self.session_dropdown_open {
+        if self.workspace_menu.is_some() {
             return PasteTarget::Blocked;
         }
         if self.session_panel.is_open() {
@@ -280,10 +280,13 @@ mod tests {
         assert_eq!(app.commands_panel.form_name.text(), "front form");
         assert_eq!(app.tab_rename.as_ref().unwrap().input, "Roots");
         app.commands_panel.close();
-        app.session_dropdown_open = true;
+        app.workspace_menu = Some(crate::ui::popup_menu::PopupMenu::new(
+            crate::ui::workspace_menu::workspace_menu_rows(&[], None),
+            false,
+        ));
         assert!(app.clipboard_paste_blocked());
         assert!(!app.paste_clipboard_payload("hidden"));
-        app.session_dropdown_open = false;
+        app.workspace_menu = None;
         app.shortcut_registry.clear_binding(BindableAction::Paste);
         assert!(!app.handle_query_paste_key(&rebound));
         assert_eq!(app.tab_rename.as_ref().unwrap().input, "Roots");
@@ -384,11 +387,14 @@ mod tests {
         assert!(!app.handle_query_paste_key(&default));
         app.modifiers = ModifiersState::empty();
         assert!(app.handle_query_paste_key(&rebound));
-        app.session_dropdown_open = true;
+        app.workspace_menu = Some(crate::ui::popup_menu::PopupMenu::new(
+            crate::ui::workspace_menu::workspace_menu_rows(&[], None),
+            false,
+        ));
         assert!(app.clipboard_paste_blocked());
         assert!(!app.handle_query_paste_key(&rebound));
         assert!(!app.paste_clipboard_payload("hidden"));
-        app.session_dropdown_open = false;
+        app.workspace_menu = None;
         app.shortcut_registry.clear_binding(BindableAction::Paste);
         assert!(!app.handle_query_paste_key(&rebound));
         assert_eq!(

@@ -1106,6 +1106,12 @@ Versioning once public beta tags begin.
 
 ### Changed
 
+- The toolbar Workspaces menu lists recent workspaces (current one checked,
+  with tab counts) followed by Save Workspace and Manage Workspaces…, instead
+  of a "legacy snapshots" list. It is keyboard navigable, exposed to screen
+  readers as a menu, drawn in the UI font, and built on a reusable popup-menu
+  component whose single layout drives drawing, hit testing, and accessibility.
+
 - The tab bar has a quiet, native design. Titles use the desktop's sans-serif
   UI face at 10pt, resolved through fontconfig, and are shortened with an
   ellipsis to the measured space instead of cut at 15 characters and squeezed
@@ -1182,6 +1188,11 @@ Versioning once public beta tags begin.
   application identity; closing or losing one window no longer exits siblings.
 
 ### Fixed
+
+- Escape pressed while the toolbar Workspaces menu was open reached the shell
+  as `^[`, and every other key leaked the same way, because the menu was an
+  unowned flag outside the keyboard priority chain. The menu now owns the
+  keyboard while open.
 
 - Theme, SGR, and chrome colors now present exactly as written. The renderer
   drew sRGB hex values into an sRGB surface, so the GPU encoded them a second

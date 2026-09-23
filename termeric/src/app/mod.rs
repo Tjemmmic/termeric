@@ -40,6 +40,7 @@ mod tests;
 mod transcripts;
 mod unicode_picker;
 mod workspace_actions;
+mod workspace_menu;
 mod workspaces;
 
 use anyhow::Result;
@@ -1169,12 +1170,9 @@ pub struct App {
     keybinding_manager: KeyBindingManager,
     /// Application runtime state (for first boot tracking, etc.)
     app_state: AppState,
-    /// Whether the session dropdown is currently open
-    session_dropdown_open: bool,
-    /// Cached list of session names for the dropdown
-    session_dropdown_items: Vec<(String, String)>,
-    /// Mouse-hovered row in the session dropdown
-    session_dropdown_hovered: Option<usize>,
+    /// The toolbar Workspaces menu while it is open.
+    workspace_menu:
+        Option<crate::ui::popup_menu::PopupMenu<crate::ui::workspace_menu::WorkspaceMenuAction>>,
     /// Session management panel
     session_panel: crate::session::panel::SessionPanel,
     /// Custom commands panel
@@ -1426,9 +1424,7 @@ impl App {
             } else {
                 AppState::default()
             },
-            session_dropdown_open: false,
-            session_dropdown_items: Vec::new(),
-            session_dropdown_hovered: None,
+            workspace_menu: None,
             session_panel: crate::session::panel::SessionPanel::new(),
             commands_panel: crate::ui::commands::panel::CommandsPanel::new(),
             input_line_buffer: String::new(),
@@ -2104,6 +2100,7 @@ impl App {
         let ime_preedit_info = self.ime_preedit_render_info(&pane_info);
         let chrome_focus_target = self.chrome_focus_render_target();
         let broadcast_render = self.broadcast_render_targets();
+        let workspace_menu_info = self.workspace_menu_render_info();
 
         let Some(renderer) = &mut self.renderer else {
             return false;
@@ -2197,15 +2194,6 @@ impl App {
             Some(image_data.as_slice())
         };
 
-        // Build session dropdown info if dropdown is open
-        let session_dropdown_info = if self.session_dropdown_open {
-            Some(crate::renderer::SessionDropdownInfo {
-                sessions: self.session_dropdown_items.clone(),
-                hovered_index: self.session_dropdown_hovered,
-            })
-        } else {
-            None
-        };
         // Build session panel info if panel is open or animating
         self.session_panel.update();
         let session_panel_info = if !self.session_panel.is_closed() {
@@ -2794,7 +2782,7 @@ impl App {
             &self.url_cache,
             copy_mode_info.as_ref(),
             images,
-            session_dropdown_info.as_ref(),
+            workspace_menu_info.as_ref(),
             session_panel_info.as_ref(),
             commands_panel_info.as_ref(),
             palette_info.as_ref(),
@@ -3605,7 +3593,7 @@ impl App {
 
         self.commands_panel.close();
         self.session_panel.close();
-        self.session_dropdown_open = false;
+        self.close_workspace_menu();
         self.settings_panel.toggle();
     }
 
