@@ -1,7 +1,7 @@
 //! Command palette — centered modal for command discovery and execution
 //!
-//! A world-class command palette with fuzzy search, category grouping,
-//! keycap-styled shortcuts, and plugin integration.
+//! Fuzzy search over core, plugin, and theme commands, recently used
+//! commands first, and quick-pick lists such as Change Theme….
 
 use sublime_fuzzy::FuzzySearch;
 

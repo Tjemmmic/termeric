@@ -190,7 +190,7 @@ explicit status signals rather than decorative Termeric transitions.
 
 `high_contrast = "on"` derives opaque application-chrome surfaces and chooses
 their text colors to meet a 4.5:1 contrast floor across every built-in theme.
-It covers tabs, Settings, search, palettes/dialogs, keycaps, borders, and modal
+It covers tabs, Settings, the find box, palettes/dialogs, menus, borders, and modal
 scrims. It does not rewrite the terminal foreground, background, ANSI palette,
 truecolor output, inline media, or colors changed by an application through
 terminal protocols.

@@ -28,7 +28,9 @@ impl PaletteLayout {
     /// Keep the caret visible without splitting a grapheme or drawing outside
     /// the field. The full query remains in the model and accessibility tree.
     pub fn input_viewport(&self, text: &str, cursor: usize) -> Option<PaletteInputViewport> {
-        let text_x = self.panel_x + self.padding + self.cell_width * 2.2;
+        let text_x = self.panel_x
+            + self.padding
+            + self.cell_width * crate::ui::constants::FILTER_TEXT_INSET_CELLS;
         let right = self.panel_x + self.panel_width - self.padding - self.cell_width * 0.8;
         PaletteInputViewport::calculate(
             text,

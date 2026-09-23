@@ -4812,16 +4812,16 @@ impl App {
             nodes.push((SHORTCUTS_EMPTY, empty));
             dialog_children.push(SHORTCUTS_EMPTY);
         }
-        if info.recording || info.conflict_label.is_some() {
+        if info.recording || info.notice.is_some() {
             let mut status = Node::new(Role::Status);
             status.set_label(if info.recording {
                 "Recording shortcut. Press a key to bind, Delete to clear, or Escape to cancel."
                     .to_string()
             } else {
-                format!(
-                    "Shortcut reassigned from {}",
-                    info.conflict_label.as_deref().unwrap_or_default()
-                )
+                info.notice
+                    .as_ref()
+                    .map(crate::ui::shortcuts_panel::ShortcutNotice::message)
+                    .unwrap_or_default()
             });
             status.set_live(Live::Polite);
             nodes.push((SHORTCUTS_STATUS, status));

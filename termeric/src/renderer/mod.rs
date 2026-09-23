@@ -255,11 +255,8 @@ pub(crate) struct UiPalette {
     pub(crate) settings_separator: [f32; 4],
     pub(crate) scrim: [f32; 4],
     // Search colors
-    pub(crate) search_bg: [f32; 4],
-    pub(crate) search_text: [f32; 4],
     pub(crate) search_match: [f32; 4],
     pub(crate) search_match_current: [f32; 4],
-    pub(crate) search_indicator: [f32; 4],
     pub(crate) search_error: [f32; 4],
     // URL/hyperlink color
     pub(crate) url: [f32; 4],
@@ -271,11 +268,7 @@ pub(crate) struct UiPalette {
     pub(crate) palette_text: [f32; 4],
     pub(crate) palette_text_dim: [f32; 4],
     pub(crate) palette_match_highlight: [f32; 4],
-    pub(crate) palette_keycap_bg: [f32; 4],
-    pub(crate) palette_keycap_text: [f32; 4],
     pub(crate) palette_border: [f32; 4],
-    pub(crate) palette_category: [f32; 4],
-    pub(crate) palette_footer: [f32; 4],
 }
 
 impl UiPalette {
@@ -325,13 +318,10 @@ impl UiPalette {
             settings_separator: adjust_alpha(tab_border.to_f32_array(), 0.4),
             // Warm scrim derived from theme background
             scrim: adjust_alpha(shade(bg.to_f32_array(), 0.3), 0.30),
-            // Search colors - warm gold tones per style guide
-            search_bg: shade(bg.to_f32_array(), 0.85),
-            search_text: fg.to_f32_array(),
+            // Search highlights and the find box's error color
             search_match: theme.ui.search_match.with_alpha(0.35).to_f32_array(),
             search_match_current: theme.ui.search_match.with_alpha(0.65).to_f32_array(),
-            search_indicator: theme.ansi_color(2).to_f32_array(), // green
-            search_error: theme.ansi_color(1).to_f32_array(),     // red
+            search_error: theme.ansi_color(1).to_f32_array(), // red
             // URL/hyperlink color from theme
             url: theme.ui.url.to_f32_array(),
             // Command palette — fully theme-derived
@@ -342,11 +332,7 @@ impl UiPalette {
             palette_text: fg.to_f32_array(),
             palette_text_dim: adjust_alpha(fg.to_f32_array(), 0.50),
             palette_match_highlight: cursor.to_f32_array(),
-            palette_keycap_bg: adjust_alpha(shade(bg.to_f32_array(), 0.45), 0.9),
-            palette_keycap_text: adjust_alpha(fg.to_f32_array(), 0.70),
             palette_border: adjust_alpha(tab_border.to_f32_array(), 0.5),
-            palette_category: adjust_alpha(fg.to_f32_array(), 0.40),
-            palette_footer: adjust_alpha(fg.to_f32_array(), 0.35),
         };
         if high_contrast {
             palette.enforce_high_contrast();
@@ -377,10 +363,8 @@ impl UiPalette {
         self.menu_border = self.menu_text;
         self.tab_border = high_contrast_text(self.tab_bar_bg);
 
-        self.search_bg[3] = 1.0;
-        self.search_text = high_contrast_text(self.search_bg);
-        self.search_indicator = self.search_text;
-        self.search_error = self.search_text;
+        // Errors draw on menu surfaces (find box, manager buttons).
+        self.search_error = self.menu_text;
 
         self.palette_bg[3] = 1.0;
         self.palette_input_bg[3] = 1.0;
@@ -388,12 +372,8 @@ impl UiPalette {
         let palette_text = high_contrast_text(self.palette_bg);
         self.palette_text = palette_text;
         self.palette_text_dim = palette_text;
-        self.palette_category = palette_text;
-        self.palette_footer = palette_text;
         self.palette_border = palette_text;
         self.palette_accent = palette_text;
-        self.palette_keycap_bg[3] = 1.0;
-        self.palette_keycap_text = high_contrast_text(self.palette_keycap_bg);
         self.scrim[3] = self.scrim[3].max(0.65);
         self.palette_scrim[3] = self.palette_scrim[3].max(0.72);
     }
@@ -4678,13 +4658,11 @@ mod ui_palette_accessibility_tests {
                 (palette.menu_text, palette.menu_bg),
                 (palette.menu_text, palette.menu_highlight),
                 (palette.menu_text_dim, palette.menu_bg),
-                (palette.search_text, palette.search_bg),
-                (palette.search_indicator, palette.search_bg),
-                (palette.search_error, palette.search_bg),
+                (palette.search_error, palette.menu_bg),
+                (palette.palette_text, palette.menu_bg),
                 (palette.palette_text, palette.palette_bg),
                 (palette.palette_text, palette.palette_input_bg),
                 (palette.palette_text_dim, palette.palette_bg),
-                (palette.palette_keycap_text, palette.palette_keycap_bg),
             ] {
                 assert!(
                     contrast_ratio(foreground, background) >= 4.5,

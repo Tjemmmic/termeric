@@ -83,8 +83,26 @@ pub struct ShortcutsPanelInfo {
     pub total_rows: usize,
     /// Whether we're in recording mode
     pub recording: bool,
-    /// Conflict label after reassignment
-    pub conflict_label: Option<String>,
+    /// Note about the last recording, until the next edit.
+    pub notice: Option<ShortcutNotice>,
+}
+
+/// What happened to the last recorded shortcut, when it needs saying.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShortcutNotice {
+    /// The chord belonged to this other action, which is now unset.
+    Reassigned(&'static str),
+    /// No key arrived before recording gave up.
+    TimedOut,
+}
+
+impl ShortcutNotice {
+    pub fn message(&self) -> String {
+        match self {
+            Self::Reassigned(label) => format!("{label} is now unset"),
+            Self::TimedOut => "Recording timed out".to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -110,7 +128,6 @@ pub struct ShortcutsPanelLayout {
     pub panel_height: f32,
     pub padding: f32,
     pub row_height: f32,
-    pub input_height: f32,
     pub footer_height: f32,
     pub gap: f32,
     pub separator_height: f32,
@@ -132,7 +149,7 @@ impl ShortcutsPanelLayout {
         TextInputViewport::calculate(
             text,
             cursor,
-            self.input.x + cell_width * 2.2,
+            self.input.x + cell_width * crate::ui::constants::FILTER_TEXT_INSET_CELLS,
             self.input.y + (self.input.height - cell_height) / 2.0,
             self.input.x + self.input.width - cell_width * 0.8,
             cell_width,
@@ -191,7 +208,6 @@ impl ShortcutsPanelLayout {
             panel_height,
             padding,
             row_height,
-            input_height,
             footer_height,
             gap,
             separator_height,
@@ -256,8 +272,8 @@ pub struct ShortcutsPanel {
     /// When recording mode was entered. Used to auto-cancel after a
     /// timeout so users can't get stuck if they walk away.
     recording_started: Option<std::time::Instant>,
-    /// Brief conflict notification text
-    conflict_label: Option<String>,
+    /// Note about the last recording.
+    notice: Option<ShortcutNotice>,
 }
 
 impl ShortcutsPanel {
@@ -271,7 +287,7 @@ impl ShortcutsPanel {
             recording: false,
             recording_action: None,
             recording_started: None,
-            conflict_label: None,
+            notice: None,
         }
     }
 
@@ -284,7 +300,7 @@ impl ShortcutsPanel {
         self.recording = false;
         self.recording_action = None;
         self.recording_started = None;
-        self.conflict_label = None;
+        self.notice = None;
     }
 
     /// Close the shortcuts panel
@@ -318,7 +334,7 @@ impl ShortcutsPanel {
             self.recording = false;
             self.recording_action = None;
             self.recording_started = None;
-            self.conflict_label = Some("Recording timed out".to_string());
+            self.notice = Some(ShortcutNotice::TimedOut);
             return true;
         }
         false
@@ -474,7 +490,8 @@ impl ShortcutsPanel {
                         // Check for conflict
                         if let Some(conflicting) = registry.conflict_for(&chord) {
                             if conflicting != a {
-                                self.conflict_label = Some(conflicting.meta().label.to_string());
+                                self.notice =
+                                    Some(ShortcutNotice::Reassigned(conflicting.meta().label));
                             }
                         }
                         ShortcutsAction::SetShortcut {
@@ -663,7 +680,7 @@ impl ShortcutsPanel {
         self.recording = true;
         self.recording_action = Some(action);
         self.recording_started = Some(std::time::Instant::now());
-        self.conflict_label = None;
+        self.notice = None;
     }
 
     pub fn select_action(&mut self, action: BindableAction, registry: &ShortcutRegistry) -> bool {
@@ -749,7 +766,7 @@ impl ShortcutsPanel {
             total_entries: selectable,
             total_rows,
             recording: self.recording,
-            conflict_label: self.conflict_label.clone(),
+            notice: self.notice.clone(),
         }
     }
 }
@@ -863,6 +880,37 @@ mod tests {
         // Escape cancels recording
         panel.handle_key(ShortcutsKey::Escape, &registry);
         assert!(!panel.is_recording());
+    }
+
+    #[test]
+    fn recording_notices_name_the_unset_action_or_the_timeout() {
+        let mut panel = ShortcutsPanel::new();
+        let registry = ShortcutRegistry::new();
+        let search = registry
+            .binding_for(BindableAction::ToggleSearch)
+            .cloned()
+            .unwrap();
+        panel.open();
+        panel.handle_key(ShortcutsKey::Enter, &registry);
+        let recorded = panel
+            .build_info(&registry)
+            .entries
+            .iter()
+            .find(|entry| entry.selected)
+            .unwrap()
+            .action;
+        assert_ne!(recorded, BindableAction::ToggleSearch);
+        panel.handle_key(ShortcutsKey::RecordedChord(search), &registry);
+        let notice = panel.build_info(&registry).notice.unwrap();
+        assert_eq!(notice, ShortcutNotice::Reassigned("Toggle Search"));
+        assert_eq!(notice.message(), "Toggle Search is now unset");
+
+        panel.handle_key(ShortcutsKey::Enter, &registry);
+        assert!(panel.tick_recording_timeout(std::time::Duration::ZERO));
+        assert_eq!(
+            panel.build_info(&registry).notice.unwrap().message(),
+            "Recording timed out"
+        );
     }
 
     #[test]
@@ -1112,7 +1160,10 @@ mod tests {
     fn filter_pointer_caret_preserves_results_and_refuses_recording_or_collapsed_input() {
         let mut panel = ShortcutsPanel::new();
         let layout = ShortcutsPanelLayout::calculate(1000.0, 700.0, 8.0, 16.0, 1.0, 8);
-        let (x, y) = (layout.input.x + 2.2 * 8.0, layout.input.y + 8.0);
+        let (x, y) = (
+            layout.input.x + crate::ui::constants::FILTER_TEXT_INSET_CELLS * 8.0,
+            layout.input.y + 8.0,
+        );
         assert!(!panel.place_filter_caret_at(x, y, &layout, 8.0, 16.0));
         panel.open();
         assert!(panel.insert_filter_text("e\u{301}界👩\u{200d}💻"));

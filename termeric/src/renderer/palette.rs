@@ -110,6 +110,48 @@ pub(crate) fn headless_palette_input_smoke(
 }
 
 impl Renderer {
+    /// A centred modal's soft shadow, hairline border, and raised surface,
+    /// faded in with `animation`. Shared by the palette-style dialogs.
+    pub(super) fn build_modal_frame(
+        &mut self,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        animation: f32,
+    ) {
+        let px = |logical: f32| (logical * self.scale_factor).round().max(1.0);
+        let fade = |color: [f32; 4]| adjust_alpha(color, color[3] * animation);
+        let radius = px(10.0);
+        for (spread, alpha) in [(px(2.0), 0.18), (px(10.0), 0.10)] {
+            self.rect_pipeline.push_rounded_rect(
+                x - spread,
+                y - spread / 2.0 + px(3.0),
+                width + spread * 2.0,
+                height + spread * 2.0,
+                [0.0, 0.0, 0.0, alpha * animation],
+                radius + spread,
+            );
+        }
+        let line = px(1.0);
+        self.rect_pipeline.push_rounded_rect(
+            x,
+            y,
+            width,
+            height,
+            fade(self.ui.menu_border),
+            radius,
+        );
+        self.rect_pipeline.push_rounded_rect(
+            x + line,
+            y + line,
+            width - line * 2.0,
+            height - line * 2.0,
+            fade(self.ui.menu_bg),
+            radius - line,
+        );
+    }
+
     /// Build command palette render data — centered modal with a light scrim.
     /// The query field keeps the shared `PaletteLayout` geometry that caret,
     /// IME, pointer, and accessibility code use; rows draw in the UI face.
@@ -143,35 +185,8 @@ impl Renderer {
         let padding = layout.padding;
         let row_height = layout.row_height;
 
-        // ── Panel: soft shadow, hairline border, raised surface ──
-        let radius = px(10.0);
-        for (spread, alpha) in [(px(2.0), 0.18), (px(10.0), 0.10)] {
-            self.rect_pipeline.push_rounded_rect(
-                panel_x - spread,
-                panel_y - spread / 2.0 + px(3.0),
-                panel_width + spread * 2.0,
-                panel_height + spread * 2.0,
-                [0.0, 0.0, 0.0, alpha * anim],
-                radius + spread,
-            );
-        }
+        self.build_modal_frame(panel_x, panel_y, panel_width, panel_height, anim);
         let line = px(1.0);
-        self.rect_pipeline.push_rounded_rect(
-            panel_x,
-            panel_y,
-            panel_width,
-            panel_height,
-            fade(self.ui.menu_border, 1.0),
-            radius,
-        );
-        self.rect_pipeline.push_rounded_rect(
-            panel_x + line,
-            panel_y + line,
-            panel_width - line * 2.0,
-            panel_height - line * 2.0,
-            fade(self.ui.menu_bg, 1.0),
-            radius - line,
-        );
 
         // ── Query field ──
         let input_x = panel_x + padding;
@@ -188,7 +203,7 @@ impl Renderer {
         );
         // Magnifier in the slot before the query text.
         self.push_magnifier(
-            input_x + cell_width * 1.1,
+            input_x + cell_width * crate::ui::constants::FILTER_ICON_CENTER_CELLS,
             input_y + input_height / 2.0,
             fade(self.ui.palette_text_dim, 1.0),
             fade(self.ui.palette_input_bg, 0.8),

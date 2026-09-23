@@ -1131,6 +1131,14 @@ Versioning once public beta tags begin.
   bars are gone, a magnifier replaces the `>` prompt, rows are shorter, and the
   scrim is lighter. The query field keeps its existing geometry.
 
+- The Keyboard Shortcuts dialog matches the command palette: UI-face text, a
+  magnifier in the filter, quiet selected rows, and shortcuts as plain text
+  instead of keycap boxes ("Not set" for unbound actions). The key-hint strip
+  is replaced by one line ("Enter changes · Delete clears"), recording shows
+  "Press a shortcut…" without a flicker, and reassigning a shortcut now says
+  which action lost it ("Toggle Search is now unset"). A recording timeout
+  previously read "Reassigned from: Recording timed out".
+
 - Terminal search is a floating find box at the top right of the terminal
   instead of a full-width bar. It no longer pushes terminal content down,
   which also clipped the bottom rows and shifted pointer, image, and IME
