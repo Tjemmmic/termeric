@@ -1189,6 +1189,11 @@ Versioning once public beta tags begin.
 
 ### Fixed
 
+- The Keyboard Shortcuts editor repeated category headings (General,
+  Navigation, Tabs, and Panes each appeared twice) because it started a new
+  heading whenever adjacent actions differed. Shortcuts are now grouped under
+  one heading per category in a fixed order.
+
 - Escape pressed while the toolbar Workspaces menu was open reached the shell
   as `^[`, and every other key leaked the same way, because the menu was an
   unowned flag outside the keyboard priority chain. The menu now owns the

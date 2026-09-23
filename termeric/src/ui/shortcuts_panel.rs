@@ -369,7 +369,15 @@ impl ShortcutsPanel {
         let mut entries = Vec::new();
         let mut last_category: Option<ShortcutCategory> = None;
 
-        for &action in BindableAction::all() {
+        // Group by category so each header appears once, whatever order the
+        // action registry declares its members in.
+        let grouped = ShortcutCategory::ORDERED.into_iter().flat_map(|category| {
+            BindableAction::all()
+                .iter()
+                .copied()
+                .filter(move |action| action.meta().category == category)
+        });
+        for action in grouped {
             let meta = action.meta();
 
             // Apply search filter
@@ -761,6 +769,39 @@ mod tests {
 
         panel.close_immediately();
         assert!(!panel.is_active());
+    }
+
+    #[test]
+    fn every_category_header_appears_once_with_all_its_shortcuts_beneath_it() {
+        let panel = ShortcutsPanel::new();
+        let entries = panel.build_entries(&ShortcutRegistry::new());
+        let headers: Vec<_> = entries
+            .iter()
+            .filter(|entry| entry.is_header)
+            .map(|entry| entry.label)
+            .collect();
+        let mut unique = headers.clone();
+        unique.dedup();
+        assert_eq!(headers, unique, "a category header repeats: {headers:?}");
+        assert_eq!(
+            headers,
+            ShortcutCategory::ORDERED
+                .iter()
+                .map(|category| category.label())
+                .collect::<Vec<_>>()
+        );
+        let mut current = None;
+        for entry in &entries {
+            if entry.is_header {
+                current = Some(entry.label);
+            } else {
+                assert_eq!(Some(entry.action.meta().category.label()), current);
+            }
+        }
+        assert_eq!(
+            entries.iter().filter(|entry| !entry.is_header).count(),
+            BindableAction::all().len()
+        );
     }
 
     #[test]

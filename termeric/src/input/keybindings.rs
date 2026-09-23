@@ -547,6 +547,17 @@ pub enum ShortcutCategory {
 }
 
 impl ShortcutCategory {
+    /// Display order: everyday actions first, specialist ones last.
+    pub const ORDERED: [Self; 7] = [
+        Self::General,
+        Self::Tabs,
+        Self::Panes,
+        Self::Navigation,
+        Self::Scrolling,
+        Self::Font,
+        Self::Terminal,
+    ];
+
     pub fn label(self) -> &'static str {
         match self {
             Self::General => "General",
