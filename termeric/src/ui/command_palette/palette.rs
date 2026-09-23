@@ -110,9 +110,9 @@ impl PaletteLayout {
         let panel_width = (cell_width * 55.0).max(450.0).min(window_width * 0.65);
         let panel_x = (window_width - panel_width) / 2.0;
         let padding = cell_width * 1.5;
-        let row_height = cell_height * 2.2;
+        let row_height = cell_height * 1.6;
         let input_height = cell_height * 2.0;
-        let footer_height = cell_height * 1.6;
+        let footer_height = cell_height * 1.3;
         let gap = 6.0;
         let separator_height = 1.0;
         let header_area = padding + input_height + gap + separator_height + gap;
@@ -193,8 +193,8 @@ pub struct PaletteInfo {
     pub placeholder: String,
     /// Singular noun used by the result counter.
     pub item_noun: String,
-    /// Label shown beside the Escape key hint.
-    pub escape_label: String,
+    /// Whether rows show their category as right-aligned detail text.
+    pub show_category: bool,
 }
 
 /// Display info for a single palette entry
@@ -230,7 +230,7 @@ pub struct CommandPalette {
     max_visible: usize,
     placeholder: String,
     item_noun: String,
-    escape_label: String,
+    show_category: bool,
 }
 
 impl CommandPalette {
@@ -245,18 +245,23 @@ impl CommandPalette {
             scroll_offset: 0,
             recently_used: Vec::new(),
             max_visible: 9,
-            placeholder: "Search commands...".into(),
+            placeholder: "Search commands…".into(),
             item_noun: "command".into(),
-            escape_label: "Close".into(),
+            show_category: true,
         }
     }
 
     /// Customize the shared palette chrome for another bounded selection
     /// workflow while retaining identical keyboard/mouse geometry.
-    pub fn set_presentation(&mut self, placeholder: &str, item_noun: &str, escape_label: &str) {
+    pub fn set_presentation(&mut self, placeholder: &str, item_noun: &str) {
         self.placeholder = placeholder.to_string();
         self.item_noun = item_noun.to_string();
-        self.escape_label = escape_label.to_string();
+    }
+
+    /// Show each row's category as detail text. Pickers carry useful
+    /// details there; the command palette's grouping labels are noise.
+    pub fn set_show_category(&mut self, show: bool) {
+        self.show_category = show;
     }
 
     /// Register commands, replacing any existing ones from the same source
@@ -602,7 +607,7 @@ impl CommandPalette {
             animation: self.animation.eased(),
             placeholder: self.placeholder.clone(),
             item_noun: self.item_noun.clone(),
-            escape_label: self.escape_label.clone(),
+            show_category: self.show_category,
         }
     }
 

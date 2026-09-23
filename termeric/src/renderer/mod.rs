@@ -274,7 +274,6 @@ pub(crate) struct UiPalette {
     pub(crate) palette_keycap_bg: [f32; 4],
     pub(crate) palette_keycap_text: [f32; 4],
     pub(crate) palette_border: [f32; 4],
-    pub(crate) palette_destructive: [f32; 4],
     pub(crate) palette_category: [f32; 4],
     pub(crate) palette_footer: [f32; 4],
 }
@@ -337,7 +336,7 @@ impl UiPalette {
             // URL/hyperlink color from theme
             url: theme.ui.url.to_f32_array(),
             // Command palette — fully theme-derived
-            palette_scrim: adjust_alpha(shade(bg.to_f32_array(), 0.0), 0.55),
+            palette_scrim: adjust_alpha(shade(bg.to_f32_array(), 0.0), 0.3),
             palette_bg: shade(bg.to_f32_array(), 0.65),
             palette_input_bg: shade(bg.to_f32_array(), 0.50),
             palette_accent: cursor.to_f32_array(),
@@ -347,7 +346,6 @@ impl UiPalette {
             palette_keycap_bg: adjust_alpha(shade(bg.to_f32_array(), 0.45), 0.9),
             palette_keycap_text: adjust_alpha(fg.to_f32_array(), 0.70),
             palette_border: adjust_alpha(tab_border.to_f32_array(), 0.5),
-            palette_destructive: adjust_alpha(theme.primary.red.to_f32_array(), 0.08),
             palette_category: adjust_alpha(fg.to_f32_array(), 0.40),
             palette_footer: adjust_alpha(fg.to_f32_array(), 0.35),
         };

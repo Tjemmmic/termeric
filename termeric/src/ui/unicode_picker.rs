@@ -114,7 +114,7 @@ struct RankedCharacter {
 impl UnicodePicker {
     pub fn new() -> Self {
         let mut palette = CommandPalette::new();
-        palette.set_presentation("Search characters or enter U+2192...", "character", "Close");
+        palette.set_presentation("Search characters or enter U+2192…", "character");
         Self {
             palette,
             actions: Vec::new(),

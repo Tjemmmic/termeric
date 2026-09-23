@@ -83,7 +83,7 @@ pub struct DomainPicker {
 impl DomainPicker {
     pub fn new() -> Self {
         let mut palette = CommandPalette::new();
-        palette.set_presentation("Search hosts...", "host", "Close");
+        palette.set_presentation("Search hosts…", "host");
         Self {
             palette,
             authorities: Vec::new(),
@@ -327,7 +327,7 @@ impl DomainPicker {
             })
             .collect();
         self.palette
-            .set_presentation("Search local or saved hosts...", "host", "Close");
+            .set_presentation("Search local or saved hosts…", "host");
         self.palette.replace_all_commands(commands);
         self.palette.open();
     }
@@ -346,13 +346,12 @@ impl DomainPicker {
         };
         self.actions.clear();
         self.palette.set_presentation(
-            &format!("Connecting to {}...", display_text(&label, 36)),
+            &format!("Connecting to {}…", display_text(&label, 36)),
             "domain",
-            "Back",
         );
         self.palette.replace_all_commands(vec![command(
             "domain-picker.loading".into(),
-            "Discovering live domains...".into(),
+            "Discovering live domains…".into(),
             display_text(&label, 48),
         )]);
         self.palette.open();
@@ -411,9 +410,8 @@ impl DomainPicker {
                 .collect()
         };
         self.palette.set_presentation(
-            &format!("Search domains on {}...", display_text(&label, 30)),
+            &format!("Search domains on {}…", display_text(&label, 30)),
             "domain",
-            "Back",
         );
         self.palette.replace_all_commands(commands);
         self.palette.open();
@@ -428,7 +426,6 @@ impl DomainPicker {
         self.palette.set_presentation(
             &format!("Could not reach {}", display_text(&label, 36)),
             "result",
-            "Back",
         );
         self.palette.replace_all_commands(vec![command(
             "domain-picker.error".into(),
@@ -448,13 +445,12 @@ impl DomainPicker {
         };
         self.actions.clear();
         self.palette.set_presentation(
-            &format!("Preparing {}...", display_text(&label, 40)),
+            &format!("Preparing {}…", display_text(&label, 40)),
             "domain",
-            "Back",
         );
         self.palette.replace_all_commands(vec![command(
             "domain-picker.preparing".into(),
-            "Loading authoritative domain state...".into(),
+            "Loading authoritative domain state…".into(),
             display_text(&target.domain_id, 48),
         )]);
         self.palette.open();

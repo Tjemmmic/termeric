@@ -1106,6 +1106,14 @@ Versioning once public beta tags begin.
 
 ### Changed
 
+- The command palette and the host and Unicode pickers built on it are
+  restyled: rows use the UI face with measured ellipsis and proportional match
+  highlighting, the selected row is a quiet rounded highlight, shortcuts are
+  plain dimmed text instead of keycap boxes, the command palette no longer
+  repeats a category after every title, the key-hint footer and colored side
+  bars are gone, a magnifier replaces the `>` prompt, rows are shorter, and the
+  scrim is lighter. The query field keeps its existing geometry.
+
 - The toolbar Workspaces menu lists recent workspaces (current one checked,
   with tab counts) followed by Save Workspace and Manage Workspaces…, instead
   of a "legacy snapshots" list. It is keyboard navigable, exposed to screen

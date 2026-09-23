@@ -1439,7 +1439,11 @@ impl App {
                 .map_err(anyhow::Error::msg)?,
             plugin_runtime_generation: 1,
             pending_plugin_window_close: None,
-            command_palette: CommandPalette::new(),
+            command_palette: {
+                let mut palette = CommandPalette::new();
+                palette.set_show_category(false);
+                palette
+            },
             unicode_picker: UnicodePicker::new(),
             pending_unicode_picker: None,
             domain_picker: DomainPicker::new(),

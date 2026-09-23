@@ -54,6 +54,79 @@ impl Renderer {
     }
 }
 
+impl Renderer {
+    /// Like [`Renderer::push_ui_label`], drawing the characters whose
+    /// indices appear in `highlights` in `highlight` instead of `color`.
+    /// Each run is placed at the measured width of the text before it, so
+    /// highlighted and plain runs line up with an unhighlighted rendering.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn push_ui_label_highlighted(
+        &mut self,
+        text: &str,
+        highlights: &[usize],
+        x: f32,
+        top: f32,
+        height: f32,
+        max_width: f32,
+        size_px: f32,
+        color: [f32; 4],
+        highlight: [f32; 4],
+    ) -> f32 {
+        if highlights.is_empty() {
+            return self.push_ui_label(text, x, top, height, max_width, size_px, color);
+        }
+        let glyphs = &mut self.glyph_cache;
+        let fitted = fit_with_ellipsis(text, max_width, |candidate| {
+            glyphs.ui_text_width(candidate, size_px)
+        })
+        .into_owned();
+        if fitted.is_empty() {
+            return 0.0;
+        }
+        // An appended ellipsis is never part of the match.
+        let kept = if fitted == text {
+            fitted.chars().count()
+        } else {
+            fitted.chars().count() - 1
+        };
+        let baseline = self
+            .glyph_cache
+            .ui_font_metrics(size_px)
+            .centered_baseline(top, height);
+        let x = x.round();
+        let mut run_start = 0;
+        let mut run_highlighted = None;
+        let boundaries = fitted
+            .char_indices()
+            .enumerate()
+            .map(|(index, (byte, _))| (byte, index < kept && highlights.contains(&index)))
+            .chain(std::iter::once((fitted.len(), false)));
+        for (byte, highlighted) in boundaries {
+            if run_highlighted == Some(highlighted) && byte < fitted.len() {
+                continue;
+            }
+            if let Some(was_highlighted) = run_highlighted
+                && byte > run_start
+            {
+                let offset = self
+                    .glyph_cache
+                    .ui_text_width(&fitted[..run_start], size_px);
+                self.text_pipeline.push_ui_text(
+                    &fitted[run_start..byte],
+                    (x + offset).round(),
+                    baseline,
+                    size_px,
+                    if was_highlighted { highlight } else { color },
+                    None,
+                );
+            }
+            run_start = byte;
+            run_highlighted = Some(highlighted);
+        }
+        self.glyph_cache.ui_text_width(&fitted, size_px)
+    }
+}
+
 /// The longest grapheme prefix of `text` that fits `max_width` once an
 /// ellipsis is appended, or `text` itself when it already fits. Returns an
 /// empty string when not even the ellipsis fits.
