@@ -928,17 +928,7 @@ impl App {
             let px = position.0 as f32;
             let py = position.1 as f32;
             let layout = self.commands_panel_layout();
-            use crate::ui::commands::panel::CommandsPanelAction;
-            let (hovered_index, hovered_delete) = match layout.row_action(px, py) {
-                CommandsPanelAction::Run(index) => (Some(index), None),
-                CommandsPanelAction::Delete(index) => (Some(index), Some(index)),
-                _ => (None, None),
-            };
-            self.commands_panel.set_hover(
-                hovered_index,
-                layout.new_button.contains(px, py),
-                hovered_delete,
-            );
+            self.commands_panel.set_hover(layout.control_at(px, py));
             if let Some(window) = &self.window {
                 window.request_redraw();
             }

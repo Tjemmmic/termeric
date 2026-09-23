@@ -313,9 +313,14 @@ impl App {
         // Only form state is needed here; do not clone the command inventory
         // a second time just to position the input method.
         let info = self.commands_panel.build_info(&[]);
+        let top = self
+            .renderer
+            .as_ref()
+            .map_or(0.0, crate::renderer::Renderer::tab_bar_height);
         crate::ui::commands::panel::CommandsPanelLayout::calculate(
             width,
             height,
+            top,
             cell_width,
             cell_height,
             info.animation,
@@ -676,6 +681,7 @@ mod tests {
                 let layout = CommandsPanelLayout::calculate(
                     width,
                     800.0,
+                    0.0,
                     cell,
                     cell * 2.0,
                     info.animation,

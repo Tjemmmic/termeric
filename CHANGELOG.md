@@ -1131,6 +1131,14 @@ Versioning once public beta tags begin.
   bars are gone, a magnifier replaces the `>` prompt, rows are shorter, and the
   scrim is lighter. The query field keeps its existing geometry.
 
+- The Custom Commands panel matches the Workspace Manager: it opens below the
+  tab bar instead of covering it, uses the UI font, and adds commands from a
+  "+" in its header. Rows show the name over the command, and Delete appears
+  only on the hovered or focused row instead of a faint × on every row. The
+  count label, form hint, and play icons are gone, the empty state and hint no
+  longer overflow the panel, and a thin scroll indicator appears when the
+  list is longer than the panel.
+
 - The Workspace Manager is redesigned. It opens as a panel below the tab bar
   instead of covering it, uses the UI font, and lists each workspace with its
   tab and pane counts and a plain age ("2 hours ago", "Yesterday", "Sep 2")

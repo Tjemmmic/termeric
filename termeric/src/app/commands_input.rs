@@ -30,7 +30,7 @@ impl App {
     }
 
     pub(super) fn commands_panel_layout(&self) -> crate::ui::commands::panel::CommandsPanelLayout {
-        let (width, height, cell_width, cell_height) = self
+        let (width, height, top, cell_width, cell_height) = self
             .renderer
             .as_ref()
             .map(|renderer| {
@@ -38,15 +38,17 @@ impl App {
                 (
                     width as f32,
                     height as f32,
+                    renderer.tab_bar_height(),
                     renderer.cell_width(),
                     renderer.cell_height(),
                 )
             })
-            .unwrap_or((800.0, 600.0, 8.0, 16.0));
+            .unwrap_or((800.0, 600.0, 0.0, 8.0, 16.0));
         // Read only panel state, without copying command/form strings on wheel events.
         self.commands_panel.layout(
             width,
             height,
+            top,
             cell_width,
             cell_height,
             self.config.commands.len(),
@@ -649,7 +651,7 @@ mod tests {
         // mouse input, then insert IME text at that exact visible boundary.
         let info = app.commands_panel.build_info(&[]);
         let layout = crate::ui::commands::panel::CommandsPanelLayout::calculate(
-            800.0, 800.0, 8.0, 16.0, 1.0, true, 0,
+            800.0, 800.0, 0.0, 8.0, 16.0, 1.0, true, 0,
         );
         let view = layout
             .input_viewport(&info, crate::ui::commands::panel::EditMode::EditingName)

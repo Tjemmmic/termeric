@@ -5201,7 +5201,7 @@ impl App {
             let mut name = command_form_input(
                 COMMANDS_NAME,
                 "Command name",
-                "e.g. SSH Production",
+                crate::ui::commands::panel::NAME_PLACEHOLDER,
                 &info.form_name,
                 name_active.then_some(info.form_cursor),
                 form.name_input,
@@ -5212,7 +5212,7 @@ impl App {
             let mut command = command_form_input(
                 COMMANDS_COMMAND,
                 "Shell command",
-                "e.g. ssh admin@prod.app.com",
+                crate::ui::commands::panel::COMMAND_PLACEHOLDER,
                 &info.form_command,
                 command_active.then_some(info.form_cursor),
                 form.command_input,
@@ -5308,7 +5308,7 @@ impl App {
 
         if info.commands.is_empty() && info.edit_mode == EditMode::Browse {
             let mut empty = Node::new(Role::Status);
-            empty.set_label("No custom commands yet");
+            empty.set_label("No saved commands");
             empty.set_live(Live::Polite);
             nodes.push((COMMANDS_EMPTY, empty));
             dialog_children.push(COMMANDS_EMPTY);

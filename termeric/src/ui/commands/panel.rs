@@ -2,10 +2,10 @@
 //!
 //! Provides a right-side slide-in panel where users can:
 //! - View all custom commands with name + command preview
-//! - Run a command in the focused terminal
-//! - Add new commands via an inline form
-//! - Delete commands with a small (×) button
-//! - Close via scrim click, × button, or Escape
+//! - Run a command in the focused terminal by clicking its row
+//! - Add new commands via the header's "+" and an inline form
+//! - Delete commands with the Delete button shown on the hovered row
+//! - Close via scrim or toolbar click, × button, or Escape
 
 use super::navigation::{CommandControl, CommandNavigation, CommandNavigationKey};
 use crate::config::CustomCommand;
@@ -13,6 +13,10 @@ use crate::ui::animation::PanelAnimation;
 use crate::ui::text_input::{TextInput, TextInputEdit};
 use crate::ui::text_input_viewport::TextInputViewport;
 use unicode_segmentation::UnicodeSegmentation;
+
+/// Example text shown in the empty add-form fields.
+pub const NAME_PLACEHOLDER: &str = "Deploy staging";
+pub const COMMAND_PLACEHOLDER: &str = "ssh deploy@staging";
 
 /// Action returned by the commands panel after a click
 #[derive(Debug, Clone)]
@@ -57,12 +61,8 @@ pub struct CommandsPanel {
     /// First requested list row; geometry clamps this after resize/config changes.
     scroll_offset: usize,
     navigation: CommandNavigation,
-    /// Mouse-hovered command index (None if not hovering a row)
-    pub hovered_index: Option<usize>,
-    /// Whether hovering the "Add Command" button
-    pub hovered_add: bool,
-    /// Whether hovering the delete (×) on a specific row
-    pub hovered_delete: Option<usize>,
+    /// Control under the pointer.
+    pub hovered: Option<CommandControl>,
     /// Current edit mode
     pub edit_mode: EditMode,
     /// Name input for inline form
@@ -80,12 +80,8 @@ pub struct CommandsPanelInfo {
     pub browse_focus: Option<CommandControl>,
     /// List of commands to display
     pub commands: Vec<CustomCommand>,
-    /// Mouse-hovered command row index
-    pub hovered_index: Option<usize>,
-    /// Whether the "Add Command" button is hovered
-    pub hovered_add: bool,
-    /// Which row's delete (×) is hovered
-    pub hovered_delete: Option<usize>,
+    /// Control under the pointer.
+    pub hovered: Option<CommandControl>,
     /// Current edit mode
     pub edit_mode: EditMode,
     /// Name field content (for inline form)
@@ -120,7 +116,6 @@ pub struct CommandsFormLayout {
     pub command_input: CommandsPanelRect,
     pub save_button: CommandsPanelRect,
     pub cancel_button: CommandsPanelRect,
-    pub hint_y: f32,
 }
 
 /// Single source of truth for custom-command panel geometry.
@@ -129,8 +124,12 @@ pub struct CommandsPanelLayout {
     pub panel: CommandsPanelRect,
     pub padding: f32,
     pub small_padding: f32,
-    pub header_height: f32,
+    pub title_y: f32,
+    /// Line of explanatory text under the title.
+    pub note_y: f32,
+    pub separator_y: f32,
     pub close_button: CommandsPanelRect,
+    /// The header's "+" control, beside close.
     pub new_button: CommandsPanelRect,
     pub form: Option<CommandsFormLayout>,
     pub list_start_y: f32,
@@ -201,51 +200,55 @@ impl CommandsPanelLayout {
         )
     }
 
+    /// Geometry of the panel, which slides in from the right edge and spans
+    /// from `top` (below the toolbar) to the bottom of the window.
+    #[allow(clippy::too_many_arguments)]
     pub fn calculate(
         window_width: f32,
         window_height: f32,
+        top: f32,
         cell_width: f32,
         cell_height: f32,
         animation: f32,
         editing: bool,
         command_count: usize,
     ) -> Self {
-        let panel_width = (cell_width * 36.0).max(340.0).min(window_width * 0.45);
+        // Shares the Workspace Manager's width so side panels line up.
+        let panel_width = (cell_width * 44.0).max(380.0).min(window_width * 0.45);
         let panel_x = window_width - panel_width * animation;
-        let padding = cell_width * 1.8;
+        let padding = cell_width * 1.5;
         let small_padding = cell_width * 0.8;
-        let header_height = cell_height * 2.8;
-        let header_text_y = (header_height - cell_height) / 2.0;
-        let close_x = panel_x + panel_width - padding - cell_width;
+        let title_y = top + cell_height * 0.9;
+        let control = cell_height * 1.5;
         let close_button = CommandsPanelRect {
-            x: close_x,
-            y: header_text_y,
-            width: cell_width,
-            height: cell_height * 1.5,
+            x: panel_x + panel_width - padding * 0.5 - control,
+            y: title_y,
+            width: control,
+            height: control,
         };
         let new_button = CommandsPanelRect {
-            x: panel_x + padding,
-            y: header_height + cell_height * 0.8,
-            width: panel_width - padding * 2.0,
-            height: cell_height * 2.0,
+            x: close_button.x - control - cell_width * 0.25,
+            ..close_button
         };
-        let mut list_start_y = new_button.y + new_button.height + cell_height * 0.8;
+        let note_y = title_y + control;
+        let separator_y = note_y + cell_height * 1.7;
+        let mut list_start_y = separator_y + cell_height * 0.5;
         let form = editing.then(|| {
             let form_x = panel_x + padding;
             let form_width = panel_width - padding * 2.0;
             let field_height = cell_height * 1.8;
             let label_width = cell_width * 10.0;
-            let form_height = field_height * 2.0 + cell_height * 3.2;
             let field_y = list_start_y + small_padding;
             let input_x = form_x + label_width;
             let input_width = form_width - label_width - small_padding;
             let command_y = field_y + field_height + small_padding;
             let buttons_y = command_y + field_height + small_padding * 1.5;
             let save_width = cell_width * 7.0;
-            let save_x = form_x + form_width - save_width;
-            let save_height = cell_height * 1.6;
+            let save_x = form_x + form_width - small_padding - save_width;
+            let save_height = cell_height * 1.5;
             let cancel_width = cell_width * 8.0;
             let cancel_x = save_x - cancel_width - small_padding;
+            let form_height = buttons_y + save_height + small_padding - list_start_y;
             let layout = CommandsFormLayout {
                 container: CommandsPanelRect {
                     x: form_x,
@@ -277,33 +280,32 @@ impl CommandsPanelLayout {
                     width: cancel_width,
                     height: save_height,
                 },
-                hint_y: buttons_y + save_height + small_padding,
             };
             list_start_y += form_height + cell_height * 0.5;
             layout
         });
-        if command_count > 0 {
-            list_start_y += cell_height * 1.5;
-        }
+        let row_height = cell_height * 3.0;
         Self {
             panel: CommandsPanelRect {
                 x: panel_x,
-                y: 0.0,
+                y: top,
                 width: panel_width,
-                height: window_height,
+                height: (window_height - top).max(0.0),
             },
             padding,
             small_padding,
-            header_height,
+            title_y,
+            note_y,
+            separator_y,
             close_button,
             new_button,
             form,
             list_start_y,
-            row_height: cell_height * 3.0,
+            row_height,
             cell_width,
             cell_height,
             scroll_offset: 0,
-            visible_count: (((window_height - list_start_y).max(0.0) / (cell_height * 3.0)).floor()
+            visible_count: (((window_height - list_start_y).max(0.0) / row_height).floor()
                 as usize)
                 .min(command_count),
             command_count,
@@ -344,6 +346,22 @@ impl CommandsPanelLayout {
         CommandsPanelAction::None
     }
 
+    /// The control under the pointer, for hover: header buttons first, then
+    /// the painted rows.
+    pub fn control_at(self, x: f32, y: f32) -> Option<CommandControl> {
+        if self.close_button.contains(x, y) {
+            return Some(CommandControl::Close);
+        }
+        if self.new_button.contains(x, y) {
+            return Some(CommandControl::New);
+        }
+        match self.row_action(x, y) {
+            CommandsPanelAction::Run(index) => Some(CommandControl::Run(index)),
+            CommandsPanelAction::Delete(index) => Some(CommandControl::Delete(index)),
+            _ => None,
+        }
+    }
+
     pub fn command_row(self, index: usize) -> CommandsPanelRect {
         let relative = if index >= self.scroll_offset {
             (index - self.scroll_offset) as f32
@@ -372,6 +390,7 @@ impl CommandsPanelLayout {
         }
     }
 
+    /// Everything on the row left of Delete runs the command.
     pub fn command_run(self, index: usize) -> CommandsPanelRect {
         let row = self.command_row(index);
         let delete = self.command_delete(index);
@@ -381,14 +400,16 @@ impl CommandsPanelLayout {
         }
     }
 
+    /// The row's Delete button, drawn while the row is hovered or focused.
     pub fn command_delete(self, index: usize) -> CommandsPanelRect {
         let row = self.command_row(index);
-        let glyph_x = self.panel.x + self.panel.width - self.padding - self.cell_width * 1.5;
+        let width = self.cell_width * 8.0;
+        let height = self.cell_height * 1.5;
         CommandsPanelRect {
-            x: glyph_x - self.cell_width * 0.5,
-            y: row.y,
-            width: self.cell_width * 2.0,
-            height: row.height,
+            x: self.panel.x + self.panel.width - self.padding - width,
+            y: row.y + (row.height - height) / 2.0,
+            width,
+            height,
         }
     }
 }
@@ -402,9 +423,7 @@ impl CommandsPanel {
             animation: PanelAnimation::with_duration(0.25),
             scroll_offset: 0,
             navigation: CommandNavigation::default(),
-            hovered_index: None,
-            hovered_add: false,
-            hovered_delete: None,
+            hovered: None,
             edit_mode: EditMode::Browse,
             form_name: TextInput::new(),
             form_command: TextInput::new(),
@@ -417,9 +436,7 @@ impl CommandsPanel {
         if !self.animation.is_open() {
             self.scroll_offset = 0;
             // Reset hover state when opening
-            self.hovered_index = None;
-            self.hovered_add = false;
-            self.hovered_delete = None;
+            self.hovered = None;
         }
         self.animation.toggle();
     }
@@ -462,16 +479,15 @@ impl CommandsPanel {
     }
 
     /// Update hover state from mouse position
-    pub fn set_hover(&mut self, index: Option<usize>, add: bool, delete: Option<usize>) {
-        self.hovered_index = index;
-        self.hovered_add = add;
-        self.hovered_delete = delete;
+    pub fn set_hover(&mut self, control: Option<CommandControl>) {
+        self.hovered = control;
     }
 
     pub fn layout(
         &self,
         width: f32,
         height: f32,
+        top: f32,
         cell_width: f32,
         cell_height: f32,
         command_count: usize,
@@ -479,6 +495,7 @@ impl CommandsPanel {
         CommandsPanelLayout::calculate(
             width,
             height,
+            top,
             cell_width,
             cell_height,
             self.animation_progress(),
@@ -501,7 +518,7 @@ impl CommandsPanel {
         if next == current {
             return false;
         }
-        self.set_hover(None, false, None);
+        self.set_hover(None);
         true
     }
 
@@ -518,7 +535,7 @@ impl CommandsPanel {
         } else {
             current.scroll_offset
         };
-        self.set_hover(None, false, None);
+        self.set_hover(None);
         true
     }
 
@@ -768,9 +785,7 @@ impl CommandsPanel {
                 .then(|| self.browse_focus(commands))
                 .flatten(),
             commands: commands.to_vec(),
-            hovered_index: self.hovered_index,
-            hovered_add: self.hovered_add,
-            hovered_delete: self.hovered_delete,
+            hovered: self.hovered,
             edit_mode: self.edit_mode.clone(),
             form_name: self.form_name.text().to_string(),
             form_command: self.form_command.text().to_string(),
@@ -798,7 +813,7 @@ mod tests {
             .collect();
         let mut panel = CommandsPanel::new();
         panel.set_reduced_motion(true);
-        let layout = panel.layout(800.0, 600.0, 8.0, 16.0, commands.len());
+        let layout = panel.layout(800.0, 600.0, 0.0, 8.0, 16.0, commands.len());
         assert!(matches!(
             panel.activate_browse(&commands, layout),
             CommandsPanelAction::None
@@ -806,10 +821,10 @@ mod tests {
         panel.toggle();
         assert_eq!(panel.build_info(&commands).browse_focus, None);
         for _ in 0..199 {
-            let layout = panel.layout(800.0, 600.0, 8.0, 16.0, commands.len());
+            let layout = panel.layout(800.0, 600.0, 0.0, 8.0, 16.0, commands.len());
             panel.navigate_browse(CommandNavigationKey::Next, &commands, layout);
         }
-        let layout = panel.layout(800.0, 600.0, 8.0, 16.0, commands.len());
+        let layout = panel.layout(800.0, 600.0, 0.0, 8.0, 16.0, commands.len());
         assert_eq!(
             panel.build_info(&commands).browse_focus,
             Some(CommandControl::Run(99))
@@ -825,23 +840,23 @@ mod tests {
             CommandsPanelAction::Run(99)
         ));
         panel.scroll_rows(isize::MIN, layout);
-        let hidden = panel.layout(800.0, 600.0, 8.0, 16.0, commands.len());
+        let hidden = panel.layout(800.0, 600.0, 0.0, 8.0, 16.0, commands.len());
         assert!(matches!(
             panel.activate_browse(&commands, hidden),
             CommandsPanelAction::None
         ));
         assert!(
             panel
-                .layout(800.0, 600.0, 8.0, 16.0, commands.len())
+                .layout(800.0, 600.0, 0.0, 8.0, 16.0, commands.len())
                 .visible_range()
                 .contains(&99)
         );
-        let tiny = panel.layout(800.0, 100.0, 8.0, 16.0, commands.len());
+        let tiny = panel.layout(800.0, 100.0, 0.0, 8.0, 16.0, commands.len());
         assert!(matches!(
             panel.activate_browse(&commands, tiny),
             CommandsPanelAction::None
         ));
-        let visible = panel.layout(800.0, 600.0, 8.0, 16.0, commands.len());
+        let visible = panel.layout(800.0, 600.0, 0.0, 8.0, 16.0, commands.len());
         assert!(panel.focus_browse_control(CommandControl::Delete(99), &commands, visible));
         assert_eq!(
             visible.control_rect(CommandControl::Delete(99)),
@@ -885,6 +900,7 @@ mod tests {
                         let layout = CommandsPanelLayout::calculate(
                             width,
                             height,
+                            0.0,
                             cell,
                             cell * 2.0,
                             animation,
@@ -938,20 +954,18 @@ mod tests {
     #[test]
     fn command_scroll_clamps_after_resize_form_and_inventory_changes_and_resets_on_open() {
         let layout = |height, editing, count| {
-            CommandsPanelLayout::calculate(800.0, height, 8.0, 16.0, 1.0, editing, count)
+            CommandsPanelLayout::calculate(800.0, height, 0.0, 8.0, 16.0, 1.0, editing, count)
         };
         let mut panel = CommandsPanel::new();
         assert!(!panel.scroll_rows(1, layout(600.0, false, 100)));
         panel.toggle();
-        panel.set_hover(Some(0), true, Some(0));
+        panel.set_hover(Some(CommandControl::Delete(0)));
         assert!(panel.scroll_rows(isize::MAX, layout(600.0, false, 100)));
         assert_eq!(
             panel.scroll_offset,
             100 - layout(600.0, false, 100).visible_count
         );
-        assert_eq!(panel.hovered_index, None);
-        assert_eq!(panel.hovered_delete, None);
-        assert!(!panel.hovered_add);
+        assert_eq!(panel.hovered, None);
         assert!(!panel.scroll_rows(1, layout(600.0, false, 100)));
         assert!(panel.scroll_rows(isize::MIN, layout(600.0, false, 100)));
         assert_eq!(panel.scroll_offset, 0);
@@ -980,8 +994,33 @@ mod tests {
     }
 
     #[test]
+    fn panel_sits_below_the_toolbar_and_hover_names_the_control_under_the_pointer() {
+        let centre =
+            |rect: CommandsPanelRect| (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
+        let layout = CommandsPanelLayout::calculate(1000.0, 800.0, 34.0, 10.0, 20.0, 1.0, false, 3);
+        assert_eq!(layout.panel.y, 34.0);
+        assert_eq!(layout.panel.height, 766.0);
+        assert!(layout.close_button.y > layout.panel.y);
+        assert!(layout.new_button.x + layout.new_button.width <= layout.close_button.x);
+        assert!(layout.list_start_y > layout.separator_y);
+
+        let (x, y) = centre(layout.close_button);
+        assert_eq!(layout.control_at(x, y), Some(CommandControl::Close));
+        let (x, y) = centre(layout.new_button);
+        assert_eq!(layout.control_at(x, y), Some(CommandControl::New));
+        let (x, y) = centre(layout.command_delete(1));
+        assert_eq!(layout.control_at(x, y), Some(CommandControl::Delete(1)));
+        let row = layout.command_row(2);
+        assert_eq!(
+            layout.control_at(row.x + 20.0, row.y + row.height / 2.0),
+            Some(CommandControl::Run(2))
+        );
+        assert_eq!(layout.control_at(layout.panel.x + 20.0, 10.0), None);
+    }
+
+    #[test]
     fn shared_layout_keeps_form_and_row_actions_disjoint() {
-        let layout = CommandsPanelLayout::calculate(1000.0, 800.0, 10.0, 20.0, 1.0, true, 2);
+        let layout = CommandsPanelLayout::calculate(1000.0, 800.0, 0.0, 10.0, 20.0, 1.0, true, 2);
         let form = layout.form.unwrap();
         assert!(layout.panel.contains(form.name_input.x, form.name_input.y));
         assert!(
@@ -1015,6 +1054,7 @@ mod tests {
                 let layout = CommandsPanelLayout::calculate(
                     width,
                     800.0,
+                    0.0,
                     cell,
                     cell * 2.0,
                     animation,
@@ -1082,7 +1122,7 @@ mod tests {
         let text = "a界e\u{301}👩\u{200d}💻".repeat(8);
         panel.form_name.replace(&text);
         panel.form_command.replace(&text);
-        let layout = CommandsPanelLayout::calculate(800.0, 800.0, 8.0, 16.0, 1.0, true, 0);
+        let layout = CommandsPanelLayout::calculate(800.0, 800.0, 0.0, 8.0, 16.0, 1.0, true, 0);
         for field in [EditMode::EditingName, EditMode::EditingCommand] {
             assert!(panel.place_form_caret(field.clone(), text.len()));
             let info = panel.build_info(&[]);
@@ -1116,7 +1156,7 @@ mod tests {
             assert!(panel.place_form_caret(target, cursor));
             assert_eq!(panel.active_input().unwrap().text(), text);
         }
-        let layout = CommandsPanelLayout::calculate(260.0, 800.0, 8.0, 16.0, 1.0, true, 0);
+        let layout = CommandsPanelLayout::calculate(260.0, 800.0, 0.0, 8.0, 16.0, 1.0, true, 0);
         let rect = layout.form.unwrap().name_input;
         assert!(rect.width > 0.0);
         assert!(matches!(
@@ -1263,6 +1303,7 @@ mod tests {
                 let layout = CommandsPanelLayout::calculate(
                     width,
                     800.0,
+                    0.0,
                     cell,
                     cell * 2.0,
                     animation,
