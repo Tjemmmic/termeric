@@ -7,16 +7,17 @@ for topology-preserving relaunches; neither format resurrects processes.
 
 ## Capture policy
 
-Every save entry point uses `Tab::save_as_session()` and one stable capture of
-the terminal selected at the start of that save:
+Snapshots are written automatically when a tab closes; there is no explicit
+save command. Every save path uses `Tab::save_as_session()` and one stable
+capture of the terminal selected at the start of that save:
 
 - a normal tab captures its single live terminal;
 - a split tab captures only its currently focused pane;
 - changing focus changes the source of the next save;
 - cwd, last foreground command, and scrollback always come from that same
   source; and
-- explicit save, configured automatic save, and close-time automatic save use
-the same policy and report type.
+- ordinary tab close and whole-split close use the same policy and report
+  type.
 
 When every process in a split exits during one event-loop poll, close-time
 autosave captures the still-addressable focused pane before destructive pane
@@ -27,9 +28,9 @@ The cwd uses the focused terminal's local-authority OSC 7 report when present,
 then falls back to platform process inspection. Remote-authority reports are
 never serialized as local launch directories.
 
-The session manager labels restored entries as new shells. A focused-pane
-snapshot is also labeled as such, and an explicit split-tab save reports that
-only focused panes were captured. Complete pane/workspace persistence uses the
+The Workspace Manager's **Tab snapshots** view lists these entries and notes
+that opening one starts a new shell. A focused-pane snapshot is labeled as
+such. Complete pane/workspace persistence uses the
 separate contract in [workspaces.md](workspaces.md), rather than an ambiguous
 extension of this format.
 
@@ -41,8 +42,8 @@ session file.
 ## Storage and compatibility
 
 New saves use format version 5: **one self-contained `session.toml`** publishes
-metadata and text together. Explicit, automatic, and close-time saves all call
-the same storage transaction. A failed first save leaves the tab's session ID
+metadata and text together. Every close-time save calls the same storage
+transaction. A failed first save leaves the tab's session ID
 unset; an update failure preserves the previous complete snapshot.
 
 The file begins with a TOML comment,

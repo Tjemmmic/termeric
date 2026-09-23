@@ -992,25 +992,6 @@ pub fn core_commands(
             source: CommandSource::Core,
             destructive: false,
         },
-        // ── Legacy single-terminal snapshots ──
-        RegisteredCommand {
-            id: "core.save-session".into(),
-            title: "Save Open Tabs as Legacy Snapshots".into(),
-            category: "Legacy Snapshots".into(),
-            shortcut: None,
-            icon: None,
-            source: CommandSource::Core,
-            destructive: false,
-        },
-        RegisteredCommand {
-            id: "core.session-manager".into(),
-            title: "Legacy Snapshot Manager".into(),
-            category: "Legacy Snapshots".into(),
-            shortcut: None,
-            icon: None,
-            source: CommandSource::Core,
-            destructive: false,
-        },
         // ── Plugins ──
         RegisteredCommand {
             id: "core.plugins".into(),
@@ -1509,12 +1490,15 @@ mod tests {
     }
 
     #[test]
-    fn manual_session_save_is_discoverable() {
+    fn tab_snapshots_are_reached_through_the_workspace_manager_only() {
         let commands = core_commands(false, &ShortcutRegistry::new());
-        assert!(commands.iter().any(|command| {
-            command.id == "core.save-session"
-                && command.title == "Save Open Tabs as Legacy Snapshots"
-                && command.category == "Legacy Snapshots"
+        assert!(
+            commands
+                .iter()
+                .any(|command| command.id == "core.workspace-manager")
+        );
+        assert!(!commands.iter().any(|command| {
+            command.id == "core.save-session" || command.id == "core.session-manager"
         }));
     }
 

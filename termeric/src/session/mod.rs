@@ -170,6 +170,87 @@ pub fn format_unix_timestamp(seconds: u64, millis: Option<u32>) -> String {
     }
 }
 
+/// Seconds since the Unix epoch.
+pub fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs())
+}
+
+/// Parse the UTC RFC 3339 form written by [`format_unix_timestamp`]
+/// (`YYYY-MM-DDTHH:MM:SS`, optional fraction, `Z`) into Unix seconds.
+pub fn parse_utc_timestamp(timestamp: &str) -> Option<u64> {
+    let timestamp = timestamp.strip_suffix('Z')?;
+    let timestamp = timestamp
+        .split_once('.')
+        .map_or(timestamp, |(whole, _)| whole);
+    let (date, time) = timestamp.split_once('T')?;
+    let mut date = date.splitn(3, '-').map(str::parse::<i64>);
+    let (year, month, day) = (date.next()?.ok()?, date.next()?.ok()?, date.next()?.ok()?);
+    let mut time = time.splitn(3, ':').map(str::parse::<u64>);
+    let (hour, minute, second) = (time.next()?.ok()?, time.next()?.ok()?, time.next()?.ok()?);
+    if !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || hour > 23
+        || minute > 59
+        || second > 60
+    {
+        return None;
+    }
+    let days = days_from_civil(year, month as u32, day as u32);
+    u64::try_from(days * 86_400)
+        .ok()?
+        .checked_add(hour * 3_600 + minute * 60 + second)
+}
+
+/// A short, human description of how long ago `timestamp` was, relative to
+/// `now` (Unix seconds): "Just now", "5 minutes ago", "Yesterday", "Sep 12",
+/// with the year added once it differs. Relative forms count elapsed time;
+/// calendar dates are UTC, so one saved near midnight may show the adjacent
+/// local day.
+pub fn describe_age(timestamp: &str, now: u64) -> Option<String> {
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let then = parse_utc_timestamp(timestamp)?;
+    let elapsed = now.saturating_sub(then);
+    let plural = |count: u64, unit: &str| {
+        if count == 1 {
+            format!("1 {unit} ago")
+        } else {
+            format!("{count} {unit}s ago")
+        }
+    };
+    Some(match elapsed {
+        0..60 => "Just now".into(),
+        60..3_600 => plural(elapsed / 60, "minute"),
+        3_600..86_400 => plural(elapsed / 3_600, "hour"),
+        86_400..172_800 => "Yesterday".into(),
+        172_800..604_800 => plural(elapsed / 86_400, "day"),
+        _ => {
+            let (year, month, day) = civil_from_days((then / 86_400) as i64);
+            let (current_year, _, _) = civil_from_days((now / 86_400) as i64);
+            let month = MONTHS[month as usize - 1];
+            if year == current_year {
+                format!("{month} {day}")
+            } else {
+                format!("{month} {day}, {year}")
+            }
+        }
+    })
+}
+
+// Inverse of `civil_from_days`: days since 1970-01-01 for a civil date.
+fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
+    let year = year - i64::from(month <= 2);
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let year_of_era = year - era * 400;
+    let month_prime = i64::from(if month > 2 { month - 3 } else { month + 9 });
+    let day_of_year = (153 * month_prime + 2) / 5 + i64::from(day) - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
 // Howard Hinnant's civil-from-days algorithm, with day zero at 1970-01-01.
 fn civil_from_days(days_since_epoch: i64) -> (i64, u32, u32) {
     let z = days_since_epoch + 719_468;
@@ -313,6 +394,34 @@ mod tests {
         let id = format!("missing-{}", generate_session_id());
         let error = delete_session(&id).unwrap_err().to_string();
         assert!(error.contains("was not found"));
+    }
+
+    #[test]
+    fn timestamps_round_trip_and_describe_their_age_plainly() {
+        for seconds in [0, 86_399, 951_782_400, 1_790_200_000] {
+            let stamp = format_unix_timestamp(seconds, Some(250));
+            assert_eq!(parse_utc_timestamp(&stamp), Some(seconds), "{stamp}");
+        }
+        assert_eq!(parse_utc_timestamp("2026-09-23T19:50:12"), None);
+        assert_eq!(parse_utc_timestamp("2026-13-01T00:00:00Z"), None);
+        assert_eq!(parse_utc_timestamp("unreadable"), None);
+
+        let now = parse_utc_timestamp("2026-09-23T12:00:00Z").unwrap();
+        let age = |stamp: &str| describe_age(stamp, now).unwrap();
+        assert_eq!(age("2026-09-23T11:59:30Z"), "Just now");
+        assert_eq!(age("2026-09-23T11:59:00Z"), "1 minute ago");
+        assert_eq!(age("2026-09-23T11:15:00.500Z"), "45 minutes ago");
+        assert_eq!(age("2026-09-23T09:00:00Z"), "3 hours ago");
+        assert_eq!(age("2026-09-22T10:00:00Z"), "Yesterday");
+        assert_eq!(age("2026-09-19T12:00:00Z"), "4 days ago");
+        assert_eq!(age("2026-09-02T12:00:00Z"), "Sep 2");
+        assert_eq!(age("2025-12-31T23:00:00Z"), "Dec 31, 2025");
+        assert_eq!(
+            age("2026-09-24T00:00:00Z"),
+            "Just now",
+            "clock skew is not negative"
+        );
+        assert_eq!(describe_age("unreadable", now), None);
     }
 
     #[test]

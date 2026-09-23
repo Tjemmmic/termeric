@@ -416,50 +416,15 @@ impl App {
         }
     }
 
-    /// Unconditionally save the current session (explicit user action)
-    pub(super) fn force_save_session(&mut self) {
-        self.save_sessions(true, false);
-    }
-
-    fn save_sessions(&mut self, include_empty: bool, automatic: bool) {
-        let Some(tabs) = &mut self.tabs else { return };
-        if tabs.has_live_domain_tabs() {
-            if !automatic {
-                self.toasts.warning(
-                    "Live-domain relay tabs cannot be saved as relaunchable session snapshots",
-                );
-            }
-            return;
-        }
-        let save_scrollback = self.config.session.save_scrollback;
-        tabs.save_all_sessions(save_scrollback, include_empty);
-        let notices = tabs.drain_persistence_notices();
-        self.show_persistence_notices(notices, automatic);
-    }
-
+    /// Report close-time snapshot saves. Successes are silent; only
+    /// truncation and failures need the user's attention.
     pub(super) fn show_persistence_notices(
         &mut self,
         notices: Vec<crate::tabs::PersistenceNotice>,
-        automatic: bool,
     ) {
-        if notices.is_empty() {
-            if !automatic {
-                self.toasts.info("No legacy snapshot content to save");
-            }
-            return;
-        }
-        let mut saved = 0;
-        let mut saved_focused_pane = false;
         for notice in notices {
             match notice {
-                crate::tabs::PersistenceNotice::Saved {
-                    id,
-                    truncated,
-                    capture_scope,
-                } => {
-                    saved += 1;
-                    saved_focused_pane |=
-                        capture_scope == crate::session::SessionCaptureScope::FocusedPane;
+                crate::tabs::PersistenceNotice::Saved { id, truncated } => {
                     if truncated {
                         self.toasts.warning(format!(
                             "Session {id} saved, but scrollback exceeded 5 MB and was truncated"
@@ -471,15 +436,6 @@ impl App {
                         .error(format!("Could not save tab {}: {}", tab_id + 1, error));
                 }
             }
-        }
-        if saved > 0 && !automatic {
-            let label = if saved == 1 { "snapshot" } else { "snapshots" };
-            let scope = if saved_focused_pane {
-                "; split tabs captured their focused pane only"
-            } else {
-                ""
-            };
-            self.toasts.success(format!("Saved {saved} {label}{scope}"));
         }
     }
 

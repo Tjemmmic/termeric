@@ -1,6 +1,6 @@
 //! Slide-in panel rendering — commands panel, session management panel
 
-use super::Renderer;
+use super::{Renderer, adjust_alpha};
 
 impl Renderer {
     pub(super) fn build_commands_panel(
@@ -621,313 +621,349 @@ impl Renderer {
         window_width: f32,
         window_height: f32,
     ) {
-        use crate::session::panel::SessionPanelLayout;
+        use crate::session::panel::{SessionPanelControl, SessionPanelLayout, SessionPanelRect};
 
         let anim = info.animation;
         if anim <= 0.0 {
             return;
         }
-
-        let ui_cw = self.cell_width;
         let cell_height = self.cell_height;
-
         let layout = SessionPanelLayout::calculate(
             window_width,
             window_height,
-            ui_cw,
+            self.tab_bar_height(),
+            self.cell_width,
             cell_height,
             anim,
             info.rename_text.is_some(),
             info.workspaces,
             info.sessions.len(),
         );
-        let panel_width = layout.panel.width;
-        let panel_x = layout.panel.x;
-        let panel_h = layout.panel.height;
-        let row_height = layout.row_height;
+        let scale = self.scale_factor;
+        let px = |logical: f32| (logical * scale).round().max(1.0);
+        let panel = layout.panel;
         let padding_x = layout.padding_x;
-        let padding_y = layout.padding_y;
+        let size = self.ui_label_px();
+        let text = self.ui.menu_text;
+        let dim = self.ui.menu_text_dim;
+        let stroke = (1.5 * scale).max(1.0);
 
-        // ── Scrim ──
+        // ── Scrim over the terminal, surface, and a hairline edge ──
         let scrim = self.ui.scrim;
         self.rect_pipeline.push_rect(
             0.0,
-            0.0,
-            panel_x,
-            window_height,
-            [scrim[0], scrim[1], scrim[2], scrim[3] * anim],
+            panel.y,
+            panel.x,
+            panel.height,
+            adjust_alpha(scrim, scrim[3] * anim),
         );
-
-        // ── Panel background ──
         self.rect_pipeline
-            .push_rect(panel_x, 0.0, panel_width, panel_h, self.ui.settings_bg);
-
-        // ── Left border ──
+            .push_rect(panel.x, panel.y, panel.width, panel.height, self.ui.menu_bg);
         self.rect_pipeline
-            .push_rect(panel_x, 0.0, 2.0, panel_h, self.ui.settings_accent);
+            .push_rect(panel.x, panel.y, px(1.0), panel.height, self.ui.menu_border);
 
-        // ── Title ──
+        // ── Header: optional back chevron, title, close × ──
+        let header_height = layout.close_button.height;
+        let hovered_control = info.hovered_control;
+        let radius = (5.0 * scale).round();
+        for (control, rect) in [
+            (SessionPanelControl::Close, Some(layout.close_button)),
+            (SessionPanelControl::Back, layout.back_button),
+        ] {
+            if let Some(rect) = rect
+                && hovered_control == Some(control)
+            {
+                self.rect_pipeline.push_rounded_rect(
+                    rect.x,
+                    rect.y,
+                    rect.width,
+                    rect.height,
+                    self.ui.menu_highlight,
+                    radius,
+                );
+            }
+        }
+        let mut title_x = panel.x + padding_x;
+        if let Some(back) = layout.back_button {
+            let (cx, cy) = (back.x + back.width / 2.0, back.y + back.height / 2.0);
+            let arm = 4.5 * scale;
+            self.rect_pipeline.push_line(
+                cx + arm * 0.5,
+                cy - arm,
+                cx - arm * 0.5,
+                cy,
+                stroke,
+                text,
+            );
+            self.rect_pipeline.push_line(
+                cx - arm * 0.5,
+                cy,
+                cx + arm * 0.5,
+                cy + arm,
+                stroke,
+                text,
+            );
+            title_x = back.x + back.width + px(2.0);
+        }
         let title = if info.workspaces {
             "Workspaces"
         } else {
-            "Legacy Snapshots"
+            "Tab Snapshots"
         };
-        let title_y = layout.title_y;
-        let title_x = panel_x + padding_x;
-        for (i, c) in title.chars().enumerate() {
-            self.text_pipeline.push_char(
-                c,
-                title_x + i as f32 * ui_cw,
-                title_y,
-                self.ui.settings_accent,
-            );
-        }
+        self.push_ui_label(
+            title,
+            title_x,
+            layout.title_y,
+            header_height,
+            layout.close_button.x - title_x,
+            size * 1.15,
+            text,
+        );
+        let close = layout.close_button;
+        let (cx, cy) = (close.x + close.width / 2.0, close.y + close.height / 2.0);
+        let arm = 4.0 * scale;
+        let close_color = if hovered_control == Some(SessionPanelControl::Close) {
+            text
+        } else {
+            dim
+        };
+        self.rect_pipeline
+            .push_line(cx - arm, cy - arm, cx + arm, cy + arm, stroke, close_color);
+        self.rect_pipeline
+            .push_line(cx + arm, cy - arm, cx - arm, cy + arm, stroke, close_color);
 
+        let note = if info.workspaces {
+            "Opening relaunches the saved tabs and panes"
+        } else {
+            "Saved when tabs close. Opening starts a new shell"
+        };
+        self.push_ui_label(
+            note,
+            panel.x + padding_x,
+            layout.note_y,
+            cell_height * 1.2,
+            panel.width - padding_x * 2.0,
+            size * 0.92,
+            dim,
+        );
+
+        // ── Inline rename form ──
         if let (Some(name), Some(rename)) = (&info.rename_text, layout.rename) {
-            self.rect_pipeline.push_rect(
-                rename.input.x,
-                rename.input.y,
-                rename.input.width,
-                rename.input.height,
-                [0.0, 0.0, 0.0, 0.2],
+            let input = rename.input;
+            self.rect_pipeline.push_rounded_rect(
+                input.x,
+                input.y,
+                input.width,
+                input.height,
+                self.ui.palette_input_bg,
+                px(5.0),
             );
             if let Some(view) = layout.rename_input_viewport(name, info.rename_cursor) {
                 self.text_pipeline.push_ui_run(
                     &name[view.text_range.clone()],
                     view.text_x,
                     view.text_y,
-                    self.ui.settings_text,
-                    ui_cw,
+                    text,
+                    self.cell_width,
                     super::text::TextClip {
                         left: view.text_x,
-                        top: rename.input.y,
+                        top: input.y,
                         right: view.right,
-                        bottom: rename.input.y + rename.input.height,
+                        bottom: input.y + input.height,
                     },
                 );
                 self.rect_pipeline.push_rect(
                     view.cursor_x,
-                    rename.input.y + 2.0,
-                    1.5_f32.min(view.right - view.cursor_x),
-                    rename.input.height - 4.0,
-                    self.ui.settings_accent,
+                    input.y + px(3.0),
+                    px(2.0).min(view.right - view.cursor_x),
+                    input.height - px(6.0),
+                    self.ui.palette_accent,
                 );
             }
-            for (button, label, color) in [
-                (rename.save_button, "Save", self.ui.settings_accent),
-                (rename.cancel_button, "Cancel", self.ui.settings_separator),
+            for (button, label, primary) in [
+                (rename.save_button, "Save", true),
+                (rename.cancel_button, "Cancel", false),
             ] {
-                self.rect_pipeline.push_rect(
-                    button.x,
-                    button.y,
-                    button.width,
-                    button.height,
-                    color,
-                );
-                let label_x =
-                    button.x + (button.width - label.chars().count() as f32 * ui_cw * 0.85) / 2.0;
-                let label_y = button.y + (button.height - cell_height) / 2.0;
-                for (index, character) in label.chars().enumerate() {
-                    self.text_pipeline.push_char(
-                        character,
-                        label_x + index as f32 * ui_cw * 0.85,
-                        label_y,
-                        self.ui.settings_text,
-                    );
-                }
-            }
-        } else {
-            let restore_note = if info.workspaces {
-                "Restore relaunches tabs and panes"
-            } else {
-                "Restore opens a new shell"
-            };
-            let note_y = title_y + cell_height * 1.2;
-            for (i, c) in restore_note.chars().take(32).enumerate() {
-                if !c.is_whitespace() {
-                    self.text_pipeline.push_char(
-                        c,
-                        panel_x + padding_x + i as f32 * ui_cw * 0.8,
-                        note_y,
-                        self.ui.settings_text_dim,
-                    );
-                }
+                self.build_panel_button(button, label, primary, text);
             }
         }
 
-        // ── Close button (×) ──
-        let close_x = layout.close_button.x;
-        self.text_pipeline
-            .push_char('×', close_x, title_y, self.ui.settings_text);
-
-        // ── Separator under title ──
-        let sep_y = layout.separator_y;
         self.rect_pipeline.push_rect(
-            panel_x + padding_x,
-            sep_y,
-            panel_width - padding_x * 2.0,
-            1.0,
-            self.ui.settings_separator,
+            panel.x + px(1.0),
+            layout.separator_y.round(),
+            panel.width - px(1.0),
+            px(1.0),
+            self.ui.menu_border,
         );
 
-        // ── Session list ──
-        let list_start_y = layout.list_start_y;
-        let text_color = self.ui.settings_text;
-        let dim_color = self.ui.settings_text_dim;
-        let accent_color = self.ui.settings_accent;
-        let btn_color = self.ui.settings_separator;
-
+        // ── Entries ──
         if info.sessions.is_empty() {
-            // Show an explicit empty-workspace placeholder.
-            let placeholder = if info.workspaces {
+            let empty = if info.workspaces {
                 "No saved workspaces"
             } else {
-                "No legacy snapshots"
+                "No tab snapshots"
             };
-            let ph_y = list_start_y + row_height * 0.5;
-            let mut px = panel_x + padding_x;
-            for c in placeholder.chars() {
-                if !c.is_whitespace() {
-                    self.text_pipeline.push_char(c, px, ph_y, dim_color);
-                }
-                px += ui_cw * 0.85;
-            }
+            self.push_ui_label(
+                empty,
+                panel.x + padding_x,
+                layout.list_start_y,
+                layout.row_height,
+                panel.width - padding_x * 2.0,
+                size,
+                dim,
+            );
         }
-
         let end = (info.scroll_offset + layout.visible_count).min(info.sessions.len());
-        for (visible_index, session) in info.sessions
-            [info.scroll_offset.min(info.sessions.len())..end]
-            .iter()
-            .enumerate()
-        {
+        let start = info.scroll_offset.min(info.sessions.len());
+        for (visible_index, session) in info.sessions[start..end].iter().enumerate() {
             let absolute_index = info.scroll_offset + visible_index;
-            let entry_layout = layout.entry(visible_index);
-            let item_y = entry_layout.row.y;
-
-            // Hover highlight for session rows
-            if info.hovered_index == Some(absolute_index) || info.selected_index == absolute_index {
-                let hover_color = [
-                    self.ui.settings_selected[0],
-                    self.ui.settings_selected[1],
-                    self.ui.settings_selected[2],
-                    self.ui.settings_selected[3] * 0.4,
-                ];
+            let entry = layout.entry(visible_index);
+            let row = entry.row;
+            let active =
+                info.hovered_index == Some(absolute_index) || info.selected_index == absolute_index;
+            if active {
                 self.rect_pipeline.push_rounded_rect(
-                    panel_x + padding_x * 0.5,
-                    item_y,
-                    panel_width - padding_x,
-                    row_height,
-                    hover_color,
-                    4.0,
+                    row.x + padding_x * 0.5,
+                    row.y + px(2.0),
+                    row.width - padding_x,
+                    row.height - px(4.0),
+                    self.ui.menu_highlight,
+                    px(6.0),
                 );
             }
-
-            // Session icon
-            let icon_y = item_y + padding_y;
-            self.text_pipeline
-                .push_char('◆', panel_x + padding_x, icon_y, accent_color);
-
-            // Session display name
-            let name_x = panel_x + padding_x + ui_cw * 2.0;
-            let name: String = if session.display_name.chars().count() > 22 {
-                let truncated: String = session.display_name.chars().take(21).collect();
-                format!("{}…", truncated)
+            let line = cell_height * 1.3;
+            let title_top = entry.load_button.y + (entry.load_button.height - line) / 2.0;
+            let actions_left = if active {
+                entry.load_button.x - px(8.0)
             } else {
-                session.display_name.clone()
+                row.x + row.width - padding_x
             };
-            for (j, c) in name.chars().enumerate() {
-                if !c.is_whitespace() {
-                    self.text_pipeline.push_char(
-                        c,
-                        name_x + j as f32 * ui_cw * 0.85,
-                        icon_y,
-                        text_color,
-                    );
-                }
-            }
-
-            // Metadata line: "<subtitle> · <last_modified>". Focused-pane
-            // snapshots disclose their reduced capture scope here.
-            let meta = if session.subtitle.is_empty() {
-                session.last_modified.clone()
-            } else {
-                format!("{} · {}", session.subtitle, session.last_modified)
-            };
-            let meta_y = icon_y + cell_height * 1.3;
-            let mut mx = name_x;
-            for c in meta.chars().take(38) {
-                if !c.is_whitespace() {
-                    self.text_pipeline.push_char(c, mx, meta_y, dim_color);
-                }
-                mx += ui_cw * 0.8;
-            }
-
-            // ── Action buttons: [Load] [Rename] [Delete] ──
-            let btn_height = entry_layout.delete_button.height;
-            let btn_y = entry_layout.delete_button.y;
-
-            // Delete button (right-aligned)
-            let delete_text = "Delete";
-            let delete_w = entry_layout.delete_button.width;
-            let delete_x = entry_layout.delete_button.x;
-            self.rect_pipeline.push_rect(
-                delete_x,
-                btn_y,
-                delete_w,
-                btn_height,
-                [0.6, 0.2, 0.2, 0.5],
+            let name_x = row.x + padding_x;
+            self.push_ui_label(
+                &session.display_name,
+                name_x,
+                title_top,
+                line,
+                actions_left - name_x,
+                size,
+                text,
             );
-            for (j, c) in delete_text.chars().enumerate() {
-                self.text_pipeline.push_char(
-                    c,
-                    delete_x + ui_cw * 1.0 + j as f32 * ui_cw * 0.85,
-                    btn_y + (btn_height - cell_height) * 0.5,
-                    text_color,
-                );
-            }
-
-            // Rename button (left of delete, complete workspaces only)
-            if let Some(rename_button) = entry_layout.rename_button {
-                let rename_text = "Rename";
-                let rename_w = rename_button.width;
-                let rename_x = rename_button.x;
-                self.rect_pipeline
-                    .push_rect(rename_x, btn_y, rename_w, btn_height, btn_color);
-                for (j, c) in rename_text.chars().enumerate() {
-                    self.text_pipeline.push_char(
-                        c,
-                        rename_x + ui_cw * 1.0 + j as f32 * ui_cw * 0.85,
-                        btn_y + (btn_height - cell_height) * 0.5,
-                        text_color,
-                    );
+            let meta = match (
+                session.subtitle.is_empty(),
+                session.last_modified.is_empty(),
+            ) {
+                (false, false) => format!("{} · {}", session.subtitle, session.last_modified),
+                (false, true) => session.subtitle.clone(),
+                (true, _) => session.last_modified.clone(),
+            };
+            self.push_ui_label(
+                &meta,
+                name_x,
+                title_top + line,
+                line,
+                row.x + row.width - padding_x - name_x,
+                size * 0.92,
+                dim,
+            );
+            if active {
+                self.build_panel_button(entry.load_button, "Open", true, text);
+                if let Some(rename) = entry.rename_button {
+                    self.build_panel_button(rename, "Rename", false, text);
                 }
+                let danger = adjust_alpha(self.ui.search_error, 0.95);
+                self.build_panel_button(entry.delete_button, "Delete", false, danger);
             }
+        }
 
-            // Load button (left of rename)
-            let load_text = "Load";
-            let load_w = entry_layout.load_button.width;
-            let load_x = entry_layout.load_button.x;
-            self.rect_pipeline
-                .push_rect(load_x, btn_y, load_w, btn_height, btn_color);
-            for (j, c) in load_text.chars().enumerate() {
-                self.text_pipeline.push_char(
-                    c,
-                    load_x + ui_cw * 1.0 + j as f32 * ui_cw * 0.85,
-                    btn_y + (btn_height - cell_height) * 0.5,
-                    text_color,
+        // ── Tab snapshots link, only when some exist ──
+        if info.snapshot_count > 0
+            && let Some(link) = layout.snapshots_link
+        {
+            let link_color = if hovered_control == Some(SessionPanelControl::SnapshotsLink) {
+                self.rect_pipeline.push_rect(
+                    link.x + px(1.0),
+                    link.y,
+                    link.width - px(1.0),
+                    link.height,
+                    self.ui.menu_highlight,
                 );
-            }
-
-            // Row separator
-            let row_sep_y = item_y + row_height - 1.0;
+                text
+            } else {
+                dim
+            };
             self.rect_pipeline.push_rect(
-                panel_x + padding_x,
-                row_sep_y,
-                panel_width - padding_x * 2.0,
-                1.0,
-                self.ui.settings_separator,
+                link.x + px(1.0),
+                link.y,
+                link.width - px(1.0),
+                px(1.0),
+                self.ui.menu_border,
+            );
+            let label = format!("Tab snapshots ({})", info.snapshot_count);
+            self.push_ui_label(
+                &label,
+                link.x + padding_x,
+                link.y,
+                link.height,
+                link.width - padding_x * 3.0,
+                size,
+                link_color,
+            );
+            let chevron = SessionPanelRect {
+                x: link.x + link.width - padding_x * 1.5,
+                ..link
+            };
+            let (cx, cy) = (chevron.x, chevron.y + chevron.height / 2.0);
+            let arm = 4.0 * scale;
+            self.rect_pipeline.push_line(
+                cx - arm * 0.5,
+                cy - arm,
+                cx + arm * 0.5,
+                cy,
+                stroke,
+                link_color,
+            );
+            self.rect_pipeline.push_line(
+                cx + arm * 0.5,
+                cy,
+                cx - arm * 0.5,
+                cy + arm,
+                stroke,
+                link_color,
             );
         }
+    }
+
+    /// A quiet text button: a subtle surface for the primary action, text
+    /// alone otherwise, label centred in the UI face.
+    fn build_panel_button(
+        &mut self,
+        rect: crate::session::panel::SessionPanelRect,
+        label: &str,
+        primary: bool,
+        color: [f32; 4],
+    ) {
+        let radius = (5.0 * self.scale_factor).round();
+        if primary {
+            self.rect_pipeline.push_rounded_rect(
+                rect.x,
+                rect.y,
+                rect.width,
+                rect.height,
+                self.ui.menu_border,
+                radius,
+            );
+        }
+        let size = self.ui_label_px() * 0.95;
+        let width = self.ui_text_width(label, size).min(rect.width);
+        self.push_ui_label(
+            label,
+            rect.x + (rect.width - width) / 2.0,
+            rect.y,
+            rect.height,
+            rect.width,
+            size,
+            color,
+        );
     }
 
     /// Hit-test the session management panel for click handling
@@ -939,7 +975,7 @@ impl Renderer {
         window_width: f32,
         window_height: f32,
     ) -> crate::session::panel::SessionPanelAction {
-        use crate::session::panel::{SessionPanelAction, SessionPanelLayout};
+        use crate::session::panel::{SessionPanelAction, SessionPanelControl, SessionPanelLayout};
 
         let ui_cw = self.cell_width;
         let cell_height = self.cell_height;
@@ -947,6 +983,7 @@ impl Renderer {
         let layout = SessionPanelLayout::calculate(
             window_width,
             window_height,
+            self.tab_bar_height(),
             ui_cw,
             cell_height,
             info.animation,
@@ -955,13 +992,13 @@ impl Renderer {
             info.sessions.len(),
         );
 
-        // Click outside panel → close
-        if x < layout.panel.x {
+        // A click beside or above the panel (the toolbar) dismisses it.
+        if x < layout.panel.x || y < layout.panel.y {
             return SessionPanelAction::Close;
         }
 
-        // Close button (× in top-right)
-        if layout.close_button.contains(x, y) {
+        let control = layout.control_at(x, y, info.snapshot_count);
+        if control == Some(SessionPanelControl::Close) {
             return SessionPanelAction::Close;
         }
 
@@ -979,6 +1016,12 @@ impl Renderer {
             }
             // The rename form owns input until it is saved or cancelled.
             return SessionPanelAction::None;
+        }
+
+        match control {
+            Some(SessionPanelControl::Back) => return SessionPanelAction::ShowWorkspaces,
+            Some(SessionPanelControl::SnapshotsLink) => return SessionPanelAction::ShowSnapshots,
+            Some(SessionPanelControl::Close) | None => {}
         }
 
         let end = (info.scroll_offset + layout.visible_count).min(info.sessions.len());
@@ -1006,8 +1049,9 @@ impl Renderer {
                 return SessionPanelAction::Load(session.id.clone());
             }
 
-            // Clicking anywhere else on the session row → load it
-            return SessionPanelAction::Load(session.id.clone());
+            // Elsewhere on the row selects it; restoring replaces the open
+            // tabs, so it needs Open, Enter, or a double click.
+            return SessionPanelAction::Select(session.id.clone());
         }
 
         SessionPanelAction::None

@@ -116,6 +116,32 @@ impl App {
         }
     }
 
+    /// A second click on the same workspace row within the desktop's usual
+    /// double-click interval opens it; a single click only selects.
+    fn promote_session_double_click(
+        &mut self,
+        action: crate::session::panel::SessionPanelAction,
+    ) -> crate::session::panel::SessionPanelAction {
+        use crate::session::panel::SessionPanelAction;
+        const DOUBLE_CLICK: std::time::Duration = std::time::Duration::from_millis(400);
+        let SessionPanelAction::Select(id) = action else {
+            self.session_row_click = None;
+            return action;
+        };
+        let now = std::time::Instant::now();
+        let repeated = self
+            .session_row_click
+            .as_ref()
+            .is_some_and(|(last, at)| *last == id && now.duration_since(*at) <= DOUBLE_CLICK);
+        if repeated {
+            self.session_row_click = None;
+            SessionPanelAction::Load(id)
+        } else {
+            self.session_row_click = Some((id.clone(), now));
+            SessionPanelAction::Select(id)
+        }
+    }
+
     /// These surfaces are dispatched here, below the event-loop overlays but
     /// above terminal scrollbars/dividers. Keep their ownership independent
     /// of where the pointer lands (including outside-click dismissal).
@@ -386,6 +412,7 @@ impl App {
                                     size.width as f32,
                                     size.height as f32,
                                 );
+                                let action = self.promote_session_double_click(action);
                                 self.apply_session_panel_action(action);
                                 if let Some(window) = &self.window {
                                     window.request_redraw();
@@ -929,6 +956,7 @@ impl App {
                     let layout = crate::session::panel::SessionPanelLayout::calculate(
                         size.width as f32,
                         size.height as f32,
+                        renderer.tab_bar_height(),
                         ui_cw,
                         cell_height,
                         info.animation,
@@ -936,14 +964,15 @@ impl App {
                         info.workspaces,
                         info.sessions.len(),
                     );
-                    let hovered = if px >= layout.panel.x {
+                    let control = layout.control_at(px, py, info.snapshot_count);
+                    let hovered = if px >= layout.panel.x && control.is_none() {
                         layout
                             .visible_row_at(py)
                             .map(|row| info.scroll_offset + row)
                     } else {
                         None
                     };
-                    self.session_panel.set_hover(hovered);
+                    self.session_panel.set_hover(hovered, control);
                 }
             }
             if let Some(window) = &self.window {
@@ -2031,5 +2060,27 @@ mod tests {
             protocol_cell_from_viewport((f64::NAN, 100.0), args.0, args.1, args.2, args.3),
             None
         );
+    }
+
+    #[test]
+    fn a_second_click_on_the_same_workspace_row_opens_it() {
+        use crate::session::panel::SessionPanelAction;
+        let mut app = App::new_headless(crate::config::Config::default()).unwrap();
+        let select = |id: &str| SessionPanelAction::Select(id.into());
+
+        assert_eq!(app.promote_session_double_click(select("a")), select("a"));
+        assert_eq!(app.promote_session_double_click(select("b")), select("b"));
+        assert_eq!(
+            app.promote_session_double_click(select("b")),
+            SessionPanelAction::Load("b".into())
+        );
+        // A third click starts a new pair rather than opening again.
+        assert_eq!(app.promote_session_double_click(select("b")), select("b"));
+        // Any other action in between breaks the pair.
+        assert_eq!(
+            app.promote_session_double_click(SessionPanelAction::None),
+            SessionPanelAction::None
+        );
+        assert_eq!(app.promote_session_double_click(select("b")), select("b"));
     }
 }

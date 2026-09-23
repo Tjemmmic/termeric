@@ -114,9 +114,11 @@ local launch and archive behavior, not provider readiness or native appearance.
 ## User workflow
 
 Use **Save Workspace** and **Manage Workspaces…** in the command palette or the
-toolbar Workspaces menu. The
-manager lists archives and provides Load, Rename, and Delete controls. Rename is
-an inline text field: Enter submits and Escape cancels. The existing `[session]`
+toolbar Workspaces menu. The manager is a panel below the tab bar that lists
+archives newest first, each with its tab and pane counts and a plain age
+("2 hours ago", "Yesterday", "Sep 2"). Open, Rename, and Delete appear on the
+hovered or selected row; double-clicking a row opens it. Rename is an inline
+text field: Enter submits and Escape cancels. The existing `[session]`
 configuration keys retain their names for compatibility; `auto_save` now saves
 each complete window workspace on normal application exit, `auto_restore`
 restores the stable ordered workspace-ID set recorded in application state, and
@@ -132,6 +134,7 @@ closes it, and no key reaches the terminal. Opened with F6 chrome navigation,
 it starts on the first entry; screen readers see a menu of items that focus
 and activate the same way.
 
-Legacy **Save Open Tabs as Legacy Snapshots** remains available for interoperating with
-the older single-terminal snapshot format. Those entries still restore as new
-shells and intentionally do not preserve complete topology.
+Single-terminal tab snapshots, which Termeric writes when a tab closes, are
+reached from the **Tab snapshots** link at the foot of the manager; a back
+button returns to workspaces. There is no palette command for them. They still
+restore as new shells and intentionally do not preserve complete topology.

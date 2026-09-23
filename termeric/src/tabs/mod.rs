@@ -51,15 +51,8 @@ pub struct RoutedTerminalEvent {
 
 #[derive(Debug, Clone)]
 pub enum PersistenceNotice {
-    Saved {
-        id: String,
-        truncated: bool,
-        capture_scope: crate::session::SessionCaptureScope,
-    },
-    SaveFailed {
-        tab_id: usize,
-        error: String,
-    },
+    Saved { id: String, truncated: bool },
+    SaveFailed { tab_id: usize, error: String },
 }
 
 /// Manager for multiple tabs
@@ -1968,8 +1961,8 @@ impl TabManager {
         // If every pane exited in the same poll, topology cleanup has no live
         // owner to collapse back into the tab and must drop the pane manager.
         // Capture its still-addressable focused pane before that destructive
-        // transition so close-time persistence uses the same source as an
-        // explicit save.
+        // transition so close-time persistence captures the same focused
+        // terminal as an ordinary tab close.
         let mut handled_before_topology_cleanup = Vec::new();
         if auto_save {
             for tab in &mut self.tabs {
@@ -1997,7 +1990,6 @@ impl TabManager {
                             self.persistence_notices.push(PersistenceNotice::Saved {
                                 id: outcome.id,
                                 truncated: outcome.scrollback_truncated,
-                                capture_scope: outcome.capture_scope,
                             });
                         }
                         Err(error) => {
@@ -2041,7 +2033,6 @@ impl TabManager {
                             self.persistence_notices.push(PersistenceNotice::Saved {
                                 id: outcome.id,
                                 truncated: outcome.scrollback_truncated,
-                                capture_scope: outcome.capture_scope,
                             });
                         }
                         Err(error) => {
@@ -2493,38 +2484,6 @@ impl TabManager {
         Ok(id)
     }
 
-    /// Save all non-empty tabs as individual sessions
-    ///
-    /// Each eligible tab gets its own session entry. Automatic saves skip
-    /// pristine tabs; explicit saves may include them to preserve their cwd.
-    pub fn save_all_sessions(&mut self, save_scrollback: bool, include_empty: bool) {
-        for tab in self.tabs.iter_mut() {
-            if !include_empty && !tab.has_content() {
-                log::debug!("Skipping empty tab {} (no content)", tab.id);
-                continue;
-            }
-
-            match tab.save_as_session(save_scrollback) {
-                Ok(outcome) => {
-                    log::info!("Saved tab {} as session '{}'", tab.id, outcome.id);
-                    self.persistence_notices.push(PersistenceNotice::Saved {
-                        id: outcome.id,
-                        truncated: outcome.scrollback_truncated,
-                        capture_scope: outcome.capture_scope,
-                    });
-                }
-                Err(error) => {
-                    log::error!("Failed to save tab {}: {error:#}", tab.id);
-                    self.persistence_notices
-                        .push(PersistenceNotice::SaveFailed {
-                            tab_id: tab.id,
-                            error: format!("{error:#}"),
-                        });
-                }
-            }
-        }
-    }
-
     pub fn drain_persistence_notices(&mut self) -> Vec<PersistenceNotice> {
         std::mem::take(&mut self.persistence_notices)
     }
@@ -2757,24 +2716,17 @@ mod tests {
         assert!(manager.cleanup_closed(true, true));
         assert!(manager.is_empty());
         let notices = manager.drain_persistence_notices();
-        let [
-            PersistenceNotice::Saved {
-                id,
-                truncated,
-                capture_scope,
-            },
-        ] = notices.as_slice()
-        else {
+        let [PersistenceNotice::Saved { id, truncated }] = notices.as_slice() else {
             panic!("close-time focused pane was not saved: {notices:?}");
         };
         assert!(!truncated);
-        assert_eq!(
-            *capture_scope,
-            crate::session::SessionCaptureScope::FocusedPane
-        );
         let restored = crate::session::restore::restore_named_session(id)
             .unwrap()
             .unwrap();
+        assert_eq!(
+            restored.capture_scope,
+            crate::session::SessionCaptureScope::FocusedPane
+        );
         assert_eq!(restored.last_command.as_deref(), Some("right-command"));
         let history = crate::session::restore::load_snapshot_scrollback(&restored)
             .unwrap()

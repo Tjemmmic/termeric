@@ -1171,6 +1171,8 @@ pub struct App {
     keybinding_manager: KeyBindingManager,
     /// Application runtime state (for first boot tracking, etc.)
     app_state: AppState,
+    /// Last workspace-manager row click, for double-click opening.
+    session_row_click: Option<(String, std::time::Instant)>,
     /// The theme in effect while "Change Theme…" previews others.
     theme_preview: Option<theme_picker::ThemePreview>,
     /// The toolbar Workspaces menu while it is open.
@@ -1428,6 +1430,7 @@ impl App {
                 AppState::default()
             },
             workspace_menu: None,
+            session_row_click: None,
             theme_preview: None,
             session_panel: crate::session::panel::SessionPanel::new(),
             commands_panel: crate::ui::commands::panel::CommandsPanel::new(),
@@ -1714,7 +1717,7 @@ impl App {
             || file_transfers_pruned
             || should_exit;
 
-        self.show_persistence_notices(persistence_notices, true);
+        self.show_persistence_notices(persistence_notices);
         for notice in user_notices {
             self.toasts.warning(notice);
         }
@@ -2213,6 +2216,7 @@ impl App {
             let layout = crate::session::panel::SessionPanelLayout::calculate(
                 window_width as f32,
                 window_height as f32,
+                renderer.tab_bar_height(),
                 renderer.cell_width(),
                 renderer.cell_height(),
                 preview.animation,
@@ -3715,17 +3719,13 @@ impl App {
                         }
                         return;
                     }
-                    "core.workspace-manager" | "core.session-manager" => {
+                    "core.workspace-manager" => {
                         if self.session_panel.is_open() {
                             self.session_panel.close();
                         } else {
                             self.settings_panel.close();
                             self.commands_panel.close();
-                            if id == "core.workspace-manager" {
-                                self.session_panel.open_workspaces();
-                            } else {
-                                self.session_panel.open_sessions();
-                            }
+                            self.session_panel.open_workspaces();
                         }
                         if let Some(window) = &self.window {
                             window.request_redraw();
@@ -3734,10 +3734,6 @@ impl App {
                     }
                     "core.save-workspace" => {
                         self.force_save_workspace();
-                        return;
-                    }
-                    "core.save-session" => {
-                        self.force_save_session();
                         return;
                     }
                     "core.plugins" => {

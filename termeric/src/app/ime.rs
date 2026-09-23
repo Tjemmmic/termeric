@@ -268,10 +268,19 @@ impl App {
         cell_width: f32,
         cell_height: f32,
     ) -> Option<crate::ui::text_input_viewport::TextInputViewport> {
+        let top = self
+            .renderer
+            .as_ref()
+            .map_or(0.0, crate::renderer::Renderer::tab_bar_height);
         self.session_owns_ime_text()
             .then(|| {
-                self.session_panel
-                    .rename_input_viewport(width, height, cell_width, cell_height)
+                self.session_panel.rename_input_viewport(
+                    width,
+                    height,
+                    top,
+                    cell_width,
+                    cell_height,
+                )
             })
             .flatten()
     }
@@ -846,6 +855,7 @@ mod tests {
             let layout = crate::session::panel::SessionPanelLayout::calculate(
                 width,
                 800.0,
+                0.0,
                 cell,
                 cell * 2.0,
                 info.animation,
@@ -1321,7 +1331,7 @@ mod tests {
         );
         let info = app.session_panel.build_info();
         let layout = crate::session::panel::SessionPanelLayout::calculate(
-            800.0, 600.0, 8.0, 16.0, 1.0, true, true, 1,
+            800.0, 600.0, 0.0, 8.0, 16.0, 1.0, true, true, 1,
         );
         let text = info.rename_text.as_deref().unwrap();
         let view = layout

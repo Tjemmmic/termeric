@@ -611,9 +611,10 @@ raw-PTY tests cover editable/read-only transitions, candidate geometry, retained
 drafts, and resumption without real clipboard access, workspace persistence,
 command execution, or provider calls. Native desktop acceptance remains separate.
 
-The workspace manager and legacy-snapshot manager share a bounded modal model.
-Each visible entry is a named group with exact Load and Delete actions;
-workspaces additionally expose Rename. Stable actions resolve the saved entry's
+The Workspace Manager and its Tab snapshots view share a bounded modal model.
+Each visible entry is a named group with exact Open and Delete actions;
+workspaces additionally expose Rename. The Tab snapshots link and the back
+button are named buttons. Stable actions resolve the saved entry's
 ID and manager mode again before use, so a stale request cannot load, rename,
 or delete a different entry. The rename form has a bounded UTF-8 text input and
 visible Save/Cancel controls. `SessionPanelLayout` owns the panel, header,

@@ -48,6 +48,8 @@ const SESSION_EMPTY: NodeId = NodeId(53);
 const SESSION_RENAME_INPUT: NodeId = NodeId(54);
 const SESSION_RENAME_SAVE: NodeId = NodeId(55);
 const SESSION_RENAME_CANCEL: NodeId = NodeId(56);
+const SESSION_BACK: NodeId = NodeId(57);
+const SESSION_SNAPSHOTS: NodeId = NodeId(58);
 const SHORTCUTS_DIALOG: NodeId = NodeId(60);
 const SHORTCUTS_INPUT: NodeId = NodeId(61);
 const SHORTCUTS_LIST: NodeId = NodeId(62);
@@ -445,6 +447,8 @@ impl AccessibilityState {
                 | SESSION_RENAME_INPUT
                 | SESSION_RENAME_SAVE
                 | SESSION_RENAME_CANCEL
+                | SESSION_BACK
+                | SESSION_SNAPSHOTS
         ) || self.session_targets.contains_key(&node)
     }
 
@@ -2256,6 +2260,18 @@ impl App {
         use crate::session::panel::SessionPanelAction;
 
         match request.target_node {
+            SESSION_BACK | SESSION_SNAPSHOTS => match request.action {
+                Action::Click => {
+                    self.apply_session_panel_action(if request.target_node == SESSION_BACK {
+                        SessionPanelAction::ShowWorkspaces
+                    } else {
+                        SessionPanelAction::ShowSnapshots
+                    });
+                    self.accessibility.focus_override = None;
+                }
+                Action::Focus => self.accessibility.focus_override = Some(request.target_node),
+                _ => {}
+            },
             SESSION_CLOSE => match request.action {
                 Action::Click => {
                     self.apply_session_panel_action(SessionPanelAction::Close);
@@ -2355,7 +2371,7 @@ impl App {
         &self,
         info: &crate::session::panel::SessionPanelInfo,
     ) -> crate::session::panel::SessionPanelLayout {
-        let (width, height, cell_width, cell_height) = self
+        let (width, height, top, cell_width, cell_height) = self
             .renderer
             .as_ref()
             .map(|renderer| {
@@ -2363,14 +2379,16 @@ impl App {
                 (
                     width as f32,
                     height as f32,
+                    renderer.tab_bar_height(),
                     renderer.cell_width(),
                     renderer.cell_height(),
                 )
             })
-            .unwrap_or((800.0, 600.0, 8.0, 16.0));
+            .unwrap_or((800.0, 600.0, 0.0, 8.0, 16.0));
         crate::session::panel::SessionPanelLayout::calculate(
             width,
             height,
+            top,
             cell_width,
             cell_height,
             info.animation,
@@ -5376,7 +5394,7 @@ impl App {
         close.set_label(if info.workspaces {
             "Close workspaces"
         } else {
-            "Close legacy snapshots"
+            "Close tab snapshots"
         });
         close.add_action(Action::Click);
         close.add_action(Action::Focus);
@@ -5384,6 +5402,27 @@ impl App {
         nodes.push((SESSION_CLOSE, close));
 
         let mut dialog_children = vec![SESSION_CLOSE];
+        if let Some(back) = layout.back_button {
+            let mut node = Node::new(Role::Button);
+            node.set_label("Back to workspaces");
+            node.add_action(Action::Click);
+            node.add_action(Action::Focus);
+            node.set_bounds(session_rect(back));
+            nodes.push((SESSION_BACK, node));
+            dialog_children.push(SESSION_BACK);
+        }
+        if info.snapshot_count > 0
+            && let Some(link) = layout.snapshots_link
+        {
+            let mut node = Node::new(Role::Button);
+            node.set_label(format!("Tab snapshots ({})", info.snapshot_count));
+            node.set_description("Show snapshots saved when tabs closed");
+            node.add_action(Action::Click);
+            node.add_action(Action::Focus);
+            node.set_bounds(session_rect(link));
+            nodes.push((SESSION_SNAPSHOTS, node));
+            dialog_children.push(SESSION_SNAPSHOTS);
+        }
         if let (Some(value), Some(rename)) = (&info.rename_text, layout.rename) {
             let mut input = Node::new(Role::TextInput);
             input.set_label("Workspace name");
@@ -5451,11 +5490,11 @@ impl App {
                 .accessibility
                 .session_node(SessionSemanticTarget::Delete(key.clone()));
             let mut load = Node::new(Role::Button);
-            load.set_label(format!("Load {}", entry.display_name));
+            load.set_label(format!("Open {}", entry.display_name));
             load.set_description(if info.workspaces {
-                "Restore this complete workspace, including its tabs and panes"
+                "Relaunch this workspace's tabs and panes"
             } else {
-                "Restore this legacy focused-terminal snapshot in a new shell"
+                "Open this tab snapshot in a new shell"
             });
             if rename_active {
                 load.set_disabled();
@@ -5491,7 +5530,7 @@ impl App {
             delete.set_description(if info.workspaces {
                 "Permanently deletes this saved workspace"
             } else {
-                "Permanently deletes this legacy snapshot"
+                "Permanently deletes this tab snapshot"
             });
             if rename_active {
                 delete.set_disabled();
@@ -5527,7 +5566,7 @@ impl App {
         list.set_label(if info.workspaces {
             format!("{} saved workspaces", info.sessions.len())
         } else {
-            format!("{} legacy snapshots", info.sessions.len())
+            format!("{} tab snapshots", info.sessions.len())
         });
         list.set_orientation(accesskit::Orientation::Vertical);
         list.set_bounds(rect(
@@ -5548,7 +5587,7 @@ impl App {
             empty.set_label(if info.workspaces {
                 "No saved workspaces"
             } else {
-                "No legacy snapshots"
+                "No tab snapshots"
             });
             empty.set_live(Live::Polite);
             nodes.push((SESSION_EMPTY, empty));
@@ -5559,12 +5598,12 @@ impl App {
         dialog.set_label(if info.workspaces {
             "Workspaces"
         } else {
-            "Legacy snapshots"
+            "Tab snapshots"
         });
         dialog.set_description(if info.workspaces {
-            "Restoring relaunches saved tabs and panes"
+            "Opening relaunches the saved tabs and panes"
         } else {
-            "Restoring opens a new shell"
+            "Saved when tabs close. Opening starts a new shell"
         });
         dialog.set_modal();
         dialog.set_bounds(session_rect(layout.panel));
@@ -8615,7 +8654,7 @@ mod tests {
                 .unwrap()
                 .1
                 .label(),
-            Some("Legacy snapshots")
+            Some("Tab snapshots")
         );
         assert!(
             !app.accessibility

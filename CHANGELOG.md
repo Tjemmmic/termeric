@@ -1131,6 +1131,14 @@ Versioning once public beta tags begin.
   bars are gone, a magnifier replaces the `>` prompt, rows are shorter, and the
   scrim is lighter. The query field keeps its existing geometry.
 
+- The Workspace Manager is redesigned. It opens as a panel below the tab bar
+  instead of covering it, uses the UI font, and lists each workspace with its
+  tab and pane counts and a plain age ("2 hours ago", "Yesterday", "Sep 2")
+  instead of a raw timestamp. Open, Rename, and Delete appear only on the
+  hovered or selected row, and double-clicking a row opens it. Tab snapshots
+  saved on close are reached from a "Tab snapshots" link at the foot of the
+  manager, with a back button to return.
+
 - The toolbar Workspaces menu lists recent workspaces (current one checked,
   with tab counts) followed by Save Workspace and Manage Workspaces…, instead
   of a "legacy snapshots" list. It is keyboard navigable, exposed to screen
@@ -1211,6 +1219,13 @@ Versioning once public beta tags begin.
   for grouped windows/tabs, shell splits, Unicode cwd, direct commands and
   exact argv, plugin profiles, workspaces, titles, pixel geometry, and Linux
   application identity; closing or losing one window no longer exits siblings.
+
+### Removed
+
+- The "Save Open Tabs as Legacy Snapshots" and "Legacy Snapshot Manager"
+  palette commands. Tab snapshots are still written when a tab closes and are
+  opened from the Workspace Manager's "Tab snapshots" view; complete
+  workspaces are the supported way to save open tabs on demand.
 
 ### Fixed
 

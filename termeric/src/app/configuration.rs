@@ -1171,6 +1171,17 @@ impl App {
                 self.ime.clear_preedit();
                 self.session_panel.close();
             }
+            SessionPanelAction::Select(id) => {
+                self.session_panel.select_id(&id);
+            }
+            SessionPanelAction::ShowSnapshots => {
+                self.ime.clear_preedit();
+                self.session_panel.open_sessions();
+            }
+            SessionPanelAction::ShowWorkspaces => {
+                self.ime.clear_preedit();
+                self.session_panel.open_workspaces();
+            }
             SessionPanelAction::None => {}
         }
     }

@@ -62,6 +62,7 @@ pub(crate) fn headless_palette_input_smoke(
                 crate::session::panel::SessionPanelLayout::calculate(
                     width.max(800.0),
                     600.0,
+                    0.0,
                     10.0,
                     24.0,
                     1.0,

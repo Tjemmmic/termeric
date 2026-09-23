@@ -27,7 +27,6 @@ use super::title::{
 pub struct SessionSaveOutcome {
     pub id: String,
     pub scrollback_truncated: bool,
-    pub capture_scope: crate::session::SessionCaptureScope,
 }
 
 pub(crate) struct SessionCapture {
@@ -1272,7 +1271,6 @@ impl Tab {
         Ok(SessionSaveOutcome {
             id: session_id,
             scrollback_truncated,
-            capture_scope: session.capture_scope,
         })
     }
 
@@ -1290,8 +1288,7 @@ impl Tab {
     }
 
     /// Capture every persisted field from one stable focused-terminal source.
-    /// This is the sole policy boundary used by explicit, automatic, and
-    /// close-time saves.
+    /// This is the sole policy boundary used by every close-time save.
     pub(crate) fn capture_focused_session(
         &self,
         save_scrollback: bool,

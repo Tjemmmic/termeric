@@ -44,10 +44,24 @@ pub enum SessionPanelAction {
     CancelRename,
     /// Place the active rename caret at a whole-grapheme byte boundary.
     PlaceRenameCaret { cursor: usize },
+    /// Select an entry without opening it.
+    Select(String),
+    /// Show tab snapshots instead of workspaces.
+    ShowSnapshots,
+    /// Return from tab snapshots to workspaces.
+    ShowWorkspaces,
     /// Close the panel
     Close,
     /// No action
     None,
+}
+
+/// Header and footer controls that show pointer hover.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionPanelControl {
+    Close,
+    Back,
+    SnapshotsLink,
 }
 
 /// Info passed to the renderer
@@ -59,6 +73,8 @@ pub struct SessionPanelInfo {
     pub sessions: Vec<SessionEntry>,
     /// Mouse-hovered session index (None if not hovering any session)
     pub hovered_index: Option<usize>,
+    /// Header or footer control under the pointer.
+    pub hovered_control: Option<SessionPanelControl>,
     /// Inline rename text, when active.
     pub rename_text: Option<String>,
     /// UTF-8 byte cursor within the rename input.
@@ -69,6 +85,8 @@ pub struct SessionPanelInfo {
     pub selected_index: usize,
     /// First entry rendered in the bounded viewport.
     pub scroll_offset: usize,
+    /// Saved tab snapshots, offered from the workspace list when non-zero.
+    pub snapshot_count: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -109,7 +127,14 @@ pub struct SessionPanelLayout {
     pub padding_x: f32,
     pub padding_y: f32,
     pub title_y: f32,
+    /// Line of explanatory text under the title.
+    pub note_y: f32,
     pub close_button: SessionPanelRect,
+    /// Returns from tab snapshots to workspaces.
+    pub back_button: Option<SessionPanelRect>,
+    /// Opens tab snapshots from the workspace list. Reserved in workspace
+    /// mode and drawn only when snapshots exist.
+    pub snapshots_link: Option<SessionPanelRect>,
     pub rename: Option<SessionRenameLayout>,
     pub separator_y: f32,
     pub list_start_y: f32,
@@ -174,10 +199,13 @@ impl SessionPanelLayout {
         )
     }
 
+    /// Geometry of the panel, which slides in from the right edge and spans
+    /// from `top` (below the toolbar) to the bottom of the window.
     #[allow(clippy::too_many_arguments)]
     pub fn calculate(
         window_width: f32,
         window_height: f32,
+        top: f32,
         cell_width: f32,
         cell_height: f32,
         animation: f32,
@@ -185,19 +213,28 @@ impl SessionPanelLayout {
         workspaces: bool,
         entry_count: usize,
     ) -> Self {
-        let panel_width = (cell_width * 35.0).max(320.0).min(window_width * 0.45);
+        // Wide enough that a hovered row's actions leave room for its name.
+        let panel_width = (cell_width * 44.0).max(380.0).min(window_width * 0.45);
         let panel_x = window_width - panel_width * animation;
         let padding_x = cell_width * 1.5;
         let padding_y = cell_height * 0.5;
-        let title_y = cell_height * 1.5;
+        let title_y = top + cell_height * 0.9;
+        let control = cell_height * 1.5;
         let close_button = SessionPanelRect {
-            x: panel_x + panel_width - padding_x - cell_width,
+            x: panel_x + panel_width - padding_x * 0.5 - control,
             y: title_y,
-            width: cell_width * 1.5,
-            height: cell_height * 1.5,
+            width: control,
+            height: control,
         };
+        let back_button = (!workspaces).then_some(SessionPanelRect {
+            x: panel_x + padding_x * 0.5,
+            y: title_y,
+            width: control,
+            height: control,
+        });
+        let note_y = title_y + control;
         let rename = renaming.then(|| {
-            let form_y = title_y + cell_height * 1.15;
+            let form_y = note_y + cell_height * 1.4;
             let form_height = cell_height * 1.5;
             let cancel_width = cell_width * 8.0;
             let save_width = cell_width * 6.0;
@@ -224,26 +261,37 @@ impl SessionPanelLayout {
                 },
             }
         });
-        let separator_y = rename.map_or(title_y + cell_height * 2.0, |form| {
+        let separator_y = rename.map_or(note_y + cell_height * 1.7, |form| {
             form.input.y + form.input.height + padding_y
         });
-        let list_start_y = separator_y + padding_y + 4.0;
+        let list_start_y = separator_y + padding_y;
         let row_height = (cell_height * 3.5).max(52.0);
-        let rows_that_fit = ((window_height - list_start_y).max(0.0) / row_height)
+        let link_height = cell_height * 2.2;
+        let snapshots_link = workspaces.then_some(SessionPanelRect {
+            x: panel_x,
+            y: window_height - link_height,
+            width: panel_width,
+            height: link_height,
+        });
+        let list_bottom = snapshots_link.map_or(window_height, |link| link.y);
+        let rows_that_fit = ((list_bottom - list_start_y).max(0.0) / row_height)
             .floor()
             .max(1.0) as usize;
         Self {
             window_width,
             panel: SessionPanelRect {
                 x: panel_x,
-                y: 0.0,
+                y: top,
                 width: panel_width,
-                height: window_height,
+                height: (window_height - top).max(0.0),
             },
             padding_x,
             padding_y,
             title_y,
+            note_y,
             close_button,
+            back_button,
+            snapshots_link,
             rename,
             separator_y,
             list_start_y,
@@ -303,6 +351,21 @@ impl SessionPanelLayout {
         }
     }
 
+    /// The header or footer control at a point. The snapshots link only
+    /// exists while there are snapshots to open.
+    pub fn control_at(self, x: f32, y: f32, snapshot_count: usize) -> Option<SessionPanelControl> {
+        if self.close_button.contains(x, y) {
+            Some(SessionPanelControl::Close)
+        } else if self.back_button.is_some_and(|back| back.contains(x, y)) {
+            Some(SessionPanelControl::Back)
+        } else if snapshot_count > 0 && self.snapshots_link.is_some_and(|link| link.contains(x, y))
+        {
+            Some(SessionPanelControl::SnapshotsLink)
+        } else {
+            None
+        }
+    }
+
     pub fn visible_row_at(self, y: f32) -> Option<usize> {
         if y < self.list_start_y {
             return None;
@@ -322,11 +385,13 @@ pub struct SessionPanel {
     sessions: Vec<SessionEntry>,
     /// Mouse-hovered session index
     hovered_index: Option<usize>,
+    hovered_control: Option<SessionPanelControl>,
     rename_target: Option<String>,
     rename_input: TextInput,
     workspaces: bool,
     scroll_offset: usize,
     max_visible: usize,
+    snapshot_count: usize,
 }
 
 impl SessionPanel {
@@ -336,11 +401,13 @@ impl SessionPanel {
             selected_index: 0,
             sessions: Vec::new(),
             hovered_index: None,
+            hovered_control: None,
             rename_target: None,
             rename_input: TextInput::new(),
             workspaces: true,
             scroll_offset: 0,
             max_visible: 8,
+            snapshot_count: 0,
         }
     }
 
@@ -350,7 +417,7 @@ impl SessionPanel {
         self.open_current_mode();
     }
 
-    /// Open the legacy focused-terminal session manager.
+    /// Open the tab snapshot list.
     pub fn open_sessions(&mut self) {
         self.workspaces = false;
         self.open_current_mode();
@@ -360,6 +427,10 @@ impl SessionPanel {
         self.animation.open();
         self.selected_index = 0;
         self.scroll_offset = 0;
+        // Hover indexes refer to the previous list; the next pointer motion
+        // re-establishes them.
+        self.hovered_index = None;
+        self.hovered_control = None;
         self.cancel_rename();
         self.refresh_sessions();
     }
@@ -401,6 +472,12 @@ impl SessionPanel {
 
     /// Refresh the session list from disk
     pub fn refresh_sessions(&mut self) {
+        let now = super::unix_now();
+        self.snapshot_count = if self.workspaces {
+            super::list_sessions().len()
+        } else {
+            0
+        };
         self.sessions = if self.workspaces {
             crate::workspace::list_workspaces()
                 .into_iter()
@@ -418,12 +495,13 @@ impl SessionPanel {
                         id: workspace.id,
                         display_name: workspace.name,
                         subtitle,
-                        last_modified: workspace.updated_at,
+                        last_modified: super::describe_age(&workspace.updated_at, now)
+                            .unwrap_or_default(),
                     }
                 })
                 .collect()
         } else {
-            legacy_session_entries()
+            legacy_session_entries(now)
         };
         self.selected_index = self
             .selected_index
@@ -437,6 +515,7 @@ impl SessionPanel {
             animation: self.animation_progress(),
             sessions: self.sessions.clone(),
             hovered_index: self.hovered_index,
+            hovered_control: self.hovered_control,
             rename_text: self
                 .rename_target
                 .as_ref()
@@ -445,6 +524,7 @@ impl SessionPanel {
             workspaces: self.workspaces,
             selected_index: self.selected_index,
             scroll_offset: self.scroll_offset,
+            snapshot_count: self.snapshot_count,
         }
     }
 
@@ -453,6 +533,7 @@ impl SessionPanel {
         &self,
         width: f32,
         height: f32,
+        top: f32,
         cell_width: f32,
         cell_height: f32,
     ) -> Option<crate::ui::text_input_viewport::TextInputViewport> {
@@ -462,6 +543,7 @@ impl SessionPanel {
         SessionPanelLayout::calculate(
             width,
             height,
+            top,
             cell_width,
             cell_height,
             self.animation_progress(),
@@ -473,8 +555,9 @@ impl SessionPanel {
     }
 
     /// Update hover state from mouse position
-    pub fn set_hover(&mut self, index: Option<usize>) {
+    pub fn set_hover(&mut self, index: Option<usize>, control: Option<SessionPanelControl>) {
         self.hovered_index = index;
+        self.hovered_control = control;
     }
 
     /// Get the sessions list
@@ -624,6 +707,7 @@ impl SessionPanel {
             SessionPanelKey::Rename if self.workspaces => {
                 self.selected_action(SessionPanelAction::Rename)
             }
+            SessionPanelKey::Escape if !self.workspaces => SessionPanelAction::ShowWorkspaces,
             SessionPanelKey::Escape => SessionPanelAction::Close,
             SessionPanelKey::Rename => SessionPanelAction::None,
         }
@@ -675,7 +759,7 @@ pub enum SessionPanelKey {
     Escape,
 }
 
-fn legacy_session_entries() -> Vec<SessionEntry> {
+fn legacy_session_entries(now: u64) -> Vec<SessionEntry> {
     super::list_sessions()
         .into_iter()
         .map(|name| {
@@ -711,11 +795,15 @@ fn legacy_session_entries() -> Vec<SessionEntry> {
                 (true, false) => format!("focused pane · {detail}"),
                 (false, _) => detail,
             };
+            let last_modified = session
+                .as_ref()
+                .and_then(|session| super::describe_age(&session.created_at, now))
+                .unwrap_or_default();
             SessionEntry {
                 id: name,
                 display_name,
                 subtitle,
-                last_modified: "legacy snapshot".into(),
+                last_modified,
             }
         })
         .collect()
@@ -737,7 +825,7 @@ mod tests {
             .unwrap();
         super::super::set_test_sessions_base_dir(Some(root.path().to_owned()));
         let restored = super::super::restore::restore_named_session("oversized-fixture");
-        let entries = legacy_session_entries();
+        let entries = legacy_session_entries(0);
         super::super::set_test_sessions_base_dir(None);
         assert!(restored.unwrap_err().to_string().contains("limit"));
         assert_eq!(entries.len(), 1);
@@ -850,6 +938,7 @@ mod tests {
                     let layout = SessionPanelLayout::calculate(
                         width,
                         600.0,
+                        0.0,
                         cell,
                         cell * 2.0,
                         animation,
@@ -895,7 +984,7 @@ mod tests {
             (800.0, 600.0, 1.0, false),
         ] {
             let layout = SessionPanelLayout::calculate(
-                width, height, 10.0, 20.0, animation, renaming, true, 0,
+                width, height, 0.0, 10.0, 20.0, animation, renaming, true, 0,
             );
             assert!(layout.rename_input_viewport(&text, text.len()).is_none());
         }
@@ -911,6 +1000,7 @@ mod tests {
                     let layout = SessionPanelLayout::calculate(
                         width,
                         600.0,
+                        0.0,
                         cell,
                         cell * 2.0,
                         animation,
@@ -986,7 +1076,8 @@ mod tests {
         assert!(visible_cases > 10);
         // Partially revealed fields can be clickable before a single text
         // cell fits. Such clicks must not move a hidden caret.
-        let layout = SessionPanelLayout::calculate(800.0, 600.0, 8.0, 16.0, 0.06, true, true, 1);
+        let layout =
+            SessionPanelLayout::calculate(800.0, 600.0, 0.0, 8.0, 16.0, 0.06, true, true, 1);
         let field = layout.rename.unwrap();
         assert!(layout.rename_input_viewport(&text, text.len()).is_none());
         assert_eq!(
@@ -997,7 +1088,8 @@ mod tests {
 
     #[test]
     fn rename_layout_and_value_limits_are_explicit() {
-        let layout = SessionPanelLayout::calculate(1000.0, 800.0, 10.0, 20.0, 1.0, true, true, 4);
+        let layout =
+            SessionPanelLayout::calculate(1000.0, 800.0, 0.0, 10.0, 20.0, 1.0, true, true, 4);
         let rename = layout.rename.unwrap();
         assert!(!rename.input.contains(
             rename.save_button.x + rename.save_button.width / 2.0,
@@ -1020,5 +1112,42 @@ mod tests {
         assert_eq!(panel.build_info().rename_text.as_deref(), Some("Roots 🫚"));
         assert!(!panel.accessibility_set_rename("bad\nname"));
         assert!(!panel.accessibility_set_rename(&"x".repeat(129)));
+    }
+
+    #[test]
+    fn header_and_footer_controls_are_hit_exactly_and_rows_stay_above_the_link() {
+        let centre =
+            |rect: SessionPanelRect| (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
+        let workspaces =
+            SessionPanelLayout::calculate(1000.0, 800.0, 34.0, 10.0, 20.0, 1.0, false, true, 40);
+        assert!(workspaces.panel.y == 34.0 && workspaces.back_button.is_none());
+        let (x, y) = centre(workspaces.close_button);
+        assert_eq!(
+            workspaces.control_at(x, y, 0),
+            Some(SessionPanelControl::Close)
+        );
+        let link = workspaces.snapshots_link.unwrap();
+        let (x, y) = centre(link);
+        assert_eq!(
+            workspaces.control_at(x, y, 0),
+            None,
+            "no snapshots, no link"
+        );
+        assert_eq!(
+            workspaces.control_at(x, y, 2),
+            Some(SessionPanelControl::SnapshotsLink)
+        );
+        let last_row =
+            workspaces.list_start_y + workspaces.row_height * workspaces.visible_count as f32;
+        assert!(last_row <= link.y);
+
+        let snapshots =
+            SessionPanelLayout::calculate(1000.0, 800.0, 34.0, 10.0, 20.0, 1.0, false, false, 1);
+        assert!(snapshots.snapshots_link.is_none());
+        let (x, y) = centre(snapshots.back_button.unwrap());
+        assert_eq!(
+            snapshots.control_at(x, y, 0),
+            Some(SessionPanelControl::Back)
+        );
     }
 }
