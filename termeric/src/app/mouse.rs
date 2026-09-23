@@ -259,17 +259,9 @@ impl App {
             return;
         };
         let (cell_width, cell_height) = renderer.cell_size();
-        let tab_bar_height = renderer.tab_bar_height();
-        let chrome_bar_height = renderer.chrome_bar_height();
         let padding = renderer.padding();
         let content_left = renderer.tab_bar_width();
-        // Account for search bar height if visible
-        let search_bar_height = if self.search.is_active() || self.search.has_results() {
-            cell_height + 8.0 * 2.0 // Same calculation as renderer
-        } else {
-            0.0
-        };
-        let content_top = tab_bar_height + chrome_bar_height + search_bar_height;
+        let content_top = renderer.content_top();
         if state == ElementState::Pressed
             && button != MouseButton::Left
             && self.pointer_panel_owns_input()
@@ -755,16 +747,9 @@ impl App {
         };
         let (cell_width, cell_height) = renderer.cell_size();
         let tab_bar_height = renderer.tab_bar_height();
-        let chrome_bar_height = renderer.chrome_bar_height();
         let padding = renderer.padding();
         let content_left = renderer.tab_bar_width();
-        // Account for search bar height if visible
-        let search_bar_height = if self.search.is_active() || self.search.has_results() {
-            cell_height + 8.0 * 2.0 // Same calculation as renderer
-        } else {
-            0.0
-        };
-        let content_top = tab_bar_height + chrome_bar_height + search_bar_height;
+        let content_top = renderer.content_top();
         let grid_pos =
             self.focused_grid_position(position, cell_width, cell_height, content_top, padding);
 
@@ -1209,13 +1194,7 @@ impl App {
             return false;
         };
         let (cell_width, cell_height) = renderer.cell_size();
-        let search_bar_height = if self.search.is_active() || self.search.has_results() {
-            cell_height + 16.0
-        } else {
-            0.0
-        };
-        let content_top =
-            renderer.tab_bar_height() + renderer.chrome_bar_height() + search_bar_height;
+        let content_top = renderer.content_top();
         let padding = renderer.padding();
         let Some((col, row)) =
             self.protocol_grid_position(position, cell_width, cell_height, content_top, padding)
@@ -1242,16 +1221,11 @@ impl App {
             return false;
         };
         let (cell_width, cell_height) = renderer.cell_size();
-        let search_bar_height = if self.search.is_active() || self.search.has_results() {
-            cell_height + 16.0
-        } else {
-            0.0
-        };
         self.protocol_grid_position(
             position,
             cell_width,
             cell_height,
-            renderer.tab_bar_height() + renderer.chrome_bar_height() + search_bar_height,
+            renderer.content_top(),
             renderer.padding(),
         )
         .is_some()
@@ -1583,13 +1557,7 @@ impl App {
         let scrollbar_hit_width = 16.0_f32;
         let scrollbar_x = window_width as f32 - scrollbar_hit_width;
 
-        let search_bar_height = if self.search.is_active() || self.search.has_results() {
-            renderer.cell_height() + 16.0
-        } else {
-            0.0
-        };
-        let content_top =
-            renderer.tab_bar_height() + renderer.chrome_bar_height() + search_bar_height;
+        let content_top = renderer.content_top();
         let padding = renderer.padding();
         let content_left = renderer.tab_bar_width();
 
@@ -1629,17 +1597,9 @@ impl App {
         let Some(renderer) = &self.renderer else {
             return;
         };
-        let tab_bar_height = renderer.tab_bar_height();
         let padding = renderer.padding();
         let (_, window_height) = renderer.window_size();
-
-        let search_bar_height = if self.search.is_active() || self.search.has_results() {
-            let (_, cell_height) = renderer.cell_size();
-            cell_height + 8.0 * 2.0
-        } else {
-            0.0
-        };
-        let content_top = tab_bar_height + renderer.chrome_bar_height() + search_bar_height;
+        let content_top = renderer.content_top();
         let scrollbar_top = content_top + padding;
         let scrollbar_bottom = window_height as f32 - padding;
         let (scrollbar_top, scrollbar_bottom) = self

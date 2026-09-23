@@ -218,16 +218,10 @@ impl CompletionLayout {
 impl Renderer {
     /// Same minimum viewport contract as the render layout. Input must not
     /// consume completion keys when no complete item can be displayed.
-    pub fn git_completion_fits(&self, search_visible: bool) -> bool {
+    pub fn git_completion_fits(&self) -> bool {
         CompletionViewport {
             content_left: self.tab_bar_width(),
-            content_top: self.tab_bar_height()
-                + self.chrome_bar_height()
-                + if search_visible {
-                    self.cell_height + 16.0
-                } else {
-                    0.0
-                },
+            content_top: self.content_top(),
             content_width: (self.size.0 as f32 - self.tab_bar_width()).max(0.0),
             window_height: self.size.1 as f32,
             cell_width: self.cell_width,

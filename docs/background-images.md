@@ -35,9 +35,9 @@ nothing. Removing `path` disables the feature and releases that texture.
 
 ## Viewport and layering
 
-The image occupies the terminal content viewport below the top toolbar,
-plugin chrome, and search bar, and to the right of a configured vertical tab
-rail. It spans the whole content area behind all splits rather than being
+The image occupies the terminal content viewport below the top toolbar and
+plugin chrome, and to the right of a configured vertical tab rail. The find box
+floats over it without moving it. It spans the whole content area behind all splits rather than being
 duplicated per pane. Explicit terminal cell backgrounds, selection/search
 highlights, inline terminal graphics, text, cursors, and application chrome are
 painted above it. An OSC 11 application background therefore remains

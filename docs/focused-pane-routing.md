@@ -69,6 +69,13 @@ fields directly. A source guard rejects bypasses of the focused-terminal API.
 
 ## Search presentation
 
+The find box floats over the top-right corner of the terminal area, clear of
+the scrollbar strip; terminal content, pointer mapping, images, and IME
+geometry never shift while it is open. It holds the query, a match status,
+case/regex/filter toggles, previous/next, and close. Previous/next keep their
+space without matches but act only while there are matches, and an invalid
+pattern adds one line naming the problem.
+
 Global literal/regex search, highlights, filter rows, and result navigation use
 the displayed grid. During synchronized output that is the bounded viewport
 captured at begin; hidden live changes and off-viewport history are not searched.

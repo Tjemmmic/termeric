@@ -1,5 +1,6 @@
 //! Slide-in panel rendering — commands panel, session management panel
 
+use super::icons::Icon;
 use super::{Renderer, adjust_alpha};
 
 /// Bounds of a side-panel control, whichever panel's layout produced it.
@@ -45,14 +46,6 @@ impl From<crate::ui::commands::panel::CommandsPanelRect> for PanelBox {
     }
 }
 
-/// Vector icons for side-panel header controls.
-#[derive(Debug, Clone, Copy)]
-pub(super) enum HeaderIcon {
-    Close,
-    Plus,
-    Back,
-}
-
 impl Renderer {
     pub(super) fn build_commands_panel(
         &mut self,
@@ -95,14 +88,10 @@ impl Renderer {
         // ── Header: title, "+" and × ──
         let close = layout.close_button;
         let new = layout.new_button;
-        self.build_header_icon_button(
-            new,
-            HeaderIcon::Plus,
-            info.hovered == Some(CommandControl::New),
-        );
+        self.build_header_icon_button(new, Icon::Plus, info.hovered == Some(CommandControl::New));
         self.build_header_icon_button(
             close,
-            HeaderIcon::Close,
+            Icon::Close,
             info.hovered == Some(CommandControl::Close),
         );
         let title_x = panel.x + padding;
@@ -352,7 +341,7 @@ impl Renderer {
     pub(super) fn build_header_icon_button(
         &mut self,
         bounds: impl Into<PanelBox>,
-        icon: HeaderIcon,
+        icon: Icon,
         hovered: bool,
     ) {
         let PanelBox {
@@ -361,7 +350,6 @@ impl Renderer {
             width,
             height,
         } = bounds.into();
-        let scale = self.scale_factor;
         if hovered {
             self.rect_pipeline.push_rounded_rect(
                 x,
@@ -369,7 +357,7 @@ impl Renderer {
                 width,
                 height,
                 self.ui.menu_highlight,
-                (5.0 * scale).round(),
+                (5.0 * self.scale_factor).round(),
             );
         }
         let color = if hovered {
@@ -377,21 +365,7 @@ impl Renderer {
         } else {
             self.ui.menu_text_dim
         };
-        let stroke = (1.5 * scale).max(1.0);
-        let (cx, cy) = (x + width / 2.0, y + height / 2.0);
-        let arm = 4.0 * scale;
-        let lines: &[(f32, f32, f32, f32)] = match icon {
-            HeaderIcon::Close => &[(-arm, -arm, arm, arm), (arm, -arm, -arm, arm)],
-            HeaderIcon::Plus => &[(-arm, 0.0, arm, 0.0), (0.0, -arm, 0.0, arm)],
-            HeaderIcon::Back => &[
-                (arm * 0.5, -arm, -arm * 0.5, 0.0),
-                (-arm * 0.5, 0.0, arm * 0.5, arm),
-            ],
-        };
-        for &(x1, y1, x2, y2) in lines {
-            self.rect_pipeline
-                .push_line(cx + x1, cy + y1, cx + x2, cy + y2, stroke, color);
-        }
+        self.push_icon(icon, x + width / 2.0, y + height / 2.0, color);
     }
 
     /// A rectangular outline of `stroke` pixels inside the given bounds.
@@ -525,14 +499,14 @@ impl Renderer {
         if let Some(back) = layout.back_button {
             self.build_header_icon_button(
                 back,
-                HeaderIcon::Back,
+                Icon::Back,
                 hovered_control == Some(SessionPanelControl::Back),
             );
             title_x = back.x + back.width + px(2.0);
         }
         self.build_header_icon_button(
             close,
-            HeaderIcon::Close,
+            Icon::Close,
             hovered_control == Some(SessionPanelControl::Close),
         );
         let title = if info.workspaces {

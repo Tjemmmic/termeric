@@ -7,7 +7,7 @@ owner (terminal, search, settings filter, command palette, Unicode/domain picker
 command form, or typed plugin-setting dialog). Changing pane focus, losing
 window focus, or disabling the IME
 cancels stale preedit. Candidate geometry is reported in physical pixels from
-the same vertical-tab rail, padding, chrome/search offsets, pane rectangle,
+the same vertical-tab rail, padding, chrome offset, pane rectangle,
 cursor row/column, and
 scaled cell dimensions used to render the terminal. Long preedit runs are
 clipped only at grapheme boundaries to the space remaining in the focused pane

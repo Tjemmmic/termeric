@@ -1361,7 +1361,7 @@ impl ApplicationHandler<AppEvent> for App {
                                 renderer.cell_width(),
                                 renderer.cell_height(),
                                 renderer.tab_bar_width(),
-                                renderer.tab_bar_height() + renderer.chrome_bar_height(),
+                                renderer.content_top(),
                                 window_width as f32,
                                 window_height as f32,
                             );

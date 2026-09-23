@@ -5,11 +5,9 @@ use winit::keyboard::{Key, NamedKey};
 
 impl App {
     pub(super) fn git_completion_has_room(&self) -> bool {
-        self.renderer.as_ref().is_none_or(|renderer| {
-            renderer.git_completion_fits(
-                self.search.is_active() || self.search.has_results() || self.search.is_searching(),
-            )
-        })
+        self.renderer
+            .as_ref()
+            .is_none_or(crate::renderer::Renderer::git_completion_fits)
     }
 
     pub(super) fn dismiss_git_completion_popup(&mut self) {

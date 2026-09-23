@@ -355,14 +355,9 @@ impl Renderer {
             .clear(&mut self.background_image_pipeline);
     }
 
-    pub(super) fn build_background_image_data(&mut self, search_bar_visible: bool) {
-        let search_height = if search_bar_visible {
-            self.cell_height + 16.0
-        } else {
-            0.0
-        };
+    pub(super) fn build_background_image_data(&mut self) {
         let content_left = self.tab_bar_width();
-        let content_top = self.tab_bar_height() + self.chrome_bar_height() + search_height;
+        let content_top = self.content_top();
         let viewport = (
             content_left,
             content_top,

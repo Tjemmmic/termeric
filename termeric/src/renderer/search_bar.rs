@@ -1,10 +1,10 @@
 //! Search bar rendering and hit-testing.
 
+use super::icons::Icon;
 use super::types::*;
 use super::{Renderer, adjust_alpha};
-use crate::terminal::search::{SearchBarInfo, SearchBarLayout, SearchBarRect};
+use crate::terminal::search::{SearchBarInfo, SearchBarLayout};
 use crate::ui::text_input_viewport::TextInputViewport;
-use unicode_segmentation::UnicodeSegmentation;
 
 impl Renderer {
     pub(super) fn build_search_bar(
@@ -12,35 +12,55 @@ impl Renderer {
         info: &SearchBarInfo,
         content_left: f32,
         content_width: f32,
-        tab_bar_height: f32,
+        content_top: f32,
     ) {
         let layout = SearchBarLayout::calculate(
             info,
             content_left,
             content_width,
-            tab_bar_height,
+            content_top,
             self.cell_width,
             self.cell_height,
         );
+        if layout.bar.width <= 0.0 {
+            return;
+        }
+        let scale = self.scale_factor;
+        let px = |logical: f32| (logical * scale).round().max(1.0);
+        let text = self.ui.menu_text;
+        let dim = self.ui.menu_text_dim;
+        let accent = self.ui.palette_accent;
+        let error_color = self.ui.search_error;
+        let radius = px(8.0);
+        let bar = layout.bar;
 
-        self.rect_pipeline.push_rect(
-            layout.bar.x,
-            layout.bar.y,
-            layout.bar.width,
-            layout.bar.height,
-            self.ui.search_bg,
-        );
-        self.rect_pipeline.push_rect(
-            layout.bar.x,
-            layout.bar.y + layout.bar.height - 1.0,
-            layout.bar.width,
-            1.0,
-            adjust_alpha(self.ui.tab_border, 0.5),
+        // ── Floating surface with a hairline border ──
+        let border = if info.regex_error.is_some() {
+            adjust_alpha(error_color, 0.7)
+        } else {
+            self.ui.menu_border
+        };
+        self.rect_pipeline
+            .push_rounded_rect(bar.x, bar.y, bar.width, bar.height, border, radius);
+        let hairline = px(1.0);
+        self.rect_pipeline.push_rounded_rect(
+            bar.x + hairline,
+            bar.y + hairline,
+            bar.width - hairline * 2.0,
+            bar.height - hairline * 2.0,
+            self.ui.menu_bg,
+            radius - hairline,
         );
 
-        let prompt_color = self.ui.search_indicator;
-        self.text_pipeline
-            .push_char('/', layout.input.x, layout.text_y, prompt_color);
+        let icon = layout.icon;
+        self.push_magnifier(
+            icon.x + icon.width / 2.0,
+            icon.y + icon.height / 2.0,
+            dim,
+            self.ui.menu_bg,
+        );
+
+        // ── Query ──
         if let Some(view) = layout.input_viewport(info, self.cell_width) {
             let clip = super::text::TextClip {
                 left: view.text_x,
@@ -48,124 +68,144 @@ impl Renderer {
                 right: view.right,
                 bottom: layout.input.y + layout.input.height,
             };
-            let visible = &info.query[view.text_range.clone()];
-            self.text_pipeline.push_ui_run(
-                visible,
-                view.text_x,
-                view.text_y,
-                self.ui.search_text,
-                self.cell_width,
-                clip,
-            );
-            if info.is_active {
-                self.rect_pipeline.push_rect(
-                    view.cursor_x,
-                    view.text_y,
-                    2.0,
-                    self.cell_height,
-                    adjust_alpha(self.ui.cursor, 0.8),
-                );
-                if info.query.is_empty() {
-                    let hint = "Type to search";
-                    if let Some(hint_view) = TextInputViewport::calculate(
-                        hint,
-                        0,
-                        view.text_x,
-                        view.text_y,
-                        view.right,
-                        self.cell_width,
-                    ) {
-                        self.text_pipeline.push_ui_run(
-                            &hint[hint_view.text_range],
-                            view.text_x,
-                            view.text_y,
-                            adjust_alpha(self.ui.search_text, 0.4),
-                            self.cell_width,
-                            clip,
-                        );
-                    }
-                }
-            }
-            let drawn: usize = visible
-                .graphemes(true)
-                .map(termeric_core::unicode::grapheme_width)
-                .sum();
-            if let Some(error) = &info.regex_error
-                && drawn.saturating_add(2) < view.columns
-            {
-                let error = format!(" Error: {error}");
-                let x = view.text_x + drawn as f32 * self.cell_width;
-                if let Some(error_view) = TextInputViewport::calculate(
-                    &error,
+            if info.query.is_empty() {
+                let hint = "Find";
+                if let Some(hint_view) = TextInputViewport::calculate(
+                    hint,
                     0,
-                    x,
+                    view.text_x,
                     view.text_y,
                     view.right,
                     self.cell_width,
                 ) {
                     self.text_pipeline.push_ui_run(
-                        &error[error_view.text_range],
-                        x,
+                        &hint[hint_view.text_range],
+                        view.text_x,
                         view.text_y,
-                        self.ui.search_error,
+                        adjust_alpha(dim, dim[3] * 0.7),
                         self.cell_width,
                         clip,
                     );
                 }
+            } else {
+                self.text_pipeline.push_ui_run(
+                    &info.query[view.text_range.clone()],
+                    view.text_x,
+                    view.text_y,
+                    text,
+                    self.cell_width,
+                    clip,
+                );
+            }
+            if info.is_active {
+                self.rect_pipeline.push_rect(
+                    view.cursor_x,
+                    view.text_y,
+                    px(2.0).min(view.right - view.cursor_x),
+                    self.cell_height,
+                    accent,
+                );
             }
         }
 
-        if let Some(rect) = layout.next {
-            self.draw_search_text("▼", rect.x, layout.text_y, self.ui.search_indicator);
-        }
-        if let Some(rect) = layout.previous {
-            self.draw_search_text("▲", rect.x, layout.text_y, self.ui.search_indicator);
-        }
-
+        // ── Status, right-aligned in its slot ──
         let count = info.count_text();
         if !count.is_empty() {
-            let color = if info.searching || info.match_count > 0 {
-                self.ui.search_indicator
+            let size = self.ui_label_px() * 0.92;
+            let status = layout.status;
+            let width = self.ui_text_width(&count, size).min(status.width);
+            let color = if info.regex_error.is_some() || (!info.searching && info.match_count == 0)
+            {
+                error_color
             } else {
-                self.ui.search_error
+                dim
             };
-            self.draw_search_text(&count, layout.status.x, layout.text_y, color);
+            self.push_ui_label(
+                &count,
+                status.x + status.width - width,
+                status.y,
+                status.height,
+                status.width,
+                size,
+                color,
+            );
         }
 
-        let regex_color = if info.regex_error.is_some() {
-            self.ui.search_error
-        } else if info.use_regex {
-            self.ui.search_indicator
+        // ── Option toggles, then navigation and close ──
+        for (rect, label, on) in [
+            (layout.case_sensitive, Some("Aa"), info.case_sensitive),
+            (layout.regex, Some(".*"), info.use_regex),
+            (layout.filter, None, info.filter_mode),
+        ] {
+            if on {
+                self.rect_pipeline.push_rounded_rect(
+                    rect.x,
+                    rect.y,
+                    rect.width,
+                    rect.height,
+                    adjust_alpha(accent, 0.28),
+                    px(5.0),
+                );
+            }
+            let color = if on { text } else { dim };
+            match label {
+                Some(label) => {
+                    let size = self.ui_label_px();
+                    let width = self.ui_text_width(label, size);
+                    self.push_ui_label(
+                        label,
+                        rect.x + (rect.width - width) / 2.0,
+                        rect.y,
+                        rect.height,
+                        rect.width,
+                        size,
+                        color,
+                    );
+                }
+                None => self.push_icon(
+                    Icon::Filter,
+                    rect.x + rect.width / 2.0,
+                    rect.y + rect.height / 2.0,
+                    color,
+                ),
+            }
+        }
+        let navigation_color = if layout.navigable {
+            dim
         } else {
-            adjust_alpha(self.ui.search_indicator, 0.35)
+            adjust_alpha(dim, dim[3] * 0.4)
         };
-        self.draw_search_text("[.*]", layout.regex.x, layout.text_y, regex_color);
+        for (rect, icon) in [
+            (layout.previous, Icon::ChevronUp),
+            (layout.next, Icon::ChevronDown),
+        ] {
+            self.push_icon(
+                icon,
+                rect.x + rect.width / 2.0,
+                rect.y + rect.height / 2.0,
+                navigation_color,
+            );
+        }
+        let close = layout.close;
+        self.push_icon(
+            Icon::Close,
+            close.x + close.width / 2.0,
+            close.y + close.height / 2.0,
+            dim,
+        );
 
-        let case_color = if info.case_sensitive {
-            self.ui.search_indicator
-        } else {
-            adjust_alpha(self.ui.search_indicator, 0.35)
-        };
-        self.draw_search_text("[Aa]", layout.case_sensitive.x, layout.text_y, case_color);
-
-        let filter = if info.filter_mode {
-            format!("[⊜{}]", info.matching_line_count)
-        } else {
-            "[⊜]".to_string()
-        };
-        let filter_color = if info.filter_mode {
-            self.ui.search_indicator
-        } else {
-            adjust_alpha(self.ui.search_indicator, 0.35)
-        };
-        self.draw_search_text(&filter, layout.filter.x, layout.text_y, filter_color);
-        self.draw_search_text("×", layout.close.x, layout.text_y, self.ui.search_indicator);
-    }
-
-    fn draw_search_text(&mut self, text: &str, x: f32, y: f32, color: [f32; 4]) {
-        for (index, character) in text.chars().enumerate() {
-            self.text_pipeline
-                .push_char(character, x + index as f32 * self.cell_width, y, color);
+        // ── Regex error on its own line ──
+        if let (Some(line), Some(message)) = (layout.error, &info.regex_error) {
+            let size = self.ui_label_px() * 0.92;
+            self.push_ui_label(
+                message,
+                line.x,
+                line.y,
+                line.height,
+                line.width,
+                size,
+                error_color,
+            );
         }
     }
 
@@ -174,7 +214,7 @@ impl Renderer {
             info,
             self.tab_bar_width_for(window_width),
             (window_width - self.tab_bar_width_for(window_width)).max(0.0),
-            self.tab_bar_height() + self.chrome_bar_height(),
+            self.content_top(),
             self.cell_width,
             self.cell_height,
         )
@@ -203,19 +243,26 @@ fn search_bar_click(
     if !layout.bar.contains(x, y) {
         return SearchBarClick::None;
     }
-    for (rect, click) in [
-        (Some(layout.close), SearchBarClick::Close),
-        (layout.next, SearchBarClick::NextMatch),
-        (layout.previous, SearchBarClick::PrevMatch),
-        (Some(layout.regex), SearchBarClick::ToggleRegex),
+    let navigation = layout.navigable;
+    for (rect, enabled, click) in [
+        (layout.close, true, SearchBarClick::Close),
+        (layout.next, navigation, SearchBarClick::NextMatch),
+        (layout.previous, navigation, SearchBarClick::PrevMatch),
+        (layout.regex, true, SearchBarClick::ToggleRegex),
         (
-            Some(layout.case_sensitive),
+            layout.case_sensitive,
+            true,
             SearchBarClick::ToggleCaseSensitive,
         ),
-        (Some(layout.filter), SearchBarClick::ToggleFilter),
+        (layout.filter, true, SearchBarClick::ToggleFilter),
     ] {
-        if rect.is_some_and(|rect: SearchBarRect| rect.contains(x, y)) {
-            return click;
+        if rect.contains(x, y) {
+            // A disabled control still owns its pixels.
+            return if enabled {
+                click
+            } else {
+                SearchBarClick::Background
+            };
         }
     }
     if layout.input.contains(x, y)
@@ -231,6 +278,7 @@ fn search_bar_click(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use unicode_segmentation::UnicodeSegmentation;
 
     fn info() -> SearchBarInfo {
         SearchBarInfo {
@@ -265,14 +313,23 @@ mod tests {
                         info.cursor_pos = cursor;
                         let layout =
                             SearchBarLayout::calculate(&info, 120.0, width, 55.0, cell_width, 25.0);
+                        let bar = layout.bar;
                         assert_eq!(
-                            search_bar_click(&layout, &info, cell_width, 119.0, 60.0),
+                            search_bar_click(&layout, &info, cell_width, bar.x - 1.0, bar.y + 1.0),
                             SearchBarClick::None
                         );
-                        assert_eq!(
-                            search_bar_click(&layout, &info, cell_width, 121.0, 56.0),
-                            SearchBarClick::Background
-                        );
+                        if bar.width > 2.0 {
+                            assert_eq!(
+                                search_bar_click(
+                                    &layout,
+                                    &info,
+                                    cell_width,
+                                    bar.x + 1.0,
+                                    bar.y + 1.0
+                                ),
+                                SearchBarClick::Background
+                            );
+                        }
                         let Some(view) = layout.input_viewport(&info, cell_width) else {
                             continue;
                         };
@@ -322,8 +379,8 @@ mod tests {
                             (layout.regex, SearchBarClick::ToggleRegex),
                             (layout.case_sensitive, SearchBarClick::ToggleCaseSensitive),
                             (layout.filter, SearchBarClick::ToggleFilter),
-                            (layout.next.unwrap(), SearchBarClick::NextMatch),
-                            (layout.previous.unwrap(), SearchBarClick::PrevMatch),
+                            (layout.next, SearchBarClick::NextMatch),
+                            (layout.previous, SearchBarClick::PrevMatch),
                         ] {
                             assert_eq!(
                                 search_bar_click(
@@ -388,32 +445,66 @@ mod tests {
         info.match_count = 300_000;
         info.current_match = Some(37_857);
         info.results_truncated = true;
-        assert_eq!(info.count_text(), "37857/300000 · recent");
+        assert_eq!(info.count_text(), "37857 of 300000 · recent");
         info.match_count = 12;
         info.current_match = Some(1);
         info.results_truncated = false;
-        assert_eq!(info.count_text(), "1/12");
+        assert_eq!(info.count_text(), "1 of 12");
         info.searching = true;
         assert_eq!(info.count_text(), "Searching…");
     }
 
     #[test]
     fn shared_layout_keeps_controls_disjoint_and_inside_bar() {
-        let info = info();
+        let mut info = info();
         let layout = SearchBarLayout::calculate(&info, 120.0, 680.0, 30.0, 8.0, 16.0);
-        assert_eq!(layout.bar.x, 120.0);
-        assert_eq!(layout.bar.width, 680.0);
+        // The box floats at the top right of the content, clear of the
+        // scrollbar strip, and never spans the whole width.
+        assert!(layout.bar.x > 120.0 && layout.bar.y > 30.0);
+        assert!(layout.bar.x + layout.bar.width <= 800.0 - 16.0);
+        assert!(layout.error.is_none());
         for rect in [
             layout.filter,
             layout.case_sensitive,
             layout.regex,
-            layout.previous.unwrap(),
-            layout.next.unwrap(),
+            layout.previous,
+            layout.next,
             layout.close,
         ] {
             assert!(layout.bar.contains(rect.x, rect.y));
             assert!(layout.bar.contains(rect.x + rect.width - 0.01, rect.y));
         }
-        assert!(layout.input.x + layout.input.width <= layout.filter.x);
+        assert!(layout.input.x + layout.input.width <= layout.status.x);
+        assert!(layout.status.x + layout.status.width <= layout.case_sensitive.x);
+        for (left, right) in [
+            (layout.case_sensitive, layout.regex),
+            (layout.regex, layout.filter),
+            (layout.filter, layout.previous),
+            (layout.previous, layout.next),
+            (layout.next, layout.close),
+        ] {
+            assert!(left.x + left.width <= right.x);
+        }
+
+        // Navigation space stays reserved without matches, and an invalid
+        // pattern adds a line for its message.
+        info.retained_match_count = 0;
+        info.regex_error = Some("unclosed group".into());
+        let without = SearchBarLayout::calculate(&info, 120.0, 680.0, 30.0, 8.0, 16.0);
+        assert!(!without.navigable);
+        assert_eq!(without.next, layout.next);
+        assert_eq!(
+            search_bar_click(
+                &without,
+                &info,
+                8.0,
+                without.next.x + 1.0,
+                without.next.y + 1.0
+            ),
+            SearchBarClick::Background
+        );
+        let error = without.error.unwrap();
+        assert!(without.bar.height > layout.bar.height);
+        assert!(error.y + error.height <= without.bar.y + without.bar.height);
     }
 }

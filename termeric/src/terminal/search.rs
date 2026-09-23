@@ -606,7 +606,7 @@ impl Search {
             }
             Err(e) => {
                 self.compiled_regex = None;
-                self.regex_error = Some(e.to_string());
+                self.regex_error = Some(describe_regex_error(&e));
             }
         }
     }
@@ -864,12 +864,16 @@ impl SearchBarInfo {
             "Searching…".to_string()
         } else if self.match_count > 0 && self.results_truncated {
             format!(
-                "{}/{} · recent",
+                "{} of {} · recent",
                 self.current_match.unwrap_or(0),
                 self.match_count
             )
         } else if self.match_count > 0 {
-            format!("{}/{}", self.current_match.unwrap_or(0), self.match_count)
+            format!(
+                "{} of {}",
+                self.current_match.unwrap_or(0),
+                self.match_count
+            )
         } else if !self.query.is_empty() {
             "No matches".to_string()
         } else {
@@ -904,6 +908,30 @@ impl SearchBarInfo {
     }
 }
 
+/// One line explaining why a pattern is invalid. The regex crate's syntax
+/// errors span several lines (the pattern, a caret marker, then
+/// `error: …`); only the final explanation fits the find box and reads well
+/// aloud.
+fn describe_regex_error(error: &regex::Error) -> String {
+    match error {
+        regex::Error::CompiledTooBig(_) => "Pattern is too large".to_string(),
+        _ => {
+            let text = error.to_string();
+            let line = text
+                .lines()
+                .rev()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+                .unwrap_or_default();
+            let reason = line.strip_prefix("error:").map_or(line, str::trim);
+            let mut chars = reason.chars();
+            chars.next().map_or_else(String::new, |first| {
+                first.to_uppercase().chain(chars).collect()
+            })
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct SearchBarRect {
     pub x: f32,
@@ -920,17 +948,31 @@ impl SearchBarRect {
 
 /// One shared geometry contract for painting, pointer hit-testing, and the
 /// native accessibility tree.
+///
+/// The find box floats over the top-right of the terminal area; terminal
+/// content never moves to make room for it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SearchBarLayout {
+    /// The floating box, including the error line when one is shown.
     pub bar: SearchBarRect,
+    /// Magnifier slot at the start of the control row.
+    pub icon: SearchBarRect,
     pub input: SearchBarRect,
     pub filter: SearchBarRect,
     pub case_sensitive: SearchBarRect,
     pub regex: SearchBarRect,
+    /// Right-aligned match status, sized for its text in terminal cells as an
+    /// upper bound on the narrower UI face.
     pub status: SearchBarRect,
-    pub previous: Option<SearchBarRect>,
-    pub next: Option<SearchBarRect>,
+    /// Always reserved so the box does not reflow as results arrive; they
+    /// act only while `navigable`.
+    pub previous: SearchBarRect,
+    pub next: SearchBarRect,
+    /// Whether there are matches to move between.
+    pub navigable: bool,
     pub close: SearchBarRect,
+    /// A second line describing an invalid regular expression.
+    pub error: Option<SearchBarRect>,
     pub text_y: f32,
 }
 
@@ -944,87 +986,96 @@ impl SearchBarLayout {
         crate::ui::text_input_viewport::TextInputViewport::calculate(
             &info.query,
             info.cursor_pos,
-            self.input.x + cell_width * 1.3,
+            self.input.x,
             self.text_y,
             self.input.x + self.input.width,
             cell_width,
         )
     }
 
+    /// Place the find box in the terminal area that starts at
+    /// (`content_x`, `content_y`) and is `content_width` wide.
     pub fn calculate(
         info: &SearchBarInfo,
-        bar_x: f32,
-        bar_width: f32,
-        bar_y: f32,
+        content_x: f32,
+        content_width: f32,
+        content_y: f32,
         cell_width: f32,
         cell_height: f32,
     ) -> Self {
-        let padding = 8.0;
-        let bar_height = cell_height + padding * 2.0;
-        let mut right = bar_x + bar_width - padding;
-        let rect_from_right = |right: &mut f32, width: f32| {
-            *right -= width;
-            SearchBarRect {
-                x: *right,
-                y: bar_y + padding,
-                width,
-                height: cell_height,
-            }
+        let margin = cell_width;
+        // Clear the terminal scrollbar's hit strip, which takes presses first.
+        let margin_right = (cell_width * 2.0).max(20.0);
+        let inset = cell_width * 0.5;
+        let control = (cell_height * 1.4).round();
+        let row_height = control + inset * 2.0;
+        let available = (content_width - margin - margin_right).max(0.0);
+        let width = (cell_width * 56.0).min(available);
+        let x = content_x + content_width - margin_right - width;
+        let y = content_y + margin * 0.75;
+        let row_y = y + inset;
+        let square = |x: f32| SearchBarRect {
+            x,
+            y: row_y,
+            width: control,
+            height: control,
         };
-
-        let close = rect_from_right(&mut right, cell_width);
-        right -= cell_width * 0.5;
-        let (next, previous) = if info.retained_match_count > 0 {
-            let next = rect_from_right(&mut right, cell_width);
-            let previous = rect_from_right(&mut right, cell_width);
-            right -= cell_width * 0.5;
-            (Some(next), Some(previous))
-        } else {
-            (None, None)
+        let gap = cell_width * 0.25;
+        let mut right = x + width - inset;
+        let mut take = |width: f32, space_after: f32| {
+            right -= space_after + width;
+            right
         };
+        let close = square(take(control, 0.0));
+        let next = square(take(control, gap * 2.0));
+        let previous = square(take(control, gap));
+        let filter = square(take(control, gap * 2.0));
+        let regex = square(take(control, gap));
+        let case_sensitive = square(take(control, gap));
+        let has_matches = info.retained_match_count > 0;
 
-        let count_width = info.count_text().chars().count() as f32 * cell_width;
-        let status = rect_from_right(&mut right, count_width);
-        if count_width > 0.0 {
-            right -= cell_width;
-        }
-        right -= cell_width * 0.5;
-        let regex = rect_from_right(&mut right, 4.0 * cell_width);
-        right -= cell_width;
-        right -= cell_width * 0.5;
-        let case_sensitive = rect_from_right(&mut right, 4.0 * cell_width);
-        right -= cell_width;
-        let filter_chars = if info.filter_mode {
-            format!("[⊜{}]", info.matching_line_count).chars().count()
-        } else {
-            3
-        };
-        right -= cell_width * 0.5;
-        let filter = rect_from_right(&mut right, filter_chars as f32 * cell_width);
-
-        let input_x = bar_x + padding;
-        let input_right = (filter.x - cell_width * 0.5).max(input_x);
+        let status_width = info.count_text().chars().count() as f32 * cell_width;
+        let status_x = take(status_width, gap * 2.0);
+        let icon = square(x + inset);
+        let input_x = icon.x + icon.width + gap;
+        let input_right = (status_x - gap * 2.0).max(input_x);
+        let text_y = row_y + (control - cell_height) / 2.0;
+        let error = info.regex_error.as_ref().map(|_| SearchBarRect {
+            x: input_x,
+            y: row_y + control,
+            width: (x + width - inset - input_x).max(0.0),
+            height: cell_height * 1.3,
+        });
+        let height = row_height + error.map_or(0.0, |line| line.height);
         Self {
             bar: SearchBarRect {
-                x: bar_x,
-                y: bar_y,
-                width: bar_width,
-                height: bar_height,
+                x,
+                y,
+                width,
+                height,
             },
+            icon,
             input: SearchBarRect {
                 x: input_x,
-                y: bar_y + padding,
+                y: row_y,
                 width: (input_right - input_x).max(0.0),
-                height: cell_height,
+                height: control,
             },
             filter,
             case_sensitive,
             regex,
-            status,
+            status: SearchBarRect {
+                x: status_x,
+                y: row_y,
+                width: status_width,
+                height: control,
+            },
             previous,
             next,
+            navigable: has_matches,
             close,
-            text_y: bar_y + padding,
+            error,
+            text_y,
         }
     }
 }
@@ -1053,6 +1104,22 @@ impl Search {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn regex_errors_are_one_plain_line() {
+        // Invalid on purpose; held in variables so they are parsed at run time.
+        let [unclosed, reversed] = ["Cargo(", "a{2,1}"];
+        let error = Regex::new(unclosed).unwrap_err();
+        assert!(error.to_string().lines().count() > 1);
+        assert_eq!(describe_regex_error(&error), "Unclosed group");
+        let error = Regex::new(reversed).unwrap_err();
+        let described = describe_regex_error(&error);
+        assert!(!described.contains('\n') && !described.starts_with("error"));
+        assert_eq!(
+            describe_regex_error(&regex::Error::CompiledTooBig(1)),
+            "Pattern is too large"
+        );
+    }
 
     // Note: These tests would require a mock Grid implementation
     // For now, we just test the basic functionality

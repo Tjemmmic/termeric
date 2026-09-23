@@ -1131,6 +1131,15 @@ Versioning once public beta tags begin.
   bars are gone, a magnifier replaces the `>` prompt, rows are shorter, and the
   scrim is lighter. The query field keeps its existing geometry.
 
+- Terminal search is a floating find box at the top right of the terminal
+  instead of a full-width bar. It no longer pushes terminal content down,
+  which also clipped the bottom rows and shifted pointer, image, and IME
+  positions while search was open. Options are icon toggles (Aa, .*, and a
+  filter icon) instead of `[Aa] [.*] [⊜]`, previous/next are chevrons that
+  keep their place when there are no matches, counts read "3 of 12", and an
+  invalid regular expression shows a single plain explanation such as
+  "Unclosed group" instead of the parser's multi-line report.
+
 - The Custom Commands panel matches the Workspace Manager: it opens below the
   tab bar instead of covering it, uses the UI font, and adds commands from a
   "+" in its header. Rows show the name over the command, and Delete appears

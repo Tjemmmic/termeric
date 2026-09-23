@@ -187,36 +187,11 @@ impl Renderer {
             px(6.0),
         );
         // Magnifier in the slot before the query text.
-        let icon_color = fade(self.ui.palette_text_dim, 1.0);
-        let (icon_x, icon_y) = (
-            (input_x + cell_width * 1.1).round(),
-            (input_y + input_height / 2.0).round(),
-        );
-        let ring = px(10.0);
-        self.rect_pipeline.push_rounded_rect(
-            icon_x - ring / 2.0 - px(1.0),
-            icon_y - ring / 2.0 - px(1.0),
-            ring,
-            ring,
-            icon_color,
-            ring / 2.0,
-        );
-        let hole = ring - px(3.0);
-        self.rect_pipeline.push_rounded_rect(
-            icon_x - hole / 2.0 - px(1.0),
-            icon_y - hole / 2.0 - px(1.0),
-            hole,
-            hole,
+        self.push_magnifier(
+            input_x + cell_width * 1.1,
+            input_y + input_height / 2.0,
+            fade(self.ui.palette_text_dim, 1.0),
             fade(self.ui.palette_input_bg, 0.8),
-            hole / 2.0,
-        );
-        self.rect_pipeline.push_line(
-            icon_x + px(2.0),
-            icon_y + px(2.0),
-            icon_x + px(5.0),
-            icon_y + px(5.0),
-            (1.6 * scale).max(1.0),
-            icon_color,
         );
 
         // One grapheme-safe, caret-following viewport also anchors native IME.

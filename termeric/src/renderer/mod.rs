@@ -23,6 +23,7 @@ mod cursor;
 pub(crate) mod draw;
 mod git;
 mod harvest;
+mod icons;
 pub use harvest::sprout_menu_hit_test;
 mod overlays;
 mod palette;
@@ -1277,6 +1278,12 @@ impl Renderer {
         self.bell_intensity = intensity;
     }
 
+    /// Top edge of the terminal area: below the tab bar and any chrome bar.
+    /// Overlays such as the find box float above it and never move it.
+    pub fn content_top(&self) -> f32 {
+        self.tab_bar_height() + self.chrome_bar_height()
+    }
+
     /// Height of the chrome bar (0 if no chrome bar is active)
     pub fn chrome_bar_height(&self) -> f32 {
         if self.chrome_bar.is_some() {
@@ -1405,8 +1412,8 @@ impl Renderer {
         );
 
         // Build image render data if any
-        self.build_background_image_data(search_bar.is_some());
-        self.build_image_data(terminal_key, grid, images, panes, search_bar.is_some());
+        self.build_background_image_data();
+        self.build_image_data(terminal_key, grid, images, panes);
 
         // Upload vertex data
         self.rect_pipeline.upload(&self.device, &self.queue);
@@ -1496,7 +1503,6 @@ impl Renderer {
         grid: &Grid,
         images: Option<&[termeric_core::PresentationImage]>,
         panes: &[PaneRenderData],
-        search_bar_visible: bool,
     ) {
         self.image_pipeline.clear();
         let active_keys: Vec<_> = if panes.is_empty() {
@@ -1517,12 +1523,7 @@ impl Renderer {
         };
         self.image_pipeline.gc_images(&active_keys);
 
-        let search_height = if search_bar_visible {
-            self.cell_height + 16.0
-        } else {
-            0.0
-        };
-        let content_top = self.tab_bar_height() + self.chrome_bar_height() + search_height;
+        let content_top = self.content_top();
         let content_left = self.tab_bar_width();
         if panes.is_empty() {
             self.queue_terminal_images(
@@ -1635,16 +1636,10 @@ impl Renderer {
         // Calculate brightness multiplier for focus dimming (1.0 = full brightness, lower = dimmed)
         let brightness = 1.0 - focus_dim;
 
-        // Calculate search bar height if visible
-        let search_bar_height = if search_bar.is_some() {
-            cell_height + 8.0 * 2.0 // padding * 2
-        } else {
-            0.0
-        };
-
-        // Content area starts below tab bar, chrome bar (if Claude tab), and search bar
+        // Content starts below the tab bar and the chrome bar (Claude tabs).
+        // The find box floats over it.
         let chrome_height = self.chrome_bar_height();
-        let content_top = tab_bar_height + chrome_height + search_bar_height;
+        let content_top = tab_bar_height + chrome_height;
 
         // ── LAYER 0: Base content (tab bar, grid, cursor, scrollbar) ──
         // Render tab bar first

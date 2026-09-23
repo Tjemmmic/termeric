@@ -488,13 +488,7 @@ impl App {
         }
         let terminal = self.active_terminal()?;
         let cursor = terminal.grid().cursor();
-        let search_height =
-            if self.search.is_active() || self.search.has_results() || self.search.is_searching() {
-                renderer.cell_height() + 16.0
-            } else {
-                0.0
-            };
-        let content_top = renderer.tab_bar_height() + renderer.chrome_bar_height() + search_height;
+        let content_top = renderer.content_top();
         let content_left = renderer.tab_bar_width();
         let focused_pane = panes.iter().find(|pane| pane.is_focused);
         let (origin_x, origin_y, max_width) = if let Some(pane) = focused_pane {
@@ -728,7 +722,8 @@ mod tests {
                         SearchBarLayout::calculate(&info, left, width, top, cell, cell * 2.0);
                     let view = app.search_ime_viewport(&layout, cell).unwrap();
                     assert_eq!(view, layout.input_viewport(&info, cell).unwrap());
-                    assert_eq!(view.text_y, top + 8.0);
+                    assert_eq!(view.text_y, layout.text_y);
+                    assert!(layout.bar.y > top, "the box floats inside the content");
                     assert!(view.cursor_x + cell <= layout.input.x + layout.input.width + 0.001);
                     assert!(view.text_range.end <= query.len());
                     if cursor == query.len() {

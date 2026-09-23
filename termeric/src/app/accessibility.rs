@@ -2525,11 +2525,6 @@ impl App {
             .as_ref()
             .map(|renderer| {
                 let (width, height) = renderer.window_size();
-                let search_height = if self.search_is_visible() {
-                    renderer.cell_height() + 16.0
-                } else {
-                    0.0
-                };
                 (
                     width as f32,
                     height as f32,
@@ -2538,7 +2533,7 @@ impl App {
                     renderer.cell_height(),
                     renderer.padding(),
                     renderer.tab_bar_width(),
-                    renderer.tab_bar_height() + renderer.chrome_bar_height() + search_height,
+                    renderer.content_top(),
                 )
             })
             .unwrap_or((1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0));
@@ -2938,7 +2933,7 @@ impl App {
                 (SEARCH_PREVIOUS, "Previous match", layout.previous),
                 (SEARCH_NEXT, "Next match", layout.next),
             ] {
-                if let Some(rectangle) = rectangle {
+                if layout.navigable {
                     let mut button = Node::new(Role::Button);
                     button.set_label(label);
                     button.set_bounds(search_rect(rectangle));
@@ -3284,7 +3279,7 @@ impl App {
                     renderer.cell_height(),
                     renderer.padding(),
                     renderer.tab_bar_width(),
-                    renderer.tab_bar_height() + renderer.chrome_bar_height(),
+                    renderer.content_top(),
                 )
             })
             .unwrap_or((8.0, 16.0, 8.0, 0.0, 40.0));

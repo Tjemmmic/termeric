@@ -2562,7 +2562,7 @@ impl App {
         }
 
         renderer.set_tab_bar_hover(self.tab_bar_hover, self.tab_bar_hover_progress);
-        if !renderer.git_completion_fits(search_info.is_some()) {
+        if !renderer.git_completion_fits() {
             self.git_completions_visible = false;
             self.git_completions.clear();
             self.git_completion_index = None;
@@ -2762,7 +2762,7 @@ impl App {
                     renderer.cell_width(),
                     renderer.cell_height(),
                     renderer.tab_bar_width(),
-                    renderer.tab_bar_height() + renderer.chrome_bar_height(),
+                    renderer.content_top(),
                     harvest_window_width as f32,
                     harvest_window_height as f32,
                 )
