@@ -1,5 +1,7 @@
-//! The `termeric agent-event` hook command, run as agents run it: it reports
-//! to the GUI that owns its terminal and otherwise stays silent and succeeds.
+//! The commands agents run, executed as agents run them against a private
+//! fake GUI endpoint: the `agent-event` hook, which reports to the GUI that
+//! owns its terminal and otherwise stays silent and succeeds, and the `mcp`
+//! server.
 #![cfg(unix)]
 
 use serde_json::{Value, json};
@@ -10,7 +12,7 @@ use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 const TOKEN: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-const VERSION: u32 = 19;
+const VERSION: u32 = 20;
 
 /// A private runtime directory holding a fake GUI endpoint for this process.
 struct Gui {
@@ -191,4 +193,76 @@ fn a_missing_refusing_or_stuck_gui_never_fails_the_hook() {
         );
         server.join().unwrap();
     });
+}
+
+#[test]
+fn the_mcp_server_speaks_json_rpc_over_stdio_to_the_terminals_gui() {
+    let gui = Gui::new();
+    let id = gui.terminal_id();
+    let requests = [
+        json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+               "params": {"protocolVersion": "2025-06-18", "capabilities": {}}}),
+        json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+               "params": {"name": "list_agents", "arguments": {}}}),
+    ];
+    let input: String = requests
+        .iter()
+        .map(|request| format!("{request}\n"))
+        .collect();
+    let (output, request) = std::thread::scope(|scope| {
+        let server = scope.spawn(|| {
+            gui.serve(Some(json!({
+                "result": "agents",
+                "version": VERSION,
+                "process_id": std::process::id(),
+                "truncated": false,
+                "agents": [{
+                    "window_id": 1, "tab_id": 2, "pane_id": 0,
+                    "agent_id": "codex", "name": "Codex", "tab_title": "api",
+                    "state": "needs_input", "detail": "Approve shell: ls",
+                    "last_message": null, "seconds_in_state": 3,
+                }],
+            })))
+        });
+        let mut child = Command::new(env!("CARGO_BIN_EXE_termeric"))
+            .arg("mcp")
+            .env("XDG_RUNTIME_DIR", gui.root.path())
+            .env("TERMERIC_TERMINAL_ID", &id)
+            .env("RUST_LOG", "off")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        (child.wait_with_output().unwrap(), server.join().unwrap())
+    });
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        request,
+        json!({"version": VERSION, "token": TOKEN, "request": {"operation": "list_agents"}})
+    );
+    let replies: Vec<Value> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(
+        replies.len(),
+        2,
+        "one reply per request, none for notifications"
+    );
+    assert_eq!(replies[0]["result"]["serverInfo"]["name"], "termeric");
+    let result = &replies[1]["result"];
+    assert_eq!(result["isError"], false);
+    assert_eq!(
+        result["structuredContent"]["agents"][0]["state"],
+        "needs_input"
+    );
 }

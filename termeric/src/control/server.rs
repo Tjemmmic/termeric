@@ -200,6 +200,39 @@ fn serve_client(
         }
     };
     let frame = match response {
+        Response::Agents {
+            process_id,
+            agents,
+            truncated,
+        } => {
+            if process_id == 0 || process_id > i32::MAX as u32 {
+                anyhow::bail!("GUI event loop returned an invalid agent list");
+            }
+            protocol::validate_agent_summaries(&agents)?;
+            ServerFrame::Agents {
+                version: protocol::PROTOCOL_VERSION,
+                process_id,
+                agents,
+                truncated,
+            }
+        }
+        Response::AgentInputAccepted {
+            process_id,
+            request_id,
+            window_id,
+            tab_id,
+            pane_id,
+        } => {
+            validate_action_response(process_id, &request_id, window_id)?;
+            ServerFrame::AgentInputAccepted {
+                version: protocol::PROTOCOL_VERSION,
+                process_id,
+                request_id,
+                window_id,
+                tab_id,
+                pane_id,
+            }
+        }
         Response::AgentEventRecorded { process_id } => {
             if process_id == 0 || process_id > i32::MAX as u32 {
                 anyhow::bail!("GUI event loop returned an invalid agent-event response");

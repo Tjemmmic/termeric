@@ -8,6 +8,11 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- `termeric mcp` is an MCP server that lets one agent see and direct the
+  others: `list_agents`, `read_terminal`, and `send_to_agent`. Sending
+  requires `security.allow_gui_control_input`. GUI control protocol v20 adds
+  `list_agents` and `submit_to_agent`.
+
 - **Review Agent Changes…** lists the files an agent changed since it started
   in a Git repository, compared with a snapshot taken when Termeric noticed
   it. Each file's diff can be staged, or reverted to how it was after

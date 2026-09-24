@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::collections::HashSet;
 use std::io::{Read, Write};
 
-pub const PROTOCOL_VERSION: u32 = 19;
+pub const PROTOCOL_VERSION: u32 = 20;
 pub const JSON_SCHEMA_VERSION: u32 = 3;
 pub const MAX_FRAME_BYTES: usize = 256 * 1024;
 pub const MAX_WINDOWS: usize = 32;
@@ -35,6 +35,8 @@ pub const MAX_AGENT_ID_BYTES: usize = 64;
 pub const MAX_AGENT_EVENT_DETAIL_BYTES: usize = 512;
 pub const MAX_AGENT_LAST_MESSAGE_BYTES: usize = 64 * 1024;
 pub const MAX_AGENT_TRANSCRIPT_PATH_BYTES: usize = 4 * 1024;
+pub const MAX_AGENT_SUMMARIES: usize = 256;
+pub const MAX_AGENT_SUMMARY_MESSAGE_BYTES: usize = 16 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -169,6 +171,18 @@ pub enum Request {
         divider_id: u64,
         ratio_millis: u16,
     },
+    /// Every terminal running a coding agent, with its reported state.
+    ListAgents,
+    /// Paste `text` into the agent in one pane and submit it once it has
+    /// settled, provided that pane still runs `agent_id`.
+    SubmitToAgent {
+        request_id: String,
+        window_id: u64,
+        tab_id: u64,
+        pane_id: u32,
+        agent_id: String,
+        text: String,
+    },
     /// A coding agent's hook reporting what the agent is doing. The terminal
     /// is named by the identity its processes inherited, not by focus.
     AgentEvent {
@@ -179,6 +193,73 @@ pub enum Request {
         last_message: Option<String>,
         transcript_path: Option<String>,
     },
+}
+
+/// One terminal running a coding agent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentSummary {
+    pub window_id: u64,
+    pub tab_id: u64,
+    pub pane_id: u32,
+    pub agent_id: String,
+    pub name: String,
+    pub tab_title: String,
+    /// `None` when the agent's hooks are not reporting.
+    pub state: Option<AgentState>,
+    /// What the agent asks for, or why its turn failed.
+    pub detail: Option<String>,
+    /// The agent's latest answer, cut to a bounded length.
+    pub last_message: Option<String>,
+    pub seconds_in_state: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentState {
+    Idle,
+    Working,
+    NeedsInput,
+    Finished,
+    Failed,
+}
+
+impl AgentSummary {
+    fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(self.window_id != 0, "agent summary has no window");
+        anyhow::ensure!(
+            valid_agent_id(&self.agent_id)
+                && self.name.len() <= MAX_METADATA_BYTES
+                && self.tab_title.len() <= MAX_METADATA_BYTES
+                && self
+                    .detail
+                    .as_ref()
+                    .is_none_or(|detail| detail.len() <= MAX_AGENT_EVENT_DETAIL_BYTES)
+                && self
+                    .last_message
+                    .as_ref()
+                    .is_none_or(|message| message.len() <= MAX_AGENT_SUMMARY_MESSAGE_BYTES),
+            "agent summary exceeds its bounds"
+        );
+        Ok(())
+    }
+}
+
+/// Validate a bounded list of agent summaries from a GUI.
+pub fn validate_agent_summaries(agents: &[AgentSummary]) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        agents.len() <= MAX_AGENT_SUMMARIES,
+        "more than {MAX_AGENT_SUMMARIES} agents"
+    );
+    agents.iter().try_for_each(AgentSummary::validate)
+}
+
+fn valid_agent_id(agent_id: &str) -> bool {
+    !agent_id.is_empty()
+        && agent_id.len() <= MAX_AGENT_ID_BYTES
+        && agent_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
 }
 
 /// What an agent reported through its hooks.
@@ -403,6 +484,18 @@ pub enum Response {
     AgentEventRecorded {
         process_id: u32,
     },
+    Agents {
+        process_id: u32,
+        agents: Vec<AgentSummary>,
+        truncated: bool,
+    },
+    AgentInputAccepted {
+        process_id: u32,
+        request_id: String,
+        window_id: u64,
+        tab_id: u64,
+        pane_id: u32,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -577,6 +670,20 @@ pub enum ServerFrame {
         version: u32,
         process_id: u32,
     },
+    Agents {
+        version: u32,
+        process_id: u32,
+        agents: Vec<AgentSummary>,
+        truncated: bool,
+    },
+    AgentInputAccepted {
+        version: u32,
+        process_id: u32,
+        request_id: String,
+        window_id: u64,
+        tab_id: u64,
+        pane_id: u32,
+    },
     Error {
         version: u32,
         message: String,
@@ -604,7 +711,35 @@ impl Request {
 
     pub fn validate(&self) -> Result<(), String> {
         match self {
-            Self::Inventory => Ok(()),
+            Self::Inventory | Self::ListAgents => Ok(()),
+            Self::SubmitToAgent {
+                request_id,
+                window_id,
+                agent_id,
+                text,
+                ..
+            } => {
+                if !valid_request_id(request_id) {
+                    return Err(
+                        "GUI control request ID must be exactly 32 lowercase hex digits".into(),
+                    );
+                }
+                if *window_id == 0 {
+                    return Err("GUI control target window ID must be nonzero".into());
+                }
+                if !valid_agent_id(agent_id) {
+                    return Err("Agent ID must be 1-64 letters, digits, '-' or '_'".into());
+                }
+                if text.trim().is_empty() || text.len() > MAX_CONTROL_INPUT_BYTES {
+                    return Err(format!(
+                        "Agent input must be 1 to {MAX_CONTROL_INPUT_BYTES} UTF-8 bytes of text"
+                    ));
+                }
+                if !valid_control_input_text(text) {
+                    return Err("Agent input permits printable UTF-8, tab, and newline only".into());
+                }
+                Ok(())
+            }
             Self::AgentEvent {
                 terminal_id,
                 agent_id,
@@ -909,6 +1044,7 @@ impl Request {
             Self::Inventory
             | Self::ReadText { .. }
             | Self::LaunchStatus { .. }
+            | Self::ListAgents
             | Self::AgentEvent { .. } => None,
             Self::CreateWindow { request_id, .. }
             | Self::LaunchWindow { request_id, .. }
@@ -926,7 +1062,8 @@ impl Request {
             | Self::MovePane { request_id, .. }
             | Self::ResizeWindow { request_id, .. }
             | Self::ResizeDivider { request_id, .. }
-            | Self::SendText { request_id, .. } => Some(request_id),
+            | Self::SendText { request_id, .. }
+            | Self::SubmitToAgent { request_id, .. } => Some(request_id),
         }
     }
 }
@@ -949,12 +1086,7 @@ fn validate_agent_event(
     {
         return Err("Agent terminal identity must be PID.HEX".into());
     }
-    if agent_id.is_empty()
-        || agent_id.len() > MAX_AGENT_ID_BYTES
-        || !agent_id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
-    {
+    if !valid_agent_id(agent_id) {
         return Err("Agent ID must be 1-64 letters, digits, '-' or '_'".into());
     }
     if detail.is_some_and(|detail| detail.len() > MAX_AGENT_EVENT_DETAIL_BYTES) {

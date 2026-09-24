@@ -16,6 +16,7 @@ mod domain;
 mod git;
 mod harvest;
 mod input;
+mod mcp;
 mod notifications;
 #[allow(dead_code)]
 mod panes;
@@ -54,6 +55,11 @@ fn main() -> Result<std::process::ExitCode> {
         cli::ParseOutcome::Run(launch) => launch,
         cli::ParseOutcome::AgentEvent(_) => {
             unreachable!("agent hooks return before logging starts")
+        }
+        cli::ParseOutcome::Mcp { process_id } => {
+            // Standard output carries the protocol; logging stays on stderr.
+            mcp::serve(mcp::ControlBackend { process_id })?;
+            return Ok(std::process::ExitCode::SUCCESS);
         }
         cli::ParseOutcome::QuickAccess(launch) => {
             if let Some(output) = control::toggle_existing_quick_access()? {

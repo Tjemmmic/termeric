@@ -1942,6 +1942,36 @@ impl ApplicationHandler<AppEvent> for App {
                     crate::control::protocol::Request::LaunchStatus { .. } => Err(
                         "Launch status requires the process-level application controller".into(),
                     ),
+                    crate::control::protocol::Request::ListAgents => {
+                        Ok(crate::control::protocol::Response::Agents {
+                            process_id: std::process::id(),
+                            agents: self.control_agents(1),
+                            truncated: false,
+                        })
+                    }
+                    crate::control::protocol::Request::SubmitToAgent {
+                        request_id,
+                        window_id,
+                        tab_id,
+                        pane_id,
+                        agent_id,
+                        text,
+                    } => {
+                        if window_id != 1 {
+                            Err(format!("GUI window {window_id} does not exist"))
+                        } else {
+                            self.submit_control_text_to_agent(tab_id, pane_id, &agent_id, &text)
+                                .map(
+                                    |()| crate::control::protocol::Response::AgentInputAccepted {
+                                        process_id: std::process::id(),
+                                        request_id,
+                                        window_id,
+                                        tab_id,
+                                        pane_id,
+                                    },
+                                )
+                        }
+                    }
                     crate::control::protocol::Request::AgentEvent {
                         terminal_id,
                         agent_id,

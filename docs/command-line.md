@@ -285,6 +285,11 @@ remain window-local rather than part of the live domain.
 The complete local syntax, security model, resource limits, and reconnect
 semantics are in [`live-domains.md`](live-domains.md).
 
+`termeric mcp [--process PID]` serves the [agent MCP tools](agents.md#letting-an-agent-direct-the-others)
+on standard input and output. `termeric agent-event AGENT EVENT` is the
+command [agent status hooks](agents.md#agent-status) run; it is not meant to be
+typed.
+
 `termeric plugin ...` is also display-free. It manages only reviewed local
 directories; exact syntax, source records, permission grants, API compatibility,
 and authoring are in [`plugins.md`](plugins.md).

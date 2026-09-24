@@ -211,6 +211,79 @@ pub fn toggle_existing_quick_access() -> anyhow::Result<Option<String>> {
     }
 }
 
+/// Running GUI process IDs.
+pub fn running_processes() -> anyhow::Result<Vec<u32>> {
+    #[cfg(unix)]
+    {
+        client::running_processes()
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(Vec::new())
+    }
+}
+
+/// Every agent terminal in GUI process `process_id`, and whether the list
+/// was cut short.
+pub fn list_agents(process_id: u32) -> anyhow::Result<(Vec<protocol::AgentSummary>, bool)> {
+    #[cfg(unix)]
+    {
+        client::list_agents(process_id)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = process_id;
+        anyhow::bail!("Agent control needs a Unix control socket")
+    }
+}
+
+/// Paste `text` into one pane's agent and submit it.
+pub fn submit_to_agent(
+    process_id: u32,
+    window_id: u64,
+    tab_id: u64,
+    pane_id: u32,
+    agent_id: &str,
+    text: &str,
+) -> anyhow::Result<()> {
+    #[cfg(unix)]
+    {
+        client::submit_to_agent(process_id, window_id, tab_id, pane_id, agent_id, text)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (process_id, window_id, tab_id, pane_id, agent_id, text);
+        anyhow::bail!("Agent control needs a Unix control socket")
+    }
+}
+
+/// A pane's recent terminal text, oldest first.
+pub fn read_terminal_text(
+    process_id: u32,
+    window_id: u64,
+    tab_id: u64,
+    pane_id: u32,
+    history_lines: u16,
+) -> anyhow::Result<String> {
+    #[cfg(unix)]
+    {
+        client::get_text(
+            process_id,
+            window_id,
+            tab_id,
+            pane_id,
+            history_lines,
+            protocol::MAX_TERMINAL_TEXT_BYTES,
+            false,
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (process_id, window_id, tab_id, pane_id, history_lines);
+        anyhow::bail!("Terminal reads need a Unix control socket")
+    }
+}
+
 /// Deliver one agent hook report to the GUI process `process_id`.
 pub fn report_agent_event(process_id: u32, report: protocol::Request) -> anyhow::Result<()> {
     #[cfg(unix)]

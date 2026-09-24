@@ -2015,6 +2015,28 @@ impl Application {
         {
             return self.read_control_text(window_id, tab_id, pane_id, history_lines, max_bytes);
         }
+        if request == Request::ListAgents {
+            let mut agents: Vec<_> = self
+                .control_window_ids
+                .iter()
+                .filter_map(|(native_id, control_id)| {
+                    let window = self
+                        .windows
+                        .get(native_id)
+                        .filter(|window| !window.should_exit)?;
+                    Some(window.control_agents(*control_id))
+                })
+                .flatten()
+                .collect();
+            agents.sort_by_key(|agent| (agent.window_id, agent.tab_id, agent.pane_id));
+            let truncated = agents.len() > crate::control::protocol::MAX_AGENT_SUMMARIES;
+            agents.truncate(crate::control::protocol::MAX_AGENT_SUMMARIES);
+            return Ok(Response::Agents {
+                process_id: std::process::id(),
+                agents,
+                truncated,
+            });
+        }
         if let Request::AgentEvent {
             terminal_id,
             agent_id,
@@ -2199,9 +2221,20 @@ impl Application {
             } => self.send_control_text(
                 request_id, *window_id, *tab_id, *pane_id, text, *paste, *enter,
             ),
+            Request::SubmitToAgent {
+                request_id,
+                window_id,
+                tab_id,
+                pane_id,
+                agent_id,
+                text,
+            } => self.submit_control_text_to_agent(
+                request_id, *window_id, *tab_id, *pane_id, agent_id, text,
+            ),
             Request::Inventory
             | Request::ReadText { .. }
             | Request::LaunchStatus { .. }
+            | Request::ListAgents
             | Request::AgentEvent { .. } => {
                 unreachable!("read-only and agent requests returned before mutation dispatch")
             }
@@ -3704,6 +3737,30 @@ impl Application {
             enter,
             disposition,
             confirmation_id,
+        })
+    }
+
+    fn submit_control_text_to_agent(
+        &mut self,
+        request_id: &str,
+        window_id: u64,
+        tab_id: u64,
+        pane_id: u32,
+        agent_id: &str,
+        text: &str,
+    ) -> std::result::Result<crate::control::protocol::Response, String> {
+        let native_id = self.control_native_window_id(window_id)?;
+        self.windows
+            .get_mut(&native_id)
+            .filter(|window| !window.should_exit)
+            .ok_or_else(|| format!("GUI window {window_id} is closing"))?
+            .submit_control_text_to_agent(tab_id, pane_id, agent_id, text)?;
+        Ok(crate::control::protocol::Response::AgentInputAccepted {
+            process_id: std::process::id(),
+            request_id: request_id.to_string(),
+            window_id,
+            tab_id,
+            pane_id,
         })
     }
 

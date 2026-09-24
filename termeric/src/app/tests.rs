@@ -8245,6 +8245,45 @@ fn typed_agent_input_is_submitted_separately_and_only_to_the_same_agent() {
         latest_toast(&app),
         Some("Codex is no longer running in that terminal")
     );
+
+    // The control protocol lists the agent and can submit to it, but only
+    // once the person allows external input, and only to the same agent.
+    app.tabs
+        .as_mut()
+        .unwrap()
+        .active_tab_mut()
+        .unwrap()
+        .pane_session_mut(pane_id)
+        .unwrap()
+        .agent = Some(crate::agents::AgentSession {
+        agent_id: "codex".into(),
+        launched: false,
+        profile: None,
+    });
+    let listed = app.control_agents(7);
+    assert_eq!(listed.len(), 1);
+    assert_eq!(
+        (listed[0].window_id, listed[0].tab_id, listed[0].pane_id),
+        (7, tab_id as u64, pane_id.0)
+    );
+    assert_eq!(listed[0].state, None, "no hook has reported");
+    let submit = |app: &mut App, agent: &str| {
+        app.submit_control_text_to_agent(tab_id as u64, pane_id.0, agent, "go\non")
+    };
+    assert!(
+        submit(&mut app, "codex")
+            .unwrap_err()
+            .contains("allow_gui_control_input")
+    );
+    app.config.security.allow_gui_control_input = true;
+    assert_eq!(
+        submit(&mut app, "gemini").unwrap_err(),
+        "Gemini CLI is no longer running in that terminal"
+    );
+    submit(&mut app, "codex").unwrap();
+    assert_eq!(read(11), b"/new\rxgo\non", "pasted without Enter");
+    app.submit_due_agent_input(Instant::now() + super::agents::AGENT_SUBMIT_DELAY);
+    assert_eq!(read(12), b"/new\rxgo\non\r");
 }
 
 #[cfg(unix)]

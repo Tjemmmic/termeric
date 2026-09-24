@@ -15,8 +15,9 @@ and script exit-code propagation using that same protocol.
 [#102](https://github.com/Tjemmmic/termeric/issues/102) adds explicit child-local
 environment clearing and variable removal in GUI protocol v17.
 [#112](https://github.com/Tjemmmic/termeric/issues/112) adds non-selecting
-command-tab launch in protocol v18. Current protocol v19 adds the
-[agent status](agents.md#agent-status) report sent by agent hooks. Client and
+command-tab launch in protocol v18. Protocol v19 adds the [agent status](agents.md#agent-status) report sent by
+agent hooks. Current protocol v20 adds `list_agents` and `submit_to_agent` for
+[`termeric mcp`](agents.md#letting-an-agent-direct-the-others). Client and
 server must be rebuilt together; mismatched protocol versions fail rather than
 dropping the mode.
 
@@ -531,7 +532,7 @@ connected peer's operating-system user in addition to token authentication.
 Token files are opened without following symlinks and validated by owner, type,
 permissions, and exact size before their fixed-size contents are read.
 
-Protocol version 19 accepts exactly `inventory`, `launch_status`, `agent_event`, ID-targeted `read_text`,
+Protocol version 20 accepts exactly `inventory`, `launch_status`, `agent_event`, `list_agents`, `submit_to_agent`, ID-targeted `read_text`,
 `send_text`, `create_window`, `launch_window`, `create_tab`, `launch_tab`,
 `split_pane`, `focus_window`, `select_tab`, `focus_pane`,
 `close_window`, `close_tab`, `close_pane`, `move_tab`, `move_pane`,
@@ -551,6 +552,14 @@ Submitted program, argv, cwd, environment values, and provider credentials are
 not written to process logs. A failed private window launch may return its
 detailed startup diagnostic to the authenticated requester while logging only a
 generic initialization failure.
+
+`list_agents` returns at most 256 agent terminals with their window, tab, and
+pane IDs, agent, state, detail, and at most 16 KiB of last answer.
+`submit_to_agent` is an ID-targeted mutation like `send_text`, under the same
+`security.allow_gui_control_input` opt-in. It names the agent it expects and is
+refused if that pane now runs another agent, or none. Its text is pasted and
+submitted after a short pause, and is not held for destructive-command
+confirmation.
 
 `agent_event` is sent by `termeric agent-event`, the command agent hooks run.
 It names a terminal by the random `TERMERIC_TERMINAL_ID` its processes

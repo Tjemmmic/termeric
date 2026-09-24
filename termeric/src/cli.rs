@@ -65,6 +65,10 @@ pub enum ParseOutcome {
     /// An agent hook. `None` when its arguments are not understood, which
     /// must stay silent: a failing hook would surface inside the agent.
     AgentEvent(Option<crate::agents::hook::HookInvocation>),
+    /// Serve MCP on standard I/O for the named (or discovered) process.
+    Mcp {
+        process_id: Option<u32>,
+    },
     Print(String),
 }
 
@@ -122,6 +126,24 @@ pub fn parse(arguments: impl IntoIterator<Item = OsString>) -> anyhow::Result<Pa
     parse_collected(arguments, &crate::config::DomainsConfig::default())
 }
 
+/// `mcp [--process PID]`.
+fn parse_mcp(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
+    match arguments {
+        [] => Ok(ParseOutcome::Mcp { process_id: None }),
+        [flag, value] if flag.to_str() == Some("--process") => {
+            let process_id = value
+                .to_str()
+                .and_then(|value| value.parse::<u32>().ok())
+                .filter(|pid| *pid != 0 && *pid <= i32::MAX as u32)
+                .context("--process expects a Termeric process ID")?;
+            Ok(ParseOutcome::Mcp {
+                process_id: Some(process_id),
+            })
+        }
+        _ => anyhow::bail!("usage: termeric mcp [--process PID]"),
+    }
+}
+
 /// `agent-event AGENT EVENT`, as written by Termeric's hook setup.
 fn parse_agent_event(arguments: &[OsString]) -> Option<crate::agents::hook::HookInvocation> {
     let [agent_id, event] = arguments else {
@@ -156,6 +178,9 @@ fn parse_collected(
     }
     if arguments.first().and_then(|argument| argument.to_str()) == Some("plugin") {
         return parse_plugin(&arguments[1..]);
+    }
+    if arguments.first().and_then(|argument| argument.to_str()) == Some("mcp") {
+        return parse_mcp(&arguments[1..]);
     }
     if arguments.first().and_then(|argument| argument.to_str()) == Some("agent-event") {
         return Ok(ParseOutcome::AgentEvent(parse_agent_event(&arguments[1..])));
@@ -450,6 +475,7 @@ General:\n  \
   domain SUBCOMMAND            Manage persistent local terminal domains\n  \
   control SUBCOMMAND           Inspect or explicitly control a running GUI\n  \
   plugin SUBCOMMAND            Manage declarative third-party plugins\n  \
+  mcp [--process PID]          Serve MCP tools for Termeric's agents on stdio\n  \
   -h, --help                   Print this help\n  \
   -V, --version                Print the version",
         env!("CARGO_PKG_VERSION")
@@ -1731,7 +1757,10 @@ fn apply_remote_authority(
         ParseOutcome::SerialBridge(_) => {
             anyhow::bail!("the internal serial bridge cannot be nested through a remote domain")
         }
-        ParseOutcome::Plugin(_) | ParseOutcome::Control(_) | ParseOutcome::AgentEvent(_) => {
+        ParseOutcome::Plugin(_)
+        | ParseOutcome::Control(_)
+        | ParseOutcome::AgentEvent(_)
+        | ParseOutcome::Mcp { .. } => {
             unreachable!("domain parser cannot return plugin, GUI control, or agent commands")
         }
     }

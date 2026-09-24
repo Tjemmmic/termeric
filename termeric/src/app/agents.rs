@@ -51,6 +51,7 @@ pub(super) struct FocusedAgent {
 /// A terminal running an agent, for the agent list.
 pub(super) struct AgentTerminal {
     pub identity: TerminalIdentity,
+    pub agent_id: String,
     pub name: String,
     pub status: Option<AgentStatus>,
     pub tab_title: String,
@@ -103,6 +104,7 @@ impl App {
                             tab_id: tab.id,
                             pane_id,
                         },
+                        agent_id: agent.agent_id.clone(),
                         name: self
                             .agents
                             .get(&agent.agent_id)
@@ -157,6 +159,80 @@ impl App {
             HookSetupSummary::Incomplete => &[][..],
         });
         hidden.into_iter().map(str::to_owned).collect()
+    }
+
+    /// This window's agents for the control protocol.
+    pub(super) fn control_agents(
+        &self,
+        window_id: u64,
+    ) -> Vec<crate::control::protocol::AgentSummary> {
+        use crate::control::protocol::{AgentState, AgentSummary, MAX_AGENT_SUMMARY_MESSAGE_BYTES};
+        let printable = |text: &str| text.chars().filter(|c| !c.is_control()).collect::<String>();
+        self.agent_terminals()
+            .into_iter()
+            .map(|terminal| {
+                let status = terminal.status.as_ref();
+                AgentSummary {
+                    window_id,
+                    tab_id: terminal.identity.tab_id as u64,
+                    pane_id: terminal.identity.pane_id.0,
+                    agent_id: terminal.agent_id,
+                    name: printable(&terminal.name),
+                    tab_title: printable(&terminal.tab_title),
+                    state: status.map(|status| match status.activity {
+                        AgentActivity::Idle => AgentState::Idle,
+                        AgentActivity::Working => AgentState::Working,
+                        AgentActivity::NeedsInput => AgentState::NeedsInput,
+                        AgentActivity::Finished => AgentState::Finished,
+                        AgentActivity::Failed => AgentState::Failed,
+                    }),
+                    detail: status.and_then(|status| status.detail.clone()),
+                    last_message: status
+                        .and_then(|status| status.last_message.as_deref())
+                        .map(|message| {
+                            let mut end = message.len().min(MAX_AGENT_SUMMARY_MESSAGE_BYTES);
+                            while !message.is_char_boundary(end) {
+                                end -= 1;
+                            }
+                            message[..end].to_owned()
+                        }),
+                    seconds_in_state: status.map(|status| status.since.elapsed().as_secs()),
+                }
+            })
+            .collect()
+    }
+
+    /// Submit text sent through the control protocol to one agent.
+    pub(super) fn submit_control_text_to_agent(
+        &mut self,
+        tab_id: u64,
+        pane_id: u32,
+        agent_id: &str,
+        text: &str,
+    ) -> Result<(), String> {
+        if !self.config.security.allow_gui_control_input {
+            return Err(
+                "External terminal input is disabled; set security.allow_gui_control_input = true"
+                    .into(),
+            );
+        }
+        let identity = TerminalIdentity {
+            tab_id: usize::try_from(tab_id)
+                .map_err(|_| "Target tab ID does not fit this platform".to_string())?,
+            pane_id: crate::panes::PaneId(pane_id),
+        };
+        let agent_name = self
+            .agents
+            .get(agent_id)
+            .map_or_else(|| agent_id.to_string(), |agent| agent.name.clone());
+        self.paste_and_submit_to_agent(
+            AgentTarget {
+                identity,
+                agent_id: agent_id.to_string(),
+                agent_name,
+            },
+            text,
+        )
     }
 
     /// List the agents running in this window, with what each is doing.
@@ -590,6 +666,18 @@ impl App {
                 false
             }
         }
+    }
+
+    /// Paste `text` into the agent at `target` (bracketed when the agent asks
+    /// for it, so several lines arrive as one prompt) and submit it.
+    pub(super) fn paste_and_submit_to_agent(
+        &mut self,
+        target: AgentTarget,
+        text: &str,
+    ) -> Result<(), String> {
+        let mode = self.agent_terminal_mode(&target)?;
+        let framed = crate::input::encode_paste(mode, text);
+        self.submit_to_agent(target, &framed)
     }
 
     /// Type `input` into the agent at `target` as keystrokes and press Enter

@@ -1567,6 +1567,78 @@ struct DividerResizeOutput {
     changed: bool,
 }
 
+/// Every running GUI process, by process ID.
+pub(super) fn running_processes() -> anyhow::Result<Vec<u32>> {
+    Ok(ControlPaths::discover_all()?
+        .into_iter()
+        .map(|endpoint| endpoint.process_id)
+        .collect())
+}
+
+fn endpoint_for(process_id: u32) -> anyhow::Result<ControlPaths> {
+    ControlPaths::discover_all()?
+        .into_iter()
+        .find(|endpoint| endpoint.process_id == process_id)
+        .ok_or_else(|| anyhow::anyhow!("running GUI process {process_id} was not found"))
+}
+
+/// Every terminal running an agent in GUI process `process_id`, and whether
+/// the list was cut short.
+pub(super) fn list_agents(process_id: u32) -> anyhow::Result<(Vec<protocol::AgentSummary>, bool)> {
+    match request(&endpoint_for(process_id)?, Request::ListAgents)? {
+        ServerFrame::Agents {
+            version,
+            process_id: returned,
+            agents,
+            truncated,
+        } if version == protocol::PROTOCOL_VERSION && returned == process_id => {
+            protocol::validate_agent_summaries(&agents)?;
+            Ok((agents, truncated))
+        }
+        ServerFrame::Error { message, .. } => anyhow::bail!(message),
+        _ => anyhow::bail!("Invalid agent list response"),
+    }
+}
+
+/// Paste `text` into the agent in one pane and submit it.
+pub(super) fn submit_to_agent(
+    process_id: u32,
+    window_id: u64,
+    tab_id: u64,
+    pane_id: u32,
+    agent_id: &str,
+    text: &str,
+) -> anyhow::Result<()> {
+    let request_id = generate_request_id()?;
+    let submission = Request::SubmitToAgent {
+        request_id: request_id.clone(),
+        window_id,
+        tab_id,
+        pane_id,
+        agent_id: agent_id.into(),
+        text: text.into(),
+    };
+    submission.validate().map_err(anyhow::Error::msg)?;
+    match request(&endpoint_for(process_id)?, submission)? {
+        ServerFrame::AgentInputAccepted {
+            version,
+            process_id: returned,
+            request_id: returned_id,
+            window_id: returned_window,
+            tab_id: returned_tab,
+            pane_id: returned_pane,
+        } if version == protocol::PROTOCOL_VERSION
+            && returned == process_id
+            && returned_id == request_id
+            && (returned_window, returned_tab, returned_pane) == (window_id, tab_id, pane_id) =>
+        {
+            Ok(())
+        }
+        ServerFrame::Error { message, .. } => anyhow::bail!(message),
+        _ => anyhow::bail!("Invalid agent input response"),
+    }
+}
+
 /// How long an agent hook waits for the GUI. A hook runs inside the agent's
 /// turn, so a busy or stuck GUI must not hold the agent up for long.
 const AGENT_EVENT_TIMEOUT: Duration = Duration::from_secs(2);

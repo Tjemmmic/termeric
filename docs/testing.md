@@ -406,7 +406,7 @@ Agent status coverage is provider-free. Unit tests cover the status state
 machine, hook payload parsing for Claude Code and Codex shapes, settings-file
 rewriting (verbatim order and text, indentation, symlinks, permissions,
 backups, and edits made while the dialog was open), and tolerant log reading.
-`termeric/tests/agent_event_hook.rs` runs the real `termeric agent-event`
+`termeric/tests/agent_commands.rs` runs the real `termeric agent-event`
 executable against a private fake GUI endpoint. It proves exact delivery, and
 that the command is silent and succeeds outside Termeric, with unknown
 arguments, and when the GUI is missing, refusing, or stuck. A headless test

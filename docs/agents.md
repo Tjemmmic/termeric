@@ -145,6 +145,34 @@ private, user-only socket as the [GUI control protocol](gui-control.md).
 records the path of the Termeric program that ran it, so run setup again after
 moving Termeric. The Settings page shows **Needs updating** when that is due.
 
+## Letting an agent direct the others
+
+`termeric mcp` is a [Model Context Protocol](https://modelcontextprotocol.io)
+server on standard input and output. It gives an agent three tools:
+
+| Tool | What it does |
+|---|---|
+| `list_agents` | Every agent in Termeric, with its window, tab, and pane, state, what it is waiting for, and last answer |
+| `read_terminal` | A pane's screen and up to 256 lines of scrollback |
+| `send_to_agent` | Pastes a prompt into one agent and submits it, if that pane still runs the named agent |
+
+Register it once with each agent that should use it:
+
+```sh
+claude mcp add termeric -- termeric mcp
+codex mcp add termeric -- termeric mcp
+```
+
+Started inside a Termeric terminal, the server talks to that terminal's
+Termeric process. Elsewhere it uses the only running Termeric, or the one named
+with `--process PID`. Reading needs nothing more than
+[`termeric control get-text`](gui-control.md) already allows. Sending is
+refused unless `security.allow_gui_control_input = true`, because it lets one
+program type into another agent. Prompts are pasted, then submitted a moment
+later, the same way as **Start New Agent Conversation**. They are not checked
+for destructive commands, because they are requests to an agent, which still
+applies its own approvals.
+
 ## Configuration
 
 `[agents.<id>]` entries in `config.toml` change a built-in agent. An entry with
