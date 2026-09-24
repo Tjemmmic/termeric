@@ -811,13 +811,13 @@ a stale action cannot confirm a later request.
 A guarded request captures the exact tab or pane destination—or the complete
 pane-broadcast destination/encoding set—at interception time. Confirmation
 validates that every captured destination still exists before delivering any
-member and never falls back to current focus. Typed commits, clipboard paste,
-and pane broadcast use this path. Hermetic tests use a fake plugin identity and
+member and never falls back to current focus. Only automated input uses this
+path: text sent by the GUI control protocol or a runtime plugin. What a person
+types, pastes, completes, or broadcasts is sent as entered. Hermetic tests use
 an inert local process; they neither start an AI provider nor confirm the
-guarded payload. This remains a best-effort product warning for plugin tabs,
-not a shell parser or security boundary: the finite substring rules can produce
-false positives and false negatives and cannot prove what a CLI or downstream
-agent will execute.
+guarded payload. This remains a best-effort warning, not a shell parser or
+security boundary: the finite substring rules can produce false positives and
+false negatives and cannot prove what a CLI or downstream agent will execute.
 
 Scrollback and inactive-tab terminal buffers are intentionally not exposed.
 SGR hidden cells are replaced by blank semantic cells, so invisible/password-
