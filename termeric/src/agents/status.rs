@@ -186,6 +186,20 @@ impl AgentStatus {
         }
     }
 
+    /// The person interrupted the agent from its terminal. Claude Code runs
+    /// no hook when a turn is interrupted, so without this its ring would
+    /// keep turning until the next prompt.
+    pub fn interrupted(&mut self, now: Instant) {
+        if matches!(
+            self.activity,
+            AgentActivity::Working | AgentActivity::NeedsInput
+        ) {
+            self.activity = AgentActivity::Idle;
+            self.detail = None;
+            self.since = now;
+        }
+    }
+
     /// Whether the terminal should draw attention to itself.
     pub fn needs_attention(&self) -> bool {
         self.activity.wants_attention() && !self.seen
@@ -351,6 +365,19 @@ mod tests {
             Some("rate_limit"),
             "the reason stays"
         );
+
+        // The person interrupting a turn ends it, as no hook says so; a
+        // result already reported is not an interruption.
+        let mut working = AgentStatus::after(None, report(AgentEventKind::Working), now).unwrap();
+        working.interrupted(now);
+        assert_eq!(working.activity, AgentActivity::Idle);
+        let mut waiting =
+            AgentStatus::after(None, report(AgentEventKind::NeedsInput), now).unwrap();
+        waiting.interrupted(now);
+        assert_eq!(waiting.activity, AgentActivity::Idle);
+        let mut done = AgentStatus::after(None, report(AgentEventKind::Finished), now).unwrap();
+        done.interrupted(now);
+        assert_eq!(done.activity, AgentActivity::Finished);
     }
 
     #[test]

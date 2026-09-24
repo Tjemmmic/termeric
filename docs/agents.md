@@ -125,10 +125,12 @@ With agent status set up, Termeric knows what each agent is doing:
 
 When you answer a waiting agent, by typing or pasting into its terminal, the
 yellow dot gives way to the working ring. Arrow and page keys, which only move
-through its menu, do not count as an answer. When you interrupt a turn, the ring
-goes away: Codex reports the interruption, and Claude Code, which does not,
-reports once it has sat at its prompt for a while. Compacting a long
-conversation is not reported as a new one.
+through its menu, do not count as an answer. Escape or Ctrl+C in a working or
+waiting agent's terminal ends the turn, and the ring goes away; Claude Code
+reports nothing when interrupted, or when you decline its request, so
+Termeric goes by the key. Codex also reports interruptions itself. A finished
+answer keeps showing when Claude Code later notes that it has sat at its
+prompt. Compacting a long conversation is not reported as a new one.
 
 Notifications appear only for terminals you are not looking at, and clicking
 one shows that terminal. Turn them off with **Notify When Agents Need You** on
@@ -374,8 +376,10 @@ split around, collapsed, or moved to another tab or window.
 
 ## Limits
 
-- The supervisor has been exercised with fake agents only. Real Claude Code
-  and Codex supervisors, and their MCP clients, have not been run.
+- Real Claude Code has been run once, in a contained test: detection, status
+  hooks, answering and declining a request, interrupting, `termeric mcp`, and
+  a supervisor reporting on a worker. Codex, and Codex as a supervisor, have
+  been exercised with fake programs only.
 - Status comes only from agents with hooks set up: Claude Code and Codex.
   Other agents are recognized, but their state is not known.
 - Agents in [live-domain](live-domains.md) terminals cannot report status.

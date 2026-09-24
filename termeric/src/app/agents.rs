@@ -643,14 +643,13 @@ impl App {
         else {
             return;
         };
-        self.note_person_input(identity, !only_navigates(input));
+        self.note_person_input(identity, PersonInput::of(input));
     }
 
     /// Record that the person typed or pasted into the terminal at
-    /// `identity`, which keeps automated messages away for a while. When the
-    /// input `answers` (more than moving through a menu), an agent that was
-    /// waiting on them is working again.
-    pub(super) fn note_person_input(&mut self, identity: TerminalIdentity, answers: bool) {
+    /// `identity`, which keeps automated messages away for a while, and what
+    /// it tells about the agent there.
+    pub(super) fn note_person_input(&mut self, identity: TerminalIdentity, input: PersonInput) {
         let Some(session) = self
             .tabs
             .as_mut()
@@ -661,8 +660,12 @@ impl App {
         };
         let now = Instant::now();
         session.last_person_input = Some(now);
-        if answers && let Some(status) = &mut session.agent_status {
-            status.answered(now);
+        if let Some(status) = &mut session.agent_status {
+            match input {
+                PersonInput::Answer => status.answered(now),
+                PersonInput::Interrupt => status.interrupted(now),
+                PersonInput::Navigation => {}
+            }
         }
     }
 
@@ -1086,18 +1089,54 @@ impl App {
     }
 }
 
-/// Whether `input` is a cursor or page key (arrows, Home, End, Page Up and
-/// Down, in any encoding). Moving through an agent's menu does not answer
-/// it; Escape and Ctrl+C, even as keyboard-protocol sequences, do.
-pub(super) fn only_navigates(input: &[u8]) -> bool {
-    input.len() > 2
-        && input[0] == 0x1b
-        && matches!(input[1], b'[' | b'O')
-        && !input.starts_with(b"\x1b[200~")
-        && matches!(
-            input.last(),
-            Some(b'A' | b'B' | b'C' | b'D' | b'H' | b'F' | b'~')
-        )
+/// What the person's input to an agent's terminal says about the agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PersonInput {
+    /// A cursor or page key, or a key release: moving through a menu is
+    /// not answering it.
+    Navigation,
+    /// Escape or Ctrl+C: the agents' interrupt keys.
+    Interrupt,
+    /// Anything else, a paste included.
+    Answer,
+}
+
+impl PersonInput {
+    /// Classify input as the keyboard encoder wrote it, in either the legacy
+    /// encoding or the keyboard protocol some agents ask for (`CSI … u`).
+    pub(super) fn of(input: &[u8]) -> Self {
+        if matches!(input, b"\x1b" | b"\x03") {
+            return Self::Interrupt;
+        }
+        if let Some(body) = input
+            .strip_prefix(b"\x1b[")
+            .and_then(|body| body.strip_suffix(b"u"))
+        {
+            let text = String::from_utf8_lossy(body);
+            let mut fields = text.split(';');
+            let key = fields.next().unwrap_or_default();
+            let modifiers = fields.next().unwrap_or("1");
+            let (modifiers, event) = modifiers.split_once(':').unwrap_or((modifiers, "1"));
+            return match (key, modifiers, event) {
+                (_, _, "3") => Self::Navigation,
+                ("27", "1", _) | ("99", "5", _) => Self::Interrupt,
+                _ => Self::Answer,
+            };
+        }
+        let navigates = input.len() > 2
+            && input[0] == 0x1b
+            && matches!(input[1], b'[' | b'O')
+            && !input.starts_with(b"\x1b[200~")
+            && matches!(
+                input.last(),
+                Some(b'A' | b'B' | b'C' | b'D' | b'H' | b'F' | b'~')
+            );
+        if navigates {
+            Self::Navigation
+        } else {
+            Self::Answer
+        }
+    }
 }
 
 /// Picker rows: each agent that `available` accepts, then one row per
@@ -1225,27 +1264,28 @@ mod tests {
     }
 
     #[test]
-    fn moving_through_a_menu_is_not_an_answer() {
-        for keys in [
-            &b"\x1b[A"[..],
-            b"\x1bOB",
-            b"\x1b[1;5C",
-            b"\x1b[5~",
-            b"\x1b[H",
-        ] {
-            assert!(only_navigates(keys), "{keys:?}");
-        }
-        // Escape and Ctrl+C answer, also as keyboard-protocol sequences, and
-        // so do text, Enter, and pastes.
-        for keys in [
-            &b"\x1b"[..],
-            b"\x1b[27u",
-            b"\x1b[99;5u",
-            b"y",
-            b"\r",
-            b"\x1b[200~text\x1b[201~",
-        ] {
-            assert!(!only_navigates(keys), "{keys:?}");
+    fn keys_tell_moving_answering_and_interrupting_apart() {
+        use super::PersonInput::{Answer, Interrupt, Navigation};
+        let cases: &[(&[u8], PersonInput)] = &[
+            (b"\x1b[A", Navigation),
+            (b"\x1bOB", Navigation),
+            (b"\x1b[1;5C", Navigation),
+            (b"\x1b[5~", Navigation),
+            (b"\x1b[H", Navigation),
+            // A key release, which some agents ask to be told about.
+            (b"\x1b[27;1:3u", Navigation),
+            (b"\x1b", Interrupt),
+            (b"\x03", Interrupt),
+            (b"\x1b[27u", Interrupt),
+            (b"\x1b[99;5u", Interrupt),
+            (b"\x1b[99;5:1u", Interrupt),
+            (b"y", Answer),
+            (b"\r", Answer),
+            (b"\x1b[13u", Answer),
+            (b"\x1b[200~text\x1b[201~", Answer),
+        ];
+        for (keys, kind) in cases {
+            assert_eq!(PersonInput::of(keys), *kind, "{keys:?}");
         }
     }
 

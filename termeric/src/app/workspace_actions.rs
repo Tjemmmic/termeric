@@ -720,14 +720,19 @@ impl App {
     }
 
     /// Broadcast input is the person's typing in every pane it reached.
-    fn note_broadcast_input(&mut self, tab_id: usize, panes: &[PaneId], answers: bool) {
+    fn note_broadcast_input(
+        &mut self,
+        tab_id: usize,
+        panes: &[PaneId],
+        input: super::agents::PersonInput,
+    ) {
         for pane_id in panes {
             self.note_person_input(
                 crate::tabs::TerminalIdentity {
                     tab_id,
                     pane_id: *pane_id,
                 },
-                answers,
+                input,
             );
         }
     }
@@ -868,7 +873,7 @@ impl App {
             failed += usize::from(!written);
             written
         });
-        self.note_broadcast_input(tab_id, &remaining, !super::agents::only_navigates(data));
+        self.note_broadcast_input(tab_id, &remaining, super::agents::PersonInput::of(data));
         self.finish_broadcast_writes(tab_id, remaining, failed);
         true
     }
@@ -926,16 +931,17 @@ impl App {
         };
         let mut remaining = targets;
         let mut failed = 0;
-        let mut answers = false;
+        let mut input = super::agents::PersonInput::Navigation;
         for (id, bytes) in encoded {
             if manager.write_to(id, &bytes).is_err() {
                 remaining.retain(|target| *target != id);
                 failed += 1;
             } else {
-                answers |= !super::agents::only_navigates(&bytes);
+                // One key, encoded per pane; any pane's reading will do.
+                input = super::agents::PersonInput::of(&bytes);
             }
         }
-        self.note_broadcast_input(tab_id, &remaining, answers);
+        self.note_broadcast_input(tab_id, &remaining, input);
         self.finish_broadcast_writes(tab_id, remaining, failed);
         true
     }
@@ -988,7 +994,7 @@ impl App {
                 failed += 1;
             }
         }
-        self.note_broadcast_input(tab_id, &remaining, true);
+        self.note_broadcast_input(tab_id, &remaining, super::agents::PersonInput::Answer);
         self.finish_broadcast_writes(tab_id, remaining, failed);
         self.input_line_buffer.clear();
         true
