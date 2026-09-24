@@ -245,6 +245,24 @@ impl PromptTracker {
             .map(|m| m.row)
     }
 
+    /// Prompt row of the nearest failed command (non-zero exit) above
+    /// `from_row` whose text is still retained.
+    pub fn previous_failed_prompt(&self, from_row: i32) -> Option<i32> {
+        self.failed_prompts().rev().find(|row| *row < from_row)
+    }
+
+    /// Prompt row of the nearest failed command below `from_row`.
+    pub fn next_failed_prompt(&self, from_row: i32) -> Option<i32> {
+        self.failed_prompts().find(|row| *row > from_row)
+    }
+
+    fn failed_prompts(&self) -> impl DoubleEndedIterator<Item = i32> + '_ {
+        self.regions
+            .iter()
+            .filter(|region| region.content_available && region.is_failure())
+            .map(|region| region.prompt_row)
+    }
+
     /// Get all prompt rows
     pub fn all_prompts(&self) -> impl Iterator<Item = i32> + '_ {
         self.marks
@@ -573,6 +591,28 @@ mod tests {
         assert_eq!(region.prompt_row, 5);
         assert_eq!(region.output_row, Some(6));
         assert_eq!(region.finish_row, Some(10));
+    }
+
+    #[test]
+    fn failed_command_navigation_skips_successes_and_unfinished_commands() {
+        let mut tracker = PromptTracker::new();
+        for (prompt, exit) in [(0, Some(0)), (3, Some(2)), (6, Some(0)), (9, Some(127))] {
+            tracker.mark_prompt_start(prompt);
+            tracker.mark_command_start(prompt);
+            tracker.mark_output_start(prompt + 1);
+            tracker.mark_command_finished(prompt + 2, exit);
+        }
+        // A command still running has no exit status and is never a target.
+        tracker.mark_prompt_start(12);
+        tracker.mark_command_start(12);
+        tracker.mark_output_start(13);
+
+        assert_eq!(tracker.previous_failed_prompt(20), Some(9));
+        assert_eq!(tracker.previous_failed_prompt(9), Some(3));
+        assert_eq!(tracker.previous_failed_prompt(3), None);
+        assert_eq!(tracker.next_failed_prompt(-1), Some(3));
+        assert_eq!(tracker.next_failed_prompt(3), Some(9));
+        assert_eq!(tracker.next_failed_prompt(9), None);
     }
 
     #[test]

@@ -91,6 +91,16 @@ impl ShellIntegration {
         self.prompt_tracker.next_prompt(from_row)
     }
 
+    /// Prompt row of the nearest earlier command that exited non-zero.
+    pub fn previous_failed_prompt(&self, from_row: i32) -> Option<i32> {
+        self.prompt_tracker.previous_failed_prompt(from_row)
+    }
+
+    /// Prompt row of the nearest later command that exited non-zero.
+    pub fn next_failed_prompt(&self, from_row: i32) -> Option<i32> {
+        self.prompt_tracker.next_failed_prompt(from_row)
+    }
+
     /// Get the command region containing a given row
     pub fn command_at(&self, row: i32) -> Option<&CommandRegion> {
         self.prompt_tracker.command_at(row)

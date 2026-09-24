@@ -333,6 +333,12 @@ the navigation cursor, scrollback eviction retires it, and the alternate screen
 never navigates primary-shell marks. Core state tests and a local two-way app
 action fixture cover this path without external services.
 
+Jump to Previous/Next Failed Command uses the same origin and reveal rules but
+stops only at retained commands whose OSC 133 finish reported a non-zero exit
+status; running commands and successes are skipped. The actions have no default
+key binding and are offered in the command palette. Without shell integration
+the palette explains that exit statuses are unavailable.
+
 ### Exact-source Harvest rerun
 
 [#118](https://github.com/Tjemmmic/termeric/issues/118) extends mandatory stable

@@ -85,6 +85,8 @@ pub enum BindableAction {
     // Navigation
     PreviousPrompt,
     NextPrompt,
+    PreviousFailedCommand,
+    NextFailedCommand,
 
     // Terminal
     ClearScrollback,
@@ -95,7 +97,7 @@ impl BindableAction {
     /// Every variant, in display order.
     pub fn all() -> &'static [BindableAction] {
         use BindableAction::*;
-        static ALL: [BindableAction; 59] = [
+        static ALL: [BindableAction; 61] = [
             // General
             Copy,
             Paste,
@@ -159,6 +161,8 @@ impl BindableAction {
             // Navigation
             PreviousPrompt,
             NextPrompt,
+            PreviousFailedCommand,
+            NextFailedCommand,
             // Terminal
             ClearScrollback,
             ResetTerminal,
@@ -443,6 +447,18 @@ impl BindableAction {
                 category: Navigation,
                 default_binding: Some(KeyChord::new("Down", true, false, true, false)),
             },
+            PreviousFailedCommand => ActionMeta {
+                id: "previous_failed_command",
+                label: "Previous Failed Command",
+                category: Navigation,
+                default_binding: None,
+            },
+            NextFailedCommand => ActionMeta {
+                id: "next_failed_command",
+                label: "Next Failed Command",
+                category: Navigation,
+                default_binding: None,
+            },
 
             // ── Terminal ──
             ClearScrollback => ActionMeta {
@@ -521,6 +537,8 @@ impl BindableAction {
             Self::ScrollToBottom => Action::ScrollToBottom,
             Self::PreviousPrompt => Action::PreviousPrompt,
             Self::NextPrompt => Action::NextPrompt,
+            Self::PreviousFailedCommand => Action::PreviousFailedCommand,
+            Self::NextFailedCommand => Action::NextFailedCommand,
             Self::ClearScrollback => Action::ClearScrollback,
             Self::ResetTerminal => Action::ResetTerminal,
         }

@@ -49,6 +49,10 @@ pub enum Action {
     PreviousPrompt,
     /// Navigate to next prompt (shell integration)
     NextPrompt,
+    /// Jump to the nearest earlier command that exited non-zero
+    PreviousFailedCommand,
+    /// Jump to the nearest later command that exited non-zero
+    NextFailedCommand,
     /// Execute a plugin command by its ID
     PluginCommand(String),
     /// Toggle command palette

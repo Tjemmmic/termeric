@@ -3381,6 +3381,45 @@ impl App {
         }
     }
 
+    /// Scroll the focused terminal to the nearest earlier or later command
+    /// that exited non-zero, as recorded by shell integration.
+    fn jump_to_failed_command(&mut self, previous: bool) {
+        let integrated = self
+            .tabs
+            .as_ref()
+            .and_then(TabManager::active_tab)
+            .and_then(|tab| match &tab.pane_manager {
+                Some(panes) => panes.focused_pane().map(|pane| &pane.shell_integration),
+                None => Some(&tab.shell_integration),
+            })
+            .is_some_and(|integration| {
+                matches!(
+                    integration,
+                    crate::terminal::shell_integration::ShellIntegrationSupport::Enabled(_)
+                )
+            });
+        let Some(terminal) = self.active_terminal_mut() else {
+            return;
+        };
+        let found = if previous {
+            terminal.previous_failed_command()
+        } else {
+            terminal.next_failed_command()
+        };
+        if found.is_some() {
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+        } else if !integrated {
+            self.toasts
+                .info("Failed-command jumps need shell integration (bash, zsh, or fish)");
+        } else if previous {
+            self.toasts.info("No earlier failed command");
+        } else {
+            self.toasts.info("No later failed command");
+        }
+    }
+
     /// Handle an action triggered by a keybinding.
     /// Returns true if the action was handled and the key should be consumed.
     fn handle_action(&mut self, action: Action) -> bool {
@@ -3532,6 +3571,9 @@ impl App {
                     }
                 }
             }
+            Action::PreviousFailedCommand | Action::NextFailedCommand => {
+                self.jump_to_failed_command(matches!(action, Action::PreviousFailedCommand));
+            }
             Action::PluginCommand(command_id) => {
                 self.execute_plugin_command(&command_id);
             }
@@ -3678,6 +3720,8 @@ impl App {
                     "core.next-tab" => Action::NextTab,
                     "core.prev-tab" => Action::PrevTab,
                     "core.find" => Action::ToggleSearch,
+                    "core.previous-failed-command" => Action::PreviousFailedCommand,
+                    "core.next-failed-command" => Action::NextFailedCommand,
                     "core.copy-mode" => Action::ToggleCopyMode,
                     "core.quick-select" => Action::QuickSelect,
                     "core.unicode-picker" => Action::OpenUnicodePicker,

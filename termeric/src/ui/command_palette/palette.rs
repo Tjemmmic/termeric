@@ -890,6 +890,24 @@ pub fn core_commands(
             source: CommandSource::Core,
             destructive: false,
         },
+        RegisteredCommand {
+            id: "core.previous-failed-command".into(),
+            title: "Jump to Previous Failed Command".into(),
+            category: "Navigation".into(),
+            shortcut: shortcut(BindableAction::PreviousFailedCommand),
+            icon: None,
+            source: CommandSource::Core,
+            destructive: false,
+        },
+        RegisteredCommand {
+            id: "core.next-failed-command".into(),
+            title: "Jump to Next Failed Command".into(),
+            category: "Navigation".into(),
+            shortcut: shortcut(BindableAction::NextFailedCommand),
+            icon: None,
+            source: CommandSource::Core,
+            destructive: false,
+        },
         // ── Search ──
         RegisteredCommand {
             id: "core.find".into(),

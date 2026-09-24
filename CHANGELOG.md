@@ -1131,6 +1131,11 @@ Versioning once public beta tags begin.
   bars are gone, a magnifier replaces the `>` prompt, rows are shorter, and the
   scrim is lighter. The query field keeps its existing geometry.
 
+- Jump to Previous/Next Failed Command moves through commands that exited
+  with a non-zero status, using shell integration in any bash, zsh, or fish
+  pane. It replaces the agent plugins' "Jump to Last Error", which searched
+  for the word "error".
+
 - Settings is a larger dialog with a sidebar of pages (Appearance, Font,
   Terminal, Keyboard, Sessions, Accessibility, Plugins, Experimental) instead
   of one long list. Tab and Shift+Tab move between pages, and the search box

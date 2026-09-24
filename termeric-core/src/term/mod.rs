@@ -4757,6 +4757,32 @@ impl Terminal {
         Some(row)
     }
 
+    /// Navigate to the prompt of the nearest earlier command that exited
+    /// non-zero, using the same origin as prompt navigation.
+    pub fn previous_failed_command(&mut self) -> Option<i32> {
+        if self.alt_screen_active {
+            self.prompt_navigation = None;
+            return None;
+        }
+        let from_row = self.prompt_navigation_origin(true);
+        let row = self.shell.previous_failed_prompt(from_row)?;
+        self.reveal_prompt(row);
+        Some(row)
+    }
+
+    /// Navigate to the prompt of the nearest later command that exited
+    /// non-zero.
+    pub fn next_failed_command(&mut self) -> Option<i32> {
+        if self.alt_screen_active {
+            self.prompt_navigation = None;
+            return None;
+        }
+        let from_row = self.prompt_navigation_origin(false);
+        let row = self.shell.next_failed_prompt(from_row)?;
+        self.reveal_prompt(row);
+        Some(row)
+    }
+
     fn prompt_navigation_origin(&mut self, previous: bool) -> i32 {
         let offset = self.grid().scroll_offset();
         if let Some(navigation) = self.prompt_navigation
@@ -10905,6 +10931,31 @@ mod tests {
                 .id,
             before.id
         );
+    }
+
+    #[test]
+    fn failed_command_navigation_reveals_only_non_zero_exits_in_history() {
+        let mut term = Terminal::new(20, 4);
+        for (index, exit) in [0, 3, 0, 1, 0].into_iter().enumerate() {
+            term.process(b"\x1b]133;A\x07\x1b]133;B\x07");
+            term.process(format!("cmd {index}\r\n").as_bytes());
+            term.process(format!("\x1b]133;C\x07out\r\n\x1b]133;D;{exit}\x07").as_bytes());
+        }
+        term.process(b"\x1b]133;A\x07");
+        let tracker = &term.shell_integration().prompt_tracker;
+        let failed: Vec<i32> = (0..5)
+            .filter_map(|index| tracker.completed_region(index))
+            .filter(|region| region.is_failure())
+            .map(|region| region.prompt_row)
+            .collect();
+        assert_eq!(failed.len(), 2);
+
+        assert_eq!(term.previous_failed_command(), Some(failed[1]));
+        assert_eq!(term.previous_failed_command(), Some(failed[0]));
+        assert!(term.grid().scroll_offset() > 0, "history is revealed");
+        assert_eq!(term.previous_failed_command(), None);
+        assert_eq!(term.next_failed_command(), Some(failed[1]));
+        assert_eq!(term.next_failed_command(), None);
     }
 
     #[test]
