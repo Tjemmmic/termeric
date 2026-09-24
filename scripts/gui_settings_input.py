@@ -23,19 +23,28 @@ CASES = (
 
 
 def settings_pointer_point(geometry, column):
-    """Independent settled SettingsModalLayout math, from actual PTY cells."""
+    """Independent settled SettingsModalLayout math, from actual PTY cells:
+    the dialog is centered, and its search field sits in the header, left of
+    the close button."""
     rows, cols, width, height = geometry
     if min(rows, cols, width, height) <= 0 or not math.isfinite(column) or column < 0:
         raise ValueError("invalid native Settings pointer geometry")
     cw, ch = width / cols, height / rows
-    panel_width = min(max(cw * 60, 500), SURFACE[0] * 0.7)
-    panel_x, padding = (SURFACE[0] - panel_width) / 2, cw * 1.5
-    text_x = panel_x + padding + cw * 2.2
-    right = panel_x + panel_width - padding - cw * 0.8
+    panel_width = min(min(max(cw * 100, 560), 900), max(SURFACE[0] - cw * 4, 0))
+    panel_height = min(min(max(SURFACE[1] * 0.82, 320), 640), max(SURFACE[1] - ch * 2, 0))
+    panel_x = (SURFACE[0] - panel_width) / 2
+    panel_y = (SURFACE[1] - panel_height) * 0.4
+    padding, control, header = cw * 1.5, ch * 1.5, ch * 3.0
+    close_x = panel_x + panel_width - padding * 0.5 - control
+    input_width, input_height = min(panel_width * 0.36, cw * 36), ch * 1.7
+    input_x = close_x - cw * 0.75 - input_width
+    input_y = panel_y + (header - input_height) / 2
+    # ui::constants::FILTER_TEXT_INSET_CELLS
+    text_x = input_x + cw * 2.6
+    right = input_x + input_width - cw * 0.8
     if column >= math.floor((right - text_x) / cw):
         raise ValueError("Settings click is outside the visible filter")
-    return (math.floor(text_x + column * cw),
-            math.floor(SURFACE[1] * 0.1 + padding + ch * 2.4 + 6))
+    return (math.floor(text_x + column * cw), math.floor(input_y + input_height / 2))
 
 
 def verify_settings_delivery(streams, owner, fence):

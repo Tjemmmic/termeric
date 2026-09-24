@@ -46,11 +46,12 @@ class PaletteInputTests(unittest.TestCase):
 
     def test_pointer_targets_use_real_cell_metrics_and_scrolled_caret(self):
         geometry = (42, 126, 1008, 714)  # 8x17 physical-pixel cells
-        self.assertEqual(palette_pointer_point(geometry, 0), (316, 121))
-        self.assertEqual(palette_pointer_point(geometry, 4), (348, 121))
-        self.assertEqual(palette_pointer_point(geometry, 2.25), (334, 121))
-        self.assertEqual(palette_pointer_point(geometry, 2.75), (338, 121))
-        self.assertEqual(palette_pointer_point(geometry, 2, from_tail=True), (692, 121))
+        # The query starts 2.6 cells into the field (FILTER_TEXT_INSET_CELLS).
+        self.assertEqual(palette_pointer_point(geometry, 0), (319, 121))
+        self.assertEqual(palette_pointer_point(geometry, 4), (351, 121))
+        self.assertEqual(palette_pointer_point(geometry, 2.25), (337, 121))
+        self.assertEqual(palette_pointer_point(geometry, 2.75), (341, 121))
+        self.assertEqual(palette_pointer_point(geometry, 2, from_tail=True), (687, 121))
         for shape, column in [((0, 126, 1008, 714), 0), (geometry, -1),
                               (geometry, float("nan")), (geometry, 1000)]:
             with self.assertRaises(ValueError):

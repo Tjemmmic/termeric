@@ -16,9 +16,11 @@ class SettingsInputTests(unittest.TestCase):
 
     def test_pointer_uses_actual_cells_and_shared_modal_input_metrics(self):
         geometry = (42, 126, 1008, 714)  # 8x17 physical cells
-        self.assertEqual(settings.settings_pointer_point(geometry, 0), (291, 135))
-        self.assertEqual(settings.settings_pointer_point(geometry, 3.75), (321, 135))
-        self.assertEqual(settings.settings_pointer_point(geometry, 2.75), (313, 135))
+        # 800x629.76 dialog at (112, 55.3); its 288px field ends 6px left
+        # of the close button, and the query starts 2.6 cells in.
+        self.assertEqual(settings.settings_pointer_point(geometry, 0), (607, 80))
+        self.assertEqual(settings.settings_pointer_point(geometry, 3.75), (637, 80))
+        self.assertEqual(settings.settings_pointer_point(geometry, 2.75), (629, 80))
         for shape, col in [((0, 1, 1, 1), 0), (geometry, -1), (geometry, float("nan")), (geometry, 1000)]:
             with self.assertRaises(ValueError):
                 settings.settings_pointer_point(shape, col)

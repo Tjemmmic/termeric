@@ -45,7 +45,8 @@ def palette_pointer_point(geometry, column, *, from_tail=False):
     panel_width = min(max(cell_width * 55, 450), SURFACE[0] * 0.65)
     panel_x = (SURFACE[0] - panel_width) / 2
     padding = cell_width * 1.5
-    text_x = panel_x + padding + cell_width * 2.2
+    # ui::constants::FILTER_TEXT_INSET_CELLS
+    text_x = panel_x + padding + cell_width * 2.6
     right = panel_x + panel_width - padding - cell_width * 0.8
     columns = math.floor((right - text_x) / cell_width)
     if from_tail:
