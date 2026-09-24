@@ -8344,10 +8344,33 @@ fn typed_agent_input_is_submitted_separately_and_only_to_the_same_agent() {
     app.submit_due_agent_input(Instant::now() + super::agents::AGENT_SUBMIT_DELAY);
     assert_eq!(read(15), b"/new\ra\rb\rgo\non\r");
 
+    // Typing into the prompt after the text went in cancels its Enter,
+    // which would submit the person's words with it.
+    app.submit_to_agent(target.clone(), b"z").unwrap();
+    let typed = |app: &mut App, at: Option<Instant>| {
+        app.tabs
+            .as_mut()
+            .unwrap()
+            .active_tab_mut()
+            .unwrap()
+            .pane_session_mut(pane_id)
+            .unwrap()
+            .last_person_input = at;
+    };
+    typed(&mut app, Some(Instant::now()));
+    app.submit_due_agent_input(Instant::now() + super::agents::AGENT_SUBMIT_DELAY);
+    assert_eq!(
+        latest_toast(&app),
+        Some("Not submitted to Codex: you typed into its prompt")
+    );
+    assert_eq!(app.next_agent_submit_deadline(), None);
+    typed(&mut app, None);
+    assert_eq!(read(16), b"/new\ra\rb\rgo\non\rz");
+
     // An agent that exits before its Enter is due never receives it, nor
     // does the shell or whatever else takes its place.
     app.submit_to_agent(target.clone(), b"x").unwrap();
-    assert_eq!(read(16), b"/new\ra\rb\rgo\non\rx");
+    assert_eq!(read(17), b"/new\ra\rb\rgo\non\rzx");
     let child = app
         .tabs
         .as_ref()
@@ -12290,10 +12313,19 @@ done
             .contains("waiting for the person's approval")
     );
     let approval = app.info_overlay.request_id();
-    app.apply_info_overlay_action(crate::ui::info_overlay::InfoOverlayAction::Choose {
-        request_id: approval,
-        choice_id: "supervisor-send".into(),
-    });
+    let choose_send = |app: &mut App| {
+        app.apply_info_overlay_action(crate::ui::info_overlay::InfoOverlayAction::Choose {
+            request_id: approval,
+            choice_id: "supervisor-send".into(),
+        })
+    };
+    // Send is ignored while the dialog is new; keys meant for something
+    // else cannot approve it.
+    choose_send(&mut app);
+    assert!(app.info_overlay.is_awaiting(approval));
+    app.arm_supervisor_approval();
+    choose_send(&mut app);
+    assert!(!app.info_overlay.is_awaiting(approval));
     flush(&mut app);
     wait_for_file_text(&log, "stdin\tworker\tyes, run it");
     wait_for_file_text(

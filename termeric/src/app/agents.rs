@@ -46,7 +46,8 @@ pub(super) struct PendingAgentSubmit {
     target: AgentTarget,
     /// The text still to type; empty once typed.
     input: Vec<u8>,
-    /// When to press Enter; `None` until the text has been typed.
+    /// When the text was typed, and when to press Enter; `None` until then.
+    typed_at: Option<Instant>,
     enter_due: Option<Instant>,
 }
 
@@ -845,10 +846,12 @@ impl App {
             .count();
         if waiting == 0 {
             self.write_to_agent(&target, input)?;
+            let now = Instant::now();
             self.pending_agent_submits.push(PendingAgentSubmit {
                 target,
                 input: Vec::new(),
-                enter_due: Some(Instant::now() + AGENT_SUBMIT_DELAY),
+                typed_at: Some(now),
+                enter_due: Some(now + AGENT_SUBMIT_DELAY),
             });
             return Ok(());
         }
@@ -862,9 +865,19 @@ impl App {
         self.pending_agent_submits.push(PendingAgentSubmit {
             target,
             input: input.to_vec(),
+            typed_at: None,
             enter_due: None,
         });
         Ok(())
+    }
+
+    /// When the person last typed into the terminal at `identity`.
+    fn last_person_input(&self, identity: TerminalIdentity) -> Option<Instant> {
+        self.tabs
+            .as_ref()?
+            .tab_by_id(identity.tab_id)?
+            .pane_session(identity.pane_id)?
+            .last_person_input
     }
 
     /// Press Enter for every typed message whose delay has passed, then type
@@ -876,7 +889,24 @@ impl App {
             let first = !self.pending_agent_submits[..index]
                 .iter()
                 .any(|pending| pending.target.identity == identity);
+            let typed_over = self.pending_agent_submits[index]
+                .typed_at
+                .zip(self.last_person_input(identity))
+                .is_some_and(|(typed, person)| person >= typed);
+            let person_typing = self
+                .last_person_input(identity)
+                .is_some_and(|person| now.saturating_duration_since(person) < PERSON_TYPING_GRACE);
             let result = match (first, self.pending_agent_submits[index].enter_due) {
+                // The person typed into the prompt after the text went in;
+                // Enter would submit their words with it.
+                (true, Some(due)) if due <= now && typed_over => {
+                    let target = self.pending_agent_submits[index].target.clone();
+                    let name = target.agent_name.clone();
+                    Err((
+                        target,
+                        format!("Not submitted to {name}: you typed into its prompt"),
+                    ))
+                }
                 (true, Some(due)) if due <= now => {
                     let target = self.pending_agent_submits.remove(index).target;
                     // The next message for this agent, if any, is now first
@@ -884,10 +914,16 @@ impl App {
                     self.write_to_agent(&target, b"\r")
                         .map_err(|reason| (target, reason))
                 }
+                // A waiting message is typed only once the person stops.
+                (true, None) if person_typing => {
+                    index += 1;
+                    Ok(())
+                }
                 (true, None) => {
                     let pending = &mut self.pending_agent_submits[index];
                     let input = std::mem::take(&mut pending.input);
                     let target = pending.target.clone();
+                    pending.typed_at = Some(now);
                     pending.enter_due = Some(now + AGENT_SUBMIT_DELAY);
                     index += 1;
                     self.write_to_agent(&target, &input)
@@ -904,12 +940,15 @@ impl App {
                 self.pending_agent_submits
                     .retain(|pending| pending.target.identity != target.identity);
                 index = 0;
+                self.report_undelivered(&target, &reason);
                 self.toasts.warning(reason);
             }
         }
     }
 
     pub(super) fn next_agent_submit_deadline(&self) -> Option<Instant> {
+        // Messages held while the person types are retried at each agent
+        // scan, which already wakes the loop.
         self.pending_agent_submits
             .iter()
             .filter_map(|pending| pending.enter_due)
@@ -961,7 +1000,31 @@ impl App {
         {
             tab.refresh_agents(&self.agents);
         }
-        self.agent_terminal_mode(target)
+        let mode = self.agent_terminal_mode(target)?;
+        // A launched agent stays recognized while it hands the terminal to
+        // another program, such as the editor it opened; that program must
+        // not receive the text.
+        let tab = self
+            .tabs
+            .as_ref()
+            .and_then(|tabs| tabs.tab_by_id(target.identity.tab_id));
+        let process = tab
+            .and_then(|tab| tab.pane_session(target.identity.pane_id))
+            .and_then(|session| session.agent.as_ref())
+            .and_then(|agent| agent.process);
+        let foreground = tab
+            .and_then(|tab| tab.pane_foreground_group(target.identity.pane_id))
+            .map(i64::from);
+        if process
+            .zip(foreground)
+            .is_some_and(|(process, foreground)| process != foreground)
+        {
+            return Err(format!(
+                "{} has handed its terminal to another program; try again once it is back",
+                target.agent_name
+            ));
+        }
+        Ok(mode)
     }
 
     /// Write `bytes` to `target` if it still runs the same agent and accepts

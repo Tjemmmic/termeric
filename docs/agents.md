@@ -60,9 +60,11 @@ hidden everywhere else:
 Harvest **Explain** and **Send Context to Agent…** go to the focused agent. If
 no agent is focused, they go to the only running agent. If several agents are
 running, focus the one you mean. Right before typing, Termeric checks the
-terminal again. If the agent has exited or the terminal is read-only, you get
-a notice and nothing is typed, so text meant for an agent never runs in the
-shell it returned to.
+terminal again. If the agent has exited, has handed the terminal to another
+program such as an editor, or the terminal is read-only, you get a notice and
+nothing is typed, so text meant for an agent never runs in a shell or lands
+in an editor. If you type into the agent's prompt in the moment before
+Termeric presses Enter, it does not press it.
 
 Terminal output context comes from a shell pane beside the agent in its tab,
 or else from the first shell tab. It never comes from an agent's screen.
@@ -214,15 +216,17 @@ instructions say:
   you decline count too, so it cannot ask faster than it could send.
 - It cannot send the same message to the same agent twice within 30 seconds,
   however the spacing or capitals differ.
-- A message is plain text of at most 4096 bytes and 80 lines. It may not start
+- A message is plain text of at most 4000 bytes and 80 lines. It may not start
   with `!` or `/`, which the agent would run as a shell or agent command
   without its own approval. Control and text-direction characters are refused,
   so what you approve is what is sent.
 - It waits while you type to that agent. Nothing it sends, or Termeric tells
-  it, is added to a prompt you are writing.
+  it, is added to a prompt you are writing. If a message cannot be delivered
+  after all, the supervisor is told.
 
 The approval dialog has no single-key shortcuts, because it can open while
-you type; Enter and Escape leave the message unsent. It never replaces a
+you type. Enter and Escape leave the message unsent, **Don't send** comes
+before **Send**, and **Send** does nothing for the first second. It never replaces a
 dialog you have open. If another dialog replaces it, the message is not sent
 and the supervisor is told.
 

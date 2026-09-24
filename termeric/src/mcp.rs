@@ -239,7 +239,7 @@ fn tools() -> Value {
         {
             "name": "send_to_agent",
             "title": "Send to an agent",
-            "description": "Give the agent in one pane a prompt, pasted and submitted as if typed. Plain text of at most 4096 bytes and 80 lines, not starting with `!` or `/`. Refused if that pane no longer runs agent_id, while the person is typing to it, or if the person has not enabled external input.",
+            "description": "Give the agent in one pane a prompt, pasted and submitted as if typed. Plain text of at most 4000 bytes and 80 lines, not starting with `!` or `/`. Refused if that pane no longer runs agent_id, while the person is typing to it, or if the person has not enabled external input.",
             "inputSchema": pane_schema(&[
                 (
                     "agent_id",

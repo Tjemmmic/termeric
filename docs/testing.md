@@ -407,8 +407,11 @@ size limit, batches, and stray responses.
 Agent input delivery is tested against a real PTY running a program Termeric
 recognizes as Codex. It proves that Enter waits for typed text, that two
 quick messages are submitted one after the other, that automated messages wait
-while the person types, and that nothing more reaches a terminal whose agent
-has exited.
+while the person types, that Enter is withheld when the person typed into the
+prompt after the text went in, and that nothing more reaches a terminal whose
+agent has exited. The supervisor test also proves that **Send** is ignored
+while the approval dialog is new. A hook report from a process outside the
+terminal's session is proven to be set aside.
 
 Agent change review is tested against temporary Git repositories. The tests
 prove that snapshots leave the real index byte-for-byte unchanged, skip

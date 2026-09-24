@@ -32,7 +32,13 @@ struct PendingApproval {
     request_id: u64,
     target: AgentTarget,
     text: String,
+    shown_at: Instant,
 }
+
+/// How long the approval dialog ignores **Send** after it opens. It opens on
+/// its own, while the person may be typing elsewhere, and keys meant for
+/// that, such as Tab then Enter, must not approve it.
+const APPROVAL_ARMING: Duration = Duration::from_secs(1);
 
 pub(super) struct Supervisor {
     /// Proves a control request comes from this supervisor's MCP server.
@@ -233,11 +239,36 @@ impl App {
         }
     }
 
+    /// Forget the supervisor, and close the approval dialog it left open.
+    fn end_supervision(&mut self) {
+        if let Some(approval) = self
+            .supervisor
+            .take()
+            .and_then(|supervisor| supervisor.approval)
+        {
+            self.info_overlay.dismiss(approval.request_id);
+        }
+    }
+
+    /// Tell the supervisor that text meant for another agent was dropped.
+    pub(super) fn report_undelivered(&mut self, target: &AgentTarget, reason: &str) {
+        if self.supervisor.is_none() || self.is_supervisor_terminal(target.identity) {
+            return;
+        }
+        let name = &target.agent_name;
+        if let Some(supervisor) = &mut self.supervisor {
+            supervisor.note(format!("Not delivered to {name}: {reason}"));
+        }
+        self.tell_supervisor(format!(
+            "Termeric: a message to {name} was not delivered: {reason}"
+        ));
+    }
+
     /// End supervision and close the supervisor's terminal: its pane, or
     /// its tab when it is the only pane there.
     pub(super) fn stop_supervisor(&mut self) {
         let terminal = self.supervisor_terminal();
-        self.supervisor = None;
+        self.end_supervision();
         if let Some(identity) = terminal {
             let alone = self
                 .tabs
@@ -263,7 +294,7 @@ impl App {
         if self.supervisor.is_none() || self.supervisor_terminal().is_some() {
             return false;
         }
-        self.supervisor = None;
+        self.end_supervision();
         self.toasts.info("The supervisor's terminal closed");
         true
     }
@@ -607,16 +638,17 @@ impl App {
                 lines.extend(text.lines().map(|line| format!("  {line}")));
                 lines.push(String::new());
                 let choice_line = lines.len();
-                // No single-key shortcuts: the dialog can open while the
-                // person is typing, and a stray key must not approve it.
-                lines.push("  Send".into());
+                // No single-key shortcuts, and Send after Don't send and
+                // disarmed for a moment: the dialog can open while the
+                // person is typing, and stray keys must not approve it.
                 lines.push("  Don't send".into());
+                lines.push("  Send".into());
                 let request_id = self.info_overlay.show_choices(
                     "Supervisor message",
                     lines,
                     vec![
-                        InfoOverlayChoice::new(SEND_CHOICE, "Send", choice_line, None),
-                        InfoOverlayChoice::new(DECLINE_CHOICE, "Don't send", choice_line + 1, None),
+                        InfoOverlayChoice::new(DECLINE_CHOICE, "Don't send", choice_line, None),
+                        InfoOverlayChoice::new(SEND_CHOICE, "Send", choice_line + 1, None),
                     ],
                 );
                 let supervisor = self.supervisor.as_mut().expect("still running");
@@ -625,6 +657,7 @@ impl App {
                     request_id,
                     target,
                     text: text.to_owned(),
+                    shown_at: Instant::now(),
                 });
                 Ok(true)
             }
@@ -639,12 +672,16 @@ impl App {
         let Some(supervisor) = &mut self.supervisor else {
             return false;
         };
-        if supervisor
+        let Some(approval) = supervisor
             .approval
             .as_ref()
-            .is_none_or(|approval| approval.request_id != request_id)
-        {
+            .filter(|approval| approval.request_id == request_id)
+        else {
             return false;
+        };
+        if choice_id == SEND_CHOICE && approval.shown_at.elapsed() < APPROVAL_ARMING {
+            // Too soon to be a decision about this message; it stays open.
+            return true;
         }
         self.info_overlay.dismiss(request_id);
         self.resolve_supervisor_approval(if choice_id == SEND_CHOICE {
@@ -653,6 +690,18 @@ impl App {
             ApprovalOutcome::Decline
         });
         true
+    }
+
+    /// Make the waiting approval old enough to accept **Send**.
+    #[cfg(test)]
+    pub(super) fn arm_supervisor_approval(&mut self) {
+        if let Some(approval) = self
+            .supervisor
+            .as_mut()
+            .and_then(|supervisor| supervisor.approval.as_mut())
+        {
+            approval.shown_at -= APPROVAL_ARMING;
+        }
     }
 
     /// Treat a dismissed approval dialog as declined.

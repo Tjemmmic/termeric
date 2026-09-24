@@ -564,7 +564,7 @@ refused if that pane, checked again at the moment of writing, runs another
 agent or none. Its text is pasted and submitted after a short pause; several
 to one pane are submitted in order, one at a time. It is not held for
 destructive-command confirmation, but it is refused while the person has typed
-into that pane in the last ten seconds, beyond 4096 bytes or 80 lines, with
+into that pane in the last ten seconds, beyond 4000 bytes or 80 lines, with
 control or text-direction characters, or when it starts with `!` or `/`,
 which the agent would run as a command. Both accept an optional `supervisor`
 token of 32 hex digits. With one, `list_agents` returns only the agents that
