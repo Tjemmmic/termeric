@@ -172,6 +172,9 @@ impl App {
             .collect();
         if self.agent_terminals().is_empty() {
             hidden.push("agent.go-to");
+            if !self.supervisor_running() {
+                hidden.push("agent.panel");
+            }
         }
         if self.supervisor_running() {
             hidden.push("supervisor.start");
@@ -184,7 +187,6 @@ impl App {
             hidden.extend([
                 "supervisor.take-over",
                 "supervisor.hand-back",
-                "supervisor.activity",
                 "supervisor.stop",
             ]);
         }
@@ -526,11 +528,11 @@ impl App {
             "agent.split-right" => self.open_agent_picker(AgentPlacement::SplitRight),
             "agent.split-down" => self.open_agent_picker(AgentPlacement::SplitDown),
             "agent.go-to" => self.open_agent_list(),
+            "agent.panel" => self.toggle_agents_panel(),
             "supervisor.start" => self.start_supervisor(),
             "supervisor.mode" => self.open_supervisor_mode_picker(),
             "supervisor.take-over" => self.take_over_from_supervisor(),
             "supervisor.hand-back" => self.hand_back_to_supervisor(),
-            "supervisor.activity" => self.show_supervisor_activity(),
             "supervisor.rules" => self.edit_supervisor_rules(),
             "supervisor.stop" => self.stop_supervisor(),
             "agent.review-changes" => self.review_agent_changes(),

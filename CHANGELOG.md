@@ -16,8 +16,9 @@ Versioning once public beta tags begin.
   need input, finish, or fail. Its messages are short plain text, never a
   `!` or `/` command, and never typed while you are typing to that agent.
   Assist shows each one in full, without single-key shortcuts. **Take Over
-  from Supervisor** makes it watch until you hand back, and **Supervisor
-  Activity** shows what it did. GUI control protocol v21 adds the supervisor
+  from Supervisor** makes it watch until you hand back, and **Show Agents**
+  opens a panel listing every agent, the ones that need you first, with the
+  supervisor's mode and latest activity at its foot. GUI control protocol v21 adds the supervisor
   token, which only processes under the supervisor's terminal may use.
 
 - `termeric mcp` is an MCP server that lets one agent see and direct the

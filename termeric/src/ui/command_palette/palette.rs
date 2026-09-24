@@ -1170,6 +1170,7 @@ pub fn core_commands(
         ),
         ("agent.resume", "Resume Agent Conversation…", None),
         ("agent.go-to", "Go to Agent…", None),
+        ("agent.panel", "Show Agents", None),
         ("agent.split-right", "Split Right with Agent…", None),
         ("agent.split-down", "Split Down with Agent…", None),
         (
@@ -1191,7 +1192,6 @@ pub fn core_commands(
         ("supervisor.mode", "Supervisor Mode…", None),
         ("supervisor.take-over", "Take Over from Supervisor", None),
         ("supervisor.hand-back", "Hand Back to Supervisor", None),
-        ("supervisor.activity", "Supervisor Activity", None),
         ("supervisor.rules", "Edit Supervisor Rules", None),
         ("supervisor.stop", "Stop Supervisor", None),
         ("agent.remove-status", "Remove Agent Status Hooks…", None),

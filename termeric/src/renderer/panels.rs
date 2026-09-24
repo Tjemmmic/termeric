@@ -46,6 +46,23 @@ impl From<crate::ui::settings::SettingsInputRect> for PanelBox {
     }
 }
 
+impl From<crate::ui::agents_panel::AgentsPanelRect> for PanelBox {
+    fn from(rect: crate::ui::agents_panel::AgentsPanelRect) -> Self {
+        let crate::ui::agents_panel::AgentsPanelRect {
+            x,
+            y,
+            width,
+            height,
+        } = rect;
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+}
+
 impl From<crate::ui::commands::panel::CommandsPanelRect> for PanelBox {
     fn from(rect: crate::ui::commands::panel::CommandsPanelRect) -> Self {
         let crate::ui::commands::panel::CommandsPanelRect {
@@ -322,6 +339,246 @@ impl Renderer {
         // Keyboard and assistive focus use the same geometry as clicks.
         if let Some(rect) = info
             .browse_focus
+            .and_then(|control| layout.control_rect(control))
+        {
+            self.push_rect_outline(
+                rect.x,
+                rect.y,
+                rect.width,
+                rect.height,
+                px(2.0),
+                self.ui.palette_accent,
+            );
+        }
+    }
+
+    pub(super) fn build_agents_panel(
+        &mut self,
+        info: &crate::ui::agents_panel::AgentsPanelInfo,
+        window_width: f32,
+        window_height: f32,
+    ) {
+        use crate::ui::agents_panel::{AgentRowState, AgentsControl, AgentsPanelLayout};
+
+        let anim = info.animation;
+        if anim <= 0.0 {
+            return;
+        }
+        let cell_height = self.cell_height;
+        let layout = AgentsPanelLayout::calculate(
+            window_width,
+            window_height,
+            self.tab_bar_height(),
+            self.cell_width,
+            cell_height,
+            anim,
+            info.rows.len(),
+            info.supervisor
+                .as_ref()
+                .map(|supervisor| supervisor.entries.len()),
+        )
+        .scrolled(info.scroll_offset);
+        let scale = self.scale_factor;
+        let px = |logical: f32| (logical * scale).round().max(1.0);
+        let panel = layout.panel;
+        let padding = layout.padding;
+        let size = self.ui_label_px();
+        let text = self.ui.menu_text;
+        let dim = self.ui.menu_text_dim;
+
+        self.build_side_panel_frame(panel, anim);
+
+        // ── Header ──
+        let close = layout.close_button;
+        self.build_header_icon_button(
+            close,
+            Icon::Close,
+            info.hovered == Some(AgentsControl::Close),
+        );
+        let title_x = panel.x + padding;
+        self.push_ui_label(
+            "Agents",
+            title_x,
+            layout.title_y,
+            close.height,
+            close.x - title_x,
+            size * 1.15,
+            text,
+        );
+        self.rect_pipeline.push_rect(
+            panel.x + px(1.0),
+            layout.separator_y.round(),
+            panel.width - px(1.0),
+            px(1.0),
+            self.ui.menu_border,
+        );
+
+        // ── Agents ──
+        if info.rows.is_empty() {
+            self.push_ui_label(
+                "No agents in this window",
+                title_x,
+                layout.list_start_y,
+                layout.row_height,
+                panel.width - padding * 2.0,
+                size,
+                dim,
+            );
+        }
+        let line = cell_height * 1.3;
+        let dot = (size * 0.7).round();
+        for index in layout.visible_range() {
+            let row_info = &info.rows[index];
+            let row = layout.row(index);
+            // Focus on a row reads like a menu's selection: the same quiet
+            // rounded surface as hover, not a hard outline.
+            let active = info.hovered == Some(AgentsControl::Agent(index))
+                || info.focus == Some(AgentsControl::Agent(index));
+            let surface = if active {
+                self.rect_pipeline.push_rounded_rect(
+                    row.x + padding * 0.5,
+                    row.y + px(2.0),
+                    row.width - padding,
+                    row.height - px(4.0),
+                    self.ui.menu_highlight,
+                    px(6.0),
+                );
+                self.ui.menu_highlight
+            } else {
+                self.ui.menu_bg
+            };
+            let top = row.y + (row.height - line * 2.0) / 2.0;
+            // The tab badge's dot: a ring while working, the theme's colors
+            // for a request, a result, or a failure.
+            let fill = match row_info.state {
+                AgentRowState::Unknown => None,
+                AgentRowState::Idle => Some(adjust_alpha(dim, 0.5)),
+                AgentRowState::Working => Some(text),
+                AgentRowState::NeedsYou => Some(self.ui.agent_needs_you),
+                AgentRowState::Done => Some(self.ui.agent_done),
+                AgentRowState::Failed => Some(self.ui.agent_failed),
+            };
+            let (dot_x, dot_y) = ((title_x).round(), (top + (line - dot) / 2.0).round());
+            if let Some(fill) = fill {
+                self.rect_pipeline
+                    .push_rounded_rect(dot_x, dot_y, dot, dot, fill, dot / 2.0);
+                if matches!(row_info.state, AgentRowState::Working | AgentRowState::Idle) {
+                    let inner = (dot - px(1.5) * 2.0).max(1.0);
+                    self.rect_pipeline.push_rounded_rect(
+                        dot_x + (dot - inner) / 2.0,
+                        dot_y + (dot - inner) / 2.0,
+                        inner,
+                        inner,
+                        surface,
+                        inner / 2.0,
+                    );
+                }
+            }
+            let name_x = title_x + dot + px(8.0);
+            let right = row.x + row.width - padding;
+            let name_width = self.push_ui_label(
+                &row_info.name,
+                name_x,
+                top,
+                line,
+                right - name_x,
+                size,
+                text,
+            );
+            let place_x = name_x + name_width + px(8.0);
+            if place_x < right {
+                self.push_ui_label(
+                    &row_info.place,
+                    place_x,
+                    top,
+                    line,
+                    right - place_x,
+                    size * 0.92,
+                    dim,
+                );
+            }
+            self.push_ui_label(
+                &row_info.summary,
+                name_x,
+                top + line,
+                line,
+                right - name_x,
+                size * 0.92,
+                dim,
+            );
+        }
+        if layout.visible_count > 0 && layout.visible_count < info.rows.len() {
+            let track_top = layout.list_start_y;
+            let track_height = layout.visible_count as f32 * layout.row_height;
+            let thumb_height =
+                (track_height * layout.visible_count as f32 / info.rows.len() as f32).max(px(24.0));
+            let travel = (track_height - thumb_height).max(0.0);
+            let max_offset = (info.rows.len() - layout.visible_count) as f32;
+            let thumb_top = track_top + travel * layout.scroll_offset as f32 / max_offset;
+            self.rect_pipeline.push_rounded_rect(
+                panel.x + panel.width - px(6.0),
+                thumb_top,
+                px(3.0),
+                thumb_height,
+                adjust_alpha(dim, 0.45),
+                px(1.5),
+            );
+        }
+
+        // ── Supervisor ──
+        if let (Some(section), Some(supervisor)) = (layout.supervisor, info.supervisor.as_ref()) {
+            self.rect_pipeline.push_rect(
+                panel.x + px(1.0),
+                section.section.y.round(),
+                panel.width - px(1.0),
+                px(1.0),
+                self.ui.menu_border,
+            );
+            let heading = format!("Supervisor · {}", supervisor.mode);
+            self.push_ui_label(
+                &heading,
+                section.heading.x,
+                section.heading.y,
+                section.heading.height,
+                section.heading.width,
+                size,
+                text,
+            );
+            let label = if supervisor.held {
+                "Hand Back"
+            } else {
+                "Take Over"
+            };
+            let color = if info.hovered == Some(AgentsControl::Supervisor) {
+                text
+            } else {
+                adjust_alpha(text, 0.9)
+            };
+            self.build_panel_button(section.button, label, true, color);
+            for (index, entry) in supervisor
+                .entries
+                .iter()
+                .take(section.entry_count)
+                .enumerate()
+            {
+                let rect = section.entry(index);
+                self.push_ui_label(
+                    entry,
+                    rect.x,
+                    rect.y,
+                    rect.height,
+                    rect.width - padding,
+                    size * 0.92,
+                    dim,
+                );
+            }
+        }
+
+        // Keyboard and assistive focus on a button uses the same geometry
+        // as clicks; a focused row is shown by its surface above.
+        if let Some(rect) = info
+            .focus
+            .filter(|control| !matches!(control, AgentsControl::Agent(_)))
             .and_then(|control| layout.control_rect(control))
         {
             self.push_rect_outline(

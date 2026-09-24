@@ -1298,6 +1298,7 @@ impl Renderer {
         workspace_menu: Option<&PopupMenuInfo>,
         session_panel: Option<&crate::session::panel::SessionPanelInfo>,
         commands_panel: Option<&crate::ui::commands::panel::CommandsPanelInfo>,
+        agents_panel: Option<&crate::ui::agents_panel::AgentsPanelInfo>,
         command_palette: Option<&PaletteInfo>,
         shortcuts_panel: Option<&ShortcutsPanelInfo>,
         cursor_style: CursorStyle,
@@ -1374,6 +1375,7 @@ impl Renderer {
             workspace_menu,
             session_panel,
             commands_panel,
+            agents_panel,
             command_palette,
             shortcuts_panel,
             cursor_style,
@@ -1590,6 +1592,7 @@ impl Renderer {
         workspace_menu: Option<&PopupMenuInfo>,
         session_panel: Option<&crate::session::panel::SessionPanelInfo>,
         commands_panel: Option<&crate::ui::commands::panel::CommandsPanelInfo>,
+        agents_panel: Option<&crate::ui::agents_panel::AgentsPanelInfo>,
         command_palette: Option<&PaletteInfo>,
         shortcuts_panel: Option<&ShortcutsPanelInfo>,
         cursor_style: CursorStyle,
@@ -1857,6 +1860,12 @@ impl Renderer {
             if cp.animation > 0.001 {
                 self.build_commands_panel(cp, window_width, window_height);
             }
+        }
+        // Side panels are never open together, so they share a layer.
+        if let Some(agents) = agents_panel
+            && agents.animation > 0.001
+        {
+            self.build_agents_panel(agents, window_width, window_height);
         }
 
         // ── LAYER 10.5: Settings panel (centered modal) ──

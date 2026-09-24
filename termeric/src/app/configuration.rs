@@ -653,6 +653,7 @@ impl App {
         self.settings_panel.set_reduced_motion(reduced_motion);
         self.session_panel.set_reduced_motion(reduced_motion);
         self.commands_panel.set_reduced_motion(reduced_motion);
+        self.agents_panel.set_reduced_motion(reduced_motion);
         self.command_palette.set_reduced_motion(reduced_motion);
         self.domain_picker.set_reduced_motion(reduced_motion);
         self.unicode_picker.set_reduced_motion(reduced_motion);

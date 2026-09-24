@@ -7,6 +7,7 @@
 //! - Diff review overlay
 //! - Context picker modal
 
+pub mod agents_panel;
 pub mod animation;
 pub mod command_palette;
 pub mod commands;

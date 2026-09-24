@@ -137,8 +137,14 @@ one shows that terminal. Turn them off with **Notify When Agents Need You** on
 the Settings **Agents** page, or `[agent_status] notify = false`. The tab
 announces the same state to screen readers.
 
-**Go to Agent…** lists every agent in the window, the ones that need you
-first, and shows the chosen terminal. **Copy Last Agent Response** copies the
+**Show Agents** opens a panel beside the terminals that lists every agent in
+the window, the ones that need you first. Each row says what the agent is
+doing, for how long, and what it waits for, its error, or the start of its
+answer. Choosing a row, with the pointer or with the arrow keys and Enter,
+shows that terminal. While a supervisor runs, the foot of the panel shows its
+mode, a **Take Over** or **Hand Back** button, and what it did most recently.
+**Go to Agent…** is the quick way to jump: it lists the same agents in the
+palette, where you can type to find one. **Copy Last Agent Response** copies the
 focused agent's most recent answer. The answer comes from the agent's report,
 or else from the end of the agent's own conversation log. Both commands appear
 only when they have something to show.
@@ -236,8 +242,9 @@ and the supervisor is told.
 
 **Take Over from Supervisor** puts it in watch mode until **Hand Back to
 Supervisor**, and tells it so. **Supervisor Mode…** changes the mode,
-including for a running supervisor. **Supervisor Activity** lists what it was
-told, what it asked, and what was sent or refused. **Stop Supervisor** closes
+including for a running supervisor. The foot of the **Show Agents** panel
+lists what it was told, what it asked, and what was sent or refused, newest
+first. **Stop Supervisor** closes
 its terminal, and its tab when it is alone there.
 
 The rules are plain language in `supervisor.md`, beside `config.toml`.

@@ -105,6 +105,9 @@ impl App {
         if self.commands_panel.is_open() {
             return self.commands_panel.is_editing();
         }
+        if self.agents_panel.is_open() {
+            return false;
+        }
         if self.tab_rename.is_some() {
             return true;
         }
@@ -198,6 +201,7 @@ impl App {
             && !self.settings_panel.is_active()
             && !self.session_panel.is_open()
             && !self.commands_panel.is_open()
+            && !self.agents_panel.is_open()
     }
 
     fn commands_owns_ime_text(&self) -> bool {

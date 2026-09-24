@@ -429,18 +429,23 @@ impl App {
         }
     }
 
-    /// What the supervisor has seen and done, newest first.
-    pub(super) fn show_supervisor_activity(&mut self) {
-        let Some(supervisor) = &self.supervisor else {
-            return;
-        };
-        let lines = supervisor
-            .log
-            .iter()
-            .rev()
-            .map(|(when, entry)| format!("{}  {entry}", ago(when.elapsed())))
-            .collect();
-        self.info_overlay.show("Supervisor activity", lines);
+    /// The supervisor as the Agents panel shows it: its mode and what it
+    /// has seen and done, newest first.
+    pub(super) fn supervisor_summary(&self) -> Option<crate::ui::agents_panel::SupervisorSummary> {
+        let supervisor = self.supervisor.as_ref()?;
+        Some(crate::ui::agents_panel::SupervisorSummary {
+            mode: match supervisor.held_mode {
+                Some(_) => "Watch, you took over".into(),
+                None => supervisor.mode.label().into(),
+            },
+            held: supervisor.held_mode.is_some(),
+            entries: supervisor
+                .log
+                .iter()
+                .rev()
+                .map(|(when, entry)| format!("{} · {entry}", ago(when.elapsed())))
+                .collect(),
+        })
     }
 
     /// Tell the supervisor something now, or once it has finished what it is
@@ -797,12 +802,12 @@ fn one_line(text: &str) -> String {
     }
 }
 
-/// How long ago, in the fixed width the activity log aligns on.
-fn ago(elapsed: Duration) -> String {
+/// How long ago, coarsely.
+pub(super) fn ago(elapsed: Duration) -> String {
     let minutes = elapsed.as_secs() / 60;
     match minutes {
-        0 => "   now".into(),
-        1..=59 => format!("{minutes:>3} min"),
-        _ => format!("{:>4} h", minutes / 60),
+        0 => "now".into(),
+        1..=59 => format!("{minutes} min"),
+        _ => format!("{} h", minutes / 60),
     }
 }

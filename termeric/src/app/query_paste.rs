@@ -71,6 +71,9 @@ impl App {
                 PasteTarget::Blocked
             };
         }
+        if self.agents_panel.is_open() {
+            return PasteTarget::Blocked;
+        }
         if self.tab_rename.is_some() {
             return PasteTarget::TabRename;
         }

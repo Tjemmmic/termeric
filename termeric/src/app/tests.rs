@@ -8853,6 +8853,123 @@ fn agent_changes_are_listed_reviewed_staged_and_reverted_for_their_terminal() {
     assert!(app.agent_change_job.is_none(), "nothing was started");
 }
 
+/// Two agent tabs: Codex working in the first, Claude Code waiting in the
+/// second, which is left active.
+#[cfg(unix)]
+pub(super) fn two_agent_tabs() -> (App, usize, usize) {
+    use crate::agents::{AgentReport, AgentStatus};
+    use crate::control::protocol::AgentEventKind;
+    let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+    let mut ids = Vec::new();
+    for (agent, event, detail) in [
+        ("codex", AgentEventKind::Working, None),
+        (
+            "claude-code",
+            AgentEventKind::NeedsInput,
+            Some("Approve shell: cargo test"),
+        ),
+    ] {
+        let id = tabs
+            .new_tab_with_command(
+                "/bin/sh",
+                &["-c".into(), "sleep 30".into()],
+                None,
+                None,
+                None,
+                HashMap::new(),
+            )
+            .unwrap();
+        let tab = tabs.tab_mut_by_id(id).unwrap();
+        let pane_id = tab.focused_terminal_identity().pane_id;
+        let session = tab.pane_session_mut(pane_id).unwrap();
+        session.agent = Some(crate::agents::AgentSession {
+            agent_id: agent.into(),
+            launched: false,
+            profile: None,
+            process: None,
+        });
+        session.agent_status = AgentStatus::after(
+            None,
+            AgentReport {
+                agent_id: agent.into(),
+                event,
+                detail: detail.map(Into::into),
+                last_message: None,
+                transcript_path: None,
+            },
+            Instant::now(),
+        );
+        ids.push(id);
+    }
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.tabs = Some(tabs);
+    (app, ids[0], ids[1])
+}
+
+#[cfg(unix)]
+#[test]
+fn the_agents_panel_lists_agents_by_urgency_and_shows_the_chosen_one() {
+    use crate::ui::agents_panel::{AgentRowState, AgentsControl};
+    use winit::keyboard::{Key, NamedKey};
+    let (mut app, codex_tab, claude_tab) = two_agent_tabs();
+    assert_eq!(app.tabs.as_ref().unwrap().active_tab_id(), Some(claude_tab));
+
+    // Opening it closes another side panel, and it owns the pointer.
+    app.commands_panel.toggle();
+    app.toggle_agents_panel();
+    assert!(!app.commands_panel.is_open());
+    assert!(app.agents_panel.is_open());
+    assert!(app.pointer_panel_owns_input());
+
+    let info = app.agents_panel_info();
+    assert_eq!(info.rows.len(), 2);
+    assert_eq!(
+        info.rows[0].name, "Claude Code",
+        "the agent that needs you first"
+    );
+    assert_eq!(info.rows[0].state, AgentRowState::NeedsYou);
+    assert_eq!(
+        info.rows[0].summary,
+        "Needs you · now · Approve shell: cargo test"
+    );
+    assert_eq!(info.rows[1].state, AgentRowState::Working);
+    assert_eq!(info.focus, Some(AgentsControl::Agent(0)));
+
+    // It is modal: text never reaches a terminal behind it.
+    assert!(app.handle_agents_panel_key(&Key::Character("x".into())));
+    assert!(app.agents_panel.is_open());
+
+    // Down, then Enter, shows the second agent and closes the panel.
+    app.handle_agents_panel_key(&Key::Named(NamedKey::ArrowDown));
+    app.handle_agents_panel_key(&Key::Named(NamedKey::Enter));
+    assert!(!app.agents_panel.is_open());
+    assert_eq!(app.tabs.as_ref().unwrap().active_tab_id(), Some(codex_tab));
+
+    // Escape closes it; with no agent and no supervisor, it is not offered.
+    app.toggle_agents_panel();
+    app.handle_agents_panel_key(&Key::Named(NamedKey::Escape));
+    assert!(!app.agents_panel.is_open());
+    assert!(
+        !app.unavailable_agent_commands()
+            .contains(&"agent.panel".to_string())
+    );
+    let empty = App::new_headless(Config::default()).unwrap();
+    assert!(
+        empty
+            .unavailable_agent_commands()
+            .contains(&"agent.panel".to_string())
+    );
+    assert!(
+        !empty
+            .unavailable_agent_commands()
+            .contains(&"supervisor.activity".to_string())
+            && !crate::ui::command_palette::palette::core_commands(false, &empty.shortcut_registry)
+                .iter()
+                .any(|command| command.id == "supervisor.activity"),
+        "the panel replaces the activity dialog"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn a_transcript_can_be_stopped_after_its_agent_exits() {

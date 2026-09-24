@@ -620,6 +620,7 @@ impl App {
             || self.shortcuts_panel.is_active()
             || self.settings_panel.is_active()
             || self.commands_panel.is_open()
+            || self.agents_panel.is_open()
             || self.session_panel.is_open()
             || self.workspace_menu.is_some()
             || self.search.is_active()

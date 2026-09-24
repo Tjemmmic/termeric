@@ -1095,6 +1095,12 @@ impl ApplicationHandler<AppEvent> for App {
                     }
                     return;
                 }
+                if self.agents_panel.is_open() {
+                    if event.state == winit::event::ElementState::Pressed {
+                        self.handle_agents_panel_key(&event.logical_key);
+                    }
+                    return;
+                }
 
                 if self.handle_tab_rename_input(&event) {
                     return;
@@ -1823,7 +1829,9 @@ impl ApplicationHandler<AppEvent> for App {
                 {
                     return;
                 }
-                if self.handle_commands_panel_scroll(delta) {
+                if self.handle_commands_panel_scroll(delta)
+                    || self.handle_agents_panel_scroll(delta)
+                {
                     return;
                 }
                 let scroll_speed = self.config.scrollback.scroll_speed;

@@ -120,6 +120,7 @@ impl App {
             WorkspaceMenuAction::Manage => {
                 self.settings_panel.close();
                 self.commands_panel.close();
+                self.agents_panel.close();
                 self.session_panel.open_workspaces();
             }
         }

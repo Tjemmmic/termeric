@@ -4,6 +4,7 @@ mod accessibility;
 mod agent_changes;
 mod agent_hooks;
 mod agents;
+mod agents_panel;
 mod application;
 mod commands_input;
 mod configuration;
@@ -1185,6 +1186,8 @@ pub struct App {
     session_panel: crate::session::panel::SessionPanel,
     /// Custom commands panel
     commands_panel: crate::ui::commands::panel::CommandsPanel,
+    /// This window's agents and supervisor at a glance.
+    agents_panel: crate::ui::agents_panel::AgentsPanel,
     /// Buffer tracking what the user has typed on the current line (for alias expansion)
     input_line_buffer: String,
     /// Git repository watcher (tracks branch, dirty status per tab)
@@ -1456,6 +1459,7 @@ impl App {
             theme_preview: None,
             session_panel: crate::session::panel::SessionPanel::new(),
             commands_panel: crate::ui::commands::panel::CommandsPanel::new(),
+            agents_panel: crate::ui::agents_panel::AgentsPanel::new(),
             input_line_buffer: String::new(),
             git_watcher: crate::git::GitWatcher::new(git_event_waker()),
             git_completions: crate::git::BranchCompletions::default(),
@@ -2106,6 +2110,7 @@ impl App {
         let workspace_menu_info = self.workspace_menu_render_info();
         let settings_unsaved =
             self.settings_panel.is_visible() && self.config_has_unsaved_changes();
+        let agents_panel_info = (!self.agents_panel.is_closed()).then(|| self.agents_panel_info());
 
         let Some(renderer) = &mut self.renderer else {
             return false;
@@ -2221,8 +2226,8 @@ impl App {
         } else {
             None
         };
-        // Update commands panel animation
-        if self.commands_panel.needs_redraw() {
+        // Update commands and agents panel animation
+        if self.commands_panel.needs_redraw() || self.agents_panel.needs_redraw() {
             self.redraw_scheduler
                 .request(redraw_scheduler::RedrawReason::Animation);
             if let Some(window) = &self.window {
@@ -2792,6 +2797,7 @@ impl App {
             workspace_menu_info.as_ref(),
             session_panel_info.as_ref(),
             commands_panel_info.as_ref(),
+            agents_panel_info.as_ref(),
             palette_info.as_ref(),
             shortcuts_info.as_ref(),
             cursor_style,
@@ -3165,6 +3171,7 @@ impl App {
         if self.retire_closed_supervisor()
             | self.settle_replaced_supervisor_approval()
             | self.deliver_supervisor_messages()
+            | self.agents_panel.take_refresh_due(Instant::now())
         {
             self.redraw_scheduler
                 .request(redraw_scheduler::RedrawReason::WindowEvent);
@@ -3251,6 +3258,7 @@ impl App {
             self.git_watcher.next_poll_deadline(),
         ];
         deadlines.extend(self.next_agent_submit_deadline());
+        deadlines.extend(self.agents_panel.refresh_deadline());
         deadlines.extend(self.next_agent_change_deadline(now));
         if self.unicode_picker.search_pending() {
             deadlines.push(now + Duration::from_millis(16));
@@ -3670,6 +3678,7 @@ impl App {
         }
 
         self.commands_panel.close();
+        self.agents_panel.close();
         self.session_panel.close();
         self.close_workspace_menu();
         self.settings_panel.toggle();
@@ -3811,6 +3820,7 @@ impl App {
                         } else {
                             self.settings_panel.close();
                             self.commands_panel.close();
+                            self.agents_panel.close();
                             self.session_panel.open_workspaces();
                         }
                         if let Some(window) = &self.window {

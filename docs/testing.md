@@ -404,6 +404,14 @@ both agents (each `-c` override parsed as TOML), process ancestry, and event
 wording. The MCP server's input loop is tested for invalid UTF-8, the exact
 size limit, batches, and stray responses.
 
+The **Show Agents** panel's geometry, clicks (including outside-click
+dismissal), whole-row scrolling, and keyboard focus are unit-tested on its
+layout without a renderer; focus is proven to stay on its agent as urgency
+reorders the rows, and an off-screen row is revealed before it is acted on.
+Headless application tests prove that it closes other side panels, keeps
+every key from the terminals behind it, orders agents by urgency, and shows
+the chosen terminal from the keyboard and from its modal accessibility tree.
+
 Agent input delivery is tested against a real PTY running a program Termeric
 recognizes as Codex. It proves that Enter waits for typed text, that two
 quick messages are submitted one after the other, that automated messages wait

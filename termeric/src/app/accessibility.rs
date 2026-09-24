@@ -96,6 +96,13 @@ const UNICODE_INPUT: NodeId = NodeId(151);
 const UNICODE_LIST: NodeId = NodeId(152);
 const UNICODE_EMPTY: NodeId = NodeId(153);
 const WORKSPACE_MENU: NodeId = NodeId(160);
+const AGENTS_DIALOG: NodeId = NodeId(170);
+const AGENTS_CLOSE: NodeId = NodeId(171);
+const AGENTS_LIST: NodeId = NodeId(172);
+const AGENTS_EMPTY: NodeId = NodeId(173);
+const AGENTS_SUPERVISOR: NodeId = NodeId(174);
+const AGENTS_SUPERVISOR_TOGGLE: NodeId = NodeId(175);
+const AGENTS_ACTIVITY: NodeId = NodeId(176);
 const SHORTCUT_CLEAR_ACTION: i32 = 1;
 const TAB_BASE: u64 = 1_000;
 const PANE_BASE: u64 = 10_000;
@@ -114,6 +121,8 @@ const COMMANDS_ENTRY_BASE: u64 = 1 << 58;
 const SETTINGS_ENTRY_BASE: u64 = 1 << 59;
 const PALETTE_ENTRY_BASE: u64 = 1 << 60;
 const WORKSPACE_MENU_ENTRY_BASE: u64 = 1 << 47;
+const AGENTS_ENTRY_BASE: u64 = 1 << 46;
+const AGENTS_ACTIVITY_BASE: u64 = 1 << 45;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum SettingsSemanticTarget {
@@ -217,6 +226,11 @@ pub(super) struct AccessibilityState {
     commands_nodes: HashMap<CommandsSemanticTarget, NodeId>,
     commands_targets: HashMap<NodeId, CommandsSemanticTarget>,
     next_commands_node: u64,
+    /// Agent rows, by the terminal they show, so a row keeps its node as
+    /// urgency reorders the list.
+    agents_nodes: HashMap<crate::tabs::TerminalIdentity, NodeId>,
+    agents_targets: HashMap<NodeId, crate::tabs::TerminalIdentity>,
+    next_agents_node: u64,
     session_nodes: HashMap<SessionSemanticTarget, NodeId>,
     session_targets: HashMap<NodeId, SessionSemanticTarget>,
     next_session_node: u64,
@@ -263,6 +277,9 @@ impl Default for AccessibilityState {
             commands_nodes: HashMap::new(),
             commands_targets: HashMap::new(),
             next_commands_node: COMMANDS_ENTRY_BASE,
+            agents_nodes: HashMap::new(),
+            agents_targets: HashMap::new(),
+            next_agents_node: AGENTS_ENTRY_BASE,
             session_nodes: HashMap::new(),
             session_targets: HashMap::new(),
             next_session_node: SESSION_ENTRY_BASE,
@@ -415,6 +432,38 @@ impl AccessibilityState {
             .retain(|target, _| targets.contains(target));
         self.commands_targets
             .retain(|_, target| targets.contains(target));
+    }
+
+    fn agents_node(&mut self, identity: crate::tabs::TerminalIdentity) -> NodeId {
+        if let Some(node) = self.agents_nodes.get(&identity) {
+            return *node;
+        }
+        let node = NodeId(self.next_agents_node);
+        self.next_agents_node = self.next_agents_node.saturating_add(1);
+        self.agents_nodes.insert(identity, node);
+        self.agents_targets.insert(node, identity);
+        node
+    }
+
+    fn retain_agents(&mut self, shown: &HashSet<crate::tabs::TerminalIdentity>) {
+        self.agents_nodes
+            .retain(|identity, _| shown.contains(identity));
+        self.agents_targets
+            .retain(|_, identity| shown.contains(identity));
+    }
+
+    fn is_agents_node(&self, node: NodeId) -> bool {
+        matches!(
+            node,
+            AGENTS_DIALOG
+                | AGENTS_CLOSE
+                | AGENTS_LIST
+                | AGENTS_EMPTY
+                | AGENTS_SUPERVISOR
+                | AGENTS_SUPERVISOR_TOGGLE
+                | AGENTS_ACTIVITY
+        ) || self.agents_targets.contains_key(&node)
+            || (AGENTS_ACTIVITY_BASE..AGENTS_ENTRY_BASE).contains(&node.0)
     }
 
     fn is_commands_node(&self, node: NodeId) -> bool {
@@ -985,6 +1034,13 @@ impl App {
         }
         if self.commands_panel.is_open() {
             self.handle_commands_accessibility_action(request);
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            return;
+        }
+        if self.agents_panel.is_open() {
+            self.handle_agents_accessibility_action(request);
             if let Some(window) = &self.window {
                 window.request_redraw();
             }
@@ -2116,6 +2172,67 @@ impl App {
         )
     }
 
+    pub(super) fn clear_agents_accessibility_focus(&mut self) {
+        if self
+            .accessibility
+            .focus_override
+            .is_some_and(|id| self.accessibility.is_agents_node(id))
+        {
+            self.accessibility.focus_override = None;
+        }
+    }
+
+    fn handle_agents_accessibility_action(&mut self, request: ActionRequest) {
+        use crate::ui::agents_panel::{AgentsControl, AgentsPanelAction};
+
+        let control = match request.target_node {
+            AGENTS_LIST => {
+                let delta = match request.action {
+                    Action::ScrollUp => -1,
+                    Action::ScrollDown => 1,
+                    _ => return,
+                };
+                let layout = self.agents_panel_layout();
+                self.agents_panel.scroll_rows(delta, layout);
+                return;
+            }
+            AGENTS_CLOSE => AgentsControl::Close,
+            AGENTS_SUPERVISOR_TOGGLE if self.supervisor_running() => AgentsControl::Supervisor,
+            node => {
+                // The panel is modal: a request for anything else, including
+                // a row whose agent has gone, stops here.
+                let Some(index) = self
+                    .accessibility
+                    .agents_targets
+                    .get(&node)
+                    .and_then(|identity| self.agents_panel.shown_index(*identity))
+                else {
+                    return;
+                };
+                AgentsControl::Agent(index)
+            }
+        };
+        match request.action {
+            Action::Click => {
+                let action = match control {
+                    AgentsControl::Close => AgentsPanelAction::Close,
+                    AgentsControl::Supervisor => AgentsPanelAction::ToggleSupervisor,
+                    AgentsControl::Agent(index) => AgentsPanelAction::Show(index),
+                };
+                self.apply_agents_panel_action(action);
+                self.accessibility.focus_override =
+                    (control == AgentsControl::Supervisor).then_some(AGENTS_SUPERVISOR_TOGGLE);
+            }
+            Action::Focus => {
+                let layout = self.agents_panel_layout();
+                if self.agents_panel.focus_control_at(control, layout) {
+                    self.accessibility.focus_override = Some(request.target_node);
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub(super) fn clear_commands_accessibility_focus(&mut self) {
         if self
             .accessibility
@@ -2703,6 +2820,10 @@ impl App {
         {
             self.accessibility.focus_override = None;
         }
+        if self.agents_panel.is_open() {
+            return self.agents_accessibility_snapshot(width, height);
+        }
+        self.clear_agents_accessibility_focus();
         if self.session_panel.is_open() {
             return self.session_accessibility_snapshot(width, height);
         }
@@ -5502,6 +5623,140 @@ impl App {
         SemanticSnapshot { nodes, focus }
     }
 
+    fn agents_accessibility_snapshot(
+        &mut self,
+        window_width: f32,
+        window_height: f32,
+    ) -> SemanticSnapshot {
+        use crate::ui::agents_panel::AgentsControl;
+
+        let info = self.agents_panel_info();
+        let layout = self.agents_panel_layout();
+        let shown: HashSet<_> = info.rows.iter().map(|row| row.identity).collect();
+        self.accessibility.retain_agents(&shown);
+
+        let mut nodes = Vec::with_capacity(info.rows.len() + 12);
+        let mut root = Node::new(Role::Window);
+        root.set_label("Termeric terminal emulator");
+        root.set_bounds(rect(0.0, 0.0, window_width, window_height));
+        root.set_children([AGENTS_DIALOG]);
+
+        let mut close = Node::new(Role::Button);
+        close.set_label("Close agents");
+        close.add_action(Action::Click);
+        close.add_action(Action::Focus);
+        close.set_bounds(agents_rect(layout.close_button));
+        nodes.push((AGENTS_CLOSE, close));
+        let mut dialog_children = vec![AGENTS_CLOSE];
+
+        let mut row_ids = Vec::with_capacity(info.rows.len());
+        for (index, row) in info.rows.iter().enumerate() {
+            let id = self.accessibility.agents_node(row.identity);
+            let mut button = Node::new(Role::Button);
+            button.set_label(format!("{}, {}", row.name, row.place));
+            button.set_description(row.summary.clone());
+            button.add_action(Action::Click);
+            button.add_action(Action::Focus);
+            if layout.visible_range().contains(&index) {
+                button.set_bounds(agents_rect(layout.row(index)));
+            }
+            nodes.push((id, button));
+            row_ids.push(id);
+        }
+        let mut list = Node::new(Role::List);
+        list.set_label(format!("{} agents", info.rows.len()));
+        if layout.scroll_offset > 0 {
+            list.add_action(Action::ScrollUp);
+        }
+        if layout.visible_count > 0 && layout.visible_range().end < info.rows.len() {
+            list.add_action(Action::ScrollDown);
+        }
+        list.set_orientation(accesskit::Orientation::Vertical);
+        list.set_bounds(rect(
+            layout.panel.x,
+            layout.list_start_y,
+            layout.panel.width,
+            layout.visible_count as f32 * layout.row_height,
+        ));
+        list.set_children(row_ids.clone());
+        nodes.push((AGENTS_LIST, list));
+        dialog_children.push(AGENTS_LIST);
+
+        if info.rows.is_empty() {
+            let mut empty = Node::new(Role::Status);
+            empty.set_label("No agents in this window");
+            empty.set_live(Live::Polite);
+            nodes.push((AGENTS_EMPTY, empty));
+            dialog_children.push(AGENTS_EMPTY);
+        }
+
+        if let (Some(supervisor), Some(section)) = (&info.supervisor, layout.supervisor) {
+            let mut toggle = Node::new(Role::Button);
+            toggle.set_label(if supervisor.held {
+                "Hand back to supervisor"
+            } else {
+                "Take over from supervisor"
+            });
+            toggle.add_action(Action::Click);
+            toggle.add_action(Action::Focus);
+            toggle.set_bounds(agents_rect(section.button));
+            nodes.push((AGENTS_SUPERVISOR_TOGGLE, toggle));
+
+            let mut entry_ids = Vec::with_capacity(section.entry_count);
+            for (index, entry) in supervisor
+                .entries
+                .iter()
+                .take(section.entry_count)
+                .enumerate()
+            {
+                let id = NodeId(AGENTS_ACTIVITY_BASE + index as u64);
+                let mut item = Node::new(Role::ListItem);
+                item.set_label(entry.clone());
+                item.set_bounds(agents_rect(section.entry(index)));
+                nodes.push((id, item));
+                entry_ids.push(id);
+            }
+            let mut activity = Node::new(Role::List);
+            activity.set_label("Supervisor activity");
+            activity.set_children(entry_ids);
+            nodes.push((AGENTS_ACTIVITY, activity));
+
+            let mut group = Node::new(Role::Group);
+            group.set_label(format!("Supervisor, {}", supervisor.mode));
+            group.set_bounds(agents_rect(section.section));
+            group.set_children([AGENTS_SUPERVISOR_TOGGLE, AGENTS_ACTIVITY]);
+            nodes.push((AGENTS_SUPERVISOR, group));
+            dialog_children.push(AGENTS_SUPERVISOR);
+        }
+
+        let mut dialog = Node::new(Role::Dialog);
+        dialog.set_label("Agents");
+        dialog.set_modal();
+        dialog.set_bounds(agents_rect(layout.panel));
+        dialog.set_children(dialog_children);
+        nodes.push((AGENTS_DIALOG, dialog));
+        nodes.push((ROOT, root));
+
+        let default_focus = match info.focus {
+            Some(AgentsControl::Agent(index)) => {
+                row_ids.get(index).copied().unwrap_or(AGENTS_CLOSE)
+            }
+            Some(AgentsControl::Supervisor) if info.supervisor.is_some() => {
+                AGENTS_SUPERVISOR_TOGGLE
+            }
+            _ => AGENTS_CLOSE,
+        };
+        let requested_focus = self.accessibility.focus_override.filter(|node| {
+            self.accessibility.is_agents_node(*node)
+                && nodes.iter().any(|(current, _)| current == node)
+        });
+        let focus = requested_focus.unwrap_or(default_focus);
+        if self.accessibility.focus_override.is_some() && requested_focus.is_none() {
+            self.accessibility.focus_override = Some(default_focus);
+        }
+        SemanticSnapshot { nodes, focus }
+    }
+
     fn session_accessibility_snapshot(
         &mut self,
         window_width: f32,
@@ -5812,6 +6067,10 @@ fn bounded_semantic_text(value: &str, max_chars: usize) -> String {
         bounded.push('…');
     }
     bounded
+}
+
+fn agents_rect(rectangle: crate::ui::agents_panel::AgentsPanelRect) -> Rect {
+    rect(rectangle.x, rectangle.y, rectangle.width, rectangle.height)
 }
 
 fn command_rect(rectangle: crate::ui::commands::panel::CommandsPanelRect) -> Rect {
@@ -8303,6 +8562,56 @@ mod tests {
         assert!(!fresh.nodes.iter().any(|(id, _)| *id == last));
         assert!(app.commands_panel.is_open());
         assert_eq!(app.config.commands.len(), 100);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn agents_panel_is_one_modal_tree_whose_rows_show_their_agent() {
+        let (mut app, codex_tab, _) = crate::app::tests::two_agent_tabs();
+        app.agents_panel.set_reduced_motion(true);
+        app.toggle_agents_panel();
+        let snapshot = app.accessibility_snapshot();
+        let node = |id| {
+            snapshot
+                .nodes
+                .iter()
+                .find(|(node_id, _)| *node_id == id)
+                .map(|(_, node)| node.clone())
+                .unwrap()
+        };
+        assert_eq!(node(ROOT).children(), &[AGENTS_DIALOG]);
+        assert!(node(AGENTS_DIALOG).is_modal());
+        assert_eq!(node(AGENTS_LIST).role(), Role::List);
+        let rows = node(AGENTS_LIST).children().to_vec();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(snapshot.focus, rows[0], "the most urgent agent has focus");
+        let first = node(rows[0]);
+        assert_eq!(first.role(), Role::Button);
+        assert!(first.label().unwrap().starts_with("Claude Code, "));
+        assert!(first.description().unwrap().contains("Approve shell"));
+        let layout = app.agents_panel_layout();
+        let bounds = node(rows[1]).bounds().unwrap();
+        assert!((bounds.y0 - f64::from(layout.row(1).y)).abs() < 0.05);
+
+        // A request for anything outside the modal panel is ignored.
+        app.handle_accessibility_action(ActionRequest {
+            action: Action::Click,
+            target_tree: TreeId::ROOT,
+            target_node: COMMANDS_NEW,
+            data: None,
+        });
+        assert!(app.agents_panel.is_open());
+        assert!(!app.commands_panel.is_open());
+
+        // Clicking a row shows its agent and closes the panel.
+        app.handle_accessibility_action(ActionRequest {
+            action: Action::Click,
+            target_tree: TreeId::ROOT,
+            target_node: rows[1],
+            data: None,
+        });
+        assert!(!app.agents_panel.is_open());
+        assert_eq!(app.tabs.as_ref().unwrap().active_tab_id(), Some(codex_tab));
     }
 
     #[test]

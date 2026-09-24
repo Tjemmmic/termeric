@@ -148,6 +148,7 @@ impl App {
     pub(super) fn pointer_panel_owns_input(&self) -> bool {
         self.settings_panel.is_active()
             || self.commands_panel.is_open()
+            || self.agents_panel.is_open()
             || self.session_panel.is_open()
             || self.workspace_menu.is_some()
     }
@@ -390,6 +391,13 @@ impl App {
                                 }
                                 return;
                             }
+                        }
+
+                        // The agents panel owns every click while open,
+                        // including the one beside it that closes it.
+                        if self.agents_panel.is_open() {
+                            self.handle_agents_panel_click(px, py);
+                            return;
                         }
 
                         // If session management panel is open, intercept all clicks
@@ -929,6 +937,10 @@ impl App {
             }
             return;
         }
+        if self.agents_panel.is_open() {
+            self.update_agents_panel_hover(position.0 as f32, position.1 as f32);
+            return;
+        }
 
         if self.session_panel.is_open() {
             let px = position.0 as f32;
@@ -1258,6 +1270,7 @@ impl App {
             || self.shortcuts_panel.is_active()
             || self.settings_panel.is_active()
             || self.commands_panel.is_open()
+            || self.agents_panel.is_open()
             || self.session_panel.is_open()
             || self.workspace_menu.is_some()
         {
