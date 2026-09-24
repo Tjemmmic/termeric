@@ -7,6 +7,11 @@ pub struct EnvironmentPolicy {
     pub unset: Vec<String>,
 }
 
+/// Names this terminal's processes as `PID.HEX`: the process that owns the
+/// PTY, then a random identifier unique to it. Programs such as agent hooks
+/// report back to that process under this identity.
+pub const TERMINAL_ID_VARIABLE: &str = "TERMERIC_TERMINAL_ID";
+
 pub fn terminal_identity_variable(name: &str) -> bool {
     matches!(
         name,
@@ -16,7 +21,27 @@ pub fn terminal_identity_variable(name: &str) -> bool {
             | "TERMINFO_DIRS"
             | "TERM_PROGRAM"
             | "TERM_PROGRAM_VERSION"
+            | TERMINAL_ID_VARIABLE
     )
+}
+
+/// A fresh identity for one terminal's processes, or `None` when the system
+/// cannot supply randomness.
+#[cfg(unix)]
+pub(super) fn new_terminal_id() -> Option<String> {
+    use std::io::Read;
+    let mut bytes = [0_u8; 16];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut source| source.read_exact(&mut bytes))
+        .map_err(|error| log::warn!("No terminal identity: {error}"))
+        .ok()?;
+    let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    Some(format!("{}.{hex}", std::process::id()))
+}
+
+#[cfg(not(unix))]
+pub(super) fn new_terminal_id() -> Option<String> {
+    None
 }
 
 impl EnvironmentPolicy {

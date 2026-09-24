@@ -9,13 +9,18 @@
 
 pub mod config;
 pub mod detect;
+pub mod hook;
 pub mod session;
+pub mod setup;
+pub mod status;
+pub mod transcript;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 pub use config::AgentConfig;
 pub use session::AgentSession;
+pub use status::{AgentActivity, AgentBadge, AgentReport, AgentStatus};
 
 /// A named launch variant: extra arguments and environment for one agent.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

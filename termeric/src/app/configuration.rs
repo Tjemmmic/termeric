@@ -523,7 +523,7 @@ impl App {
     }
 
     /// Hand Settings the installed and enabled state of each built-in agent.
-    fn sync_agent_settings_rows(&mut self) {
+    pub(super) fn sync_agent_settings_rows(&mut self) {
         const BUILTIN: [(&str, &str); 4] = [
             ("claude-code", "Claude Code"),
             ("codex", "Codex"),
@@ -554,7 +554,8 @@ impl App {
         } else {
             custom.join(", ")
         };
-        self.settings_panel.set_agents(rows, summary);
+        let status = self.agent_hook_summary().label().to_string();
+        self.settings_panel.set_agents(rows, summary, status);
     }
 
     pub(super) fn sync_plugins_from_config(&mut self) {
@@ -992,6 +993,16 @@ impl App {
                 if *entry == crate::agents::AgentConfig::default() {
                     self.config.agents.remove(&agent_id);
                 }
+            }
+            SettingsAction::SetAgentNotifications(notify) => {
+                self.config.agent_status.notify = notify;
+            }
+            SettingsAction::SetUpAgentStatus => {
+                // Up to date: offer removal instead of a no-op.
+                let install =
+                    self.agent_hook_summary() != super::agent_hooks::HookSetupSummary::SetUp;
+                self.open_agent_hook_setup(install);
+                return;
             }
             SettingsAction::ManageRuntimePlugins => {
                 self.open_runtime_plugin_manager();

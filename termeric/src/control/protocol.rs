@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::collections::HashSet;
 use std::io::{Read, Write};
 
-pub const PROTOCOL_VERSION: u32 = 18;
+pub const PROTOCOL_VERSION: u32 = 19;
 pub const JSON_SCHEMA_VERSION: u32 = 3;
 pub const MAX_FRAME_BYTES: usize = 256 * 1024;
 pub const MAX_WINDOWS: usize = 32;
@@ -30,6 +30,11 @@ pub const MAX_CONTROL_LAUNCH_ENVIRONMENT_ENTRIES: usize = 64;
 pub const MAX_CONTROL_LAUNCH_ENVIRONMENT_NAME_BYTES: usize = 128;
 pub const MAX_CONTROL_LAUNCH_ENVIRONMENT_VALUE_BYTES: usize = 8 * 1024;
 pub const MAX_CONTROL_LAUNCH_ENVIRONMENT_BYTES: usize = 64 * 1024;
+pub const MAX_AGENT_TERMINAL_ID_BYTES: usize = 64;
+pub const MAX_AGENT_ID_BYTES: usize = 64;
+pub const MAX_AGENT_EVENT_DETAIL_BYTES: usize = 512;
+pub const MAX_AGENT_LAST_MESSAGE_BYTES: usize = 64 * 1024;
+pub const MAX_AGENT_TRANSCRIPT_PATH_BYTES: usize = 4 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -164,6 +169,34 @@ pub enum Request {
         divider_id: u64,
         ratio_millis: u16,
     },
+    /// A coding agent's hook reporting what the agent is doing. The terminal
+    /// is named by the identity its processes inherited, not by focus.
+    AgentEvent {
+        terminal_id: String,
+        agent_id: String,
+        event: AgentEventKind,
+        detail: Option<String>,
+        last_message: Option<String>,
+        transcript_path: Option<String>,
+    },
+}
+
+/// What an agent reported through its hooks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentEventKind {
+    /// A conversation started or resumed.
+    SessionStarted,
+    /// The agent received a prompt and is working on it.
+    Working,
+    /// The agent is waiting for the person, for example to approve a tool.
+    NeedsInput,
+    /// The agent finished its turn.
+    Finished,
+    /// The agent's turn ended in an error.
+    Failed,
+    /// The conversation ended.
+    SessionEnded,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -367,6 +400,9 @@ pub enum Response {
         ratio_millis: u16,
         changed: bool,
     },
+    AgentEventRecorded {
+        process_id: u32,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -537,6 +573,10 @@ pub enum ServerFrame {
         ratio_millis: u16,
         changed: bool,
     },
+    AgentEventRecorded {
+        version: u32,
+        process_id: u32,
+    },
     Error {
         version: u32,
         message: String,
@@ -565,6 +605,20 @@ impl Request {
     pub fn validate(&self) -> Result<(), String> {
         match self {
             Self::Inventory => Ok(()),
+            Self::AgentEvent {
+                terminal_id,
+                agent_id,
+                detail,
+                last_message,
+                transcript_path,
+                ..
+            } => validate_agent_event(
+                terminal_id,
+                agent_id,
+                detail.as_deref(),
+                last_message.as_deref(),
+                transcript_path.as_deref(),
+            ),
             Self::LaunchStatus { launch_request_id } => {
                 if !valid_request_id(launch_request_id) {
                     return Err("Launch request ID must be exactly 32 lowercase hex digits".into());
@@ -850,7 +904,12 @@ impl Request {
 
     pub fn request_id(&self) -> Option<&str> {
         match self {
-            Self::Inventory | Self::ReadText { .. } | Self::LaunchStatus { .. } => None,
+            // Agent events restate the agent's current state; repeating one
+            // is harmless, so they carry no replay identity.
+            Self::Inventory
+            | Self::ReadText { .. }
+            | Self::LaunchStatus { .. }
+            | Self::AgentEvent { .. } => None,
             Self::CreateWindow { request_id, .. }
             | Self::LaunchWindow { request_id, .. }
             | Self::CreateTab { request_id, .. }
@@ -870,6 +929,52 @@ impl Request {
             | Self::SendText { request_id, .. } => Some(request_id),
         }
     }
+}
+
+fn validate_agent_event(
+    terminal_id: &str,
+    agent_id: &str,
+    detail: Option<&str>,
+    last_message: Option<&str>,
+    transcript_path: Option<&str>,
+) -> Result<(), String> {
+    let (process, random) = terminal_id
+        .split_once('.')
+        .ok_or("Agent terminal identity must be PID.HEX")?;
+    if terminal_id.len() > MAX_AGENT_TERMINAL_ID_BYTES
+        || process.is_empty()
+        || !process.bytes().all(|byte| byte.is_ascii_digit())
+        || random.is_empty()
+        || !random.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err("Agent terminal identity must be PID.HEX".into());
+    }
+    if agent_id.is_empty()
+        || agent_id.len() > MAX_AGENT_ID_BYTES
+        || !agent_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    {
+        return Err("Agent ID must be 1-64 letters, digits, '-' or '_'".into());
+    }
+    if detail.is_some_and(|detail| detail.len() > MAX_AGENT_EVENT_DETAIL_BYTES) {
+        return Err(format!(
+            "Agent event detail is limited to {MAX_AGENT_EVENT_DETAIL_BYTES} bytes"
+        ));
+    }
+    if last_message.is_some_and(|message| message.len() > MAX_AGENT_LAST_MESSAGE_BYTES) {
+        return Err(format!(
+            "Agent last message is limited to {MAX_AGENT_LAST_MESSAGE_BYTES} bytes"
+        ));
+    }
+    if transcript_path.is_some_and(|path| {
+        path.len() > MAX_AGENT_TRANSCRIPT_PATH_BYTES
+            || !path.starts_with('/')
+            || path.contains('\0')
+    }) {
+        return Err("Agent transcript path must be absolute and bounded".into());
+    }
+    Ok(())
 }
 
 fn validate_control_launch(
@@ -951,16 +1056,8 @@ pub(super) fn validate_control_launch_environment(
             .next()
             .is_some_and(|byte| byte == b'_' || byte.is_ascii_alphabetic())
             && bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric());
-        let reserved = matches!(
-            entry.name.as_str(),
-            "PWD"
-                | "TERM"
-                | "COLORTERM"
-                | "TERMINFO"
-                | "TERMINFO_DIRS"
-                | "TERM_PROGRAM"
-                | "TERM_PROGRAM_VERSION"
-        );
+        let reserved =
+            entry.name == "PWD" || termeric_core::pty::terminal_identity_variable(&entry.name);
         if !valid_name || entry.name.len() > MAX_CONTROL_LAUNCH_ENVIRONMENT_NAME_BYTES || reserved {
             return Err(
                 "GUI control launch environment contains an invalid or reserved variable name"
@@ -1291,6 +1388,7 @@ mod tests {
             "TERMINFO_DIRS",
             "TERM_PROGRAM",
             "TERM_PROGRAM_VERSION",
+            "TERMERIC_TERMINAL_ID",
             "PWD",
             "SHELL",
         ] {
@@ -1823,6 +1921,7 @@ mod tests {
             "TERMINFO_DIRS",
             "TERM_PROGRAM",
             "TERM_PROGRAM_VERSION",
+            "TERMERIC_TERMINAL_ID",
             "",
             "9INVALID",
             "INVALID-NAME",

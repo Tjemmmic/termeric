@@ -15,8 +15,10 @@ and script exit-code propagation using that same protocol.
 [#102](https://github.com/Tjemmmic/termeric/issues/102) adds explicit child-local
 environment clearing and variable removal in GUI protocol v17.
 [#112](https://github.com/Tjemmmic/termeric/issues/112) adds non-selecting
-command-tab launch in current protocol v18. Client and server must be rebuilt
-together; mismatched protocol versions fail rather than dropping the mode.
+command-tab launch in protocol v18. Current protocol v19 adds the
+[agent status](agents.md#agent-status) report sent by agent hooks. Client and
+server must be rebuilt together; mismatched protocol versions fail rather than
+dropping the mode.
 
 ## Command line
 
@@ -170,7 +172,8 @@ of CLI ordering. Names are canonicalized for replay, but changing the policy
 with an existing request ID is a different action and is refused.
 
 Cleared means a fresh base, **not zero variables or a sandbox**. Termeric still
-sets `TERM`, `COLORTERM`, `TERM_PROGRAM`, `TERM_PROGRAM_VERSION`, any selected
+sets `TERM`, `COLORTERM`, `TERM_PROGRAM`, `TERM_PROGRAM_VERSION`,
+`TERMERIC_TERMINAL_ID`, any selected
 terminfo configuration (which can include the GUI's search path), and `PWD`
 when cwd is supplied. Unix portable-pty 0.8 also supplies `SHELL`; explicit
 removal of `SHELL` is therefore refused, while an explicit `--env SHELL=VALUE`
@@ -528,7 +531,7 @@ connected peer's operating-system user in addition to token authentication.
 Token files are opened without following symlinks and validated by owner, type,
 permissions, and exact size before their fixed-size contents are read.
 
-Protocol version 18 accepts exactly `inventory`, `launch_status`, ID-targeted `read_text`,
+Protocol version 19 accepts exactly `inventory`, `launch_status`, `agent_event`, ID-targeted `read_text`,
 `send_text`, `create_window`, `launch_window`, `create_tab`, `launch_tab`,
 `split_pane`, `focus_window`, `select_tab`, `focus_pane`,
 `close_window`, `close_tab`, `close_pane`, `move_tab`, `move_pane`,
@@ -549,12 +552,21 @@ not written to process logs. A failed private window launch may return its
 detailed startup diagnostic to the authenticated requester while logging only a
 generic initialization failure.
 
+`agent_event` is sent by `termeric agent-event`, the command agent hooks run.
+It names a terminal by the random `TERMERIC_TERMINAL_ID` its processes
+inherited, and carries an event kind, a detail of at most 512 bytes, an answer
+of at most 64 KiB, and an absolute transcript path. It changes only that
+terminal's displayed agent state and notifications. It cannot send input,
+change focus, or read anything. An identity the process does not own is
+refused. Any same-user process could send one, which at most shows a
+misleading status.
+
 Environment changes are intentionally narrow. One launch accepts at most 64
 unique ASCII names matching `[A-Za-z_][A-Za-z0-9_]*`, with names capped at 128
 bytes, values at 8 KiB each, and the combined names and values at 64 KiB.
 Values must be NUL-free UTF-8. `PWD` is controlled only by `--cwd`; `TERM`,
-`COLORTERM`, `TERMINFO`, `TERMINFO_DIRS`, `TERM_PROGRAM`, and
-`TERM_PROGRAM_VERSION` remain owned by Termeric and cannot be overridden. The
+`COLORTERM`, `TERMINFO`, `TERMINFO_DIRS`, `TERM_PROGRAM`,
+`TERM_PROGRAM_VERSION`, and `TERMERIC_TERMINAL_ID` remain owned by Termeric and cannot be overridden. The
 same names cannot be explicitly removed; `SHELL` removal is also refused. Literal
 `--env` values are **not secret-safe**: they may be retained by shell history
 or visible through process-argument inspection before Termeric receives them.

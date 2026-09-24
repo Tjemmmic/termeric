@@ -2015,6 +2015,35 @@ impl Application {
         {
             return self.read_control_text(window_id, tab_id, pane_id, history_lines, max_bytes);
         }
+        if let Request::AgentEvent {
+            terminal_id,
+            agent_id,
+            event,
+            detail,
+            last_message,
+            transcript_path,
+        } = request
+        {
+            let report = crate::agents::AgentReport::from_wire(
+                agent_id,
+                event,
+                detail,
+                last_message,
+                transcript_path,
+            );
+            let owned = self
+                .windows
+                .values_mut()
+                .any(|window| window.record_agent_report(&terminal_id, report.clone()));
+            self.remove_closed_windows(event_loop);
+            return if owned {
+                Ok(Response::AgentEventRecorded {
+                    process_id: std::process::id(),
+                })
+            } else {
+                Err("No terminal in this process has that identity".into())
+            };
+        }
 
         let result = match &request {
             Request::CreateWindow {
@@ -2170,8 +2199,11 @@ impl Application {
             } => self.send_control_text(
                 request_id, *window_id, *tab_id, *pane_id, text, *paste, *enter,
             ),
-            Request::Inventory | Request::ReadText { .. } | Request::LaunchStatus { .. } => {
-                unreachable!("read-only requests returned before mutation dispatch")
+            Request::Inventory
+            | Request::ReadText { .. }
+            | Request::LaunchStatus { .. }
+            | Request::AgentEvent { .. } => {
+                unreachable!("read-only and agent requests returned before mutation dispatch")
             }
         }
         .map_err(|error| bounded_control_error(&error));

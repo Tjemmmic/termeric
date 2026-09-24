@@ -1929,6 +1929,29 @@ impl ApplicationHandler<AppEvent> for App {
                     crate::control::protocol::Request::LaunchStatus { .. } => Err(
                         "Launch status requires the process-level application controller".into(),
                     ),
+                    crate::control::protocol::Request::AgentEvent {
+                        terminal_id,
+                        agent_id,
+                        event,
+                        detail,
+                        last_message,
+                        transcript_path,
+                    } => {
+                        let report = crate::agents::AgentReport::from_wire(
+                            agent_id,
+                            event,
+                            detail,
+                            last_message,
+                            transcript_path,
+                        );
+                        if self.record_agent_report(&terminal_id, report) {
+                            Ok(crate::control::protocol::Response::AgentEventRecorded {
+                                process_id: std::process::id(),
+                            })
+                        } else {
+                            Err("No terminal in this process has that identity".into())
+                        }
+                    }
                     crate::control::protocol::Request::CreateWindow { .. }
                     | crate::control::protocol::Request::LaunchWindow { .. }
                     | crate::control::protocol::Request::CreateTab { .. }

@@ -2311,6 +2311,20 @@ impl TabManager {
         changed
     }
 
+    /// The open terminal whose processes inherited `terminal_id`.
+    pub(crate) fn terminal_with_id(&self, terminal_id: &str) -> Option<TerminalIdentity> {
+        self.tabs
+            .iter()
+            .filter(|tab| !tab.closed && !tab.is_closing())
+            .find_map(|tab| {
+                tab.pane_with_terminal_id(terminal_id)
+                    .map(|pane_id| TerminalIdentity {
+                        tab_id: tab.id,
+                        pane_id,
+                    })
+            })
+    }
+
     /// Find the index of the first tab owned by a given plugin
     #[cfg(test)]
     pub fn find_plugin_tab_index(&self, plugin_id: &str) -> Option<usize> {
@@ -2366,6 +2380,7 @@ impl TabManager {
                 },
                 tab_type: tab.tab_type.clone(),
                 unreviewed_diff_count: tab.unreviewed_diff_count(),
+                agent_badge: tab.agent_badge(),
             })
             .collect()
     }
@@ -2526,6 +2541,8 @@ pub struct TabInfo {
     pub tab_type: TabType,
     /// Number of unreviewed diffs detected in this tab
     pub unreviewed_diff_count: usize,
+    /// The most urgent state reported by an agent in this tab.
+    pub agent_badge: Option<crate::agents::AgentBadge>,
 }
 
 #[cfg(test)]

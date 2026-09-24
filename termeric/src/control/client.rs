@@ -1567,12 +1567,41 @@ struct DividerResizeOutput {
     changed: bool,
 }
 
+/// How long an agent hook waits for the GUI. A hook runs inside the agent's
+/// turn, so a busy or stuck GUI must not hold the agent up for long.
+const AGENT_EVENT_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Deliver one agent hook report to the GUI process that owns its terminal.
+pub(super) fn report_agent_event(process_id: u32, report: Request) -> anyhow::Result<()> {
+    report.validate().map_err(anyhow::Error::msg)?;
+    let endpoint = ControlPaths::from_directory(
+        crate::domain::paths::discover_runtime_directory(),
+        process_id,
+    )?;
+    match request_within(&endpoint, report, AGENT_EVENT_TIMEOUT)? {
+        ServerFrame::AgentEventRecorded {
+            version,
+            process_id: returned,
+        } if version == protocol::PROTOCOL_VERSION && returned == process_id => Ok(()),
+        ServerFrame::Error { message, .. } => anyhow::bail!(message),
+        _ => anyhow::bail!("Invalid agent-event response"),
+    }
+}
+
 fn request(endpoint: &ControlPaths, request: Request) -> anyhow::Result<ServerFrame> {
+    request_within(endpoint, request, IO_TIMEOUT)
+}
+
+fn request_within(
+    endpoint: &ControlPaths,
+    request: Request,
+    timeout: Duration,
+) -> anyhow::Result<ServerFrame> {
     let token = endpoint.read_token()?;
     let mut stream = UnixStream::connect(&endpoint.socket)
         .with_context(|| format!("connect to {}", endpoint.socket.display()))?;
-    stream.set_read_timeout(Some(IO_TIMEOUT))?;
-    stream.set_write_timeout(Some(IO_TIMEOUT))?;
+    stream.set_read_timeout(Some(timeout))?;
+    stream.set_write_timeout(Some(timeout))?;
     validate_peer(&stream)?;
     protocol::write_frame(
         &mut stream,

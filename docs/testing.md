@@ -393,6 +393,18 @@ must return the compiled wire version without creating a daemon socket or token.
 Exact-version mismatch tests fail before requests or terminal input, while the
 fake-SSH integration remains credential- and network-free.
 
+Agent status coverage is provider-free. Unit tests cover the status state
+machine, hook payload parsing for Claude Code and Codex shapes, settings-file
+rewriting (verbatim order and text, indentation, symlinks, permissions,
+backups, and edits made while the dialog was open), and tolerant log reading.
+`termeric/tests/agent_event_hook.rs` runs the real `termeric agent-event`
+executable against a private fake GUI endpoint. It proves exact delivery, and
+that the command is silent and succeeds outside Termeric, with unknown
+arguments, and when the GUI is missing, refusing, or stuck. A headless test
+drives a job-control Bash with a foreground program to prove that a reporting
+agent stays recognized, raises one captured notification, is marked seen, and
+is forgotten when the shell takes the foreground back. No real agent runs.
+
 Automated-input confirmation coverage is provider-free. Pure state tests prove
 immediate cancellation, one-shot request identity, stale-action rejection,
 exact multi-destination ownership, and shared pointer/accessibility geometry.

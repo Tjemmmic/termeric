@@ -200,6 +200,15 @@ fn serve_client(
         }
     };
     let frame = match response {
+        Response::AgentEventRecorded { process_id } => {
+            if process_id == 0 || process_id > i32::MAX as u32 {
+                anyhow::bail!("GUI event loop returned an invalid agent-event response");
+            }
+            ServerFrame::AgentEventRecorded {
+                version: protocol::PROTOCOL_VERSION,
+                process_id,
+            }
+        }
         Response::LaunchStatus {
             process_id,
             launch_request_id,
@@ -780,6 +789,65 @@ mod tests {
         );
         worker.join().unwrap();
     }
+    #[test]
+    fn agent_events_round_trip_and_invalid_identities_are_refused() {
+        use super::*;
+        let event = Request::AgentEvent {
+            terminal_id: "4242.0123456789abcdef".into(),
+            agent_id: "codex".into(),
+            event: protocol::AgentEventKind::NeedsInput,
+            detail: Some("Approve shell: cargo test".into()),
+            last_message: None,
+            transcript_path: Some("/home/me/.codex/sessions/rollout.jsonl".into()),
+        };
+        let expected = event.clone();
+        let (mut client, server) = UnixStream::pair().unwrap();
+        let worker = thread::spawn(move || {
+            serve_client(server, "fixture-token", |request| {
+                assert!(request.request_id().is_none(), "no replay identity");
+                assert_eq!(request, expected);
+                Ok(Response::AgentEventRecorded { process_id: 4242 })
+            })
+            .unwrap();
+        });
+        protocol::write_frame(
+            &mut client,
+            &ClientFrame {
+                version: protocol::PROTOCOL_VERSION,
+                token: "fixture-token".into(),
+                request: event,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            protocol::read_frame::<ServerFrame>(&mut client).unwrap(),
+            ServerFrame::AgentEventRecorded {
+                version: protocol::PROTOCOL_VERSION,
+                process_id: 4242,
+            }
+        );
+        worker.join().unwrap();
+
+        let invalid = |terminal_id: &str, agent_id: &str, path: Option<&str>| Request::AgentEvent {
+            terminal_id: terminal_id.into(),
+            agent_id: agent_id.into(),
+            event: protocol::AgentEventKind::Finished,
+            detail: None,
+            last_message: None,
+            transcript_path: path.map(Into::into),
+        };
+        for request in [
+            invalid("4242", "codex", None),
+            invalid("pid.abc", "codex", None),
+            invalid("4242.xyz", "codex", None),
+            invalid("4242.ab", "co dex", None),
+            invalid("4242.ab", "", None),
+            invalid("4242.ab", "codex", Some("relative/path")),
+        ] {
+            assert!(request.validate().is_err(), "{request:?}");
+        }
+    }
+
     use super::*;
 
     #[test]

@@ -8249,6 +8249,273 @@ fn typed_agent_input_is_submitted_separately_and_only_to_the_same_agent() {
 
 #[cfg(unix)]
 #[test]
+fn hook_reports_track_an_agent_started_from_a_shell_until_it_exits() {
+    use crate::agents::{AgentActivity, AgentReport};
+    use crate::control::protocol::AgentEventKind;
+    let Some(bash) = ["/bin/bash", "/usr/bin/bash"]
+        .into_iter()
+        .find(|path| std::path::Path::new(path).exists())
+    else {
+        return;
+    };
+    let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+    let tab_id = tabs
+        .new_tab_with_command(
+            bash,
+            &["--norc".into(), "--noprofile".into(), "-i".into()],
+            None,
+            None,
+            None,
+            HashMap::new(),
+        )
+        .unwrap();
+    let mut app = App::new_headless(Config::default()).unwrap();
+    #[cfg(target_os = "linux")]
+    let shown = app.notifications.capture_tracked_commands_for_test();
+    app.tabs = Some(tabs);
+    let terminal_id = app
+        .tabs
+        .as_ref()
+        .unwrap()
+        .active_tab()
+        .unwrap()
+        .single_pty()
+        .unwrap()
+        .terminal_id()
+        .unwrap()
+        .to_owned();
+
+    // An interactive shell gives the program its own foreground job, as it
+    // does for an agent typed at the prompt. `sleep` is no known agent.
+    app.tabs
+        .as_mut()
+        .unwrap()
+        .active_tab_mut()
+        .unwrap()
+        .write(b"sleep 30\r")
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
+        let pty = tab.single_pty().unwrap();
+        let group = pty.foreground_process_group();
+        if group.is_some() && group != pty.child_id().map(|pid| pid as i32) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "sleep never took the foreground");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let report = |event| AgentReport {
+        agent_id: "codex".into(),
+        event,
+        detail: None,
+        last_message: None,
+        transcript_path: None,
+    };
+    assert!(!app.record_agent_report("1.00", report(AgentEventKind::Working)));
+    assert!(app.record_agent_report(&terminal_id, report(AgentEventKind::Working)));
+    let session = |app: &App| {
+        app.tabs
+            .as_ref()
+            .unwrap()
+            .tab_by_id(tab_id)
+            .unwrap()
+            .focused_session()
+            .map(|session| (session.agent.clone(), session.agent_status.clone()))
+            .unwrap()
+    };
+    let (agent, status) = session(&app);
+    assert_eq!(
+        agent.unwrap().agent_id,
+        "codex",
+        "recognized from its report"
+    );
+    assert_eq!(status.unwrap().activity, AgentActivity::Working);
+    // The scan keeps a reporting agent even though its process is unfamiliar.
+    app.tabs.as_mut().unwrap().refresh_agents(&app.agents);
+    assert!(session(&app).0.is_some());
+
+    // Looking at the terminal answers the request; away from it, it waits.
+    app.window_focused = false;
+    assert!(app.record_agent_report(
+        &terminal_id,
+        AgentReport {
+            detail: Some("Approve shell: cargo test".into()),
+            ..report(AgentEventKind::NeedsInput)
+        }
+    ));
+    let status = session(&app).1.unwrap();
+    assert!(status.needs_attention());
+    #[cfg(target_os = "linux")]
+    {
+        let identity = crate::tabs::TerminalIdentity {
+            tab_id,
+            pane_id: app
+                .tabs
+                .as_ref()
+                .unwrap()
+                .tab_by_id(tab_id)
+                .unwrap()
+                .focused_terminal_identity()
+                .pane_id,
+        };
+        assert_eq!(
+            shown(),
+            vec![(
+                "show",
+                identity,
+                format!("agent-{tab_id}-{}", identity.pane_id.0)
+            )]
+        );
+        // A repeated request is not news.
+        app.record_agent_report(&terminal_id, report(AgentEventKind::NeedsInput));
+        assert!(shown().is_empty());
+    }
+    app.window_focused = true;
+    assert!(app.acknowledge_focused_agent());
+    assert!(!session(&app).1.unwrap().needs_attention());
+
+    // When the program exits, the shell is back in front and the agent is
+    // gone even though it never reported ending.
+    app.tabs
+        .as_mut()
+        .unwrap()
+        .active_tab_mut()
+        .unwrap()
+        .write(b"\x03")
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while session(&app).0.is_some() {
+        assert!(
+            Instant::now() < deadline,
+            "the exited agent stayed recognized"
+        );
+        app.tabs.as_mut().unwrap().refresh_agents(&app.agents);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(session(&app).1, None);
+}
+
+#[cfg(unix)]
+#[test]
+fn agent_list_puts_waiting_agents_first_and_answers_come_from_reports_or_logs() {
+    use crate::agents::{AgentReport, AgentStatus};
+    use crate::control::protocol::AgentEventKind;
+    let temp = tempfile::tempdir().unwrap();
+    let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+    let mut open = |title: &str, agent: &str, event: Option<AgentEventKind>| {
+        let tab_id = tabs
+            .new_tab_with_command(
+                "/bin/sh",
+                &["-c".into(), "sleep 30".into()],
+                None,
+                Some(title),
+                None,
+                HashMap::new(),
+            )
+            .unwrap();
+        let tab = tabs.active_tab_mut().unwrap();
+        let pane_id = tab.focused_terminal_identity().pane_id;
+        let session = tab.pane_session_mut(pane_id).unwrap();
+        session.agent = Some(crate::agents::AgentSession {
+            agent_id: agent.into(),
+            launched: false,
+            profile: None,
+        });
+        session.agent_status = event.and_then(|event| {
+            AgentStatus::after(
+                None,
+                AgentReport {
+                    agent_id: agent.into(),
+                    event,
+                    detail: (event == AgentEventKind::NeedsInput)
+                        .then(|| "Approve shell: rm build".into()),
+                    last_message: None,
+                    transcript_path: None,
+                },
+                Instant::now(),
+            )
+        });
+        crate::tabs::TerminalIdentity { tab_id, pane_id }
+    };
+    let working = open("one", "claude-code", Some(AgentEventKind::Working));
+    let unreported = open("two", "gemini", None);
+    let waiting = open("three", "codex", Some(AgentEventKind::NeedsInput));
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.tabs = Some(tabs);
+
+    let order: Vec<_> = app
+        .agent_terminals()
+        .iter()
+        .map(|terminal| terminal.identity)
+        .collect();
+    assert_eq!(order, [waiting, working, unreported]);
+
+    app.open_agent_list();
+    assert_eq!(
+        app.command_palette.active_pick(),
+        Some(crate::ui::command_palette::palette::PickKind::AgentTerminal)
+    );
+    app.command_palette.close();
+    app.focus_agent_terminal(&format!("{}:{}", working.tab_id, working.pane_id.0));
+    assert_eq!(
+        app.tabs.as_ref().unwrap().active_tab_id(),
+        Some(working.tab_id)
+    );
+    app.focus_agent_terminal("99:0");
+    assert_eq!(latest_toast(&app), Some("That agent's terminal has closed"));
+
+    // Without an answer, copying is not offered.
+    assert!(
+        app.unavailable_agent_commands()
+            .contains(&"agent.copy-last-response".to_string())
+    );
+    assert_eq!(
+        app.focused_agent_answer().unwrap_err(),
+        "Claude Code has not finished an answer yet"
+    );
+
+    // A log from an agent whose hook did not carry the answer.
+    let log = temp.path().join("session.jsonl");
+    std::fs::write(
+        &log,
+        r#"{"type":"assistant","message":{"content":[{"type":"text","text":"From the log"}]}}"#,
+    )
+    .unwrap();
+    let set_status = |app: &mut App, message: Option<&str>| {
+        let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
+        let status = tab
+            .pane_session_mut(working.pane_id)
+            .unwrap()
+            .agent_status
+            .as_mut()
+            .unwrap();
+        status.transcript_path = Some(log.clone());
+        status.last_message = message.map(Into::into);
+    };
+    set_status(&mut app, None);
+    assert!(
+        !app.unavailable_agent_commands()
+            .contains(&"agent.copy-last-response".to_string())
+    );
+    assert_eq!(
+        app.focused_agent_answer().unwrap(),
+        ("Claude Code".to_string(), "From the log".to_string())
+    );
+    set_status(&mut app, Some("From the hook"));
+    assert_eq!(app.focused_agent_answer().unwrap().1, "From the hook");
+
+    // An agent without status hooks explains what is missing.
+    app.focus_agent_terminal(&format!("{}:{}", unreported.tab_id, unreported.pane_id.0));
+    assert_eq!(
+        app.focused_agent_answer().unwrap_err(),
+        "Set up agent status to copy an agent's answers"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn a_read_only_agent_refuses_context_with_its_own_reason() {
     let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
     let tab_id = tabs
@@ -11331,7 +11598,16 @@ done
             let focused = app.focused_agent().expect("the started agent is focused");
             assert!(focused.session.launched);
             assert_eq!(focused.session.profile.as_deref(), Some("acceptance"));
-            assert!(app.unavailable_agent_commands().is_empty());
+            let hidden = app.unavailable_agent_commands();
+            for id in super::agents::FOCUSED_AGENT_COMMANDS {
+                // Copying needs an answer the agent's hooks have reported.
+                let expected_hidden = *id == "agent.copy-last-response";
+                assert_eq!(
+                    hidden.iter().any(|hidden| hidden == id),
+                    expected_hidden,
+                    "{id}"
+                );
+            }
 
             app.run_agent_command("agent.new-conversation");
             // The command is typed now and submitted once it has settled.

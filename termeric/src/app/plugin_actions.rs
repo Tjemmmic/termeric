@@ -1346,6 +1346,7 @@ impl App {
                     self.pending_font_range_management = None;
                     self.pending_font_feature_management = None;
                     self.pending_file_upload = None;
+                    self.cancel_pending_hook_change(request_id);
                 }
             }
             InfoOverlayAction::Choose {
@@ -1369,6 +1370,9 @@ impl App {
                     return;
                 }
                 if self.handle_runtime_plugin_manager_choice(request_id, &choice_id) {
+                    return;
+                }
+                if self.handle_agent_hook_choice(request_id, &choice_id) {
                     return;
                 }
                 if self
@@ -1400,6 +1404,7 @@ impl App {
                     self.pending_font_range_management = None;
                     self.pending_font_feature_management = None;
                     self.pending_file_upload = None;
+                    self.cancel_pending_hook_change(request_id);
                 }
             }
             InfoOverlayAction::CancelInput { request_id } => {
@@ -1413,6 +1418,7 @@ impl App {
                     self.pending_font_range_management = None;
                     self.pending_font_feature_management = None;
                     self.pending_file_upload = None;
+                    self.cancel_pending_hook_change(request_id);
                 }
             }
             InfoOverlayAction::ScrollLines { request_id, delta } => {

@@ -62,6 +62,9 @@ pub enum ParseOutcome {
     Domain(crate::domain::DomainCommand),
     Plugin(crate::plugin::runtime::PluginAdminCommand),
     SerialBridge(crate::serial::BridgeOptions),
+    /// An agent hook. `None` when its arguments are not understood, which
+    /// must stay silent: a failing hook would surface inside the agent.
+    AgentEvent(Option<crate::agents::hook::HookInvocation>),
     Print(String),
 }
 
@@ -119,6 +122,23 @@ pub fn parse(arguments: impl IntoIterator<Item = OsString>) -> anyhow::Result<Pa
     parse_collected(arguments, &crate::config::DomainsConfig::default())
 }
 
+/// `agent-event AGENT EVENT`, as written by Termeric's hook setup.
+fn parse_agent_event(arguments: &[OsString]) -> Option<crate::agents::hook::HookInvocation> {
+    let [agent_id, event] = arguments else {
+        return None;
+    };
+    let agent_id = agent_id.to_str()?;
+    let valid_id = !agent_id.is_empty()
+        && agent_id.len() <= 64
+        && agent_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_');
+    Some(crate::agents::hook::HookInvocation {
+        agent_id: valid_id.then(|| agent_id.to_owned())?,
+        event: crate::agents::hook::HookEvent::parse(event.to_str()?)?,
+    })
+}
+
 fn parse_collected(
     arguments: Vec<OsString>,
     domains: &crate::config::DomainsConfig,
@@ -136,6 +156,9 @@ fn parse_collected(
     }
     if arguments.first().and_then(|argument| argument.to_str()) == Some("plugin") {
         return parse_plugin(&arguments[1..]);
+    }
+    if arguments.first().and_then(|argument| argument.to_str()) == Some("agent-event") {
+        return Ok(ParseOutcome::AgentEvent(parse_agent_event(&arguments[1..])));
     }
     let mut plan = LaunchPlan::default();
     let mut renderer_backend = None;
@@ -1708,8 +1731,8 @@ fn apply_remote_authority(
         ParseOutcome::SerialBridge(_) => {
             anyhow::bail!("the internal serial bridge cannot be nested through a remote domain")
         }
-        ParseOutcome::Plugin(_) | ParseOutcome::Control(_) => {
-            unreachable!("domain parser cannot return plugin or GUI control commands")
+        ParseOutcome::Plugin(_) | ParseOutcome::Control(_) | ParseOutcome::AgentEvent(_) => {
+            unreachable!("domain parser cannot return plugin, GUI control, or agent commands")
         }
     }
 }

@@ -2,6 +2,7 @@
 
 use super::types::*;
 use super::{Renderer, adjust_alpha, contrast_text, mix};
+use crate::agents::AgentBadge;
 use crate::tabs::{TabInfo, TabType};
 
 /// Logical tab widths before display scaling.
@@ -489,16 +490,28 @@ enum TabStatus {
     BroadcastActive,
     BroadcastArmed,
     ReadOnly,
+    Agent(AgentBadge),
     Pinned,
 }
 
+/// The one marker a tab has room for. Broadcast outranks everything because
+/// typing there reaches other panes; an agent waiting on the person or a
+/// failed turn outranks the read-only lock; progress and results outrank the
+/// pin.
 fn tab_status(tab: &TabInfo) -> Option<TabStatus> {
+    let urgent_agent = tab
+        .agent_badge
+        .filter(|badge| matches!(badge, AgentBadge::NeedsYou | AgentBadge::Failed));
     if tab.broadcast_active {
         Some(TabStatus::BroadcastActive)
     } else if tab.broadcast_armed {
         Some(TabStatus::BroadcastArmed)
+    } else if let Some(badge) = urgent_agent {
+        Some(TabStatus::Agent(badge))
     } else if tab.read_only {
         Some(TabStatus::ReadOnly)
+    } else if let Some(badge) = tab.agent_badge {
+        Some(TabStatus::Agent(badge))
     } else if tab.pinned {
         Some(TabStatus::Pinned)
     } else {
@@ -882,6 +895,36 @@ impl Renderer {
                 self.rect_pipeline
                     .push_line(cx, y + head, cx, y + size, stroke, color);
             }
+            TabStatus::Agent(badge) => {
+                let dot = (size * 0.66).round();
+                let (left, top) = ((cx - dot / 2.0).round(), (cy - dot / 2.0).round());
+                let fill = match badge {
+                    // Working is a neutral ring: it asks nothing of the person.
+                    AgentBadge::Working => color,
+                    AgentBadge::NeedsYou => self.ui.agent_needs_you,
+                    AgentBadge::Failed => self.ui.agent_failed,
+                    AgentBadge::Done => self.ui.agent_done,
+                };
+                self.rect_pipeline.push_rounded_rect(
+                    left,
+                    top,
+                    dot,
+                    dot,
+                    adjust_alpha(fill, color[3]),
+                    dot / 2.0,
+                );
+                if badge == AgentBadge::Working {
+                    let inner = (dot - stroke * 2.0).max(1.0);
+                    self.rect_pipeline.push_rounded_rect(
+                        cx - inner / 2.0,
+                        cy - inner / 2.0,
+                        inner,
+                        inner,
+                        surface,
+                        inner / 2.0,
+                    );
+                }
+            }
         }
     }
 
@@ -1174,6 +1217,7 @@ mod tests {
                 close_progress: 0.0,
                 tab_type: TabType::Shell,
                 unreviewed_diff_count: 0,
+                agent_badge: None,
             })
             .collect()
     }
@@ -1502,5 +1546,22 @@ mod tests {
         assert_eq!(tab_status(&tab), Some(TabStatus::BroadcastArmed));
         tab.broadcast_active = true;
         assert_eq!(tab_status(&tab), Some(TabStatus::BroadcastActive));
+
+        let mut tab = tabs(1, 0).remove(0);
+        tab.pinned = true;
+        tab.agent_badge = Some(AgentBadge::Working);
+        assert_eq!(
+            tab_status(&tab),
+            Some(TabStatus::Agent(AgentBadge::Working))
+        );
+        tab.read_only = true;
+        assert_eq!(tab_status(&tab), Some(TabStatus::ReadOnly));
+        tab.agent_badge = Some(AgentBadge::NeedsYou);
+        assert_eq!(
+            tab_status(&tab),
+            Some(TabStatus::Agent(AgentBadge::NeedsYou))
+        );
+        tab.broadcast_armed = true;
+        assert_eq!(tab_status(&tab), Some(TabStatus::BroadcastArmed));
     }
 }

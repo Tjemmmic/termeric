@@ -66,6 +66,9 @@ pub struct Config {
     /// of custom ones.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub agents: BTreeMap<String, crate::agents::AgentConfig>,
+    /// `[agent_status]`: presentation of agent hook reports.
+    #[serde(default)]
+    pub agent_status: crate::agents::config::AgentStatusConfig,
     /// Harvest mode configuration
     #[serde(default)]
     pub harvest: HarvestConfig,
@@ -855,16 +858,8 @@ fn validate_child_env_key(owner: &str, key: &str) -> Result<()> {
         .next()
         .is_some_and(|byte| byte == b'_' || byte.is_ascii_alphabetic())
         && bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric());
-    const RESERVED: &[&str] = &[
-        "PWD",
-        "TERM",
-        "COLORTERM",
-        "TERMINFO",
-        "TERMINFO_DIRS",
-        "TERM_PROGRAM",
-        "TERM_PROGRAM_VERSION",
-    ];
-    if !valid || key.len() > 128 || RESERVED.contains(&key) {
+    let reserved = key == "PWD" || termeric_core::pty::terminal_identity_variable(key);
+    if !valid || key.len() > 128 || reserved {
         bail!("{owner} has invalid or reserved environment key {key:?}");
     }
     Ok(())
@@ -1940,12 +1935,14 @@ mod tests {
         );
         assert!(multiline.validate().is_err());
 
-        let mut reserved_shell_env = Config::default();
-        reserved_shell_env
-            .shell
-            .env
-            .insert("TERM".into(), "spoofed".into());
-        assert!(reserved_shell_env.validate().is_err());
+        for reserved in ["TERM", "PWD", "TERMERIC_TERMINAL_ID"] {
+            let mut reserved_shell_env = Config::default();
+            reserved_shell_env
+                .shell
+                .env
+                .insert(reserved.into(), "spoofed".into());
+            assert!(reserved_shell_env.validate().is_err(), "{reserved}");
+        }
 
         let mut config = Config::default();
         for index in 0..=MAX_LAUNCH_PROFILES {

@@ -1176,7 +1176,8 @@ impl Tab {
             catalog: &crate::agents::AgentCatalog,
             pty: Option<&PtyHandle>,
             launch: &crate::workspace::WorkspaceLaunch,
-        ) -> Option<crate::agents::AgentSession> {
+            session: &mut crate::session::terminal_state::TerminalSession,
+        ) -> bool {
             let (launched_id, profile) = match launch {
                 crate::workspace::WorkspaceLaunch::Plugin { plugin_id, profile } => (
                     catalog.get(plugin_id).map(|agent| agent.id.as_str()),
@@ -1184,17 +1185,49 @@ impl Tab {
                 ),
                 _ => (None, &None),
             };
-            let foreground = pty
-                .and_then(PtyHandle::foreground_process_group)
+            let foreground_group = pty.and_then(PtyHandle::foreground_process_group);
+            let foreground = foreground_group
                 .and_then(crate::agents::detect::foreground_argv)
                 .and_then(|argv| catalog.identify(&argv).map(|agent| agent.id.clone()));
-            let agent_id = foreground.or_else(|| launched_id.map(str::to_owned))?;
-            let launched = launched_id == Some(agent_id.as_str());
-            Some(crate::agents::AgentSession {
-                profile: launched.then(|| profile.clone()).flatten(),
-                launched,
-                agent_id,
-            })
+            // An agent that reports through hooks stays recognized while some
+            // program other than the terminal's own child holds the
+            // foreground, even when its process name is unfamiliar (for
+            // example one started through `npx`).
+            let child_in_foreground = pty
+                .and_then(PtyHandle::child_id)
+                .zip(foreground_group)
+                .is_some_and(|(child, group)| i64::from(child) == i64::from(group));
+            let reported = session
+                .agent_status
+                .as_ref()
+                .filter(|_| foreground_group.is_some() && !child_in_foreground)
+                .map(|status| status.agent_id.clone());
+            let observed = foreground
+                .or(reported)
+                .or_else(|| launched_id.map(str::to_owned))
+                .map(|agent_id| {
+                    let launched = launched_id == Some(agent_id.as_str());
+                    crate::agents::AgentSession {
+                        profile: launched.then(|| profile.clone()).flatten(),
+                        launched,
+                        agent_id,
+                    }
+                });
+            let mut changed = false;
+            if session.agent_status.as_ref().is_some_and(|status| {
+                observed
+                    .as_ref()
+                    .is_none_or(|agent| agent.agent_id != status.agent_id)
+            }) {
+                // The agent that reported is gone, even if it never said so.
+                session.agent_status = None;
+                changed = true;
+            }
+            if session.agent != observed {
+                session.agent = observed;
+                changed = true;
+            }
+            changed
         }
         let mut changed = false;
         if let Some(panes) = &mut self.pane_manager {
@@ -1202,20 +1235,52 @@ impl Tab {
                 let Some(pane) = panes.get_pane_mut(id).filter(|pane| !pane.closed) else {
                     continue;
                 };
-                let observed = observe(catalog, Some(&pane.pty), &pane.launch);
-                if pane.integration.agent != observed {
-                    pane.integration.agent = observed;
-                    changed = true;
-                }
+                changed |= observe(
+                    catalog,
+                    Some(&pane.pty),
+                    &pane.launch,
+                    &mut pane.integration,
+                );
             }
         } else if self.terminal.is_some() {
-            let observed = observe(catalog, self.pty.as_ref(), &self.terminal_launch);
-            if self.integration.agent != observed {
-                self.integration.agent = observed;
-                changed = true;
-            }
+            changed |= observe(
+                catalog,
+                self.pty.as_ref(),
+                &self.terminal_launch,
+                &mut self.integration,
+            );
         }
         changed
+    }
+
+    /// The most urgent agent badge among this tab's terminals.
+    pub(crate) fn agent_badge(&self) -> Option<crate::agents::AgentBadge> {
+        self.owned_pane_ids()
+            .into_iter()
+            .filter_map(|id| self.pane_session(id)?.agent_status.as_ref()?.badge())
+            .max()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn single_pty(&self) -> Option<&PtyHandle> {
+        self.pty.as_ref()
+    }
+
+    /// The pane whose processes inherited `terminal_id`.
+    pub(crate) fn pane_with_terminal_id(&self, terminal_id: &str) -> Option<crate::panes::PaneId> {
+        if let Some(panes) = &self.pane_manager {
+            return panes.pane_ids().into_iter().find(|id| {
+                panes
+                    .get_pane(*id)
+                    .is_some_and(|pane| !pane.closed && pane.pty.terminal_id() == Some(terminal_id))
+            });
+        }
+        (self.terminal.is_some()
+            && self
+                .pty
+                .as_ref()
+                .is_some_and(|pty| pty.terminal_id() == Some(terminal_id)))
+        .then_some(self.single_pane_id)
     }
 
     pub(crate) fn owned_pane_ids(&self) -> Vec<crate::panes::PaneId> {

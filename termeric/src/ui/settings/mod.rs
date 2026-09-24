@@ -621,6 +621,10 @@ pub enum SettingsAction {
     SetHarvestMaxHistory(usize),
     /// Offer or hide one built-in coding agent.
     SetAgentEnabled { agent_id: String, enabled: bool },
+    /// Show what setting up agent status hooks would change.
+    SetUpAgentStatus,
+    /// Notify when an agent the person is not looking at needs them.
+    SetAgentNotifications(bool),
     /// Follow the system or override non-essential UI transitions.
     SetReduceMotion(AccessibilityPreference),
     /// Follow the system or override higher-contrast application chrome.
@@ -690,6 +694,8 @@ pub struct SettingsPanel {
     /// the application because finding executables touches the file system.
     agent_rows: Vec<AgentSettingsRow>,
     custom_agent_summary: String,
+    /// Whether agent status hooks are set up, supplied by the application.
+    agent_status_summary: String,
 }
 
 /// One built-in agent row on the Agents page.
@@ -725,6 +731,7 @@ impl SettingsPanel {
             runtime_plugin_summary: "None installed (use `termeric plugin --help`)".into(),
             agent_rows: Vec::new(),
             custom_agent_summary: "None".into(),
+            agent_status_summary: "Not set up".into(),
         }
     }
 
@@ -742,10 +749,17 @@ impl SettingsPanel {
         self.theme_meta = Some(meta);
     }
 
-    /// Built-in agent rows and a one-line summary of custom agents.
-    pub fn set_agents(&mut self, rows: Vec<AgentSettingsRow>, custom_summary: String) {
+    /// Built-in agent rows, a one-line summary of custom agents, and whether
+    /// agent status hooks are set up.
+    pub fn set_agents(
+        &mut self,
+        rows: Vec<AgentSettingsRow>,
+        custom_summary: String,
+        status_summary: String,
+    ) {
         self.agent_rows = rows;
         self.custom_agent_summary = custom_summary;
+        self.agent_status_summary = status_summary;
     }
 
     pub fn set_runtime_plugin_summary(&mut self, summary: String) {
@@ -1508,6 +1522,26 @@ impl SettingsPanel {
                 value: self.custom_agent_summary.clone(),
                 kind: SettingKind::ReadOnly,
             });
+            items.push(SettingItem {
+                label: "Agent Status",
+                value: self.agent_status_summary.clone(),
+                kind: SettingKind::Action {
+                    action: SettingsAction::SetUpAgentStatus,
+                },
+            });
+            items.push(SettingItem {
+                label: "Notify When Agents Need You",
+                value: if config.agent_status.notify {
+                    "On"
+                } else {
+                    "Off"
+                }
+                .into(),
+                kind: SettingKind::Dropdown {
+                    options: on_off.clone(),
+                    selected: usize::from(!config.agent_status.notify),
+                },
+            });
             result.push((SettingsSection::Agents, items));
         }
 
@@ -1994,6 +2028,9 @@ impl SettingsPanel {
                                 .copied()
                                 .unwrap_or_default(),
                         )
+                    }
+                    (SettingsSection::Agents, "Notify When Agents Need You") => {
+                        SettingsAction::SetAgentNotifications(new_val == "On")
                     }
                     (SettingsSection::Agents, label) => self
                         .agent_rows

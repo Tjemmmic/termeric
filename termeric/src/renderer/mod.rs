@@ -242,6 +242,11 @@ pub(crate) struct UiPalette {
     pub(crate) menu_text: [f32; 4],
     pub(crate) menu_text_dim: [f32; 4],
     pub(crate) tab_activity: [f32; 4],
+    /// Agent tab badges, in the terminal's own warning, error, and success
+    /// hues.
+    pub(crate) agent_needs_you: [f32; 4],
+    pub(crate) agent_failed: [f32; 4],
+    pub(crate) agent_done: [f32; 4],
     pub(crate) tab_border: [f32; 4],
     pub(crate) tab_text_active: [f32; 4],
     pub(crate) tab_text_inactive: [f32; 4],
@@ -305,6 +310,9 @@ impl UiPalette {
             menu_text: fg.to_f32_array(),
             menu_text_dim: adjust_alpha(fg.to_f32_array(), 0.55),
             tab_activity: theme.primary.yellow.to_f32_array(),
+            agent_needs_you: theme.primary.yellow.to_f32_array(),
+            agent_failed: theme.primary.red.to_f32_array(),
+            agent_done: theme.primary.green.to_f32_array(),
             tab_border: tab_border.to_f32_array(),
             tab_text_active,
             tab_text_inactive,

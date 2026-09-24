@@ -2759,6 +2759,10 @@ impl App {
             let close_id = tab_close_node(index);
             let mut node = Node::new(Role::Tab);
             let mut label = tab.title.clone();
+            if let Some(badge) = tab.agent_badge {
+                label.push_str(", ");
+                label.push_str(badge.description());
+            }
             if tab.pinned {
                 label.push_str(", pinned");
             }

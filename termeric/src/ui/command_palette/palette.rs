@@ -81,6 +81,8 @@ pub enum PickKind {
     Theme,
     /// Choose a coding agent (and profile) to start.
     Agent(AgentPlacement),
+    /// Choose a terminal running an agent to focus.
+    AgentTerminal,
 }
 
 /// Where a picked agent starts.
@@ -98,6 +100,7 @@ impl PickKind {
         match self {
             Self::Theme => "Choose theme",
             Self::Agent(_) => "Choose agent",
+            Self::AgentTerminal => "Go to agent",
         }
     }
 }
@@ -1160,6 +1163,7 @@ pub fn core_commands(
             shortcut(BindableAction::NewAgent),
         ),
         ("agent.resume", "Resume Agent Conversation…", None),
+        ("agent.go-to", "Go to Agent…", None),
         ("agent.split-right", "Split Right with Agent…", None),
         ("agent.split-down", "Split Down with Agent…", None),
         (
@@ -1172,7 +1176,10 @@ pub fn core_commands(
         ("agent.review-diff", "Review Agent Diff", None),
         ("agent.copy-diff", "Copy Agent Diff", None),
         ("agent.export", "Export Agent Session", None),
+        ("agent.copy-last-response", "Copy Last Agent Response", None),
         ("core.toggle-transcript", "Toggle Agent Transcript", None),
+        ("agent.setup-status", "Set Up Agent Status…", None),
+        ("agent.remove-status", "Remove Agent Status Hooks…", None),
     ] {
         commands.push(RegisteredCommand {
             id: id.into(),

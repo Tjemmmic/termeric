@@ -10,7 +10,7 @@ mod event;
 
 pub use capabilities::{COMPATIBILITY_TERM, TERMERIC_TERM};
 pub use child::{ChildExitStatus, ChildObservation, ChildObserver};
-pub use environment::{EnvironmentPolicy, terminal_identity_variable};
+pub use environment::{EnvironmentPolicy, TERMINAL_ID_VARIABLE, terminal_identity_variable};
 pub use event::PtyEvent;
 pub use portable_pty::PtySize;
 
@@ -47,6 +47,8 @@ pub struct Pty {
     child: PtyChild,
     /// Exact TERM identity exported to this child.
     term_name: &'static str,
+    /// Exported as [`TERMINAL_ID_VARIABLE`].
+    terminal_id: Option<String>,
     /// The master side of the PTY
     master: Box<dyn MasterPty + Send>,
     /// Reader for PTY output
@@ -155,6 +157,13 @@ impl Pty {
         if let Some(terminfo_dirs) = terminal_environment.terminfo_dirs {
             cmd.env("TERMINFO_DIRS", terminfo_dirs);
         }
+        // Always replaced, so a terminal started from another Termeric
+        // terminal never inherits its parent's identity.
+        cmd.env_remove(TERMINAL_ID_VARIABLE);
+        let terminal_id = environment::new_terminal_id();
+        if let Some(id) = &terminal_id {
+            cmd.env(TERMINAL_ID_VARIABLE, id);
+        }
 
         // Set additional environment variables (e.g., PWD for session restore)
         for (key, value) in env {
@@ -183,6 +192,7 @@ impl Pty {
 
         Ok(Self {
             term_name: terminal_environment.term,
+            terminal_id,
             master: pair.master,
             reader,
             writer,
@@ -250,6 +260,7 @@ impl Pty {
                 master: self.master,
                 writer: Some(self.writer),
                 child: self.child,
+                terminal_id: self.terminal_id,
             },
             self.reader,
         )
@@ -262,9 +273,16 @@ pub struct PtyHandle {
     child: PtyChild,
     master: Box<dyn MasterPty + Send>,
     writer: Option<Box<dyn Write + Send>>,
+    terminal_id: Option<String>,
 }
 
 impl PtyHandle {
+    /// The identity exported to this terminal's processes as
+    /// [`TERMINAL_ID_VARIABLE`].
+    pub fn terminal_id(&self) -> Option<&str> {
+        self.terminal_id.as_deref()
+    }
+
     /// Observe this exact child across pane/window ownership changes and cleanup.
     pub fn child_observer(&self) -> ChildObserver {
         self.child.observer()
@@ -464,6 +482,10 @@ mod tests {
                 "cleared child retained an unexpected variable (names/values withheld)"
             );
         }
+        println!(
+            "TERMINAL_ID={}",
+            std::env::var(TERMINAL_ID_VARIABLE).unwrap()
+        );
         println!("ENVIRONMENT_POLICY_PROBE_OK");
     }
 
@@ -507,6 +529,10 @@ mod tests {
                 ("EMPTY_VALUE".into(), String::new()),
                 ("EXACT_VALUE".into(), "= two words $HOME;λ".into()),
                 ("TERM".into(), "must-not-override-identity".into()),
+                (
+                    TERMINAL_ID_VARIABLE.into(),
+                    "must-not-override-identity".into(),
+                ),
             ];
             let pty = Pty::new_with_environment_policy(
                 default_pty_size(80, 24),
@@ -517,7 +543,7 @@ mod tests {
             )
             .unwrap();
             let observer = pty.child_observer();
-            let (_handle, reader) = pty.take_reader();
+            let (handle, reader) = pty.take_reader();
             let rx = spawn_reader_thread(reader);
             let deadline = std::time::Instant::now() + Duration::from_secs(5);
             let mut output = Vec::new();
@@ -543,7 +569,14 @@ mod tests {
                 "environment fixture failed: {}",
                 String::from_utf8_lossy(&output)
             );
-            assert!(String::from_utf8_lossy(&output).contains("ENVIRONMENT_POLICY_PROBE_OK"));
+            let output = String::from_utf8_lossy(&output);
+            assert!(output.contains("ENVIRONMENT_POLICY_PROBE_OK"));
+            let id = handle.terminal_id().expect("a terminal identity");
+            assert!(id.starts_with(&format!("{}.", std::process::id())));
+            assert!(
+                output.contains(&format!("TERMINAL_ID={id}")),
+                "the child saw another terminal identity"
+            );
             assert_eq!(std::env::var_os("PATH"), original_path);
             assert_eq!(std::env::var_os("HOME"), original_home);
         }

@@ -1,11 +1,13 @@
 //! Integration state owned by one terminal, transferred with its PTY.
 use super::transcript::{TranscriptNotice, TranscriptRecorder, TranscriptWrite};
-use crate::agents::AgentSession;
+use crate::agents::{AgentSession, AgentStatus};
 use crate::terminal::diff_detector::DiffDetector;
 
 pub(crate) struct TerminalSession {
     /// The coding agent in this terminal's foreground, if any.
     pub agent: Option<AgentSession>,
+    /// What that agent last reported through its hooks.
+    pub agent_status: Option<AgentStatus>,
     pub transcript: Option<TranscriptRecorder>,
     pub diff_detector: DiffDetector,
     failure_reported: bool,
@@ -16,6 +18,7 @@ impl Default for TerminalSession {
     fn default() -> Self {
         Self {
             agent: None,
+            agent_status: None,
             transcript: None,
             diff_detector: DiffDetector::new(),
             failure_reported: false,

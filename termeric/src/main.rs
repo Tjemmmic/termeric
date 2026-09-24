@@ -35,6 +35,14 @@ use winit::event_loop::EventLoop;
 
 fn main() -> Result<std::process::ExitCode> {
     let outcome = cli::parse_env()?;
+    // Hooks run inside an agent's turn: no logging setup, no output, and
+    // success whatever happens.
+    if let cli::ParseOutcome::AgentEvent(invocation) = &outcome {
+        if let Some(invocation) = invocation {
+            agents::hook::run(invocation);
+        }
+        return Ok(std::process::ExitCode::SUCCESS);
+    }
 
     // Initialize logging after deterministic parsing but before either GUI or
     // local-domain execution.
@@ -44,6 +52,9 @@ fn main() -> Result<std::process::ExitCode> {
     let mut _quick_access_guard = None;
     let launch = match outcome {
         cli::ParseOutcome::Run(launch) => launch,
+        cli::ParseOutcome::AgentEvent(_) => {
+            unreachable!("agent hooks return before logging starts")
+        }
         cli::ParseOutcome::QuickAccess(launch) => {
             if let Some(output) = control::toggle_existing_quick_access()? {
                 println!("{output}");

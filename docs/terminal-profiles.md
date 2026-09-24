@@ -96,7 +96,8 @@ descriptions must be bounded single-line text, programs cannot contain control
 line breaks, and environment names use portable identifier syntax.
 
 Termeric owns `PWD`, `TERM`, `COLORTERM`, `TERMINFO`, `TERMINFO_DIRS`,
-`TERM_PROGRAM`, and `TERM_PROGRAM_VERSION`; profiles cannot override them.
+`TERM_PROGRAM`, `TERM_PROGRAM_VERSION`, and `TERMERIC_TERMINAL_ID`; profiles
+cannot override them.
 Environment values are ordinary process configuration and may contain secrets,
 so they are neither rendered in the palette nor copied into workspace files.
 The same key, value, and identity-variable rules apply to optional `[shell].env`.

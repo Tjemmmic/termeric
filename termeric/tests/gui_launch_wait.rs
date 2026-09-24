@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 const ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const TOKEN: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-const VERSION: u32 = 18;
+const VERSION: u32 = 19;
 
 struct Fixture {
     root: tempfile::TempDir,

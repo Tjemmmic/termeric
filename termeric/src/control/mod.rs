@@ -211,6 +211,19 @@ pub fn toggle_existing_quick_access() -> anyhow::Result<Option<String>> {
     }
 }
 
+/// Deliver one agent hook report to the GUI process `process_id`.
+pub fn report_agent_event(process_id: u32, report: protocol::Request) -> anyhow::Result<()> {
+    #[cfg(unix)]
+    {
+        client::report_agent_event(process_id, report)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (process_id, report);
+        anyhow::bail!("Agent events need a Unix control socket")
+    }
+}
+
 pub struct ControlOutput {
     pub text: String,
     pub exit_code: u8,

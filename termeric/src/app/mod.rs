@@ -1,6 +1,7 @@
 //! Application state and event handling
 
 mod accessibility;
+mod agent_hooks;
 mod agents;
 mod application;
 mod commands_input;
@@ -1237,6 +1238,8 @@ pub struct App {
     runtime_plugin_test_paths: Option<(PathBuf, PathBuf)>,
     /// Exact source and live-domain destination awaiting explicit upload consent.
     pending_file_upload: Option<PendingFileUpload>,
+    /// Agent status hooks awaiting the person's confirmation.
+    pending_hook_change: Option<agent_hooks::PendingHookChange>,
     /// At most one background file upload may be active per native window.
     active_file_upload: Option<ActiveFileUpload>,
     /// One export owns its captured source and this window's completion route.
@@ -1468,6 +1471,7 @@ impl App {
             #[cfg(test)]
             runtime_plugin_test_paths: None,
             pending_file_upload: None,
+            pending_hook_change: None,
             active_file_upload: None,
             session_export: None,
             kitty_file_transfers: kitty_file_transfer::KittyFileTransferManager::default(),
@@ -3132,6 +3136,10 @@ impl App {
                 .request(redraw_scheduler::RedrawReason::TerminalOutput);
         }
         self.submit_due_agent_input(Instant::now());
+        if self.acknowledge_focused_agent() {
+            self.redraw_scheduler
+                .request(redraw_scheduler::RedrawReason::WindowEvent);
+        }
 
         let working_dir = self
             .tabs
@@ -3663,6 +3671,10 @@ impl App {
                 kind: crate::ui::command_palette::palette::PickKind::Agent(placement),
                 id,
             } => self.start_picked_agent(placement, &id),
+            PaletteResult::Picked {
+                kind: crate::ui::command_palette::palette::PickKind::AgentTerminal,
+                id,
+            } => self.focus_agent_terminal(&id),
             PaletteResult::RunAction(id) => {
                 if self.run_agent_command(&id) {
                     return;

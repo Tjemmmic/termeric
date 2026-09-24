@@ -8,6 +8,17 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- Agent status. **Set Up Agent Status…** adds hooks to Claude Code and Codex,
+  after showing which files change. Other settings keep their exact text and
+  order, and a backup is kept. The hooks run `termeric agent-event`, which does
+  nothing outside Termeric. Tabs then show when an agent is working, needs you,
+  is done, or failed. A desktop notification arrives when an agent you are not
+  looking at needs you or finishes. **Go to Agent…** lists agents with the
+  waiting ones first, and **Copy Last Agent Response** copies an agent's latest
+  answer. Codex asks you to trust the new hooks once. GUI control protocol v19
+  adds the `agent_event` report. Every terminal now sets `TERMERIC_TERMINAL_ID`
+  for its processes, a name reserved like `TERM`.
+
 - A Linux candidate-bound Bash/Zsh/Fish acceptance runner produces sealed
   partial integration records with exact shell paths/versions/digests, observed
   capability-reply counts, bounded logs and pinned test-executable provenance.

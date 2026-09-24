@@ -67,6 +67,59 @@ sends on your behalf, through the [GUI control protocol](gui-control.md) or a
 [runtime plugin](plugins.md), still asks for confirmation when it would run a
 guarded command.
 
+## Agent status
+
+With agent status set up, Termeric knows what each agent is doing:
+
+| State | Shown as | Notification |
+|---|---|---|
+| Working | A hollow ring before the tab title | — |
+| Needs you (a permission prompt or question) | A yellow dot, until the agent moves on | "Codex needs you", with what it asks |
+| Done | A green dot, until you look at the terminal | "Codex is done", with the answer's first line |
+| Failed | A red dot, until you look at the terminal | "Claude Code stopped with an error" |
+
+Notifications appear only for terminals you are not looking at, and clicking
+one shows that terminal. Turn them off with **Notify When Agents Need You** on
+the Settings **Agents** page, or `[agent_status] notify = false`. The tab
+announces the same state to screen readers.
+
+**Go to Agent…** lists every agent in the window, the ones that need you
+first, and shows the chosen terminal. **Copy Last Agent Response** copies the
+focused agent's most recent answer. The answer comes from the agent's report,
+or else from the end of the agent's own conversation log. Both commands appear
+only when they have something to show.
+
+### Setting it up
+
+Agents report their state through hooks, commands they run at points in a
+conversation. **Set Up Agent Status…**, in the palette or on the Settings
+**Agents** page, adds Termeric's hooks for Claude Code and Codex:
+
+| Agent | File | Hooks |
+|---|---|---|
+| Claude Code | `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR`) | `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `Notification` (permission prompts and questions), `Stop`, `StopFailure`, `SessionEnd` |
+| Codex | `~/.codex/hooks.json` (or `$CODEX_HOME`) | `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `PermissionRequest`, `Stop`, `SessionEnd` |
+
+Setup lists the files it will change and waits for you to confirm. Every other
+setting and hook in those files keeps its exact text and order, and each file's
+previous version is kept beside it with `.termeric-backup` appended. A file
+linked from elsewhere, for example by a dotfile manager, is updated where it
+really lives. If a file changes while the dialog is open, it is left alone.
+Codex asks you to trust new hooks the next time it starts. Termeric does not
+approve them on your behalf.
+
+Each hook runs `termeric agent-event AGENT EVENT`. That command does nothing
+unless it runs inside a Termeric terminal. Inside one, it reports to the
+Termeric window that owns the terminal, which it finds through the
+`TERMERIC_TERMINAL_ID` variable every Termeric terminal sets for its
+processes. It never prints, always succeeds, and gives up after two seconds,
+so a hook cannot slow or fail an agent's turn. Reports travel over the same
+private, user-only socket as the [GUI control protocol](gui-control.md).
+
+**Remove Agent Status Hooks…** takes Termeric's hooks out again. The setup
+records the path of the Termeric program that ran it, so run setup again after
+moving Termeric. The Settings page shows **Needs updating** when that is due.
+
 ## Configuration
 
 `[agents.<id>]` entries in `config.toml` change a built-in agent. An entry with
@@ -137,8 +190,10 @@ split around, collapsed, or moved to another tab or window.
 
 ## Limits
 
-- Termeric cannot tell whether an agent is working, waiting for you, or done.
-  It only knows which agent is running.
+- Status comes only from agents with hooks set up: Claude Code and Codex.
+  Other agents are recognized, but their state is not known.
+- Agents in [live-domain](live-domains.md) terminals cannot report status.
+  Their processes belong to the domain daemon rather than to a window.
 - Diffs are read from the terminal output, so an agent that never prints a
   unified diff has nothing to review.
 - Automated tests use fake agent executables in real PTYs. They never start a

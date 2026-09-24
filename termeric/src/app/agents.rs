@@ -6,7 +6,7 @@
 //! palette never lists a copy of each command per agent.
 
 use super::*;
-use crate::agents::{AgentDefinition, AgentSession};
+use crate::agents::{AgentActivity, AgentDefinition, AgentReport, AgentSession, AgentStatus};
 use crate::tabs::TerminalIdentity;
 use crate::ui::command_palette::palette::{
     AgentPlacement, CommandSource, PickKind, RegisteredCommand,
@@ -23,6 +23,7 @@ pub(super) const FOCUSED_AGENT_COMMANDS: &[&str] = &[
     "agent.review-diff",
     "agent.copy-diff",
     "agent.export",
+    "agent.copy-last-response",
     "core.toggle-transcript",
 ];
 
@@ -43,6 +44,16 @@ pub(super) struct FocusedAgent {
     pub identity: TerminalIdentity,
     pub definition: AgentDefinition,
     pub session: AgentSession,
+    /// What the agent last reported, when its hooks are set up.
+    pub status: Option<AgentStatus>,
+}
+
+/// A terminal running an agent, for the agent list.
+pub(super) struct AgentTerminal {
+    pub identity: TerminalIdentity,
+    pub name: String,
+    pub status: Option<AgentStatus>,
+    pub tab_title: String,
 }
 
 impl App {
@@ -65,30 +76,165 @@ impl App {
     pub(super) fn focused_agent(&self) -> Option<FocusedAgent> {
         let tab = self.tabs.as_ref()?.active_tab()?;
         let identity = tab.focused_terminal_identity();
-        let session = tab.pane_session(identity.pane_id)?.agent.clone()?;
+        let state = tab.pane_session(identity.pane_id)?;
+        let session = state.agent.clone()?;
         let definition = self.agents.get(&session.agent_id)?.clone();
         Some(FocusedAgent {
             identity,
             definition,
             session,
+            status: state.agent_status.clone(),
         })
+    }
+
+    /// Every terminal in this window running an agent, most urgent first.
+    pub(super) fn agent_terminals(&self) -> Vec<AgentTerminal> {
+        let mut terminals: Vec<AgentTerminal> = self
+            .tabs
+            .iter()
+            .flat_map(|tabs| tabs.iter())
+            .filter(|(_, tab)| !tab.closed && !tab.is_closing())
+            .flat_map(|(_, tab)| {
+                tab.owned_pane_ids().into_iter().filter_map(move |pane_id| {
+                    let state = tab.pane_session(pane_id)?;
+                    let agent = state.agent.as_ref()?;
+                    Some(AgentTerminal {
+                        identity: TerminalIdentity {
+                            tab_id: tab.id,
+                            pane_id,
+                        },
+                        name: self
+                            .agents
+                            .get(&agent.agent_id)
+                            .map_or_else(|| agent.agent_id.clone(), |agent| agent.name.clone()),
+                        status: state.agent_status.clone(),
+                        tab_title: tab.title.clone(),
+                    })
+                })
+            })
+            .collect();
+        // Stable: equally urgent agents keep their tab order.
+        terminals.sort_by_key(|terminal| {
+            std::cmp::Reverse(terminal.status.as_ref().and_then(AgentStatus::badge))
+        });
+        terminals
     }
 
     /// Commands to hide from the palette for the current focus.
     pub(super) fn unavailable_agent_commands(&self) -> Vec<String> {
+        use super::agent_hooks::HookSetupSummary;
         let focused = self.focused_agent();
-        FOCUSED_AGENT_COMMANDS
+        let mut hidden: Vec<&str> = FOCUSED_AGENT_COMMANDS
             .iter()
+            .copied()
             .filter(|id| match &focused {
                 None => true,
-                Some(agent) => match **id {
+                Some(agent) => match *id {
                     "agent.new-conversation" => agent.definition.new_conversation.is_none(),
                     "agent.restart" => !agent.session.launched,
+                    "agent.copy-last-response" => agent.status.as_ref().is_none_or(|status| {
+                        status.last_message.is_none() && status.transcript_path.is_none()
+                    }),
                     _ => false,
                 },
             })
-            .map(|id| (*id).to_string())
-            .collect()
+            .collect();
+        if self.agent_terminals().is_empty() {
+            hidden.push("agent.go-to");
+        }
+        hidden.extend(match self.agent_hook_summary() {
+            HookSetupSummary::Unavailable => &["agent.setup-status", "agent.remove-status"][..],
+            HookSetupSummary::SetUp => &["agent.setup-status"][..],
+            HookSetupSummary::NotSetUp => &["agent.remove-status"][..],
+            HookSetupSummary::Incomplete => &[][..],
+        });
+        hidden.into_iter().map(str::to_owned).collect()
+    }
+
+    /// List the agents running in this window, with what each is doing.
+    pub(super) fn open_agent_list(&mut self) {
+        let terminals = self.agent_terminals();
+        if terminals.is_empty() {
+            self.toasts.info("No agent is running in this window");
+            return;
+        }
+        let items = terminals
+            .iter()
+            .map(|terminal| {
+                let state = match &terminal.status {
+                    Some(status) => status.activity.label(),
+                    None => "Running",
+                };
+                RegisteredCommand {
+                    id: format!(
+                        "{}:{}",
+                        terminal.identity.tab_id, terminal.identity.pane_id.0
+                    ),
+                    title: format!("{} · {state}", terminal.name),
+                    category: terminal
+                        .status
+                        .as_ref()
+                        .and_then(|status| status.detail.clone())
+                        .unwrap_or_else(|| terminal.tab_title.clone()),
+                    shortcut: None,
+                    icon: None,
+                    source: CommandSource::Core,
+                    destructive: false,
+                }
+            })
+            .collect();
+        self.command_palette.begin_pick(
+            PickKind::AgentTerminal,
+            items,
+            "Go to which agent…",
+            "agent",
+            None,
+        );
+    }
+
+    /// Show the terminal picked from the agent list.
+    pub(super) fn focus_agent_terminal(&mut self, pick_id: &str) {
+        let identity = pick_id.split_once(':').and_then(|(tab, pane)| {
+            Some(TerminalIdentity {
+                tab_id: tab.parse().ok()?,
+                pane_id: crate::panes::PaneId(pane.parse().ok()?),
+            })
+        });
+        if !identity.is_some_and(|identity| self.activate_notification_origin(identity)) {
+            self.toasts.warning("That agent's terminal has closed");
+        }
+    }
+
+    /// Copy the focused agent's most recent answer.
+    pub(super) fn copy_last_agent_response(&mut self) {
+        match self.focused_agent_answer() {
+            Ok((name, text)) => {
+                self.copy_to_clipboard(text, &format!("Copied {name}'s last answer"))
+            }
+            Err(reason) => self.toasts.info(reason),
+        }
+    }
+
+    /// The focused agent's name and most recent answer: as its hook reported
+    /// it, else from the end of its own conversation log.
+    pub(super) fn focused_agent_answer(&self) -> Result<(String, String), String> {
+        let agent = self
+            .focused_agent()
+            .ok_or("Focus an agent terminal first")?;
+        let name = agent.definition.name;
+        let status = agent
+            .status
+            .ok_or("Set up agent status to copy an agent's answers")?;
+        status
+            .last_message
+            .or_else(|| {
+                status
+                    .transcript_path
+                    .as_deref()
+                    .and_then(crate::agents::transcript::last_response)
+            })
+            .map(|text| (name.clone(), text))
+            .ok_or_else(|| format!("{name} has not finished an answer yet"))
     }
 
     /// Open the palette with commands that do not apply hidden.
@@ -212,6 +358,10 @@ impl App {
             "agent.resume" => self.open_agent_picker(AgentPlacement::Resume),
             "agent.split-right" => self.open_agent_picker(AgentPlacement::SplitRight),
             "agent.split-down" => self.open_agent_picker(AgentPlacement::SplitDown),
+            "agent.go-to" => self.open_agent_list(),
+            "agent.copy-last-response" => self.copy_last_agent_response(),
+            "agent.setup-status" => self.open_agent_hook_setup(true),
+            "agent.remove-status" => self.open_agent_hook_setup(false),
             "agent.new-conversation" => self.start_new_agent_conversation(),
             "agent.restart" => self.restart_focused_agent(),
             "agent.insert-context" | "agent.review-diff" | "agent.copy-diff" | "agent.export" => {
@@ -231,6 +381,140 @@ impl App {
             _ => return false,
         }
         true
+    }
+}
+
+impl App {
+    /// Apply a report from an agent's hooks to the terminal it names.
+    /// Returns whether this window owns that terminal.
+    pub(super) fn record_agent_report(&mut self, terminal_id: &str, report: AgentReport) -> bool {
+        let Some(tabs) = self.tabs.as_mut() else {
+            return false;
+        };
+        let Some(identity) = tabs.terminal_with_id(terminal_id) else {
+            return false;
+        };
+        // Disabled agents are not tracked, but the report was delivered.
+        if self
+            .agents
+            .get(&report.agent_id)
+            .is_none_or(|agent| !agent.enabled)
+        {
+            return true;
+        }
+        let Some(tab) = tabs.tab_mut_by_id(identity.tab_id) else {
+            return false;
+        };
+        let Some(session) = tab.pane_session_mut(identity.pane_id) else {
+            return false;
+        };
+        let before = session.agent_status.as_ref().map(|status| status.activity);
+        session.agent_status =
+            AgentStatus::after(session.agent_status.as_ref(), report, Instant::now());
+        let after = session.agent_status.clone();
+        // A reporting agent is recognized now, not at the next scan.
+        tab.refresh_agents(&self.agents);
+        self.acknowledge_focused_agent();
+        if let Some(status) =
+            after.filter(|status| status.needs_attention() && before != Some(status.activity))
+        {
+            self.notify_agent_attention(identity, &status);
+        }
+        self.redraw_scheduler
+            .request(super::redraw_scheduler::RedrawReason::TerminalOutput);
+        true
+    }
+
+    /// Mark the focused terminal's finished, failed, or waiting agent as seen
+    /// while the person is looking at it. Returns whether anything changed.
+    pub(super) fn acknowledge_focused_agent(&mut self) -> bool {
+        if !self.window_focused {
+            return false;
+        }
+        let Some(tab) = self.tabs.as_mut().and_then(TabManager::active_tab_mut) else {
+            return false;
+        };
+        let pane_id = tab.focused_terminal_identity().pane_id;
+        let Some(status) = tab
+            .pane_session_mut(pane_id)
+            .and_then(|session| session.agent_status.as_mut())
+            .filter(|status| status.needs_attention())
+        else {
+            return false;
+        };
+        status.seen = true;
+        true
+    }
+
+    /// Tell the person an agent they are not looking at wants them.
+    fn notify_agent_attention(&mut self, identity: TerminalIdentity, status: &AgentStatus) {
+        if !self.config.agent_status.notify {
+            return;
+        }
+        let Some(origin) = self
+            .tabs
+            .as_ref()
+            .and_then(|tabs| tabs.origin_for_pane(identity.tab_id, identity.pane_id))
+        else {
+            return;
+        };
+        if !self.should_present_terminal_notification(
+            origin,
+            termeric_core::NotificationOccasion::Unfocused,
+        ) {
+            return;
+        }
+        let name = self
+            .agents
+            .get(&status.agent_id)
+            .map_or(status.agent_id.as_str(), |agent| agent.name.as_str());
+        let request = attention_notification(name, identity, status);
+        if let Some(error) = self.notifications.notify_terminal(identity, request) {
+            self.toasts.warning(error);
+        }
+    }
+}
+
+/// The desktop notification for an agent that wants the person. Each
+/// terminal has one, replaced as its agent moves on, and activating it
+/// focuses that terminal.
+fn attention_notification(
+    name: &str,
+    identity: TerminalIdentity,
+    status: &AgentStatus,
+) -> termeric_core::NotificationRequest {
+    let title = match status.activity {
+        AgentActivity::NeedsInput => format!("{name} needs you"),
+        AgentActivity::Failed => format!("{name} stopped with an error"),
+        _ => format!("{name} is done"),
+    };
+    let body = status
+        .detail
+        .clone()
+        .or_else(|| status.last_message.as_deref().map(first_line))
+        .unwrap_or_default();
+    termeric_core::NotificationRequest {
+        title: Some(title),
+        body,
+        identifier: Some(format!("agent-{}-{}", identity.tab_id, identity.pane_id.0)),
+        application_name: Some("Termeric".into()),
+        occasion: termeric_core::NotificationOccasion::Unfocused,
+        focus_on_activation: true,
+        ..termeric_core::NotificationRequest::default()
+    }
+}
+
+/// The first non-empty line of `text`, shortened for a notification.
+fn first_line(text: &str) -> String {
+    const LIMIT: usize = 160;
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default();
+    match line.char_indices().nth(LIMIT) {
+        Some((cut, _)) => format!("{}…", &line[..cut]),
+        None => line.to_string(),
     }
 }
 
@@ -424,6 +708,61 @@ pub(super) fn agent_pick_items(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn attention_notifications_say_what_the_agent_wants() {
+        use crate::agents::AgentReport;
+        use crate::control::protocol::AgentEventKind;
+        let identity = TerminalIdentity {
+            tab_id: 3,
+            pane_id: crate::panes::PaneId(1),
+        };
+        let status = |event, detail: Option<&str>, message: Option<&str>| {
+            AgentStatus::after(
+                None,
+                AgentReport {
+                    agent_id: "codex".into(),
+                    event,
+                    detail: detail.map(Into::into),
+                    last_message: message.map(Into::into),
+                    transcript_path: None,
+                },
+                Instant::now(),
+            )
+            .unwrap()
+        };
+        let needs = attention_notification(
+            "Codex",
+            identity,
+            &status(AgentEventKind::NeedsInput, Some("Approve shell: ls"), None),
+        );
+        assert_eq!(needs.title.as_deref(), Some("Codex needs you"));
+        assert_eq!(needs.body, "Approve shell: ls");
+        assert_eq!(needs.identifier.as_deref(), Some("agent-3-1"));
+        assert!(needs.focus_on_activation);
+
+        let long = "word ".repeat(100);
+        let done = attention_notification(
+            "Codex",
+            identity,
+            &status(
+                AgentEventKind::Finished,
+                None,
+                Some(&format!("\n\n  {long}\nsecond line")),
+            ),
+        );
+        assert_eq!(done.title.as_deref(), Some("Codex is done"));
+        assert!(done.body.starts_with("word word"));
+        assert!(done.body.ends_with('…'));
+        assert!(!done.body.contains("second line"));
+        let failed = attention_notification(
+            "Codex",
+            identity,
+            &status(AgentEventKind::Failed, Some("rate_limit"), None),
+        );
+        assert_eq!(failed.title.as_deref(), Some("Codex stopped with an error"));
+        assert_eq!(failed.body, "rate_limit");
+    }
 
     #[test]
     fn picker_lists_available_agents_then_their_profiles() {
