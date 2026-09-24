@@ -90,11 +90,13 @@ file shows its diff, with these controls:
   you confirm. A file the agent created is removed. Only the working tree
   changes: staged content and commits stay as they are. Reverting writes only
   inside the repository, never through a linked directory, and applies the
-  repository's line-ending settings. A file that was already there when the
-  agent started, but that Git ignored then, is never removed. A path that
+  repository's line-ending settings. A file that Git ignored when the agent
+  started, or anything in a directory it ignored, is never removed, since the
+  snapshot does not know whether it was already there. A path that
   became a directory, or the other way round, is refused rather than half
   changed; revert the files inside first, and the emptied directories the
-  agent made go with them.
+  agent made go with them, where the file system records when they were
+  made.
 - **Copy** (C) copies the file's diff.
 
 **Stage All Agent Changes** stages every changed file at once. Both commands

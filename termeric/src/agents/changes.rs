@@ -120,8 +120,11 @@ pub struct Baseline {
     /// Untracked files too large to snapshot. Their content is unknown, so
     /// they are never listed or reverted.
     left_out: Arc<BTreeSet<PathBuf>>,
-    /// When the snapshot was taken. A file created before it was there when
-    /// the agent started, even if the snapshot left it out.
+    /// What Git ignored when the snapshot was taken, files and whole
+    /// directories. The snapshot does not hold them, so a file here that
+    /// looks new may be the person's own, and is never removed.
+    ignored: Arc<BTreeSet<PathBuf>>,
+    /// When the snapshot was taken, to tell the directories the agent made.
     captured_at: SystemTime,
 }
 
@@ -169,8 +172,29 @@ pub fn capture(directory: &Path) -> Result<Option<Baseline>> {
         repo_root: root,
         tree: snapshot.tree,
         left_out: Arc::new(snapshot.left_out),
+        ignored: Arc::new(ignored_paths(&repo)?),
         captured_at,
     }))
+}
+
+/// The files and outermost directories Git ignores in the working tree.
+fn ignored_paths(repo: &Repository) -> Result<BTreeSet<PathBuf>> {
+    let mut options = git2::StatusOptions::new();
+    options
+        .include_ignored(true)
+        .recurse_ignored_dirs(false)
+        .include_untracked(false)
+        .exclude_submodules(true);
+    let statuses = repo.statuses(Some(&mut options))?;
+    Ok(statuses
+        .iter()
+        .filter(|entry| entry.status().is_ignored())
+        .map(|entry| {
+            let bytes = entry.path_bytes();
+            let bytes = bytes.strip_suffix(b"/").unwrap_or(bytes);
+            PathBuf::from(<std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(bytes))
+        })
+        .collect())
 }
 
 /// The working tree as a tree object, without touching the on-disk index.
@@ -421,16 +445,14 @@ fn check_path_inside(root: &Path, path: &Path) -> Result<()> {
 /// one by a few milliseconds.
 const TIMESTAMP_GRANULARITY: std::time::Duration = std::time::Duration::from_millis(20);
 
-/// Whether the file system entry was created before `moment`. Where the
-/// file system does not record creation, its last change stands in.
-fn created_before(metadata: &fs::Metadata, moment: SystemTime) -> bool {
+/// Whether the file system records that the entry was created after
+/// `moment`. Without a recorded creation time, the answer is no: a change
+/// time says nothing about when a directory appeared.
+fn created_after(metadata: &fs::Metadata, moment: SystemTime) -> bool {
     let moment = moment
         .checked_sub(TIMESTAMP_GRANULARITY)
         .unwrap_or(SystemTime::UNIX_EPOCH);
-    metadata
-        .created()
-        .or_else(|_| metadata.modified())
-        .is_ok_and(|created| created < moment)
+    metadata.created().is_ok_and(|created| created >= moment)
 }
 
 /// Remove the directories above `path` that the agent created and left
@@ -443,7 +465,7 @@ fn remove_emptied_parents(baseline: &Baseline, tree: &git2::Tree<'_>, path: &Pat
             .get_path(parent)
             .is_ok_and(|entry| entry.kind() == Some(ObjectType::Tree));
         let new = fs::symlink_metadata(&absolute).is_ok_and(|metadata| {
-            metadata.is_dir() && !created_before(&metadata, baseline.captured_at)
+            metadata.is_dir() && created_after(&metadata, baseline.captured_at)
         });
         // `remove_dir` removes only an empty directory.
         if recorded || !new || fs::remove_dir(&absolute).is_err() {
@@ -506,9 +528,14 @@ pub fn revert(baseline: &Baseline, path: &Path) -> Result<()> {
         _ => false,
     };
     let Some(entry) = entry else {
-        if let Some(metadata) = &current {
-            // Git ignored it then, so the snapshot does not know its content.
-            if created_before(metadata, baseline.captured_at) {
+        if current.is_some() {
+            // Git ignored it then, so the snapshot does not know whether it
+            // was there, or what it held.
+            if baseline
+                .ignored
+                .iter()
+                .any(|ignored| path.starts_with(ignored))
+            {
                 bail!(
                     "{} was already here when the agent started, though Git ignored it; remove it by hand if you mean to",
                     path.display()
@@ -908,7 +935,6 @@ mod tests {
         let root = temp.path();
         fs::write(root.join(".gitignore"), "target/\n.env\n").unwrap();
         fs::write(root.join(".env"), "SECRET=1\n").unwrap();
-        std::thread::sleep(TIMESTAMP_GRANULARITY * 2);
         let baseline = capture(root).unwrap().unwrap();
         // The agent stops ignoring it, so it now looks new.
         fs::write(root.join(".gitignore"), "target/\n").unwrap();
@@ -921,6 +947,15 @@ mod tests {
         let error = revert(&baseline, Path::new(".env")).unwrap_err();
         assert!(error.to_string().contains("already here"), "{error}");
         assert_eq!(fs::read_to_string(root.join(".env")).unwrap(), "SECRET=1\n");
+        // Rewritten as a new file, as `sed -i` does, it is still theirs.
+        fs::remove_file(root.join(".env")).unwrap();
+        fs::write(root.join(".env"), "SECRET=2\n").unwrap();
+        assert!(revert(&baseline, Path::new(".env")).is_err());
+        assert!(root.join(".env").exists());
+        // So is anything in a directory Git ignored.
+        fs::write(root.join("target/built.bin"), "x").unwrap();
+        fs::write(root.join(".gitignore"), "").unwrap();
+        assert!(revert(&baseline, Path::new("target/built.bin")).is_err());
         // A file the agent created is still removed.
         fs::write(root.join("made.txt"), "x").unwrap();
         revert(&baseline, Path::new("made.txt")).unwrap();

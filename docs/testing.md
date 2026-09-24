@@ -422,7 +422,8 @@ refusing paths outside the repository. Revert is also proven never to write
 through a linked directory, to apply line-ending filters, to treat glob
 characters literally, and to refuse a path that changed between file and
 directory before touching anything, to remove the directories it emptied, and
-never to delete a file Git ignored when the agent started. Staging records a
+never to delete a file Git ignored when the agent started, even one rewritten
+as a new file, nor anything in a directory Git ignored. Staging records a
 submodule at its new commit and stages a file behind a linked directory as
 removed. Nested repositories and large untracked files stay out of the
 snapshot, and staged state compares content and mode. A
