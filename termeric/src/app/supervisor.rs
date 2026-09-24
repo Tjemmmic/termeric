@@ -612,7 +612,7 @@ impl App {
         match supervisor.mode {
             SupervisorMode::Watch => unreachable!("watch mode was refused above"),
             SupervisorMode::Auto => {
-                self.paste_and_submit_to_agent(target, text)?;
+                self.paste_and_submit_for_supervisor(target, text)?;
                 let supervisor = self.supervisor.as_mut().expect("still running");
                 supervisor.limits.record(&key, text, Instant::now());
                 supervisor.note(format!("Sent to {agent_name}: {}", one_line(text)));
@@ -681,6 +681,8 @@ impl App {
         };
         if choice_id == SEND_CHOICE && approval.shown_at.elapsed() < APPROVAL_ARMING {
             // Too soon to be a decision about this message; it stays open.
+            self.toasts
+                .info("Read the message first; Send works in a moment");
             return true;
         }
         self.info_overlay.dismiss(request_id);
@@ -753,7 +755,7 @@ impl App {
         }
         let (entry, outcome) = match outcome {
             ApprovalOutcome::Send => {
-                match self.paste_and_submit_to_agent(approval.target, &approval.text) {
+                match self.paste_and_submit_for_supervisor(approval.target, &approval.text) {
                     Ok(()) => (
                         format!("You approved; sent to {name}: {}", one_line(&approval.text)),
                         format!(

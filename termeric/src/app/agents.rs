@@ -49,6 +49,8 @@ pub(super) struct PendingAgentSubmit {
     /// When the text was typed, and when to press Enter; `None` until then.
     typed_at: Option<Instant>,
     enter_due: Option<Instant>,
+    /// Sent by the supervisor, which is told if it is dropped.
+    from_supervisor: bool,
 }
 
 /// The agent in the focused terminal.
@@ -828,9 +830,27 @@ impl App {
         target: AgentTarget,
         text: &str,
     ) -> Result<(), String> {
+        self.paste_and_submit(target, text, false)
+    }
+
+    /// Paste and submit a message the supervisor sent.
+    pub(super) fn paste_and_submit_for_supervisor(
+        &mut self,
+        target: AgentTarget,
+        text: &str,
+    ) -> Result<(), String> {
+        self.paste_and_submit(target, text, true)
+    }
+
+    fn paste_and_submit(
+        &mut self,
+        target: AgentTarget,
+        text: &str,
+        from_supervisor: bool,
+    ) -> Result<(), String> {
         let mode = self.recheck_agent_target(&target)?;
         let framed = crate::input::encode_paste(mode, text);
-        self.submit_to_agent(target, &framed)
+        self.submit(target, &framed, from_supervisor)
     }
 
     /// Type `input` into the agent at `target` as keystrokes and press Enter
@@ -840,6 +860,15 @@ impl App {
         &mut self,
         target: AgentTarget,
         input: &[u8],
+    ) -> Result<(), String> {
+        self.submit(target, input, false)
+    }
+
+    fn submit(
+        &mut self,
+        target: AgentTarget,
+        input: &[u8],
+        from_supervisor: bool,
     ) -> Result<(), String> {
         let waiting = self
             .pending_agent_submits
@@ -854,6 +883,7 @@ impl App {
                 input: Vec::new(),
                 typed_at: Some(now),
                 enter_due: Some(now + AGENT_SUBMIT_DELAY),
+                from_supervisor,
             });
             return Ok(());
         }
@@ -869,6 +899,7 @@ impl App {
             input: input.to_vec(),
             typed_at: None,
             enter_due: None,
+            from_supervisor,
         });
         Ok(())
     }
@@ -898,6 +929,7 @@ impl App {
             let person_typing = self
                 .last_person_input(identity)
                 .is_some_and(|person| now.saturating_duration_since(person) < PERSON_TYPING_GRACE);
+            let last_from_supervisor = self.pending_agent_submits[index].from_supervisor;
             let result = match (first, self.pending_agent_submits[index].enter_due) {
                 // The person typed into the prompt after the text went in;
                 // Enter would submit their words with it.
@@ -938,11 +970,17 @@ impl App {
             };
             if let Err((target, reason)) = result {
                 // Whatever else was waiting for that agent cannot reach it
-                // either.
+                // either. The one that failed may already be gone from the
+                // list, so the supervisor's is judged by what remains too.
+                let supervisors = self.pending_agent_submits.iter().any(|pending| {
+                    pending.target.identity == target.identity && pending.from_supervisor
+                }) || last_from_supervisor;
                 self.pending_agent_submits
                     .retain(|pending| pending.target.identity != target.identity);
                 index = 0;
-                self.report_undelivered(&target, &reason);
+                if supervisors {
+                    self.report_undelivered(&target, &reason);
+                }
                 self.toasts.warning(reason);
             }
         }
