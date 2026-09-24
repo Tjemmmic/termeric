@@ -625,6 +625,10 @@ pub enum SettingsAction {
     SetUpAgentStatus,
     /// Notify when an agent the person is not looking at needs them.
     SetAgentNotifications(bool),
+    /// Choose which agent supervises.
+    SetSupervisorAgent(String),
+    /// Choose how much the supervisor may do.
+    SetSupervisorMode(crate::agents::supervisor::SupervisorMode),
     /// Follow the system or override non-essential UI transitions.
     SetReduceMotion(AccessibilityPreference),
     /// Follow the system or override higher-contrast application chrome.
@@ -1529,6 +1533,34 @@ impl SettingsPanel {
                     action: SettingsAction::SetUpAgentStatus,
                 },
             });
+            let supervisor_agents = ["Claude Code", "Codex"];
+            let supervisor_index = crate::agents::supervisor::SUPERVISOR_AGENTS
+                .iter()
+                .position(|id| *id == config.supervisor.agent)
+                .unwrap_or(0);
+            items.push(SettingItem {
+                label: "Supervisor",
+                value: supervisor_agents[supervisor_index].into(),
+                kind: SettingKind::Dropdown {
+                    options: supervisor_agents
+                        .iter()
+                        .map(|name| (*name).into())
+                        .collect(),
+                    selected: supervisor_index,
+                },
+            });
+            let modes = crate::agents::supervisor::SupervisorMode::ALL;
+            items.push(SettingItem {
+                label: "Supervisor Mode",
+                value: config.supervisor.mode.label().into(),
+                kind: SettingKind::Dropdown {
+                    options: modes.iter().map(|mode| mode.label().into()).collect(),
+                    selected: modes
+                        .iter()
+                        .position(|mode| *mode == config.supervisor.mode)
+                        .unwrap_or(0),
+                },
+            });
             items.push(SettingItem {
                 label: "Notify When Agents Need You",
                 value: if config.agent_status.notify {
@@ -2031,6 +2063,19 @@ impl SettingsPanel {
                     }
                     (SettingsSection::Agents, "Notify When Agents Need You") => {
                         SettingsAction::SetAgentNotifications(new_val == "On")
+                    }
+                    (SettingsSection::Agents, "Supervisor") => {
+                        crate::agents::supervisor::SUPERVISOR_AGENTS
+                            .get(option_idx)
+                            .map_or(SettingsAction::None, |id| {
+                                SettingsAction::SetSupervisorAgent((*id).into())
+                            })
+                    }
+                    (SettingsSection::Agents, "Supervisor Mode") => {
+                        crate::agents::supervisor::SupervisorMode::ALL
+                            .get(option_idx)
+                            .copied()
+                            .map_or(SettingsAction::None, SettingsAction::SetSupervisorMode)
                     }
                     (SettingsSection::Agents, label) => self
                         .agent_rows

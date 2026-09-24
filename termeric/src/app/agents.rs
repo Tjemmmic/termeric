@@ -133,7 +133,10 @@ impl App {
                 None => true,
                 Some(agent) => match *id {
                     "agent.new-conversation" => agent.definition.new_conversation.is_none(),
-                    "agent.restart" => !agent.session.launched,
+                    // Restarting would drop the supervisor's wiring.
+                    "agent.restart" => {
+                        !agent.session.launched || self.is_supervisor_terminal(agent.identity)
+                    }
                     "agent.copy-last-response" => agent.status.as_ref().is_none_or(|status| {
                         status.last_message.is_none() && status.transcript_path.is_none()
                     }),
@@ -147,6 +150,21 @@ impl App {
             .collect();
         if self.agent_terminals().is_empty() {
             hidden.push("agent.go-to");
+        }
+        if self.supervisor_running() {
+            hidden.push("supervisor.start");
+            hidden.push(if self.supervisor_held() {
+                "supervisor.take-over"
+            } else {
+                "supervisor.hand-back"
+            });
+        } else {
+            hidden.extend([
+                "supervisor.take-over",
+                "supervisor.hand-back",
+                "supervisor.activity",
+                "supervisor.stop",
+            ]);
         }
         // Offered even after the agent exits, while its baseline remains.
         if self.focused_change_baseline().is_none() {
@@ -202,14 +220,36 @@ impl App {
             .collect()
     }
 
-    /// Submit text sent through the control protocol to one agent.
+    /// The agents a supervisor oversees: this window's, except itself.
+    pub(super) fn supervised_agents(
+        &self,
+        window_id: u64,
+    ) -> Vec<crate::control::protocol::AgentSummary> {
+        self.control_agents(window_id)
+            .into_iter()
+            .filter(|agent| {
+                !self.is_supervisor_terminal(TerminalIdentity {
+                    tab_id: agent.tab_id as usize,
+                    pane_id: crate::panes::PaneId(agent.pane_id),
+                })
+            })
+            .collect()
+    }
+
+    /// Submit text sent through the control protocol to one agent: as the
+    /// supervisor when `supervisor` carries its token, otherwise under the
+    /// external-input opt-in. Returns whether it awaits the person's approval.
     pub(super) fn submit_control_text_to_agent(
         &mut self,
         tab_id: u64,
         pane_id: u32,
         agent_id: &str,
         text: &str,
-    ) -> Result<(), String> {
+        supervisor: Option<&str>,
+    ) -> Result<bool, String> {
+        if let Some(token) = supervisor {
+            return self.supervised_submit(token, tab_id, pane_id, agent_id, text);
+        }
         if !self.config.security.allow_gui_control_input {
             return Err(
                 "External terminal input is disabled; set security.allow_gui_control_input = true"
@@ -233,6 +273,7 @@ impl App {
             },
             text,
         )
+        .map(|()| false)
     }
 
     /// List the agents running in this window, with what each is doing.
@@ -443,6 +484,13 @@ impl App {
             "agent.split-right" => self.open_agent_picker(AgentPlacement::SplitRight),
             "agent.split-down" => self.open_agent_picker(AgentPlacement::SplitDown),
             "agent.go-to" => self.open_agent_list(),
+            "supervisor.start" => self.start_supervisor(),
+            "supervisor.mode" => self.open_supervisor_mode_picker(),
+            "supervisor.take-over" => self.take_over_from_supervisor(),
+            "supervisor.hand-back" => self.hand_back_to_supervisor(),
+            "supervisor.activity" => self.show_supervisor_activity(),
+            "supervisor.rules" => self.edit_supervisor_rules(),
+            "supervisor.stop" => self.stop_supervisor(),
             "agent.review-changes" => self.review_agent_changes(),
             "agent.stage-changes" => self.stage_all_agent_changes(),
             "agent.copy-last-response" => self.copy_last_agent_response(),
@@ -501,6 +549,7 @@ impl App {
         // A reporting agent is recognized now, not at the next scan.
         tab.refresh_agents(&self.agents);
         self.acknowledge_focused_agent();
+        self.supervise_status_change(identity, before, after.as_ref());
         if let Some(status) =
             after.filter(|status| status.needs_attention() && before != Some(status.activity))
         {
@@ -726,7 +775,7 @@ impl App {
 
     /// The input modes of `target`'s terminal while it still runs the same
     /// agent.
-    fn agent_terminal_mode(
+    pub(super) fn agent_terminal_mode(
         &self,
         target: &AgentTarget,
     ) -> Result<termeric_core::term::TerminalMode, String> {

@@ -8,6 +8,15 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- The supervisor. **Start Supervisor** runs Claude Code or Codex as an agent
+  that watches the other agents in its window and answers them for you, as
+  far as its mode allows. Watch only reports. Assist asks you before each
+  message. Auto sends on its own within a rate limit and a repeat guard. It
+  follows plain-language rules in `supervisor.md` and is told when agents
+  need input, finish, or fail. **Take Over from Supervisor** makes it watch
+  until you hand back, and **Supervisor Activity** shows what it did. GUI
+  control protocol v21 adds the supervisor token.
+
 - `termeric mcp` is an MCP server that lets one agent see and direct the
   others: `list_agents`, `read_terminal`, and `send_to_agent`. Sending
   requires `security.allow_gui_control_input`. GUI control protocol v20 adds

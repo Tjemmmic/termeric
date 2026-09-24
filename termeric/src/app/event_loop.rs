@@ -1942,11 +1942,20 @@ impl ApplicationHandler<AppEvent> for App {
                     crate::control::protocol::Request::LaunchStatus { .. } => Err(
                         "Launch status requires the process-level application controller".into(),
                     ),
-                    crate::control::protocol::Request::ListAgents => {
-                        Ok(crate::control::protocol::Response::Agents {
-                            process_id: std::process::id(),
-                            agents: self.control_agents(1),
-                            truncated: false,
+                    crate::control::protocol::Request::ListAgents { supervisor } => {
+                        match supervisor {
+                            None => Ok(self.control_agents(1)),
+                            Some(token) if self.owns_supervisor_token(&token) => {
+                                Ok(self.supervised_agents(1))
+                            }
+                            Some(_) => Err("That supervisor is no longer running".to_string()),
+                        }
+                        .map(|agents| {
+                            crate::control::protocol::Response::Agents {
+                                process_id: std::process::id(),
+                                agents,
+                                truncated: false,
+                            }
                         })
                     }
                     crate::control::protocol::Request::SubmitToAgent {
@@ -1956,20 +1965,28 @@ impl ApplicationHandler<AppEvent> for App {
                         pane_id,
                         agent_id,
                         text,
+                        supervisor,
                     } => {
                         if window_id != 1 {
                             Err(format!("GUI window {window_id} does not exist"))
                         } else {
-                            self.submit_control_text_to_agent(tab_id, pane_id, &agent_id, &text)
-                                .map(
-                                    |()| crate::control::protocol::Response::AgentInputAccepted {
-                                        process_id: std::process::id(),
-                                        request_id,
-                                        window_id,
-                                        tab_id,
-                                        pane_id,
-                                    },
-                                )
+                            self.submit_control_text_to_agent(
+                                tab_id,
+                                pane_id,
+                                &agent_id,
+                                &text,
+                                supervisor.as_deref(),
+                            )
+                            .map(|pending_approval| {
+                                crate::control::protocol::Response::AgentInputAccepted {
+                                    process_id: std::process::id(),
+                                    request_id,
+                                    window_id,
+                                    tab_id,
+                                    pane_id,
+                                    pending_approval,
+                                }
+                            })
                         }
                     }
                     crate::control::protocol::Request::AgentEvent {

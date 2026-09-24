@@ -8268,7 +8268,7 @@ fn typed_agent_input_is_submitted_separately_and_only_to_the_same_agent() {
     );
     assert_eq!(listed[0].state, None, "no hook has reported");
     let submit = |app: &mut App, agent: &str| {
-        app.submit_control_text_to_agent(tab_id as u64, pane_id.0, agent, "go\non")
+        app.submit_control_text_to_agent(tab_id as u64, pane_id.0, agent, "go\non", None)
     };
     assert!(
         submit(&mut app, "codex")
@@ -8280,7 +8280,7 @@ fn typed_agent_input_is_submitted_separately_and_only_to_the_same_agent() {
         submit(&mut app, "gemini").unwrap_err(),
         "Gemini CLI is no longer running in that terminal"
     );
-    submit(&mut app, "codex").unwrap();
+    assert!(!submit(&mut app, "codex").unwrap(), "sent, not held");
     assert_eq!(read(11), b"/new\rxgo\non", "pasted without Enter");
     app.submit_due_agent_input(Instant::now() + super::agents::AGENT_SUBMIT_DELAY);
     assert_eq!(read(12), b"/new\rxgo\non\r");
@@ -11879,6 +11879,184 @@ done
     }));
     crate::session::set_test_sessions_base_dir(None);
     result.unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn the_supervisor_hears_about_agents_and_sends_only_as_its_mode_allows() {
+    use crate::agents::AgentReport;
+    use crate::agents::supervisor::SupervisorMode;
+    use crate::control::protocol::AgentEventKind;
+    use crate::ui::command_palette::palette::AgentPlacement;
+    use std::os::unix::fs::PermissionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    let log = temp.path().join("agents.log");
+    let fake = temp.path().join("fake-agent");
+    std::fs::write(
+        &fake,
+        r#"#!/bin/sh
+printf 'launch\t%s\targv=%s\n' "$FAKE_ROLE" "$*" >> "$FAKE_LOG"
+printf 'READY_%s\r\n' "$FAKE_ROLE"
+while :; do
+  if IFS= read -r line; then
+    printf 'stdin\t%s\t%s\n' "$FAKE_ROLE" "$line" >> "$FAKE_LOG"
+  else
+    sleep 0.01
+  fi
+done
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut config = Config::default();
+    for (agent, role) in [("claude-code", "supervisor"), ("codex", "worker")] {
+        config.agents.insert(
+            agent.into(),
+            crate::agents::AgentConfig {
+                program: Some(fake.display().to_string()),
+                env: std::collections::BTreeMap::from([
+                    ("FAKE_LOG".into(), log.display().to_string()),
+                    ("FAKE_ROLE".into(), role.into()),
+                ]),
+                ..Default::default()
+            },
+        );
+    }
+    config.supervisor.mode = SupervisorMode::Assist;
+    let mut app = App::new_headless(config).unwrap();
+    app.supervisor_rules_path = temp.path().join("supervisor.md");
+    let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+    tabs.new_tab_with_command(
+        "/bin/sh",
+        &["-c".into(), "sleep 30".into()],
+        temp.path().to_str(),
+        None,
+        None,
+        HashMap::new(),
+    )
+    .unwrap();
+    app.tabs = Some(tabs);
+
+    app.start_picked_agent(AgentPlacement::NewTab, "codex");
+    wait_for_plugin_fixture(&mut app, "codex", "READY_worker");
+    let worker = app
+        .tabs
+        .as_ref()
+        .unwrap()
+        .active_tab()
+        .unwrap()
+        .focused_terminal_identity();
+    app.start_supervisor();
+    wait_for_plugin_fixture(&mut app, "claude-code", "READY_supervisor");
+    assert!(app.supervisor_running());
+    let supervisor_terminal = app
+        .tabs
+        .as_ref()
+        .unwrap()
+        .active_tab()
+        .unwrap()
+        .focused_terminal_identity();
+    assert!(app.is_supervisor_terminal(supervisor_terminal));
+    let token = app.supervisor_token().unwrap().to_owned();
+    wait_for_file_text(&log, "--mcp-config");
+    let launched = std::fs::read_to_string(&log).unwrap();
+    assert!(launched.contains(&format!("\"mcp\",\"--supervisor\",\"{token}\"")));
+    assert!(launched.contains("assist mode"));
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("supervisor.md")).unwrap(),
+        crate::agents::supervisor::DEFAULT_RULES
+    );
+    assert_eq!(
+        app.supervised_agents(1).len(),
+        1,
+        "the supervisor is not listed"
+    );
+
+    let flush = |app: &mut App| {
+        app.submit_due_agent_input(Instant::now() + super::agents::AGENT_SUBMIT_DELAY)
+    };
+    // A worker needing input is reported to the supervisor.
+    let worker_id = app
+        .tabs
+        .as_ref()
+        .unwrap()
+        .tab_by_id(worker.tab_id)
+        .unwrap()
+        .pane_terminal_id(worker.pane_id)
+        .unwrap()
+        .to_owned();
+    assert!(app.record_agent_report(
+        &worker_id,
+        AgentReport {
+            agent_id: "codex".into(),
+            event: AgentEventKind::NeedsInput,
+            detail: Some("Approve shell: cargo test".into()),
+            last_message: None,
+            transcript_path: None,
+        }
+    ));
+    flush(&mut app);
+    wait_for_file_text(
+        &log,
+        &format!(
+            "stdin\tsupervisor\tTermeric: Codex (window 1, tab {}, pane {}) needs input: Approve shell: cargo test",
+            worker.tab_id, worker.pane_id.0
+        ),
+    );
+
+    let send = |app: &mut App, token: &str, target: crate::tabs::TerminalIdentity, text: &str| {
+        app.supervised_submit(token, target.tab_id as u64, target.pane_id.0, "codex", text)
+    };
+    // Assist: held for the person, sent once approved.
+    assert_eq!(send(&mut app, &token, worker, "yes, run it"), Ok(true));
+    assert!(
+        send(&mut app, &token, worker, "another")
+            .unwrap_err()
+            .contains("waiting for the person's approval")
+    );
+    let approval = app.info_overlay.request_id();
+    app.apply_info_overlay_action(crate::ui::info_overlay::InfoOverlayAction::Choose {
+        request_id: approval,
+        choice_id: "supervisor-send".into(),
+    });
+    flush(&mut app);
+    wait_for_file_text(&log, "stdin\tworker\tyes, run it");
+    wait_for_file_text(
+        &log,
+        "stdin\tsupervisor\tTermeric: the person approved your message to Codex; it was sent.",
+    );
+
+    // Taking over leaves the supervisor watching; handing back restores it.
+    app.take_over_from_supervisor();
+    assert!(
+        send(&mut app, &token, worker, "keep going")
+            .unwrap_err()
+            .contains("watch mode")
+    );
+    app.hand_back_to_supervisor();
+    app.set_supervisor_mode(SupervisorMode::Auto);
+    assert_eq!(send(&mut app, &token, worker, "keep going"), Ok(false));
+    flush(&mut app);
+    wait_for_file_text(&log, "stdin\tworker\tkeep going");
+    assert!(
+        send(&mut app, &token, worker, "keep going")
+            .unwrap_err()
+            .contains("just sent")
+    );
+    assert_eq!(
+        send(&mut app, &token, supervisor_terminal, "hi").unwrap_err(),
+        "The supervisor cannot send to itself"
+    );
+    assert!(send(&mut app, &"f".repeat(32), worker, "x").is_err());
+    assert!(
+        app.unavailable_agent_commands()
+            .contains(&"agent.restart".to_string()),
+        "the focused supervisor cannot be restarted without its wiring"
+    );
+
+    app.stop_supervisor();
+    assert!(!app.supervisor_running());
+    assert!(send(&mut app, &token, worker, "x").is_err());
 }
 
 #[cfg(unix)]

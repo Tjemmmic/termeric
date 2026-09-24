@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::collections::HashSet;
 use std::io::{Read, Write};
 
-pub const PROTOCOL_VERSION: u32 = 20;
+pub const PROTOCOL_VERSION: u32 = 21;
 pub const JSON_SCHEMA_VERSION: u32 = 3;
 pub const MAX_FRAME_BYTES: usize = 256 * 1024;
 pub const MAX_WINDOWS: usize = 32;
@@ -171,10 +171,14 @@ pub enum Request {
         divider_id: u64,
         ratio_millis: u16,
     },
-    /// Every terminal running a coding agent, with its reported state.
-    ListAgents,
+    /// Every terminal running a coding agent, with its reported state. With
+    /// a supervisor token, only the agents that supervisor oversees.
+    ListAgents {
+        supervisor: Option<String>,
+    },
     /// Paste `text` into the agent in one pane and submit it once it has
-    /// settled, provided that pane still runs `agent_id`.
+    /// settled, provided that pane still runs `agent_id`. With a supervisor
+    /// token, the send is the supervisor's and follows its mode and limits.
     SubmitToAgent {
         request_id: String,
         window_id: u64,
@@ -182,6 +186,7 @@ pub enum Request {
         pane_id: u32,
         agent_id: String,
         text: String,
+        supervisor: Option<String>,
     },
     /// A coding agent's hook reporting what the agent is doing. The terminal
     /// is named by the identity its processes inherited, not by focus.
@@ -495,6 +500,8 @@ pub enum Response {
         window_id: u64,
         tab_id: u64,
         pane_id: u32,
+        /// Held until the person approves it.
+        pending_approval: bool,
     },
 }
 
@@ -683,6 +690,7 @@ pub enum ServerFrame {
         window_id: u64,
         tab_id: u64,
         pane_id: u32,
+        pending_approval: bool,
     },
     Error {
         version: u32,
@@ -711,14 +719,17 @@ impl Request {
 
     pub fn validate(&self) -> Result<(), String> {
         match self {
-            Self::Inventory | Self::ListAgents => Ok(()),
+            Self::Inventory => Ok(()),
+            Self::ListAgents { supervisor } => validate_supervisor(supervisor.as_deref()),
             Self::SubmitToAgent {
                 request_id,
                 window_id,
                 agent_id,
                 text,
+                supervisor,
                 ..
             } => {
+                validate_supervisor(supervisor.as_deref())?;
                 if !valid_request_id(request_id) {
                     return Err(
                         "GUI control request ID must be exactly 32 lowercase hex digits".into(),
@@ -1044,7 +1055,7 @@ impl Request {
             Self::Inventory
             | Self::ReadText { .. }
             | Self::LaunchStatus { .. }
-            | Self::ListAgents
+            | Self::ListAgents { .. }
             | Self::AgentEvent { .. } => None,
             Self::CreateWindow { request_id, .. }
             | Self::LaunchWindow { request_id, .. }
@@ -1066,6 +1077,14 @@ impl Request {
             | Self::SubmitToAgent { request_id, .. } => Some(request_id),
         }
     }
+}
+
+/// Supervisor tokens are 32 lowercase hex digits, like request IDs.
+fn validate_supervisor(token: Option<&str>) -> Result<(), String> {
+    if token.is_some_and(|token| !valid_request_id(token)) {
+        return Err("Supervisor token must be exactly 32 lowercase hex digits".into());
+    }
+    Ok(())
 }
 
 fn validate_agent_event(

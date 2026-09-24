@@ -346,6 +346,7 @@ impl Application {
                     .and_then(|tab_id| u64::try_from(tab_id).ok())
             {
                 let control_id = self.next_control_window_id;
+                window.control_window_id = control_id;
                 self.window_order.push(id);
                 self.control_window_ids.insert(id, control_id);
                 self.next_control_window_id = self.next_control_window_id.saturating_add(1);
@@ -2015,19 +2016,29 @@ impl Application {
         {
             return self.read_control_text(window_id, tab_id, pane_id, history_lines, max_bytes);
         }
-        if request == Request::ListAgents {
-            let mut agents: Vec<_> = self
-                .control_window_ids
-                .iter()
-                .filter_map(|(native_id, control_id)| {
-                    let window = self
-                        .windows
-                        .get(native_id)
-                        .filter(|window| !window.should_exit)?;
-                    Some(window.control_agents(*control_id))
-                })
-                .flatten()
-                .collect();
+        if let Request::ListAgents { supervisor } = &request {
+            let mut claimed = supervisor.is_none();
+            let mut agents = Vec::new();
+            for (native_id, control_id) in &self.control_window_ids {
+                let Some(window) = self
+                    .windows
+                    .get(native_id)
+                    .filter(|window| !window.should_exit)
+                else {
+                    continue;
+                };
+                match supervisor {
+                    None => agents.extend(window.control_agents(*control_id)),
+                    Some(token) if window.owns_supervisor_token(token) => {
+                        claimed = true;
+                        agents.extend(window.supervised_agents(*control_id));
+                    }
+                    Some(_) => {}
+                }
+            }
+            if !claimed {
+                return Err("That supervisor is no longer running".into());
+            }
             agents.sort_by_key(|agent| (agent.window_id, agent.tab_id, agent.pane_id));
             let truncated = agents.len() > crate::control::protocol::MAX_AGENT_SUMMARIES;
             agents.truncate(crate::control::protocol::MAX_AGENT_SUMMARIES);
@@ -2228,13 +2239,20 @@ impl Application {
                 pane_id,
                 agent_id,
                 text,
+                supervisor,
             } => self.submit_control_text_to_agent(
-                request_id, *window_id, *tab_id, *pane_id, agent_id, text,
+                request_id,
+                *window_id,
+                *tab_id,
+                *pane_id,
+                agent_id,
+                text,
+                supervisor.as_deref(),
             ),
             Request::Inventory
             | Request::ReadText { .. }
             | Request::LaunchStatus { .. }
-            | Request::ListAgents
+            | Request::ListAgents { .. }
             | Request::AgentEvent { .. } => {
                 unreachable!("read-only and agent requests returned before mutation dispatch")
             }
@@ -3740,6 +3758,7 @@ impl Application {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn submit_control_text_to_agent(
         &mut self,
         request_id: &str,
@@ -3748,19 +3767,22 @@ impl Application {
         pane_id: u32,
         agent_id: &str,
         text: &str,
+        supervisor: Option<&str>,
     ) -> std::result::Result<crate::control::protocol::Response, String> {
         let native_id = self.control_native_window_id(window_id)?;
-        self.windows
+        let pending_approval = self
+            .windows
             .get_mut(&native_id)
             .filter(|window| !window.should_exit)
             .ok_or_else(|| format!("GUI window {window_id} is closing"))?
-            .submit_control_text_to_agent(tab_id, pane_id, agent_id, text)?;
+            .submit_control_text_to_agent(tab_id, pane_id, agent_id, text, supervisor)?;
         Ok(crate::control::protocol::Response::AgentInputAccepted {
             process_id: std::process::id(),
             request_id: request_id.to_string(),
             window_id,
             tab_id,
             pane_id,
+            pending_approval,
         })
     }
 

@@ -56,9 +56,15 @@ fn main() -> Result<std::process::ExitCode> {
         cli::ParseOutcome::AgentEvent(_) => {
             unreachable!("agent hooks return before logging starts")
         }
-        cli::ParseOutcome::Mcp { process_id } => {
+        cli::ParseOutcome::Mcp {
+            process_id,
+            supervisor,
+        } => {
             // Standard output carries the protocol; logging stays on stderr.
-            mcp::serve(mcp::ControlBackend { process_id })?;
+            mcp::serve(mcp::ControlBackend {
+                process_id,
+                supervisor,
+            })?;
             return Ok(std::process::ExitCode::SUCCESS);
         }
         cli::ParseOutcome::QuickAccess(launch) => {

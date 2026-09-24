@@ -222,6 +222,7 @@ fn serve_client(
             window_id,
             tab_id,
             pane_id,
+            pending_approval,
         } => {
             validate_action_response(process_id, &request_id, window_id)?;
             ServerFrame::AgentInputAccepted {
@@ -231,6 +232,7 @@ fn serve_client(
                 window_id,
                 tab_id,
                 pane_id,
+                pending_approval,
             }
         }
         Response::AgentEventRecorded { process_id } => {

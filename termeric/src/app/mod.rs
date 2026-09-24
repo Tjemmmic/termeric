@@ -35,6 +35,7 @@ mod sessions;
 mod settings_input;
 mod shortcuts_input;
 pub mod state;
+mod supervisor;
 mod system_accessibility;
 mod tab_drag;
 #[cfg(test)]
@@ -1247,6 +1248,12 @@ pub struct App {
     agent_change_list: Option<agent_changes::ChangeList>,
     /// A file revert awaiting the person's confirmation.
     pending_revert: Option<agent_changes::PendingRevert>,
+    /// The agent overseeing this window's other agents, if started.
+    supervisor: Option<supervisor::Supervisor>,
+    /// The plain-language rules given to a new supervisor.
+    supervisor_rules_path: PathBuf,
+    /// This window's ID in the control protocol.
+    control_window_id: u64,
     /// At most one background file upload may be active per native window.
     active_file_upload: Option<ActiveFileUpload>,
     /// One export owns its captured source and this window's completion route.
@@ -1482,6 +1489,9 @@ impl App {
             agent_change_job: None,
             agent_change_list: None,
             pending_revert: None,
+            supervisor: None,
+            supervisor_rules_path: Config::config_path().with_file_name("supervisor.md"),
+            control_window_id: 1,
             active_file_upload: None,
             session_export: None,
             kitty_file_transfers: kitty_file_transfer::KittyFileTransferManager::default(),
@@ -3147,6 +3157,10 @@ impl App {
                 .request(redraw_scheduler::RedrawReason::TerminalOutput);
         }
         self.submit_due_agent_input(Instant::now());
+        if self.retire_closed_supervisor() {
+            self.redraw_scheduler
+                .request(redraw_scheduler::RedrawReason::WindowEvent);
+        }
         if self.poll_agent_change_job() {
             self.redraw_scheduler
                 .request(redraw_scheduler::RedrawReason::WindowEvent);
@@ -3695,6 +3709,10 @@ impl App {
                 kind: crate::ui::command_palette::palette::PickKind::AgentChange,
                 id,
             } => self.pick_agent_change(&id),
+            PaletteResult::Picked {
+                kind: crate::ui::command_palette::palette::PickKind::SupervisorMode,
+                id,
+            } => self.pick_supervisor_mode(&id),
             PaletteResult::RunAction(id) => {
                 if self.run_agent_command(&id) {
                     return;

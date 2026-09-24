@@ -3,8 +3,9 @@
 //!
 //! It is a thin translation of the running GUI's control protocol into MCP
 //! tools. Reading terminals needs nothing beyond what `termeric control`
-//! already allows; sending input still requires
-//! `security.allow_gui_control_input`, which the GUI enforces.
+//! already allows. Sending requires `security.allow_gui_control_input`, or,
+//! for the server Termeric starts for its supervisor, that supervisor's mode
+//! and limits; the GUI enforces both.
 
 use std::io::{BufRead, Write};
 
@@ -42,13 +43,15 @@ pub trait Backend {
         pane_id: u32,
         agent_id: &str,
         text: &str,
-    ) -> Result<()>;
+    ) -> Result<bool>;
 }
 
 /// The Termeric process to talk to: the one named, else the one owning the
 /// terminal this server runs in, else the only one running.
 pub struct ControlBackend {
     pub process_id: Option<u32>,
+    /// Set when Termeric started this server for its supervisor.
+    pub supervisor: Option<String>,
 }
 
 impl ControlBackend {
@@ -79,7 +82,7 @@ impl ControlBackend {
 
 impl Backend for ControlBackend {
     fn list_agents(&self) -> Result<(Vec<AgentSummary>, bool)> {
-        crate::control::list_agents(self.process()?)
+        crate::control::list_agents(self.process()?, self.supervisor.as_deref())
     }
 
     fn read_terminal(
@@ -99,8 +102,16 @@ impl Backend for ControlBackend {
         pane_id: u32,
         agent_id: &str,
         text: &str,
-    ) -> Result<()> {
-        crate::control::submit_to_agent(self.process()?, window_id, tab_id, pane_id, agent_id, text)
+    ) -> Result<bool> {
+        crate::control::submit_to_agent(
+            self.process()?,
+            window_id,
+            tab_id,
+            pane_id,
+            agent_id,
+            text,
+            self.supervisor.as_deref(),
+        )
     }
 }
 
@@ -312,14 +323,20 @@ impl<B: Backend> Server<B> {
                     integer(&arguments, "tab_id")?,
                     integer(&arguments, "pane_id")?,
                 );
-                self.backend
+                let pending = self
+                    .backend
                     .submit(window_id, tab_id, pane_id, agent_id, text)?;
-                Ok((
+                let text = if pending {
+                    format!(
+                        "Waiting for the person to approve your message to {agent_id}. \
+                         Termeric will tell you whether it was sent."
+                    )
+                } else {
                     format!(
                         "Sent to {agent_id} in window {window_id}, tab {tab_id}, pane {pane_id}."
-                    ),
-                    None,
-                ))
+                    )
+                };
+                Ok((text, None))
             })(),
             _ => Err(anyhow::anyhow!("Unknown tool {name}")),
         };
@@ -367,14 +384,21 @@ mod tests {
             Ok(format!("{window}/{tab}/{pane} last {lines}"))
         }
 
-        fn submit(&self, window: u64, tab: u64, pane: u32, agent: &str, text: &str) -> Result<()> {
+        fn submit(
+            &self,
+            window: u64,
+            tab: u64,
+            pane: u32,
+            agent: &str,
+            text: &str,
+        ) -> Result<bool> {
             if agent != "codex" {
                 bail!("{agent} is no longer running in that terminal");
             }
             self.sent
                 .borrow_mut()
                 .push((window, tab, pane, agent.into(), text.into()));
-            Ok(())
+            Ok(text.contains("approve me"))
         }
     }
 
@@ -470,6 +494,18 @@ mod tests {
         assert_eq!(
             server.backend.sent.borrow().as_slice(),
             [(1, 4, 0, "codex".into(), "yes, run it".into())]
+        );
+
+        let held = call(
+            &mut server,
+            "send_to_agent",
+            json!({"window_id": 1, "tab_id": 4, "pane_id": 0, "agent_id": "codex", "text": "approve me"}),
+        );
+        assert!(
+            held["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .starts_with("Waiting for the person to approve")
         );
 
         let gone = call(

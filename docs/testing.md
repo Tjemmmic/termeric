@@ -393,6 +393,12 @@ must return the compiled wire version without creating a daemon socket or token.
 Exact-version mismatch tests fail before requests or terminal input, while the
 fake-SSH integration remains credential- and network-free.
 
+The supervisor is tested with fake agent programs. A headless test covers
+launch wiring (the tokened MCP config and rules file) and the feed into the
+supervisor. It also covers Assist approval, Take Over, Auto sends, the repeat
+and self-send guards, a foreign token, and Stop. Unit tests cover the mode and
+limit policy, launch arguments for both agents, and event wording.
+
 Agent change review is tested against temporary Git repositories. The tests
 prove that snapshots leave the real index byte-for-byte unchanged, skip
 ignored and oversized untracked files, and report additions, edits, and

@@ -1584,8 +1584,15 @@ fn endpoint_for(process_id: u32) -> anyhow::Result<ControlPaths> {
 
 /// Every terminal running an agent in GUI process `process_id`, and whether
 /// the list was cut short.
-pub(super) fn list_agents(process_id: u32) -> anyhow::Result<(Vec<protocol::AgentSummary>, bool)> {
-    match request(&endpoint_for(process_id)?, Request::ListAgents)? {
+pub(super) fn list_agents(
+    process_id: u32,
+    supervisor: Option<&str>,
+) -> anyhow::Result<(Vec<protocol::AgentSummary>, bool)> {
+    let listing = Request::ListAgents {
+        supervisor: supervisor.map(str::to_owned),
+    };
+    listing.validate().map_err(anyhow::Error::msg)?;
+    match request(&endpoint_for(process_id)?, listing)? {
         ServerFrame::Agents {
             version,
             process_id: returned,
@@ -1600,7 +1607,10 @@ pub(super) fn list_agents(process_id: u32) -> anyhow::Result<(Vec<protocol::Agen
     }
 }
 
-/// Paste `text` into the agent in one pane and submit it.
+/// Paste `text` into the agent in one pane and submit it, as the supervisor
+/// when `supervisor` carries its token. Returns whether it waits for the
+/// person's approval.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn submit_to_agent(
     process_id: u32,
     window_id: u64,
@@ -1608,7 +1618,8 @@ pub(super) fn submit_to_agent(
     pane_id: u32,
     agent_id: &str,
     text: &str,
-) -> anyhow::Result<()> {
+    supervisor: Option<&str>,
+) -> anyhow::Result<bool> {
     let request_id = generate_request_id()?;
     let submission = Request::SubmitToAgent {
         request_id: request_id.clone(),
@@ -1617,6 +1628,7 @@ pub(super) fn submit_to_agent(
         pane_id,
         agent_id: agent_id.into(),
         text: text.into(),
+        supervisor: supervisor.map(str::to_owned),
     };
     submission.validate().map_err(anyhow::Error::msg)?;
     match request(&endpoint_for(process_id)?, submission)? {
@@ -1627,12 +1639,13 @@ pub(super) fn submit_to_agent(
             window_id: returned_window,
             tab_id: returned_tab,
             pane_id: returned_pane,
+            pending_approval,
         } if version == protocol::PROTOCOL_VERSION
             && returned == process_id
             && returned_id == request_id
             && (returned_window, returned_tab, returned_pane) == (window_id, tab_id, pane_id) =>
         {
-            Ok(())
+            Ok(pending_approval)
         }
         ServerFrame::Error { message, .. } => anyhow::bail!(message),
         _ => anyhow::bail!("Invalid agent input response"),

@@ -1290,6 +1290,16 @@ impl Tab {
         self.pty.as_ref()
     }
 
+    /// The identity `pane_id`'s processes inherited.
+    pub(crate) fn pane_terminal_id(&self, pane_id: crate::panes::PaneId) -> Option<&str> {
+        if let Some(panes) = &self.pane_manager {
+            return panes.get_pane(pane_id)?.pty.terminal_id();
+        }
+        (pane_id == self.single_pane_id)
+            .then_some(self.pty.as_ref()?)
+            .and_then(PtyHandle::terminal_id)
+    }
+
     /// The pane whose processes inherited `terminal_id`.
     pub(crate) fn pane_with_terminal_id(&self, terminal_id: &str) -> Option<crate::panes::PaneId> {
         if let Some(panes) = &self.pane_manager {

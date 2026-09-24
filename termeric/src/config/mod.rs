@@ -69,6 +69,9 @@ pub struct Config {
     /// `[agent_status]`: presentation of agent hook reports.
     #[serde(default)]
     pub agent_status: crate::agents::config::AgentStatusConfig,
+    /// `[supervisor]`: the agent that oversees the others, and its authority.
+    #[serde(default)]
+    pub supervisor: crate::agents::supervisor::SupervisorConfig,
     /// Harvest mode configuration
     #[serde(default)]
     pub harvest: HarvestConfig,
@@ -444,6 +447,7 @@ impl Config {
         }
         self.domains.validate()?;
         crate::agents::config::validate(&self.agents)?;
+        self.supervisor.validate()?;
         for (id, agent) in &self.agents {
             validate_child_environment(&format!("agents.{id}"), &agent.env)?;
             for (name, profile) in &agent.profiles {

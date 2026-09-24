@@ -65,9 +65,11 @@ pub enum ParseOutcome {
     /// An agent hook. `None` when its arguments are not understood, which
     /// must stay silent: a failing hook would surface inside the agent.
     AgentEvent(Option<crate::agents::hook::HookInvocation>),
-    /// Serve MCP on standard I/O for the named (or discovered) process.
+    /// Serve MCP on standard I/O for the named (or discovered) process, as
+    /// a supervisor's server when it carries that supervisor's token.
     Mcp {
         process_id: Option<u32>,
+        supervisor: Option<String>,
     },
     Print(String),
 }
@@ -126,22 +128,38 @@ pub fn parse(arguments: impl IntoIterator<Item = OsString>) -> anyhow::Result<Pa
     parse_collected(arguments, &crate::config::DomainsConfig::default())
 }
 
-/// `mcp [--process PID]`.
+/// `mcp [--process PID] [--supervisor TOKEN]`. The token is passed only by
+/// the supervisor Termeric starts.
 fn parse_mcp(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
-    match arguments {
-        [] => Ok(ParseOutcome::Mcp { process_id: None }),
-        [flag, value] if flag.to_str() == Some("--process") => {
-            let process_id = value
-                .to_str()
-                .and_then(|value| value.parse::<u32>().ok())
-                .filter(|pid| *pid != 0 && *pid <= i32::MAX as u32)
-                .context("--process expects a Termeric process ID")?;
-            Ok(ParseOutcome::Mcp {
-                process_id: Some(process_id),
-            })
+    let mut process_id = None;
+    let mut supervisor = None;
+    let mut rest = arguments.iter();
+    while let Some(flag) = rest.next() {
+        let value = rest.next().and_then(|value| value.to_str());
+        match (flag.to_str(), value) {
+            (Some("--process"), Some(value)) if process_id.is_none() => {
+                process_id = Some(
+                    value
+                        .parse::<u32>()
+                        .ok()
+                        .filter(|pid| *pid != 0 && *pid <= i32::MAX as u32)
+                        .context("--process expects a Termeric process ID")?,
+                );
+            }
+            (Some("--supervisor"), Some(value)) if supervisor.is_none() => {
+                anyhow::ensure!(
+                    crate::control::protocol::valid_request_id(value),
+                    "--supervisor expects the token Termeric passed"
+                );
+                supervisor = Some(value.to_owned());
+            }
+            _ => anyhow::bail!("usage: termeric mcp [--process PID]"),
         }
-        _ => anyhow::bail!("usage: termeric mcp [--process PID]"),
     }
+    Ok(ParseOutcome::Mcp {
+        process_id,
+        supervisor,
+    })
 }
 
 /// `agent-event AGENT EVENT`, as written by Termeric's hook setup.

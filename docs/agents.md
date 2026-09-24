@@ -145,6 +145,60 @@ private, user-only socket as the [GUI control protocol](gui-control.md).
 records the path of the Termeric program that ran it, so run setup again after
 moving Termeric. The Settings page shows **Needs updating** when that is due.
 
+## The supervisor
+
+A supervisor is an agent that watches the other agents in its window and
+answers them for you, as far as you allow. **Start Supervisor** opens the
+configured agent, Claude Code or Codex, in a tab of its own. It starts with the
+[MCP tools](#letting-an-agent-direct-the-others) already connected, its
+instructions, and your rules. It then summarizes what each agent is doing.
+
+Whenever another agent in the window needs input, finishes, or fails, Termeric
+tells the supervisor with a message that begins `Termeric:`. While the
+supervisor is busy, messages wait and arrive together once it finishes, if its
+[status hooks](#agent-status) are set up. The supervisor reads terminals and
+sends prompts through the same tools as any MCP client. Termeric then decides
+each message it tries to send, according to the mode:
+
+| Mode | What happens to a message |
+|---|---|
+| Watch | Refused. The supervisor reports and suggests instead. |
+| Assist (default) | Shown to you with **Send** and **Don't send**. The supervisor is told the outcome. |
+| Auto | Sent at once, within the limits below. |
+
+In every mode Termeric enforces these limits, whatever the supervisor's
+instructions say:
+
+- It sends only to agents in its own window, never to itself or to a terminal
+  without that agent.
+- It sends at most `max_sends_per_minute` messages (6 by default).
+- It cannot send the same message to the same agent twice within 30 seconds.
+
+**Take Over from Supervisor** puts it in watch mode until **Hand Back to
+Supervisor**, and tells it so. **Supervisor Mode…** changes the mode,
+including for a running supervisor. **Supervisor Activity** lists what it was
+told, what it asked, and what was sent or refused. **Stop Supervisor** closes
+its terminal.
+
+The rules are plain language in `supervisor.md`, beside `config.toml`.
+**Edit Supervisor Rules** opens it in `$VISUAL` or `$EDITOR`, creating it with
+examples the first time. A supervisor reads the rules when it starts, so
+restart it after editing. The supervisor's sends do not need
+`security.allow_gui_control_input`, because starting it is the permission. They
+are not checked for destructive commands, because each agent still applies its
+own approvals.
+
+```toml
+[supervisor]
+agent = "claude-code"      # or "codex"
+mode = "assist"            # "watch", "assist", or "auto"
+max_sends_per_minute = 6   # 1 to 60
+```
+
+The supervisor's MCP server carries a random token that identifies it to
+Termeric. Other MCP clients use the ordinary rules above and never gain its
+authority.
+
 ## Letting an agent direct the others
 
 `termeric mcp` is a [Model Context Protocol](https://modelcontextprotocol.io)
@@ -243,6 +297,8 @@ split around, collapsed, or moved to another tab or window.
 
 ## Limits
 
+- The supervisor has been exercised with fake agents only. Real Claude Code
+  and Codex supervisors, and their MCP clients, have not been run.
 - Status comes only from agents with hooks set up: Claude Code and Codex.
   Other agents are recognized, but their state is not known.
 - Agents in [live-domain](live-domains.md) terminals cannot report status.

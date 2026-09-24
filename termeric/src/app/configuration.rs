@@ -997,6 +997,14 @@ impl App {
             SettingsAction::SetAgentNotifications(notify) => {
                 self.config.agent_status.notify = notify;
             }
+            SettingsAction::SetSupervisorAgent(agent) => {
+                self.config.supervisor.agent = agent;
+            }
+            SettingsAction::SetSupervisorMode(mode) => {
+                // Also applies to a supervisor that is already running.
+                self.set_supervisor_mode(mode);
+                return;
+            }
             SettingsAction::SetUpAgentStatus => {
                 // Up to date: offer removal instead of a no-op.
                 let install =

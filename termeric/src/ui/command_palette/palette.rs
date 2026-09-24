@@ -83,8 +83,10 @@ pub enum PickKind {
     Agent(AgentPlacement),
     /// Choose a terminal running an agent to focus.
     AgentTerminal,
-    /// Choose a file an agent changed to review, or stage them all.
+    /// Choose a file an agent changed to review.
     AgentChange,
+    /// Choose how much the supervisor may do.
+    SupervisorMode,
 }
 
 /// Where a picked agent starts.
@@ -104,6 +106,7 @@ impl PickKind {
             Self::Agent(_) => "Choose agent",
             Self::AgentTerminal => "Go to agent",
             Self::AgentChange => "Review agent changes",
+            Self::SupervisorMode => "Supervisor mode",
         }
     }
 }
@@ -1184,6 +1187,13 @@ pub fn core_commands(
         ("agent.copy-last-response", "Copy Last Agent Response", None),
         ("core.toggle-transcript", "Toggle Agent Transcript", None),
         ("agent.setup-status", "Set Up Agent Status…", None),
+        ("supervisor.start", "Start Supervisor", None),
+        ("supervisor.mode", "Supervisor Mode…", None),
+        ("supervisor.take-over", "Take Over from Supervisor", None),
+        ("supervisor.hand-back", "Hand Back to Supervisor", None),
+        ("supervisor.activity", "Supervisor Activity", None),
+        ("supervisor.rules", "Edit Supervisor Rules", None),
+        ("supervisor.stop", "Stop Supervisor", None),
         ("agent.remove-status", "Remove Agent Status Hooks…", None),
     ] {
         commands.push(RegisteredCommand {

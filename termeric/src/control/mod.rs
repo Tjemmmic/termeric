@@ -223,21 +223,26 @@ pub fn running_processes() -> anyhow::Result<Vec<u32>> {
     }
 }
 
-/// Every agent terminal in GUI process `process_id`, and whether the list
-/// was cut short.
-pub fn list_agents(process_id: u32) -> anyhow::Result<(Vec<protocol::AgentSummary>, bool)> {
+/// Every agent terminal in GUI process `process_id`, or with a supervisor
+/// token only those it oversees, and whether the list was cut short.
+pub fn list_agents(
+    process_id: u32,
+    supervisor: Option<&str>,
+) -> anyhow::Result<(Vec<protocol::AgentSummary>, bool)> {
     #[cfg(unix)]
     {
-        client::list_agents(process_id)
+        client::list_agents(process_id, supervisor)
     }
     #[cfg(not(unix))]
     {
-        let _ = process_id;
+        let _ = (process_id, supervisor);
         anyhow::bail!("Agent control needs a Unix control socket")
     }
 }
 
-/// Paste `text` into one pane's agent and submit it.
+/// Paste `text` into one pane's agent and submit it. Returns whether it
+/// waits for the person's approval.
+#[allow(clippy::too_many_arguments)]
 pub fn submit_to_agent(
     process_id: u32,
     window_id: u64,
@@ -245,14 +250,19 @@ pub fn submit_to_agent(
     pane_id: u32,
     agent_id: &str,
     text: &str,
-) -> anyhow::Result<()> {
+    supervisor: Option<&str>,
+) -> anyhow::Result<bool> {
     #[cfg(unix)]
     {
-        client::submit_to_agent(process_id, window_id, tab_id, pane_id, agent_id, text)
+        client::submit_to_agent(
+            process_id, window_id, tab_id, pane_id, agent_id, text, supervisor,
+        )
     }
     #[cfg(not(unix))]
     {
-        let _ = (process_id, window_id, tab_id, pane_id, agent_id, text);
+        let _ = (
+            process_id, window_id, tab_id, pane_id, agent_id, text, supervisor,
+        );
         anyhow::bail!("Agent control needs a Unix control socket")
     }
 }

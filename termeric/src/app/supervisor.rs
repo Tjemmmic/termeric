@@ -1,0 +1,656 @@
+//! The running supervisor in one window: starting it, telling it what other
+//! agents need, deciding each message it sends, and letting the person take
+//! over. The policy itself lives in `crate::agents::supervisor`.
+
+use super::agents::AgentTarget;
+use super::*;
+use crate::agents::supervisor::{self, SendLimits, SupervisorMode};
+use crate::agents::{AgentActivity, AgentStatus};
+use crate::tabs::TerminalIdentity;
+use crate::ui::info_overlay::InfoOverlayChoice;
+use std::collections::VecDeque;
+
+const MAX_QUEUED_MESSAGES: usize = 32;
+const MAX_LOG_ENTRIES: usize = 200;
+const SEND_CHOICE: &str = "supervisor-send";
+const DECLINE_CHOICE: &str = "supervisor-decline";
+
+/// A message the supervisor asked to send, waiting for the person.
+struct PendingApproval {
+    request_id: u64,
+    target: AgentTarget,
+    text: String,
+}
+
+pub(super) struct Supervisor {
+    /// Proves a control request comes from this supervisor's MCP server.
+    token: String,
+    /// The supervisor terminal's process identity, which survives moves.
+    terminal_id: String,
+    agent_id: String,
+    agent_name: String,
+    mode: SupervisorMode,
+    /// The mode to return to after the person takes over.
+    held_mode: Option<SupervisorMode>,
+    limits: SendLimits,
+    /// Messages waiting until the supervisor finishes what it is doing.
+    queue: VecDeque<String>,
+    log: VecDeque<(Instant, String)>,
+    approval: Option<PendingApproval>,
+}
+
+impl Supervisor {
+    fn note(&mut self, entry: String) {
+        if self.log.len() == MAX_LOG_ENTRIES {
+            self.log.pop_front();
+        }
+        self.log.push_back((Instant::now(), entry));
+    }
+}
+
+/// A random token, as 32 lowercase hex digits.
+fn new_token() -> Option<String> {
+    use std::io::Read;
+    let mut bytes = [0_u8; 16];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut source| source.read_exact(&mut bytes))
+        .ok()?;
+    Some(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+impl App {
+    pub(super) fn supervisor_running(&self) -> bool {
+        self.supervisor.is_some()
+    }
+
+    #[cfg(test)]
+    pub(super) fn supervisor_token(&self) -> Option<&str> {
+        self.supervisor
+            .as_ref()
+            .map(|supervisor| supervisor.token.as_str())
+    }
+
+    pub(super) fn supervisor_held(&self) -> bool {
+        self.supervisor
+            .as_ref()
+            .is_some_and(|supervisor| supervisor.held_mode.is_some())
+    }
+
+    /// The supervisor's terminal, while it is open.
+    fn supervisor_terminal(&self) -> Option<TerminalIdentity> {
+        let supervisor = self.supervisor.as_ref()?;
+        self.tabs
+            .as_ref()?
+            .terminal_with_id(&supervisor.terminal_id)
+    }
+
+    fn supervisor_target(&self) -> Option<AgentTarget> {
+        let supervisor = self.supervisor.as_ref()?;
+        Some(AgentTarget {
+            identity: self.supervisor_terminal()?,
+            agent_id: supervisor.agent_id.clone(),
+            agent_name: supervisor.agent_name.clone(),
+        })
+    }
+
+    /// Whether `identity` is the supervisor's own terminal.
+    pub(super) fn is_supervisor_terminal(&self, identity: TerminalIdentity) -> bool {
+        self.supervisor_terminal() == Some(identity)
+    }
+
+    fn ensure_rules_file(&self) -> anyhow::Result<String> {
+        let path = &self.supervisor_rules_path;
+        match std::fs::read_to_string(path) {
+            Ok(rules) => Ok(rules),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(path, supervisor::DEFAULT_RULES)?;
+                Ok(supervisor::DEFAULT_RULES.to_string())
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// Start the configured agent as this window's supervisor, or show the
+    /// one already running.
+    pub(super) fn start_supervisor(&mut self) {
+        if let Some(identity) = self.supervisor_terminal() {
+            self.activate_notification_origin(identity);
+            return;
+        }
+        let result = (|| -> Result<(), String> {
+            let config = self.config.supervisor.clone();
+            let agent = self
+                .agents
+                .get(&config.agent)
+                .filter(|agent| agent.enabled && agent.installed_path().is_some())
+                .cloned()
+                .ok_or_else(|| {
+                    format!(
+                        "The supervisor runs {}, which is not installed or is turned off",
+                        config.agent
+                    )
+                })?;
+            let rules = self
+                .ensure_rules_file()
+                .map_err(|error| format!("Could not read the supervisor rules: {error:#}"))?;
+            let token = new_token().ok_or("Could not create a supervisor token")?;
+            let executable = std::env::current_exe()
+                .and_then(|path| path.canonicalize())
+                .map_err(|error| format!("Could not locate the Termeric executable: {error}"))?;
+            let extra = supervisor::launch_args(
+                &agent.id,
+                &executable,
+                &token,
+                &supervisor::instructions(config.mode, &rules),
+            )
+            .ok_or_else(|| format!("{} cannot be a supervisor", agent.name))?;
+            let ctx = self.build_plugin_context();
+            let mut action =
+                crate::plugin::agent::open_tab_action(&agent, &ctx, None, false, None)?;
+            if let crate::plugin::hooks::PluginAction::OpenTab { args, title, .. } = &mut action {
+                args.extend(extra);
+                *title = Some("Supervisor".into());
+            }
+            let before = self.tabs.as_ref().map(TabManager::active_tab_id);
+            self.execute_plugin_actions(vec![action]);
+            let tab = self
+                .tabs
+                .as_ref()
+                .and_then(TabManager::active_tab)
+                .filter(|tab| Some(Some(tab.id)) != before)
+                .ok_or_else(|| format!("{} did not start", agent.name))?;
+            let terminal_id = tab
+                .pane_terminal_id(tab.focused_terminal_identity().pane_id)
+                .ok_or("The supervisor's terminal has no identity")?
+                .to_owned();
+            let mut started = Supervisor {
+                token,
+                terminal_id,
+                agent_id: agent.id.clone(),
+                agent_name: agent.name.clone(),
+                mode: config.mode,
+                held_mode: None,
+                limits: SendLimits::default(),
+                queue: VecDeque::new(),
+                log: VecDeque::new(),
+                approval: None,
+            };
+            started.note(format!(
+                "Started {} as the supervisor in {} mode",
+                agent.name,
+                config.mode.label().to_lowercase()
+            ));
+            self.supervisor = Some(started);
+            if let Some(tabs) = &mut self.tabs {
+                tabs.refresh_agents(&self.agents);
+            }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            self.toasts.error(error);
+        }
+    }
+
+    /// End supervision and close the supervisor's terminal.
+    pub(super) fn stop_supervisor(&mut self) {
+        let terminal = self.supervisor_terminal();
+        self.supervisor = None;
+        if let Some(identity) = terminal
+            && let Err(error) = self.close_control_pane(identity.tab_id as u64, identity.pane_id.0)
+        {
+            self.toasts
+                .warning(format!("The supervisor's terminal stayed open: {error}"));
+        }
+        self.toasts.info("Supervisor stopped");
+    }
+
+    /// Forget a supervisor whose terminal has closed. Returns whether it did.
+    pub(super) fn retire_closed_supervisor(&mut self) -> bool {
+        if self.supervisor.is_none() || self.supervisor_terminal().is_some() {
+            return false;
+        }
+        self.supervisor = None;
+        self.toasts.info("The supervisor's terminal closed");
+        true
+    }
+
+    /// Stop the supervisor from sending until the person hands back.
+    pub(super) fn take_over_from_supervisor(&mut self) {
+        let Some(supervisor) = &mut self.supervisor else {
+            return;
+        };
+        if supervisor.held_mode.is_none() {
+            supervisor.held_mode = Some(supervisor.mode);
+            supervisor.mode = SupervisorMode::Watch;
+            supervisor.note("The person took over; watching only".into());
+        }
+        self.tell_supervisor(
+            "Termeric: the person has taken over. You are in watch mode until they hand back; do not send to agents."
+                .into(),
+        );
+        self.toasts
+            .info("You have taken over; the supervisor only watches");
+    }
+
+    pub(super) fn hand_back_to_supervisor(&mut self) {
+        let Some(supervisor) = &mut self.supervisor else {
+            return;
+        };
+        let Some(mode) = supervisor.held_mode.take() else {
+            return;
+        };
+        supervisor.mode = mode;
+        supervisor.note(format!(
+            "Handed back in {} mode",
+            mode.label().to_lowercase()
+        ));
+        self.tell_supervisor(format!(
+            "Termeric: the person handed back control. You are in {} mode again.",
+            mode.label().to_lowercase()
+        ));
+        self.toasts.info("The supervisor is back in charge");
+    }
+
+    /// Change the supervisor's mode, for now and for later supervisors.
+    pub(super) fn set_supervisor_mode(&mut self, mode: SupervisorMode) {
+        let mut config = self.config.clone();
+        config.supervisor.mode = mode;
+        if let Err(error) = self.apply_config(config) {
+            self.toasts.error(format!("{error:#}"));
+            return;
+        }
+        if let Some(supervisor) = &mut self.supervisor {
+            supervisor.held_mode = None;
+            supervisor.mode = mode;
+            supervisor.note(format!("Mode set to {}", mode.label().to_lowercase()));
+            self.tell_supervisor(format!(
+                "Termeric: your mode changed. {}",
+                mode.instructions()
+            ));
+        }
+        self.toasts
+            .info(format!("Supervisor mode: {}", mode.label()));
+    }
+
+    /// Show the mode picker.
+    pub(super) fn open_supervisor_mode_picker(&mut self) {
+        let current = self
+            .supervisor
+            .as_ref()
+            .map_or(self.config.supervisor.mode, |supervisor| {
+                supervisor.held_mode.unwrap_or(supervisor.mode)
+            });
+        let items = SupervisorMode::ALL
+            .into_iter()
+            .map(
+                |mode| crate::ui::command_palette::palette::RegisteredCommand {
+                    id: mode.label().to_lowercase(),
+                    title: mode.label().into(),
+                    category: mode.description().into(),
+                    shortcut: None,
+                    icon: None,
+                    source: crate::ui::command_palette::palette::CommandSource::Core,
+                    destructive: false,
+                },
+            )
+            .collect();
+        self.command_palette.begin_pick(
+            crate::ui::command_palette::palette::PickKind::SupervisorMode,
+            items,
+            "Supervisor mode…",
+            "mode",
+            Some(&current.label().to_lowercase()),
+        );
+    }
+
+    pub(super) fn pick_supervisor_mode(&mut self, id: &str) {
+        if let Some(mode) = SupervisorMode::ALL
+            .into_iter()
+            .find(|mode| mode.label().eq_ignore_ascii_case(id))
+        {
+            self.set_supervisor_mode(mode);
+        }
+    }
+
+    /// Open the rules file in the person's editor, in a new tab.
+    pub(super) fn edit_supervisor_rules(&mut self) {
+        if let Err(error) = self.ensure_rules_file() {
+            self.toasts
+                .error(format!("Could not create the supervisor rules: {error:#}"));
+            return;
+        }
+        let path = self.supervisor_rules_path.display().to_string();
+        let opened = self.tabs.as_mut().map(|tabs| {
+            tabs.new_tab_with_command(
+                "/bin/sh",
+                &[
+                    "-c".into(),
+                    "exec ${VISUAL:-${EDITOR:-vi}} \"$1\"".into(),
+                    "termeric-edit".into(),
+                    path,
+                ],
+                None,
+                Some("Supervisor rules"),
+                None,
+                std::collections::HashMap::new(),
+            )
+        });
+        match opened {
+            Some(Ok(_)) => self.refresh_focused_terminal_surfaces(),
+            Some(Err(error)) => self
+                .toasts
+                .error(format!("Could not open an editor: {error:#}")),
+            None => {}
+        }
+    }
+
+    /// What the supervisor has seen and done, newest first.
+    pub(super) fn show_supervisor_activity(&mut self) {
+        let Some(supervisor) = &self.supervisor else {
+            return;
+        };
+        let lines = supervisor
+            .log
+            .iter()
+            .rev()
+            .map(|(when, entry)| format!("{}  {entry}", ago(when.elapsed())))
+            .collect();
+        self.info_overlay.show("Supervisor activity", lines);
+    }
+
+    /// Tell the supervisor something now, or once it has finished what it is
+    /// doing.
+    fn tell_supervisor(&mut self, message: String) {
+        let busy = self
+            .supervisor_terminal()
+            .and_then(|identity| {
+                let tabs = self.tabs.as_ref()?;
+                let status = tabs
+                    .tab_by_id(identity.tab_id)?
+                    .pane_session(identity.pane_id)?
+                    .agent_status
+                    .as_ref()?;
+                Some(matches!(
+                    status.activity,
+                    AgentActivity::Working | AgentActivity::NeedsInput
+                ))
+            })
+            .unwrap_or(false);
+        let Some(supervisor) = &mut self.supervisor else {
+            return;
+        };
+        if supervisor.queue.len() == MAX_QUEUED_MESSAGES {
+            supervisor.queue.pop_front();
+        }
+        supervisor.queue.push_back(message);
+        if !busy {
+            self.flush_supervisor_queue();
+        }
+    }
+
+    /// Deliver every waiting message as one prompt.
+    fn flush_supervisor_queue(&mut self) {
+        let Some(target) = self.supervisor_target() else {
+            return;
+        };
+        let Some(supervisor) = &mut self.supervisor else {
+            return;
+        };
+        if supervisor.queue.is_empty() {
+            return;
+        }
+        let message = supervisor.queue.drain(..).collect::<Vec<_>>().join("\n");
+        if let Err(error) = self.paste_and_submit_to_agent(target, &message)
+            && let Some(supervisor) = &mut self.supervisor
+        {
+            supervisor.note(format!("Could not reach the supervisor: {error}"));
+        }
+    }
+
+    /// React to an agent's changed status: tell the supervisor about other
+    /// agents that need attention, and deliver waiting messages once the
+    /// supervisor itself is free.
+    pub(super) fn supervise_status_change(
+        &mut self,
+        identity: TerminalIdentity,
+        before: Option<AgentActivity>,
+        status: Option<&AgentStatus>,
+    ) {
+        if self.supervisor.is_none() {
+            return;
+        }
+        if self.is_supervisor_terminal(identity) {
+            if status.is_none_or(|status| {
+                !matches!(
+                    status.activity,
+                    AgentActivity::Working | AgentActivity::NeedsInput
+                )
+            }) {
+                self.flush_supervisor_queue();
+            }
+            return;
+        }
+        let Some(status) = status.filter(|status| before != Some(status.activity)) else {
+            return;
+        };
+        let name = self
+            .agents
+            .get(&status.agent_id)
+            .map_or_else(|| status.agent_id.clone(), |agent| agent.name.clone());
+        let where_ = format!(
+            "window {}, tab {}, pane {}",
+            self.control_window_id, identity.tab_id, identity.pane_id.0
+        );
+        if let Some(message) = supervisor::event_message(&name, &where_, status) {
+            if let Some(supervisor) = &mut self.supervisor {
+                supervisor.note(message.trim_start_matches("Termeric: ").to_owned());
+            }
+            self.tell_supervisor(message);
+        }
+    }
+
+    /// Whether `token` belongs to this window's supervisor.
+    pub(super) fn owns_supervisor_token(&self, token: &str) -> bool {
+        self.supervisor
+            .as_ref()
+            .is_some_and(|supervisor| supervisor.token == token)
+    }
+
+    /// Decide a message the supervisor asked to send. Returns whether it is
+    /// waiting for the person's approval.
+    pub(super) fn supervised_submit(
+        &mut self,
+        token: &str,
+        tab_id: u64,
+        pane_id: u32,
+        agent_id: &str,
+        text: &str,
+    ) -> Result<bool, String> {
+        if !self.owns_supervisor_token(token) {
+            return Err("This supervisor does not oversee that window".into());
+        }
+        let identity = TerminalIdentity {
+            tab_id: usize::try_from(tab_id)
+                .map_err(|_| "Target tab ID does not fit this platform".to_string())?,
+            pane_id: crate::panes::PaneId(pane_id),
+        };
+        if self.is_supervisor_terminal(identity) {
+            return Err("The supervisor cannot send to itself".into());
+        }
+        let agent_name = self
+            .agents
+            .get(agent_id)
+            .map_or_else(|| agent_id.to_string(), |agent| agent.name.clone());
+        let target = AgentTarget {
+            identity,
+            agent_id: agent_id.to_string(),
+            agent_name: agent_name.clone(),
+        };
+        // The target must still run that agent before anything is decided.
+        self.agent_terminal_mode(&target)?;
+        let per_minute = self.config.supervisor.max_sends_per_minute;
+        let key = format!("{}:{}", identity.tab_id, identity.pane_id.0);
+        let supervisor = self
+            .supervisor
+            .as_mut()
+            .expect("the token was checked above");
+        if let Err(refusal) =
+            supervisor
+                .limits
+                .check(supervisor.mode, per_minute, &key, text, Instant::now())
+        {
+            supervisor.note(format!("Refused a message to {agent_name}: {refusal}"));
+            return Err(refusal.to_string());
+        }
+        match supervisor.mode {
+            SupervisorMode::Watch => unreachable!("watch mode was refused above"),
+            SupervisorMode::Auto => {
+                self.paste_and_submit_to_agent(target, text)?;
+                let supervisor = self.supervisor.as_mut().expect("still running");
+                supervisor.limits.record(&key, text, Instant::now());
+                supervisor.note(format!("Sent to {agent_name}: {}", one_line(text)));
+                Ok(false)
+            }
+            SupervisorMode::Assist => {
+                if supervisor.approval.is_some() {
+                    return Err(
+                        "Another message is waiting for the person's approval; wait for its outcome"
+                            .into(),
+                    );
+                }
+                let mut lines = vec![
+                    format!("The supervisor wants to send this to {agent_name}:"),
+                    String::new(),
+                ];
+                lines.extend(text.lines().take(20).map(|line| format!("  {line}")));
+                if text.lines().count() > 20 {
+                    lines.push("  …".into());
+                }
+                lines.push(String::new());
+                let choice_line = lines.len();
+                lines.push("  S  Send".into());
+                lines.push("  D  Don't send".into());
+                let request_id = self.info_overlay.show_choices(
+                    "Supervisor message",
+                    lines,
+                    vec![
+                        InfoOverlayChoice::new(SEND_CHOICE, "Send", choice_line, Some('s')),
+                        InfoOverlayChoice::new(
+                            DECLINE_CHOICE,
+                            "Don't send",
+                            choice_line + 1,
+                            Some('d'),
+                        ),
+                    ],
+                );
+                let supervisor = self.supervisor.as_mut().expect("still running");
+                supervisor.note(format!("Asked you to approve a message to {agent_name}"));
+                supervisor.approval = Some(PendingApproval {
+                    request_id,
+                    target,
+                    text: text.to_owned(),
+                });
+                Ok(true)
+            }
+        }
+    }
+
+    /// Answer an approval dialog. Returns whether the choice was its.
+    pub(super) fn handle_supervisor_choice(&mut self, request_id: u64, choice_id: &str) -> bool {
+        if !matches!(choice_id, SEND_CHOICE | DECLINE_CHOICE) {
+            return false;
+        }
+        let Some(supervisor) = &mut self.supervisor else {
+            return false;
+        };
+        if supervisor
+            .approval
+            .as_ref()
+            .is_none_or(|approval| approval.request_id != request_id)
+        {
+            return false;
+        }
+        self.info_overlay.dismiss(request_id);
+        self.resolve_supervisor_approval(choice_id == SEND_CHOICE);
+        true
+    }
+
+    /// Treat a dismissed approval dialog as declined.
+    pub(super) fn cancel_supervisor_approval(&mut self, request_id: u64) {
+        if self
+            .supervisor
+            .as_ref()
+            .and_then(|supervisor| supervisor.approval.as_ref())
+            .is_some_and(|approval| approval.request_id == request_id)
+        {
+            self.resolve_supervisor_approval(false);
+        }
+    }
+
+    fn resolve_supervisor_approval(&mut self, send: bool) {
+        let Some(approval) = self
+            .supervisor
+            .as_mut()
+            .and_then(|supervisor| supervisor.approval.take())
+        else {
+            return;
+        };
+        let name = approval.target.agent_name.clone();
+        let key = format!(
+            "{}:{}",
+            approval.target.identity.tab_id, approval.target.identity.pane_id.0
+        );
+        let outcome = if send {
+            match self.paste_and_submit_to_agent(approval.target, &approval.text) {
+                Ok(()) => {
+                    if let Some(supervisor) = &mut self.supervisor {
+                        supervisor
+                            .limits
+                            .record(&key, &approval.text, Instant::now());
+                        supervisor.note(format!(
+                            "You approved; sent to {name}: {}",
+                            one_line(&approval.text)
+                        ));
+                    }
+                    format!("Termeric: the person approved your message to {name}; it was sent.")
+                }
+                Err(error) => {
+                    if let Some(supervisor) = &mut self.supervisor {
+                        supervisor.note(format!("Approved, but not sent to {name}: {error}"));
+                    }
+                    format!(
+                        "Termeric: the person approved your message to {name}, but it could not be sent: {error}"
+                    )
+                }
+            }
+        } else {
+            if let Some(supervisor) = &mut self.supervisor {
+                supervisor.note(format!("You declined a message to {name}"));
+            }
+            format!("Termeric: the person declined your message to {name}; it was not sent.")
+        };
+        self.tell_supervisor(outcome);
+    }
+}
+
+/// The first line of `text`, shortened for the activity log.
+fn one_line(text: &str) -> String {
+    let line = text.lines().next().unwrap_or_default();
+    match line.char_indices().nth(80) {
+        Some((cut, _)) => format!("{}…", &line[..cut]),
+        None => line.to_owned(),
+    }
+}
+
+/// How long ago, in the fixed width the activity log aligns on.
+fn ago(elapsed: Duration) -> String {
+    let minutes = elapsed.as_secs() / 60;
+    match minutes {
+        0 => "   now".into(),
+        1..=59 => format!("{minutes:>3} min"),
+        _ => format!("{:>4} h", minutes / 60),
+    }
+}

@@ -12,7 +12,7 @@ use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 const TOKEN: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-const VERSION: u32 = 20;
+const VERSION: u32 = 21;
 
 /// A private runtime directory holding a fake GUI endpoint for this process.
 struct Gui {
@@ -246,7 +246,8 @@ fn the_mcp_server_speaks_json_rpc_over_stdio_to_the_terminals_gui() {
     assert!(output.status.success(), "{output:?}");
     assert_eq!(
         request,
-        json!({"version": VERSION, "token": TOKEN, "request": {"operation": "list_agents"}})
+        json!({"version": VERSION, "token": TOKEN,
+               "request": {"operation": "list_agents", "supervisor": null}})
     );
     let replies: Vec<Value> = String::from_utf8(output.stdout)
         .unwrap()

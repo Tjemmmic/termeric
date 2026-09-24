@@ -14,6 +14,7 @@ pub mod hook;
 pub mod session;
 pub mod setup;
 pub mod status;
+pub mod supervisor;
 pub mod transcript;
 
 use std::collections::BTreeMap;
