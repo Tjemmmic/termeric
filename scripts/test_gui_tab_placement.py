@@ -24,6 +24,9 @@ class TabPlacementTests(unittest.TestCase):
                             self.assertTrue(0 <= y < layout["surface"][1])
         top = placement.overflow_drag_layout("top", 29, 14)
         self.assertEqual((top["visible"], top["forward_index"], top["reverse_index"]), (3, 12, 1))
+        # At the real 34px rows only two 96px tabs fit the 480px fixture.
+        top = placement.overflow_drag_layout("top", placement.TAB_ROW_HEIGHT, 14)
+        self.assertEqual((top["visible"], top["forward_index"], top["reverse_index"]), (2, 13, 1))
         compact = placement.overflow_drag_layout("compact", 29, 14)
         self.assertEqual((compact["visible"], compact["forward_index"], compact["reverse_index"]), (2, 13, 0))
         self.assertEqual(compact["previous"], (36, 113))
@@ -116,17 +119,19 @@ class TabPlacementTests(unittest.TestCase):
 
     def test_compact_points_use_observed_metrics_and_reject_noncompact_fixtures(self):
         points = placement.compact_pointer_targets((5, 80, 720, 85))
-        self.assertEqual(points, {"tab": (20, 43), "previous": (36, 113),
-                                  "next": (110, 113), "new": (183, 113)})
-        self.assertEqual(placement.compact_pointer_targets((5, 80, 720, 5))["tab"], (20, 42))
-        for geometry in ((0, 80, 720, 85), (5, 80, 960, 85),
-                         (1, 80, 720, 100)):
+        # Rail rows are the renderer's fixed 34px, whatever the cell size.
+        self.assertEqual(points, {"tab": (20, 51), "previous": (36, 111),
+                                  "next": (110, 111), "new": (183, 111)})
+        self.assertEqual(placement.compact_pointer_targets((5, 80, 720, 5))["tab"], (20, 51))
+        # An empty terminal, or one without the left rail. The font no longer
+        # decides the row height, so it cannot make a fixture non-compact.
+        for geometry in ((0, 80, 720, 85), (5, 80, 960, 85)):
             with self.assertRaises(ValueError):
                 placement.compact_pointer_targets(geometry)
 
     def test_compact_metrics_identify_one_or_two_visible_tabs_for_distant_click(self):
-        for geometry, row_height, visible in (((5, 80, 720, 85), 29, 2),
-                                               ((3, 80, 720, 75), 38, 1)):
+        for geometry, row_height, visible in (((5, 80, 720, 85), 34, 1),
+                                               ((3, 80, 720, 75), 34, 1)):
             height = placement.compact_row_height(geometry)
             self.assertEqual(height, row_height)
             self.assertEqual((128 - 2 * height) // height, visible)

@@ -47,16 +47,25 @@ def rail_reduced_width(current: tuple[int, ...], top: tuple[int, ...]) -> bool:
             and current[0] == top[0] and current[3] == top[3])
 
 
+# The renderer's TAB_BAR_HEIGHT at scale 1. Chrome rows use the desktop UI
+# face, so their height no longer follows the terminal font.
+TAB_ROW_HEIGHT = 34
+# The renderer's MIN_TAB_WIDTH at scale 1: the top bar overflows below it.
+MIN_TOP_TAB_WIDTH = 96
+# The panel-dismissal fixture: wide enough that the split's divider, halfway
+# across the terminal right of the 220px rail, lies left of a side panel (at
+# most 484px wide at the fixture's 11px cells), so a click on it is outside.
+PANEL_SURFACE = (1280, 720)
+PANEL_DIVIDER_X = 220 + (PANEL_SURFACE[0] - 220) // 2
+PANEL_POINTER_Y = 680
+
+
 def compact_row_height(geometry: tuple[int, ...]) -> int:
     # This fixture uses a 960x128 scale-1 surface and the default 220px rail.
-    # Derive row height from the actual PTY cell metrics, not the host font name.
     rows, cols, width, height = geometry
     if min(rows, cols, width, height) <= 0 or not 220 <= 960 - width < 250:
         raise ValueError("compact fixture did not retain its expected left rail")
-    row_height = max(18, math.floor(height / rows * 1.1 + 0.5)) + 10
-    if not 3 * row_height <= 128 < 5 * row_height:
-        raise ValueError("fixture font does not force a compact rail with a full tab")
-    return row_height
+    return TAB_ROW_HEIGHT
 
 
 def compact_pointer_targets(geometry: tuple[int, ...]) -> dict[str, tuple[int, int]]:
@@ -78,7 +87,7 @@ def overflow_drag_layout(name: str, row_height: int, tab_count: int) -> dict:
     if name == "top":
         width, height, position = 480, 240, "top"
         viewport_width = width - 6 * row_height
-        visible = viewport_width // 80
+        visible = viewport_width // MIN_TOP_TAB_WIDTH
         slot_width = viewport_width / visible
         point = lambda offset: (math.floor(row_height + offset * slot_width + 20), row_height // 2)
         previous, next_ = (row_height // 2, row_height // 2), (math.floor(width - 4.5 * row_height), row_height // 2)
@@ -452,6 +461,11 @@ def run_tab_overflow_scenario(gui, binary: Path, run_dir: Path, env: dict,
         # observed cell height because the compact rail can fit one or two tabs.
         visible_tabs = (128 - 2 * compact_row_height(compact_geometry)) // compact_row_height(compact_geometry)
         distant_owner = starts()[-visible_tabs]
+        # Tabs in order, and where the distant tab is: the last one when the
+        # compact rail shows one tab, the one before it when it shows two.
+        tab_order = [*pids, added, compact_added]
+        distant_index = tab_order.index(distant_owner)
+        after_distant = tab_order[(distant_index + 1) % len(tab_order)]
         for key in ("F6", "Home", "Return", "Escape", "F6", "Home"):
             chord((), key)
         for _ in range((count + 1) * 2):
@@ -586,9 +600,9 @@ def run_tab_overflow_scenario(gui, binary: Path, run_dir: Path, env: dict,
         # Keep the original split active. A click outside an open panel, but
         # directly on its background divider, must dismiss the panel rather
         # than begin resizing. Only the existing focused PTY receives typing.
-        select_and_check(count, "PANEL_SPLIT_SELECTED_174", split_pid)
+        select_and_check(distant_index, "PANEL_SPLIT_SELECTED_174", split_pid)
         old_geometry = gui.latest_terminal_geometry(gui.read_records(transcript), split_pid)
-        app.renderer_resize(backend, 960, 720)
+        app.renderer_resize(backend, *PANEL_SURFACE)
         gui.wait_until("panel pointer fixture resize", lambda: gui.latest_terminal_geometry(
             gui.read_records(transcript), split_pid)[3] > old_geometry[3])
         panel_geometry = {pid: gui.latest_terminal_geometry(gui.read_records(transcript), pid)
@@ -598,7 +612,7 @@ def run_tab_overflow_scenario(gui, binary: Path, run_dir: Path, env: dict,
             for key in ("F6", "End", *("Up",) * steps, "Return"):
                 chord((), key)
             gui.time.sleep(0.25)
-            native_click(gui, app, backend, (590, 680), (960, 720))
+            native_click(gui, app, backend, (PANEL_DIVIDER_X, PANEL_POINTER_Y), PANEL_SURFACE)
             gui.time.sleep(0.25)
             token = f"PANEL_{name}_DISMISSED_174"
             assert_focus_input(token, split_pid)
@@ -613,29 +627,34 @@ def run_tab_overflow_scenario(gui, binary: Path, run_dir: Path, env: dict,
         # preview when Ctrl+Tab hides their tab during the next held drag.
         with native_keyboard_lifetime(gui, app, backend):
             lost_before_divider = app.log_count("Window focus changed: false")
-            native_drag(gui, app, backend, (590, 680), (680, 680), (960, 720))
+            native_drag(gui, app, backend, (PANEL_DIVIDER_X, PANEL_POINTER_Y),
+                        (PANEL_DIVIDER_X + 90, PANEL_POINTER_Y), PANEL_SURFACE)
             gui.wait_until("positive divider resize", lambda: all(
                 gui.latest_terminal_geometry(gui.read_records(transcript), pid) != geometry
                 for pid, geometry in panel_geometry.items()))
             divider_geometry = {pid: gui.latest_terminal_geometry(gui.read_records(transcript), pid)
                                 for pid in panel_geometry}
-            sibling_geometry = gui.latest_terminal_geometry(gui.read_records(transcript), compact_added)
-            native_drag(gui, app, backend, (680, 680), (750, 680), (960, 720),
+            sibling_geometry = gui.latest_terminal_geometry(gui.read_records(transcript), after_distant)
+            native_drag(gui, app, backend, (PANEL_DIVIDER_X + 90, PANEL_POINTER_Y),
+                        (PANEL_DIVIDER_X + 160, PANEL_POINTER_Y), PANEL_SURFACE,
                         during_drag=lambda: chord(("ctrl",), "Tab"))
-            assert_focus_input("DIVIDER_SWITCH_TARGET_174", compact_added)
+            assert_focus_input("DIVIDER_SWITCH_TARGET_174", after_distant)
             if app.log_count("Window focus changed: false") != lost_before_divider:
                 raise gui.AcceptanceError("divider drag was interrupted by unrelated focus loss")
             if any(gui.latest_terminal_geometry(gui.read_records(transcript), pid) != geometry
                    for pid, geometry in divider_geometry.items()):
                 raise gui.AcceptanceError("divider drag resized its hidden source tab")
-            if gui.latest_terminal_geometry(gui.read_records(transcript), compact_added) != sibling_geometry:
+            if gui.latest_terminal_geometry(gui.read_records(transcript), after_distant) != sibling_geometry:
                 raise gui.AcceptanceError("divider drag resized the newly selected tab")
         select_and_check(1, "SCROLL_TARGET_SELECTED_174", pids[1])
         chord(("ctrl", "shift"), "End")
         select_and_check(0, "SCROLL_SOURCE_SELECTED_174", original)
         with native_keyboard_lifetime(gui, app, backend):
             lost_before_scroll = app.log_count("Window focus changed: false")
-            native_drag(gui, app, backend, (948, 680), (948, 45), (960, 720),
+            # The right pane's scrollbar, 12px inside the window's edge.
+            scrollbar_x = PANEL_SURFACE[0] - 12
+            native_drag(gui, app, backend, (scrollbar_x, PANEL_POINTER_Y), (scrollbar_x, 45),
+                        PANEL_SURFACE,
                         during_drag=lambda: chord(("ctrl",), "Tab"))
             if app.log_count("Window focus changed: false") != lost_before_scroll:
                 raise gui.AcceptanceError("scrollbar drag was interrupted by unrelated focus loss")
@@ -674,7 +693,7 @@ def run_tab_overflow_scenario(gui, binary: Path, run_dir: Path, env: dict,
             "divider_source_geometry_after_switch": divider_geometry,
             "divider_target_geometry_after_switch": sibling_geometry,
             "panel_dismiss_input_owners": panel_owners,
-            "panel_background_divider_point": [590, 680],
+            "panel_background_divider_point": [PANEL_DIVIDER_X, PANEL_POINTER_Y],
             "panel_geometry": panel_geometry,
             "drag_points": {"source": source, "destination": destination},
             "coverage": "overflow keyboard, pointer focus, forward/reverse drag, normal/compact/top held-control traversal with exact ownership, drag ownership, window-focus/palette/resize interruption, panel outside-divider dismissal, and cross-tab scrollbar/divider isolation; not screenshot, arbitrary lost-release, pinned/live-domain traversal, or screen-reader acceptance",
