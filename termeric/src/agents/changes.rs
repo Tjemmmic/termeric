@@ -11,6 +11,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use anyhow::{Context, Result, bail};
 use git2::{Delta, DiffOptions, IndexAddOption, ObjectType, Oid, Repository};
@@ -119,6 +120,9 @@ pub struct Baseline {
     /// Untracked files too large to snapshot. Their content is unknown, so
     /// they are never listed or reverted.
     left_out: Arc<BTreeSet<PathBuf>>,
+    /// When the snapshot was taken. A file created before it was there when
+    /// the agent started, even if the snapshot left it out.
+    captured_at: SystemTime,
 }
 
 /// How a file differs from the baseline.
@@ -159,11 +163,13 @@ pub fn capture(directory: &Path) -> Result<Option<Baseline>> {
     let Some(root) = repo.workdir().map(Path::to_path_buf) else {
         return Ok(None);
     };
+    let captured_at = SystemTime::now();
     let snapshot = snapshot(&repo)?;
     Ok(Some(Baseline {
         repo_root: root,
         tree: snapshot.tree,
         left_out: Arc::new(snapshot.left_out),
+        captured_at,
     }))
 }
 
@@ -327,29 +333,40 @@ pub fn file_diff(baseline: &Baseline, path: &Path) -> Result<String> {
 }
 
 /// Stage `paths` as they are now, including deletions. A path that is now a
-/// directory is staged as removed; its files are listed separately.
+/// directory, or that is reached through a symbolic link or a file, is
+/// staged as removed, as Git would; its files are listed separately. A
+/// submodule is staged at the commit it is on now.
 pub fn stage(baseline: &Baseline, paths: &[PathBuf]) -> Result<()> {
     let repo = open(baseline)?;
     let mut index = repo.index()?;
+    let tree = repo.find_tree(baseline.tree)?;
     for path in paths {
-        let is_entry = baseline
-            .repo_root
-            .join(path)
-            .symlink_metadata()
-            .is_ok_and(|metadata| !metadata.is_dir());
-        if is_entry {
-            index.add_path(path)?;
+        check_relative(path)?;
+        let present = if blocked_ancestor(&baseline.repo_root, path)?.is_some() {
+            None
         } else {
-            index.remove_path(path)?;
+            fs::symlink_metadata(baseline.repo_root.join(path)).ok()
+        };
+        let gitlink = index
+            .get_path(path, 0)
+            .is_some_and(|entry| entry.mode == GITLINK_MODE)
+            || tree
+                .get_path(path)
+                .is_ok_and(|entry| entry.filemode() == GITLINK_MODE as i32);
+        match present {
+            Some(metadata) if !metadata.is_dir() || gitlink => index.add_path(path)?,
+            _ => index.remove_path(path)?,
         }
     }
     index.write()?;
     Ok(())
 }
 
-/// Refuse a path that is not a plain relative path inside the working tree,
-/// or that leads through a symbolic link or a file.
-fn check_path_inside(root: &Path, path: &Path) -> Result<()> {
+/// Git's file mode for a submodule's commit.
+const GITLINK_MODE: u32 = 0o160000;
+
+/// Refuse a path that is not a plain relative path.
+fn check_relative(path: &Path) -> Result<()> {
     if path.as_os_str().is_empty()
         || path.is_absolute()
         || path
@@ -358,33 +375,93 @@ fn check_path_inside(root: &Path, path: &Path) -> Result<()> {
     {
         bail!("{} is not a path inside the repository", path.display());
     }
+    Ok(())
+}
+
+/// The first ancestor of `path` below `root` that is not a real directory,
+/// and whether it is a symbolic link (else a file). Missing ancestors are
+/// not in the way.
+fn blocked_ancestor(root: &Path, path: &Path) -> Result<Option<(PathBuf, bool)>> {
     let mut parent = root.to_path_buf();
     let parts: Vec<_> = path.components().collect();
-    for part in &parts[..parts.len() - 1] {
+    for part in &parts[..parts.len().saturating_sub(1)] {
         parent.push(part);
         match fs::symlink_metadata(&parent) {
-            Ok(metadata) if metadata.file_type().is_symlink() => bail!(
-                "{} leads through a symbolic link; restore it by hand",
-                path.display()
-            ),
-            Ok(metadata) if !metadata.is_dir() => bail!(
-                "{} is inside {}, which is now a file; revert that first",
-                path.display(),
-                parent.strip_prefix(root).unwrap_or(&parent).display()
-            ),
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Ok(Some((parent, true)));
+            }
+            Ok(metadata) if !metadata.is_dir() => return Ok(Some((parent, false))),
             Ok(_) => {}
-            // Missing directories are recreated by the checkout.
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(error.into()),
         }
     }
-    Ok(())
+    Ok(None)
+}
+
+/// Refuse a path that is not a plain relative path inside the working tree,
+/// or that leads through a symbolic link or a file.
+fn check_path_inside(root: &Path, path: &Path) -> Result<()> {
+    check_relative(path)?;
+    match blocked_ancestor(root, path)? {
+        Some((_, true)) => bail!(
+            "{} leads through a symbolic link; restore it by hand",
+            path.display()
+        ),
+        Some((parent, false)) => bail!(
+            "{} is inside {}, which is now a file; revert that first",
+            path.display(),
+            parent.strip_prefix(root).unwrap_or(&parent).display()
+        ),
+        None => Ok(()),
+    }
+}
+
+/// File systems stamp times from a coarse clock that can lag the precise
+/// one by a few milliseconds.
+const TIMESTAMP_GRANULARITY: std::time::Duration = std::time::Duration::from_millis(20);
+
+/// Whether the file system entry was created before `moment`. Where the
+/// file system does not record creation, its last change stands in.
+fn created_before(metadata: &fs::Metadata, moment: SystemTime) -> bool {
+    let moment = moment
+        .checked_sub(TIMESTAMP_GRANULARITY)
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+    metadata
+        .created()
+        .or_else(|_| metadata.modified())
+        .is_ok_and(|created| created < moment)
+}
+
+/// Remove the directories above `path` that the agent created and left
+/// empty, so a file that became a directory can be put back.
+fn remove_emptied_parents(baseline: &Baseline, tree: &git2::Tree<'_>, path: &Path) {
+    let mut relative = path.parent();
+    while let Some(parent) = relative.filter(|parent| !parent.as_os_str().is_empty()) {
+        let absolute = baseline.repo_root.join(parent);
+        let recorded = tree
+            .get_path(parent)
+            .is_ok_and(|entry| entry.kind() == Some(ObjectType::Tree));
+        let new = fs::symlink_metadata(&absolute).is_ok_and(|metadata| {
+            metadata.is_dir() && !created_before(&metadata, baseline.captured_at)
+        });
+        // `remove_dir` removes only an empty directory.
+        if recorded || !new || fs::remove_dir(&absolute).is_err() {
+            return;
+        }
+        relative = parent.parent();
+    }
 }
 
 /// Put `path` back as it was in the baseline: restore its content and mode
 /// through Git's own checkout (line-ending and other filters included), or
 /// remove it if it did not exist then. Only the working tree changes. Every
 /// check happens before anything is touched.
+///
+/// The checks refuse links and files already in the way. An agent racing the
+/// revert could still swap a directory for a link between them and the
+/// rename, but it runs as the same person and could write there itself, so
+/// that race grants it nothing.
 pub fn revert(baseline: &Baseline, path: &Path) -> Result<()> {
     check_path_inside(&baseline.repo_root, path)?;
     if baseline.left_out.contains(path) {
@@ -401,25 +478,44 @@ pub fn revert(baseline: &Baseline, path: &Path) -> Result<()> {
         Err(error) if error.code() == git2::ErrorCode::NotFound => None,
         Err(error) => return Err(error.into()),
     };
-    if entry
-        .as_ref()
-        .is_some_and(|entry| entry.kind() != Some(ObjectType::Blob))
-    {
-        bail!("{} was a directory when the agent started", path.display());
+    match entry.as_ref().and_then(git2::TreeEntry::kind) {
+        Some(ObjectType::Commit) => bail!(
+            "{} is a submodule; put it back with `git submodule update`",
+            path.display()
+        ),
+        Some(ObjectType::Blob) | None => {}
+        Some(_) => bail!("{} was a directory when the agent started", path.display()),
     }
     let current = fs::symlink_metadata(&target).ok();
-    if current
-        .as_ref()
-        .is_some_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
-    {
-        bail!(
-            "{} is now a directory; revert the files in it first",
-            path.display()
-        );
-    }
+    // An empty directory where the file was is replaced; one with files in
+    // it is refused, since those files are listed and reverted on their own.
+    let empty_directory = match &current {
+        Some(metadata) if metadata.is_dir() => {
+            if entry.is_none()
+                || fs::read_dir(&target)
+                    .map(|mut entries| entries.next().is_some())
+                    .unwrap_or(true)
+            {
+                bail!(
+                    "{} is now a directory; revert the files in it first",
+                    path.display()
+                );
+            }
+            true
+        }
+        _ => false,
+    };
     let Some(entry) = entry else {
-        if current.is_some() {
+        if let Some(metadata) = &current {
+            // Git ignored it then, so the snapshot does not know its content.
+            if created_before(metadata, baseline.captured_at) {
+                bail!(
+                    "{} was already here when the agent started, though Git ignored it; remove it by hand if you mean to",
+                    path.display()
+                );
+            }
             fs::remove_file(&target).with_context(|| format!("remove {}", target.display()))?;
+            remove_emptied_parents(baseline, &tree, path);
         }
         return Ok(());
     };
@@ -453,12 +549,15 @@ pub fn revert(baseline: &Baseline, path: &Path) -> Result<()> {
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)?;
     }
+    if empty_directory {
+        fs::remove_dir(&target).with_context(|| format!("replace {}", target.display()))?;
+    }
     if let Err(error) = fs::rename(&restored, &target) {
         // A worktree whose Git directory is on another file system.
         if error.raw_os_error() != Some(libc::EXDEV) {
             return Err(error).with_context(|| format!("replace {}", target.display()));
         }
-        if current.is_some() {
+        if current.is_some() && !empty_directory {
             fs::remove_file(&target)?;
         }
         if fs::symlink_metadata(&restored)?.file_type().is_symlink() {
@@ -776,6 +875,139 @@ mod tests {
             .map(|file| file.path)
             .collect();
         stage(&baseline, &paths).unwrap();
+    }
+
+    #[test]
+    fn a_file_that_became_a_directory_can_be_put_back() {
+        let (temp, _repo) = repository();
+        let root = temp.path();
+        let baseline = capture(root).unwrap().unwrap();
+        fs::remove_file(root.join("kept.txt")).unwrap();
+        fs::create_dir(root.join("kept.txt")).unwrap();
+        fs::write(root.join("kept.txt/new.txt"), "y").unwrap();
+        revert(&baseline, Path::new("kept.txt/new.txt")).unwrap();
+        assert!(
+            !root.join("kept.txt").exists(),
+            "the emptied directory goes too"
+        );
+        revert(&baseline, Path::new("kept.txt")).unwrap();
+        assert_eq!(
+            fs::read_to_string(root.join("kept.txt")).unwrap(),
+            "one\ntwo\nthree\n"
+        );
+        // An empty directory in the file's place is replaced.
+        fs::remove_file(root.join("kept.txt")).unwrap();
+        fs::create_dir(root.join("kept.txt")).unwrap();
+        revert(&baseline, Path::new("kept.txt")).unwrap();
+        assert!(root.join("kept.txt").is_file());
+    }
+
+    #[test]
+    fn a_file_git_ignored_when_the_agent_started_is_never_deleted() {
+        let (temp, _repo) = repository();
+        let root = temp.path();
+        fs::write(root.join(".gitignore"), "target/\n.env\n").unwrap();
+        fs::write(root.join(".env"), "SECRET=1\n").unwrap();
+        std::thread::sleep(TIMESTAMP_GRANULARITY * 2);
+        let baseline = capture(root).unwrap().unwrap();
+        // The agent stops ignoring it, so it now looks new.
+        fs::write(root.join(".gitignore"), "target/\n").unwrap();
+        let listed = changes_since(&baseline).unwrap();
+        assert!(
+            listed
+                .iter()
+                .any(|file| file.path == Path::new(".env") && file.kind == ChangeKind::Added)
+        );
+        let error = revert(&baseline, Path::new(".env")).unwrap_err();
+        assert!(error.to_string().contains("already here"), "{error}");
+        assert_eq!(fs::read_to_string(root.join(".env")).unwrap(), "SECRET=1\n");
+        // A file the agent created is still removed.
+        fs::write(root.join("made.txt"), "x").unwrap();
+        revert(&baseline, Path::new("made.txt")).unwrap();
+        assert!(!root.join("made.txt").exists());
+    }
+
+    #[test]
+    fn staging_never_reads_through_a_linked_directory() {
+        let (temp, repo) = repository();
+        let root = temp.path();
+        fs::create_dir(root.join("dir")).unwrap();
+        fs::write(root.join("dir/file.txt"), "inside\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("dir/file.txt")).unwrap();
+        index.write().unwrap();
+        let baseline = capture(root).unwrap().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("file.txt"), "outside\n").unwrap();
+        fs::remove_dir_all(root.join("dir")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.join("dir")).unwrap();
+        stage(&baseline, &[PathBuf::from("dir/file.txt")]).unwrap();
+        let mut index = repo.index().unwrap();
+        index.read(true).unwrap();
+        assert!(
+            index.get_path(Path::new("dir/file.txt"), 0).is_none(),
+            "staged as removed, like Git, rather than with the linked file's content"
+        );
+    }
+
+    #[test]
+    fn a_submodule_is_staged_at_its_new_commit_never_removed() {
+        let (temp, repo) = repository();
+        let root = temp.path();
+        // A submodule: a nested repository recorded as a gitlink.
+        let sub = Repository::init(root.join("sub")).unwrap();
+        let signature = git2::Signature::now("Test", "test@example.com").unwrap();
+        let commit = |message: &str| {
+            let mut index = sub.index().unwrap();
+            fs::write(root.join("sub/file"), message).unwrap();
+            index.add_path(Path::new("file")).unwrap();
+            index.write().unwrap();
+            let tree = sub.find_tree(index.write_tree().unwrap()).unwrap();
+            let parents: Vec<_> = sub
+                .head()
+                .ok()
+                .and_then(|head| head.peel_to_commit().ok())
+                .into_iter()
+                .collect();
+            let parents: Vec<_> = parents.iter().collect();
+            sub.commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                message,
+                &tree,
+                &parents,
+            )
+            .unwrap()
+        };
+        let first = commit("one");
+        let mut index = repo.index().unwrap();
+        index
+            .add(&git2::IndexEntry {
+                ctime: git2::IndexTime::new(0, 0),
+                mtime: git2::IndexTime::new(0, 0),
+                dev: 0,
+                ino: 0,
+                mode: GITLINK_MODE,
+                uid: 0,
+                gid: 0,
+                file_size: 0,
+                id: first,
+                flags: 3,
+                flags_extended: 0,
+                path: b"sub".to_vec(),
+            })
+            .unwrap();
+        index.write().unwrap();
+        let baseline = capture(root).unwrap().unwrap();
+        let second = commit("two");
+        stage(&baseline, &[PathBuf::from("sub")]).unwrap();
+        let mut index = repo.index().unwrap();
+        index.read(true).unwrap();
+        let entry = index.get_path(Path::new("sub"), 0).unwrap();
+        assert_eq!((entry.mode, entry.id), (GITLINK_MODE, second));
+        let error = revert(&baseline, Path::new("sub")).unwrap_err();
+        assert!(error.to_string().contains("submodule"), "{error}");
     }
 
     #[test]

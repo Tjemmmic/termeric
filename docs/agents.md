@@ -81,12 +81,17 @@ removed, and marks files whose current content is already staged. Choosing a
 file shows its diff, with these controls:
 
 - **Stage** (S) adds the file to the index as it is now, including a deletion.
+  A submodule is staged at the commit it is on now. A file reached through a
+  linked directory is staged as removed, as Git would.
 - **Revert** (R) puts the file back as it was when the agent started, after
   you confirm. A file the agent created is removed. Only the working tree
   changes: staged content and commits stay as they are. Reverting writes only
   inside the repository, never through a linked directory, and applies the
-  repository's line-ending settings. A path that became a directory, or the
-  other way round, is refused rather than half changed.
+  repository's line-ending settings. A file that was already there when the
+  agent started, but that Git ignored then, is never removed. A path that
+  became a directory, or the other way round, is refused rather than half
+  changed; revert the files inside first, and the emptied directories the
+  agent made go with them.
 - **Copy** (C) copies the file's diff.
 
 **Stage All Agent Changes** stages every changed file at once. Both commands
