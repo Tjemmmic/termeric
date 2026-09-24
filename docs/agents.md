@@ -79,17 +79,23 @@ file shows its diff, with these controls:
 - **Stage** (S) adds the file to the index as it is now, including a deletion.
 - **Revert** (R) puts the file back as it was when the agent started, after
   you confirm. A file the agent created is removed. Only the working tree
-  changes: staged content and commits stay as they are.
+  changes: staged content and commits stay as they are. Reverting writes only
+  inside the repository, never through a linked directory, and applies the
+  repository's line-ending settings. A path that became a directory, or the
+  other way round, is refused rather than half changed.
 - **Copy** (C) copies the file's diff.
 
 **Stage All Agent Changes** stages every changed file at once. Both commands
 stay available after the agent exits, until another agent starts in that
-terminal.
+terminal. A snapshot belongs to one run of one agent: when the agent restarts,
+or another starts, a new snapshot is taken, and a diff still open from the
+earlier run can no longer be staged or reverted.
 
 The snapshot is taken from an in-memory copy of the index. Taking it never
 changes your index or files; it adds objects to the repository, which
 `git gc` removes once nothing uses them. Untracked files over 16 MiB are left
-out. Working trees with more than 50,000 files cannot be snapshotted. Changes
+out, and are neither listed nor reverted. Nested repositories are skipped.
+Working trees with more than 50,000 files cannot be snapshotted. Changes
 you make yourself while the agent runs are listed too.
 
 ## Agent status

@@ -45,6 +45,17 @@ pub(super) struct ChangeJob {
 pub(super) struct ChangeList {
     identity: TerminalIdentity,
     baseline: Baseline,
+    /// The listed files; picker rows are indexes into this.
+    paths: Vec<PathBuf>,
+}
+
+/// The agent change the diff viewer shows, with the baseline its diff was
+/// computed from.
+pub(super) struct ChangeReview {
+    request_id: u64,
+    identity: TerminalIdentity,
+    baseline: Baseline,
+    path: PathBuf,
 }
 
 /// A revert waiting for the person to confirm it.
@@ -112,6 +123,13 @@ impl App {
         baseline: Baseline,
         task: ChangeTask,
     ) {
+        // One job at a time: a replaced worker would keep running, and two
+        // stages could overwrite each other's index.
+        if self.agent_change_job.is_some() {
+            self.toasts
+                .info("Still working on the previous agent change; try again in a moment");
+            return;
+        }
         let (sender, receiver) = mpsc::sync_channel(1);
         let worker_baseline = baseline.clone();
         let spawned = std::thread::Builder::new()
@@ -136,7 +154,6 @@ impl App {
                 let _ = sender.send(result.map_err(|error| format!("{error:#}")));
             });
         match spawned {
-            // A newer request replaces an older one still running.
             Ok(_) => {
                 self.agent_change_job = Some(ChangeJob {
                     identity,
@@ -182,14 +199,20 @@ impl App {
             Err(error) => self.toasts.error(format!("Agent changes: {error}")),
             Ok(ChangeResult::List(files)) => self.show_change_list(identity, baseline, &files),
             Ok(ChangeResult::Diff(path, text)) => {
-                self.diff_review.show_change(
+                let request_id = self.diff_review.show_change(
                     &text,
                     ChangeReviewTarget {
                         tab_id: identity.tab_id,
                         pane_id: identity.pane_id,
-                        path,
+                        path: path.clone(),
                     },
                 );
+                self.agent_change_review = Some(ChangeReview {
+                    request_id,
+                    identity,
+                    baseline,
+                    path,
+                });
             }
             Ok(ChangeResult::Staged(paths)) => {
                 self.toasts.success(match paths.as_slice() {
@@ -220,7 +243,8 @@ impl App {
         }
         let items = files
             .iter()
-            .map(|file| {
+            .enumerate()
+            .map(|(index, file)| {
                 let change = match (file.kind, file.binary) {
                     (ChangeKind::Deleted, _) => "deleted".to_string(),
                     (_, true) => "binary".to_string(),
@@ -229,10 +253,9 @@ impl App {
                         format!("+{} −{}", file.added_lines, file.removed_lines)
                     }
                 };
-                let path = file.path.to_string_lossy().into_owned();
                 RegisteredCommand {
-                    id: path.clone(),
-                    title: path,
+                    id: index.to_string(),
+                    title: file.path.to_string_lossy().into_owned(),
                     category: if file.staged {
                         format!("{change} · staged")
                     } else {
@@ -245,7 +268,11 @@ impl App {
                 }
             })
             .collect();
-        self.agent_change_list = Some(ChangeList { identity, baseline });
+        self.agent_change_list = Some(ChangeList {
+            identity,
+            baseline,
+            paths: files.iter().map(|file| file.path.clone()).collect(),
+        });
         self.command_palette.begin_pick(
             PickKind::AgentChange,
             items,
@@ -257,71 +284,84 @@ impl App {
 
     /// Act on a row picked from the change list.
     pub(super) fn pick_agent_change(&mut self, id: &str) {
-        let Some(ChangeList { identity, baseline }) = self.agent_change_list.take() else {
+        let Some(ChangeList {
+            identity,
+            baseline,
+            paths,
+        }) = self.agent_change_list.take()
+        else {
+            return;
+        };
+        let Some(path) = id.parse::<usize>().ok().and_then(|index| paths.get(index)) else {
             return;
         };
         if !self.baseline_is_current(identity, &baseline) {
             self.toasts.warning("That agent's terminal has changed");
             return;
         }
-        self.start_change_job(identity, baseline, ChangeTask::Diff(PathBuf::from(id)));
+        self.start_change_job(identity, baseline, ChangeTask::Diff(path.clone()));
+    }
+
+    /// The change the diff viewer shows as `request_id`, while its terminal
+    /// still has the baseline the diff came from.
+    fn reviewed_change(&mut self, request_id: u64) -> Option<ChangeReview> {
+        self.diff_review.change_target(request_id)?;
+        let review = self
+            .agent_change_review
+            .take()
+            .filter(|review| review.request_id == request_id)?;
+        if !self.baseline_is_current(review.identity, &review.baseline) {
+            self.toasts
+                .warning("The agent has restarted since this diff was shown; review it again");
+            return None;
+        }
+        Some(review)
     }
 
     /// Stage the file under review.
     pub(super) fn stage_reviewed_change(&mut self, request_id: u64) {
-        let Some(change) = self.diff_review.change_target(request_id).cloned() else {
-            return;
-        };
-        let identity = TerminalIdentity {
-            tab_id: change.tab_id,
-            pane_id: change.pane_id,
-        };
-        let Some(baseline) = self.change_baseline_of(identity) else {
-            self.toasts.warning("That agent's terminal has changed");
+        let Some(review) = self.reviewed_change(request_id) else {
             return;
         };
         self.diff_review.dismiss(request_id);
-        self.start_change_job(identity, baseline, ChangeTask::Stage(vec![change.path]));
+        self.start_change_job(
+            review.identity,
+            review.baseline,
+            ChangeTask::Stage(vec![review.path]),
+        );
     }
 
-    /// Ask before putting the file under review back as it was.
+    /// Ask before putting the file under review back as it was. The
+    /// confirmation has no letter shortcut, so a repeated key cannot revert.
     pub(super) fn confirm_revert_reviewed_change(&mut self, request_id: u64) {
-        let Some(change) = self.diff_review.change_target(request_id).cloned() else {
-            return;
-        };
-        let identity = TerminalIdentity {
-            tab_id: change.tab_id,
-            pane_id: change.pane_id,
-        };
-        let Some(baseline) = self.change_baseline_of(identity) else {
-            self.toasts.warning("That agent's terminal has changed");
+        let Some(review) = self.reviewed_change(request_id) else {
             return;
         };
         self.diff_review.dismiss(request_id);
         let lines = vec![
             format!(
                 "Put {} back as it was when the agent started?",
-                change.path.display()
+                review.path.display()
             ),
             "The agent's edits to this file are lost. Other files, staged".into(),
             "changes, and commits stay as they are.".into(),
             String::new(),
-            "  R  Revert".into(),
-            "  K  Keep the changes".into(),
+            "  Revert".into(),
+            "  Keep the changes".into(),
         ];
         let revert_request = self.info_overlay.show_choices(
             "Revert file",
             lines,
             vec![
-                InfoOverlayChoice::new(REVERT_CHOICE, "Revert", 4, Some('r')),
-                InfoOverlayChoice::new(KEEP_CHOICE, "Keep the changes", 5, Some('k')),
+                InfoOverlayChoice::new(REVERT_CHOICE, "Revert", 4, None),
+                InfoOverlayChoice::new(KEEP_CHOICE, "Keep the changes", 5, None),
             ],
         );
         self.pending_revert = Some(PendingRevert {
             request_id: revert_request,
-            identity,
-            baseline,
-            path: change.path,
+            identity: review.identity,
+            baseline: review.baseline,
+            path: review.path,
         });
     }
 
@@ -361,15 +401,5 @@ impl App {
         {
             self.pending_revert = None;
         }
-    }
-
-    fn change_baseline_of(&self, identity: TerminalIdentity) -> Option<Baseline> {
-        self.tabs
-            .as_ref()?
-            .tab_by_id(identity.tab_id)?
-            .pane_session(identity.pane_id)?
-            .agent_changes
-            .baseline()
-            .cloned()
     }
 }

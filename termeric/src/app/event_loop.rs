@@ -463,6 +463,9 @@ impl ApplicationHandler<AppEvent> for App {
                                 {
                                     InfoOverlayAction::Copy { request_id }
                                 }
+                                // A held key must not pick a choice it did not
+                                // mean to reach.
+                                Key::Character(_) if event.repeat => InfoOverlayAction::None,
                                 Key::Character(character) => character
                                     .as_str()
                                     .chars()

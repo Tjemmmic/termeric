@@ -7958,6 +7958,7 @@ fn mark_capture_plugin_owner(app: &mut App, pane_id: PaneId, plugin_id: &str) {
         agent_id: plugin_id.into(),
         launched: true,
         profile: None,
+        process: None,
     });
 }
 
@@ -8173,6 +8174,7 @@ fn typed_agent_input_is_submitted_separately_and_only_to_the_same_agent() {
         agent_id: "codex".into(),
         launched: false,
         profile: None,
+        process: None,
     });
     let mut app = App::new_headless(Config::default()).unwrap();
     app.tabs = Some(tabs);
@@ -8259,6 +8261,7 @@ fn typed_agent_input_is_submitted_separately_and_only_to_the_same_agent() {
         agent_id: "codex".into(),
         launched: false,
         profile: None,
+        process: None,
     });
     let listed = app.control_agents(7);
     assert_eq!(listed.len(), 1);
@@ -8463,6 +8466,7 @@ fn agent_list_puts_waiting_agents_first_and_answers_come_from_reports_or_logs() 
             agent_id: agent.into(),
             launched: false,
             profile: None,
+            process: None,
         });
         session.agent_status = event.and_then(|event| {
             AgentStatus::after(
@@ -8589,8 +8593,7 @@ fn agent_changes_are_listed_reviewed_staged_and_reverted_for_their_terminal() {
         let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
         let pane = tab.focused_terminal_identity().pane_id;
         let changes = &mut tab.pane_session_mut(pane).unwrap().agent_changes;
-        changes.set_agent_running(true);
-        changes.start_capture(Some(root.to_path_buf()));
+        changes.start_capture(("codex", Some(1)), Some(root.to_path_buf()));
         let deadline = Instant::now() + Duration::from_secs(5);
         while !changes.poll() {
             assert!(Instant::now() < deadline, "the baseline was never captured");
@@ -8619,7 +8622,7 @@ fn agent_changes_are_listed_reviewed_staged_and_reverted_for_their_terminal() {
     );
     app.command_palette.close();
 
-    app.pick_agent_change("kept.txt");
+    app.pick_agent_change("0");
     finish_job(&mut app);
     let request = app.diff_review.request_id();
     assert!(app.diff_review.has_change_actions());
@@ -8646,7 +8649,7 @@ fn agent_changes_are_listed_reviewed_staged_and_reverted_for_their_terminal() {
     );
     app.command_palette.close();
 
-    app.pick_agent_change("kept.txt");
+    app.pick_agent_change("0");
     finish_job(&mut app);
     let request = app.diff_review.request_id();
     app.apply_diff_review_action(DiffReviewAction::Revert {
@@ -8686,6 +8689,34 @@ fn agent_changes_are_listed_reviewed_staged_and_reverted_for_their_terminal() {
             .get_path(std::path::Path::new("added.txt"), 0)
             .is_some()
     );
+
+    // A diff shown for one agent run cannot stage for the next.
+    std::fs::write(root.join("kept.txt"), "once more\n").unwrap();
+    app.review_agent_changes();
+    finish_job(&mut app);
+    app.command_palette.close();
+    app.pick_agent_change("0");
+    finish_job(&mut app);
+    let request = app.diff_review.request_id();
+    {
+        let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
+        let pane = tab.focused_terminal_identity().pane_id;
+        let changes = &mut tab.pane_session_mut(pane).unwrap().agent_changes;
+        changes.start_capture(("codex", Some(2)), Some(root.to_path_buf()));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !changes.poll() {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    app.apply_diff_review_action(DiffReviewAction::Stage {
+        request_id: request,
+    });
+    assert_eq!(
+        latest_toast(&app),
+        Some("The agent has restarted since this diff was shown; review it again")
+    );
+    assert!(app.agent_change_job.is_none(), "nothing was started");
 }
 
 #[cfg(unix)]
@@ -8708,6 +8739,7 @@ fn a_read_only_agent_refuses_context_with_its_own_reason() {
         agent_id: "codex".into(),
         launched: false,
         profile: None,
+        process: None,
     });
     assert!(tab.toggle_focused_pane_read_only());
     let mut app = App::new_headless(Config::default()).unwrap();
@@ -11596,6 +11628,7 @@ fn context_output_comes_from_a_shell_never_from_another_agent() {
                 agent_id: agent_id.into(),
                 launched: false,
                 profile: None,
+                process: None,
             });
         crate::tabs::TerminalIdentity { tab_id, pane_id }
     };

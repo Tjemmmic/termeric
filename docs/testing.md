@@ -404,9 +404,14 @@ prove that snapshots leave the real index byte-for-byte unchanged, skip
 ignored and oversized untracked files, and report additions, edits, and
 deletions with line counts and staged state. Staging records edits and
 deletions, and reverting restores content, executable mode, and absence while
-refusing paths outside the repository. A headless application test lists,
-opens, stages, confirms a revert, and stages all through the real commands and
-worker thread.
+refusing paths outside the repository. Revert is also proven never to write
+through a linked directory, to apply line-ending filters, to treat glob
+characters literally, and to refuse a path that changed between file and
+directory before touching anything; nested repositories and large untracked
+files stay out of the snapshot, and staged state compares content and mode. A
+headless application test lists, opens, stages, confirms a revert, and stages
+all through the real commands and worker thread, and proves a diff shown for
+one agent run cannot be staged after the agent restarts.
 
 Agent status coverage is provider-free. Unit tests cover the status state
 machine, hook payload parsing for Claude Code and Codex shapes, settings-file

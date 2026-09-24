@@ -1209,14 +1209,16 @@ impl Tab {
                 })
                 .map(|status| status.agent_id.clone());
             let observed = foreground
-                .or(reported)
-                .or_else(|| launched_id.map(str::to_owned))
-                .map(|agent_id| {
+                .map(|agent_id| (agent_id, foreground_group.map(i64::from)))
+                .or_else(|| reported.map(|agent_id| (agent_id, foreground_group.map(i64::from))))
+                .or_else(|| launched_id.map(|agent_id| (agent_id.to_owned(), child)))
+                .map(|(agent_id, process)| {
                     let launched = launched_id == Some(agent_id.as_str());
                     crate::agents::AgentSession {
                         profile: launched.then(|| profile.clone()).flatten(),
                         launched,
                         agent_id,
+                        process,
                     }
                 });
             let mut changed = false;
@@ -1267,18 +1269,25 @@ impl Tab {
             let Some(session) = self.pane_session(id) else {
                 continue;
             };
-            let running = session.agent.is_some();
-            let directory = session.agent_changes.needs_capture(running).then(|| {
-                self.pane_working_directory(id)
-                    .map(std::path::PathBuf::from)
-            });
+            let agent = session
+                .agent
+                .as_ref()
+                .map(|agent| (agent.agent_id.clone(), agent.process));
+            let directory = session
+                .agent_changes
+                .needs_capture(agent.as_ref().map(|(id, process)| (id.as_str(), *process)))
+                .then(|| {
+                    self.pane_working_directory(id)
+                        .map(std::path::PathBuf::from)
+                });
             let Some(session) = self.pane_session_mut(id) else {
                 continue;
             };
-            if let Some(directory) = directory {
-                session.agent_changes.start_capture(directory);
+            if let (Some(directory), Some((agent_id, process))) = (directory, &agent) {
+                session
+                    .agent_changes
+                    .start_capture((agent_id, *process), directory);
             }
-            session.agent_changes.set_agent_running(running);
             session.agent_changes.poll();
         }
     }

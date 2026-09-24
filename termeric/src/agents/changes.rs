@@ -7,8 +7,10 @@
 //! one changes neither the index nor any file; it only adds objects to the
 //! repository's object store, where Git can collect them later.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use git2::{Delta, DiffOptions, IndexAddOption, ObjectType, Oid, Repository};
@@ -16,7 +18,8 @@ use git2::{Delta, DiffOptions, IndexAddOption, ObjectType, Oid, Repository};
 /// Untracked files larger than this are left out of snapshots, so a stray
 /// build artifact or disk image is neither hashed nor reviewed.
 pub const MAX_SNAPSHOT_FILE_BYTES: u64 = 16 * 1024 * 1024;
-/// Working trees with more paths than this are not snapshotted.
+/// Snapshots stop when more than this many paths differ from the index,
+/// which in practice means a working tree full of files nobody ignored.
 pub const MAX_SNAPSHOT_PATHS: usize = 50_000;
 /// A file's diff is cut after this much text.
 const MAX_FILE_DIFF_BYTES: usize = 1024 * 1024;
@@ -26,7 +29,8 @@ const MAX_FILE_DIFF_BYTES: usize = 1024 * 1024;
 /// it exits.
 #[derive(Debug, Default)]
 pub struct ChangeTracking {
-    agent_running: bool,
+    /// The agent run the baseline belongs to: its id and process.
+    captured_for: Option<(String, Option<i64>)>,
     baseline: BaselineState,
 }
 
@@ -40,18 +44,23 @@ enum BaselineState {
 }
 
 impl ChangeTracking {
-    /// Whether an agent that just appeared needs a baseline.
-    pub fn needs_capture(&self, agent_running: bool) -> bool {
-        agent_running && !self.agent_running
+    /// Whether `agent` (its id and process) is a run the baseline does not
+    /// belong to yet. The same process returning to the foreground, for
+    /// example after being suspended, keeps its baseline.
+    pub fn needs_capture(&self, agent: Option<(&str, Option<i64>)>) -> bool {
+        agent.is_some_and(|(id, process)| {
+            self.captured_for
+                .as_ref()
+                .is_none_or(|(captured, captured_process)| {
+                    captured != id || *captured_process != process
+                })
+        })
     }
 
-    pub fn set_agent_running(&mut self, agent_running: bool) {
-        self.agent_running = agent_running;
-    }
-
-    /// Snapshot `directory` on a worker thread, replacing the previous
-    /// agent's baseline.
-    pub fn start_capture(&mut self, directory: Option<PathBuf>) {
+    /// Snapshot `directory` on a worker thread for `agent`, replacing the
+    /// previous agent's baseline.
+    pub fn start_capture(&mut self, agent: (&str, Option<i64>), directory: Option<PathBuf>) {
+        self.captured_for = Some((agent.0.to_owned(), agent.1));
         let Some(directory) = directory else {
             self.baseline =
                 BaselineState::Unavailable("the agent's working directory is unknown".into());
@@ -107,6 +116,9 @@ impl ChangeTracking {
 pub struct Baseline {
     pub repo_root: PathBuf,
     tree: Oid,
+    /// Untracked files too large to snapshot. Their content is unknown, so
+    /// they are never listed or reverted.
+    left_out: Arc<BTreeSet<PathBuf>>,
 }
 
 /// How a file differs from the baseline.
@@ -129,6 +141,13 @@ pub struct ChangedFile {
     pub staged: bool,
 }
 
+/// A working-tree snapshot.
+struct Snapshot {
+    tree: Oid,
+    /// Untracked files too large to include.
+    left_out: BTreeSet<PathBuf>,
+}
+
 /// Snapshot the working tree containing `directory`, or `None` when it is
 /// not inside a Git working tree.
 pub fn capture(directory: &Path) -> Result<Option<Baseline>> {
@@ -140,15 +159,16 @@ pub fn capture(directory: &Path) -> Result<Option<Baseline>> {
     let Some(root) = repo.workdir().map(Path::to_path_buf) else {
         return Ok(None);
     };
-    let tree = snapshot(&repo)?;
+    let snapshot = snapshot(&repo)?;
     Ok(Some(Baseline {
         repo_root: root,
-        tree,
+        tree: snapshot.tree,
+        left_out: Arc::new(snapshot.left_out),
     }))
 }
 
 /// The working tree as a tree object, without touching the on-disk index.
-fn snapshot(repo: &Repository) -> Result<Oid> {
+fn snapshot(repo: &Repository) -> Result<Snapshot> {
     let root = repo
         .workdir()
         .context("the repository has no working tree")?
@@ -156,46 +176,55 @@ fn snapshot(repo: &Repository) -> Result<Oid> {
     // `repo.index()` loads the index into memory; nothing here writes it
     // back, so the real index is unchanged.
     let mut index = repo.index()?;
-    let mut paths = 0usize;
+    let mut added = 0usize;
     let mut too_many = false;
+    let mut large = BTreeSet::new();
     index
         .add_all(
             ["*"],
             IndexAddOption::DEFAULT,
+            // 0 adds the path, a positive value skips it, a negative one stops.
             Some(&mut |path: &Path, _: &[u8]| {
-                paths += 1;
-                if paths > MAX_SNAPSHOT_PATHS {
+                added += 1;
+                if added > MAX_SNAPSHOT_PATHS {
                     too_many = true;
                     return -1;
                 }
-                let large = fs::symlink_metadata(root.join(path)).is_ok_and(|metadata| {
-                    metadata.is_file() && metadata.len() > MAX_SNAPSHOT_FILE_BYTES
-                });
-                i32::from(large)
+                match fs::symlink_metadata(root.join(path)) {
+                    // A directory here is a nested repository Git cannot add.
+                    Ok(metadata) if metadata.is_dir() => 1,
+                    Ok(metadata) if metadata.is_file() && metadata.len() > MAX_SNAPSHOT_FILE_BYTES => {
+                        large.insert(path.to_path_buf());
+                        1
+                    }
+                    _ => 0,
+                }
             }),
         )
         .or_else(|error| {
             if too_many {
-                bail!("the working tree has more than {MAX_SNAPSHOT_PATHS} files to compare")
+                bail!(
+                    "more than {MAX_SNAPSHOT_PATHS} files differ from the index, too many to compare"
+                )
             }
             Err(error.into())
         })?;
-    // Files deleted from the working tree leave the snapshot too.
+    // Files deleted from the working tree leave the snapshot too; tracked
+    // files, however large, are brought up to date here.
     index.update_all(["*"], None)?;
-    Ok(index.write_tree()?)
+    let left_out = large
+        .into_iter()
+        .filter(|path| index.get_path(path, 0).is_none())
+        .collect();
+    Ok(Snapshot {
+        tree: index.write_tree()?,
+        left_out,
+    })
 }
 
 fn open(baseline: &Baseline) -> Result<Repository> {
     Repository::open(&baseline.repo_root)
         .with_context(|| format!("open the repository at {}", baseline.repo_root.display()))
-}
-
-fn diff_since<'repo>(
-    repo: &'repo Repository,
-    baseline: &Baseline,
-    path: Option<&Path>,
-) -> Result<git2::Diff<'repo>> {
-    diff_between(repo, baseline, snapshot(repo)?, path)
 }
 
 fn diff_between<'repo>(
@@ -213,36 +242,56 @@ fn diff_between<'repo>(
     Ok(repo.diff_tree_to_tree(Some(&old), Some(&new), Some(&mut options))?)
 }
 
-/// Every file that differs from the baseline, in path order.
+/// The path a delta is about.
+fn delta_path(delta: &git2::DiffDelta<'_>) -> Result<PathBuf> {
+    Ok(delta
+        .new_file()
+        .path()
+        .or_else(|| delta.old_file().path())
+        .context("a changed file has no path")?
+        .to_path_buf())
+}
+
+/// Every file that differs from the baseline, in path order. Untracked files
+/// too large to snapshot, then or now, are left out.
 pub fn changes_since(baseline: &Baseline) -> Result<Vec<ChangedFile>> {
     let repo = open(baseline)?;
     let current = snapshot(&repo)?;
-    let diff = diff_between(&repo, baseline, current, None)?;
-    let current = repo.find_tree(current)?;
+    let diff = diff_between(&repo, baseline, current.tree, None)?;
+    let current_tree = repo.find_tree(current.tree)?;
+    let head_tree = repo.head().ok().and_then(|head| head.peel_to_tree().ok());
     // Loaded fresh: the snapshot's in-memory changes are not the real index.
     let mut staging = git2::Index::open(&repo.path().join("index"))?;
     staging.read(true)?;
     let mut files = Vec::new();
     for (index, delta) in diff.deltas().enumerate() {
+        let path = delta_path(&delta)?;
+        if baseline.left_out.contains(&path) || current.left_out.contains(&path) {
+            continue;
+        }
         let kind = match delta.status() {
             Delta::Added => ChangeKind::Added,
             Delta::Deleted => ChangeKind::Deleted,
             _ => ChangeKind::Modified,
         };
-        let path = delta
-            .new_file()
-            .path()
-            .or_else(|| delta.old_file().path())
-            .context("a changed file has no path")?
-            .to_path_buf();
         let patch = git2::Patch::from_diff(&diff, index)?;
         let (_, added_lines, removed_lines) = patch
             .as_ref()
             .map(git2::Patch::line_stats)
             .transpose()?
             .unwrap_or((0, 0, 0));
-        let now = current.get_path(&path).ok().map(|entry| entry.id());
-        let staged = staging.get_path(&path, 0).map(|entry| entry.id) == now;
+        let now = current_tree
+            .get_path(&path)
+            .ok()
+            .map(|entry| (entry.id(), entry.filemode() as u32));
+        let in_index = staging
+            .get_path(&path, 0)
+            .map(|entry| (entry.id, entry.mode));
+        let in_head = head_tree
+            .as_ref()
+            .is_some_and(|tree| tree.get_path(&path).is_ok());
+        // A deleted file Git never knew about has nothing to stage.
+        let staged = in_index == now && (in_index.is_some() || in_head);
         files.push(ChangedFile {
             path,
             kind,
@@ -258,7 +307,8 @@ pub fn changes_since(baseline: &Baseline) -> Result<Vec<ChangedFile>> {
 /// The unified diff of one file since the baseline.
 pub fn file_diff(baseline: &Baseline, path: &Path) -> Result<String> {
     let repo = open(baseline)?;
-    let diff = diff_since(&repo, baseline, Some(path))?;
+    let current = snapshot(&repo)?;
+    let diff = diff_between(&repo, baseline, current.tree, Some(path))?;
     let mut text = String::new();
     let mut truncated = false;
     diff.print(git2::DiffFormat::Patch, |_, _, line| {
@@ -276,12 +326,18 @@ pub fn file_diff(baseline: &Baseline, path: &Path) -> Result<String> {
     Ok(text)
 }
 
-/// Stage `paths` as they are now, including deletions.
+/// Stage `paths` as they are now, including deletions. A path that is now a
+/// directory is staged as removed; its files are listed separately.
 pub fn stage(baseline: &Baseline, paths: &[PathBuf]) -> Result<()> {
     let repo = open(baseline)?;
     let mut index = repo.index()?;
     for path in paths {
-        if baseline.repo_root.join(path).symlink_metadata().is_ok() {
+        let is_entry = baseline
+            .repo_root
+            .join(path)
+            .symlink_metadata()
+            .is_ok_and(|metadata| !metadata.is_dir());
+        if is_entry {
             index.add_path(path)?;
         } else {
             index.remove_path(path)?;
@@ -291,15 +347,51 @@ pub fn stage(baseline: &Baseline, paths: &[PathBuf]) -> Result<()> {
     Ok(())
 }
 
-/// Put `path` back as it was in the baseline: restore its content and mode,
-/// or remove it if it did not exist then. Only the working tree changes.
-pub fn revert(baseline: &Baseline, path: &Path) -> Result<()> {
-    if path.is_absolute()
+/// Refuse a path that is not a plain relative path inside the working tree,
+/// or that leads through a symbolic link or a file.
+fn check_path_inside(root: &Path, path: &Path) -> Result<()> {
+    if path.as_os_str().is_empty()
+        || path.is_absolute()
         || path
             .components()
             .any(|part| !matches!(part, std::path::Component::Normal(_)))
     {
         bail!("{} is not a path inside the repository", path.display());
+    }
+    let mut parent = root.to_path_buf();
+    let parts: Vec<_> = path.components().collect();
+    for part in &parts[..parts.len() - 1] {
+        parent.push(part);
+        match fs::symlink_metadata(&parent) {
+            Ok(metadata) if metadata.file_type().is_symlink() => bail!(
+                "{} leads through a symbolic link; restore it by hand",
+                path.display()
+            ),
+            Ok(metadata) if !metadata.is_dir() => bail!(
+                "{} is inside {}, which is now a file; revert that first",
+                path.display(),
+                parent.strip_prefix(root).unwrap_or(&parent).display()
+            ),
+            Ok(_) => {}
+            // Missing directories are recreated by the checkout.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
+
+/// Put `path` back as it was in the baseline: restore its content and mode
+/// through Git's own checkout (line-ending and other filters included), or
+/// remove it if it did not exist then. Only the working tree changes. Every
+/// check happens before anything is touched.
+pub fn revert(baseline: &Baseline, path: &Path) -> Result<()> {
+    check_path_inside(&baseline.repo_root, path)?;
+    if baseline.left_out.contains(path) {
+        bail!(
+            "{} was too large to record when the agent started",
+            path.display()
+        );
     }
     let repo = open(baseline)?;
     let target = baseline.repo_root.join(path);
@@ -309,45 +401,71 @@ pub fn revert(baseline: &Baseline, path: &Path) -> Result<()> {
         Err(error) if error.code() == git2::ErrorCode::NotFound => None,
         Err(error) => return Err(error.into()),
     };
-    if target
-        .symlink_metadata()
-        .is_ok_and(|metadata| !metadata.is_dir())
+    if entry
+        .as_ref()
+        .is_some_and(|entry| entry.kind() != Some(ObjectType::Blob))
     {
-        fs::remove_file(&target).with_context(|| format!("remove {}", target.display()))?;
+        bail!("{} was a directory when the agent started", path.display());
+    }
+    let current = fs::symlink_metadata(&target).ok();
+    if current
+        .as_ref()
+        .is_some_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+    {
+        bail!(
+            "{} is now a directory; revert the files in it first",
+            path.display()
+        );
     }
     let Some(entry) = entry else {
+        if current.is_some() {
+            fs::remove_file(&target).with_context(|| format!("remove {}", target.display()))?;
+        }
         return Ok(());
     };
-    if entry.kind() != Some(ObjectType::Blob) {
-        bail!("{} was not a file when the agent started", path.display());
-    }
-    let blob = repo.find_blob(entry.id())?;
+    // Check out a tree holding only this file into a private directory, so
+    // Git applies its filters and file mode without a pathspec that could
+    // match anything else, then move the result into place.
+    let empty = repo.find_tree(repo.treebuilder(None)?.write()?)?;
+    let mut single = git2::build::TreeUpdateBuilder::new();
+    single.upsert(
+        path,
+        entry.id(),
+        match entry.filemode() {
+            0o100755 => git2::FileMode::BlobExecutable,
+            0o120000 => git2::FileMode::Link,
+            _ => git2::FileMode::Blob,
+        },
+    );
+    let single = repo.find_tree(single.create_updated(&repo, &empty)?)?;
+    let staging_dir = tempfile::Builder::new()
+        .prefix("termeric-revert-")
+        .tempdir_in(repo.path())
+        .context("create a private checkout directory")?;
+    let mut checkout = git2::build::CheckoutBuilder::new();
+    checkout
+        .force()
+        .update_index(false)
+        .target_dir(staging_dir.path());
+    repo.checkout_tree(single.as_object(), Some(&mut checkout))
+        .with_context(|| format!("restore {}", path.display()))?;
+    let restored = staging_dir.path().join(path);
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)?;
     }
-    match entry.filemode() {
-        0o120000 => {
-            #[cfg(unix)]
-            std::os::unix::fs::symlink(
-                String::from_utf8_lossy(blob.content()).into_owned(),
-                &target,
-            )?;
-            #[cfg(not(unix))]
-            bail!(
-                "{} was a symbolic link, which cannot be restored here",
-                path.display()
-            );
+    if let Err(error) = fs::rename(&restored, &target) {
+        // A worktree whose Git directory is on another file system.
+        if error.raw_os_error() != Some(libc::EXDEV) {
+            return Err(error).with_context(|| format!("replace {}", target.display()));
         }
-        mode => {
-            fs::write(&target, blob.content())
-                .with_context(|| format!("write {}", target.display()))?;
+        if current.is_some() {
+            fs::remove_file(&target)?;
+        }
+        if fs::symlink_metadata(&restored)?.file_type().is_symlink() {
             #[cfg(unix)]
-            if mode == 0o100755 {
-                use std::os::unix::fs::PermissionsExt;
-                fs::set_permissions(&target, fs::Permissions::from_mode(0o755))?;
-            }
-            #[cfg(not(unix))]
-            let _ = mode;
+            std::os::unix::fs::symlink(fs::read_link(&restored)?, &target)?;
+        } else {
+            fs::copy(&restored, &target)?;
         }
     }
     Ok(())
@@ -502,13 +620,13 @@ mod tests {
     }
 
     #[test]
-    fn each_agent_start_captures_one_baseline_that_outlives_the_agent() {
+    fn a_baseline_belongs_to_one_agent_run_and_outlives_it() {
         let (temp, _repo) = repository();
         let mut tracking = ChangeTracking::default();
-        assert!(!tracking.needs_capture(false));
-        assert!(tracking.needs_capture(true));
-        tracking.set_agent_running(true);
-        tracking.start_capture(Some(temp.path().to_path_buf()));
+        let run = ("claude-code", Some(4242_i64));
+        assert!(!tracking.needs_capture(None));
+        assert!(tracking.needs_capture(Some(run)));
+        tracking.start_capture(run, Some(temp.path().to_path_buf()));
         assert_eq!(tracking.baseline(), None, "not until the snapshot finishes");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while !tracking.poll() {
@@ -516,14 +634,16 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         let first = tracking.baseline().unwrap().clone();
-        assert!(!tracking.needs_capture(true), "still the same agent");
-
-        // The agent exits: its baseline stays for review.
-        tracking.set_agent_running(false);
+        assert!(!tracking.needs_capture(Some(run)), "still the same run");
+        // Suspended (no agent in front), then resumed: the same process keeps
+        // its baseline, so earlier edits stay reviewable.
+        assert!(!tracking.needs_capture(None));
+        assert!(!tracking.needs_capture(Some(run)));
         assert_eq!(tracking.baseline(), Some(&first));
-        // A later agent gets its own.
-        assert!(tracking.needs_capture(true));
-        tracking.start_capture(None);
+        // A new process, or another agent, gets its own.
+        assert!(tracking.needs_capture(Some(("claude-code", Some(5000)))));
+        assert!(tracking.needs_capture(Some(("codex", Some(4242)))));
+        tracking.start_capture(("codex", Some(4242)), None);
         assert_eq!(tracking.baseline(), None);
         assert_eq!(
             tracking.unavailable_reason(),
@@ -538,10 +658,14 @@ mod tests {
     }
 
     #[test]
-    fn large_untracked_files_are_left_out() {
+    fn large_untracked_files_are_neither_listed_nor_reverted() {
         let (temp, _repo) = repository();
         let root = temp.path();
+        // Existing before the agent: its content was never recorded.
+        let before = fs::File::create(root.join("data.db")).unwrap();
+        before.set_len(MAX_SNAPSHOT_FILE_BYTES + 1).unwrap();
         let baseline = capture(root).unwrap().unwrap();
+        fs::write(root.join("data.db"), "shrunk by the agent").unwrap();
         let big = fs::File::create(root.join("disk.img")).unwrap();
         big.set_len(MAX_SNAPSHOT_FILE_BYTES + 1).unwrap();
         fs::write(root.join("small.txt"), "x").unwrap();
@@ -551,5 +675,146 @@ mod tests {
             .map(|file| file.path)
             .collect();
         assert_eq!(paths, [PathBuf::from("small.txt")]);
+        assert!(revert(&baseline, Path::new("data.db")).is_err());
+        assert_eq!(
+            fs::read_to_string(root.join("data.db")).unwrap(),
+            "shrunk by the agent",
+            "an unrecorded file is never deleted"
+        );
+    }
+
+    #[test]
+    fn revert_never_writes_through_a_symlinked_directory() {
+        let (temp, _repo) = repository();
+        let root = temp.path();
+        fs::create_dir(root.join("dir")).unwrap();
+        fs::write(root.join("dir/file.txt"), "inside").unwrap();
+        let baseline = capture(root).unwrap().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("file.txt"), "PRECIOUS").unwrap();
+        fs::remove_dir_all(root.join("dir")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.join("dir")).unwrap();
+        let error = revert(&baseline, Path::new("dir/file.txt")).unwrap_err();
+        assert!(error.to_string().contains("symbolic link"), "{error}");
+        assert_eq!(
+            fs::read_to_string(outside.path().join("file.txt")).unwrap(),
+            "PRECIOUS"
+        );
+    }
+
+    #[test]
+    fn revert_applies_line_endings_and_treats_glob_characters_literally() {
+        let (temp, repo) = repository();
+        let root = temp.path();
+        fs::write(root.join(".gitattributes"), "*.txt text eol=crlf\n").unwrap();
+        fs::write(root.join("crlf.txt"), "a\r\nb\r\n").unwrap();
+        fs::write(root.join("f[1].txt"), "bracket\r\n").unwrap();
+        fs::write(root.join("f1.txt"), "other file\r\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_all(["*"], IndexAddOption::DEFAULT, None).unwrap();
+        index.write().unwrap();
+        let baseline = capture(root).unwrap().unwrap();
+        fs::write(root.join("crlf.txt"), "changed\r\n").unwrap();
+        fs::write(root.join("f[1].txt"), "changed\r\n").unwrap();
+        fs::write(root.join("f1.txt"), "edited too\r\n").unwrap();
+        revert(&baseline, Path::new("crlf.txt")).unwrap();
+        revert(&baseline, Path::new("f[1].txt")).unwrap();
+        assert_eq!(fs::read(root.join("crlf.txt")).unwrap(), b"a\r\nb\r\n");
+        assert_eq!(fs::read(root.join("f[1].txt")).unwrap(), b"bracket\r\n");
+        assert_eq!(
+            fs::read(root.join("f1.txt")).unwrap(),
+            b"edited too\r\n",
+            "a pattern-like name touches only itself"
+        );
+        let remaining: Vec<_> = changes_since(&baseline)
+            .unwrap()
+            .into_iter()
+            .map(|file| file.path)
+            .collect();
+        assert_eq!(remaining, [PathBuf::from("f1.txt")]);
+        let leftovers: Vec<_> = fs::read_dir(root.join(".git"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("termeric-revert")
+            })
+            .collect();
+        assert!(leftovers.is_empty(), "the private checkout is cleaned up");
+    }
+
+    #[test]
+    fn directories_and_files_swapping_places_fail_before_changing_anything() {
+        let (temp, _repo) = repository();
+        let root = temp.path();
+        fs::create_dir(root.join("was-dir")).unwrap();
+        fs::write(root.join("was-dir/inner.txt"), "x").unwrap();
+        let baseline = capture(root).unwrap().unwrap();
+        // A file became a directory, and a directory became a file.
+        fs::remove_file(root.join("kept.txt")).unwrap();
+        fs::create_dir(root.join("kept.txt")).unwrap();
+        fs::write(root.join("kept.txt/new.txt"), "y").unwrap();
+        fs::remove_dir_all(root.join("was-dir")).unwrap();
+        fs::write(root.join("was-dir"), "now a file").unwrap();
+
+        assert!(revert(&baseline, Path::new("kept.txt")).is_err());
+        assert!(root.join("kept.txt/new.txt").exists());
+        assert!(revert(&baseline, Path::new("was-dir")).is_err());
+        assert_eq!(
+            fs::read_to_string(root.join("was-dir")).unwrap(),
+            "now a file",
+            "nothing is deleted before the refusal"
+        );
+        let error = revert(&baseline, Path::new("was-dir/inner.txt")).unwrap_err();
+        assert!(error.to_string().contains("now a file"), "{error}");
+        // Staging copes with both shapes.
+        let paths: Vec<_> = changes_since(&baseline)
+            .unwrap()
+            .into_iter()
+            .map(|file| file.path)
+            .collect();
+        stage(&baseline, &paths).unwrap();
+    }
+
+    #[test]
+    fn nested_repositories_do_not_stop_the_snapshot() {
+        let (temp, _repo) = repository();
+        let root = temp.path();
+        Repository::init(root.join("inner")).unwrap();
+        fs::write(root.join("inner/file"), "x").unwrap();
+        let baseline = capture(root).unwrap().unwrap();
+        fs::write(root.join("kept.txt"), "changed\n").unwrap();
+        assert_eq!(changes_since(&baseline).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn staged_means_the_index_matches_content_and_mode() {
+        let (temp, repo) = repository();
+        let root = temp.path();
+        let baseline = capture(root).unwrap().unwrap();
+        fs::set_permissions(root.join("kept.txt"), fs::Permissions::from_mode(0o755)).unwrap();
+        fs::remove_file(root.join("notes.txt")).unwrap();
+        let staged = |baseline: &Baseline| {
+            changes_since(baseline)
+                .unwrap()
+                .into_iter()
+                .map(|file| (file.path.to_string_lossy().into_owned(), file.staged))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            staged(&baseline),
+            [("kept.txt".into(), false), ("notes.txt".into(), false)],
+            "a mode change is not staged, and an untracked deletion has nothing to stage"
+        );
+        stage(&baseline, &["kept.txt".into()]).unwrap();
+        let mut index = repo.index().unwrap();
+        index.read(true).unwrap();
+        assert_eq!(
+            index.get_path(Path::new("kept.txt"), 0).unwrap().mode,
+            0o100755
+        );
+        assert_eq!(staged(&baseline)[0], ("kept.txt".into(), true));
     }
 }

@@ -1248,6 +1248,8 @@ pub struct App {
     agent_change_list: Option<agent_changes::ChangeList>,
     /// A file revert awaiting the person's confirmation.
     pending_revert: Option<agent_changes::PendingRevert>,
+    /// The agent change the diff viewer is showing.
+    agent_change_review: Option<agent_changes::ChangeReview>,
     /// The agent overseeing this window's other agents, if started.
     supervisor: Option<supervisor::Supervisor>,
     /// The plain-language rules given to a new supervisor.
@@ -1489,6 +1491,7 @@ impl App {
             agent_change_job: None,
             agent_change_list: None,
             pending_revert: None,
+            agent_change_review: None,
             supervisor: None,
             supervisor_rules_path: Config::config_path().with_file_name("supervisor.md"),
             control_window_id: 1,

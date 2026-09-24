@@ -11,4 +11,7 @@ pub struct AgentSession {
     pub launched: bool,
     /// Profile of a launched agent.
     pub profile: Option<String>,
+    /// The agent's process: its foreground process group, or for a launched
+    /// agent the terminal's own child. `None` where the platform cannot tell.
+    pub process: Option<i64>,
 }
