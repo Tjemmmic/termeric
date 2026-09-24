@@ -72,6 +72,14 @@ Animations use their existing `Instant` clocks and catch up after exposure or
 surface recovery instead of accumulating hidden frame steps. A lost surface
 stops rendering until a real resize reconfigures it, preventing a retry loop.
 
+Each frame is announced to the windowing system just before it is presented.
+On Wayland this asks the compositor for a frame callback, and the next redraw
+waits for it. A window the compositor is not showing, such as one on another
+Sway workspace, which may not be reported as occluded, therefore receives no
+redraws instead of presenting into a driver that waits for a callback that
+never comes. Output, control requests, and agent status keep flowing while it
+is hidden, and drawing resumes when it is shown.
+
 ## Verification
 
 The scheduler has deterministic tests for dirty-source coalescing, deadline

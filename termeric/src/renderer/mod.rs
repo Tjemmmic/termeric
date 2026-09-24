@@ -1463,6 +1463,12 @@ impl Renderer {
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
+        // On Wayland this asks the compositor for a frame callback, and winit
+        // holds the next redraw until it arrives. A window the compositor is
+        // not showing, such as one on another workspace, then is not asked to
+        // present again; presenting to it would wait inside the driver for a
+        // callback that never comes, stalling the whole event loop.
+        self.window.pre_present_notify();
         output.present();
 
         Ok(())
