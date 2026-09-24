@@ -65,6 +65,9 @@ struct Builtin {
     id: &'static str,
     name: &'static str,
     program: &'static str,
+    /// The npm package it is installed from, recognized when a shim runs
+    /// the package's entry file directly.
+    package: Option<&'static str>,
     resume_args: Option<&'static [&'static str]>,
     new_conversation: Option<&'static str>,
 }
@@ -75,6 +78,7 @@ const BUILTINS: [Builtin; 4] = [
         id: "claude-code",
         name: "Claude Code",
         program: "claude",
+        package: Some("@anthropic-ai/claude-code"),
         resume_args: Some(&["--continue"]),
         new_conversation: Some("/clear"),
     },
@@ -82,6 +86,7 @@ const BUILTINS: [Builtin; 4] = [
         id: "codex",
         name: "Codex",
         program: "codex",
+        package: Some("@openai/codex"),
         resume_args: Some(&["resume", "--last"]),
         new_conversation: Some("/new"),
     },
@@ -89,6 +94,7 @@ const BUILTINS: [Builtin; 4] = [
         id: "gemini",
         name: "Gemini CLI",
         program: "gemini",
+        package: Some("@google/gemini-cli"),
         resume_args: Some(&["--resume", "latest"]),
         new_conversation: Some("/clear"),
     },
@@ -96,6 +102,7 @@ const BUILTINS: [Builtin; 4] = [
         id: "opencode",
         name: "OpenCode",
         program: "opencode",
+        package: Some("opencode-ai"),
         resume_args: Some(&["--continue"]),
         new_conversation: Some("/new"),
     },
@@ -111,7 +118,10 @@ impl AgentDefinition {
         Self {
             id: builtin.id.into(),
             name: builtin.name.into(),
-            detect: vec![builtin.program.into()],
+            detect: std::iter::once(builtin.program)
+                .chain(builtin.package)
+                .map(Into::into)
+                .collect(),
             program: builtin.program.into(),
             args: Vec::new(),
             resume_args: builtin
@@ -226,8 +236,10 @@ impl AgentCatalog {
 
     /// The enabled agent whose process this is, from its argument vector.
     pub fn identify(&self, argv: &[String]) -> Option<&AgentDefinition> {
-        let name = detect::program_name(argv)?;
-        self.enabled().find(|agent| agent.detect.contains(&name))
+        [detect::program_name(argv), detect::package_name(argv)]
+            .into_iter()
+            .flatten()
+            .find_map(|name| self.enabled().find(|agent| agent.detect.contains(&name)))
     }
 }
 
@@ -359,6 +371,15 @@ mod tests {
         );
         assert_eq!(id(&["bash"]), None);
         assert_eq!(id(&["node", "server.js"]), None);
+        // pnpm and Volta shims run the package's entry file directly.
+        assert_eq!(
+            id(&[
+                "node",
+                "/home/me/.volta/tools/image/packages/@google/gemini-cli/lib/node_modules/@google/gemini-cli/dist/index.js"
+            ])
+            .as_deref(),
+            Some("gemini")
+        );
         // A source file of the same name outside an installed package is
         // someone's own script.
         assert_eq!(id(&["node", "/home/me/src/gemini.js"]), None);

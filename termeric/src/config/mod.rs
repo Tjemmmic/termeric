@@ -276,7 +276,7 @@ impl Config {
                 .with_context(|| format!("failed to read {}", config_path.display()))?;
             let mut config: Config = toml::from_str(&content)
                 .with_context(|| format!("failed to parse {}", config_path.display()))?;
-            config.migrate_retired_agent_sections();
+            config.migrate_retired_agent_sections()?;
             config.validate()?;
             Ok(config)
         } else {
@@ -287,7 +287,7 @@ impl Config {
     /// Move settings from the retired `[plugins.claude_code]` and
     /// `[plugins.codex]` sections into `[agents.*]`, unless an agent entry
     /// already exists. The next save writes only the new form.
-    pub fn migrate_retired_agent_sections(&mut self) {
+    pub fn migrate_retired_agent_sections(&mut self) -> Result<()> {
         let plugins = std::mem::take(&mut self.plugins);
         let migrated = [
             (
@@ -302,7 +302,9 @@ impl Config {
                 plugins
                     .codex
                     .as_ref()
-                    .and_then(crate::agents::config::migrate_codex),
+                    .map(crate::agents::config::migrate_codex)
+                    .transpose()?
+                    .flatten(),
             ),
         ];
         for (id, entry) in migrated {
@@ -310,6 +312,7 @@ impl Config {
                 self.agents.entry(id.to_string()).or_insert(entry);
             }
         }
+        Ok(())
     }
 
     /// Load startup configuration without making a malformed user file fatal.
@@ -2023,7 +2026,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        config.migrate_retired_agent_sections();
+        config.migrate_retired_agent_sections().unwrap();
         config.validate().unwrap();
         assert_eq!(
             config.agents["claude-code"].args.as_deref(),

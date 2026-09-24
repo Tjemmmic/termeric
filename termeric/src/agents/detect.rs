@@ -21,18 +21,7 @@ pub fn program_name(argv: &[String]) -> Option<String> {
     if !INTERPRETERS.contains(&first.as_str()) {
         return Some(first);
     }
-    let shell = SHELLS.contains(&first.as_str());
-    // Skip interpreter options such as `--no-warnings` to reach the script.
-    let mut arguments = argv[1..].iter();
-    let script = loop {
-        let argument = arguments.next()?;
-        if shell && argument == "-c" {
-            return None;
-        }
-        if !argument.starts_with('-') {
-            break argument;
-        }
-    };
+    let script = script_argument(argv)?;
     let name = file_name(script)?;
     match SCRIPT_EXTENSIONS
         .iter()
@@ -44,6 +33,42 @@ pub fn program_name(argv: &[String]) -> Option<String> {
         }
         Some(_) => None,
     }
+}
+
+/// The npm package whose file an interpreter runs, such as
+/// `@anthropic-ai/claude-code`. Shims from pnpm and Volta run a package's
+/// entry file by its full path, and that file's own name (`cli.js`) says
+/// nothing.
+pub fn package_name(argv: &[String]) -> Option<String> {
+    let first = file_name(argv.first()?)?;
+    if !INTERPRETERS.contains(&first.as_str()) {
+        return None;
+    }
+    let (_, inside) = script_argument(argv)?.rsplit_once("/node_modules/")?;
+    let mut parts = inside.split('/');
+    let first = parts.next().filter(|part| !part.is_empty())?;
+    if first.starts_with('@') {
+        let name = parts.next().filter(|part| !part.is_empty())?;
+        Some(format!("{first}/{name}"))
+    } else {
+        Some(first.to_string())
+    }
+}
+
+/// The script an interpreter runs: its first argument that is not an
+/// option, unless a shell was given a command line with `-c`.
+fn script_argument(argv: &[String]) -> Option<&String> {
+    let shell = SHELLS.contains(&file_name(argv.first()?)?.as_str());
+    // Skip interpreter options such as `--no-warnings` to reach the script.
+    for argument in &argv[1..] {
+        if shell && argument == "-c" {
+            return None;
+        }
+        if !argument.starts_with('-') {
+            return Some(argument);
+        }
+    }
+    None
 }
 
 fn file_name(arg: &str) -> Option<String> {
@@ -153,6 +178,29 @@ mod tests {
         assert_eq!(name(&["bash", "deploy.sh"]), None);
         assert_eq!(name(&["sh", "-c", "codex"]), None);
         assert_eq!(name(&["bash"]), None);
+
+        let package = |argv: &[&str]| {
+            package_name(
+                &argv
+                    .iter()
+                    .map(|arg| (*arg).to_string())
+                    .collect::<Vec<_>>(),
+            )
+        };
+        assert_eq!(
+            package(&[
+                "node",
+                "/home/me/.local/share/pnpm/global/5/.pnpm/@anthropic-ai+claude-code@2.0.0/node_modules/@anthropic-ai/claude-code/cli.js"
+            ])
+            .as_deref(),
+            Some("@anthropic-ai/claude-code")
+        );
+        assert_eq!(
+            package(&["node", "/opt/node_modules/opencode-ai/bin/opencode"]).as_deref(),
+            Some("opencode-ai")
+        );
+        assert_eq!(package(&["node", "/home/me/src/cli.js"]), None);
+        assert_eq!(package(&["/usr/lib/node_modules/x/bin/tool"]), None);
     }
 
     #[cfg(target_os = "linux")]

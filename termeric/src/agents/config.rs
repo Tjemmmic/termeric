@@ -237,29 +237,74 @@ fn claude_approval_args(mode: Option<&str>) -> Vec<String> {
     }
 }
 
+/// One retired Codex approval or sandbox setting, and whether a profile set
+/// it. A profile's own setting replaced the section's for that launch.
+#[derive(Clone, Copy)]
+struct CodexSetting<'a> {
+    value: Option<&'a str>,
+    from_profile: bool,
+}
+
+impl<'a> CodexSetting<'a> {
+    fn section(value: Option<&'a str>) -> Self {
+        Self {
+            value,
+            from_profile: false,
+        }
+    }
+
+    /// The profile's own setting, else the section's.
+    fn in_profile(profile: Option<&'a str>, section: Option<&'a str>) -> Self {
+        match profile {
+            Some(value) => Self {
+                value: Some(value),
+                from_profile: true,
+            },
+            None => Self::section(section),
+        }
+    }
+}
+
 /// Codex flags for the retired friendly names. Earlier releases passed the
-/// defaults ("suggest", "workspace-write") explicitly; they are dropped so a
-/// migrated launch follows the user's own Codex configuration.
-fn codex_policy_args(approval: Option<&str>, sandbox: Option<&str>) -> Vec<String> {
+/// defaults ("suggest", "workspace-write") explicitly even when nobody chose
+/// them; from the section they are dropped, so a converted launch follows the
+/// person's own Codex configuration. A profile's own setting is always
+/// passed, because it replaced a section setting that may have been less
+/// careful. Names the retired plugins did not know are refused, as they
+/// refused to launch with them.
+fn codex_policy_args(approval: CodexSetting, sandbox: CodexSetting) -> anyhow::Result<Vec<String>> {
+    let policy = approval
+        .value
+        .map(|mode| match mode {
+            "suggest" => Ok("untrusted"),
+            "auto-edit" => Ok("on-request"),
+            "full-auto" => Ok("never"),
+            _ => Err(anyhow::anyhow!(
+                "Codex approval_mode {mode:?} is not suggest, auto-edit, or full-auto"
+            )),
+        })
+        .transpose()?
+        .filter(|policy| approval.from_profile || *policy != "untrusted");
+    let sandbox_mode = sandbox
+        .value
+        .map(|mode| match mode {
+            "read-only" => Ok("read-only"),
+            "workspace-write" => Ok("workspace-write"),
+            "full-access" => Ok("danger-full-access"),
+            _ => Err(anyhow::anyhow!(
+                "Codex sandbox_mode {mode:?} is not read-only, workspace-write, or full-access"
+            )),
+        })
+        .transpose()?
+        .filter(|mode| sandbox.from_profile || *mode != "workspace-write" || policy.is_some());
     let mut args = Vec::new();
-    let policy = match approval {
-        Some("auto-edit") => Some("on-request"),
-        Some("full-auto") => Some("never"),
-        _ => None,
-    };
-    let sandbox = match sandbox {
-        Some("read-only") => Some("read-only"),
-        Some("full-access") => Some("danger-full-access"),
-        Some("workspace-write") if policy.is_some() => Some("workspace-write"),
-        _ => None,
-    };
     if let Some(policy) = policy {
         args.extend(["--ask-for-approval".into(), policy.into()]);
     }
-    if let Some(sandbox) = sandbox {
-        args.extend(["--sandbox".into(), sandbox.into()]);
+    if let Some(mode) = sandbox_mode {
+        args.extend(["--sandbox".into(), mode.into()]);
     }
-    args
+    Ok(args)
 }
 
 /// A retired section's arguments, profiles, and default profile.
@@ -279,9 +324,9 @@ fn migrate_launch(
     base_args: Vec<String>,
     section_policy: Vec<String>,
     profiles: &BTreeMap<String, LegacyProfile>,
-    profile_policy: impl Fn(&LegacyProfile) -> Vec<String>,
+    profile_policy: impl Fn(&LegacyProfile) -> anyhow::Result<Vec<String>>,
     default_profile: &Option<String>,
-) -> MigratedLaunch {
+) -> anyhow::Result<MigratedLaunch> {
     // A default naming a missing profile fell back to no profile.
     let mut default_profile = default_profile
         .clone()
@@ -289,32 +334,32 @@ fn migrate_launch(
     if profiles.is_empty() {
         let mut args = base_args;
         args.extend(section_policy);
-        return MigratedLaunch {
+        return Ok(MigratedLaunch {
             args,
             profiles: BTreeMap::new(),
             default_profile,
-        };
+        });
     }
-    let mut migrated: BTreeMap<String, AgentProfileConfig> = profiles
-        .iter()
-        .map(|(name, profile)| {
-            let mut args = profile_policy(profile);
-            args.extend(profile.extra_args.iter().cloned());
-            (
-                name.clone(),
-                AgentProfileConfig {
-                    description: profile.description.clone(),
-                    args,
-                    env: profile.env.clone(),
-                },
-            )
-        })
-        .collect();
+    let mut migrated = BTreeMap::new();
+    for (name, profile) in profiles {
+        let mut args = profile_policy(profile)
+            .map_err(|error| anyhow::anyhow!("profile {name:?}: {error}"))?;
+        args.extend(profile.extra_args.iter().cloned());
+        migrated.insert(
+            name.clone(),
+            AgentProfileConfig {
+                description: profile.description.clone(),
+                args,
+                env: profile.env.clone(),
+            },
+        );
+    }
     if default_profile.is_none() && !section_policy.is_empty() {
-        let name = ["default", "migrated-default"]
+        let name = ["default".to_string(), "migrated-default".to_string()]
             .into_iter()
-            .find(|name| !migrated.contains_key(*name))
-            .map_or_else(|| format!("default-{}", migrated.len()), str::to_owned);
+            .chain((2..).map(|number| format!("migrated-default-{number}")))
+            .find(|name| !migrated.contains_key(name))
+            .expect("some name is free");
         migrated.insert(
             name.clone(),
             AgentProfileConfig {
@@ -325,11 +370,11 @@ fn migrate_launch(
         );
         default_profile = Some(name);
     }
-    MigratedLaunch {
+    Ok(MigratedLaunch {
         args: base_args,
         profiles: migrated,
         default_profile,
-    }
+    })
 }
 
 fn non_default_program(binary: &Option<String>, default: &str) -> Option<String> {
@@ -352,9 +397,14 @@ pub fn migrate_claude_code(legacy: &LegacyClaudeCodeConfig) -> Option<AgentConfi
         base_args(&legacy.model, &legacy.args),
         claude_approval_args(section),
         &legacy.profiles,
-        |profile| claude_approval_args(profile.approval_mode.as_deref().or(section)),
+        |profile| {
+            Ok(claude_approval_args(
+                profile.approval_mode.as_deref().or(section),
+            ))
+        },
         &legacy.default_profile,
-    );
+    )
+    .expect("Claude Code approval modes cannot be refused");
     let entry = AgentConfig {
         enabled: legacy.enabled.filter(|enabled| !enabled),
         program: non_default_program(&legacy.binary, "claude"),
@@ -369,23 +419,27 @@ pub fn migrate_claude_code(legacy: &LegacyClaudeCodeConfig) -> Option<AgentConfi
 
 /// The `[agents.codex]` entry equivalent to a retired section. Codex was
 /// disabled by default, so `enabled = false` restated the default.
-pub fn migrate_codex(legacy: &LegacyCodexConfig) -> Option<AgentConfig> {
+pub fn migrate_codex(legacy: &LegacyCodexConfig) -> anyhow::Result<Option<AgentConfig>> {
     let (approval, sandbox) = (
         legacy.approval_mode.as_deref(),
         legacy.sandbox_mode.as_deref(),
     );
     let launch = migrate_launch(
         base_args(&legacy.model, &legacy.args),
-        codex_policy_args(approval, sandbox),
+        codex_policy_args(
+            CodexSetting::section(approval),
+            CodexSetting::section(sandbox),
+        )?,
         &legacy.profiles,
         |profile| {
             codex_policy_args(
-                profile.approval_mode.as_deref().or(approval),
-                profile.sandbox_mode.as_deref().or(sandbox),
+                CodexSetting::in_profile(profile.approval_mode.as_deref(), approval),
+                CodexSetting::in_profile(profile.sandbox_mode.as_deref(), sandbox),
             )
         },
         &legacy.default_profile,
-    );
+    )
+    .map_err(|error| anyhow::anyhow!("[plugins.codex] {error}"))?;
     let entry = AgentConfig {
         program: non_default_program(&legacy.binary, "codex"),
         args: (!launch.args.is_empty()).then_some(launch.args),
@@ -394,7 +448,7 @@ pub fn migrate_codex(legacy: &LegacyCodexConfig) -> Option<AgentConfig> {
         default_profile: launch.default_profile,
         ..AgentConfig::default()
     };
-    (entry != AgentConfig::default()).then_some(entry)
+    Ok((entry != AgentConfig::default()).then_some(entry))
 }
 
 #[cfg(test)]
@@ -437,11 +491,15 @@ mod tests {
             "#,
         )
         .unwrap();
-        let entry = migrate_codex(&codex).unwrap();
+        let entry = migrate_codex(&codex).unwrap().unwrap();
         // With profiles, each launch gets exactly one policy: the profile's,
         // which replaces the section's, or the section's as `default`.
         assert_eq!(entry.args, None);
-        assert_eq!(entry.profiles["safe"].args, ["--sandbox", "read-only"]);
+        assert_eq!(
+            entry.profiles["safe"].args,
+            ["--ask-for-approval", "untrusted", "--sandbox", "read-only"],
+            "the profile's own careful choice is passed, never left to Codex's defaults"
+        );
         assert_eq!(
             entry.profiles["default"].args,
             [
@@ -456,7 +514,7 @@ mod tests {
         let codex_agent = agent.get("codex").unwrap();
         assert_eq!(
             codex_agent.launch(Some("safe"), false).unwrap().args,
-            ["--sandbox", "read-only"],
+            ["--ask-for-approval", "untrusted", "--sandbox", "read-only"],
             "the safe profile never inherits `never`"
         );
         assert_eq!(
@@ -482,7 +540,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        let entry = migrate_codex(&partial).unwrap();
+        let entry = migrate_codex(&partial).unwrap().unwrap();
         assert_eq!(
             entry.profiles["fast"].args,
             ["--ask-for-approval", "on-request", "--search"]
@@ -494,6 +552,44 @@ mod tests {
         );
         assert_eq!(entry.default_profile.as_deref(), Some("migrated-default"));
         validate(&BTreeMap::from([("codex".into(), entry)])).unwrap();
+
+        // An explicit default in a profile still overrides a permissive
+        // section, and names the retired plugin refused are refused.
+        let careful: LegacyCodexConfig = toml::from_str(
+            r#"
+            approval_mode = "full-auto"
+            sandbox_mode = "full-access"
+            [profiles.careful]
+            approval_mode = "suggest"
+            sandbox_mode = "workspace-write"
+            [profiles.default]
+            [profiles.migrated-default]
+            "#,
+        )
+        .unwrap();
+        let entry = migrate_codex(&careful).unwrap().unwrap();
+        assert_eq!(
+            entry.profiles["careful"].args,
+            [
+                "--ask-for-approval",
+                "untrusted",
+                "--sandbox",
+                "workspace-write"
+            ]
+        );
+        assert_eq!(
+            entry.default_profile.as_deref(),
+            Some("migrated-default-2"),
+            "the person's own profiles are never replaced"
+        );
+        let unknown: LegacyCodexConfig =
+            toml::from_str("[profiles.x]\napproval_mode = \"yolo\"").unwrap();
+        assert!(
+            migrate_codex(&unknown)
+                .unwrap_err()
+                .to_string()
+                .contains("\"yolo\"")
+        );
 
         let claude: LegacyClaudeCodeConfig = toml::from_str(
             r#"
@@ -518,7 +614,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        assert_eq!(migrate_codex(&defaults), None);
+        assert_eq!(migrate_codex(&defaults).unwrap(), None);
         assert_eq!(
             migrate_claude_code(&LegacyClaudeCodeConfig::default()),
             None

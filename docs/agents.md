@@ -39,7 +39,8 @@ program in each terminal's foreground process group. A program counts as an
 agent when its name matches one of the agent's `detect` names. For Node, Bun,
 Deno, Python, and shell scripts, the script's name is used instead of the
 interpreter's. Only an installed program counts: a script without an
-extension, or a package's entry point under `node_modules`. Your own
+extension, or a package's entry point under `node_modules`, which is also
+recognized by its package, as pnpm and Volta install them. Your own
 `claude.py` is not taken for Claude Code. An agent Termeric started is known
 by what it started, whatever its program is called. On platforms without
 `/proc`, only agents Termeric started itself are recognized.
@@ -343,8 +344,11 @@ approval and sandbox arguments, taking the section's for what it did not set.
 The section's own become a profile named `default`, used when no other
 default was chosen. A `default_profile` naming a missing profile is dropped.
 
-The earlier defaults, `suggest` and `workspace-write`, are dropped, so a
-converted Codex launch follows your own Codex configuration. An existing
+The earlier defaults, `suggest` and `workspace-write`, are dropped from the
+section, so a converted Codex launch follows your own Codex configuration. A
+profile's own setting is always kept, `suggest` as `--ask-for-approval
+untrusted`, because it overrode the section. A name the earlier plugins did
+not know stops the configuration from loading, with a message naming it. An existing
 `[agents.<id>]` entry always wins over a converted one.
 
 ## Workspaces and restarts
