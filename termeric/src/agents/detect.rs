@@ -51,6 +51,41 @@ fn file_name(arg: &str) -> Option<String> {
     (!name.is_empty()).then(|| name.to_string())
 }
 
+/// Whether `process` is `ancestor` or was started, directly or through
+/// other processes, by it.
+#[cfg(target_os = "linux")]
+pub fn descends_from(process: u32, ancestor: u32) -> bool {
+    // Deep enough for any real launcher chain, and bounded against a
+    // pathological one.
+    const MAX_DEPTH: usize = 64;
+    let mut current = process;
+    for _ in 0..MAX_DEPTH {
+        if current == ancestor {
+            return true;
+        }
+        match parent_process(current) {
+            Some(parent) if parent != 0 && parent != current => current = parent,
+            _ => return false,
+        }
+    }
+    false
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn descends_from(_process: u32, _ancestor: u32) -> bool {
+    false
+}
+
+/// The parent of `process`, from the field after its name in
+/// `/proc/PID/stat`. The name may itself hold spaces and parentheses, so the
+/// fields are read after its last closing parenthesis.
+#[cfg(target_os = "linux")]
+fn parent_process(process: u32) -> Option<u32> {
+    let stat = std::fs::read_to_string(format!("/proc/{process}/stat")).ok()?;
+    let fields = &stat[stat.rfind(')')? + 1..];
+    fields.split_whitespace().nth(1)?.parse().ok()
+}
+
 /// The argument vector of the process leading the terminal's foreground
 /// process group.
 #[cfg(target_os = "linux")]
@@ -118,6 +153,30 @@ mod tests {
         assert_eq!(name(&["bash", "deploy.sh"]), None);
         assert_eq!(name(&["sh", "-c", "codex"]), None);
         assert_eq!(name(&["bash"]), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn ancestry_follows_parents_to_the_terminal_child() {
+        /// Stops the child however the test ends.
+        struct Reaped(std::process::Child);
+        impl Drop for Reaped {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let child = Reaped(
+            std::process::Command::new("sleep")
+                .arg("5")
+                .spawn()
+                .unwrap(),
+        );
+        let me = std::process::id();
+        assert!(descends_from(child.0.id(), me));
+        assert!(descends_from(me, me));
+        assert!(!descends_from(me, child.0.id()));
+        assert!(!descends_from(u32::MAX, me));
     }
 
     #[cfg(target_os = "linux")]

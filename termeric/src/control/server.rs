@@ -152,11 +152,12 @@ fn handle_client(
     expected_token: &str,
     proxy: &EventLoopProxy<AppEvent>,
 ) -> anyhow::Result<()> {
-    serve_client(stream, expected_token, |request| {
+    serve_client(stream, expected_token, |request, peer_process| {
         let (sender, receiver) = mpsc::sync_channel(1);
         proxy
             .send_event(AppEvent::ControlRequest {
                 request,
+                peer_process,
                 respond_to: sender,
             })
             .map_err(|_| anyhow::anyhow!("GUI event loop is no longer available"))?;
@@ -170,11 +171,11 @@ fn handle_client(
 fn serve_client(
     mut stream: UnixStream,
     expected_token: &str,
-    respond: impl FnOnce(Request) -> anyhow::Result<Response>,
+    respond: impl FnOnce(Request, Option<u32>) -> anyhow::Result<Response>,
 ) -> anyhow::Result<()> {
     stream.set_read_timeout(Some(IO_TIMEOUT))?;
     stream.set_write_timeout(Some(IO_TIMEOUT))?;
-    validate_peer(&stream)?;
+    let peer_process = validate_peer(&stream)?;
     let request = protocol::read_frame::<ClientFrame>(&mut stream)?;
     if let Err(message) = validate_request(&request, expected_token) {
         protocol::write_frame(
@@ -187,7 +188,7 @@ fn serve_client(
         return Ok(());
     }
 
-    let response = match respond(request.request) {
+    let response = match respond(request.request, peer_process) {
         Ok(response) => response,
         Err(error) => {
             return protocol::write_frame(
@@ -724,8 +725,10 @@ fn prepare_endpoint(paths: &ControlPaths) -> anyhow::Result<()> {
     remove_safe_file(&paths.token, false)
 }
 
+/// Refuses a peer of another user, and returns the peer's process ID where
+/// the platform reports it.
 #[cfg(target_os = "linux")]
-fn validate_peer(stream: &UnixStream) -> anyhow::Result<()> {
+fn validate_peer(stream: &UnixStream) -> anyhow::Result<Option<u32>> {
     let mut credentials = libc::ucred {
         pid: 0,
         uid: 0,
@@ -749,11 +752,11 @@ fn validate_peer(stream: &UnixStream) -> anyhow::Result<()> {
     if credentials.uid != crate::domain::paths::effective_uid() {
         anyhow::bail!("GUI control peer belongs to a different user");
     }
-    Ok(())
+    Ok(u32::try_from(credentials.pid).ok().filter(|pid| *pid > 0))
 }
 
 #[cfg(all(unix, not(target_os = "linux")))]
-fn validate_peer(stream: &UnixStream) -> anyhow::Result<()> {
+fn validate_peer(stream: &UnixStream) -> anyhow::Result<Option<u32>> {
     let mut uid: libc::uid_t = 0;
     let mut gid: libc::gid_t = 0;
     // SAFETY: getpeereid receives a connected descriptor and valid output
@@ -766,7 +769,7 @@ fn validate_peer(stream: &UnixStream) -> anyhow::Result<()> {
     if uid != crate::domain::paths::effective_uid() {
         anyhow::bail!("GUI control peer belongs to a different user");
     }
-    Ok(())
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -778,7 +781,7 @@ mod tests {
         let expected_id = id.clone();
         let (mut client, server) = UnixStream::pair().unwrap();
         let worker = thread::spawn(move || {
-            serve_client(server, "fixture-token", |request| {
+            serve_client(server, "fixture-token", |request, _| {
                 assert!(request.request_id().is_none());
                 assert_eq!(
                     request,
@@ -838,7 +841,7 @@ mod tests {
         let expected = event.clone();
         let (mut client, server) = UnixStream::pair().unwrap();
         let worker = thread::spawn(move || {
-            serve_client(server, "fixture-token", |request| {
+            serve_client(server, "fixture-token", |request, _| {
                 assert!(request.request_id().is_none(), "no replay identity");
                 assert_eq!(request, expected);
                 Ok(Response::AgentEventRecorded { process_id: 4242 })
@@ -929,7 +932,7 @@ mod tests {
         }
         let (mut client, server) = UnixStream::pair().unwrap();
         let worker = thread::spawn(move || {
-            serve_client(server, "secret", |request| {
+            serve_client(server, "secret", |request, _| {
                 assert_eq!(request, Request::Inventory);
                 Ok(Response::Inventory(protocol::ProcessInventory {
                     process_id: 42,
@@ -959,7 +962,7 @@ mod tests {
         let (mut client, server) = UnixStream::pair().unwrap();
         let expected_id = request_id.clone();
         let worker = thread::spawn(move || {
-            serve_client(server, "secret", |request| {
+            serve_client(server, "secret", |request, _| {
                 assert_eq!(
                     request,
                     Request::CreateWindow {
@@ -1019,7 +1022,7 @@ mod tests {
         let expected_request = launch.clone();
         let expected_id = request_id.clone();
         let worker = thread::spawn(move || {
-            serve_client(server, "secret", |request| {
+            serve_client(server, "secret", |request, _| {
                 assert_eq!(request, expected_request);
                 Ok(Response::WindowLaunched {
                     process_id: 42,
@@ -1055,7 +1058,7 @@ mod tests {
         let (mut client, server) = UnixStream::pair().unwrap();
         let expected_id = request_id.clone();
         let worker = thread::spawn(move || {
-            serve_client(server, "secret", |request| {
+            serve_client(server, "secret", |request, _| {
                 assert_eq!(
                     request,
                     Request::CreateTab {
@@ -1118,7 +1121,7 @@ mod tests {
         let expected_request = launch.clone();
         let expected_id = request_id.clone();
         let worker = thread::spawn(move || {
-            serve_client(server, "secret", |request| {
+            serve_client(server, "secret", |request, _| {
                 assert_eq!(request, expected_request);
                 Ok(Response::TabCreated {
                     process_id: 42,
@@ -1154,7 +1157,7 @@ mod tests {
         let (mut client, server) = UnixStream::pair().unwrap();
         let expected_id = request_id.clone();
         let worker = thread::spawn(move || {
-            serve_client(server, "secret", |request| {
+            serve_client(server, "secret", |request, _| {
                 assert_eq!(
                     request,
                     Request::SplitPane {
@@ -1205,7 +1208,7 @@ mod tests {
 
         let (mut client, server) = UnixStream::pair().unwrap();
         let worker = thread::spawn(move || {
-            serve_client(server, "secret", |_| anyhow::bail!("missing\nwindow")).unwrap();
+            serve_client(server, "secret", |_, _| anyhow::bail!("missing\nwindow")).unwrap();
         });
         protocol::write_frame(
             &mut client,

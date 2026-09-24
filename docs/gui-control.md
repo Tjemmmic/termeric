@@ -560,13 +560,20 @@ generic initialization failure.
 pane IDs, agent, state, detail, and at most 16 KiB of last answer.
 `submit_to_agent` is an ID-targeted mutation like `send_text`, under the same
 `security.allow_gui_control_input` opt-in. It names the agent it expects and is
-refused if that pane now runs another agent, or none. Its text is pasted and
-submitted after a short pause, and is not held for destructive-command
-confirmation. Both accept an optional `supervisor` token of 32 hex digits. With
-one, `list_agents` returns only the agents that supervisor oversees.
-`submit_to_agent` then follows that supervisor's mode and limits instead of
-the opt-in, and reports `pending_approval` when the person must decide first.
-An unknown token is refused.
+refused if that pane, checked again at the moment of writing, runs another
+agent or none. Its text is pasted and submitted after a short pause; several
+to one pane are submitted in order, one at a time. It is not held for
+destructive-command confirmation, but it is refused while the person has typed
+into that pane in the last ten seconds, beyond 4096 bytes or 80 lines, with
+control or text-direction characters, or when it starts with `!` or `/`,
+which the agent would run as a command. Both accept an optional `supervisor`
+token of 32 hex digits. With one, `list_agents` returns only the agents that
+supervisor oversees. `submit_to_agent` then follows that supervisor's mode and
+limits instead of the opt-in, and reports `pending_approval` when the person
+must decide first. An unknown token is refused. Because the token appears in
+process listings, a `submit_to_agent` carrying it must also come from a
+process descended from the supervisor terminal's child, as the socket's peer
+credentials show; this needs Linux, and elsewhere such a request is refused.
 
 `agent_event` is sent by `termeric agent-event`, the command agent hooks run.
 It names a terminal by the random `TERMERIC_TERMINAL_ID` its processes

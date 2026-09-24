@@ -132,7 +132,9 @@ pub fn instructions(mode: SupervisorMode, rules: &str) -> String {
          Termeric sends you messages beginning \"Termeric:\" when an agent in your window needs \
          input, finishes, or fails. Use the termeric tools: list_agents to see every agent and \
          its window_id, tab_id, and pane_id; read_terminal to read an agent's screen before \
-         deciding; send_to_agent to answer it. Keep each message to an agent short and specific. \
+         deciding; send_to_agent to answer it. Keep each message to an agent short and specific, \
+         in plain words: Termeric refuses messages starting with `!` or `/`, which the agent \
+         would run as commands, and any message while the person is typing to that agent. \
          Never send to yourself. {}\n\nThe person's rules:\n\n{}",
         mode.instructions(),
         rules.trim()
@@ -143,27 +145,58 @@ pub fn instructions(mode: SupervisorMode, rules: &str) -> String {
 pub const KICKOFF: &str = "Call list_agents and summarize in a few lines what each agent is doing. \
 Then wait for Termeric's messages.";
 
+/// The name of the supervisor's MCP server, distinct from a `termeric`
+/// server the person may have configured, so neither replaces the other.
+pub const SERVER_NAME: &str = "termeric_supervisor";
+/// The tools the supervisor may call without asking the person, as Claude
+/// Code names them.
+const CLAUDE_TOOLS: &str = "mcp__termeric_supervisor__list_agents,\
+mcp__termeric_supervisor__read_terminal,mcp__termeric_supervisor__send_to_agent";
+
+/// How the supervisor's MCP server reaches the Termeric that started it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SupervisorServer<'a> {
+    pub termeric: &'a Path,
+    pub token: &'a str,
+    /// This Termeric's process ID, named so that nothing is discovered.
+    pub process_id: u32,
+    /// This Termeric's `XDG_RUNTIME_DIR`, where its control socket lives.
+    /// Codex starts MCP servers with only a few basic variables, so it is
+    /// passed on explicitly.
+    pub runtime_directory: Option<&'a str>,
+}
+
 /// Arguments that start `agent_id` as a supervisor whose MCP server runs
-/// `termeric mcp --supervisor TOKEN`.
+/// `termeric mcp --process PID --supervisor TOKEN`.
 pub fn launch_args(
     agent_id: &str,
-    termeric: &Path,
-    token: &str,
+    server: &SupervisorServer,
     instructions: &str,
 ) -> Option<Vec<String>> {
-    let program = termeric.to_string_lossy().into_owned();
-    let server_args = ["mcp", "--supervisor", token];
+    let program = server.termeric.to_string_lossy().into_owned();
+    let process = server.process_id.to_string();
+    let server_args = ["mcp", "--process", &process, "--supervisor", server.token];
+    let environment: Vec<(&str, &str)> = server
+        .runtime_directory
+        .map(|directory| ("XDG_RUNTIME_DIR", directory))
+        .into_iter()
+        .collect();
     match agent_id {
         "claude-code" => {
-            let config = serde_json::json!({
-                "mcpServers": {"termeric": {"command": program, "args": server_args}}
-            });
+            let mut definition = serde_json::json!({"command": program, "args": server_args});
+            if !environment.is_empty() {
+                definition["env"] = environment
+                    .iter()
+                    .map(|(name, value)| ((*name).to_owned(), serde_json::json!(value)))
+                    .collect::<serde_json::Map<_, _>>()
+                    .into();
+            }
+            let config = serde_json::json!({"mcpServers": {SERVER_NAME: definition}});
             Some(vec![
                 "--mcp-config".into(),
                 config.to_string(),
                 "--allowedTools".into(),
-                "mcp__termeric__list_agents,mcp__termeric__read_terminal,mcp__termeric__send_to_agent"
-                    .into(),
+                CLAUDE_TOOLS.into(),
                 "--append-system-prompt".into(),
                 instructions.into(),
                 KICKOFF.into(),
@@ -176,13 +209,30 @@ pub fn launch_args(
                 .map(|arg| toml_string(arg))
                 .collect::<Vec<_>>()
                 .join(", ");
-            Some(vec![
+            let mut launch = vec![
                 "-c".into(),
-                format!("mcp_servers.termeric.command={}", toml_string(&program)),
+                format!(
+                    "mcp_servers.{SERVER_NAME}.command={}",
+                    toml_string(&program)
+                ),
                 "-c".into(),
-                format!("mcp_servers.termeric.args=[{args}]"),
-                format!("{instructions}\n\n{KICKOFF}"),
-            ])
+                format!("mcp_servers.{SERVER_NAME}.args=[{args}]"),
+                // Termeric decides every send itself; Codex asking the person
+                // again for each tool call would only repeat that.
+                "-c".into(),
+                format!("mcp_servers.{SERVER_NAME}.default_tools_approval_mode=\"approve\""),
+            ];
+            if !environment.is_empty() {
+                let table = environment
+                    .iter()
+                    .map(|(name, value)| format!("{name} = {}", toml_string(value)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                launch.push("-c".into());
+                launch.push(format!("mcp_servers.{SERVER_NAME}.env={{ {table} }}"));
+            }
+            launch.push(format!("{instructions}\n\n{KICKOFF}"));
+            Some(launch)
         }
         _ => None,
     }
@@ -223,12 +273,22 @@ pub fn event_message(name: &str, where_: &str, status: &AgentStatus) -> Option<S
     Some(format!("Termeric: {name} ({where_}) {what}"))
 }
 
-/// Why a supervisor's message may not be sent now.
+/// Why a message sent through Termeric's agent tools may not be sent now.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SendRefusal {
     Watching,
-    RateLimited { per_minute: u32 },
+    RateLimited {
+        per_minute: u32,
+    },
     Repeated,
+    Empty,
+    TooLong,
+    /// Control or direction-changing characters, which would make the text
+    /// the person approves differ from the text the agent receives.
+    HiddenCharacters,
+    /// Text the agent would run itself, as a shell command (`!`) or one of
+    /// its own commands (`/`), bypassing its approvals.
+    AgentCommand,
 }
 
 impl std::fmt::Display for SendRefusal {
@@ -242,10 +302,60 @@ impl std::fmt::Display for SendRefusal {
                 "The supervisor may send at most {per_minute} messages a minute; wait before sending again"
             ),
             Self::Repeated => formatter.write_str(
-                "That exact message was just sent to that agent; read its terminal before repeating it",
+                "That message was just sent to that agent; read its terminal before repeating it",
+            ),
+            Self::Empty => formatter.write_str("The message is empty"),
+            Self::TooLong => write!(
+                formatter,
+                "Messages are limited to {MAX_MESSAGE_BYTES} bytes and {MAX_MESSAGE_LINES} lines; send something shorter"
+            ),
+            Self::HiddenCharacters => formatter.write_str(
+                "The message contains control or text-direction characters; send plain text",
+            ),
+            Self::AgentCommand => formatter.write_str(
+                "Messages may not start with `!` or `/`, which the agent would run as a command; rephrase it as a request",
             ),
         }
     }
+}
+
+/// The largest message, small enough for the person to read in full before
+/// approving it.
+pub const MAX_MESSAGE_BYTES: usize = 4096;
+pub const MAX_MESSAGE_LINES: usize = 80;
+
+/// Whether `text` may be given to an agent as a prompt at all.
+pub fn check_message(text: &str) -> Result<(), SendRefusal> {
+    let trimmed = text.trim_start();
+    if trimmed.is_empty() {
+        return Err(SendRefusal::Empty);
+    }
+    if text.len() > MAX_MESSAGE_BYTES || text.lines().count() > MAX_MESSAGE_LINES {
+        return Err(SendRefusal::TooLong);
+    }
+    let hidden = |character: char| {
+        (character.is_control() && !matches!(character, '\n' | '\t'))
+            || matches!(
+                character,
+                '\u{200E}' | '\u{200F}' | '\u{061C}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+            )
+    };
+    if text.chars().any(hidden) {
+        return Err(SendRefusal::HiddenCharacters);
+    }
+    if trimmed.starts_with(['!', '/']) {
+        return Err(SendRefusal::AgentCommand);
+    }
+    Ok(())
+}
+
+/// The words of `text`, so that spacing and case do not make a repeated
+/// message look new.
+fn normalized(text: &str) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 /// How long a message counts toward the rate limit.
@@ -256,7 +366,7 @@ const REPEAT_WINDOW: Duration = Duration::from_secs(30);
 /// Hard limits on what a supervisor sends, whatever its instructions say.
 #[derive(Debug, Default)]
 pub struct SendLimits {
-    /// Recent sends: when, to which terminal, and what.
+    /// Recent messages: when, to which terminal, and their normalized words.
     sent: VecDeque<(Instant, String, String)>,
 }
 
@@ -273,6 +383,7 @@ impl SendLimits {
         if mode == SupervisorMode::Watch {
             return Err(SendRefusal::Watching);
         }
+        check_message(text)?;
         while self
             .sent
             .front()
@@ -280,8 +391,9 @@ impl SendLimits {
         {
             self.sent.pop_front();
         }
+        let words = normalized(text);
         if self.sent.iter().any(|(at, to, sent)| {
-            to == target && sent == text && now.duration_since(*at) < REPEAT_WINDOW
+            to == target && *sent == words && now.duration_since(*at) < REPEAT_WINDOW
         }) {
             return Err(SendRefusal::Repeated);
         }
@@ -291,10 +403,11 @@ impl SendLimits {
         Ok(())
     }
 
-    /// Count a message that was sent.
+    /// Count a message that was sent, or put to the person and not sent: a
+    /// supervisor may not keep asking faster than it may send.
     pub fn record(&mut self, target: &str, text: &str, now: Instant) {
         self.sent
-            .push_back((now, target.to_owned(), text.to_owned()));
+            .push_back((now, target.to_owned(), normalized(text)));
     }
 }
 
@@ -341,41 +454,114 @@ mod tests {
         limits
             .check(SupervisorMode::Auto, 6, "b", "same", later)
             .expect("the same words to another agent are fine");
+        assert_eq!(
+            limits.check(SupervisorMode::Auto, 6, "a", "  SAME\n", later),
+            Err(SendRefusal::Repeated),
+            "spacing and case do not make a message new"
+        );
         limits
             .check(SupervisorMode::Auto, 6, "a", "same", later + REPEAT_WINDOW)
             .expect("repeating later is fine");
     }
 
     #[test]
-    fn launches_wire_in_the_supervisor_server_for_each_agent() {
-        let exe = Path::new("/opt/termeric/bin/termeric");
-        let token = "a".repeat(32);
-        let claude = launch_args("claude-code", exe, &token, "RULES").unwrap();
-        let config: serde_json::Value = serde_json::from_str(&claude[1]).unwrap();
+    fn messages_are_plain_requests_the_person_can_read_in_full() {
         assert_eq!(
-            config["mcpServers"]["termeric"]["args"],
-            serde_json::json!(["mcp", "--supervisor", token])
+            check_message("Run the tests again.\n\tThen report."),
+            Ok(())
         );
+        assert_eq!(check_message("  \n"), Err(SendRefusal::Empty));
+        assert_eq!(
+            check_message("!rm -rf target"),
+            Err(SendRefusal::AgentCommand)
+        );
+        assert_eq!(
+            check_message("\n  /permissions"),
+            Err(SendRefusal::AgentCommand)
+        );
+        assert_eq!(check_message("Use a/b paths"), Ok(()));
+        assert_eq!(
+            check_message("approve \u{202E}lmth.exe"),
+            Err(SendRefusal::HiddenCharacters)
+        );
+        assert_eq!(
+            check_message("paste\u{1b}[201~ends"),
+            Err(SendRefusal::HiddenCharacters)
+        );
+        assert_eq!(
+            check_message(&"x".repeat(MAX_MESSAGE_BYTES + 1)),
+            Err(SendRefusal::TooLong)
+        );
+        assert_eq!(
+            check_message(&"x\n".repeat(MAX_MESSAGE_LINES + 1)),
+            Err(SendRefusal::TooLong)
+        );
+    }
+
+    #[test]
+    fn launches_wire_in_the_supervisor_server_for_each_agent() {
+        let token = "a".repeat(32);
+        let server = SupervisorServer {
+            termeric: Path::new("/opt/termeric/bin/termeric"),
+            token: &token,
+            process_id: 4242,
+            runtime_directory: Some("/run/user/1000"),
+        };
+        let expected_args = ["mcp", "--process", "4242", "--supervisor", token.as_str()];
+        let claude = launch_args("claude-code", &server, "RULES").unwrap();
+        let config: serde_json::Value = serde_json::from_str(&claude[1]).unwrap();
+        let definition = &config["mcpServers"]["termeric_supervisor"];
+        assert_eq!(definition["args"], serde_json::json!(expected_args));
+        assert_eq!(definition["env"]["XDG_RUNTIME_DIR"], "/run/user/1000");
+        assert!(
+            claude[3]
+                .split(',')
+                .all(|tool| tool.starts_with("mcp__termeric_supervisor__"))
+        );
+        assert_eq!(claude[3].split(',').count(), 3);
         assert_eq!(claude[5], "RULES");
         assert_eq!(claude.last().unwrap(), KICKOFF);
 
-        let codex = launch_args("codex", exe, &token, "RULES").unwrap();
+        let codex = launch_args("codex", &server, "RULES").unwrap();
+        // Each `-c` override is TOML, parsed as Codex parses it.
+        let overrides: toml::Table = codex
+            .chunks(2)
+            .filter(|pair| pair[0] == "-c")
+            .map(|pair| pair[1].replacen("mcp_servers.termeric_supervisor.", "", 1))
+            .collect::<Vec<_>>()
+            .join("\n")
+            .parse()
+            .unwrap();
         assert_eq!(
-            codex[1],
-            "mcp_servers.termeric.command=\"/opt/termeric/bin/termeric\""
+            overrides["command"].as_str(),
+            Some("/opt/termeric/bin/termeric")
         );
-        let args: toml::Value =
-            toml::from_str(&codex[3].replace("mcp_servers.termeric.args", "args")).unwrap();
         assert_eq!(
-            args["args"],
+            overrides["args"],
             toml::Value::Array(
-                ["mcp", "--supervisor", token.as_str()]
+                expected_args
                     .map(|arg| toml::Value::String(arg.into()))
                     .to_vec()
             )
         );
-        assert!(codex[4].starts_with("RULES") && codex[4].ends_with(KICKOFF));
-        assert_eq!(launch_args("gemini", exe, &token, "RULES"), None);
+        assert_eq!(
+            overrides["default_tools_approval_mode"].as_str(),
+            Some("approve")
+        );
+        assert_eq!(
+            overrides["env"]["XDG_RUNTIME_DIR"].as_str(),
+            Some("/run/user/1000")
+        );
+        let prompt = codex.last().unwrap();
+        assert!(prompt.starts_with("RULES") && prompt.ends_with(KICKOFF));
+
+        let without_runtime = SupervisorServer {
+            runtime_directory: None,
+            ..server.clone()
+        };
+        let codex = launch_args("codex", &without_runtime, "RULES").unwrap();
+        assert!(!codex.iter().any(|arg| arg.contains(".env=")));
+        assert_eq!(launch_args("gemini", &server, "RULES"), None);
     }
 
     #[test]

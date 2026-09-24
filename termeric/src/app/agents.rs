@@ -32,11 +32,22 @@ pub(super) const FOCUSED_AGENT_COMMANDS: &[&str] = &[
 /// as a pasted newline rather than a submission.
 pub(super) const AGENT_SUBMIT_DELAY: Duration = Duration::from_millis(250);
 
-/// An Enter key to send once typed text has settled in the agent.
+/// Automated messages wait while the person has typed into the agent this
+/// recently, so they never land in the middle of the person's own prompt.
+const PERSON_TYPING_GRACE: Duration = Duration::from_secs(10);
+/// Messages that may wait for one agent behind the one being submitted.
+const MAX_WAITING_SUBMITS: usize = 8;
+
+/// A message typed into an agent, and the Enter that submits it once the
+/// text has settled. Each terminal's messages go one at a time, in order, so
+/// two never merge into one prompt.
 #[derive(Debug)]
 pub(super) struct PendingAgentSubmit {
     target: AgentTarget,
-    due: Instant,
+    /// The text still to type; empty once typed.
+    input: Vec<u8>,
+    /// When to press Enter; `None` until the text has been typed.
+    enter_due: Option<Instant>,
 }
 
 /// The agent in the focused terminal.
@@ -246,7 +257,8 @@ impl App {
 
     /// Submit text sent through the control protocol to one agent: as the
     /// supervisor when `supervisor` carries its token, otherwise under the
-    /// external-input opt-in. Returns whether it awaits the person's approval.
+    /// external-input opt-in. `peer_process` is the requesting process.
+    /// Returns whether it awaits the person's approval.
     pub(super) fn submit_control_text_to_agent(
         &mut self,
         tab_id: u64,
@@ -254,9 +266,10 @@ impl App {
         agent_id: &str,
         text: &str,
         supervisor: Option<&str>,
+        peer_process: Option<u32>,
     ) -> Result<bool, String> {
         if let Some(token) = supervisor {
-            return self.supervised_submit(token, tab_id, pane_id, agent_id, text);
+            return self.supervised_submit(token, peer_process, tab_id, pane_id, agent_id, text);
         }
         if !self.config.security.allow_gui_control_input {
             return Err(
@@ -273,15 +286,33 @@ impl App {
             .agents
             .get(agent_id)
             .map_or_else(|| agent_id.to_string(), |agent| agent.name.clone());
-        self.paste_and_submit_to_agent(
-            AgentTarget {
-                identity,
-                agent_id: agent_id.to_string(),
-                agent_name,
-            },
-            text,
-        )
-        .map(|()| false)
+        crate::agents::supervisor::check_message(text).map_err(|refusal| refusal.to_string())?;
+        let target = AgentTarget {
+            identity,
+            agent_id: agent_id.to_string(),
+            agent_name,
+        };
+        self.refuse_while_person_types(&target)?;
+        self.paste_and_submit_to_agent(target, text).map(|()| false)
+    }
+
+    /// Refuses an automated message to `target` while the person is typing
+    /// into it.
+    pub(super) fn refuse_while_person_types(&self, target: &AgentTarget) -> Result<(), String> {
+        let typing = self
+            .tabs
+            .as_ref()
+            .and_then(|tabs| tabs.tab_by_id(target.identity.tab_id))
+            .and_then(|tab| tab.pane_session(target.identity.pane_id))
+            .and_then(|session| session.last_person_input)
+            .is_some_and(|typed| typed.elapsed() < PERSON_TYPING_GRACE);
+        if typing {
+            return Err(format!(
+                "The person is typing to {}; try again in a few seconds",
+                target.agent_name
+            ));
+        }
+        Ok(())
     }
 
     /// List the agents running in this window, with what each is doing.
@@ -762,36 +793,85 @@ impl App {
         target: AgentTarget,
         text: &str,
     ) -> Result<(), String> {
-        let mode = self.agent_terminal_mode(&target)?;
+        let mode = self.recheck_agent_target(&target)?;
         let framed = crate::input::encode_paste(mode, text);
         self.submit_to_agent(target, &framed)
     }
 
     /// Type `input` into the agent at `target` as keystrokes and press Enter
-    /// once it has settled, so the agent submits it.
+    /// once it has settled, so the agent submits it. A message to an agent
+    /// still submitting an earlier one waits its turn.
     pub(super) fn submit_to_agent(
         &mut self,
         target: AgentTarget,
         input: &[u8],
     ) -> Result<(), String> {
-        self.write_to_agent(&target, input)?;
-        self.pending_agent_submits
-            .retain(|pending| pending.target.identity != target.identity);
+        let waiting = self
+            .pending_agent_submits
+            .iter()
+            .filter(|pending| pending.target.identity == target.identity)
+            .count();
+        if waiting == 0 {
+            self.write_to_agent(&target, input)?;
+            self.pending_agent_submits.push(PendingAgentSubmit {
+                target,
+                input: Vec::new(),
+                enter_due: Some(Instant::now() + AGENT_SUBMIT_DELAY),
+            });
+            return Ok(());
+        }
+        self.recheck_agent_target(&target)?;
+        if waiting > MAX_WAITING_SUBMITS {
+            return Err(format!(
+                "Too many messages are waiting for {}; try again shortly",
+                target.agent_name
+            ));
+        }
         self.pending_agent_submits.push(PendingAgentSubmit {
             target,
-            due: Instant::now() + AGENT_SUBMIT_DELAY,
+            input: input.to_vec(),
+            enter_due: None,
         });
         Ok(())
     }
 
-    /// Press Enter for every typed submission whose delay has passed.
+    /// Press Enter for every typed message whose delay has passed, then type
+    /// the next message waiting for that agent.
     pub(super) fn submit_due_agent_input(&mut self, now: Instant) {
-        let (due, waiting) = std::mem::take(&mut self.pending_agent_submits)
-            .into_iter()
-            .partition(|pending| pending.due <= now);
-        self.pending_agent_submits = waiting;
-        for PendingAgentSubmit { target, .. } in due {
-            if let Err(reason) = self.write_to_agent(&target, b"\r") {
+        let mut index = 0;
+        while index < self.pending_agent_submits.len() {
+            let identity = self.pending_agent_submits[index].target.identity;
+            let first = !self.pending_agent_submits[..index]
+                .iter()
+                .any(|pending| pending.target.identity == identity);
+            let result = match (first, self.pending_agent_submits[index].enter_due) {
+                (true, Some(due)) if due <= now => {
+                    let target = self.pending_agent_submits.remove(index).target;
+                    // The next message for this agent, if any, is now first
+                    // and is typed when the loop reaches it.
+                    self.write_to_agent(&target, b"\r")
+                        .map_err(|reason| (target, reason))
+                }
+                (true, None) => {
+                    let pending = &mut self.pending_agent_submits[index];
+                    let input = std::mem::take(&mut pending.input);
+                    let target = pending.target.clone();
+                    pending.enter_due = Some(now + AGENT_SUBMIT_DELAY);
+                    index += 1;
+                    self.write_to_agent(&target, &input)
+                        .map_err(|reason| (target, reason))
+                }
+                _ => {
+                    index += 1;
+                    Ok(())
+                }
+            };
+            if let Err((target, reason)) = result {
+                // Whatever else was waiting for that agent cannot reach it
+                // either.
+                self.pending_agent_submits
+                    .retain(|pending| pending.target.identity != target.identity);
+                index = 0;
                 self.toasts.warning(reason);
             }
         }
@@ -800,7 +880,7 @@ impl App {
     pub(super) fn next_agent_submit_deadline(&self) -> Option<Instant> {
         self.pending_agent_submits
             .iter()
-            .map(|pending| pending.due)
+            .filter_map(|pending| pending.enter_due)
             .min()
     }
 
@@ -834,10 +914,28 @@ impl App {
             .ok_or_else(|| Self::gone_message(target))
     }
 
+    /// Identify the agents in `target`'s tab again now, rather than at the
+    /// next scan, and return its terminal's input modes if it still runs the
+    /// same agent. Text meant for an agent that has just exited would
+    /// otherwise reach the shell it returned to, and run there.
+    pub(super) fn recheck_agent_target(
+        &mut self,
+        target: &AgentTarget,
+    ) -> Result<termeric_core::term::TerminalMode, String> {
+        if let Some(tab) = self
+            .tabs
+            .as_mut()
+            .and_then(|tabs| tabs.tab_mut_by_id(target.identity.tab_id))
+        {
+            tab.refresh_agents(&self.agents);
+        }
+        self.agent_terminal_mode(target)
+    }
+
     /// Write `bytes` to `target` if it still runs the same agent and accepts
     /// input.
     fn write_to_agent(&mut self, target: &AgentTarget, bytes: &[u8]) -> Result<(), String> {
-        self.agent_terminal_mode(target)?;
+        self.recheck_agent_target(target)?;
         let tabs = self
             .tabs
             .as_mut()

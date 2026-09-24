@@ -103,6 +103,8 @@ pub(crate) enum AppEvent {
     Transcript,
     ControlRequest {
         request: crate::control::protocol::Request,
+        /// The requesting process, where the platform reports it.
+        peer_process: Option<u32>,
         respond_to: std::sync::mpsc::SyncSender<
             std::result::Result<crate::control::protocol::Response, String>,
         >,
@@ -3160,7 +3162,10 @@ impl App {
                 .request(redraw_scheduler::RedrawReason::TerminalOutput);
         }
         self.submit_due_agent_input(Instant::now());
-        if self.retire_closed_supervisor() {
+        if self.retire_closed_supervisor()
+            | self.settle_replaced_supervisor_approval()
+            | self.deliver_supervisor_messages()
+        {
             self.redraw_scheduler
                 .request(redraw_scheduler::RedrawReason::WindowEvent);
         }

@@ -58,9 +58,10 @@ hidden everywhere else:
 
 Harvest **Explain** and **Send Context to Agent…** go to the focused agent. If
 no agent is focused, they go to the only running agent. If several agents are
-running, focus the one you mean. Delivery checks that the same agent still
-owns the terminal. If it has exited or the terminal is read-only, you get a
-notice and nothing is typed.
+running, focus the one you mean. Right before typing, Termeric checks the
+terminal again. If the agent has exited or the terminal is read-only, you get
+a notice and nothing is typed, so text meant for an agent never runs in the
+shell it returned to.
 
 Terminal output context comes from a shell pane beside the agent in its tab,
 or else from the first shell tab. It never comes from an agent's screen.
@@ -175,6 +176,9 @@ answers them for you, as far as you allow. **Start Supervisor** opens the
 configured agent, Claude Code or Codex, in a tab of its own. It starts with the
 [MCP tools](#letting-an-agent-direct-the-others) already connected, its
 instructions, and your rules. It then summarizes what each agent is doing.
+The supervisor learns that an agent needs you, finished, or failed only
+through [status hooks](#agent-status), so starting one without them offers to
+set them up.
 
 Whenever another agent in the window needs input, finishes, or fails, Termeric
 tells the supervisor with a message that begins `Termeric:`. While the
@@ -186,7 +190,7 @@ each message it tries to send, according to the mode:
 | Mode | What happens to a message |
 |---|---|
 | Watch | Refused. The supervisor reports and suggests instead. |
-| Assist (default) | Shown to you with **Send** and **Don't send**. The supervisor is told the outcome. |
+| Assist (default) | Shown to you in full with **Send** and **Don't send**. The supervisor is told the outcome. |
 | Auto | Sent at once, within the limits below. |
 
 In every mode Termeric enforces these limits, whatever the supervisor's
@@ -194,19 +198,32 @@ instructions say:
 
 - It sends only to agents in its own window, never to itself or to a terminal
   without that agent.
-- It sends at most `max_sends_per_minute` messages (6 by default).
-- It cannot send the same message to the same agent twice within 30 seconds.
+- It sends at most `max_sends_per_minute` messages (6 by default). Messages
+  you decline count too, so it cannot ask faster than it could send.
+- It cannot send the same message to the same agent twice within 30 seconds,
+  however the spacing or capitals differ.
+- A message is plain text of at most 4096 bytes and 80 lines. It may not start
+  with `!` or `/`, which the agent would run as a shell or agent command
+  without its own approval. Control and text-direction characters are refused,
+  so what you approve is what is sent.
+- It waits while you type to that agent. Nothing it sends, or Termeric tells
+  it, is added to a prompt you are writing.
+
+The approval dialog has no single-key shortcuts, because it can open while
+you type; Enter and Escape leave the message unsent. It never replaces a
+dialog you have open. If another dialog replaces it, the message is not sent
+and the supervisor is told.
 
 **Take Over from Supervisor** puts it in watch mode until **Hand Back to
 Supervisor**, and tells it so. **Supervisor Mode…** changes the mode,
 including for a running supervisor. **Supervisor Activity** lists what it was
 told, what it asked, and what was sent or refused. **Stop Supervisor** closes
-its terminal.
+its terminal, and its tab when it is alone there.
 
 The rules are plain language in `supervisor.md`, beside `config.toml`.
 **Edit Supervisor Rules** opens it in `$VISUAL` or `$EDITOR`, creating it with
 examples the first time. A supervisor reads the rules when it starts, so
-restart it after editing. The supervisor's sends do not need
+restart it after editing. Rules are limited to 16 KiB. The supervisor's sends do not need
 `security.allow_gui_control_input`, because starting it is the permission. They
 are not checked for destructive commands, because each agent still applies its
 own approvals.
@@ -218,9 +235,15 @@ mode = "assist"            # "watch", "assist", or "auto"
 max_sends_per_minute = 6   # 1 to 60
 ```
 
-The supervisor's MCP server carries a random token that identifies it to
-Termeric. Other MCP clients use the ordinary rules above and never gain its
-authority.
+The supervisor's MCP server, named `termeric_supervisor` so it never replaces
+a `termeric` server you registered, carries a random token that identifies it
+to Termeric. The token is on the supervisor's command line, where your other
+programs can read it, so Termeric also requires each send to come from a
+process started under the supervisor's terminal. An agent the supervisor
+oversees cannot borrow its authority. That check needs Linux; elsewhere the
+supervisor can read and report but not send. Other MCP clients use the
+ordinary rules below. Codex is told to run the supervisor's tools without
+asking you, because Termeric decides every send itself.
 
 ## Letting an agent direct the others
 
@@ -246,7 +269,10 @@ with `--process PID`. Reading needs nothing more than
 [`termeric control get-text`](gui-control.md) already allows. Sending is
 refused unless `security.allow_gui_control_input = true`, because it lets one
 program type into another agent. Prompts are pasted, then submitted a moment
-later, the same way as **Start New Agent Conversation**. They are not checked
+later, the same way as **Start New Agent Conversation**. Several prompts to one
+agent are submitted one after another, never merged. The supervisor's message
+rules apply: plain text within the size limit, nothing starting with `!` or
+`/`, and nothing while you are typing to that agent. Prompts are not checked
 for destructive commands, because they are requests to an agent, which still
 applies its own approvals.
 

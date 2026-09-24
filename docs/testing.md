@@ -396,8 +396,19 @@ fake-SSH integration remains credential- and network-free.
 The supervisor is tested with fake agent programs. A headless test covers
 launch wiring (the tokened MCP config and rules file) and the feed into the
 supervisor. It also covers Assist approval, Take Over, Auto sends, the repeat
-and self-send guards, a foreign token, and Stop. Unit tests cover the mode and
-limit policy, launch arguments for both agents, and event wording.
+and self-send guards, a foreign token, a valid token from a process outside
+the supervisor, `!` commands, refusing to cover another dialog, an approval
+replaced before it was answered, and Stop closing the supervisor's tab. Unit
+tests cover the mode and limit policy, message limits, launch arguments for
+both agents (each `-c` override parsed as TOML), process ancestry, and event
+wording. The MCP server's input loop is tested for invalid UTF-8, the exact
+size limit, batches, and stray responses.
+
+Agent input delivery is tested against a real PTY running a program Termeric
+recognizes as Codex. It proves that Enter waits for typed text, that two
+quick messages are submitted one after the other, that automated messages wait
+while the person types, and that nothing more reaches a terminal whose agent
+has exited.
 
 Agent change review is tested against temporary Git repositories. The tests
 prove that snapshots leave the real index byte-for-byte unchanged, skip

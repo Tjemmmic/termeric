@@ -1323,6 +1323,16 @@ impl Tab {
             .and_then(PtyHandle::terminal_id)
     }
 
+    /// The process `pane_id`'s terminal started, such as its shell.
+    pub(crate) fn pane_child_process(&self, pane_id: crate::panes::PaneId) -> Option<u32> {
+        if let Some(panes) = &self.pane_manager {
+            return panes.get_pane(pane_id)?.pty.child_id();
+        }
+        (pane_id == self.single_pane_id)
+            .then_some(self.pty.as_ref()?)
+            .and_then(PtyHandle::child_id)
+    }
+
     /// The process group in the foreground of `pane_id`'s terminal.
     pub(crate) fn pane_foreground_group(&self, pane_id: crate::panes::PaneId) -> Option<i32> {
         if let Some(panes) = &self.pane_manager {

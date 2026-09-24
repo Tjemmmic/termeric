@@ -178,6 +178,12 @@ impl App {
     /// Show what setting up (or removing) agent status hooks would change,
     /// and wait for the person to confirm.
     pub(super) fn open_agent_hook_setup(&mut self, install: bool) {
+        self.open_agent_hook_setup_because(install, None);
+    }
+
+    /// Show the setup (or removal) dialog, opening with `reason` when
+    /// something else asked for it.
+    pub(super) fn open_agent_hook_setup_because(&mut self, install: bool, reason: Option<&str>) {
         let changes = match self.plan_hook_changes(install) {
             Ok(changes) => changes,
             Err(error) => {
@@ -202,7 +208,11 @@ impl App {
             Some(relative) => format!("~/{}", relative.display()),
             None => path.display().to_string(),
         };
-        let mut lines = if install {
+        let mut lines: Vec<String> = reason
+            .into_iter()
+            .flat_map(|reason| [reason.to_owned(), String::new()])
+            .collect();
+        lines.extend(if install {
             vec![
                 "Termeric adds hooks that report when an agent is working, needs you,".into(),
                 "or is done. They do nothing when the agent runs elsewhere.".into(),
@@ -213,7 +223,7 @@ impl App {
                 "Termeric removes its hooks. Your other hooks and settings stay.".into(),
                 String::new(),
             ]
-        };
+        });
         for change in &changes {
             lines.push(format!("  {}: {}", change.name, shown(&change.path)));
         }

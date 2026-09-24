@@ -13,13 +13,17 @@ Versioning once public beta tags begin.
   far as its mode allows. Watch only reports. Assist asks you before each
   message. Auto sends on its own within a rate limit and a repeat guard. It
   follows plain-language rules in `supervisor.md` and is told when agents
-  need input, finish, or fail. **Take Over from Supervisor** makes it watch
-  until you hand back, and **Supervisor Activity** shows what it did. GUI
-  control protocol v21 adds the supervisor token.
+  need input, finish, or fail. Its messages are short plain text, never a
+  `!` or `/` command, and never typed while you are typing to that agent.
+  Assist shows each one in full, without single-key shortcuts. **Take Over
+  from Supervisor** makes it watch until you hand back, and **Supervisor
+  Activity** shows what it did. GUI control protocol v21 adds the supervisor
+  token, which only processes under the supervisor's terminal may use.
 
 - `termeric mcp` is an MCP server that lets one agent see and direct the
   others: `list_agents`, `read_terminal`, and `send_to_agent`. Sending
-  requires `security.allow_gui_control_input`. GUI control protocol v20 adds
+  requires `security.allow_gui_control_input`, and Termeric checks that the
+  agent is still there right before each write. GUI control protocol v20 adds
   `list_agents` and `submit_to_agent`.
 
 - **Review Agent Changes…** lists the files an agent changed since it started

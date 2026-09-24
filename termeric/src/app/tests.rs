@@ -7705,6 +7705,7 @@ fn unicode_picker_never_inserts_into_a_replacement_single_owner() {
 #[test]
 fn plugin_context_command_never_targets_a_focused_shell_sibling() {
     let (mut app, _directory, _, captures) = harvest_rerun_capture_fixture();
+    register_capture_agent(&mut app, "synthetic-capture");
     mark_capture_plugin_owner(&mut app, PaneId(0), "synthetic-capture");
     app.tabs
         .as_mut()
@@ -7775,6 +7776,7 @@ fn context_picker_targets_the_plugin_owner_not_its_focused_shell_sibling() {
         tab_id: tab.id,
         pane_id: PaneId(0),
     };
+    register_capture_agent(&mut app, "synthetic-capture");
     mark_capture_plugin_owner(&mut app, PaneId(0), "synthetic-capture");
     let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
     for (pane_id, directory) in [
@@ -7929,6 +7931,19 @@ fn synthetic_agent(id: &str) -> crate::agents::AgentDefinition {
     .clone()
 }
 
+/// Make `plugin_id` a configured agent, so that the check made before each
+/// write to an agent recognizes the terminal Termeric launched it in.
+#[cfg(unix)]
+fn register_capture_agent(app: &mut App, plugin_id: &str) {
+    app.agents = crate::agents::AgentCatalog::from_config(&std::collections::BTreeMap::from([(
+        plugin_id.to_string(),
+        crate::agents::AgentConfig {
+            program: Some(plugin_id.into()),
+            ..Default::default()
+        },
+    )]));
+}
+
 fn mark_capture_plugin_owner(app: &mut App, pane_id: PaneId, plugin_id: &str) {
     let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
     let launch = crate::workspace::WorkspaceLaunch::Plugin {
@@ -7981,6 +7996,7 @@ fn context_picker_completion_preserves_plugin_owner_across_topology_changes() {
         let (mut app, directory, _, _) =
             harvest_rerun_capture_fixture_in(transition == "nonzero-collapse");
         let source = app.active_harvest_source().unwrap();
+        register_capture_agent(&mut app, "synthetic-capture");
         mark_capture_plugin_owner(&mut app, PaneId(source.pane_id), "synthetic-capture");
         app.open_context_picker_for(
             crate::tabs::TerminalIdentity {
@@ -8150,6 +8166,14 @@ fn typed_agent_input_is_submitted_separately_and_only_to_the_same_agent() {
     use std::io::Read;
     let temp = tempfile::tempdir().unwrap();
     let capture = temp.path().join("capture");
+    // `cat` invoked as `codex`, so the terminal is recognized as running
+    // Codex each time Termeric checks before writing.
+    let cat = ["/bin/cat", "/usr/bin/cat"]
+        .into_iter()
+        .find(|path| std::path::Path::new(path).exists())
+        .unwrap();
+    let codex = temp.path().join("codex");
+    std::os::unix::fs::symlink(cat, &codex).unwrap();
     let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
     // Raw mode: bytes reach the capture file exactly as written.
     let tab_id = tabs
@@ -8158,7 +8182,8 @@ fn typed_agent_input_is_submitted_separately_and_only_to_the_same_agent() {
             &[
                 "-c".into(),
                 format!(
-                    "stty raw -echo; printf RAW_READY; exec cat > {}",
+                    "stty raw -echo; printf RAW_READY; exec {} > {}",
+                    codex.display(),
                     capture.display()
                 ),
             ],
@@ -8220,6 +8245,11 @@ fn typed_agent_input_is_submitted_separately_and_only_to_the_same_agent() {
         );
         std::thread::sleep(Duration::from_millis(5));
     }
+    // `RAW_READY` is printed just before the `exec`.
+    while app.recheck_agent_target(&target).is_err() {
+        assert!(Instant::now() < deadline, "Codex was never recognized");
+        std::thread::sleep(Duration::from_millis(5));
+    }
     app.submit_to_agent(target.clone(), b"/new").unwrap();
     let due = app.next_agent_submit_deadline().unwrap();
     app.submit_due_agent_input(due - Duration::from_millis(1));
@@ -8232,21 +8262,47 @@ fn typed_agent_input_is_submitted_separately_and_only_to_the_same_agent() {
     assert_eq!(read(5), b"/new\r");
     assert_eq!(app.next_agent_submit_deadline(), None);
 
-    // An agent that exits before its Enter is due never receives it.
-    app.submit_to_agent(target.clone(), b"x").unwrap();
-    let tabs = app.tabs.as_mut().unwrap();
-    tabs.active_tab_mut()
+    // Two messages in quick succession are submitted one after the other,
+    // never merged into one prompt.
+    app.submit_to_agent(target.clone(), b"a").unwrap();
+    app.submit_to_agent(target.clone(), b"b").unwrap();
+    assert_eq!(
+        read(6),
+        b"/new\ra",
+        "the second waits for the first's Enter"
+    );
+    let due = app.next_agent_submit_deadline().unwrap();
+    app.submit_due_agent_input(due);
+    assert_eq!(read(8), b"/new\ra\rb");
+    let due = app.next_agent_submit_deadline().unwrap();
+    app.submit_due_agent_input(due);
+    assert_eq!(read(9), b"/new\ra\rb\r");
+    assert_eq!(app.next_agent_submit_deadline(), None);
+
+    // An automated message waits while the person is typing to the agent.
+    app.config.security.allow_gui_control_input = true;
+    app.tabs
+        .as_mut()
+        .unwrap()
+        .active_tab_mut()
         .unwrap()
         .pane_session_mut(pane_id)
         .unwrap()
-        .agent = None;
-    app.submit_due_agent_input(Instant::now() + super::agents::AGENT_SUBMIT_DELAY);
-    // The refusal is synchronous, so the typed text is all that arrived.
-    assert_eq!(read(6), b"/new\rx");
-    assert_eq!(
-        latest_toast(&app),
-        Some("Codex is no longer running in that terminal")
+        .last_person_input = Some(Instant::now());
+    assert!(
+        app.submit_control_text_to_agent(tab_id as u64, pane_id.0, "codex", "go", None, None)
+            .unwrap_err()
+            .contains("typing")
     );
+    app.tabs
+        .as_mut()
+        .unwrap()
+        .active_tab_mut()
+        .unwrap()
+        .pane_session_mut(pane_id)
+        .unwrap()
+        .last_person_input = None;
+    app.config.security.allow_gui_control_input = false;
 
     // The control protocol lists the agent and can submit to it, but only
     // once the person allows external input, and only to the same agent.
@@ -8271,7 +8327,7 @@ fn typed_agent_input_is_submitted_separately_and_only_to_the_same_agent() {
     );
     assert_eq!(listed[0].state, None, "no hook has reported");
     let submit = |app: &mut App, agent: &str| {
-        app.submit_control_text_to_agent(tab_id as u64, pane_id.0, agent, "go\non", None)
+        app.submit_control_text_to_agent(tab_id as u64, pane_id.0, agent, "go\non", None, None)
     };
     assert!(
         submit(&mut app, "codex")
@@ -8284,9 +8340,38 @@ fn typed_agent_input_is_submitted_separately_and_only_to_the_same_agent() {
         "Gemini CLI is no longer running in that terminal"
     );
     assert!(!submit(&mut app, "codex").unwrap(), "sent, not held");
-    assert_eq!(read(11), b"/new\rxgo\non", "pasted without Enter");
+    assert_eq!(read(14), b"/new\ra\rb\rgo\non", "pasted without Enter");
     app.submit_due_agent_input(Instant::now() + super::agents::AGENT_SUBMIT_DELAY);
-    assert_eq!(read(12), b"/new\rxgo\non\r");
+    assert_eq!(read(15), b"/new\ra\rb\rgo\non\r");
+
+    // An agent that exits before its Enter is due never receives it, nor
+    // does the shell or whatever else takes its place.
+    app.submit_to_agent(target.clone(), b"x").unwrap();
+    assert_eq!(read(16), b"/new\ra\rb\rgo\non\rx");
+    let child = app
+        .tabs
+        .as_ref()
+        .unwrap()
+        .tab_by_id(tab_id)
+        .unwrap()
+        .pane_child_process(pane_id)
+        .unwrap();
+    // SAFETY: signalling a child this test started.
+    assert_eq!(unsafe { libc::kill(child as i32, libc::SIGKILL) }, 0);
+    // A process that has exited, even one not yet reaped, has no command line.
+    let running =
+        || std::fs::read(format!("/proc/{child}/cmdline")).is_ok_and(|argv| !argv.is_empty());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while running() {
+        assert!(Instant::now() < deadline, "the agent did not exit");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    app.submit_due_agent_input(Instant::now() + super::agents::AGENT_SUBMIT_DELAY);
+    assert_eq!(
+        latest_toast(&app),
+        Some("Codex is no longer running in that terminal")
+    );
+    assert_eq!(app.next_agent_submit_deadline(), None);
 }
 
 #[cfg(unix)]
@@ -8778,11 +8863,19 @@ fn a_transcript_can_be_stopped_after_its_agent_exits() {
 #[cfg(unix)]
 #[test]
 fn a_read_only_agent_refuses_context_with_its_own_reason() {
+    // `sleep` invoked as `codex`, so the terminal is recognized as Codex.
+    let temp = tempfile::tempdir().unwrap();
+    let codex = temp.path().join("codex");
+    let sleep = ["/bin/sleep", "/usr/bin/sleep"]
+        .into_iter()
+        .find(|path| std::path::Path::new(path).exists())
+        .unwrap();
+    std::os::unix::fs::symlink(sleep, &codex).unwrap();
     let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
     let tab_id = tabs
         .new_tab_with_command(
-            "/bin/sh",
-            &["-c".into(), "sleep 30".into()],
+            codex.to_str().unwrap(),
+            &["30".into()],
             None,
             None,
             None,
@@ -8800,6 +8893,16 @@ fn a_read_only_agent_refuses_context_with_its_own_reason() {
     assert!(tab.toggle_focused_pane_read_only());
     let mut app = App::new_headless(Config::default()).unwrap();
     app.tabs = Some(tabs);
+    let target = super::agents::AgentTarget {
+        identity: crate::tabs::TerminalIdentity { tab_id, pane_id },
+        agent_id: "codex".into(),
+        agent_name: "Codex".into(),
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app.recheck_agent_target(&target).is_err() {
+        assert!(Instant::now() < deadline, "Codex was never recognized");
+        std::thread::sleep(Duration::from_millis(5));
+    }
 
     let sent = app.send_to_agent(
         super::agents::AgentTarget {
@@ -12036,6 +12139,15 @@ done
         .unwrap()
         .focused_terminal_identity();
     app.start_supervisor();
+    // Whether status hooks need setting up depends on this machine's own
+    // agent settings; the dialog offering it is not under test here.
+    if app.info_overlay.is_awaiting_current() {
+        assert_eq!(app.info_overlay.title(), "Set up agent status");
+        let request = app.info_overlay.request_id();
+        app.apply_info_overlay_action(crate::ui::info_overlay::InfoOverlayAction::Dismiss {
+            request_id: request,
+        });
+    }
     wait_for_plugin_fixture(&mut app, "claude-code", "READY_supervisor");
     assert!(app.supervisor_running());
     let supervisor_terminal = app
@@ -12049,7 +12161,11 @@ done
     let token = app.supervisor_token().unwrap().to_owned();
     wait_for_file_text(&log, "--mcp-config");
     let launched = std::fs::read_to_string(&log).unwrap();
-    assert!(launched.contains(&format!("\"mcp\",\"--supervisor\",\"{token}\"")));
+    assert!(launched.contains(&format!(
+        "\"mcp\",\"--process\",\"{}\",\"--supervisor\",\"{token}\"",
+        std::process::id()
+    )));
+    assert!(launched.contains("\"termeric_supervisor\""));
     assert!(launched.contains("assist mode"));
     assert_eq!(
         std::fs::read_to_string(temp.path().join("supervisor.md")).unwrap(),
@@ -12093,9 +12209,52 @@ done
         ),
     );
 
+    // Requests must come from the supervisor's own processes; its terminal's
+    // child stands in for its MCP server.
+    let supervisor_process = app
+        .tabs
+        .as_ref()
+        .unwrap()
+        .tab_by_id(supervisor_terminal.tab_id)
+        .unwrap()
+        .pane_child_process(supervisor_terminal.pane_id);
+    assert!(supervisor_process.is_some());
     let send = |app: &mut App, token: &str, target: crate::tabs::TerminalIdentity, text: &str| {
-        app.supervised_submit(token, target.tab_id as u64, target.pane_id.0, "codex", text)
+        app.supervised_submit(
+            token,
+            supervisor_process,
+            target.tab_id as u64,
+            target.pane_id.0,
+            "codex",
+            text,
+        )
     };
+    // The token alone, from a process outside the supervisor, is not enough.
+    assert_eq!(
+        app.supervised_submit(
+            &token,
+            Some(std::process::id()),
+            worker.tab_id as u64,
+            worker.pane_id.0,
+            "codex",
+            "hello"
+        )
+        .unwrap_err(),
+        "Only the supervisor Termeric started may send as the supervisor"
+    );
+    assert!(
+        send(&mut app, &token, worker, "!rm -rf target")
+            .unwrap_err()
+            .contains("run as a command")
+    );
+    // A dialog the person has open is never replaced.
+    let notice = app.info_overlay.show("Notice", vec!["Reading this".into()]);
+    assert!(
+        send(&mut app, &token, worker, "yes, run it")
+            .unwrap_err()
+            .contains("another dialog open")
+    );
+    app.info_overlay.dismiss(notice);
     // Assist: held for the person, sent once approved.
     assert_eq!(send(&mut app, &token, worker, "yes, run it"), Ok(true));
     assert!(
@@ -12113,6 +12272,23 @@ done
     wait_for_file_text(
         &log,
         "stdin\tsupervisor\tTermeric: the person approved your message to Codex; it was sent.",
+    );
+
+    // An approval that another dialog replaces is settled, not left waiting.
+    assert_eq!(send(&mut app, &token, worker, "try the fix"), Ok(true));
+    app.info_overlay
+        .show("Notice", vec!["Something else".into()]);
+    assert!(app.settle_replaced_supervisor_approval());
+    flush(&mut app);
+    wait_for_file_text(
+        &log,
+        "stdin\tsupervisor\tTermeric: your message to Codex was not sent; the person closed it without answering.",
+    );
+    assert!(
+        send(&mut app, &token, worker, "Try the  FIX")
+            .unwrap_err()
+            .contains("just sent"),
+        "an unanswered message counts toward the limits"
     );
 
     // Taking over leaves the supervisor watching; handing back restores it.
@@ -12146,6 +12322,14 @@ done
     app.stop_supervisor();
     assert!(!app.supervisor_running());
     assert!(send(&mut app, &token, worker, "x").is_err());
+    assert!(
+        app.tabs
+            .as_ref()
+            .unwrap()
+            .tab_by_id(supervisor_terminal.tab_id)
+            .is_none_or(|tab| tab.closed || tab.is_closing()),
+        "the supervisor's own tab closes with it"
+    );
 }
 
 #[cfg(unix)]

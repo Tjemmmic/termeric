@@ -1980,6 +1980,7 @@ impl Application {
         &mut self,
         event_loop: &ActiveEventLoop,
         mut request: crate::control::protocol::Request,
+        peer_process: Option<u32>,
     ) -> std::result::Result<crate::control::protocol::Response, String> {
         use crate::control::protocol::{Request, Response};
 
@@ -2248,6 +2249,7 @@ impl Application {
                 agent_id,
                 text,
                 supervisor.as_deref(),
+                peer_process,
             ),
             Request::Inventory
             | Request::ReadText { .. }
@@ -3768,6 +3770,7 @@ impl Application {
         agent_id: &str,
         text: &str,
         supervisor: Option<&str>,
+        peer_process: Option<u32>,
     ) -> std::result::Result<crate::control::protocol::Response, String> {
         let native_id = self.control_native_window_id(window_id)?;
         let pending_approval = self
@@ -3775,7 +3778,14 @@ impl Application {
             .get_mut(&native_id)
             .filter(|window| !window.should_exit)
             .ok_or_else(|| format!("GUI window {window_id} is closing"))?
-            .submit_control_text_to_agent(tab_id, pane_id, agent_id, text, supervisor)?;
+            .submit_control_text_to_agent(
+                tab_id,
+                pane_id,
+                agent_id,
+                text,
+                supervisor,
+                peer_process,
+            )?;
         Ok(crate::control::protocol::Response::AgentInputAccepted {
             process_id: std::process::id(),
             request_id: request_id.to_string(),
@@ -4188,13 +4198,14 @@ impl ApplicationHandler<AppEvent> for Application {
             }
             AppEvent::ControlRequest {
                 mut request,
+                peer_process,
                 respond_to,
             } => {
                 request.canonicalize();
                 let Some(respond_to) = self.defer_live_domain_control(&request, respond_to) else {
                     return;
                 };
-                let result = self.handle_control_request(event_loop, request);
+                let result = self.handle_control_request(event_loop, request, peer_process);
                 let _ = respond_to.send(result);
                 return;
             }

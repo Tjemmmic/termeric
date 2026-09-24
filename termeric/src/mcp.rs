@@ -7,7 +7,7 @@
 //! for the server Termeric starts for its supervisor, that supervisor's mode
 //! and limits; the GUI enforces both.
 
-use std::io::{BufRead, Write};
+use std::io::{BufRead, Read, Write};
 
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
@@ -24,7 +24,9 @@ const INSTRUCTIONS: &str = "Termeric is the terminal these agents run in. \
 list_agents shows every coding agent in Termeric with its state (working, needs_input, \
 finished, failed) and where it is: window_id, tab_id, and pane_id. read_terminal reads a \
 pane's recent screen and scrollback. send_to_agent gives an agent a prompt, as if typed and \
-submitted; Termeric refuses it unless the person enabled external input.";
+submitted; Termeric refuses it unless the person enabled external input, while the person is \
+typing to that agent, and for text starting with `!` or `/`, which the agent would run as a \
+command.";
 
 /// What the server needs from a running Termeric.
 pub trait Backend {
@@ -117,36 +119,61 @@ impl Backend for ControlBackend {
 
 /// Serve MCP over standard input and output until input ends.
 pub fn serve(backend: impl Backend) -> Result<()> {
+    serve_on(backend, std::io::stdin().lock(), std::io::stdout().lock())
+}
+
+/// Serve MCP messages, one per line, from `reader` to `writer`.
+fn serve_on(backend: impl Backend, mut reader: impl BufRead, mut writer: impl Write) -> Result<()> {
     let mut server = Server::new(backend);
-    let stdin = std::io::stdin();
-    let mut stdout = std::io::stdout().lock();
-    let mut reader = stdin.lock();
-    let mut line = String::new();
+    let mut line = Vec::new();
     loop {
         line.clear();
-        let read = std::io::Read::take(&mut reader, MAX_MESSAGE_BYTES as u64 + 1)
-            .read_line(&mut line)
+        let read = (&mut reader)
+            .take(MAX_MESSAGE_BYTES as u64 + 1)
+            .read_until(b'\n', &mut line)
             .context("read from standard input")?;
         if read == 0 {
             return Ok(());
         }
-        let reply = if line.len() > MAX_MESSAGE_BYTES {
-            // Skip the rest of the oversized line before answering.
-            let mut rest = Vec::new();
-            reader.read_until(b'\n', &mut rest)?;
+        let complete = line.last() == Some(&b'\n');
+        if complete {
+            line.pop();
+        }
+        let reply = if !complete && line.len() > MAX_MESSAGE_BYTES {
+            skip_line(&mut reader)?;
             Some(error_reply(Value::Null, -32600, "Message too large"))
-        } else if line.trim().is_empty() {
+        } else if line.trim_ascii().is_empty() {
             None
         } else {
-            match serde_json::from_str::<Value>(&line) {
-                Ok(message) => server.handle(message),
+            match serde_json::from_slice::<Value>(&line) {
+                Ok(message) => server.handle_message(message),
                 Err(error) => Some(error_reply(Value::Null, -32700, &error.to_string())),
             }
         };
         if let Some(reply) = reply {
-            serde_json::to_writer(&mut stdout, &reply)?;
-            stdout.write_all(b"\n")?;
-            stdout.flush()?;
+            serde_json::to_writer(&mut writer, &reply)?;
+            writer.write_all(b"\n")?;
+            writer.flush()?;
+        }
+    }
+}
+
+/// Discard input through the next newline without holding it.
+fn skip_line(reader: &mut impl BufRead) -> Result<()> {
+    loop {
+        let available = reader.fill_buf().context("read from standard input")?;
+        if available.is_empty() {
+            return Ok(());
+        }
+        match available.iter().position(|byte| *byte == b'\n') {
+            Some(end) => {
+                reader.consume(end + 1);
+                return Ok(());
+            }
+            None => {
+                let length = available.len();
+                reader.consume(length);
+            }
         }
     }
 }
@@ -212,7 +239,7 @@ fn tools() -> Value {
         {
             "name": "send_to_agent",
             "title": "Send to an agent",
-            "description": "Give the agent in one pane a prompt, pasted and submitted as if typed. Refused if that pane no longer runs agent_id, or if the person has not enabled external input.",
+            "description": "Give the agent in one pane a prompt, pasted and submitted as if typed. Plain text of at most 4096 bytes and 80 lines, not starting with `!` or `/`. Refused if that pane no longer runs agent_id, while the person is typing to it, or if the person has not enabled external input.",
             "inputSchema": pane_schema(&[
                 (
                     "agent_id",
@@ -239,12 +266,36 @@ impl<B: Backend> Server<B> {
         Self { backend }
     }
 
+    /// The reply to one line of input: a message, or a batch of them as
+    /// protocol revisions before 2025-06-18 allow.
+    pub fn handle_message(&mut self, message: Value) -> Option<Value> {
+        let Value::Array(batch) = message else {
+            return self.handle(message);
+        };
+        if batch.is_empty() {
+            return Some(error_reply(Value::Null, -32600, "Empty batch"));
+        }
+        let replies: Vec<Value> = batch
+            .into_iter()
+            .filter_map(|message| self.handle(message))
+            .collect();
+        (!replies.is_empty()).then_some(Value::Array(replies))
+    }
+
     /// The reply to one message, if it needs one.
     pub fn handle(&mut self, message: Value) -> Option<Value> {
+        if message.get("result").is_some() || message.get("error").is_some() {
+            // A response, which is never answered; this server sends no
+            // requests of its own.
+            return None;
+        }
         let id = message.get("id").cloned();
         let Some(method) = message.get("method").and_then(Value::as_str) else {
-            // A response to a request we never make, or garbage.
-            return id.map(|id| error_reply(id, -32600, "Not a request"));
+            return Some(error_reply(
+                id.unwrap_or(Value::Null),
+                -32600,
+                "Not a request",
+            ));
         };
         // Notifications (no id) never get a reply.
         let id = id?;
@@ -521,5 +572,71 @@ mod tests {
         let invalid = call(&mut server, "read_terminal", json!({"window_id": -1}));
         assert_eq!(invalid["isError"], true);
         assert_eq!(call(&mut server, "nope", json!({}))["isError"], true);
+    }
+
+    /// The replies `serve_on` writes for `input`.
+    fn serve_text(input: &[u8]) -> Vec<Value> {
+        let mut output = Vec::new();
+        serve_on(Fake::default(), input, &mut output).unwrap();
+        String::from_utf8(output)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn the_server_survives_bad_input_and_answers_batches() {
+        let ping = |id: u64| format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"ping\"}}");
+        let mut input = Vec::new();
+        // Invalid UTF-8 is a parse error, not the end of the server.
+        input.extend_from_slice(b"{\"x\": \"\xff\"}\n");
+        // A message of exactly the limit is accepted; one byte more is not.
+        let padded = |length: usize| {
+            let message = ping(2);
+            let mut value = message[..message.len() - 1].to_string();
+            value.push_str(",\"pad\":\"");
+            let pad = length - value.len() - 2;
+            value.push_str(&"a".repeat(pad));
+            value.push_str("\"}");
+            assert_eq!(value.len(), length);
+            value
+        };
+        input.extend_from_slice(padded(MAX_MESSAGE_BYTES).as_bytes());
+        input.push(b'\n');
+        input.extend_from_slice(padded(MAX_MESSAGE_BYTES + 1).as_bytes());
+        input.push(b'\n');
+        // A batch gets one reply per request, and none for notifications or
+        // responses.
+        input.extend_from_slice(
+            format!(
+                "[{}, {{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}}, {}]\n",
+                ping(3),
+                ping(4)
+            )
+            .as_bytes(),
+        );
+        input.extend_from_slice(b"{\"jsonrpc\":\"2.0\",\"id\":5,\"result\":{}}\n");
+        input.extend_from_slice(b"[]\n");
+        input.extend_from_slice(ping(6).as_bytes());
+        let replies = serve_text(&input);
+        assert_eq!(replies.len(), 6, "{replies:?}");
+        assert_eq!(replies[0]["error"]["code"], -32700);
+        assert_eq!(replies[1]["id"], 2);
+        assert!(replies[1].get("result").is_some());
+        assert_eq!(replies[2]["error"]["message"], "Message too large");
+        let batch = replies[3].as_array().unwrap();
+        assert_eq!(
+            batch
+                .iter()
+                .map(|reply| reply["id"].clone())
+                .collect::<Vec<_>>(),
+            [json!(3), json!(4)]
+        );
+        assert_eq!(replies[4]["error"]["message"], "Empty batch");
+        assert_eq!(
+            replies[5]["id"], 6,
+            "a last line without a newline is still read"
+        );
     }
 }

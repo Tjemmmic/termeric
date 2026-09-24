@@ -1905,6 +1905,7 @@ impl ApplicationHandler<AppEvent> for App {
             }
             AppEvent::ControlRequest {
                 request,
+                peer_process,
                 respond_to,
             } => {
                 let result = match request {
@@ -1980,6 +1981,7 @@ impl ApplicationHandler<AppEvent> for App {
                                 &agent_id,
                                 &text,
                                 supervisor.as_deref(),
+                                peer_process,
                             )
                             .map(|pending_approval| {
                                 crate::control::protocol::Response::AgentInputAccepted {
