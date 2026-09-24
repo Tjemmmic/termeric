@@ -60,22 +60,64 @@ pub struct AgentDefinition {
     pub enabled: bool,
 }
 
+/// A definition Termeric ships.
+struct Builtin {
+    id: &'static str,
+    name: &'static str,
+    program: &'static str,
+    resume_args: Option<&'static [&'static str]>,
+    new_conversation: Option<&'static str>,
+}
+
+/// The agents Termeric knows about, in display order.
+const BUILTINS: [Builtin; 4] = [
+    Builtin {
+        id: "claude-code",
+        name: "Claude Code",
+        program: "claude",
+        resume_args: Some(&["--continue"]),
+        new_conversation: Some("/clear"),
+    },
+    Builtin {
+        id: "codex",
+        name: "Codex",
+        program: "codex",
+        resume_args: Some(&["resume", "--last"]),
+        new_conversation: Some("/new"),
+    },
+    Builtin {
+        id: "gemini",
+        name: "Gemini CLI",
+        program: "gemini",
+        resume_args: Some(&["--resume", "latest"]),
+        new_conversation: Some("/clear"),
+    },
+    Builtin {
+        id: "opencode",
+        name: "OpenCode",
+        program: "opencode",
+        resume_args: Some(&["--continue"]),
+        new_conversation: Some("/new"),
+    },
+];
+
+/// Each built-in agent's id and name, in display order.
+pub fn builtin_agent_names() -> impl Iterator<Item = (&'static str, &'static str)> {
+    BUILTINS.iter().map(|builtin| (builtin.id, builtin.name))
+}
+
 impl AgentDefinition {
-    fn builtin(
-        id: &str,
-        name: &str,
-        program: &str,
-        resume_args: Option<&[&str]>,
-        new_conversation: Option<&str>,
-    ) -> Self {
+    fn builtin(builtin: &Builtin) -> Self {
         Self {
-            id: id.into(),
-            name: name.into(),
-            detect: vec![program.into()],
-            program: program.into(),
+            id: builtin.id.into(),
+            name: builtin.name.into(),
+            detect: vec![builtin.program.into()],
+            program: builtin.program.into(),
             args: Vec::new(),
-            resume_args: resume_args.map(|args| args.iter().map(|arg| (*arg).into()).collect()),
-            new_conversation: new_conversation.map(Into::into),
+            resume_args: builtin
+                .resume_args
+                .map(|args| args.iter().map(|arg| (*arg).into()).collect()),
+            new_conversation: builtin.new_conversation.map(Into::into),
             inherit_cwd: true,
             env: BTreeMap::new(),
             profiles: BTreeMap::new(),
@@ -138,38 +180,8 @@ pub struct AgentLaunch {
     pub profile: Option<String>,
 }
 
-/// The agents Termeric knows about, in display order.
 fn builtin_agents() -> Vec<AgentDefinition> {
-    vec![
-        AgentDefinition::builtin(
-            "claude-code",
-            "Claude Code",
-            "claude",
-            Some(&["--continue"]),
-            Some("/clear"),
-        ),
-        AgentDefinition::builtin(
-            "codex",
-            "Codex",
-            "codex",
-            Some(&["resume", "--last"]),
-            Some("/new"),
-        ),
-        AgentDefinition::builtin(
-            "gemini",
-            "Gemini CLI",
-            "gemini",
-            Some(&["--resume", "latest"]),
-            Some("/clear"),
-        ),
-        AgentDefinition::builtin(
-            "opencode",
-            "OpenCode",
-            "opencode",
-            Some(&["--continue"]),
-            Some("/new"),
-        ),
-    ]
+    BUILTINS.iter().map(AgentDefinition::builtin).collect()
 }
 
 /// Built-in agents with configuration applied, plus configured custom agents.
@@ -340,13 +352,16 @@ mod tests {
             id(&[
                 "/usr/bin/node",
                 "--no-warnings",
-                "/x/gemini-cli/bundle/gemini.js"
+                "/usr/lib/node_modules/@google/gemini-cli/bundle/gemini.js"
             ])
             .as_deref(),
             Some("gemini")
         );
         assert_eq!(id(&["bash"]), None);
         assert_eq!(id(&["node", "server.js"]), None);
+        // A source file of the same name outside an installed package is
+        // someone's own script.
+        assert_eq!(id(&["node", "/home/me/src/gemini.js"]), None);
         assert_eq!(id(&[]), None);
     }
 }

@@ -1180,7 +1180,10 @@ impl Tab {
         ) -> bool {
             let (launched_id, profile) = match launch {
                 crate::workspace::WorkspaceLaunch::Plugin { plugin_id, profile } => (
-                    catalog.get(plugin_id).map(|agent| agent.id.as_str()),
+                    catalog
+                        .get(plugin_id)
+                        .filter(|agent| agent.enabled)
+                        .map(|agent| agent.id.as_str()),
                     profile,
                 ),
                 _ => (None, &None),
@@ -1208,8 +1211,13 @@ impl Tab {
                         && status.process_group == foreground_group
                 })
                 .map(|status| status.agent_id.clone());
-            let observed = foreground
-                .map(|agent_id| (agent_id, foreground_group.map(i64::from)))
+            // The agent Termeric started, itself in front, is known exactly;
+            // a guess from its program name could name another agent that
+            // shares the program.
+            let launched_in_front = launched_id.filter(|_| child_in_front);
+            let observed = launched_in_front
+                .map(|agent_id| (agent_id.to_owned(), child))
+                .or_else(|| foreground.map(|agent_id| (agent_id, foreground_group.map(i64::from))))
                 .or_else(|| reported.map(|agent_id| (agent_id, foreground_group.map(i64::from))))
                 .or_else(|| launched_id.map(|agent_id| (agent_id.to_owned(), child)))
                 .map(|(agent_id, process)| {

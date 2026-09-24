@@ -132,10 +132,20 @@ impl AgentConfig {
     }
 }
 
+/// Programs that start other programs. Launched through one of these, an
+/// agent is recognized by its `detect` names; the launcher's own name would
+/// claim every other program it starts.
+const LAUNCHERS: &[&str] = &[
+    "npx", "pnpx", "bunx", "uvx", "pipx", "docker", "podman", "node", "nodejs", "bun", "deno",
+    "python", "python3", "env", "sh", "bash", "dash", "zsh", "fish",
+];
+
+/// The name `program` is recognized by, unless it is a launcher.
 fn program_file_name(program: &str) -> Option<String> {
     std::path::Path::new(program)
         .file_name()
         .and_then(|name| name.to_str())
+        .filter(|name| !LAUNCHERS.contains(name))
         .map(str::to_owned)
 }
 
@@ -252,14 +262,43 @@ fn codex_policy_args(approval: Option<&str>, sandbox: Option<&str>) -> Vec<Strin
     args
 }
 
-fn migrate_profiles(
+/// A retired section's arguments, profiles, and default profile.
+struct MigratedLaunch {
+    args: Vec<String>,
+    profiles: BTreeMap<String, AgentProfileConfig>,
+    default_profile: Option<String>,
+}
+
+/// Carry a retired section's launch settings over. There, a profile's
+/// approval and sandbox settings replaced the section's own for that launch;
+/// here, a profile's arguments are added to the agent's. So once profiles
+/// exist, the policy arguments move into each profile, which gets the
+/// section's policy for whatever it did not set itself, and the section's own
+/// policy becomes a `default` profile unless another was the default.
+fn migrate_launch(
+    base_args: Vec<String>,
+    section_policy: Vec<String>,
     profiles: &BTreeMap<String, LegacyProfile>,
-    policy: impl Fn(&LegacyProfile) -> Vec<String>,
-) -> BTreeMap<String, AgentProfileConfig> {
-    profiles
+    profile_policy: impl Fn(&LegacyProfile) -> Vec<String>,
+    default_profile: &Option<String>,
+) -> MigratedLaunch {
+    // A default naming a missing profile fell back to no profile.
+    let mut default_profile = default_profile
+        .clone()
+        .filter(|name| profiles.contains_key(name));
+    if profiles.is_empty() {
+        let mut args = base_args;
+        args.extend(section_policy);
+        return MigratedLaunch {
+            args,
+            profiles: BTreeMap::new(),
+            default_profile,
+        };
+    }
+    let mut migrated: BTreeMap<String, AgentProfileConfig> = profiles
         .iter()
         .map(|(name, profile)| {
-            let mut args = policy(profile);
+            let mut args = profile_policy(profile);
             args.extend(profile.extra_args.iter().cloned());
             (
                 name.clone(),
@@ -270,7 +309,27 @@ fn migrate_profiles(
                 },
             )
         })
-        .collect()
+        .collect();
+    if default_profile.is_none() && !section_policy.is_empty() {
+        let name = ["default", "migrated-default"]
+            .into_iter()
+            .find(|name| !migrated.contains_key(*name))
+            .map_or_else(|| format!("default-{}", migrated.len()), str::to_owned);
+        migrated.insert(
+            name.clone(),
+            AgentProfileConfig {
+                description: "Approval settings from before profiles".into(),
+                args: section_policy,
+                env: BTreeMap::new(),
+            },
+        );
+        default_profile = Some(name);
+    }
+    MigratedLaunch {
+        args: base_args,
+        profiles: migrated,
+        default_profile,
+    }
 }
 
 fn non_default_program(binary: &Option<String>, default: &str) -> Option<String> {
@@ -279,21 +338,30 @@ fn non_default_program(binary: &Option<String>, default: &str) -> Option<String>
         .filter(|binary| !binary.is_empty() && binary != default)
 }
 
+fn base_args(model: &Option<String>, args: &[String]) -> Vec<String> {
+    let mut base = model_args(model);
+    base.extend(args.iter().cloned());
+    base
+}
+
 /// The `[agents.claude-code]` entry equivalent to a retired section, or
 /// `None` when it only restated defaults.
 pub fn migrate_claude_code(legacy: &LegacyClaudeCodeConfig) -> Option<AgentConfig> {
-    let mut args = model_args(&legacy.model);
-    args.extend(legacy.args.iter().cloned());
-    args.extend(claude_approval_args(legacy.approval_mode.as_deref()));
+    let section = legacy.approval_mode.as_deref();
+    let launch = migrate_launch(
+        base_args(&legacy.model, &legacy.args),
+        claude_approval_args(section),
+        &legacy.profiles,
+        |profile| claude_approval_args(profile.approval_mode.as_deref().or(section)),
+        &legacy.default_profile,
+    );
     let entry = AgentConfig {
         enabled: legacy.enabled.filter(|enabled| !enabled),
         program: non_default_program(&legacy.binary, "claude"),
-        args: (!args.is_empty()).then_some(args),
+        args: (!launch.args.is_empty()).then_some(launch.args),
         inherit_cwd: legacy.inherit_cwd.filter(|inherit| !inherit),
-        profiles: migrate_profiles(&legacy.profiles, |profile| {
-            claude_approval_args(profile.approval_mode.as_deref())
-        }),
-        default_profile: legacy.default_profile.clone(),
+        profiles: launch.profiles,
+        default_profile: launch.default_profile,
         ..AgentConfig::default()
     };
     (entry != AgentConfig::default()).then_some(entry)
@@ -302,23 +370,28 @@ pub fn migrate_claude_code(legacy: &LegacyClaudeCodeConfig) -> Option<AgentConfi
 /// The `[agents.codex]` entry equivalent to a retired section. Codex was
 /// disabled by default, so `enabled = false` restated the default.
 pub fn migrate_codex(legacy: &LegacyCodexConfig) -> Option<AgentConfig> {
-    let mut args = model_args(&legacy.model);
-    args.extend(legacy.args.iter().cloned());
-    args.extend(codex_policy_args(
+    let (approval, sandbox) = (
         legacy.approval_mode.as_deref(),
         legacy.sandbox_mode.as_deref(),
-    ));
+    );
+    let launch = migrate_launch(
+        base_args(&legacy.model, &legacy.args),
+        codex_policy_args(approval, sandbox),
+        &legacy.profiles,
+        |profile| {
+            codex_policy_args(
+                profile.approval_mode.as_deref().or(approval),
+                profile.sandbox_mode.as_deref().or(sandbox),
+            )
+        },
+        &legacy.default_profile,
+    );
     let entry = AgentConfig {
         program: non_default_program(&legacy.binary, "codex"),
-        args: (!args.is_empty()).then_some(args),
+        args: (!launch.args.is_empty()).then_some(launch.args),
         inherit_cwd: legacy.inherit_cwd.filter(|inherit| !inherit),
-        profiles: migrate_profiles(&legacy.profiles, |profile| {
-            codex_policy_args(
-                profile.approval_mode.as_deref(),
-                profile.sandbox_mode.as_deref(),
-            )
-        }),
-        default_profile: legacy.default_profile.clone(),
+        profiles: launch.profiles,
+        default_profile: launch.default_profile,
         ..AgentConfig::default()
     };
     (entry != AgentConfig::default()).then_some(entry)
@@ -327,6 +400,7 @@ pub fn migrate_codex(legacy: &LegacyCodexConfig) -> Option<AgentConfig> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::AgentCatalog;
 
     #[test]
     fn retired_sections_keep_only_what_differed_from_their_defaults() {
@@ -364,8 +438,12 @@ mod tests {
         )
         .unwrap();
         let entry = migrate_codex(&codex).unwrap();
+        // With profiles, each launch gets exactly one policy: the profile's,
+        // which replaces the section's, or the section's as `default`.
+        assert_eq!(entry.args, None);
+        assert_eq!(entry.profiles["safe"].args, ["--sandbox", "read-only"]);
         assert_eq!(
-            entry.args.unwrap(),
+            entry.profiles["default"].args,
             [
                 "--ask-for-approval",
                 "never",
@@ -373,7 +451,63 @@ mod tests {
                 "workspace-write"
             ]
         );
-        assert_eq!(entry.profiles["safe"].args, ["--sandbox", "read-only"]);
+        assert_eq!(entry.default_profile.as_deref(), Some("default"));
+        let agent = AgentCatalog::from_config(&BTreeMap::from([("codex".into(), entry)]));
+        let codex_agent = agent.get("codex").unwrap();
+        assert_eq!(
+            codex_agent.launch(Some("safe"), false).unwrap().args,
+            ["--sandbox", "read-only"],
+            "the safe profile never inherits `never`"
+        );
+        assert_eq!(
+            codex_agent.launch(None, false).unwrap().args,
+            [
+                "--ask-for-approval",
+                "never",
+                "--sandbox",
+                "workspace-write"
+            ]
+        );
+
+        // A profile that sets nothing inherits the section's policy, and a
+        // default naming a missing profile is dropped.
+        let partial: LegacyCodexConfig = toml::from_str(
+            r#"
+            approval_mode = "auto-edit"
+            default_profile = "gone"
+            [profiles.fast]
+            extra_args = ["--search"]
+            [profiles.default]
+            description = "Mine"
+            "#,
+        )
+        .unwrap();
+        let entry = migrate_codex(&partial).unwrap();
+        assert_eq!(
+            entry.profiles["fast"].args,
+            ["--ask-for-approval", "on-request", "--search"]
+        );
+        assert_eq!(entry.profiles["default"].description, "Mine");
+        assert_eq!(
+            entry.profiles["migrated-default"].args,
+            ["--ask-for-approval", "on-request"]
+        );
+        assert_eq!(entry.default_profile.as_deref(), Some("migrated-default"));
+        validate(&BTreeMap::from([("codex".into(), entry)])).unwrap();
+
+        let claude: LegacyClaudeCodeConfig = toml::from_str(
+            r#"
+            approval_mode = "auto-accept"
+            default_profile = "careful"
+            [profiles.careful]
+            approval_mode = "default"
+            "#,
+        )
+        .unwrap();
+        let entry = migrate_claude_code(&claude).unwrap();
+        assert!(entry.profiles["careful"].args.is_empty());
+        assert_eq!(entry.default_profile.as_deref(), Some("careful"));
+        assert_eq!(entry.args, None);
 
         // Sections that only restate old defaults leave no entry behind.
         let defaults: LegacyCodexConfig = toml::from_str(
@@ -399,5 +533,25 @@ mod tests {
         assert!(validate(&parse("[\"bad id\"]")).is_err());
         assert!(validate(&parse("[codex]\ndefault_profile = \"nope\"")).is_err());
         assert!(toml::from_str::<BTreeMap<String, AgentConfig>>("[x]\nunknown = 1").is_err());
+    }
+
+    #[test]
+    fn a_launcher_program_is_not_a_name_to_recognize() {
+        let parse = |text: &str| -> BTreeMap<String, AgentConfig> { toml::from_str(text).unwrap() };
+        let catalog = AgentCatalog::from_config(&parse(
+            "[crush]\nprogram = \"/usr/bin/npx\"\nargs = [\"@charmland/crush\"]\ndetect = [\"crush\"]\n\
+             [aider]\nprogram = \"/opt/aider/bin/aider\"",
+        ));
+        assert_eq!(catalog.get("crush").unwrap().detect, ["crush"]);
+        assert_eq!(catalog.get("aider").unwrap().detect, ["aider"]);
+        let argv = |args: &[&str]| {
+            args.iter()
+                .map(|arg| (*arg).to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            catalog.identify(&argv(&["node", "/usr/bin/npx", "cowsay"])),
+            None
+        );
     }
 }

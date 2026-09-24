@@ -126,11 +126,19 @@ impl App {
     pub(super) fn unavailable_agent_commands(&self) -> Vec<String> {
         use super::agent_hooks::HookSetupSummary;
         let focused = self.focused_agent();
+        // A transcript outlives the agent it recorded; stopping it stays
+        // offered until it stops.
+        let recording = self
+            .tabs
+            .as_ref()
+            .and_then(TabManager::active_tab)
+            .and_then(|tab| tab.pane_session(tab.focused_terminal_identity().pane_id))
+            .is_some_and(|session| session.transcript.is_some());
         let mut hidden: Vec<&str> = FOCUSED_AGENT_COMMANDS
             .iter()
             .copied()
             .filter(|id| match &focused {
-                None => true,
+                None => !(*id == "core.toggle-transcript" && recording),
                 Some(agent) => match *id {
                     "agent.new-conversation" => agent.definition.new_conversation.is_none(),
                     // Restarting would drop the supervisor's wiring.

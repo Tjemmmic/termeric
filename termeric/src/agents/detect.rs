@@ -1,32 +1,53 @@
 //! Recognizing an agent from the process in the foreground of a terminal.
 
 /// Script interpreters whose first script argument names the real program.
-const INTERPRETERS: &[&str] = &["node", "nodejs", "bun", "deno", "python", "python3"];
+const INTERPRETERS: &[&str] = &[
+    "node", "nodejs", "bun", "deno", "python", "python3", "sh", "bash", "dash", "zsh",
+];
+/// Shells, whose `-c` argument is a command line rather than a script.
+const SHELLS: &[&str] = &["sh", "bash", "dash", "zsh"];
+/// Extensions of source files an interpreter can run directly.
+const SCRIPT_EXTENSIONS: &[&str] = &[".js", ".mjs", ".cjs", ".ts", ".py", ".sh"];
 
 /// The program name an argument vector was invoked as: the first word's file
-/// name, or for an interpreter its script's file name without extension.
+/// name, or for an interpreter the name of the script it runs.
+///
+/// An installed program is a script without an extension (its shebang names
+/// the interpreter) or a package's entry point under `node_modules`. A source
+/// file elsewhere, such as `python3 claude.py`, is someone's own script, not
+/// the program it happens to share a name with.
 pub fn program_name(argv: &[String]) -> Option<String> {
-    let first = file_stem(argv.first()?, false)?;
+    let first = file_name(argv.first()?)?;
     if !INTERPRETERS.contains(&first.as_str()) {
         return Some(first);
     }
+    let shell = SHELLS.contains(&first.as_str());
     // Skip interpreter options such as `--no-warnings` to reach the script.
-    let script = argv[1..].iter().find(|arg| !arg.starts_with('-'))?;
-    file_stem(script, true)
+    let mut arguments = argv[1..].iter();
+    let script = loop {
+        let argument = arguments.next()?;
+        if shell && argument == "-c" {
+            return None;
+        }
+        if !argument.starts_with('-') {
+            break argument;
+        }
+    };
+    let name = file_name(script)?;
+    match SCRIPT_EXTENSIONS
+        .iter()
+        .find_map(|extension| name.strip_suffix(extension))
+    {
+        None => Some(name),
+        Some(stem) if script.contains("/node_modules/") && !stem.is_empty() => {
+            Some(stem.to_string())
+        }
+        Some(_) => None,
+    }
 }
 
-fn file_stem(arg: &str, strip_extension: bool) -> Option<String> {
+fn file_name(arg: &str) -> Option<String> {
     let name = std::path::Path::new(arg).file_name()?.to_str()?;
-    let name = if strip_extension {
-        name.strip_suffix(".js")
-            .or_else(|| name.strip_suffix(".mjs"))
-            .or_else(|| name.strip_suffix(".cjs"))
-            .or_else(|| name.strip_suffix(".ts"))
-            .or_else(|| name.strip_suffix(".py"))
-            .unwrap_or(name)
-    } else {
-        name
-    };
     (!name.is_empty()).then(|| name.to_string())
 }
 
@@ -76,6 +97,27 @@ mod tests {
             Some("aider")
         );
         assert_eq!(name(&["node"]), None);
+        // Installed entry points are extensionless or live in a package.
+        assert_eq!(
+            name(&[
+                "node",
+                "--no-warnings",
+                "/usr/lib/node_modules/@openai/codex/bin/codex.js"
+            ])
+            .as_deref(),
+            Some("codex")
+        );
+        assert_eq!(
+            name(&["/bin/sh", "/usr/local/bin/goose"]).as_deref(),
+            Some("goose")
+        );
+        assert_eq!(name(&["python3", "-m", "aider"]).as_deref(), Some("aider"));
+        // Someone's own source file, or a shell's command line, is not one.
+        assert_eq!(name(&["python3", "tools/claude.py"]), None);
+        assert_eq!(name(&["node", "codex.js"]), None);
+        assert_eq!(name(&["bash", "deploy.sh"]), None);
+        assert_eq!(name(&["sh", "-c", "codex"]), None);
+        assert_eq!(name(&["bash"]), None);
     }
 
     #[cfg(target_os = "linux")]

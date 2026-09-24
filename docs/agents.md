@@ -37,9 +37,12 @@ Termeric recognizes an agent however it was started, including when you type
 `claude` or `codex` at a shell prompt. About once a second it reads the
 program in each terminal's foreground process group. A program counts as an
 agent when its name matches one of the agent's `detect` names. For Node, Bun,
-Deno, and Python programs, the script's name is used instead of the
-interpreter's. On platforms without `/proc`, only agents Termeric started
-itself are recognized.
+Deno, Python, and shell scripts, the script's name is used instead of the
+interpreter's. Only an installed program counts: a script without an
+extension, or a package's entry point under `node_modules`. Your own
+`claude.py` is not taken for Claude Code. An agent Termeric started is known
+by what it started, whatever its program is called. On platforms without
+`/proc`, only agents Termeric started itself are recognized.
 
 While an agent terminal is focused, the palette adds commands for it. They are
 hidden everywhere else:
@@ -256,7 +259,7 @@ any other id defines a new agent. Every key is optional:
 |---|---|
 | `enabled` | `false` hides the agent from pickers and detection. |
 | `name` | Display name. A custom agent defaults to its id. |
-| `program` | Executable to launch. Its file name is also recognized. A custom agent defaults to its id. |
+| `program` | Executable to launch. Its file name is also recognized, unless it is a launcher such as `npx`, `docker`, `node`, or `sh`; then list the agent's own name in `detect`. A custom agent defaults to its id. |
 | `detect` | Extra program names to recognize, for example a wrapper script. |
 | `args` | Arguments passed on every launch. |
 | `resume_args` | Arguments that continue the latest conversation. Without them, the agent cannot resume. |
@@ -302,6 +305,12 @@ differed from the defaults, and is dropped the next time Settings saves.
 | Claude `approval_mode = "auto-accept"` | `--dangerously-skip-permissions` |
 | Codex `approval_mode = "auto-edit"` / `"full-auto"` | `--ask-for-approval on-request` / `never` |
 | Codex `sandbox_mode = "read-only"` / `"full-access"` | `--sandbox read-only` / `danger-full-access` |
+
+A profile's approval and sandbox settings replaced the section's for that
+profile, and still do. With profiles, each converted profile carries its own
+approval and sandbox arguments, taking the section's for what it did not set.
+The section's own become a profile named `default`, used when no other
+default was chosen. A `default_profile` naming a missing profile is dropped.
 
 The earlier defaults, `suggest` and `workspace-write`, are dropped, so a
 converted Codex launch follows your own Codex configuration. An existing

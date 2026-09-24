@@ -11,9 +11,15 @@ impl App {
                 return None;
             }
             let state = tab.pane_session(identity.pane_id)?;
+            // A recording can be stopped after its agent has exited; only a
+            // new one needs an agent to record.
+            let recording = state.transcript.is_some();
+            if !recording && state.agent.is_none() {
+                return None;
+            }
             Some((
-                state.agent.clone()?,
-                state.transcript.is_some(),
+                state.agent.clone(),
+                recording,
                 tab.pane_working_directory(identity.pane_id),
             ))
         }) else {
@@ -50,7 +56,7 @@ impl App {
                     );
                 }
             }
-        } else {
+        } else if let Some(agent) = agent {
             let Some(base) = crate::session::sessions_base_dir() else {
                 self.info_overlay.show(
                     "Transcript Error",

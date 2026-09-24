@@ -8721,6 +8721,62 @@ fn agent_changes_are_listed_reviewed_staged_and_reverted_for_their_terminal() {
 
 #[cfg(unix)]
 #[test]
+fn a_transcript_can_be_stopped_after_its_agent_exits() {
+    let temp = tempfile::tempdir().unwrap();
+    crate::session::set_test_sessions_base_dir(Some(temp.path().to_path_buf()));
+    let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+    tabs.new_tab_with_command(
+        "/bin/sh",
+        &["-c".into(), "sleep 30".into()],
+        None,
+        None,
+        None,
+        HashMap::new(),
+    )
+    .unwrap();
+    let set_agent = |app: &mut App, agent: Option<crate::agents::AgentSession>| {
+        let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
+        let pane_id = tab.focused_terminal_identity().pane_id;
+        tab.pane_session_mut(pane_id).unwrap().agent = agent;
+    };
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.tabs = Some(tabs);
+    set_agent(
+        &mut app,
+        Some(crate::agents::AgentSession {
+            agent_id: "codex".into(),
+            launched: false,
+            profile: None,
+            process: None,
+        }),
+    );
+    app.toggle_transcript();
+    assert_eq!(app.info_overlay.title(), "Transcript Started");
+
+    // The agent exits while its transcript records.
+    set_agent(&mut app, None);
+    assert!(
+        !app.unavailable_agent_commands()
+            .contains(&"core.toggle-transcript".to_string()),
+        "a recording can still be stopped"
+    );
+    app.toggle_transcript();
+    assert_eq!(app.info_overlay.title(), "Transcript Stopped");
+    assert!(
+        app.unavailable_agent_commands()
+            .contains(&"core.toggle-transcript".to_string()),
+        "a new one needs an agent"
+    );
+    app.toggle_transcript();
+    assert_eq!(
+        latest_toast(&app),
+        Some("Focus a writable local agent terminal to toggle its transcript")
+    );
+    crate::session::set_test_sessions_base_dir(None);
+}
+
+#[cfg(unix)]
+#[test]
 fn a_read_only_agent_refuses_context_with_its_own_reason() {
     let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
     let tab_id = tabs

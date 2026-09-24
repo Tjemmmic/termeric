@@ -524,14 +524,7 @@ impl App {
 
     /// Hand Settings the installed and enabled state of each built-in agent.
     pub(super) fn sync_agent_settings_rows(&mut self) {
-        const BUILTIN: [(&str, &str); 4] = [
-            ("claude-code", "Claude Code"),
-            ("codex", "Codex"),
-            ("gemini", "Gemini CLI"),
-            ("opencode", "OpenCode"),
-        ];
-        let rows = BUILTIN
-            .iter()
+        let rows = crate::agents::builtin_agent_names()
             .filter_map(|(id, label)| {
                 let agent = self.agents.get(id)?;
                 Some(crate::ui::settings::AgentSettingsRow {
@@ -546,7 +539,7 @@ impl App {
             .agents
             .all()
             .iter()
-            .filter(|agent| BUILTIN.iter().all(|(id, _)| *id != agent.id))
+            .filter(|agent| crate::agents::builtin_agent_names().all(|(id, _)| id != agent.id))
             .map(|agent| agent.name.as_str())
             .collect();
         let summary = if custom.is_empty() {
