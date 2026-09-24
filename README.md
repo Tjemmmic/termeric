@@ -92,7 +92,11 @@ and Linux troubleshooting, see [`docs/install.md`](docs/install.md).
 
 ## Configuration
 
-Termeric reads `~/.config/termeric/config.toml`. A starter config lives in [`assets/config.example.toml`](assets/config.example.toml):
+Termeric reads `~/.config/termeric/config.toml` and reloads it when it changes.
+If the file has an error, Termeric starts with defaults and says why, and
+nothing it saves, such as a theme you pick, replaces the file until you fix
+it. **Reset Configuration** replaces it after keeping a copy beside it,
+ending in `.bak`. A starter config lives in [`assets/config.example.toml`](assets/config.example.toml):
 
 ```toml
 [font]

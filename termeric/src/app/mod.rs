@@ -3766,8 +3766,9 @@ impl App {
                         return;
                     }
                     "core.save-config" => {
-                        if let Ok(msg) = self.save_config() {
-                            log::info!("{}", msg);
+                        match self.save_config() {
+                            Ok(path) => self.toasts.success(format!("Configuration saved: {path}")),
+                            Err(error) => self.toasts.error(format!("{error:#}")),
                         }
                         return;
                     }
@@ -3793,7 +3794,7 @@ impl App {
                         if let Err(error) = self.apply_config(Config::default()) {
                             self.toasts.error(format!("Reset failed: {error}"));
                         } else {
-                            match self.save_config() {
+                            match self.save_config_replacing() {
                                 Ok(path) => {
                                     self.toasts.success(format!("Configuration reset: {path}"))
                                 }
@@ -4411,7 +4412,33 @@ impl App {
         })
     }
 
+    /// Save the live configuration, unless the file on disk does not load.
     fn save_config(&mut self) -> Result<String> {
+        Config::ensure_replaceable(&Config::config_path())?;
+        self.write_config()
+    }
+
+    /// Save the live configuration even over a file that does not load,
+    /// keeping that file beside it first. Only an explicit reset does this.
+    fn save_config_replacing(&mut self) -> Result<String> {
+        let config_path = Config::config_path();
+        if Config::ensure_replaceable(&config_path).is_err() {
+            let seconds = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |elapsed| elapsed.as_secs());
+            let mut backup = config_path.clone().into_os_string();
+            backup.push(format!(".{seconds}.bak"));
+            anyhow::Context::with_context(std::fs::copy(&config_path, &backup), || {
+                format!(
+                    "keep a copy of {} before replacing it",
+                    config_path.display()
+                )
+            })?;
+        }
+        self.write_config()
+    }
+
+    fn write_config(&mut self) -> Result<String> {
         let config_path = Config::config_path();
 
         // Ensure config directory exists

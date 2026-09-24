@@ -269,10 +269,14 @@ impl Config {
     /// Parse and validation errors are returned so runtime reloads can preserve
     /// the last known-good configuration.
     pub fn load_or_default() -> Result<Self> {
-        let config_path = Self::config_path();
+        Self::load_from(&Self::config_path())
+    }
 
+    /// Load the configuration file at `config_path`, or defaults when there
+    /// is none.
+    pub fn load_from(config_path: &std::path::Path) -> Result<Self> {
         if config_path.exists() {
-            let content = std::fs::read_to_string(&config_path)
+            let content = std::fs::read_to_string(config_path)
                 .with_context(|| format!("failed to read {}", config_path.display()))?;
             let mut config: Config = toml::from_str(&content)
                 .with_context(|| format!("failed to parse {}", config_path.display()))?;
@@ -281,6 +285,20 @@ impl Config {
             Ok(config)
         } else {
             Ok(Self::default())
+        }
+    }
+
+    /// Refuse to replace the configuration file at `path` when it does not
+    /// load. Termeric is then running on its defaults or on the last settings
+    /// that did load, and writing either over the file would destroy the
+    /// person's settings, which may be one typo away from working.
+    pub fn ensure_replaceable(path: &std::path::Path) -> Result<()> {
+        match Self::load_from(path) {
+            Ok(_) => Ok(()),
+            Err(error) => bail!(
+                "{} has an error, so it was left as it is ({error:#}); fix it, or use Reset Configuration to replace it",
+                path.display()
+            ),
         }
     }
 
@@ -2067,6 +2085,23 @@ mod tests {
         .unwrap();
         config.migrate_retired_agent_sections();
         assert_eq!(config.agents["codex"].enabled, None);
+    }
+
+    #[test]
+    fn a_configuration_that_does_not_load_is_never_saved_over() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        Config::ensure_replaceable(&path).expect("no file yet");
+        std::fs::write(&path, "[window]\nwidth = 1234\n").unwrap();
+        Config::ensure_replaceable(&path).expect("a file that loads");
+        // One typo away from working: the person's settings must survive.
+        std::fs::write(&path, "[window]\nwidth = 1234\n[font\nsize = 13\n").unwrap();
+        let error = Config::ensure_replaceable(&path).unwrap_err().to_string();
+        assert!(error.contains("Reset Configuration"), "{error}");
+        assert!(error.contains("config.toml"), "{error}");
+        // So is one that parses but is refused by validation.
+        std::fs::write(&path, "[window]\nwidth = 0\n").unwrap();
+        assert!(Config::ensure_replaceable(&path).is_err());
     }
 
     #[test]
