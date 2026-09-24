@@ -560,13 +560,29 @@ impl App {
 impl App {
     /// Apply a report from an agent's hooks to the terminal it names.
     /// Returns whether this window owns that terminal.
-    pub(super) fn record_agent_report(&mut self, terminal_id: &str, report: AgentReport) -> bool {
+    pub(super) fn record_agent_report(
+        &mut self,
+        terminal_id: &str,
+        report: AgentReport,
+        reporter: Option<u32>,
+    ) -> bool {
         let Some(tabs) = self.tabs.as_mut() else {
             return false;
         };
         let Some(identity) = tabs.terminal_with_id(terminal_id) else {
             return false;
         };
+        // A program that inherited the terminal's identity but runs in
+        // another session, such as inside a tmux server started here, is
+        // not in this terminal; its report is received and set aside.
+        let child = tabs
+            .tab_by_id(identity.tab_id)
+            .and_then(|tab| tab.pane_child_process(identity.pane_id));
+        if let (Some(reporter), Some(child)) = (reporter, child)
+            && crate::agents::detect::session_of(reporter) != Some(child)
+        {
+            return true;
+        }
         // Disabled agents are not tracked, but the report was delivered.
         if self
             .agents
@@ -612,19 +628,35 @@ impl App {
         true
     }
 
-    /// Record that the person typed or pasted into the focused terminal. An
-    /// agent that was waiting on them is working again.
-    pub(super) fn note_person_typed(&mut self) {
-        let Some(tab) = self.tabs.as_mut().and_then(TabManager::active_tab_mut) else {
+    /// Record that the person typed `input` into the focused terminal.
+    pub(super) fn note_person_typed(&mut self, input: &[u8]) {
+        let Some(identity) = self
+            .tabs
+            .as_ref()
+            .and_then(TabManager::active_tab)
+            .map(|tab| tab.focused_terminal_identity())
+        else {
             return;
         };
-        let pane_id = tab.focused_terminal_identity().pane_id;
-        let Some(session) = tab.pane_session_mut(pane_id) else {
+        self.note_person_input(identity, !only_navigates(input));
+    }
+
+    /// Record that the person typed or pasted into the terminal at
+    /// `identity`, which keeps automated messages away for a while. When the
+    /// input `answers` (more than moving through a menu), an agent that was
+    /// waiting on them is working again.
+    pub(super) fn note_person_input(&mut self, identity: TerminalIdentity, answers: bool) {
+        let Some(session) = self
+            .tabs
+            .as_mut()
+            .and_then(|tabs| tabs.tab_mut_by_id(identity.tab_id))
+            .and_then(|tab| tab.pane_session_mut(identity.pane_id))
+        else {
             return;
         };
         let now = Instant::now();
         session.last_person_input = Some(now);
-        if let Some(status) = &mut session.agent_status {
+        if answers && let Some(status) = &mut session.agent_status {
             status.answered(now);
         }
     }
@@ -949,6 +981,13 @@ impl App {
         tabs.write_user_to_origin(origin, bytes)
             .map_err(|error| format!("Could not send to {}: {error}", target.agent_name))
     }
+}
+
+/// Whether `input` is a cursor, page, or function key: an escape sequence
+/// other than a bracketed paste. Moving through an agent's menu does not
+/// answer it.
+pub(super) fn only_navigates(input: &[u8]) -> bool {
+    input.len() > 1 && input[0] == 0x1b && !input.starts_with(b"\x1b[200~")
 }
 
 /// Picker rows: each agent that `available` accepts, then one row per

@@ -719,6 +719,19 @@ impl App {
         (tab.id == *tab_id).then(|| (*tab_id, targets.clone()))
     }
 
+    /// Broadcast input is the person's typing in every pane it reached.
+    fn note_broadcast_input(&mut self, tab_id: usize, panes: &[PaneId], answers: bool) {
+        for pane_id in panes {
+            self.note_person_input(
+                crate::tabs::TerminalIdentity {
+                    tab_id,
+                    pane_id: *pane_id,
+                },
+                answers,
+            );
+        }
+    }
+
     fn finish_broadcast_writes(
         &mut self,
         tab_id: usize,
@@ -855,6 +868,7 @@ impl App {
             failed += usize::from(!written);
             written
         });
+        self.note_broadcast_input(tab_id, &remaining, !super::agents::only_navigates(data));
         self.finish_broadcast_writes(tab_id, remaining, failed);
         true
     }
@@ -912,12 +926,16 @@ impl App {
         };
         let mut remaining = targets;
         let mut failed = 0;
+        let mut answers = false;
         for (id, bytes) in encoded {
             if manager.write_to(id, &bytes).is_err() {
                 remaining.retain(|target| *target != id);
                 failed += 1;
+            } else {
+                answers |= !super::agents::only_navigates(&bytes);
             }
         }
+        self.note_broadcast_input(tab_id, &remaining, answers);
         self.finish_broadcast_writes(tab_id, remaining, failed);
         true
     }
@@ -970,6 +988,7 @@ impl App {
                 failed += 1;
             }
         }
+        self.note_broadcast_input(tab_id, &remaining, true);
         self.finish_broadcast_writes(tab_id, remaining, failed);
         self.input_line_buffer.clear();
         true

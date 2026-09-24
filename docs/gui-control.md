@@ -581,8 +581,11 @@ inherited, and carries an event kind, a detail of at most 512 bytes, an answer
 of at most 64 KiB, and an absolute transcript path. It changes only that
 terminal's displayed agent state and notifications. It cannot send input,
 change focus, or read anything. An identity the process does not own is
-refused. Any same-user process could send one, which at most shows a
-misleading status.
+refused. Where the socket reports the sender's process, as on Linux, a
+report whose process is not in that terminal's session is received and set
+aside, so a program that merely inherited the identity, such as one inside a
+tmux server started there, cannot speak for the terminal. Otherwise any
+same-user process could send one, which at most shows a misleading status.
 
 Environment changes are intentionally narrow. One launch accepts at most 64
 unique ASCII names matching `[A-Za-z_][A-Za-z0-9_]*`, with names capped at 128

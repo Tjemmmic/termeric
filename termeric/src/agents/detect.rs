@@ -101,6 +101,22 @@ pub fn descends_from(_process: u32, _ancestor: u32) -> bool {
     false
 }
 
+/// The session `process` belongs to: for anything started in a terminal,
+/// the process ID of the terminal's own child, which leads the session.
+#[cfg(unix)]
+pub fn session_of(process: u32) -> Option<u32> {
+    let process = libc::pid_t::try_from(process).ok()?;
+    // SAFETY: getsid reads the kernel's record of a process and has no
+    // memory arguments.
+    let session = unsafe { libc::getsid(process) };
+    u32::try_from(session).ok()
+}
+
+#[cfg(not(unix))]
+pub fn session_of(_process: u32) -> Option<u32> {
+    None
+}
+
 /// The parent of `process`, from the field after its name in
 /// `/proc/PID/stat`. The name may itself hold spaces and parentheses, so the
 /// fields are read after its last closing parenthesis.

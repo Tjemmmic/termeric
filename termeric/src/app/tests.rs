@@ -8424,16 +8424,18 @@ fn hook_reports_track_an_agent_started_from_a_shell_until_it_exits() {
         .write(b"sleep 30\r")
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
+    let foreground = loop {
         let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
         let pty = tab.single_pty().unwrap();
         let group = pty.foreground_process_group();
-        if group.is_some() && group != pty.child_id().map(|pid| pid as i32) {
-            break;
+        if let Some(group) =
+            group.filter(|group| Some(*group) != pty.child_id().map(|pid| pid as i32))
+        {
+            break group as u32;
         }
         assert!(Instant::now() < deadline, "sleep never took the foreground");
         std::thread::sleep(Duration::from_millis(10));
-    }
+    };
 
     let report = |event| AgentReport {
         agent_id: "codex".into(),
@@ -8442,8 +8444,31 @@ fn hook_reports_track_an_agent_started_from_a_shell_until_it_exits() {
         last_message: None,
         transcript_path: None,
     };
-    assert!(!app.record_agent_report("1.00", report(AgentEventKind::Working)));
-    assert!(app.record_agent_report(&terminal_id, report(AgentEventKind::Working)));
+    assert!(!app.record_agent_report("1.00", report(AgentEventKind::Working), None));
+    // A program outside this terminal's session that borrowed its identity
+    // is received and set aside.
+    assert!(app.record_agent_report(
+        &terminal_id,
+        report(AgentEventKind::Working),
+        Some(std::process::id())
+    ));
+    assert!(
+        app.tabs
+            .as_ref()
+            .unwrap()
+            .tab_by_id(tab_id)
+            .unwrap()
+            .focused_session()
+            .unwrap()
+            .agent_status
+            .is_none()
+    );
+    // The hook runs inside the terminal, as the foreground job does.
+    assert!(app.record_agent_report(
+        &terminal_id,
+        report(AgentEventKind::Working),
+        Some(foreground)
+    ));
     let session = |app: &App| {
         app.tabs
             .as_ref()
@@ -8472,7 +8497,8 @@ fn hook_reports_track_an_agent_started_from_a_shell_until_it_exits() {
         AgentReport {
             detail: Some("Approve shell: cargo test".into()),
             ..report(AgentEventKind::NeedsInput)
-        }
+        },
+        None
     ));
     let status = session(&app).1.unwrap();
     assert!(status.needs_attention());
@@ -8498,7 +8524,7 @@ fn hook_reports_track_an_agent_started_from_a_shell_until_it_exits() {
             )]
         );
         // A repeated request is not news.
-        app.record_agent_report(&terminal_id, report(AgentEventKind::NeedsInput));
+        app.record_agent_report(&terminal_id, report(AgentEventKind::NeedsInput), None);
         assert!(shown().is_empty());
     }
     app.window_focused = true;
@@ -12198,7 +12224,8 @@ done
             detail: Some("Approve shell: cargo test".into()),
             last_message: None,
             transcript_path: None,
-        }
+        },
+        None
     ));
     flush(&mut app);
     wait_for_file_text(

@@ -149,9 +149,14 @@ impl AgentStatus {
         Some(Self {
             agent_id: report.agent_id,
             activity,
-            detail: report
-                .detail
-                .filter(|_| matches!(activity, AgentActivity::NeedsInput | AgentActivity::Failed)),
+            detail: match report.event {
+                // A stop that keeps a result keeps what explained it.
+                AgentEventKind::Stopped => current
+                    .filter(|status| status.activity == activity)
+                    .and_then(|status| status.detail.clone()),
+                _ => report.detail,
+            }
+            .filter(|_| matches!(activity, AgentActivity::NeedsInput | AgentActivity::Failed)),
             last_message: report.last_message.or_else(|| {
                 current
                     .filter(|_| keep_previous)
@@ -330,6 +335,22 @@ mod tests {
         assert_eq!(later.activity, AgentActivity::Finished);
         assert!(later.needs_attention(), "an unseen result stays news");
         assert_eq!(later.last_message.as_deref(), Some("answer"));
+        let failed = AgentStatus::after(
+            None,
+            AgentReport {
+                detail: Some("rate_limit".into()),
+                ..report(AgentEventKind::Failed)
+            },
+            now,
+        )
+        .unwrap();
+        let idle = AgentStatus::after(Some(&failed), report(AgentEventKind::Stopped), now).unwrap();
+        assert_eq!(idle.activity, AgentActivity::Failed);
+        assert_eq!(
+            idle.detail.as_deref(),
+            Some("rate_limit"),
+            "the reason stays"
+        );
     }
 
     #[test]

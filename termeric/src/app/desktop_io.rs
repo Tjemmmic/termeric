@@ -1124,7 +1124,7 @@ impl App {
                         let _ = tab.write(&rewrite);
                     }
                 }
-                self.note_person_typed();
+                self.note_person_typed(data);
                 return;
             }
         } else if data == b"\x7f" {
@@ -1188,7 +1188,7 @@ impl App {
                 }
             }
         }
-        self.note_person_typed();
+        self.note_person_typed(data);
     }
 
     /// Clear state derived from a user's editable terminal line. This must run

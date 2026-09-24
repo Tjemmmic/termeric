@@ -280,30 +280,40 @@ pub fn rewrite(agent: HookedAgent, text: &str, executable: &Path, install: bool)
     for (event, raw) in original.0 {
         let groups: Vec<Box<RawValue>> = serde_json::from_str(raw.get())
             .with_context(|| format!("\"hooks\".{event:?} is not a list"))?;
-        let kept: Vec<Box<RawValue>> = groups
-            .iter()
-            .filter(|group| {
-                serde_json::from_str::<Value>(group.get())
-                    .is_ok_and(|group| !is_termeric_group(&group, agent.agent_id))
-            })
-            .cloned()
-            .collect();
-        let added = ours(&event);
-        if kept.len() == groups.len() && added.is_empty() {
+        let mut added = Some(ours(&event)).filter(|added| !added.is_empty());
+        if added.is_none() && !groups.iter().any(|group| is_termeric_raw(group, agent)) {
             events.push((event, raw));
             continue;
         }
         changed = true;
-        if !kept.is_empty() || !added.is_empty() {
-            let rendered = render_groups(&kept, &added, &indent)?;
-            events.push((event, rendered));
+        // Termeric's groups take the place of its earlier ones, else go
+        // last. Codex keys each hook's trust by its position in the list, so
+        // the person's hooks must not move.
+        let mut items = Vec::new();
+        for group in &groups {
+            if !is_termeric_raw(group, agent) {
+                items.push(group.get().to_owned());
+            } else if let Some(added) = added.take() {
+                for group in &added {
+                    items.push(render_group(group, &indent)?);
+                }
+            }
+        }
+        for group in added.iter().flatten() {
+            items.push(render_group(group, &indent)?);
+        }
+        if !items.is_empty() {
+            events.push((event, render_list(&items, &indent)?));
         }
     }
     for (event, ..) in agent.events {
         if install && !events.iter().any(|(name, _)| name == event) {
             changed = true;
-            let rendered = render_groups(&[], &ours(event), &indent)?;
-            events.push(((*event).to_owned(), rendered));
+            let items = ours(event)
+                .iter()
+                .map(|group| render_group(group, &indent))
+                .collect::<Result<Vec<_>>>()?;
+            events.push(((*event).to_owned(), render_list(&items, &indent)?));
         }
     }
     if changed {
@@ -322,20 +332,27 @@ pub fn rewrite(agent: HookedAgent, text: &str, executable: &Path, install: bool)
     Ok(render(&entries, &indent))
 }
 
-/// An event's list of groups at nesting depth three: the person's groups
-/// verbatim, then Termeric's, each on its own line.
-fn render_groups(kept: &[Box<RawValue>], added: &[Value], indent: &str) -> Result<Box<RawValue>> {
+/// Whether a group, as written in the file, is one Termeric installed.
+fn is_termeric_raw(group: &RawValue, agent: HookedAgent) -> bool {
+    serde_json::from_str::<Value>(group.get())
+        .is_ok_and(|group| is_termeric_group(&group, agent.agent_id))
+}
+
+/// One of Termeric's groups as JSON text for nesting depth three.
+fn render_group(group: &Value, indent: &str) -> Result<String> {
+    let mut bytes = Vec::new();
+    let formatter = serde_json::ser::PrettyFormatter::with_indent(indent.as_bytes());
+    serde::Serialize::serialize(
+        group,
+        &mut serde_json::Serializer::with_formatter(&mut bytes, formatter),
+    )?;
+    Ok(String::from_utf8(bytes)?.replace('\n', &format!("\n{}", indent.repeat(3))))
+}
+
+/// An event's list of groups, already JSON text, each on its own line at
+/// nesting depth three.
+fn render_list(items: &[String], indent: &str) -> Result<Box<RawValue>> {
     let inner = indent.repeat(3);
-    let mut items: Vec<String> = kept.iter().map(|group| group.get().to_owned()).collect();
-    for group in added {
-        let mut bytes = Vec::new();
-        let formatter = serde_json::ser::PrettyFormatter::with_indent(indent.as_bytes());
-        serde::Serialize::serialize(
-            group,
-            &mut serde_json::Serializer::with_formatter(&mut bytes, formatter),
-        )?;
-        items.push(String::from_utf8(bytes)?.replace('\n', &format!("\n{inner}")));
-    }
     let body = items
         .iter()
         .map(|item| format!("{inner}{item}"))
@@ -669,6 +686,31 @@ mod tests {
                 .settings_path(&relative)
                 .is_none_or(|path| path.is_absolute() && path.ends_with("hooks.json"))
         );
+    }
+
+    #[test]
+    fn updating_leaves_every_group_where_it_was() {
+        // Termeric's group first, then one the person added after setup.
+        let installed = rewrite(CODEX, "", &exe(), true).unwrap();
+        let mut value: Value = serde_json::from_str(&installed).unwrap();
+        value["hooks"]["Stop"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"hooks": [{"type": "command", "command": "say done"}]}));
+        let with_theirs = serde_json::to_string_pretty(&value).unwrap();
+        // A newer Termeric replaces its group in place.
+        let moved = with_theirs.replace(
+            "/usr/bin/termeric agent-event codex stop",
+            "/old/termeric agent-event codex stop",
+        );
+        let updated = rewrite(CODEX, &moved, &exe(), true).unwrap();
+        let stop = &serde_json::from_str::<Value>(&updated).unwrap()["hooks"]["Stop"];
+        assert_eq!(
+            stop[0]["hooks"][0]["command"],
+            "/usr/bin/termeric agent-event codex stop"
+        );
+        assert_eq!(stop[1]["hooks"][0]["command"], "say done");
+        assert_eq!(stop.as_array().unwrap().len(), 2);
     }
 
     #[test]

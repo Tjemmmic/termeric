@@ -4111,7 +4111,8 @@ impl App {
             accepted = self.write_terminal_protocol_input(&framed);
             self.input_line_buffer.clear();
             if accepted {
-                self.note_person_typed();
+                // A paste is an answer, whatever it starts with.
+                self.note_person_typed(b"");
             }
         }
         self.git_completions_visible = false;

@@ -2065,10 +2065,9 @@ impl Application {
                 last_message,
                 transcript_path,
             );
-            let owned = self
-                .windows
-                .values_mut()
-                .any(|window| window.record_agent_report(&terminal_id, report.clone()));
+            let owned = self.windows.values_mut().any(|window| {
+                window.record_agent_report(&terminal_id, report.clone(), peer_process)
+            });
             self.remove_closed_windows(event_loop);
             return if owned {
                 Ok(Response::AgentEventRecorded {

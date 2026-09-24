@@ -2010,7 +2010,7 @@ impl ApplicationHandler<AppEvent> for App {
                             last_message,
                             transcript_path,
                         );
-                        if self.record_agent_report(&terminal_id, report) {
+                        if self.record_agent_report(&terminal_id, report, peer_process) {
                             Ok(crate::control::protocol::Response::AgentEventRecorded {
                                 process_id: std::process::id(),
                             })

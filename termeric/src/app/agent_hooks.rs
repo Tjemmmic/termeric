@@ -50,6 +50,16 @@ impl HookSetupSummary {
     }
 }
 
+/// The environment an agent is started with when no profile is named,
+/// which decides where it reads its settings.
+fn launch_env(
+    agent: &crate::agents::AgentDefinition,
+) -> std::collections::BTreeMap<String, String> {
+    agent
+        .launch(None, false)
+        .map_or_else(|_| agent.env.clone(), |launch| launch.env)
+}
+
 fn termeric_executable() -> Result<PathBuf, String> {
     std::env::current_exe()
         .and_then(|path| path.canonicalize())
@@ -64,8 +74,13 @@ impl App {
             .into_iter()
             .filter_map(|hooked| {
                 let agent = self.agents.get(hooked.agent_id)?;
-                (agent.enabled && agent.installed_path().is_some())
-                    .then(|| (hooked, agent.name.clone(), hooked.settings_path(&agent.env)))
+                (agent.enabled && agent.installed_path().is_some()).then(|| {
+                    (
+                        hooked,
+                        agent.name.clone(),
+                        hooked.settings_path(&launch_env(agent)),
+                    )
+                })
             })
             .collect()
     }
@@ -145,7 +160,11 @@ impl App {
             setup::HOOKED_AGENTS
                 .into_iter()
                 .map(|hooked| match self.agents.get(hooked.agent_id) {
-                    Some(agent) => (hooked, agent.name.clone(), hooked.settings_path(&agent.env)),
+                    Some(agent) => (
+                        hooked,
+                        agent.name.clone(),
+                        hooked.settings_path(&launch_env(agent)),
+                    ),
                     None => (
                         hooked,
                         hooked.agent_id.to_string(),
@@ -160,6 +179,13 @@ impl App {
                 continue;
             };
             let previous = setup::read_settings(&path).map_err(|error| format!("{error:#}"))?;
+            // Already current: leave the file, and its formatting, alone.
+            if install
+                && setup::hook_state(hooked, &previous, &executable).ok()
+                    == Some(HookState::Installed)
+            {
+                continue;
+            }
             let next = setup::rewrite(hooked, &previous, &executable, install)
                 .map_err(|error| format!("{} could not be updated: {error:#}", path.display()))?;
             if next != previous && (install || !previous.is_empty()) {
