@@ -582,9 +582,11 @@ of at most 64 KiB, and an absolute transcript path. It changes only that
 terminal's displayed agent state and notifications. It cannot send input,
 change focus, or read anything. An identity the process does not own is
 refused. Where the socket reports the sender's process, as on Linux, a
-report whose process is not in that terminal's session is received and set
-aside, so a program that merely inherited the identity, such as one inside a
-tmux server started there, cannot speak for the terminal. Otherwise any
+report from a process that does not descend from that terminal's child is
+received and set aside, so a program that merely inherited the identity, such
+as one inside a tmux server started there, cannot speak for the terminal.
+Descent, not the session, decides, because Claude Code runs each hook in a
+session of its own. Otherwise any
 same-user process could send one, which at most shows a misleading status.
 
 Environment changes are intentionally narrow. One launch accepts at most 64

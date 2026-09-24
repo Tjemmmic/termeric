@@ -378,10 +378,10 @@ split around, collapsed, or moved to another tab or window.
 - Agents in [live-domain](live-domains.md) terminals cannot report status.
   Their processes belong to the domain daemon rather than to a window.
 - Agents inside tmux or screen cannot report status. The server keeps the
-  environment of the terminal it was started in, but its agents run in its
-  own sessions, and a report from outside a terminal's session is set aside.
-  This check needs a platform that reports the sender's process, as Linux
-  does.
+  environment of the terminal it was started in, but it detaches from that
+  terminal, and a report from a process that does not descend from the
+  terminal's own is set aside. This check needs a platform that reports the
+  sender's process, as Linux does.
 - Diffs are read from the terminal output, so an agent that never prints a
   unified diff has nothing to review.
 - Automated tests use fake agent executables in real PTYs. They never start a

@@ -573,14 +573,16 @@ impl App {
         let Some(identity) = tabs.terminal_with_id(terminal_id) else {
             return false;
         };
-        // A program that inherited the terminal's identity but runs in
-        // another session, such as inside a tmux server started here, is
-        // not in this terminal; its report is received and set aside.
+        // A program that inherited the terminal's identity but no longer
+        // descends from its child, such as an agent inside a tmux server
+        // started here, is not in this terminal; its report is received and
+        // set aside. Ancestry, not the session, decides: Claude Code runs
+        // each hook in a session of its own.
         let child = tabs
             .tab_by_id(identity.tab_id)
             .and_then(|tab| tab.pane_child_process(identity.pane_id));
         if let (Some(reporter), Some(child)) = (reporter, child)
-            && crate::agents::detect::session_of(reporter) != Some(child)
+            && !crate::agents::detect::descends_from(reporter, child)
         {
             return true;
         }
@@ -1046,11 +1048,18 @@ impl App {
     }
 }
 
-/// Whether `input` is a cursor, page, or function key: an escape sequence
-/// other than a bracketed paste. Moving through an agent's menu does not
-/// answer it.
+/// Whether `input` is a cursor or page key (arrows, Home, End, Page Up and
+/// Down, in any encoding). Moving through an agent's menu does not answer
+/// it; Escape and Ctrl+C, even as keyboard-protocol sequences, do.
 pub(super) fn only_navigates(input: &[u8]) -> bool {
-    input.len() > 1 && input[0] == 0x1b && !input.starts_with(b"\x1b[200~")
+    input.len() > 2
+        && input[0] == 0x1b
+        && matches!(input[1], b'[' | b'O')
+        && !input.starts_with(b"\x1b[200~")
+        && matches!(
+            input.last(),
+            Some(b'A' | b'B' | b'C' | b'D' | b'H' | b'F' | b'~')
+        )
 }
 
 /// Picker rows: each agent that `available` accepts, then one row per
@@ -1175,6 +1184,31 @@ mod tests {
                 .iter()
                 .all(|item| item.id != "gemini")
         );
+    }
+
+    #[test]
+    fn moving_through_a_menu_is_not_an_answer() {
+        for keys in [
+            &b"\x1b[A"[..],
+            b"\x1bOB",
+            b"\x1b[1;5C",
+            b"\x1b[5~",
+            b"\x1b[H",
+        ] {
+            assert!(only_navigates(keys), "{keys:?}");
+        }
+        // Escape and Ctrl+C answer, also as keyboard-protocol sequences, and
+        // so do text, Enter, and pastes.
+        for keys in [
+            &b"\x1b"[..],
+            b"\x1b[27u",
+            b"\x1b[99;5u",
+            b"y",
+            b"\r",
+            b"\x1b[200~text\x1b[201~",
+        ] {
+            assert!(!only_navigates(keys), "{keys:?}");
+        }
     }
 
     #[test]
