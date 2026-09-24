@@ -410,8 +410,11 @@ worker thread.
 
 Agent status coverage is provider-free. Unit tests cover the status state
 machine, hook payload parsing for Claude Code and Codex shapes, settings-file
-rewriting (verbatim order and text, indentation, symlinks, permissions,
-backups, and edits made while the dialog was open), and tolerant log reading.
+rewriting (verbatim order and text of the person's own hook groups,
+indentation, symlinks, dangling links, duplicate keys, permissions, backups,
+and edits made while the dialog was open), and tolerant log reading that
+refuses a pipe in place of a log. The hook executable is proven to read a
+3 MiB payload in full, so no agent sees a broken pipe.
 `termeric/tests/agent_commands.rs` runs the real `termeric agent-event`
 executable against a private fake GUI endpoint. It proves exact delivery, and
 that the command is silent and succeeds outside Termeric, with unknown

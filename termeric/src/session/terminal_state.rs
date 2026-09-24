@@ -10,6 +10,8 @@ pub(crate) struct TerminalSession {
     pub agent_status: Option<AgentStatus>,
     /// Where the latest agent started, for reviewing what it changed.
     pub agent_changes: crate::agents::changes::ChangeTracking,
+    /// When the person last typed or pasted into this terminal.
+    pub last_person_input: Option<std::time::Instant>,
     pub transcript: Option<TranscriptRecorder>,
     pub diff_detector: DiffDetector,
     failure_reported: bool,
@@ -22,6 +24,7 @@ impl Default for TerminalSession {
             agent: None,
             agent_status: None,
             agent_changes: Default::default(),
+            last_person_input: None,
             transcript: None,
             diff_detector: DiffDetector::new(),
             failure_reported: false,

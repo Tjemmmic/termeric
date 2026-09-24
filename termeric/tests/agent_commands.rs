@@ -12,7 +12,7 @@ use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 const TOKEN: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-const VERSION: u32 = 21;
+const VERSION: u32 = 22;
 
 /// A private runtime directory holding a fake GUI endpoint for this process.
 struct Gui {
@@ -266,4 +266,33 @@ fn the_mcp_server_speaks_json_rpc_over_stdio_to_the_terminals_gui() {
         result["structuredContent"]["agents"][0]["state"],
         "needs_input"
     );
+}
+
+#[test]
+fn the_hook_reads_every_payload_so_agents_never_see_a_broken_pipe() {
+    let gui = Gui::new();
+    let large = format!("{{\"tool_response\": \"{}\"}}", "x".repeat(3 * 1024 * 1024));
+    // Writing the whole payload succeeds (the helper unwraps the write),
+    // whether or not the hook runs inside Termeric or uses the payload.
+    for (event, terminal) in [
+        ("tool-done", None),
+        ("stop", None),
+        ("from-the-future", None),
+    ] {
+        let (output, _) = gui.hook(&["codex", event], terminal, &large);
+        assert_silent_success(&output);
+    }
+    let id = gui.terminal_id();
+    std::thread::scope(|scope| {
+        let server = scope.spawn(|| {
+            gui.serve(Some(json!({
+                "result": "agent_event_recorded",
+                "version": VERSION,
+                "process_id": std::process::id(),
+            })))
+        });
+        let (output, _) = gui.hook(&["codex", "tool-done"], Some(&id), &large);
+        assert_silent_success(&output);
+        server.join().unwrap();
+    });
 }

@@ -1189,18 +1189,24 @@ impl Tab {
             let foreground = foreground_group
                 .and_then(crate::agents::detect::foreground_argv)
                 .and_then(|argv| catalog.identify(&argv).map(|agent| agent.id.clone()));
-            // An agent that reports through hooks stays recognized while some
-            // program other than the terminal's own child holds the
-            // foreground, even when its process name is unfamiliar (for
-            // example one started through `npx`).
-            let child_in_foreground = pty
-                .and_then(PtyHandle::child_id)
-                .zip(foreground_group)
-                .is_some_and(|(child, group)| i64::from(child) == i64::from(group));
+            // An agent that reports through hooks stays recognized, even when
+            // its process name is unfamiliar (for example one started through
+            // `npx`), only while the process group it reported from still
+            // holds the foreground. Anything started after it, such as a
+            // shell or `ssh`, is not the agent.
+            let child = pty.and_then(PtyHandle::child_id).map(i64::from);
+            // The terminal's own child (its shell) in front means no agent is,
+            // whatever a program elsewhere that inherited this terminal's
+            // identity reports.
+            let child_in_front = child.is_some() && child == foreground_group.map(i64::from);
             let reported = session
                 .agent_status
                 .as_ref()
-                .filter(|_| foreground_group.is_some() && !child_in_foreground)
+                .filter(|status| {
+                    !child_in_front
+                        && foreground_group.is_some()
+                        && status.process_group == foreground_group
+                })
                 .map(|status| status.agent_id.clone());
             let observed = foreground
                 .or(reported)
@@ -1298,6 +1304,16 @@ impl Tab {
         (pane_id == self.single_pane_id)
             .then_some(self.pty.as_ref()?)
             .and_then(PtyHandle::terminal_id)
+    }
+
+    /// The process group in the foreground of `pane_id`'s terminal.
+    pub(crate) fn pane_foreground_group(&self, pane_id: crate::panes::PaneId) -> Option<i32> {
+        if let Some(panes) = &self.pane_manager {
+            return panes.get_pane(pane_id)?.pty.foreground_process_group();
+        }
+        (pane_id == self.single_pane_id)
+            .then_some(self.pty.as_ref()?)
+            .and_then(PtyHandle::foreground_process_group)
     }
 
     /// The pane whose processes inherited `terminal_id`.

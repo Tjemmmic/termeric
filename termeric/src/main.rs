@@ -39,8 +39,10 @@ fn main() -> Result<std::process::ExitCode> {
     // Hooks run inside an agent's turn: no logging setup, no output, and
     // success whatever happens.
     if let cli::ParseOutcome::AgentEvent(invocation) = &outcome {
-        if let Some(invocation) = invocation {
-            agents::hook::run(invocation);
+        match invocation {
+            Some(invocation) => agents::hook::run(invocation),
+            // A hook from a newer setup, still owed a read of its input.
+            None => agents::hook::discard_input(),
         }
         return Ok(std::process::ExitCode::SUCCESS);
     }

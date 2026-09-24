@@ -73,6 +73,9 @@ pub struct AgentStatus {
     /// Whether the person has looked at the terminal since `activity` asked
     /// for attention.
     pub seen: bool,
+    /// The terminal's foreground process group when the agent last
+    /// reported: the agent itself, since its hooks run inside its turn.
+    pub process_group: Option<i32>,
 }
 
 /// One report from an agent's hooks.
@@ -127,6 +130,13 @@ impl AgentStatus {
         let current = current.filter(|status| status.agent_id == report.agent_id);
         let activity = match report.event {
             AgentEventKind::SessionEnded => return None,
+            // Only a turn in progress stops; a result keeps showing until seen.
+            AgentEventKind::Stopped => match current.map(|status| status.activity) {
+                Some(AgentActivity::Working | AgentActivity::NeedsInput) | None => {
+                    AgentActivity::Idle
+                }
+                Some(activity) => activity,
+            },
             AgentEventKind::SessionStarted => AgentActivity::Idle,
             AgentEventKind::Working => AgentActivity::Working,
             AgentEventKind::NeedsInput => AgentActivity::NeedsInput,
@@ -156,7 +166,19 @@ impl AgentStatus {
                 current.map_or(now, |status| status.since)
             },
             seen: !changed && current.is_some_and(|status| status.seen),
+            process_group: current.and_then(|status| status.process_group),
         })
+    }
+
+    /// The person answered the agent from its terminal: a waiting agent is
+    /// back at work. There is no hook for an approved request, so this is
+    /// how the badge learns of it.
+    pub fn answered(&mut self, now: Instant) {
+        if self.activity == AgentActivity::NeedsInput {
+            self.activity = AgentActivity::Working;
+            self.detail = None;
+            self.since = now;
+        }
     }
 
     /// Whether the terminal should draw attention to itself.
@@ -285,6 +307,29 @@ mod tests {
         assert!(AgentBadge::NeedsYou > AgentBadge::Failed);
         assert!(AgentBadge::Failed > AgentBadge::Done);
         assert!(AgentBadge::Done > AgentBadge::Working);
+    }
+
+    #[test]
+    fn stopping_ends_a_turn_in_progress_but_keeps_results() {
+        let now = Instant::now();
+        let working = AgentStatus::after(None, report(AgentEventKind::Working), now).unwrap();
+        let stopped =
+            AgentStatus::after(Some(&working), report(AgentEventKind::Stopped), now).unwrap();
+        assert_eq!(stopped.activity, AgentActivity::Idle);
+        assert_eq!(stopped.badge(), None);
+        let done = AgentStatus::after(
+            None,
+            AgentReport {
+                last_message: Some("answer".into()),
+                ..report(AgentEventKind::Finished)
+            },
+            now,
+        )
+        .unwrap();
+        let later = AgentStatus::after(Some(&done), report(AgentEventKind::Stopped), now).unwrap();
+        assert_eq!(later.activity, AgentActivity::Finished);
+        assert!(later.needs_attention(), "an unseen result stays news");
+        assert_eq!(later.last_message.as_deref(), Some("answer"));
     }
 
     #[test]

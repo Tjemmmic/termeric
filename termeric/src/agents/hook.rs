@@ -26,17 +26,20 @@ pub enum HookEvent {
     NeedsInput,
     Stop,
     StopFailure,
+    /// The agent stopped without a result: interrupted, or idle at its prompt.
+    Stopped,
     SessionEnd,
 }
 
 impl HookEvent {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::SessionStart,
         Self::Prompt,
         Self::ToolDone,
         Self::NeedsInput,
         Self::Stop,
         Self::StopFailure,
+        Self::Stopped,
         Self::SessionEnd,
     ];
 
@@ -48,6 +51,7 @@ impl HookEvent {
             Self::NeedsInput => "needs-input",
             Self::Stop => "stop",
             Self::StopFailure => "stop-failure",
+            Self::Stopped => "stopped",
             Self::SessionEnd => "session-end",
         }
     }
@@ -63,6 +67,7 @@ impl HookEvent {
             Self::NeedsInput => AgentEventKind::NeedsInput,
             Self::Stop => AgentEventKind::Finished,
             Self::StopFailure => AgentEventKind::Failed,
+            Self::Stopped => AgentEventKind::Stopped,
             Self::SessionEnd => AgentEventKind::SessionEnded,
         }
     }
@@ -85,6 +90,9 @@ pub struct HookInvocation {
 
 /// Report the hook to the terminal's GUI, if it runs in a Termeric terminal.
 pub fn run(invocation: &HookInvocation) {
+    // Always read the whole payload: an agent may report a hook whose input
+    // it could not finish writing as failed, even outside Termeric.
+    let payload = drain_payload(invocation.event.reads_payload());
     let Ok(terminal_id) = std::env::var(termeric_core::pty::TERMINAL_ID_VARIABLE) else {
         return;
     };
@@ -94,12 +102,10 @@ pub fn run(invocation: &HookInvocation) {
     else {
         return;
     };
-    let payload = if invocation.event.reads_payload() {
-        read_payload()
-    } else {
-        None
+    let payload = payload.and_then(|bytes| serde_json::from_slice(&bytes).ok());
+    let Some(report) = build_report(invocation, terminal_id, payload.as_ref()) else {
+        return;
     };
-    let report = build_report(invocation, terminal_id, payload.as_ref());
     // Nothing useful can be done about a failure from inside a hook: the GUI
     // may have exited, or be an older build.
     if let Err(error) = crate::control::report_agent_event(process_id, report) {
@@ -107,29 +113,47 @@ pub fn run(invocation: &HookInvocation) {
     }
 }
 
-fn read_payload() -> Option<serde_json::Value> {
-    let stdin = std::io::stdin();
-    if stdin.is_terminal() {
-        return None;
-    }
-    let mut bytes = Vec::new();
-    stdin
-        .lock()
-        .take(MAX_PAYLOAD_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .ok()?;
-    if bytes.len() as u64 > MAX_PAYLOAD_BYTES {
-        return None;
-    }
-    serde_json::from_slice(&bytes).ok()
+/// Read and ignore the hook's input.
+pub fn discard_input() {
+    drain_payload(false);
 }
 
-/// The wire request for one hook, taking what it can from the payload.
+/// How long the hook waits for its input to end.
+const PAYLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// Read standard input to its end, keeping the first `MAX_PAYLOAD_BYTES`
+/// when `keep` is set. Reading happens on a worker so an agent that never
+/// closes the pipe cannot hold the hook past `PAYLOAD_TIMEOUT`.
+fn drain_payload(keep: bool) -> Option<Vec<u8>> {
+    if std::io::stdin().is_terminal() {
+        return None;
+    }
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    std::thread::Builder::new()
+        .name("termeric-hook-stdin".into())
+        .spawn(move || {
+            let mut stdin = std::io::stdin().lock();
+            let mut kept = Vec::new();
+            let limit = if keep { MAX_PAYLOAD_BYTES + 1 } else { 0 };
+            let complete = (&mut stdin)
+                .take(limit)
+                .read_to_end(&mut kept)
+                .and_then(|_| std::io::copy(&mut stdin, &mut std::io::sink()))
+                .is_ok();
+            let within = kept.len() as u64 <= MAX_PAYLOAD_BYTES;
+            let _ = sender.send((complete && keep && within).then_some(kept));
+        })
+        .ok()?;
+    receiver.recv_timeout(PAYLOAD_TIMEOUT).ok().flatten()
+}
+
+/// The wire request for one hook, taking what it can from the payload, or
+/// `None` when the hook reports nothing new.
 fn build_report(
     invocation: &HookInvocation,
     terminal_id: String,
     payload: Option<&serde_json::Value>,
-) -> Request {
+) -> Option<Request> {
     let text = |key: &str| {
         payload
             .and_then(|payload| payload.get(key))
@@ -137,6 +161,11 @@ fn build_report(
             .map(str::trim)
             .filter(|text| !text.is_empty())
     };
+    // Compacting a long conversation restarts the session in the middle of a
+    // turn; the conversation itself continues.
+    if invocation.event == HookEvent::SessionStart && text("source") == Some("compact") {
+        return None;
+    }
     let detail = match invocation.event {
         // Claude Code's notification carries a sentence; Codex's permission
         // request names the tool.
@@ -159,23 +188,31 @@ fn build_report(
         ),
         _ => None,
     };
+    // Control characters are dropped here as the GUI would drop them: each
+    // costs six bytes once escaped, and could push the report past the
+    // protocol's frame limit.
     let last_message = if invocation.event == HookEvent::Stop {
-        text("last_assistant_message")
-            .map(|message| truncate(message, MAX_AGENT_LAST_MESSAGE_BYTES).to_owned())
+        text("last_assistant_message").map(|message| {
+            let printable: String = message
+                .chars()
+                .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
+                .collect();
+            truncate(&printable, MAX_AGENT_LAST_MESSAGE_BYTES).to_owned()
+        })
     } else {
         None
     };
     let transcript_path = text("transcript_path")
         .filter(|path| path.starts_with('/') && path.len() <= MAX_AGENT_TRANSCRIPT_PATH_BYTES)
         .map(str::to_owned);
-    Request::AgentEvent {
+    Some(Request::AgentEvent {
         terminal_id,
         agent_id: invocation.agent_id.clone(),
         event: invocation.event.kind(),
         detail: detail.map(|detail| truncate(&detail, MAX_AGENT_EVENT_DETAIL_BYTES).to_owned()),
         last_message,
         transcript_path,
-    }
+    })
 }
 
 /// The longest prefix of `text` within `limit` bytes, on a character
@@ -204,20 +241,20 @@ mod tests {
     }
 
     fn fields(
-        request: Request,
+        request: Option<Request>,
     ) -> (
         AgentEventKind,
         Option<String>,
         Option<String>,
         Option<String>,
     ) {
-        let Request::AgentEvent {
+        let Some(Request::AgentEvent {
             event,
             detail,
             last_message,
             transcript_path,
             ..
-        } = request
+        }) = request
         else {
             panic!("not an agent event");
         };
@@ -303,6 +340,20 @@ mod tests {
             "1.ab".into(),
             Some(&json!({ "message": "x".repeat(4096) })),
         );
-        request.validate().unwrap();
+        request.unwrap().validate().unwrap();
+    }
+
+    #[test]
+    fn compaction_is_not_a_new_conversation() {
+        let start = |source: &str| {
+            build_report(
+                &invocation(HookEvent::SessionStart),
+                "1.ab".into(),
+                Some(&json!({ "source": source })),
+            )
+        };
+        assert!(start("compact").is_none());
+        assert!(start("clear").is_some());
+        assert!(start("startup").is_some());
     }
 }

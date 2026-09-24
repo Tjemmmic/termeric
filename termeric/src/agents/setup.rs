@@ -7,6 +7,7 @@
 //! file keeps its exact text and order. The hook command does nothing outside
 //! a Termeric terminal, so installing it is harmless for other terminals.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -21,6 +22,9 @@ use super::hook::HookEvent;
 /// Seconds an agent waits for one Termeric hook. The command itself gives
 /// up well before this.
 const HOOK_TIMEOUT_SECONDS: u64 = 5;
+/// Codex caps hooks that run while a session closes or a turn is interrupted
+/// at three seconds, and warns at every start about a longer one.
+const SHORT_HOOK_TIMEOUT_SECONDS: u64 = 2;
 /// Settings files are small; anything larger is not one Termeric should edit.
 const MAX_SETTINGS_BYTES: u64 = 4 * 1024 * 1024;
 
@@ -38,11 +42,16 @@ pub const CLAUDE_CODE: HookedAgent = HookedAgent {
         ("SessionStart", None, HookEvent::SessionStart),
         ("UserPromptSubmit", None, HookEvent::Prompt),
         ("PostToolUse", None, HookEvent::ToolDone),
+        // A tool that fails runs this instead of `PostToolUse`.
+        ("PostToolUseFailure", None, HookEvent::ToolDone),
         (
             "Notification",
-            Some("permission_prompt|elicitation_dialog"),
+            Some("permission_prompt|elicitation_dialog|elicitation_url_dialog"),
             HookEvent::NeedsInput,
         ),
+        // Claude Code runs no hook when a turn is interrupted; it notifies
+        // once it has sat at its prompt for a while.
+        ("Notification", Some("idle_prompt"), HookEvent::Stopped),
         ("Stop", None, HookEvent::Stop),
         ("StopFailure", None, HookEvent::StopFailure),
         ("SessionEnd", None, HookEvent::SessionEnd),
@@ -57,6 +66,7 @@ pub const CODEX: HookedAgent = HookedAgent {
         ("PostToolUse", None, HookEvent::ToolDone),
         ("PermissionRequest", None, HookEvent::NeedsInput),
         ("Stop", None, HookEvent::Stop),
+        ("Interrupt", None, HookEvent::Stopped),
         ("SessionEnd", None, HookEvent::SessionEnd),
     ],
 };
@@ -65,14 +75,17 @@ pub const HOOKED_AGENTS: [HookedAgent; 2] = [CLAUDE_CODE, CODEX];
 
 impl HookedAgent {
     /// The file this agent reads hooks from, honoring the agent's own
-    /// configuration-directory variable.
-    pub fn settings_path(self) -> Option<PathBuf> {
+    /// configuration-directory variable: as set for it in Termeric's
+    /// configuration (`launch_env`), else in Termeric's own environment.
+    pub fn settings_path(self, launch_env: &BTreeMap<String, String>) -> Option<PathBuf> {
         let (variable, default, file) = match self.agent_id {
             "claude-code" => ("CLAUDE_CONFIG_DIR", ".claude", "settings.json"),
             _ => ("CODEX_HOME", ".codex", "hooks.json"),
         };
-        let directory = std::env::var_os(variable)
+        let directory = launch_env
+            .get(variable)
             .map(PathBuf::from)
+            .or_else(|| std::env::var_os(variable).map(PathBuf::from))
             .filter(|path| path.is_absolute())
             .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(default)))?;
         Some(directory.join(file))
@@ -124,14 +137,19 @@ fn is_termeric_group(group: &Value, agent_id: &str) -> bool {
 fn termeric_group(
     agent: HookedAgent,
     executable: &Path,
+    event_name: &str,
     event: HookEvent,
     matcher: Option<&str>,
 ) -> Value {
+    let timeout = match event_name {
+        "SessionEnd" | "Interrupt" => SHORT_HOOK_TIMEOUT_SECONDS,
+        _ => HOOK_TIMEOUT_SECONDS,
+    };
     let mut group = json!({
         "hooks": [{
             "type": "command",
             "command": hook_command(executable, agent.agent_id, event),
-            "timeout": HOOK_TIMEOUT_SECONDS,
+            "timeout": timeout,
         }]
     });
     if let Some(matcher) = matcher {
@@ -156,9 +174,16 @@ impl<'de> Deserialize<'de> for Entries {
                 self,
                 mut map: A,
             ) -> Result<Entries, A::Error> {
-                let mut entries = Vec::new();
-                while let Some(entry) = map.next_entry::<String, Box<RawValue>>()? {
-                    entries.push(entry);
+                let mut entries: Vec<(String, Box<RawValue>)> = Vec::new();
+                while let Some((key, value)) = map.next_entry::<String, Box<RawValue>>()? {
+                    // Parsers disagree on which duplicate wins, so an edit to
+                    // one could be ignored; refuse instead of guessing.
+                    if entries.iter().any(|(existing, _)| *existing == key) {
+                        return Err(serde::de::Error::custom(format!(
+                            "the key {key:?} appears more than once"
+                        )));
+                    }
+                    entries.push((key, value));
                 }
                 Ok(Entries(entries))
             }
@@ -204,8 +229,22 @@ pub fn hook_state(agent: HookedAgent, text: &str, executable: &Path) -> Result<H
     if !any {
         return Ok(HookState::NotInstalled);
     }
-    let current = agent.events.iter().all(|(event, matcher, hook)| {
-        groups(event) == [&termeric_group(agent, executable, *hook, *matcher)]
+    // Every event must hold exactly the groups Termeric would install now,
+    // in order, and no event may hold groups Termeric no longer installs.
+    let expected = |event: &str| {
+        agent
+            .events
+            .iter()
+            .filter(|(name, ..)| *name == event)
+            .map(|(name, matcher, hook)| termeric_group(agent, executable, name, *hook, *matcher))
+            .collect::<Vec<_>>()
+    };
+    let current = hooks.as_object().is_some_and(|events| {
+        events
+            .keys()
+            .map(String::as_str)
+            .chain(agent.events.iter().map(|(name, ..)| *name))
+            .all(|event| groups(event).into_iter().cloned().collect::<Vec<_>>() == expected(event))
     });
     Ok(if current {
         HookState::Installed
@@ -215,56 +254,118 @@ pub fn hook_state(agent: HookedAgent, text: &str, executable: &Path) -> Result<H
 }
 
 /// The file text with Termeric's hooks for `agent` replaced by the current
-/// set (`install`) or removed. Other hooks and settings are untouched.
+/// set (`install`) or removed. Everything else keeps its exact text and
+/// order: other settings, other hook events, and the person's own groups
+/// within an event Termeric also hooks.
 pub fn rewrite(agent: HookedAgent, text: &str, executable: &Path, install: bool) -> Result<String> {
     let mut entries = parse_entries(text)?;
-    let mut hooks = hooks_value(&entries)?;
-    let events = hooks
-        .as_object_mut()
-        .expect("hooks were checked to be an object");
-    for groups in events.values_mut() {
-        if let Some(groups) = groups.as_array_mut() {
-            groups.retain(|group| !is_termeric_group(group, agent.agent_id));
-        }
-    }
-    events.retain(|_, groups| groups.as_array().is_none_or(|groups| !groups.is_empty()));
-    if install {
-        for (event, matcher, hook) in agent.events {
-            let groups = events.entry(*event).or_insert_with(|| json!([]));
-            let groups = groups
-                .as_array_mut()
-                .with_context(|| format!("\"hooks\".{event:?} is not a list"))?;
-            // Appended last: Codex trusts hooks by position, so existing
-            // groups keep theirs.
-            groups.push(termeric_group(agent, executable, *hook, *matcher));
-        }
-    }
     let indent = indentation(text);
-    let hooks_text = if events.is_empty() {
-        None
-    } else {
+    let hooks_index = entries.0.iter().position(|(key, _)| key == "hooks");
+    let original: Entries = match hooks_index {
+        Some(index) => {
+            serde_json::from_str(entries.0[index].1.get()).context("\"hooks\" is not an object")?
+        }
+        None => Entries(Vec::new()),
+    };
+    let ours = |event: &str| -> Vec<Value> {
+        agent
+            .events
+            .iter()
+            .filter(|(name, ..)| install && *name == event)
+            .map(|(name, matcher, hook)| termeric_group(agent, executable, name, *hook, *matcher))
+            .collect()
+    };
+    let mut changed = false;
+    let mut events: Vec<(String, Box<RawValue>)> = Vec::new();
+    for (event, raw) in original.0 {
+        let groups: Vec<Box<RawValue>> = serde_json::from_str(raw.get())
+            .with_context(|| format!("\"hooks\".{event:?} is not a list"))?;
+        let kept: Vec<Box<RawValue>> = groups
+            .iter()
+            .filter(|group| {
+                serde_json::from_str::<Value>(group.get())
+                    .is_ok_and(|group| !is_termeric_group(&group, agent.agent_id))
+            })
+            .cloned()
+            .collect();
+        let added = ours(&event);
+        if kept.len() == groups.len() && added.is_empty() {
+            events.push((event, raw));
+            continue;
+        }
+        changed = true;
+        if !kept.is_empty() || !added.is_empty() {
+            let rendered = render_groups(&kept, &added, &indent)?;
+            events.push((event, rendered));
+        }
+    }
+    for (event, ..) in agent.events {
+        if install && !events.iter().any(|(name, _)| name == event) {
+            changed = true;
+            let rendered = render_groups(&[], &ours(event), &indent)?;
+            events.push(((*event).to_owned(), rendered));
+        }
+    }
+    if changed {
+        let hooks = (!events.is_empty())
+            .then(|| render_object(&events, &indent, 2))
+            .transpose()?;
+        match (hooks_index, hooks) {
+            (Some(index), Some(hooks)) => entries.0[index].1 = hooks,
+            (Some(index), None) => {
+                entries.0.remove(index);
+            }
+            (None, Some(hooks)) => entries.0.push(("hooks".into(), hooks)),
+            (None, None) => {}
+        }
+    }
+    Ok(render(&entries, &indent))
+}
+
+/// An event's list of groups at nesting depth three: the person's groups
+/// verbatim, then Termeric's, each on its own line.
+fn render_groups(kept: &[Box<RawValue>], added: &[Value], indent: &str) -> Result<Box<RawValue>> {
+    let inner = indent.repeat(3);
+    let mut items: Vec<String> = kept.iter().map(|group| group.get().to_owned()).collect();
+    for group in added {
         let mut bytes = Vec::new();
         let formatter = serde_json::ser::PrettyFormatter::with_indent(indent.as_bytes());
         serde::Serialize::serialize(
-            &hooks,
+            group,
             &mut serde_json::Serializer::with_formatter(&mut bytes, formatter),
         )?;
-        // One level in, beneath its key.
-        let nested = String::from_utf8(bytes)?.replace('\n', &format!("\n{indent}"));
-        Some(RawValue::from_string(nested)?)
-    };
-    match (
-        entries.0.iter().position(|(key, _)| key == "hooks"),
-        hooks_text,
-    ) {
-        (Some(index), Some(text)) => entries.0[index].1 = text,
-        (Some(index), None) => {
-            entries.0.remove(index);
-        }
-        (None, Some(text)) => entries.0.push(("hooks".into(), text)),
-        (None, None) => {}
+        items.push(String::from_utf8(bytes)?.replace('\n', &format!("\n{inner}")));
     }
-    Ok(render(&entries, &indent))
+    let body = items
+        .iter()
+        .map(|item| format!("{inner}{item}"))
+        .collect::<Vec<_>>()
+        .join(",\n");
+    Ok(RawValue::from_string(format!(
+        "[\n{body}\n{}]",
+        indent.repeat(2)
+    ))?)
+}
+
+/// An object whose values are already JSON text, with its keys at `depth`.
+fn render_object(
+    entries: &[(String, Box<RawValue>)],
+    indent: &str,
+    depth: usize,
+) -> Result<Box<RawValue>> {
+    let inner = indent.repeat(depth);
+    let body = entries
+        .iter()
+        .map(|(key, value)| {
+            let key = serde_json::to_string(key).expect("strings serialize");
+            format!("{inner}{key}: {}", value.get())
+        })
+        .collect::<Vec<_>>()
+        .join(",\n");
+    Ok(RawValue::from_string(format!(
+        "{{\n{body}\n{}}}",
+        indent.repeat(depth - 1)
+    ))?)
 }
 
 /// The file's own indentation, taken from its first entry; two spaces for a
@@ -340,7 +441,16 @@ pub fn replace_if_unchanged(path: &Path, previous: &str, text: &str) -> Result<b
 fn write_settings(path: &Path, previous: &str, text: &str) -> Result<()> {
     let target = match fs::canonicalize(path) {
         Ok(resolved) => resolved,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => path.to_path_buf(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            // Writing through a link whose file is gone would replace the
+            // link itself and quietly disconnect it from its real location.
+            anyhow::ensure!(
+                !fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_symlink()),
+                "{} is a link to a file that does not exist",
+                path.display()
+            );
+            path.to_path_buf()
+        }
         Err(error) => return Err(error).with_context(|| format!("resolve {}", path.display())),
     };
     let directory = target
@@ -437,9 +547,24 @@ mod tests {
             stop[1]["hooks"][0]["command"],
             "/usr/bin/termeric agent-event claude-code stop"
         );
+        let notification = &value["hooks"]["Notification"];
         assert_eq!(
-            value["hooks"]["Notification"][0]["matcher"],
-            "permission_prompt|elicitation_dialog"
+            notification[0]["matcher"],
+            "permission_prompt|elicitation_dialog|elicitation_url_dialog"
+        );
+        assert_eq!(notification[1]["matcher"], "idle_prompt");
+        assert_eq!(
+            notification[1]["hooks"][0]["command"],
+            "/usr/bin/termeric agent-event claude-code stopped"
+        );
+        assert_eq!(value["hooks"]["Stop"][1]["hooks"][0]["timeout"], 5);
+        assert_eq!(value["hooks"]["SessionEnd"][0]["hooks"][0]["timeout"], 2);
+        // An older install, before the idle hook existed, needs updating.
+        let mut older = value.clone();
+        older["hooks"]["Notification"].as_array_mut().unwrap().pop();
+        assert_eq!(
+            hook_state(CLAUDE_CODE, &older.to_string(), &exe()).unwrap(),
+            HookState::Outdated
         );
         assert_eq!(
             hook_state(CLAUDE_CODE, &installed, &exe()).unwrap(),
@@ -472,11 +597,98 @@ mod tests {
     }
 
     #[test]
+    fn the_persons_own_hooks_keep_their_exact_text_and_order() {
+        let original = r#"{
+  "hooks": {
+    "UserPromptSubmit": [ {"hooks": [{"type": "command", "command": "log-prompt", "timeout": 3}]} ],
+    "Stop": [
+      {"matcher": "", "hooks": [{"type": "command", "command": "say done"}]}
+    ],
+    "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "guard"}]}]
+  },
+  "model": "opus"
+}
+"#;
+        let installed = rewrite(CLAUDE_CODE, original, &exe(), true).unwrap();
+        // Events Termeric does not hook are copied byte for byte.
+        assert!(installed.contains(
+            r#""PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "guard"}]}]"#
+        ));
+        // The person's groups in shared events keep their text, and come first.
+        assert!(installed.contains(
+            r#"{"hooks": [{"type": "command", "command": "log-prompt", "timeout": 3}]}"#
+        ));
+        assert!(
+            installed.contains(
+                r#"{"matcher": "", "hooks": [{"type": "command", "command": "say done"}]}"#
+            )
+        );
+        let order: Vec<_> = serde_json::from_str::<Value>(&installed).unwrap()["hooks"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
+        assert_eq!(order.len(), 9);
+        // Only a round trip through Termeric's own format could reorder
+        // keys; the person's events stay where they were.
+        let position = |needle: &str| installed.find(needle).unwrap();
+        assert!(position("\"UserPromptSubmit\"") < position("\"Stop\""));
+        assert!(position("\"Stop\"") < position("\"PreToolUse\""));
+        assert_eq!(
+            hook_state(CLAUDE_CODE, &installed, &exe()).unwrap(),
+            HookState::Installed
+        );
+        let removed = rewrite(CLAUDE_CODE, &installed, &exe(), false).unwrap();
+        let reparsed: Value = serde_json::from_str(&removed).unwrap();
+        assert_eq!(reparsed, serde_json::from_str::<Value>(original).unwrap());
+        assert!(removed.contains(
+            r#""PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "guard"}]}]"#
+        ));
+        // Installing on top of an up-to-date install changes nothing.
+        assert_eq!(
+            rewrite(CLAUDE_CODE, &installed, &exe(), true).unwrap(),
+            installed
+        );
+    }
+
+    #[test]
+    fn the_agents_configured_directory_decides_where_hooks_go() {
+        let launch_env = BTreeMap::from([(
+            "CLAUDE_CONFIG_DIR".to_string(),
+            "/srv/claude-work".to_string(),
+        )]);
+        assert_eq!(
+            CLAUDE_CODE.settings_path(&launch_env),
+            Some(PathBuf::from("/srv/claude-work/settings.json"))
+        );
+        // A relative directory would depend on where the agent starts.
+        let relative = BTreeMap::from([("CODEX_HOME".to_string(), "codex".to_string())]);
+        assert!(
+            CODEX
+                .settings_path(&relative)
+                .is_none_or(|path| path.is_absolute() && path.ends_with("hooks.json"))
+        );
+    }
+
+    #[test]
+    fn duplicate_keys_are_refused() {
+        let doubled = "{\"hooks\": {}, \"hooks\": {\"Stop\": []}}";
+        assert!(rewrite(CLAUDE_CODE, doubled, &exe(), true).is_err());
+        let doubled_event = "{\"hooks\": {\"Stop\": [], \"Stop\": []}}";
+        assert!(rewrite(CLAUDE_CODE, doubled_event, &exe(), true).is_err());
+    }
+
+    #[test]
     fn rewritten_hooks_follow_the_files_indentation() {
         let four = "{\n    \"model\": \"opus\",\n    \"env\": {\n        \"A\": \"1\"\n    }\n}\n";
         let installed = rewrite(CLAUDE_CODE, four, &exe(), true).unwrap();
         assert!(installed.contains("    \"env\": {\n        \"A\": \"1\"\n    },\n"));
-        assert!(installed.contains("    \"hooks\": {\n        \"Notification\": [\n"));
+        let first_event = format!(
+            "    \"hooks\": {{\n        \"{}\": [\n            {{\n                \"",
+            CLAUDE_CODE.events[0].0
+        );
+        assert!(installed.contains(&first_event), "{installed}");
         let removed = rewrite(CLAUDE_CODE, &installed, &exe(), false).unwrap();
         assert_eq!(removed, four, "removal restores the original text");
     }
@@ -548,5 +760,12 @@ mod tests {
         assert_eq!(fs::read_to_string(&real).unwrap(), "{\"edited\": true}\n");
         assert!(replace_if_unchanged(&link, "{\"edited\": true}\n", "{}\n").unwrap());
         assert_eq!(fs::read_to_string(&real).unwrap(), "{}\n");
+
+        // A link whose file is gone is left alone rather than replaced.
+        let dangling = temp.path().join("dangling.json");
+        std::os::unix::fs::symlink(dotfiles.join("gone.json"), &dangling).unwrap();
+        assert!(write_settings(&dangling, "", "{}\n").is_err());
+        assert!(fs::symlink_metadata(&dangling).unwrap().is_symlink());
+        assert!(!dotfiles.join("gone.json").exists());
     }
 }

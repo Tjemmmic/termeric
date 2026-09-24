@@ -1124,6 +1124,7 @@ impl App {
                         let _ = tab.write(&rewrite);
                     }
                 }
+                self.note_person_typed();
                 return;
             }
         } else if data == b"\x7f" {
@@ -1183,9 +1184,11 @@ impl App {
                 }
                 if let Err(error) = tab.write(data) {
                     log::error!("Failed to write to focused PTY: {}", error);
+                    return;
                 }
             }
         }
+        self.note_person_typed();
     }
 
     /// Clear state derived from a user's editable terminal line. This must run

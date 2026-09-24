@@ -17,8 +17,10 @@ environment clearing and variable removal in GUI protocol v17.
 [#112](https://github.com/Tjemmmic/termeric/issues/112) adds non-selecting
 command-tab launch in protocol v18. Protocol v19 adds the [agent status](agents.md#agent-status) report sent by
 agent hooks. Protocol v20 adds `list_agents` and `submit_to_agent` for
-[`termeric mcp`](agents.md#letting-an-agent-direct-the-others). Current
-protocol v21 adds the [supervisor](agents.md#the-supervisor) token to both. Client and
+[`termeric mcp`](agents.md#letting-an-agent-direct-the-others). Protocol v21
+adds the [supervisor](agents.md#the-supervisor) token to both. Current protocol
+v22 adds the `stopped` agent event, for a turn that was interrupted or an
+agent idle at its prompt. Client and
 server must be rebuilt together; mismatched protocol versions fail rather than
 dropping the mode.
 
@@ -533,7 +535,7 @@ connected peer's operating-system user in addition to token authentication.
 Token files are opened without following symlinks and validated by owner, type,
 permissions, and exact size before their fixed-size contents are read.
 
-Protocol version 21 accepts exactly `inventory`, `launch_status`, `agent_event`, `list_agents`, `submit_to_agent`, ID-targeted `read_text`,
+Protocol version 22 accepts exactly `inventory`, `launch_status`, `agent_event`, `list_agents`, `submit_to_agent`, ID-targeted `read_text`,
 `send_text`, `create_window`, `launch_window`, `create_tab`, `launch_tab`,
 `split_pane`, `focus_window`, `select_tab`, `focus_pane`,
 `close_window`, `close_tab`, `close_pane`, `move_tab`, `move_pane`,

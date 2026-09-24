@@ -58,41 +58,78 @@ fn termeric_executable() -> Result<PathBuf, String> {
 
 impl App {
     /// Agents that could report their state: enabled, installed, and with a
-    /// known hook format.
-    fn hookable_agents(&self) -> Vec<(HookedAgent, String)> {
+    /// known hook format; each with its name and settings file.
+    fn hookable_agents(&self) -> Vec<(HookedAgent, String, Option<PathBuf>)> {
         setup::HOOKED_AGENTS
             .into_iter()
             .filter_map(|hooked| {
                 let agent = self.agents.get(hooked.agent_id)?;
                 (agent.enabled && agent.installed_path().is_some())
-                    .then(|| (hooked, agent.name.clone()))
+                    .then(|| (hooked, agent.name.clone(), hooked.settings_path(&agent.env)))
             })
             .collect()
     }
 
+    /// Each hookable agent's name and how its installed hooks compare with
+    /// this Termeric's; `None` when this executable cannot be located.
+    fn agent_hook_states(&self) -> Option<Vec<(String, HookState)>> {
+        let executable = termeric_executable().ok()?;
+        Some(
+            self.hookable_agents()
+                .into_iter()
+                .map(|(hooked, name, path)| {
+                    let state = path
+                        .and_then(|path| setup::read_settings(&path).ok())
+                        .and_then(|text| setup::hook_state(hooked, &text, &executable).ok())
+                        .unwrap_or(HookState::NotInstalled);
+                    (name, state)
+                })
+                .collect(),
+        )
+    }
+
     pub(super) fn agent_hook_summary(&self) -> HookSetupSummary {
-        let agents = self.hookable_agents();
-        let Ok(executable) = termeric_executable() else {
+        let Some(states) = self.agent_hook_states() else {
             return HookSetupSummary::Unavailable;
         };
-        let states: Vec<HookState> = agents
-            .iter()
-            .map(|(hooked, _)| {
-                hooked
-                    .settings_path()
-                    .and_then(|path| setup::read_settings(&path).ok())
-                    .and_then(|text| setup::hook_state(*hooked, &text, &executable).ok())
-                    .unwrap_or(HookState::NotInstalled)
-            })
-            .collect();
         if states.is_empty() {
             HookSetupSummary::Unavailable
-        } else if states.iter().all(|state| *state == HookState::Installed) {
+        } else if states
+            .iter()
+            .all(|(_, state)| *state == HookState::Installed)
+        {
             HookSetupSummary::SetUp
-        } else if states.iter().all(|state| *state == HookState::NotInstalled) {
+        } else if states
+            .iter()
+            .all(|(_, state)| *state == HookState::NotInstalled)
+        {
             HookSetupSummary::NotSetUp
         } else {
             HookSetupSummary::Incomplete
+        }
+    }
+
+    /// Once per process, point out hooks that were set up but no longer
+    /// match this Termeric: after it moved, or after an update changed the
+    /// events it listens to. Agents then report nothing, or too little, and
+    /// nothing else would say why. Agents never set up are not mentioned.
+    pub(super) fn warn_about_outdated_agent_hooks(&mut self) {
+        static CHECKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if CHECKED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        let outdated: Vec<String> = self
+            .agent_hook_states()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(_, state)| *state == HookState::Outdated)
+            .map(|(name, _)| name)
+            .collect();
+        if !outdated.is_empty() {
+            self.toasts.warning(format!(
+                "Status hooks for {} need updating; run Set Up Agent Status…",
+                outdated.join(" and ")
+            ));
         }
     }
 
@@ -100,25 +137,26 @@ impl App {
     /// already in the wanted state are skipped.
     fn plan_hook_changes(&self, install: bool) -> Result<Vec<HookFileChange>, String> {
         let executable = termeric_executable()?;
-        let agents: Vec<(HookedAgent, String)> = if install {
+        let agents: Vec<(HookedAgent, String, Option<PathBuf>)> = if install {
             self.hookable_agents()
         } else {
             // Removal also cleans up after agents that were since disabled
             // or uninstalled.
             setup::HOOKED_AGENTS
                 .into_iter()
-                .map(|hooked| {
-                    let name = self
-                        .agents
-                        .get(hooked.agent_id)
-                        .map_or_else(|| hooked.agent_id.to_string(), |agent| agent.name.clone());
-                    (hooked, name)
+                .map(|hooked| match self.agents.get(hooked.agent_id) {
+                    Some(agent) => (hooked, agent.name.clone(), hooked.settings_path(&agent.env)),
+                    None => (
+                        hooked,
+                        hooked.agent_id.to_string(),
+                        hooked.settings_path(&Default::default()),
+                    ),
                 })
                 .collect()
         };
         let mut changes = Vec::new();
-        for (hooked, name) in agents {
-            let Some(path) = hooked.settings_path() else {
+        for (hooked, name, path) in agents {
+            let Some(path) = path else {
                 continue;
             };
             let previous = setup::read_settings(&path).map_err(|error| format!("{error:#}"))?;

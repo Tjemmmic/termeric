@@ -32,7 +32,8 @@ Versioning once public beta tags begin.
   after showing which files change. Other settings keep their exact text and
   order, and a backup is kept. The hooks run `termeric agent-event`, which does
   nothing outside Termeric. Tabs then show when an agent is working, needs you,
-  is done, or failed. A desktop notification arrives when an agent you are not
+  is done, or failed, and clear the working ring when a turn is interrupted
+  (GUI control protocol v22). A desktop notification arrives when an agent you are not
   looking at needs you or finishes. **Go to Agent…** lists agents with the
   waiting ones first, and **Copy Last Agent Response** copies an agent's latest
   answer. Codex asks you to trust the new hooks once. GUI control protocol v19

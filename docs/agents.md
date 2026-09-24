@@ -103,6 +103,12 @@ With agent status set up, Termeric knows what each agent is doing:
 | Done | A green dot, until you look at the terminal | "Codex is done", with the answer's first line |
 | Failed | A red dot, until you look at the terminal | "Claude Code stopped with an error" |
 
+When you answer a waiting agent, by typing or pasting into its terminal, the
+yellow dot gives way to the working ring. When you interrupt a turn, the ring
+goes away: Codex reports the interruption, and Claude Code, which does not,
+reports once it has sat at its prompt for a while. Compacting a long
+conversation is not reported as a new one.
+
 Notifications appear only for terminals you are not looking at, and clicking
 one shows that terminal. Turn them off with **Notify When Agents Need You** on
 the Settings **Agents** page, or `[agent_status] notify = false`. The tab
@@ -122,8 +128,8 @@ conversation. **Set Up Agent Status…**, in the palette or on the Settings
 
 | Agent | File | Hooks |
 |---|---|---|
-| Claude Code | `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR`) | `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `Notification` (permission prompts and questions), `Stop`, `StopFailure`, `SessionEnd` |
-| Codex | `~/.codex/hooks.json` (or `$CODEX_HOME`) | `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `PermissionRequest`, `Stop`, `SessionEnd` |
+| Claude Code | `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR`) | `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `PostToolUseFailure`, `Notification` (permission prompts, questions, and idle at the prompt), `Stop`, `StopFailure`, `SessionEnd` |
+| Codex | `~/.codex/hooks.json` (or `$CODEX_HOME`) | `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `PermissionRequest`, `Stop`, `Interrupt`, `SessionEnd` |
 
 Setup lists the files it will change and waits for you to confirm. Every other
 setting and hook in those files keeps its exact text and order, and each file's
@@ -132,6 +138,12 @@ linked from elsewhere, for example by a dotfile manager, is updated where it
 really lives. If a file changes while the dialog is open, it is left alone.
 Codex asks you to trust new hooks the next time it starts. Termeric does not
 approve them on your behalf.
+
+Setup looks for each file where the agent will: through `CLAUDE_CONFIG_DIR` or
+`CODEX_HOME` as set in the agent's [`env`](#configuration), else as set in
+Termeric's own environment, else in your home directory. A variable exported
+only in your shell's startup file is not seen by a Termeric started from your
+desktop, so set it in `[agents.<id>].env` too.
 
 Each hook runs `termeric agent-event AGENT EVENT`. That command does nothing
 unless it runs inside a Termeric terminal. Inside one, it reports to the
@@ -143,7 +155,9 @@ private, user-only socket as the [GUI control protocol](gui-control.md).
 
 **Remove Agent Status Hooks…** takes Termeric's hooks out again. The setup
 records the path of the Termeric program that ran it, so run setup again after
-moving Termeric. The Settings page shows **Needs updating** when that is due.
+moving Termeric, and after an update that listens to more events. The
+Settings page shows **Needs updating** when that is due, and Termeric says so
+once when it starts.
 
 ## The supervisor
 
@@ -303,6 +317,10 @@ split around, collapsed, or moved to another tab or window.
   Other agents are recognized, but their state is not known.
 - Agents in [live-domain](live-domains.md) terminals cannot report status.
   Their processes belong to the domain daemon rather than to a window.
+- A tmux or screen server keeps the environment of the terminal it was started
+  in. Agents inside it report to that Termeric terminal, whichever terminal
+  shows them. Start tmux outside Termeric, or run
+  `tmux set-environment -gu TERMERIC_TERMINAL_ID` before starting agents in it.
 - Diffs are read from the terminal output, so an agent that never prints a
   unified diff has nothing to review.
 - Automated tests use fake agent executables in real PTYs. They never start a

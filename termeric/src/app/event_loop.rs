@@ -151,6 +151,7 @@ impl ApplicationHandler<AppEvent> for App {
                 if self.launch.quick_access {
                     window.focus_window();
                 }
+                self.warn_about_outdated_agent_hooks();
 
                 // Initial render
                 self.redraw_scheduler.request(RedrawReason::Startup);

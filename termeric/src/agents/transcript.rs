@@ -15,8 +15,14 @@ const TAIL_BYTES: u64 = 4 * 1024 * 1024;
 
 /// The most recent complete answer in the log at `path`.
 pub fn last_response(path: &Path) -> Option<String> {
-    let mut file = std::fs::File::open(path).ok()?;
-    let length = file.metadata().ok()?.len();
+    let mut file = open_without_waiting(path)?;
+    let metadata = file.metadata().ok()?;
+    // The path comes from the agent's report; anything but a regular file,
+    // such as a pipe, could make the read wait forever.
+    if !metadata.is_file() {
+        return None;
+    }
+    let length = metadata.len();
     let start = length.saturating_sub(TAIL_BYTES);
     file.seek(SeekFrom::Start(start)).ok()?;
     let mut bytes = Vec::new();
@@ -31,6 +37,19 @@ pub fn last_response(path: &Path) -> Option<String> {
         .rev()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .find_map(|entry| response_in(&entry))
+}
+
+/// Opens `path` for reading without waiting for a writer, as opening a named
+/// pipe otherwise would.
+fn open_without_waiting(path: &Path) -> Option<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    options.open(path).ok()
 }
 
 /// The answer an entry records, in either agent's log shape.
@@ -107,5 +126,17 @@ mod tests {
         let file = log(&[r#"{"type":"assistant","message":{"content":"plain string"}}"#]);
         assert_eq!(last_response(file.path()), None);
         assert_eq!(last_response(Path::new("/definitely/missing.jsonl")), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_pipe_in_place_of_a_log_is_refused_without_waiting() {
+        let directory = tempfile::tempdir().unwrap();
+        let pipe = directory.path().join("log.jsonl");
+        let path = std::ffi::CString::new(pipe.as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: `path` is a valid NUL-terminated string for the call.
+        assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+        assert_eq!(last_response(&pipe), None);
+        assert_eq!(last_response(directory.path()), None);
     }
 }

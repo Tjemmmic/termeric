@@ -4102,6 +4102,9 @@ impl App {
             let framed = crate::input::encode_paste(self.active_keyboard_mode(), text);
             accepted = self.write_terminal_protocol_input(&framed);
             self.input_line_buffer.clear();
+            if accepted {
+                self.note_person_typed();
+            }
         }
         self.git_completions_visible = false;
         self.git_completions.clear();

@@ -545,9 +545,22 @@ impl App {
         let before = session.agent_status.as_ref().map(|status| status.activity);
         session.agent_status =
             AgentStatus::after(session.agent_status.as_ref(), report, Instant::now());
-        let after = session.agent_status.clone();
-        // A reporting agent is recognized now, not at the next scan.
+        // Hooks run inside the agent's turn, so the foreground now is the
+        // agent. Its identity holds only while that process stays in front.
+        let reporter = tab.pane_foreground_group(identity.pane_id);
+        if let Some(status) = tab
+            .pane_session_mut(identity.pane_id)
+            .and_then(|session| session.agent_status.as_mut())
+        {
+            status.process_group = reporter;
+        }
+        // A reporting agent is recognized now, not at the next scan. The scan
+        // also drops a report that does not belong to this terminal, such as
+        // one from a program that inherited its identity but runs elsewhere.
         tab.refresh_agents(&self.agents);
+        let after = tab
+            .pane_session(identity.pane_id)
+            .and_then(|session| session.agent_status.clone());
         self.acknowledge_focused_agent();
         self.supervise_status_change(identity, before, after.as_ref());
         if let Some(status) =
@@ -558,6 +571,23 @@ impl App {
         self.redraw_scheduler
             .request(super::redraw_scheduler::RedrawReason::TerminalOutput);
         true
+    }
+
+    /// Record that the person typed or pasted into the focused terminal. An
+    /// agent that was waiting on them is working again.
+    pub(super) fn note_person_typed(&mut self) {
+        let Some(tab) = self.tabs.as_mut().and_then(TabManager::active_tab_mut) else {
+            return;
+        };
+        let pane_id = tab.focused_terminal_identity().pane_id;
+        let Some(session) = tab.pane_session_mut(pane_id) else {
+            return;
+        };
+        let now = Instant::now();
+        session.last_person_input = Some(now);
+        if let Some(status) = &mut session.agent_status {
+            status.answered(now);
+        }
     }
 
     /// Mark the focused terminal's finished, failed, or waiting agent as seen

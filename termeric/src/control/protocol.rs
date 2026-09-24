@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::collections::HashSet;
 use std::io::{Read, Write};
 
-pub const PROTOCOL_VERSION: u32 = 21;
+pub const PROTOCOL_VERSION: u32 = 22;
 pub const JSON_SCHEMA_VERSION: u32 = 3;
 pub const MAX_FRAME_BYTES: usize = 256 * 1024;
 pub const MAX_WINDOWS: usize = 32;
@@ -281,6 +281,9 @@ pub enum AgentEventKind {
     Finished,
     /// The agent's turn ended in an error.
     Failed,
+    /// The agent stopped without a result: the person interrupted it, or it
+    /// sits waiting at its prompt.
+    Stopped,
     /// The conversation ended.
     SessionEnded,
 }
