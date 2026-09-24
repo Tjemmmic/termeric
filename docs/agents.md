@@ -360,7 +360,8 @@ The earlier defaults, `suggest` and `workspace-write`, are dropped from the
 section, so a converted Codex launch follows your own Codex configuration. A
 profile's own setting is always kept, `suggest` as `--ask-for-approval
 untrusted`, because it overrode the section. A name the earlier plugins did
-not know stops the configuration from loading, with a message naming it. An existing
+not know, which they refused to launch with, turns the agent off instead of
+guessing its policy; the log names the setting. An existing
 `[agents.<id>]` entry always wins over a converted one.
 
 ## Workspaces and restarts

@@ -41,6 +41,9 @@ pub struct AgentDefinition {
     pub name: String,
     /// Program names that identify this agent in a pane's foreground process.
     pub detect: Vec<String>,
+    /// npm packages it is installed from, recognized when an interpreter
+    /// runs a file inside one.
+    pub packages: Vec<String>,
     /// Executable to launch.
     pub program: String,
     /// Arguments passed on every launch.
@@ -118,10 +121,8 @@ impl AgentDefinition {
         Self {
             id: builtin.id.into(),
             name: builtin.name.into(),
-            detect: std::iter::once(builtin.program)
-                .chain(builtin.package)
-                .map(Into::into)
-                .collect(),
+            detect: vec![builtin.program.into()],
+            packages: builtin.package.into_iter().map(Into::into).collect(),
             program: builtin.program.into(),
             args: Vec::new(),
             resume_args: builtin
@@ -236,10 +237,13 @@ impl AgentCatalog {
 
     /// The enabled agent whose process this is, from its argument vector.
     pub fn identify(&self, argv: &[String]) -> Option<&AgentDefinition> {
-        [detect::program_name(argv), detect::package_name(argv)]
-            .into_iter()
-            .flatten()
-            .find_map(|name| self.enabled().find(|agent| agent.detect.contains(&name)))
+        let by_name = detect::program_name(argv)
+            .and_then(|name| self.enabled().find(|agent| agent.detect.contains(&name)));
+        by_name.or_else(|| {
+            let package = detect::package_name(argv)?;
+            self.enabled()
+                .find(|agent| agent.packages.contains(&package))
+        })
     }
 }
 
@@ -380,6 +384,8 @@ mod tests {
             .as_deref(),
             Some("gemini")
         );
+        // A package's name is compared only with packages, not commands.
+        assert_eq!(id(&["node", "/srv/node_modules/codex/lib/main.js"]), None);
         // A source file of the same name outside an installed package is
         // someone's own script.
         assert_eq!(id(&["node", "/home/me/src/gemini.js"]), None);

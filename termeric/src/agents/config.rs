@@ -116,6 +116,7 @@ impl AgentConfig {
             id: id.to_string(),
             name: self.name.clone().unwrap_or_else(|| id.to_string()),
             detect: Vec::new(),
+            packages: Vec::new(),
             program: program.clone(),
             args: Vec::new(),
             resume_args: None,
