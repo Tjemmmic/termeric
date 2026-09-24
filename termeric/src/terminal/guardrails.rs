@@ -1,8 +1,9 @@
 //! Guardrails — detect and intercept destructive terminal commands
 //!
-//! Scans guarded plugin-tab and externally initiated PTY input for dangerous
-//! patterns (rm -rf, sudo, dd, mkfs, etc.) and triggers a confirmation prompt
-//! before allowing the command through.
+//! Scans automated terminal input — text sent through the GUI control
+//! protocol or by runtime plugins — for dangerous patterns (rm -rf, dd, mkfs,
+//! etc.) and asks the person to confirm before it is delivered. Input a person
+//! types, pastes, completes, or broadcasts is never intercepted.
 
 /// Get the current username
 fn whoami() -> String {

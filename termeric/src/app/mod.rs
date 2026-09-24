@@ -4032,26 +4032,8 @@ impl App {
         let mut accepted = true;
         if !self.write_broadcast_paste(text) {
             let framed = crate::input::encode_paste(self.active_keyboard_mode(), text);
-            let candidate = format!("{}{}", self.input_line_buffer, text);
-            let guarded_pane = self.active_guarded_pane();
-            let intercepted = guarded_pane.is_some_and(|(tab_id, pane_id)| {
-                self.guard_plugin_writes(
-                    &candidate,
-                    vec![crate::terminal::guardrails::GuardedWrite::for_pane(
-                        tab_id,
-                        pane_id,
-                        framed.clone(),
-                    )],
-                )
-            });
-            if !intercepted {
-                accepted = self.write_terminal_protocol_input(&framed);
-            }
-            if guarded_pane.is_some() && !intercepted {
-                self.track_guarded_paste_suffix(text);
-            } else if !intercepted {
-                self.input_line_buffer.clear();
-            }
+            accepted = self.write_terminal_protocol_input(&framed);
+            self.input_line_buffer.clear();
         }
         self.git_completions_visible = false;
         self.git_completions.clear();

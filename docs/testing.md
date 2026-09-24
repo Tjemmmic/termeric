@@ -395,13 +395,13 @@ must return the compiled wire version without creating a daemon socket or token.
 Exact-version mismatch tests fail before requests or terminal input, while the
 fake-SSH integration remains credential- and network-free.
 
-Guardrail coverage is also provider-free. Pure state tests prove immediate
-cancellation, one-shot request identity, stale-action rejection, exact
-multi-destination ownership, and shared pointer/accessibility geometry.
-Headless fake-plugin fixtures prove paste and pane-broadcast commits are
-intercepted before delivery by using only an inert local `/bin/sh -c sleep`
-process; the buffered payload is never confirmed or written, and no Codex,
-Claude, network, provider SDK, or authenticated AI process is started.
+Automated-input confirmation coverage is provider-free. Pure state tests prove
+immediate cancellation, one-shot request identity, stale-action rejection,
+exact multi-destination ownership, and shared pointer/accessibility geometry.
+Control-protocol and plugin producers are confirmed before delivery through an
+inert local capture process, while typed and pasted input in agent tabs is
+proven to reach the terminal unconfirmed. No Codex, Claude, network, provider
+SDK, or authenticated AI process is started.
 
 Information-dialog coverage is entirely in-memory. It verifies title/line/
 choice ceilings, omission markers, window-bounded shared geometry, vertical and

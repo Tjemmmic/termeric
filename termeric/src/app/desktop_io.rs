@@ -961,20 +961,6 @@ impl App {
         })
     }
 
-    pub(super) fn active_guarded_pane(&self) -> Option<(usize, crate::panes::PaneId)> {
-        let tab = self
-            .tabs
-            .as_ref()
-            .and_then(TabManager::active_tab)
-            .filter(|tab| matches!(tab.tab_type, crate::tabs::TabType::Plugin { .. }))?;
-        Some((
-            tab.id,
-            tab.pane_manager
-                .as_ref()
-                .map_or(tab.single_pane_id(), |panes| panes.focused_id()),
-        ))
-    }
-
     pub(super) fn active_terminal_origin(&self) -> Option<crate::tabs::TerminalEventOrigin> {
         let tab = self.tabs.as_ref().and_then(TabManager::active_tab)?;
         Some(if let Some(panes) = &tab.pane_manager {
@@ -985,88 +971,6 @@ impl App {
         } else {
             crate::tabs::TerminalEventOrigin::Tab { tab_id: tab.id }
         })
-    }
-
-    pub(super) fn guard_plugin_writes(
-        &mut self,
-        input: &str,
-        writes: Vec<crate::terminal::guardrails::GuardedWrite>,
-    ) -> bool {
-        let Some(active_tab) = self.tabs.as_ref().and_then(TabManager::active_tab) else {
-            return false;
-        };
-        if !matches!(active_tab.tab_type, crate::tabs::TabType::Plugin { .. })
-            || writes.is_empty()
-            || writes.iter().any(|write| write.tab_id != active_tab.id)
-        {
-            return false;
-        }
-        let Some(mut matched) = crate::terminal::guardrails::check_command(input) else {
-            return false;
-        };
-        if writes.len() > 1 {
-            matched.target = format!("Broadcast to {} panes", writes.len());
-        }
-        log::warn!(
-            "Guardrail triggered: {} — {}",
-            matched.command,
-            matched.reason
-        );
-        self.guardrail.show(matched, writes);
-        true
-    }
-
-    /// Track only enough editable-line state to guard a broadcast commit.
-    /// Alias expansion and completion deliberately remain disabled while
-    /// broadcasting, but destructive input must not bypass the safety check.
-    /// A commit candidate does not consume the existing line: callers clear it
-    /// only after the guard accepts, since withheld bytes never reached the PTY.
-    pub(super) fn track_broadcast_guardrail_input(&mut self, data: &[u8]) -> Option<String> {
-        if data == b"\r" || data == b"\n" {
-            return Some(self.input_line_buffer.clone());
-        }
-        if data == b"\x7f" {
-            self.input_line_buffer.pop();
-        } else if data == b"\x15" {
-            self.input_line_buffer.clear();
-        } else if data == b"\x17" {
-            let trimmed = self.input_line_buffer.trim_end();
-            if let Some(position) = trimmed.rfind(' ') {
-                self.input_line_buffer.truncate(position + 1);
-            } else {
-                self.input_line_buffer.clear();
-            }
-        } else if (data.len() == 1 && data[0] < 0x20) || (data.len() >= 2 && data[0] == 0x1b) {
-            self.input_line_buffer.clear();
-        } else if let Ok(text) = std::str::from_utf8(data) {
-            if text.contains(['\r', '\n']) {
-                let mut committed = self.input_line_buffer.clone();
-                committed.push_str(text);
-                return Some(committed);
-            }
-            self.input_line_buffer.push_str(text);
-        }
-        None
-    }
-
-    /// Preserve the editable suffix of a paste after it has passed the
-    /// destructive-command check. A later typed suffix must be checked with
-    /// the pasted prefix instead of being treated as a fresh command.
-    pub(super) fn track_guarded_paste_suffix(&mut self, text: &str) {
-        let suffix_start = text.char_indices().rev().find_map(|(index, character)| {
-            matches!(character, '\r' | '\n').then_some(index + character.len_utf8())
-        });
-        let suffix = suffix_start.map_or(text, |index| &text[index..]);
-        if suffix.chars().any(char::is_control) {
-            // Cursor-editing controls make the shell's resulting line
-            // unknowable, so do not retain a falsely authoritative prefix.
-            self.input_line_buffer.clear();
-        } else if suffix_start.is_some() {
-            self.input_line_buffer.clear();
-            self.input_line_buffer.push_str(suffix);
-        } else {
-            self.input_line_buffer.push_str(suffix);
-        }
     }
 
     /// Write interactive input with saved aliases and Git branch suggestions.
@@ -1132,20 +1036,6 @@ impl App {
                 return true;
             }
         };
-        if submit
-            && self.active_guarded_pane().is_some_and(|(tab_id, pane_id)| {
-                self.guard_plugin_writes(
-                    &edit.line,
-                    vec![crate::terminal::guardrails::GuardedWrite::for_pane(
-                        tab_id,
-                        pane_id,
-                        edit.wire.clone(),
-                    )],
-                )
-            })
-        {
-            return true;
-        }
         if let Some(tab) = self.tabs.as_mut().and_then(TabManager::active_tab_mut) {
             match tab.write(&edit.wire) {
                 Ok(()) => {
@@ -1177,8 +1067,7 @@ impl App {
         // Reset cursor blink so cursor is fully visible when typing
         self.reset_cursor_blink();
 
-        // Broadcast deliberately bypasses alias expansion and completion, but
-        // its own route still tracks enough line state for plugin guardrails.
+        // Broadcast deliberately bypasses alias expansion and completion.
         if self.write_broadcast_bytes(data) {
             self.git_completions_visible = false;
             return;
@@ -1217,22 +1106,6 @@ impl App {
             let rewrite = expanded
                 .as_ref()
                 .map(|command| format!("\x15{command}\r").into_bytes());
-
-            // Check the text that will actually be sent, not the typed alias.
-            // Freeze the entire rewrite at this exact owner before emitting any
-            // replacement bytes; confirmation must not re-resolve changed config.
-            if let Some((tab_id, pane_id)) = self.active_guarded_pane() {
-                let writes = vec![crate::terminal::guardrails::GuardedWrite::for_pane(
-                    tab_id,
-                    pane_id,
-                    rewrite.clone().unwrap_or_else(|| data.to_vec()),
-                )];
-                if self.guard_plugin_writes(input, writes) {
-                    // The typed prefix is still in the terminal. Retain it so
-                    // Cancel followed by Enter checks it again, including aliases.
-                    return;
-                }
-            }
 
             // If a git command was run, invalidate the watcher to refresh branch state
             if input.starts_with("git ") {
@@ -1318,8 +1191,8 @@ impl App {
 
     /// Clear state derived from a user's editable terminal line. This must run
     /// whenever a route rejects user input before the bytes reach the PTY so a
-    /// later unlock cannot revive aliases, completions, or guardrail context
-    /// that the shell never received.
+    /// later unlock cannot revive aliases or completions the shell never
+    /// received.
     pub(super) fn clear_terminal_input_tracking(&mut self) {
         self.input_line_buffer.clear();
         self.git_completions_visible = false;
@@ -1647,8 +1520,7 @@ mod desktop_io_tests {
 
     #[cfg(unix)]
     #[test]
-    fn explicit_git_run_guards_the_exact_text_without_a_completion_rewrite() {
-        use crate::terminal::guardrails::GuardrailAction;
+    fn explicit_git_run_in_an_agent_tab_sends_the_exact_text_without_a_completion_rewrite() {
         let command = "git checkout rm -rf /synthetic-never-executed ma";
         let expected = format!("\x15{command}\rZ");
         let mut app = raw_command_app(expected.len());
@@ -1662,13 +1534,8 @@ mod desktop_io_tests {
             plugin_id: "inert-explicit-git-guard".into(),
         };
         app.run_custom_command(command);
-        assert!(app.guardrail.is_awaiting_current());
-        assert_eq!(app.guardrail.matched.as_ref().unwrap().command, command);
         assert!(!app.git_completions_visible);
         assert!(app.git_completions.is_empty());
-        let request_id = app.guardrail.request_id();
-        app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
-        app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
         app.write_to_pty(b"Z");
         assert_command_bytes(&mut app, expected.as_bytes());
     }
@@ -1918,236 +1785,6 @@ mod desktop_io_tests {
 
     #[cfg(unix)]
     #[test]
-    fn cancelled_guardrail_rechecks_retained_input_without_sending_submission() {
-        use crate::terminal::guardrails::GuardrailAction;
-        for kind in ["typed", "alias", "completion", "paste", "explicit"] {
-            let typed = match kind {
-                "alias" => "alias /synthetic-never-executed",
-                "completion" => "git checkout rm -rf /synthetic-never-executed ma",
-                _ => "rm -rf /synthetic-never-executed",
-            };
-            let prefix = if kind == "explicit" { "\x15" } else { "" };
-            let expected = format!("{prefix}{typed}\x15safe\rZ");
-            let mut app = raw_command_app(expected.len());
-            app.tabs
-                .as_mut()
-                .unwrap()
-                .active_tab_mut()
-                .unwrap()
-                .tab_type = crate::tabs::TabType::Plugin {
-                plugin_id: "inert-cancel-retry".into(),
-            };
-            app.config.commands[0].command = "rm -rf".into();
-            if kind == "explicit" {
-                app.run_custom_command(typed);
-            } else {
-                app.write_to_pty(typed.as_bytes());
-                if kind == "completion" {
-                    app.git_completions = vec!["main".into()].into();
-                    app.git_completion_index = Some(0);
-                    app.git_completions_visible = true;
-                }
-                if kind == "paste" {
-                    app.write_paste_text(" ignored\n");
-                } else {
-                    app.write_to_pty(b"\r");
-                }
-            }
-            for _ in 0..2 {
-                assert!(
-                    app.guardrail.is_awaiting_current(),
-                    "{kind}: submission bypassed confirmation"
-                );
-                let request_id = app.guardrail.request_id();
-                app.apply_guardrail_action(GuardrailAction::Cancel { request_id });
-                app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
-                app.write_to_pty(b"\r");
-                assert!(
-                    app.guardrail.is_awaiting_current(),
-                    "{kind}: Enter after cancellation bypassed confirmation"
-                );
-                assert_ne!(app.guardrail.request_id(), request_id);
-                assert_eq!(app.input_line_buffer, typed);
-            }
-            let request_id = app.guardrail.request_id();
-            app.apply_guardrail_action(GuardrailAction::Cancel { request_id });
-            // Clearing the retained line allows an unrelated safe command.
-            app.write_to_pty(b"\x15");
-            app.write_to_pty(b"safe");
-            app.write_to_pty(b"\r");
-            assert!(!app.guardrail.is_awaiting_current());
-            assert!(app.input_line_buffer.is_empty());
-            app.write_to_pty(b"Z");
-            assert_command_bytes(&mut app, expected.as_bytes());
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn cancelled_paste_retains_only_the_prefix_already_sent() {
-        use crate::terminal::guardrails::GuardrailAction;
-        let expected = b"rm safe\rZ";
-        let mut app = raw_command_app(expected.len());
-        app.tabs
-            .as_mut()
-            .unwrap()
-            .active_tab_mut()
-            .unwrap()
-            .tab_type = crate::tabs::TabType::Plugin {
-            plugin_id: "inert-cancel-paste-prefix".into(),
-        };
-        app.write_to_pty(b"rm ");
-        app.write_paste_text("-rf /synthetic-never-executed\n");
-        assert!(app.guardrail.is_awaiting_current());
-        let request_id = app.guardrail.request_id();
-        app.apply_guardrail_action(GuardrailAction::Cancel { request_id });
-        assert_eq!(app.input_line_buffer, "rm ");
-        app.write_to_pty(b"safe");
-        app.write_to_pty(b"\r");
-        assert!(!app.guardrail.is_awaiting_current());
-        assert!(app.input_line_buffer.is_empty());
-        app.write_to_pty(b"Z");
-        assert_command_bytes(&mut app, expected);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn cancelled_broadcast_rechecks_original_line_and_confirms_once_to_each_reader() {
-        use crate::terminal::guardrails::GuardrailAction;
-        for withheld in [b"\r".as_slice(), b" ignored\n".as_slice()] {
-            let typed = "rm -rf /synthetic";
-            let expected = format!("{typed}\rZ");
-            let mut app = raw_command_app(expected.len());
-            let shell = crate::config::ShellConfig {
-                program: Some("/bin/sh".into()),
-                args: vec![
-                    "-c".into(),
-                    format!(
-                        "stty raw -echo; printf READY; dd bs=1 count={} 2>/dev/null | od -An -tx1 -v; sleep 0.2",
-                        expected.len()
-                    ),
-                ],
-                env: Default::default(),
-            };
-            let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
-            let owner = tab.take_terminal_owner().unwrap();
-            let mut panes = PaneManager::from_existing(
-                owner,
-                shell,
-                100,
-                1024 * 1024,
-                1600.0,
-                480.0,
-                8.0,
-                16.0,
-            );
-            panes.split(SplitDirection::Vertical).unwrap();
-            let targets = panes.pane_ids();
-            let tab_id = tab.id;
-            tab.pane_manager = Some(panes);
-            let wait_all = |app: &mut App, expected: &str| {
-                let deadline = Instant::now() + Duration::from_secs(3);
-                let mut last = Vec::new();
-                loop {
-                    app.process_pty_events();
-                    let Some(panes) = app
-                        .tabs
-                        .as_ref()
-                        .and_then(TabManager::active_tab)
-                        .and_then(|tab| tab.pane_manager.as_ref())
-                    else {
-                        panic!("readers exited before {expected:?}; last output: {last:?}");
-                    };
-                    let outputs: Vec<_> = targets
-                        .iter()
-                        .map(|id| {
-                            panes
-                                .get_pane(*id)
-                                .unwrap()
-                                .terminal
-                                .rows_text(0, 23)
-                                .split_whitespace()
-                                .collect::<Vec<_>>()
-                                .join(" ")
-                        })
-                        .collect();
-                    if outputs.iter().all(|output| output.contains(expected)) {
-                        return;
-                    }
-                    assert!(Instant::now() < deadline, "missing {expected}: {outputs:?}");
-                    last = outputs;
-                    std::thread::yield_now();
-                }
-            };
-            wait_all(&mut app, "READY");
-            // Polling startup refreshes tab metadata from the real shell owners.
-            // Mark only the input policy after startup; neither reader is a provider.
-            app.tabs
-                .as_mut()
-                .unwrap()
-                .active_tab_mut()
-                .unwrap()
-                .tab_type = crate::tabs::TabType::Plugin {
-                plugin_id: "inert-cancel-broadcast".into(),
-            };
-            app.broadcast = BroadcastState::Active {
-                tab_id,
-                targets: targets.clone(),
-            };
-            app.write_to_pty(typed.as_bytes());
-            if withheld == b"\r" {
-                app.write_to_pty(withheld);
-            } else {
-                app.write_paste_text(std::str::from_utf8(withheld).unwrap());
-            }
-            assert!(app.guardrail.is_awaiting_current());
-            let cancelled_id = app.guardrail.request_id();
-            app.apply_guardrail_action(GuardrailAction::Cancel {
-                request_id: cancelled_id,
-            });
-            app.write_to_pty(b"\r");
-            assert!(app.guardrail.is_awaiting_current());
-            assert_eq!(app.guardrail.matched.as_ref().unwrap().command, typed);
-            assert_eq!(app.input_line_buffer, typed);
-            app.apply_guardrail_action(GuardrailAction::Confirm {
-                request_id: cancelled_id,
-            });
-            assert!(app.guardrail.is_awaiting_current());
-            let request_id = app.guardrail.request_id();
-            app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
-            app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
-            assert!(app.input_line_buffer.is_empty());
-            app.write_to_pty(b"Z");
-            let hex = expected
-                .as_bytes()
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<Vec<_>>()
-                .join(" ");
-            wait_all(&mut app, &hex);
-        }
-    }
-
-    #[test]
-    fn broadcast_commit_candidates_preserve_only_previously_tracked_bytes() {
-        let mut app = App::new_headless(Config::default()).unwrap();
-        for bytes in [b"\r".as_slice(), b"\n", b" suffix\n"] {
-            app.input_line_buffer = "rm -rf /synthetic".into();
-            let candidate = app.track_broadcast_guardrail_input(bytes).unwrap();
-            assert_eq!(app.input_line_buffer, "rm -rf /synthetic");
-            assert_eq!(
-                candidate,
-                if bytes.len() == 1 {
-                    "rm -rf /synthetic"
-                } else {
-                    "rm -rf /synthetic suffix\n"
-                }
-            );
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
     fn explicit_run_preserves_text_when_saved_names_or_aliases_collide() {
         for (command, expected) in [
             ("B", b"\x15B\r".as_slice()),
@@ -2182,7 +1819,6 @@ mod desktop_io_tests {
             }
             app.write_to_pty(typed.as_bytes());
             app.write_to_pty(b"\r");
-            assert!(!app.guardrail.is_awaiting_current());
             app.write_to_pty(b"Z");
             assert_command_bytes(&mut app, &[expected.as_bytes(), b"Z"].concat());
         }
@@ -2190,85 +1826,21 @@ mod desktop_io_tests {
 
     #[cfg(unix)]
     #[test]
-    fn typed_alias_checks_expanded_command_and_withholds_the_entire_rewrite() {
-        for name in ["B", "alias"] {
-            let typed = format!("{name} /synthetic-never-executed");
-            let mut app = raw_command_app(typed.len() + 1);
-            app.config.commands[0].command = "rm -rf".into();
-            let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
-            let target = (tab.id, tab.single_pane_id());
-            tab.tab_type = crate::tabs::TabType::Plugin {
-                plugin_id: "inert-alias-guard".into(),
-            };
-            app.write_to_pty(typed.as_bytes());
-            app.write_to_pty(b"\r");
-            assert!(
-                app.guardrail.is_awaiting_current(),
-                "expanded destructive alias must await confirmation"
-            );
-            assert_eq!(
-                app.guardrail.matched.as_ref().unwrap().command,
+    fn typed_and_pasted_input_in_agent_tabs_reaches_the_terminal_without_confirmation() {
+        // Only automated input (control protocol, plugins) is confirmed; what
+        // a person types, expands, completes, or pastes is sent as-is.
+        for kind in ["typed", "alias", "paste"] {
+            let typed = if kind == "alias" {
+                "alias /synthetic-never-executed"
+            } else {
                 "rm -rf /synthetic-never-executed"
-            );
-            let writes = app.guardrail.confirm(app.guardrail.request_id()).unwrap();
-            assert_eq!(
-                writes,
-                vec![crate::terminal::guardrails::GuardedWrite::for_pane(
-                    target.0,
-                    target.1,
-                    b"\x15rm -rf /synthetic-never-executed\r".to_vec()
-                )]
-            );
-            // Inspect, then discard the batch: no destructive bytes are delivered.
-            app.write_to_pty(b"Z");
-            assert_command_bytes(&mut app, format!("{typed}Z").as_bytes());
-            assert_eq!(app.input_line_buffer, format!("{typed}Z"));
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn typed_alias_confirmation_uses_captured_bytes_and_origin_after_config_and_focus_change() {
-        use crate::terminal::guardrails::GuardrailAction;
-        let typed = "alias /synthetic-never-executed";
-        let expected = format!("{typed}\x15rm -rf /synthetic-never-executed\rZ");
-        let mut app = raw_command_app(expected.len());
-        app.config.commands[0].command = "rm -rf".into();
-        app.tabs
-            .as_mut()
-            .unwrap()
-            .active_tab_mut()
-            .unwrap()
-            .tab_type = crate::tabs::TabType::Plugin {
-            plugin_id: "inert-captured-alias".into(),
-        };
-        app.write_to_pty(typed.as_bytes());
-        app.write_to_pty(b"\r");
-        assert!(app.guardrail.is_awaiting_current());
-        let request_id = app.guardrail.request_id();
-        app.config.commands[0].command = "different-after-prompt".into();
-        app.tabs.as_mut().unwrap().new_tab_with_command("/bin/sh", &[
-            "-c".into(), "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1; sleep 0.2".into(),
-        ], None, Some("not-the-alias-owner"), None, Default::default()).unwrap();
-        wait_command_output(&mut app, "READY");
-        app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
-        app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
-        app.write_to_pty(b"Z");
-        assert_command_bytes(&mut app, b"Z");
-        app.tabs.as_mut().unwrap().switch_to(0);
-        app.write_to_pty(b"Z");
-        // The dangerous-looking text reaches only dd, never an interpreter/provider.
-        assert_command_bytes(&mut app, expected.as_bytes());
-        assert!(!app.guardrail.is_awaiting_current());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn typed_alias_cancellation_and_later_read_only_state_never_emit_replacement_bytes() {
-        use crate::terminal::guardrails::GuardrailAction;
-        for cancel in [true, false] {
-            let typed = "alias /synthetic-never-executed";
-            let mut app = raw_command_app(typed.len() + 1);
+            };
+            let expected = match kind {
+                "alias" => format!("{typed}\x15rm -rf /synthetic-never-executed\rZ"),
+                "paste" => format!("{typed}\rZ"),
+                _ => format!("{typed}\rZ"),
+            };
+            let mut app = raw_command_app(expected.len());
             app.config.commands[0].command = "rm -rf".into();
             app.tabs
                 .as_mut()
@@ -2276,65 +1848,18 @@ mod desktop_io_tests {
                 .active_tab_mut()
                 .unwrap()
                 .tab_type = crate::tabs::TabType::Plugin {
-                plugin_id: "inert-refused-alias".into(),
+                plugin_id: "inert-agent-input".into(),
             };
-            app.write_to_pty(typed.as_bytes());
-            app.write_to_pty(b"\r");
-            assert!(app.guardrail.is_awaiting_current());
-            let request_id = app.guardrail.request_id();
-            if cancel {
-                app.apply_guardrail_action(GuardrailAction::Cancel { request_id });
+            if kind == "paste" {
+                app.write_paste_text(&format!("{typed}\r"));
             } else {
-                app.toggle_focused_pane_read_only();
+                app.write_to_pty(typed.as_bytes());
+                app.write_to_pty(b"\r");
             }
-            app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
-            if !cancel {
-                app.toggle_focused_pane_read_only();
-            }
+            assert!(!app.guardrail.is_awaiting_current(), "{kind}");
             app.write_to_pty(b"Z");
-            assert_command_bytes(&mut app, format!("{typed}Z").as_bytes());
-            assert!(!app.guardrail.is_awaiting_current());
+            assert_command_bytes(&mut app, expected.as_bytes());
         }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn git_completion_enter_checks_the_completed_command_before_sending_any_edit() {
-        let typed = "git checkout rm -rf /synthetic-never-executed ma";
-        let mut app = raw_command_app(typed.len() + 1);
-        let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
-        let target = (tab.id, tab.single_pane_id());
-        tab.tab_type = crate::tabs::TabType::Plugin {
-            plugin_id: "inert-completion-guard".into(),
-        };
-        app.write_to_pty(typed.as_bytes());
-        app.git_completions = vec!["main".into()].into();
-        app.git_completion_index = Some(0);
-        app.git_completions_visible = true;
-        app.write_to_pty(b"\r");
-        assert!(
-            app.guardrail.is_awaiting_current(),
-            "completion Enter must not bypass the guardrail"
-        );
-        assert_eq!(
-            app.guardrail.matched.as_ref().unwrap().command,
-            "git checkout rm -rf /synthetic-never-executed main"
-        );
-        let writes = app.guardrail.confirm(app.guardrail.request_id()).unwrap();
-        assert_eq!(
-            writes,
-            vec![crate::terminal::guardrails::GuardedWrite::for_pane(
-                target.0,
-                target.1,
-                b"\x7f\x7fmain\r".to_vec()
-            )]
-        );
-        assert!(app.git_completions.is_empty());
-        assert_eq!(app.input_line_buffer, typed);
-        assert!(!app.git_completions_visible);
-        // Discard the inspected batch and fence the untouched typed line.
-        app.write_to_pty(b"Z");
-        assert_command_bytes(&mut app, format!("{typed}Z").as_bytes());
     }
 
     #[cfg(unix)]
@@ -2359,87 +1884,10 @@ mod desktop_io_tests {
             app.git_completion_index = selected;
             app.git_completions_visible = true;
             app.write_to_pty(b"\r");
-            assert!(!app.guardrail.is_awaiting_current());
             assert!(app.input_line_buffer.is_empty());
             assert!(app.git_completions.is_empty());
             app.write_to_pty(b"Z");
             assert_command_bytes(&mut app, expected);
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn git_completion_confirmation_freezes_selection_and_does_not_follow_focus() {
-        use crate::terminal::guardrails::GuardrailAction;
-        let typed = "git checkout rm -rf /synthetic-never-executed ma";
-        let expected = format!("{typed}\x7f\x7fmain\rZ");
-        let mut app = raw_command_app(expected.len());
-        app.tabs
-            .as_mut()
-            .unwrap()
-            .active_tab_mut()
-            .unwrap()
-            .tab_type = crate::tabs::TabType::Plugin {
-            plugin_id: "inert-captured-completion".into(),
-        };
-        app.write_to_pty(typed.as_bytes());
-        app.git_completions = vec!["main".into()].into();
-        app.git_completion_index = Some(0);
-        app.git_completions_visible = true;
-        app.write_to_pty(b"\r");
-        assert!(app.guardrail.is_awaiting_current());
-        let request_id = app.guardrail.request_id();
-        app.tabs.as_mut().unwrap().new_tab_with_command("/bin/sh", &[
-            "-c".into(), "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1; sleep 0.2".into(),
-        ], None, Some("not-the-completion-owner"), None, Default::default()).unwrap();
-        wait_command_output(&mut app, "READY");
-        app.git_completions = vec!["replacement".into()].into();
-        app.git_completion_index = Some(0);
-        app.git_completions_visible = true;
-        app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
-        app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
-        // Confirming background input must not overwrite the focused completion state.
-        assert_eq!(&*app.git_completions, ["replacement"]);
-        app.write_to_pty(b"Z");
-        assert_command_bytes(&mut app, b"Z");
-        app.tabs.as_mut().unwrap().switch_to(0);
-        app.write_to_pty(b"Z");
-        assert_command_bytes(&mut app, expected.as_bytes());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn git_completion_cancel_and_read_only_refuse_every_edit_byte() {
-        use crate::terminal::guardrails::GuardrailAction;
-        for cancel in [true, false] {
-            let typed = "git checkout rm -rf /synthetic-never-executed ma";
-            let mut app = raw_command_app(typed.len() + 1);
-            app.tabs
-                .as_mut()
-                .unwrap()
-                .active_tab_mut()
-                .unwrap()
-                .tab_type = crate::tabs::TabType::Plugin {
-                plugin_id: "inert-refused-completion".into(),
-            };
-            app.write_to_pty(typed.as_bytes());
-            app.git_completions = vec!["main".into()].into();
-            app.git_completion_index = Some(0);
-            app.git_completions_visible = true;
-            app.write_to_pty(b"\r");
-            assert!(app.guardrail.is_awaiting_current());
-            let request_id = app.guardrail.request_id();
-            if cancel {
-                app.apply_guardrail_action(GuardrailAction::Cancel { request_id });
-            } else {
-                app.toggle_focused_pane_read_only();
-            }
-            app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
-            if !cancel {
-                app.toggle_focused_pane_read_only();
-            }
-            app.write_to_pty(b"Z");
-            assert_command_bytes(&mut app, format!("{typed}Z").as_bytes());
         }
     }
 
@@ -2468,36 +1916,6 @@ mod desktop_io_tests {
         app.write_to_pty(b"Z");
         // Even the line-clear prefix must not reach a refused destination.
         assert_command_bytes(&mut app, b"Z");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn explicit_run_keeps_plugin_confirmation_bound_to_the_real_terminal() {
-        let command = "rm -rf /synthetic-never-executed";
-        let expected = format!("\x15{command}Z");
-        let mut app = raw_command_app(expected.len());
-        let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
-        let target = (tab.id, tab.single_pane_id());
-        // Metadata only: the existing child remains the local raw dd reader.
-        tab.tab_type = crate::tabs::TabType::Plugin {
-            plugin_id: "inert-guard-fixture".into(),
-        };
-        app.run_custom_command(command);
-        assert!(app.guardrail.is_awaiting_current());
-        assert_eq!(app.guardrail.matched.as_ref().unwrap().command, command);
-        let writes = app.guardrail.confirm(app.guardrail.request_id()).unwrap();
-        assert_eq!(
-            writes,
-            vec![crate::terminal::guardrails::GuardedWrite::for_pane(
-                target.0,
-                target.1,
-                b"\r".to_vec()
-            )]
-        );
-        // Inspect and discard the pending Enter; never deliver the confirmed batch.
-        app.write_to_pty(b"Z");
-        assert_command_bytes(&mut app, expected.as_bytes());
-        assert!(!app.guardrail.is_awaiting_current());
     }
 
     #[cfg(unix)]

@@ -169,8 +169,6 @@ Every write path prunes panes whose PTY writer has failed. The selected set is
 updated immediately when at least two targets survive; otherwise broadcast is
 cancelled before later input. Key, raw-byte, and paste paths use the same
 two-target floor rather than waiting for a render-time cleanup.
-Destructive-command guardrails retain a safe pasted line prefix, so a later
-typed suffix cannot bypass the combined-command check.
 
 Target selection is per activation and limited to the active tab. Named or
 persistent target groups and cross-tab/window broadcast are not provided.

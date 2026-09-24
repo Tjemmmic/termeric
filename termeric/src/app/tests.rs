@@ -6929,103 +6929,6 @@ fn harvest_nonzero_survivor_keeps_live_regions_and_rerun_after_collapse() {
 
 #[cfg(unix)]
 #[test]
-fn harvest_confirmation_resolves_stable_owner_after_topology_changes() {
-    use crate::terminal::guardrails::GuardrailAction;
-    for transition in [
-        "split",
-        "collapse",
-        "nonzero-collapse",
-        "removed",
-        "read-only-split",
-        "read-only-collapse",
-        "cancel",
-    ] {
-        let (mut app, directory, mut entry, initial_captures) =
-            harvest_rerun_capture_fixture_in(transition == "nonzero-collapse");
-        if transition == "nonzero-collapse" {
-            entry.source = app.active_harvest_source().unwrap();
-        }
-        entry.command = "rm -rf /synthetic-never-executed".into();
-        app.execute_sprout_action(
-            crate::harvest::sprouts::SproutAction::Rerun,
-            Some(entry.clone()),
-        );
-        let request_id = app.guardrail.request_id();
-        assert!(app.guardrail.is_awaiting(request_id));
-        assert!(
-            fenced_harvest_capture(&mut app, &initial_captures)
-                .iter()
-                .all(Vec::is_empty)
-        );
-        let tab_id = entry.source.tab_id as u64;
-        if transition == "nonzero-collapse" {
-            app.close_control_pane(tab_id, 0).unwrap();
-            app.close_control_pane(tab_id, 1).unwrap();
-        } else {
-            let sibling = split_harvest_capture_owner(&mut app, directory.path());
-            if transition.ends_with("collapse") {
-                app.close_control_pane(tab_id, sibling.0).unwrap();
-            } else if transition == "removed" {
-                app.close_control_pane(tab_id, entry.source.pane_id)
-                    .unwrap();
-                // Same tab, different surviving owner: never alias the old source.
-                assert!(app.terminal_for_harvest_source(entry.source).is_none());
-            }
-        }
-        if transition.starts_with("read-only") {
-            app.focus_control_pane(tab_id, entry.source.pane_id)
-                .unwrap();
-            app.toggle_focused_pane_read_only();
-        }
-        let captures = current_harvest_capture_routes(&mut app, directory.path());
-        let before = fenced_harvest_capture(&mut app, &captures);
-        assert!(
-            before.iter().flatten().all(|byte| *byte == 0),
-            "input before confirmation: {transition}"
-        );
-        let focused = app.active_harvest_source();
-        app.input_line_buffer = "preserve pending input".into();
-        if transition == "cancel" {
-            app.apply_guardrail_action(GuardrailAction::Cancel { request_id });
-        }
-        app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
-        app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
-        let sent = matches!(transition, "split" | "collapse" | "nonzero-collapse");
-        let source_origin = app
-            .tabs
-            .as_ref()
-            .unwrap()
-            .origin_for_pane(entry.source.tab_id, PaneId(entry.source.pane_id));
-        let expected = captures
-            .iter()
-            .zip(before)
-            .map(|((origin, _), mut bytes)| {
-                bytes.push(0);
-                if sent && Some(*origin) == source_origin {
-                    bytes.extend_from_slice(b"\x15rm -rf /synthetic-never-executed\r");
-                }
-                bytes
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(
-            fenced_harvest_capture(&mut app, &captures),
-            expected,
-            "{transition}"
-        );
-        assert_eq!(app.active_harvest_source(), focused);
-        assert_eq!(
-            app.input_line_buffer,
-            if sent && focused == Some(entry.source) {
-                ""
-            } else {
-                "preserve pending input"
-            }
-        );
-    }
-}
-
-#[cfg(unix)]
-#[test]
 fn harvest_rerun_never_broadcasts_the_source_command() {
     for excluded in [false, true] {
         let (mut app, _directory, entry, captures) = harvest_rerun_capture_fixture();
@@ -7220,7 +7123,6 @@ fn harvest_rerun_refuses_armed_read_only_stale_and_closing_sources_without_write
         "pane-closed",
         "tab-closed",
         "closing",
-        "pending",
     ] {
         let (mut app, _directory, mut entry, captures) = harvest_rerun_capture_fixture();
         let before = app.active_harvest_source();
@@ -7262,19 +7164,8 @@ fn harvest_rerun_refuses_armed_read_only_stale_and_closing_sources_without_write
                     .unwrap()
                     .closing_at = Some(Instant::now())
             }
-            "pending" => {
-                app.guardrail.show(
-                    crate::terminal::guardrails::check_command("rm -rf /synthetic").unwrap(),
-                    vec![crate::terminal::guardrails::GuardedWrite::for_pane(
-                        entry.source.tab_id,
-                        PaneId(1),
-                        b"pending\r".to_vec(),
-                    )],
-                );
-            }
             _ => unreachable!(),
         }
-        let pending_id = app.guardrail.request_id();
         app.execute_sprout_action(crate::harvest::sprouts::SproutAction::Rerun, Some(entry));
         let bytes = fenced_harvest_capture(&mut app, &captures);
         assert!(bytes.iter().all(Vec::is_empty), "{refusal} wrote {bytes:?}");
@@ -7286,120 +7177,6 @@ fn harvest_rerun_refuses_armed_read_only_stale_and_closing_sources_without_write
         assert!(app.toasts.iter().all(|toast| toast.message
             != "Sent command to its source terminal"
             && toast.message != "Re-ran command"));
-        if refusal == "pending" {
-            assert!(app.guardrail.is_awaiting(pending_id));
-        }
-    }
-}
-
-#[cfg(unix)]
-#[test]
-fn harvest_rerun_confirmation_is_exact_revocable_and_revalidates_source() {
-    use crate::terminal::guardrails::GuardrailAction;
-    for (plugin, disposition) in [false, true].into_iter().flat_map(|plugin| {
-        [
-            "confirm",
-            "confirm-focused",
-            "cancel",
-            "read-only",
-            "pane-closed",
-            "tab-closing",
-        ]
-        .map(move |disposition| (plugin, disposition))
-    }) {
-        let (mut app, _directory, mut entry, captures) = harvest_rerun_capture_fixture();
-        if plugin {
-            // Metadata only: the same raw capture PTYs remain in place.
-            app.tabs
-                .as_mut()
-                .unwrap()
-                .active_tab_mut()
-                .unwrap()
-                .tab_type = crate::tabs::TabType::Plugin {
-                plugin_id: "synthetic-capture".into(),
-            };
-        }
-        entry.command = "rm -rf /synthetic-not-executed".into();
-        app.execute_sprout_action(
-            crate::harvest::sprouts::SproutAction::Rerun,
-            Some(entry.clone()),
-        );
-        let request_id = app.guardrail.request_id();
-        assert!(app.guardrail.is_awaiting(request_id));
-        let bytes = fenced_harvest_capture(&mut app, &captures);
-        assert!(
-            bytes.iter().all(Vec::is_empty),
-            "bytes leaked before confirmation"
-        );
-        if disposition != "confirm-focused" {
-            app.tabs
-                .as_mut()
-                .unwrap()
-                .active_tab_mut()
-                .unwrap()
-                .pane_manager
-                .as_mut()
-                .unwrap()
-                .focus(PaneId(1));
-        }
-        app.input_line_buffer = "preserve sibling input".into();
-        match disposition {
-            "cancel" => app.apply_guardrail_action(GuardrailAction::Cancel { request_id }),
-            "read-only" => {
-                app.tabs
-                    .as_mut()
-                    .unwrap()
-                    .active_tab_mut()
-                    .unwrap()
-                    .pane_manager
-                    .as_mut()
-                    .unwrap()
-                    .get_pane_mut(PaneId(entry.source.pane_id))
-                    .unwrap()
-                    .read_only = true
-            }
-            "pane-closed" => {
-                app.tabs
-                    .as_mut()
-                    .unwrap()
-                    .active_tab_mut()
-                    .unwrap()
-                    .pane_manager
-                    .as_mut()
-                    .unwrap()
-                    .get_pane_mut(PaneId(entry.source.pane_id))
-                    .unwrap()
-                    .closed = true
-            }
-            "tab-closing" => {
-                app.tabs
-                    .as_mut()
-                    .unwrap()
-                    .active_tab_mut()
-                    .unwrap()
-                    .closing_at = Some(Instant::now())
-            }
-            _ => {}
-        }
-        app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
-        // Stale confirm must never repeat a delivered command.
-        app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
-        let bytes = fenced_harvest_capture(&mut app, &captures);
-        let expected = if disposition.starts_with("confirm") {
-            b"\0\x15rm -rf /synthetic-not-executed\r".as_slice()
-        } else {
-            b"\0".as_slice()
-        };
-        assert_eq!(bytes[0], expected, "{disposition}");
-        assert!(bytes[1..].iter().all(|data| data == b"\0"));
-        assert_eq!(
-            app.input_line_buffer,
-            if disposition == "confirm-focused" {
-                ""
-            } else {
-                "preserve sibling input"
-            }
-        );
     }
 }
 
@@ -7526,7 +7303,8 @@ fn external_confirmation_never_targets_a_replacement_single_owner() {
 fn guarded_input_producers_follow_only_the_original_owner_through_topology_changes() {
     use crate::terminal::guardrails::GuardrailAction;
     const COMMAND: &str = "rm -rf /synthetic-never-executed";
-    for producer in ["typed", "paste", "control", "plugin", "process-plugin"] {
+    // Only automated producers are confirmed; typed and pasted input is sent as-is.
+    for producer in ["control", "plugin", "process-plugin"] {
         for transition in [
             "split",
             "collapse",
@@ -7549,49 +7327,38 @@ fn guarded_input_producers_follow_only_the_original_owner_through_topology_chang
                 plugin_id: "synthetic-capture".into(),
             };
             app.active_terminal_mut().unwrap().process(b"\x1b[?2004h");
-            let expected_wire = match producer {
-                "typed" => {
-                    app.input_line_buffer = COMMAND.into();
-                    app.write_to_pty(b"\r");
-                    b"\r".to_vec()
+            let expected_wire = {
+                let result = match producer {
+                    "control" => app.send_control_text(
+                        source.tab_id as u64,
+                        source.pane_id,
+                        COMMAND,
+                        true,
+                        true,
+                    ),
+                    "plugin" => app.send_plugin_text(
+                        source.tab_id as u64,
+                        source.pane_id,
+                        COMMAND,
+                        true,
+                        true,
+                    ),
+                    "process-plugin" => app.send_process_plugin_text(
+                        7,
+                        source.tab_id as u64,
+                        source.pane_id,
+                        COMMAND,
+                        true,
+                        true,
+                    ),
+                    _ => unreachable!(),
                 }
-                "paste" => {
-                    app.write_paste_text(COMMAND);
-                    format!("\x1b[200~{COMMAND}\x1b[201~").into_bytes()
-                }
-                _ => {
-                    let result = match producer {
-                        "control" => app.send_control_text(
-                            source.tab_id as u64,
-                            source.pane_id,
-                            COMMAND,
-                            true,
-                            true,
-                        ),
-                        "plugin" => app.send_plugin_text(
-                            source.tab_id as u64,
-                            source.pane_id,
-                            COMMAND,
-                            true,
-                            true,
-                        ),
-                        "process-plugin" => app.send_process_plugin_text(
-                            7,
-                            source.tab_id as u64,
-                            source.pane_id,
-                            COMMAND,
-                            true,
-                            true,
-                        ),
-                        _ => unreachable!(),
-                    }
-                    .unwrap();
-                    assert_eq!(
-                        result.2,
-                        crate::control::protocol::InputDisposition::PendingConfirmation
-                    );
-                    format!("\x1b[200~{COMMAND}\x1b[201~\r").into_bytes()
-                }
+                .unwrap();
+                assert_eq!(
+                    result.2,
+                    crate::control::protocol::InputDisposition::PendingConfirmation
+                );
+                format!("\x1b[200~{COMMAND}\x1b[201~\r").into_bytes()
             };
             let request_id = app.guardrail.request_id();
             assert!(app.guardrail.is_awaiting(request_id));
@@ -7672,82 +7439,6 @@ fn guarded_input_producers_follow_only_the_original_owner_through_topology_chang
                 } else {
                     "preserve sibling input"
                 }
-            );
-        }
-    }
-}
-
-#[cfg(unix)]
-#[test]
-fn guarded_broadcast_preserves_framing_and_rejects_removed_batch_members() {
-    use crate::terminal::guardrails::GuardrailAction;
-    const COMMAND: &str = "rm -rf /synthetic-never-executed";
-    for paste in [false, true] {
-        for remove_source in [false, true] {
-            let (mut app, directory, entry, initial_captures) = harvest_rerun_capture_fixture();
-            let tab_id = entry.source.tab_id;
-            let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
-            tab.tab_type = crate::tabs::TabType::Plugin {
-                plugin_id: "synthetic-capture".into(),
-            };
-            tab.pane_manager
-                .as_mut()
-                .unwrap()
-                .get_pane_mut(PaneId(0))
-                .unwrap()
-                .terminal
-                .process(b"\x1b[?2004h");
-            app.toggle_broadcast();
-            app.toggle_broadcast();
-            if paste {
-                assert!(app.write_broadcast_paste(COMMAND));
-            } else {
-                app.input_line_buffer = COMMAND.into();
-                assert!(app.write_broadcast_bytes(b"\r"));
-            }
-            let request_id = app.guardrail.request_id();
-            assert!(app.guardrail.is_awaiting(request_id));
-            assert!(
-                fenced_harvest_capture(&mut app, &initial_captures)
-                    .iter()
-                    .all(Vec::is_empty)
-            );
-            if remove_source {
-                app.close_control_pane(tab_id as u64, 0).unwrap();
-                app.close_control_pane(tab_id as u64, 1).unwrap();
-            }
-            let captures = current_harvest_capture_routes(&mut app, directory.path());
-            let before = fenced_harvest_capture(&mut app, &captures);
-            app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
-            app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
-            let expected = captures
-                .iter()
-                .zip(before)
-                .map(|((origin, _), mut bytes)| {
-                    bytes.push(0);
-                    if !remove_source {
-                        if !paste {
-                            bytes.push(b'\r');
-                        } else if *origin
-                            == (crate::tabs::TerminalEventOrigin::Pane {
-                                tab_id,
-                                pane_id: PaneId(0),
-                            })
-                        {
-                            bytes.extend_from_slice(
-                                format!("\x1b[200~{COMMAND}\x1b[201~").as_bytes(),
-                            );
-                        } else {
-                            bytes.extend_from_slice(COMMAND.as_bytes());
-                        }
-                    }
-                    bytes
-                })
-                .collect::<Vec<_>>();
-            assert_eq!(
-                fenced_harvest_capture(&mut app, &captures),
-                expected,
-                "paste={paste}, removed={remove_source}"
             );
         }
     }

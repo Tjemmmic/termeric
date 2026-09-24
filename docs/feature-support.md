@@ -435,28 +435,17 @@ selected payload into another saved command or rewrite it with a cached Git
 branch suggestion. Resolved command chunks skip interactive suggestion creation
 and acceptance; ordinary typed aliases and Git suggestions retain their normal
 behavior. Temporary libgit2 repositories and inert raw-PTY tests verify literal
-Run/keybinding bytes, typed completion, and exact guarded command confirmation.
-The shared terminal-input policy retains read-only, armed/active broadcast,
-and plugin confirmation behavior. Raw-PTY collision and safeguard tests use
+Run/keybinding bytes, typed completion, and exact delivered bytes.
+The shared terminal-input policy retains read-only and armed/active broadcast
+behavior. Raw-PTY collision and safeguard tests use
 inert byte readers, not real command execution or providers; native operator
 acceptance remains deferred (see [input contract](accessibility-and-input.md)).
 
-Typed application aliases now pass their expanded command and arguments to the
-plugin-tab destructive-command check. Pending confirmation captures the complete
-replacement bytes and exact pane before any rewrite is sent, so config/focus
-changes cannot alter or retarget approval; cancellation, replay, and later
-read-only refusal are covered by raw-PTY tests. Safe typed aliases still expand
-once. This remains pattern-based checking, not shell parsing or inspection of
-shell-defined aliases; no real provider was used (see
-[input contract](accessibility-and-input.md)).
+Typed, pasted, completed, broadcast, and Harvest re-run input is sent exactly
+as the person entered it. Only automated input, from the GUI control protocol
+and runtime plugins, waits for the destructive-command confirmation.
 
-Selected Git-completion Enter now checks the completed command against plugin
-guardrails before sending any replacement edits or submission. Confirmation
-captures the exact edit batch and originating pane; changed completion lists
-or focus cannot redirect it. Safe/stale-selection paths, captured approval,
-cancellation, replay, and read-only refusal have inert raw-PTY coverage. Native
-client acceptance and broader command parsing remain outside this change.
-Tab and Enter now share Git-ref validation and literal Bash/Zsh/Fish quoting
+Tab and Enter share Git-ref validation and literal Bash/Zsh/Fish quoting
 chosen from the focused pane's enabled integration metadata. Unknown dialects
 refuse names needing quotes; complex input stays with native shell completion.
 Partial erasure counts Unicode scalars, not bytes. Inert PTY routing/refusal and

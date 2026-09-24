@@ -55,7 +55,7 @@ refresh once per paste; accepted pastes clear stale IME composition.
 Higher-priority dialogs block background query pastes, and busy domain stages
 remain read-only. Unsupported modal paste destinations do not fall back to the
 terminal. Ordinary terminal pastes retain bracketed-paste framing, read-only
-checks, broadcast policy, and guardrails. Local routing and raw-PTY tests cover
+checks, and broadcast policy. Local routing and raw-PTY tests cover
 query insertion/refusal and child isolation; real clipboard/compositor
 acceptance for these query destinations remains deferred.
 
@@ -412,28 +412,9 @@ invalid indices, form preservation, and the next Enter action. No provider or
 saved command is executed. Native keyboard/focus-outline
 and screen-reader acceptance remain deferred.
 
-Typed application aliases in plugin tabs are now expanded before destructive-
-command checking. The confirmation shows the resolved command, including typed
-arguments, and retains the entire line-clear/replacement/Enter batch for the
-exact originating pane; no rewrite bytes are sent before approval. Config
-changes cannot alter that pending payload, and confirmation revalidates the
-original pane and its read-only state without falling back to current focus.
-Cancellation and stale confirmation remain non-delivering. Raw-reader tests
-cover names and aliases, safe expansions, suffixes, captured-config identity,
-cross-tab focus changes, replay, cancellation, and later read-only refusal.
-This uses the existing pattern-based plugin guardrail, not a complete shell
-parser or a claim to inspect aliases defined inside the user's shell. Explicit
-Run remains unexpanded, and active broadcast retains its no-expansion policy.
-
-Enter on a selected Git branch completion now applies the plugin guardrail to
-the completed command line before sending any backspace, replacement, or Enter.
-Approval retains that exact edit batch and originating pane, independently of
-later focus or completion-list changes. Safe completions still submit normally;
-missing/stale selections fall through to the ordinary Enter path. Inert raw-PTY
-tests cover withheld edits, exact safe bytes, fallback, captured selection and
-destination, replay, cancellation, and later read-only refusal. This does not
-extend the pattern matcher into shell parsing. Native Git-client/operator
-acceptance remains deferred; no real provider was invoked.
+Typed, pasted, completed, broadcast, and Harvest re-run input is sent exactly
+as the person entered it. Only automated input, from the GUI control protocol
+and runtime plugins, waits for the destructive-command confirmation.
 
 Tab and Enter now share one literal branch-edit builder. Names are validated
 as Git refs, capped at 4 KiB, and rejected for leading options, control or

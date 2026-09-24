@@ -840,27 +840,6 @@ impl App {
             }
             return false;
         };
-        let guarded = self
-            .tabs
-            .as_ref()
-            .and_then(TabManager::active_tab)
-            .is_some_and(|tab| matches!(tab.tab_type, crate::tabs::TabType::Plugin { .. }));
-        if guarded && let Some(input) = self.track_broadcast_guardrail_input(data) {
-            let writes = targets
-                .iter()
-                .map(|pane_id| {
-                    crate::terminal::guardrails::GuardedWrite::for_pane(
-                        tab_id,
-                        *pane_id,
-                        data.to_vec(),
-                    )
-                })
-                .collect();
-            if self.guard_plugin_writes(&input, writes) {
-                return true;
-            }
-            self.input_line_buffer.clear();
-        }
         let Some(tab) = self.tabs.as_mut().and_then(TabManager::active_tab_mut) else {
             return false;
         };
@@ -922,30 +901,6 @@ impl App {
                 .map(|bytes| (*id, bytes))
             })
             .collect();
-        let guarded = self
-            .tabs
-            .as_ref()
-            .and_then(TabManager::active_tab)
-            .is_some_and(|tab| matches!(tab.tab_type, crate::tabs::TabType::Plugin { .. }));
-        if guarded
-            && let Some(sample) = encoded.first().map(|(_, bytes)| bytes.as_slice())
-            && let Some(input) = self.track_broadcast_guardrail_input(sample)
-        {
-            let writes = encoded
-                .iter()
-                .map(|(pane_id, bytes)| {
-                    crate::terminal::guardrails::GuardedWrite::for_pane(
-                        tab_id,
-                        *pane_id,
-                        bytes.clone(),
-                    )
-                })
-                .collect();
-            if self.guard_plugin_writes(&input, writes) {
-                return true;
-            }
-            self.input_line_buffer.clear();
-        }
         let Some(manager) = self
             .tabs
             .as_mut()
@@ -998,21 +953,6 @@ impl App {
                 .warning("Broadcast cancelled because fewer than two targets remain");
             return true;
         }
-        let guarded = self
-            .tabs
-            .as_ref()
-            .and_then(TabManager::active_tab)
-            .is_some_and(|tab| matches!(tab.tab_type, crate::tabs::TabType::Plugin { .. }));
-        let candidate = format!("{}{}", self.input_line_buffer, text);
-        let writes = framed
-            .iter()
-            .map(|(pane_id, bytes)| {
-                crate::terminal::guardrails::GuardedWrite::for_pane(tab_id, *pane_id, bytes.clone())
-            })
-            .collect();
-        if self.guard_plugin_writes(&candidate, writes) {
-            return true;
-        }
         let Some(manager) = self
             .tabs
             .as_mut()
@@ -1031,11 +971,7 @@ impl App {
             }
         }
         self.finish_broadcast_writes(tab_id, remaining, failed);
-        if guarded {
-            self.track_guarded_paste_suffix(text);
-        } else {
-            self.input_line_buffer.clear();
-        }
+        self.input_line_buffer.clear();
         true
     }
 
@@ -1578,11 +1514,6 @@ impl App {
                     self.toasts.warning("Nothing to rerun");
                     return;
                 }
-                if self.guardrail.is_awaiting_current() {
-                    self.toasts
-                        .warning("A destructive-command confirmation is already pending");
-                    return;
-                }
                 if matches!(self.broadcast, BroadcastState::Armed { .. }) {
                     self.toasts
                         .warning("Re-run was not sent while broadcast is armed");
@@ -1608,11 +1539,6 @@ impl App {
                         .warning("The command's terminal is no longer open");
                     return;
                 }
-                if self.guardrail.is_awaiting_current() {
-                    self.toasts
-                        .warning("A destructive-command confirmation is already pending");
-                    return;
-                }
                 let Some(origin) = self.origin_for_harvest_source(target.source) else {
                     self.toasts
                         .warning("The command's terminal is no longer open");
@@ -1621,25 +1547,6 @@ impl App {
                 // Focus callbacks are not delivery authority. Capture all bytes,
                 // including line clearing, in one exact-owner user operation.
                 let wire = command_keystrokes(trimmed).concat();
-                if let Some(mut matched) = crate::terminal::guardrails::check_command(trimmed) {
-                    matched.target = format!(
-                        "Harvest source tab {}, pane {}",
-                        target.source.tab_id, target.source.pane_id
-                    );
-                    self.guardrail.show(
-                        matched,
-                        vec![crate::terminal::guardrails::GuardedWrite::for_pane(
-                            target.source.tab_id,
-                            PaneId(target.source.pane_id),
-                            wire,
-                        )],
-                    );
-                    self.toasts.info("Re-run is awaiting confirmation");
-                    if let Some(window) = &self.window {
-                        window.request_redraw();
-                    }
-                    return;
-                }
                 let result = self
                     .tabs
                     .as_mut()
@@ -4987,188 +4894,6 @@ mod workspace_control_tests {
                 .filter(|(_, tab)| tab.live_domain.is_some())
                 .all(|(_, tab)| tab.is_closing())
         );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn plugin_broadcast_commit_is_guarded_before_any_destination_write() {
-        use std::collections::HashMap;
-
-        if !std::path::Path::new("/bin/sh").is_file() {
-            return;
-        }
-        let shell = crate::config::ShellConfig {
-            program: Some("/bin/sh".into()),
-            args: vec!["-c".into(), "sleep 2".into()],
-            env: Default::default(),
-        };
-        let mut tabs = TabManager::new(40, 8, shell.clone(), 100, 1024 * 1024);
-        tabs.new_tab_with_command(
-            "/bin/sh",
-            &shell.args,
-            None,
-            Some("guardrail-broadcast-fixture"),
-            Some(crate::tabs::TabType::Plugin {
-                plugin_id: "fake-ai".into(),
-            }),
-            HashMap::new(),
-        )
-        .unwrap();
-        let owner = tabs
-            .active_tab_mut()
-            .unwrap()
-            .take_terminal_owner()
-            .unwrap();
-        let mut panes =
-            PaneManager::from_existing(owner, shell, 100, 1024 * 1024, 400.0, 160.0, 10.0, 20.0);
-        panes.split(SplitDirection::Vertical).unwrap();
-        let targets = panes.pane_ids();
-        let tab_id = tabs.active_tab().unwrap().id;
-        tabs.active_tab_mut().unwrap().pane_manager = Some(panes);
-
-        let mut app = App::new_headless(Config::default()).unwrap();
-        app.tabs = Some(tabs);
-        app.broadcast = BroadcastState::Active {
-            tab_id,
-            targets: targets.clone(),
-        };
-        // The potentially destructive text exists only in speculative app
-        // state; this hermetic test never writes it to a PTY.
-        app.input_line_buffer = "rm -rf /".into();
-
-        assert!(app.write_broadcast_bytes(b"\r"));
-        assert!(app.guardrail.is_awaiting_current());
-        assert_eq!(
-            app.guardrail.matched.as_ref().unwrap().target,
-            format!("Broadcast to {} panes", targets.len())
-        );
-        assert_eq!(app.input_line_buffer, "rm -rf /");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn plugin_paste_is_guarded_before_terminal_protocol_delivery() {
-        use std::collections::HashMap;
-
-        if !std::path::Path::new("/bin/sh").is_file() {
-            return;
-        }
-        let mut tabs = TabManager::new(
-            40,
-            8,
-            crate::config::ShellConfig::default(),
-            100,
-            1024 * 1024,
-        );
-        tabs.new_tab_with_command(
-            "/bin/sh",
-            &["-c".into(), "sleep 2".into()],
-            None,
-            Some("guardrail-paste-fixture"),
-            Some(crate::tabs::TabType::Plugin {
-                plugin_id: "fake-ai".into(),
-            }),
-            HashMap::new(),
-        )
-        .unwrap();
-        let mut app = App::new_headless(Config::default()).unwrap();
-        app.tabs = Some(tabs);
-
-        // The payload is retained by the overlay and never confirmed, so no
-        // command reaches the inert local fixture process.
-        app.write_paste_text("rm -rf /\n");
-
-        assert!(app.guardrail.is_awaiting_current());
-        assert!(app.input_line_buffer.is_empty());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn plugin_guardrail_combines_safe_paste_with_typed_suffix() {
-        use std::collections::HashMap;
-
-        if !std::path::Path::new("/bin/sh").is_file() {
-            return;
-        }
-        let mut tabs = TabManager::new(
-            40,
-            8,
-            crate::config::ShellConfig::default(),
-            100,
-            1024 * 1024,
-        );
-        tabs.new_tab_with_command(
-            "/bin/sh",
-            &["-c".into(), "sleep 2".into()],
-            None,
-            Some("guardrail-paste-prefix-fixture"),
-            Some(crate::tabs::TabType::Plugin {
-                plugin_id: "fake-ai".into(),
-            }),
-            HashMap::new(),
-        )
-        .unwrap();
-        let mut app = App::new_headless(Config::default()).unwrap();
-        app.tabs = Some(tabs);
-
-        app.write_paste_text("rm ");
-        assert_eq!(app.input_line_buffer, "rm ");
-        app.write_to_pty(b"-rf /");
-        app.write_to_pty(b"\r");
-
-        assert!(app.guardrail.is_awaiting_current());
-        assert_eq!(app.guardrail.matched.as_ref().unwrap().command, "rm -rf /");
-        assert_eq!(app.input_line_buffer, "rm -rf /");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn plugin_broadcast_guardrail_combines_safe_paste_with_typed_suffix() {
-        use std::collections::HashMap;
-
-        if !std::path::Path::new("/bin/sh").is_file() {
-            return;
-        }
-        let shell = crate::config::ShellConfig {
-            program: Some("/bin/sh".into()),
-            args: vec!["-c".into(), "sleep 2".into()],
-            env: Default::default(),
-        };
-        let mut tabs = TabManager::new(40, 8, shell.clone(), 100, 1024 * 1024);
-        tabs.new_tab_with_command(
-            "/bin/sh",
-            &shell.args,
-            None,
-            Some("guardrail-broadcast-paste-fixture"),
-            Some(crate::tabs::TabType::Plugin {
-                plugin_id: "fake-ai".into(),
-            }),
-            HashMap::new(),
-        )
-        .unwrap();
-        let owner = tabs
-            .active_tab_mut()
-            .unwrap()
-            .take_terminal_owner()
-            .unwrap();
-        let mut panes =
-            PaneManager::from_existing(owner, shell, 100, 1024 * 1024, 400.0, 160.0, 10.0, 20.0);
-        panes.split(SplitDirection::Vertical).unwrap();
-        let targets = panes.pane_ids();
-        let tab_id = tabs.active_tab().unwrap().id;
-        tabs.active_tab_mut().unwrap().pane_manager = Some(panes);
-
-        let mut app = App::new_headless(Config::default()).unwrap();
-        app.tabs = Some(tabs);
-        app.broadcast = BroadcastState::Active { tab_id, targets };
-
-        assert!(app.write_broadcast_paste("rm "));
-        assert_eq!(app.input_line_buffer, "rm ");
-        assert!(app.write_broadcast_bytes(b"-rf /"));
-        assert!(app.write_broadcast_bytes(b"\r"));
-        assert!(app.guardrail.is_awaiting_current());
-        assert_eq!(app.guardrail.matched.as_ref().unwrap().command, "rm -rf /");
-        assert_eq!(app.input_line_buffer, "rm -rf /");
     }
 
     #[cfg(unix)]

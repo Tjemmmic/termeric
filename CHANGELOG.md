@@ -1257,6 +1257,12 @@ Versioning once public beta tags begin.
 
 ### Removed
 
+- Destructive-command confirmations for input you type, paste, complete,
+  broadcast, or re-run from Harvest in agent tabs. The check matched text
+  such as `> /dev/null` and inspected what you typed to an agent rather than
+  what the agent runs, so it mostly got in the way. Text sent by the GUI
+  control protocol or runtime plugins is still confirmed.
+
 - The "Save Open Tabs as Legacy Snapshots" and "Legacy Snapshot Manager"
   palette commands. Tab snapshots are still written when a tab closes and are
   opened from the Workspace Manager's "Tab snapshots" view; complete
