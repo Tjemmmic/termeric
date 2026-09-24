@@ -547,6 +547,18 @@ impl ApplicationHandler<AppEvent> for App {
                             Key::Character(key) if key.as_str().eq_ignore_ascii_case("c") => {
                                 DiffReviewAction::Copy { request_id }
                             }
+                            Key::Character(key)
+                                if key.as_str().eq_ignore_ascii_case("s")
+                                    && self.diff_review.has_change_actions() =>
+                            {
+                                DiffReviewAction::Stage { request_id }
+                            }
+                            Key::Character(key)
+                                if key.as_str().eq_ignore_ascii_case("r")
+                                    && self.diff_review.has_change_actions() =>
+                            {
+                                DiffReviewAction::Revert { request_id }
+                            }
                             _ => DiffReviewAction::None,
                         };
                         self.apply_diff_review_action(action);
@@ -1307,6 +1319,7 @@ impl ApplicationHandler<AppEvent> for App {
                             self.diff_review.filename(),
                             self.diff_review.rows().len(),
                             self.diff_review.max_line_chars(),
+                            self.diff_review.has_change_actions(),
                         );
                         let action = layout.hit_test(
                             pos.0 as f32,

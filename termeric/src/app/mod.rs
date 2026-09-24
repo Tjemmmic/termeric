@@ -1,6 +1,7 @@
 //! Application state and event handling
 
 mod accessibility;
+mod agent_changes;
 mod agent_hooks;
 mod agents;
 mod application;
@@ -1240,6 +1241,12 @@ pub struct App {
     pending_file_upload: Option<PendingFileUpload>,
     /// Agent status hooks awaiting the person's confirmation.
     pending_hook_change: Option<agent_hooks::PendingHookChange>,
+    /// Git work comparing an agent's changes, running on a worker thread.
+    agent_change_job: Option<agent_changes::ChangeJob>,
+    /// The terminal whose changed files the palette lists.
+    agent_change_list: Option<agent_changes::ChangeList>,
+    /// A file revert awaiting the person's confirmation.
+    pending_revert: Option<agent_changes::PendingRevert>,
     /// At most one background file upload may be active per native window.
     active_file_upload: Option<ActiveFileUpload>,
     /// One export owns its captured source and this window's completion route.
@@ -1472,6 +1479,9 @@ impl App {
             runtime_plugin_test_paths: None,
             pending_file_upload: None,
             pending_hook_change: None,
+            agent_change_job: None,
+            agent_change_list: None,
+            pending_revert: None,
             active_file_upload: None,
             session_export: None,
             kitty_file_transfers: kitty_file_transfer::KittyFileTransferManager::default(),
@@ -2434,6 +2444,7 @@ impl App {
                 self.diff_review.filename(),
                 self.diff_review.rows().len(),
                 self.diff_review.max_line_chars(),
+                self.diff_review.has_change_actions(),
             );
             self.diff_review
                 .set_viewport(layout.rows_that_fit, layout.columns_that_fit);
@@ -3136,6 +3147,10 @@ impl App {
                 .request(redraw_scheduler::RedrawReason::TerminalOutput);
         }
         self.submit_due_agent_input(Instant::now());
+        if self.poll_agent_change_job() {
+            self.redraw_scheduler
+                .request(redraw_scheduler::RedrawReason::WindowEvent);
+        }
         if self.acknowledge_focused_agent() {
             self.redraw_scheduler
                 .request(redraw_scheduler::RedrawReason::WindowEvent);
@@ -3214,6 +3229,7 @@ impl App {
             self.git_watcher.next_poll_deadline(),
         ];
         deadlines.extend(self.next_agent_submit_deadline());
+        deadlines.extend(self.next_agent_change_deadline(now));
         if self.unicode_picker.search_pending() {
             deadlines.push(now + Duration::from_millis(16));
         }
@@ -3675,6 +3691,10 @@ impl App {
                 kind: crate::ui::command_palette::palette::PickKind::AgentTerminal,
                 id,
             } => self.focus_agent_terminal(&id),
+            PaletteResult::Picked {
+                kind: crate::ui::command_palette::palette::PickKind::AgentChange,
+                id,
+            } => self.pick_agent_change(&id),
             PaletteResult::RunAction(id) => {
                 if self.run_agent_command(&id) {
                     return;

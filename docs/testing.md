@@ -393,6 +393,15 @@ must return the compiled wire version without creating a daemon socket or token.
 Exact-version mismatch tests fail before requests or terminal input, while the
 fake-SSH integration remains credential- and network-free.
 
+Agent change review is tested against temporary Git repositories. The tests
+prove that snapshots leave the real index byte-for-byte unchanged, skip
+ignored and oversized untracked files, and report additions, edits, and
+deletions with line counts and staged state. Staging records edits and
+deletions, and reverting restores content, executable mode, and absence while
+refusing paths outside the repository. A headless application test lists,
+opens, stages, confirms a revert, and stages all through the real commands and
+worker thread.
+
 Agent status coverage is provider-free. Unit tests cover the status state
 machine, hook payload parsing for Claude Code and Codex shapes, settings-file
 rewriting (verbatim order and text, indentation, symlinks, permissions,

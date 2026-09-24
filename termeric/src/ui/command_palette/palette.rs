@@ -83,6 +83,8 @@ pub enum PickKind {
     Agent(AgentPlacement),
     /// Choose a terminal running an agent to focus.
     AgentTerminal,
+    /// Choose a file an agent changed to review, or stage them all.
+    AgentChange,
 }
 
 /// Where a picked agent starts.
@@ -101,6 +103,7 @@ impl PickKind {
             Self::Theme => "Choose theme",
             Self::Agent(_) => "Choose agent",
             Self::AgentTerminal => "Go to agent",
+            Self::AgentChange => "Review agent changes",
         }
     }
 }
@@ -1173,6 +1176,8 @@ pub fn core_commands(
         ),
         ("agent.restart", "Restart Agent", None),
         ("agent.insert-context", "Send Context to Agent…", None),
+        ("agent.review-changes", "Review Agent Changes…", None),
+        ("agent.stage-changes", "Stage All Agent Changes", None),
         ("agent.review-diff", "Review Agent Diff", None),
         ("agent.copy-diff", "Copy Agent Diff", None),
         ("agent.export", "Export Agent Session", None),

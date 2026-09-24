@@ -597,6 +597,26 @@ impl Renderer {
                 anim,
                 4.0,
             );
+            for (button, label) in [
+                (layout.stage_button, "Stage"),
+                (layout.revert_button, "Revert"),
+            ] {
+                let Some(button) = button else {
+                    continue;
+                };
+                let hovered = info.awaiting && button.contains(mouse_x, mouse_y);
+                ctx.draw_button(
+                    button.x,
+                    button.y,
+                    button.width,
+                    button.height,
+                    label,
+                    false,
+                    hovered,
+                    hovered && info.mouse_pressed,
+                    anim,
+                );
+            }
             ctx.draw_button(
                 layout.copy_button.x,
                 layout.copy_button.y,
@@ -629,11 +649,18 @@ impl Renderer {
             .scroll_offset
             .saturating_add(layout.rows_that_fit)
             .min(info.total_rows);
-        let hint = format!(
-            "{first}-{last}/{} c{} | arrows scroll | C copy | Enter/Esc done",
-            info.total_rows,
-            info.horizontal_offset + 1
-        );
+        let hint = if layout.stage_button.is_some() {
+            format!(
+                "{first}-{last}/{} | S stage | R revert | C copy | Esc done",
+                info.total_rows
+            )
+        } else {
+            format!(
+                "{first}-{last}/{} c{} | arrows scroll | C copy | Enter/Esc done",
+                info.total_rows,
+                info.horizontal_offset + 1
+            )
+        };
         let hint: String = hint
             .chars()
             .take(((card_width - padding * 2.0) / char_scale).floor().max(1.0) as usize)

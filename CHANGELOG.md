@@ -8,6 +8,12 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- **Review Agent Changes…** lists the files an agent changed since it started
+  in a Git repository, compared with a snapshot taken when Termeric noticed
+  it. Each file's diff can be staged, or reverted to how it was after
+  confirmation, and **Stage All Agent Changes** stages them together. Taking
+  the snapshot never touches the index or any file.
+
 - Agent status. **Set Up Agent Status…** adds hooks to Claude Code and Codex,
   after showing which files change. Other settings keep their exact text and
   order, and a backup is kept. The hooks run `termeric agent-event`, which does

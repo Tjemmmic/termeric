@@ -1250,7 +1250,31 @@ impl Tab {
                 &mut self.integration,
             );
         }
+        self.track_agent_changes();
         changed
+    }
+
+    /// Start a change baseline for each agent that just appeared, and
+    /// collect finished ones.
+    fn track_agent_changes(&mut self) {
+        for id in self.owned_pane_ids() {
+            let Some(session) = self.pane_session(id) else {
+                continue;
+            };
+            let running = session.agent.is_some();
+            let directory = session.agent_changes.needs_capture(running).then(|| {
+                self.pane_working_directory(id)
+                    .map(std::path::PathBuf::from)
+            });
+            let Some(session) = self.pane_session_mut(id) else {
+                continue;
+            };
+            if let Some(directory) = directory {
+                session.agent_changes.start_capture(directory);
+            }
+            session.agent_changes.set_agent_running(running);
+            session.agent_changes.poll();
+        }
     }
 
     /// The most urgent agent badge among this tab's terminals.

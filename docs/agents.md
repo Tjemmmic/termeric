@@ -49,7 +49,7 @@ hidden everywhere else:
 | **Start New Agent Conversation** | Types the agent's own new-conversation command, such as `/clear`, then presses Enter a moment later so the agent submits it. |
 | **Restart Agent** | Starts the same agent, profile, and directory again, then closes the old process. Only offered for agents Termeric started. |
 | **Send Context to Agent…** | Gathers the chosen context and pastes it into the agent without pressing Enter, so you can add to it first. Bracketed paste is used when the agent enabled it. |
-| **Review Agent Diff** / **Copy Agent Diff** | Reviews or copies the latest unified diff the agent printed. See [diff capture](diff-capture.md). |
+| **Review Agent Diff** / **Copy Agent Diff** | Reviews or copies the latest unified diff the agent printed. Offered only when the agent printed one. See [diff capture](diff-capture.md). |
 | **Export Agent Session** | Exports the terminal's transcript, or its scrollback when it is not recording. See [transcript export](transcript-export.md). |
 | **Toggle Agent Transcript** | Starts or stops recording this terminal's raw transcript. |
 
@@ -66,6 +66,31 @@ What you type or paste into an agent reaches it directly. Input that software
 sends on your behalf, through the [GUI control protocol](gui-control.md) or a
 [runtime plugin](plugins.md), still asks for confirmation when it would run a
 guarded command.
+
+## Reviewing an agent's changes
+
+When Termeric notices an agent in a terminal inside a Git working tree, it
+records a snapshot of that working tree. The snapshot includes your own
+uncommitted work and new files that are not ignored. **Review Agent Changes…**
+then lists every file that differs from the snapshot, with lines added and
+removed, and marks files whose current content is already staged. Choosing a
+file shows its diff, with these controls:
+
+- **Stage** (S) adds the file to the index as it is now, including a deletion.
+- **Revert** (R) puts the file back as it was when the agent started, after
+  you confirm. A file the agent created is removed. Only the working tree
+  changes: staged content and commits stay as they are.
+- **Copy** (C) copies the file's diff.
+
+**Stage All Agent Changes** stages every changed file at once. Both commands
+stay available after the agent exits, until another agent starts in that
+terminal.
+
+The snapshot is taken from an in-memory copy of the index. Taking it never
+changes your index or files; it adds objects to the repository, which
+`git gc` removes once nothing uses them. Untracked files over 16 MiB are left
+out. Working trees with more than 50,000 files cannot be snapshotted. Changes
+you make yourself while the agent runs are listed too.
 
 ## Agent status
 

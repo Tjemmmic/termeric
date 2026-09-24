@@ -135,12 +135,20 @@ impl App {
                     "agent.copy-last-response" => agent.status.as_ref().is_none_or(|status| {
                         status.last_message.is_none() && status.transcript_path.is_none()
                     }),
+                    // Only when the agent printed a diff Termeric recognized.
+                    "agent.review-diff" | "agent.copy-diff" => {
+                        self.selected_diff(agent.identity).is_none()
+                    }
                     _ => false,
                 },
             })
             .collect();
         if self.agent_terminals().is_empty() {
             hidden.push("agent.go-to");
+        }
+        // Offered even after the agent exits, while its baseline remains.
+        if self.focused_change_baseline().is_none() {
+            hidden.extend(["agent.review-changes", "agent.stage-changes"]);
         }
         hidden.extend(match self.agent_hook_summary() {
             HookSetupSummary::Unavailable => &["agent.setup-status", "agent.remove-status"][..],
@@ -359,6 +367,8 @@ impl App {
             "agent.split-right" => self.open_agent_picker(AgentPlacement::SplitRight),
             "agent.split-down" => self.open_agent_picker(AgentPlacement::SplitDown),
             "agent.go-to" => self.open_agent_list(),
+            "agent.review-changes" => self.review_agent_changes(),
+            "agent.stage-changes" => self.stage_all_agent_changes(),
             "agent.copy-last-response" => self.copy_last_agent_response(),
             "agent.setup-status" => self.open_agent_hook_setup(true),
             "agent.remove-status" => self.open_agent_hook_setup(false),

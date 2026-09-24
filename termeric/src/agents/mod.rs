@@ -7,6 +7,7 @@
 //! entries from the configuration on top, so supporting another agent is a
 //! configuration entry rather than new code.
 
+pub mod changes;
 pub mod config;
 pub mod detect;
 pub mod hook;

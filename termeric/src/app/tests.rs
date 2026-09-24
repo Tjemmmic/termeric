@@ -8258,12 +8258,14 @@ fn hook_reports_track_an_agent_started_from_a_shell_until_it_exits() {
     else {
         return;
     };
+    // Outside any repository, so noticing the agent snapshots nothing real.
+    let directory = tempfile::tempdir().unwrap();
     let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
     let tab_id = tabs
         .new_tab_with_command(
             bash,
             &["--norc".into(), "--noprofile".into(), "-i".into()],
-            None,
+            directory.path().to_str(),
             None,
             None,
             HashMap::new(),
@@ -8511,6 +8513,139 @@ fn agent_list_puts_waiting_agents_first_and_answers_come_from_reports_or_logs() 
     assert_eq!(
         app.focused_agent_answer().unwrap_err(),
         "Set up agent status to copy an agent's answers"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn agent_changes_are_listed_reviewed_staged_and_reverted_for_their_terminal() {
+    use crate::ui::command_palette::palette::PickKind;
+    use crate::ui::diff_review::DiffReviewAction;
+    let repository = tempfile::tempdir().unwrap();
+    let root = repository.path();
+    let repo = git2::Repository::init(root).unwrap();
+    std::fs::write(root.join("kept.txt"), "one\ntwo\n").unwrap();
+    let mut index = repo.index().unwrap();
+    index.add_path(std::path::Path::new("kept.txt")).unwrap();
+    index.write().unwrap();
+    let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+    let signature = git2::Signature::now("Test", "test@example.com").unwrap();
+    repo.commit(Some("HEAD"), &signature, &signature, "start", &tree, &[])
+        .unwrap();
+
+    let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+    tabs.new_tab_with_command(
+        "/bin/sh",
+        &["-c".into(), "sleep 30".into()],
+        root.to_str(),
+        None,
+        None,
+        HashMap::new(),
+    )
+    .unwrap();
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.tabs = Some(tabs);
+    {
+        // What noticing an agent in this terminal does.
+        let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
+        let pane = tab.focused_terminal_identity().pane_id;
+        let changes = &mut tab.pane_session_mut(pane).unwrap().agent_changes;
+        changes.set_agent_running(true);
+        changes.start_capture(Some(root.to_path_buf()));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !changes.poll() {
+            assert!(Instant::now() < deadline, "the baseline was never captured");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    assert!(
+        !app.unavailable_agent_commands()
+            .contains(&"agent.review-changes".to_string())
+    );
+    let finish_job = |app: &mut App| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !app.poll_agent_change_job() {
+            assert!(Instant::now() < deadline, "the Git job never finished");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    };
+
+    // The agent edits a file after it started.
+    std::fs::write(root.join("kept.txt"), "one\nTWO\n").unwrap();
+    app.review_agent_changes();
+    finish_job(&mut app);
+    assert_eq!(
+        app.command_palette.active_pick(),
+        Some(PickKind::AgentChange)
+    );
+    app.command_palette.close();
+
+    app.pick_agent_change("kept.txt");
+    finish_job(&mut app);
+    let request = app.diff_review.request_id();
+    assert!(app.diff_review.has_change_actions());
+    assert!(
+        app.diff_review
+            .change_text(request)
+            .is_some_and(|text| text.contains("-two\n") && text.contains("+TWO\n"))
+    );
+
+    app.apply_diff_review_action(DiffReviewAction::Stage {
+        request_id: request,
+    });
+    finish_job(&mut app);
+    assert_eq!(latest_toast(&app), Some("Staged kept.txt"));
+    let mut index = repo.index().unwrap();
+    index.read(true).unwrap();
+    let staged = index.get_path(std::path::Path::new("kept.txt"), 0).unwrap();
+    assert_eq!(repo.find_blob(staged.id).unwrap().content(), b"one\nTWO\n");
+    // Staging reopens the list, which still shows the change.
+    finish_job(&mut app);
+    assert_eq!(
+        app.command_palette.active_pick(),
+        Some(PickKind::AgentChange)
+    );
+    app.command_palette.close();
+
+    app.pick_agent_change("kept.txt");
+    finish_job(&mut app);
+    let request = app.diff_review.request_id();
+    app.apply_diff_review_action(DiffReviewAction::Revert {
+        request_id: request,
+    });
+    assert_eq!(
+        std::fs::read_to_string(root.join("kept.txt")).unwrap(),
+        "one\nTWO\n",
+        "nothing is reverted before the person confirms"
+    );
+    let confirmation = app.info_overlay.request_id();
+    app.apply_info_overlay_action(crate::ui::info_overlay::InfoOverlayAction::Choose {
+        request_id: confirmation,
+        choice_id: "agent-change-revert".into(),
+    });
+    finish_job(&mut app);
+    assert_eq!(latest_toast(&app), Some("Reverted kept.txt"));
+    assert_eq!(
+        std::fs::read_to_string(root.join("kept.txt")).unwrap(),
+        "one\ntwo\n"
+    );
+    finish_job(&mut app);
+    assert_eq!(
+        latest_toast(&app),
+        Some("The agent has not changed any files since it started")
+    );
+
+    // Stage All stages everything that changed, including new files.
+    std::fs::write(root.join("kept.txt"), "one\nthree\n").unwrap();
+    std::fs::write(root.join("added.txt"), "new\n").unwrap();
+    app.stage_all_agent_changes();
+    finish_job(&mut app);
+    assert_eq!(latest_toast(&app), Some("Staged 2 files"));
+    index.read(true).unwrap();
+    assert!(
+        index
+            .get_path(std::path::Path::new("added.txt"), 0)
+            .is_some()
     );
 }
 

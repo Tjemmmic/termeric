@@ -177,6 +177,8 @@ enum DiffSemanticTarget {
     Content(u64),
     Copy(u64),
     Dismiss(u64),
+    Stage(u64),
+    Revert(u64),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1596,7 +1598,9 @@ impl App {
         let request_id = match target {
             DiffSemanticTarget::Content(request_id)
             | DiffSemanticTarget::Copy(request_id)
-            | DiffSemanticTarget::Dismiss(request_id) => request_id,
+            | DiffSemanticTarget::Dismiss(request_id)
+            | DiffSemanticTarget::Stage(request_id)
+            | DiffSemanticTarget::Revert(request_id) => request_id,
         };
         if !self.diff_review.is_awaiting(request_id) {
             return;
@@ -1611,6 +1615,12 @@ impl App {
             }
             (Action::Click, DiffSemanticTarget::Dismiss(request_id)) => {
                 DiffReviewAction::Dismiss { request_id }
+            }
+            (Action::Click, DiffSemanticTarget::Stage(request_id)) => {
+                DiffReviewAction::Stage { request_id }
+            }
+            (Action::Click, DiffSemanticTarget::Revert(request_id)) => {
+                DiffReviewAction::Revert { request_id }
             }
             (Action::ScrollUp, DiffSemanticTarget::Content(request_id)) => {
                 DiffReviewAction::ScrollRows {
@@ -1752,6 +1762,7 @@ impl App {
             self.diff_review.filename(),
             self.diff_review.rows().len(),
             self.diff_review.max_line_chars(),
+            self.diff_review.has_change_actions(),
         )
     }
 
@@ -4456,7 +4467,17 @@ impl App {
         let content_target = DiffSemanticTarget::Content(request_id);
         let copy_target = DiffSemanticTarget::Copy(request_id);
         let dismiss_target = DiffSemanticTarget::Dismiss(request_id);
-        let targets = HashSet::from([content_target, copy_target, dismiss_target]);
+        let change_actions = [
+            (DiffSemanticTarget::Stage(request_id), layout.stage_button),
+            (DiffSemanticTarget::Revert(request_id), layout.revert_button),
+        ];
+        let mut targets = HashSet::from([content_target, copy_target, dismiss_target]);
+        targets.extend(
+            change_actions
+                .iter()
+                .filter(|(_, button)| button.is_some())
+                .map(|(target, _)| *target),
+        );
         self.accessibility.retain_diff_targets(&targets);
         let content_id = self.accessibility.diff_node(content_target);
         let copy_id = self.accessibility.diff_node(copy_target);
@@ -4500,7 +4521,11 @@ impl App {
         nodes.push((DIFF_TITLE, title));
 
         let mut content = Node::new(Role::Document);
-        content.set_label("Detected unified diff");
+        content.set_label(if self.diff_review.has_change_actions() {
+            "Changes to this file since the agent started"
+        } else {
+            "Detected unified diff"
+        });
         content.set_value(visible_rows.join("\n"));
         content.set_description(status_text.clone());
         content.set_bounds(diff_rect(layout.content));
@@ -4528,6 +4553,30 @@ impl App {
         status.set_live(Live::Polite);
         nodes.push((DIFF_STATUS, status));
 
+        let mut change_ids = Vec::new();
+        for (target, button) in change_actions {
+            let Some(button) = button else {
+                continue;
+            };
+            let (label, shortcut) = match target {
+                DiffSemanticTarget::Stage(_) => ("Stage this file", "S"),
+                _ => ("Revert this file to how it was when the agent started", "R"),
+            };
+            let id = self.accessibility.diff_node(target);
+            let mut node = Node::new(Role::Button);
+            node.set_label(label);
+            node.set_keyboard_shortcut(shortcut);
+            node.set_bounds(diff_rect(button));
+            if awaiting {
+                node.add_action(Action::Click);
+                node.add_action(Action::Focus);
+            } else {
+                node.set_disabled();
+            }
+            nodes.push((id, node));
+            change_ids.push(id);
+        }
+
         let mut copy = Node::new(Role::Button);
         copy.set_label("Copy complete raw diff");
         copy.set_keyboard_shortcut("C");
@@ -4554,11 +4603,18 @@ impl App {
 
         let mut dialog = Node::new(Role::Dialog);
         dialog.set_label(title_text);
-        dialog.set_description("Scrollable review of one detected unified diff");
+        dialog.set_description(if self.diff_review.has_change_actions() {
+            "Scrollable review of one file an agent changed, which can be staged or reverted"
+        } else {
+            "Scrollable review of one detected unified diff"
+        });
         dialog.set_modal();
         dialog.add_action(Action::Focus);
         dialog.set_bounds(diff_rect(layout.card));
-        dialog.set_children([DIFF_TITLE, content_id, DIFF_STATUS, copy_id, dismiss_id]);
+        let mut children = vec![DIFF_TITLE, content_id, DIFF_STATUS];
+        children.extend(change_ids);
+        children.extend([copy_id, dismiss_id]);
+        dialog.set_children(children);
         nodes.push((DIFF_DIALOG, dialog));
         nodes.push((ROOT, root));
 

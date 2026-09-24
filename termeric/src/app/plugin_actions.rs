@@ -1274,6 +1274,16 @@ impl App {
         use crate::ui::diff_review::DiffReviewAction;
 
         match action {
+            DiffReviewAction::Copy { request_id }
+                if self.diff_review.change_text(request_id).is_some() =>
+            {
+                let text = self.diff_review.change_text(request_id).unwrap_or_default();
+                self.copy_to_clipboard(text.to_owned(), "Copied diff to clipboard");
+            }
+            DiffReviewAction::Stage { request_id } => self.stage_reviewed_change(request_id),
+            DiffReviewAction::Revert { request_id } => {
+                self.confirm_revert_reviewed_change(request_id)
+            }
             DiffReviewAction::Copy { request_id } => {
                 let raw = self.diff_review.target(request_id).and_then(|target| {
                     let tabs = self.tabs.as_ref()?;
@@ -1347,6 +1357,7 @@ impl App {
                     self.pending_font_feature_management = None;
                     self.pending_file_upload = None;
                     self.cancel_pending_hook_change(request_id);
+                    self.cancel_pending_revert(request_id);
                 }
             }
             InfoOverlayAction::Choose {
@@ -1373,6 +1384,9 @@ impl App {
                     return;
                 }
                 if self.handle_agent_hook_choice(request_id, &choice_id) {
+                    return;
+                }
+                if self.handle_revert_choice(request_id, &choice_id) {
                     return;
                 }
                 if self
@@ -1405,6 +1419,7 @@ impl App {
                     self.pending_font_feature_management = None;
                     self.pending_file_upload = None;
                     self.cancel_pending_hook_change(request_id);
+                    self.cancel_pending_revert(request_id);
                 }
             }
             InfoOverlayAction::CancelInput { request_id } => {
@@ -1419,6 +1434,7 @@ impl App {
                     self.pending_font_feature_management = None;
                     self.pending_file_upload = None;
                     self.cancel_pending_hook_change(request_id);
+                    self.cancel_pending_revert(request_id);
                 }
             }
             InfoOverlayAction::ScrollLines { request_id, delta } => {
@@ -1486,7 +1502,7 @@ impl App {
         }
     }
 
-    fn selected_diff(
+    pub(super) fn selected_diff(
         &self,
         identity: crate::tabs::TerminalIdentity,
     ) -> Option<crate::terminal::diff_detector::DetectedDiff> {

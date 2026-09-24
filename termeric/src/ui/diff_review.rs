@@ -1,4 +1,6 @@
-//! Bounded, request-scoped review surface for detected unified diffs.
+//! Bounded, request-scoped review surface for unified diffs: one detected in
+//! a terminal's output, or one file an agent changed, which can also be
+//! staged or reverted from here.
 
 use super::animation::OverlayAnimation;
 use super::constants::CONTENT_CHAR_SCALE;
@@ -58,6 +60,15 @@ impl DiffReviewRow {
     }
 }
 
+/// The agent-changed file a review shows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChangeReviewTarget {
+    pub tab_id: usize,
+    pub pane_id: crate::panes::PaneId,
+    /// Relative to the repository root.
+    pub path: std::path::PathBuf,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DiffReviewTarget {
     pub tab_id: usize,
@@ -67,14 +78,40 @@ pub struct DiffReviewTarget {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiffReviewAction {
-    Copy { request_id: u64 },
-    Dismiss { request_id: u64 },
-    ScrollRows { request_id: u64, delta: isize },
-    ScrollColumns { request_id: u64, delta: isize },
-    ScrollToTop { request_id: u64 },
-    ScrollToBottom { request_id: u64 },
-    ScrollToLeft { request_id: u64 },
-    ScrollToRight { request_id: u64 },
+    Copy {
+        request_id: u64,
+    },
+    /// Stage the reviewed agent change.
+    Stage {
+        request_id: u64,
+    },
+    /// Ask to put the reviewed file back as it was when the agent started.
+    Revert {
+        request_id: u64,
+    },
+    Dismiss {
+        request_id: u64,
+    },
+    ScrollRows {
+        request_id: u64,
+        delta: isize,
+    },
+    ScrollColumns {
+        request_id: u64,
+        delta: isize,
+    },
+    ScrollToTop {
+        request_id: u64,
+    },
+    ScrollToBottom {
+        request_id: u64,
+    },
+    ScrollToLeft {
+        request_id: u64,
+    },
+    ScrollToRight {
+        request_id: u64,
+    },
     None,
 }
 
@@ -86,6 +123,9 @@ pub struct DiffReviewLayout {
     pub content: DiffReviewRect,
     pub copy_button: DiffReviewRect,
     pub done_button: DiffReviewRect,
+    /// Present only when reviewing an agent's change.
+    pub stage_button: Option<DiffReviewRect>,
+    pub revert_button: Option<DiffReviewRect>,
     pub padding: f32,
     pub title_height: f32,
     pub line_height: f32,
@@ -107,6 +147,7 @@ impl DiffReviewLayout {
         filename: &str,
         total_rows: usize,
         max_line_chars: usize,
+        change_actions: bool,
     ) -> Self {
         let char_scale = (cell_width * CONTENT_CHAR_SCALE).max(1.0);
         let padding = (cell_width * 1.5).max(10.0);
@@ -142,11 +183,35 @@ impl DiffReviewLayout {
         let button_height = cell_height * 1.8;
         let button_gap = cell_width * 1.5;
         let button_y = content_y + content_height + cell_height * 1.15;
-        let available_button_width = (card_width - padding * 2.0 - button_gap).max(2.0);
-        let copy_width = (available_button_width * 0.38).max(1.0);
-        let done_width = (available_button_width - copy_width).max(1.0);
-        let copy_x = card_x + padding;
-        let done_x = copy_x + copy_width + button_gap;
+        let button = |x: f32, width: f32| DiffReviewRect {
+            x,
+            y: button_y,
+            width: width.max(1.0),
+            height: button_height,
+        };
+        let row_x = card_x + padding;
+        let (stage_button, revert_button, copy_button, done_button) = if change_actions {
+            // Stage, Revert, and Copy share the row equally with a wider Done.
+            let available = (card_width - padding * 2.0 - button_gap * 3.0).max(4.0);
+            let small = available * 0.22;
+            let done = available - small * 3.0;
+            let step = small + button_gap;
+            (
+                Some(button(row_x, small)),
+                Some(button(row_x + step, small)),
+                button(row_x + step * 2.0, small),
+                button(row_x + step * 3.0, done),
+            )
+        } else {
+            let available = (card_width - padding * 2.0 - button_gap).max(2.0);
+            let copy = available * 0.38;
+            (
+                None,
+                None,
+                button(row_x, copy),
+                button(row_x + copy + button_gap, available - copy),
+            )
+        };
 
         Self {
             card: DiffReviewRect {
@@ -161,18 +226,10 @@ impl DiffReviewLayout {
                 width: content_width,
                 height: content_height,
             },
-            copy_button: DiffReviewRect {
-                x: copy_x,
-                y: button_y,
-                width: copy_width,
-                height: button_height,
-            },
-            done_button: DiffReviewRect {
-                x: done_x,
-                y: button_y,
-                width: done_width,
-                height: button_height,
-            },
+            copy_button,
+            done_button,
+            stage_button,
+            revert_button,
             padding,
             title_height,
             line_height,
@@ -185,7 +242,17 @@ impl DiffReviewLayout {
     }
 
     pub fn hit_test(&self, x: f32, y: f32, request_id: u64) -> DiffReviewAction {
-        if self.copy_button.contains(x, y) {
+        if self
+            .stage_button
+            .is_some_and(|button| button.contains(x, y))
+        {
+            DiffReviewAction::Stage { request_id }
+        } else if self
+            .revert_button
+            .is_some_and(|button| button.contains(x, y))
+        {
+            DiffReviewAction::Revert { request_id }
+        } else if self.copy_button.contains(x, y) {
             DiffReviewAction::Copy { request_id }
         } else if self.done_button.contains(x, y) {
             DiffReviewAction::Dismiss { request_id }
@@ -201,6 +268,10 @@ pub struct DiffReviewOverlay {
     filename: String,
     rows: Vec<DiffReviewRow>,
     target: Option<DiffReviewTarget>,
+    /// Set instead of `target` when reviewing an agent's change.
+    change: Option<ChangeReviewTarget>,
+    /// The complete unified diff of that change, for Copy.
+    change_text: String,
     request_id: u64,
     accepting: bool,
     scroll_offset: usize,
@@ -217,6 +288,8 @@ impl DiffReviewOverlay {
             filename: String::new(),
             rows: Vec::new(),
             target: None,
+            change: None,
+            change_text: String::new(),
             request_id: 0,
             accepting: false,
             scroll_offset: 0,
@@ -236,17 +309,34 @@ impl DiffReviewOverlay {
         self.request_id = self.request_id.wrapping_add(1).max(1);
         self.filename = bounded_text(&diff.filename, MAX_DIFF_FILENAME_CHARS);
         self.rows = bounded_rows(diff);
+        self.target = Some(DiffReviewTarget {
+            tab_id,
+            pane_id,
+            diff_id: diff.id,
+        });
+        self.change = None;
+        self.change_text.clear();
+        self.open_rows()
+    }
+
+    /// Review one file an agent changed, given its unified diff.
+    pub fn show_change(&mut self, unified: &str, change: ChangeReviewTarget) -> u64 {
+        self.request_id = self.request_id.wrapping_add(1).max(1);
+        self.filename = bounded_text(&change.path.to_string_lossy(), MAX_DIFF_FILENAME_CHARS);
+        self.rows = rows_from_unified(unified);
+        self.target = None;
+        self.change = Some(change);
+        self.change_text = unified.to_owned();
+        self.open_rows()
+    }
+
+    fn open_rows(&mut self) -> u64 {
         self.max_line_chars = self
             .rows
             .iter()
             .map(|row| row.prefix().chars().count() + row.text().chars().count())
             .max()
             .unwrap_or(0);
-        self.target = Some(DiffReviewTarget {
-            tab_id,
-            pane_id,
-            diff_id: diff.id,
-        });
         self.accepting = true;
         self.scroll_offset = 0;
         self.horizontal_offset = 0;
@@ -279,6 +369,24 @@ impl DiffReviewOverlay {
         self.is_awaiting(request_id)
             .then_some(self.target)
             .flatten()
+    }
+
+    /// The agent change under review, while it can still be acted on.
+    pub fn change_target(&self, request_id: u64) -> Option<&ChangeReviewTarget> {
+        self.is_awaiting(request_id)
+            .then_some(self.change.as_ref())
+            .flatten()
+    }
+
+    /// The reviewed change's complete diff, for Copy.
+    pub fn change_text(&self, request_id: u64) -> Option<&str> {
+        self.change_target(request_id)
+            .map(|_| self.change_text.as_str())
+    }
+
+    /// Whether Stage and Revert are offered.
+    pub fn has_change_actions(&self) -> bool {
+        self.change.is_some()
     }
 
     pub fn filename(&self) -> &str {
@@ -414,6 +522,8 @@ impl DiffReviewOverlay {
             self.filename.clear();
             self.rows.clear();
             self.target = None;
+            self.change = None;
+            self.change_text.clear();
             self.scroll_offset = 0;
             self.horizontal_offset = 0;
             self.max_line_chars = 0;
@@ -456,6 +566,47 @@ fn bounded_rows(diff: &DetectedDiff) -> Vec<DiffReviewRow> {
     }
     if rows.is_empty() {
         rows.push(DiffReviewRow::Context("No diff hunks available".into()));
+    }
+    rows
+}
+
+/// Rows for a unified diff as Git prints it. The file headers are dropped:
+/// the title already names the file.
+fn rows_from_unified(text: &str) -> Vec<DiffReviewRow> {
+    let body = |line: &str| bounded_text(&line[1..], MAX_DIFF_REVIEW_LINE_CHARS.saturating_sub(2));
+    let mut rows = Vec::new();
+    let mut in_hunk = false;
+    for line in text.lines() {
+        let row = if line.starts_with("@@") {
+            if in_hunk && !push_bounded_row(&mut rows, DiffReviewRow::Blank) {
+                break;
+            }
+            in_hunk = true;
+            DiffReviewRow::Header(bounded_text(line, MAX_DIFF_REVIEW_LINE_CHARS))
+        } else if !in_hunk {
+            if line.starts_with("Binary files") {
+                DiffReviewRow::Omitted("Binary file; its content is not shown".into())
+            } else {
+                continue;
+            }
+        } else if line.starts_with('+') {
+            DiffReviewRow::Added(body(line))
+        } else if line.starts_with('-') {
+            DiffReviewRow::Removed(body(line))
+        } else if line.starts_with(' ') {
+            DiffReviewRow::Context(body(line))
+        } else {
+            // "\ No newline at end of file" and similar notes.
+            DiffReviewRow::Omitted(bounded_text(line, MAX_DIFF_REVIEW_LINE_CHARS))
+        };
+        if !push_bounded_row(&mut rows, row) {
+            break;
+        }
+    }
+    if rows.is_empty() {
+        rows.push(DiffReviewRow::Context(
+            "No differences remain in this file".into(),
+        ));
     }
     rows
 }
@@ -524,6 +675,7 @@ mod tests {
                 "fixture.rs",
                 40,
                 80,
+                false,
             )
         };
         let settled = calculate(1.0);
@@ -578,7 +730,9 @@ mod tests {
             "fixture.rs",
             50_000,
             50_000,
+            false,
         );
+        assert!(layout.stage_button.is_none() && layout.revert_button.is_none());
         assert!(layout.card.height < 500.0);
         assert!(layout.card.width < 900.0);
         assert_eq!(
@@ -624,5 +778,78 @@ mod tests {
         assert!(overlay.dismiss(current));
         assert!(overlay.is_active());
         assert!(!overlay.is_awaiting(current));
+    }
+
+    #[test]
+    fn change_reviews_add_stage_and_revert_inside_the_card() {
+        let layout =
+            DiffReviewLayout::calculate(900.0, 500.0, 10.0, 20.0, 1.0, "src/lib.rs", 10, 40, true);
+        let stage = layout.stage_button.unwrap();
+        let revert = layout.revert_button.unwrap();
+        let buttons = [stage, revert, layout.copy_button, layout.done_button];
+        for pair in buttons.windows(2) {
+            assert!(
+                pair[0].x + pair[0].width < pair[1].x,
+                "buttons do not overlap"
+            );
+        }
+        let last = layout.done_button;
+        assert!(last.x + last.width <= layout.card.x + layout.card.width);
+        let centre = |rect: DiffReviewRect| (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
+        let hit = |rect| {
+            let (x, y) = centre(rect);
+            layout.hit_test(x, y, 3)
+        };
+        assert_eq!(hit(stage), DiffReviewAction::Stage { request_id: 3 });
+        assert_eq!(hit(revert), DiffReviewAction::Revert { request_id: 3 });
+        assert_eq!(
+            hit(layout.copy_button),
+            DiffReviewAction::Copy { request_id: 3 }
+        );
+    }
+
+    #[test]
+    fn change_reviews_parse_git_patches_and_expire_with_the_review() {
+        let mut overlay = DiffReviewOverlay::new();
+        let target = ChangeReviewTarget {
+            tab_id: 1,
+            pane_id: crate::panes::PaneId(0),
+            path: "src/lib.rs".into(),
+        };
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\nindex 1..2 100644\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1,2 @@\n keep\n-old\n+new\n@@ -9 +9 @@\n-a\n+b\n\\ No newline at end of file\n";
+        let request = overlay.show_change(patch, target.clone());
+        assert!(overlay.has_change_actions());
+        assert_eq!(overlay.filename(), "src/lib.rs");
+        assert_eq!(
+            overlay.rows(),
+            [
+                DiffReviewRow::Header("@@ -1,2 +1,2 @@".into()),
+                DiffReviewRow::Context("keep".into()),
+                DiffReviewRow::Removed("old".into()),
+                DiffReviewRow::Added("new".into()),
+                DiffReviewRow::Blank,
+                DiffReviewRow::Header("@@ -9 +9 @@".into()),
+                DiffReviewRow::Removed("a".into()),
+                DiffReviewRow::Added("b".into()),
+                DiffReviewRow::Omitted("\\ No newline at end of file".into()),
+            ]
+        );
+        assert_eq!(overlay.change_target(request), Some(&target));
+        assert_eq!(overlay.change_text(request), Some(patch));
+        assert!(
+            overlay.target(request).is_none(),
+            "no detected-diff authority"
+        );
+        assert!(overlay.dismiss(request));
+        assert_eq!(overlay.change_target(request), None);
+
+        let request = overlay.show_change("Binary files a/x and b/x differ\n", target);
+        assert_eq!(
+            overlay.rows(),
+            [DiffReviewRow::Omitted(
+                "Binary file; its content is not shown".into()
+            )]
+        );
+        assert!(overlay.change_text(request).is_some());
     }
 }

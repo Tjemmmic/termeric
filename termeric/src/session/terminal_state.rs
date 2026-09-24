@@ -8,6 +8,8 @@ pub(crate) struct TerminalSession {
     pub agent: Option<AgentSession>,
     /// What that agent last reported through its hooks.
     pub agent_status: Option<AgentStatus>,
+    /// Where the latest agent started, for reviewing what it changed.
+    pub agent_changes: crate::agents::changes::ChangeTracking,
     pub transcript: Option<TranscriptRecorder>,
     pub diff_detector: DiffDetector,
     failure_reported: bool,
@@ -19,6 +21,7 @@ impl Default for TerminalSession {
         Self {
             agent: None,
             agent_status: None,
+            agent_changes: Default::default(),
             transcript: None,
             diff_detector: DiffDetector::new(),
             failure_reported: false,
