@@ -8,7 +8,6 @@
 //! - Context picker modal
 
 pub mod animation;
-pub mod claude_chrome;
 pub mod command_palette;
 pub mod commands;
 pub mod constants;

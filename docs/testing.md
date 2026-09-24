@@ -343,10 +343,8 @@ python3 -m unittest scripts.test_check_feature_support
 
 The test suite includes a headless `App` controller, direct terminal fixtures,
 real PTY quick-exit capture, a real Bash/OSC 133/Harvest path, shared render and
-hit-test geometry checks, and opt-in executable-contract probes. The installed
-Codex parser probe is skipped before launching the CLI unless the operator sets
-`TERMERIC_REAL_CODEX_CONTRACT=1`; the default lane uses only the fake
-executable integration fixture.
+hit-test geometry checks, and a fake agent executable. No test launches an
+installed agent CLI.
 
 Reusable terminal-profile coverage is hermetic: `/bin/sh` fixtures verify exact
 environment/cwd/title delivery, CLI resolution before window creation, palette
@@ -366,15 +364,15 @@ admission/eviction, replay-expiry refusal, and strict CLI/wire/result validation
 These fixtures run local shell helpers only. Native GUI status acceptance and
 any real provider child remain operator work.
 The separate `scripts/run_fake_provider_acceptance.py` runner resolves and
-executes only that exact fake-CLI test, strips the real-Codex opt-in variable,
+executes only that exact fake-CLI test, strips provider opt-in variables,
 and emits a sealed partial integration record. CI uploads it with the tested
 binary digest; every non-fake integration row remains visibly unrecorded.
-The fake CLI installs its interrupt handler before publishing readiness. A
-per-plugin startup gate holds it before its input loop while the test invokes
-clear, then releases only after that plugin acknowledges Ctrl+C. Clear and
-context-input acknowledgments carry the plugin identity, so one plugin's log
-entry cannot satisfy the other's assertions. This covers fixture scheduling
-and routing, not the readiness or behavior of real provider executables.
+The fake CLI publishes readiness only after writing its launch record. New
+conversation and context input are logged with the agent's identity, so one
+agent's log entry cannot satisfy the other's assertions. Resume waits for its
+own launch record rather than an earlier tab's readiness. This covers fixture
+scheduling and routing, not the readiness or behavior of real provider
+executables.
 
 The feature-support contract rejects undefined status vocabulary, README
 highlights without reviewed matrix mappings, missing/duplicate capability rows,
@@ -1639,8 +1637,8 @@ respectively. They can be promoted to required real-PTY gates with
 an isolated 0.21.0 binary; the ordinary-directory Nushell probe passes with an
 isolated 0.115.1 binary. Environments without these shells still explicitly
 self-skip unless required. Nushell's remaining native percent-path failure is documented above. The
-fake-AI lane launches both built-ins through real
-PTYs and drives all twelve commands without credentials or network access. The
+fake-agent lane launches two agents through real
+PTYs and drives every agent command without credentials or network access. The
 native X11 workspace fixture adds exact OSC 52,
 selection/paste, link, visual/audio bell, and notification assertions through
 isolated command spies. It also enters copy mode, searches, selects, yanks, and
@@ -1726,8 +1724,9 @@ workspace-contained Specific Files validation and symlink revalidation,
 per-source and aggregate limits, relevant test-output extraction, editable
 AccessKit fields, modal background rejection, and late-result retirement. A
 local `/bin/sh` two-tab fixture proves a vanished captured destination cannot
-fall back to another tab with the same plugin identity. No gathered fixture is
-sent to an AI provider.
+fall back to another tab with the same agent identity. Terminal-output context
+never comes from another agent's screen, and a read-only agent refuses
+delivery with its own reason. No gathered fixture is sent to an AI provider.
 
 Harvest fixtures cover bounded normalized command storage, stable entry IDs,
 newest-entry selection, non-replaying capacity eviction, signed negative

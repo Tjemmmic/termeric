@@ -10,13 +10,11 @@
 //!
 //! # Built-in Plugins
 //!
-//! - **Claude Code** (`claude_code`) — Launch Claude Code AI assistant
+//! - **Agents** (`agent`) — one launch integration per coding agent in the
+//!   agent catalog (Claude Code, Codex, Gemini CLI, OpenCode, and configured
+//!   custom agents)
 
-pub mod ai_common;
-pub mod claude_code;
-pub mod claude_profiles;
-pub mod codex;
-pub mod codex_profiles;
+pub mod agent;
 pub mod hooks;
 pub mod manager;
 pub mod runtime;

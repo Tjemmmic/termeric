@@ -10,9 +10,8 @@ impl App {
         use crate::ui::command_palette::palette::{CommandSource, RegisteredCommand};
         let mut commands = Vec::new();
         for (id, name, mut profiles) in self.plugin_manager.pane_launch_profiles() {
-            if (id == "codex" && !self.config.plugins.codex.enabled)
-                || (id == "claude-code" && !self.config.plugins.claude_code.enabled)
-            {
+            // Agents are offered once, through the agent picker.
+            if self.agents.get(&id).is_some() {
                 continue;
             }
             profiles.sort();

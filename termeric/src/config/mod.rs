@@ -8,8 +8,6 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::input::keybindings::{KeyBinding, ShortcutOverride};
-use crate::plugin::claude_code::ClaudeCodeConfig;
-use crate::plugin::codex::CodexConfig;
 
 /// Application configuration
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -60,9 +58,14 @@ pub struct Config {
     /// User-defined custom commands / shortcuts
     #[serde(default)]
     pub commands: Vec<CustomCommand>,
-    /// Plugin configuration
-    #[serde(default)]
+    /// Retired `[plugins.*]` agent sections, read only to migrate them into
+    /// `agents` and never written back.
+    #[serde(default, skip_serializing)]
     pub plugins: PluginsConfig,
+    /// `[agents.<id>]`: overrides for built-in coding agents and definitions
+    /// of custom ones.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub agents: BTreeMap<String, crate::agents::AgentConfig>,
     /// Harvest mode configuration
     #[serde(default)]
     pub harvest: HarvestConfig,
@@ -265,12 +268,41 @@ impl Config {
         if config_path.exists() {
             let content = std::fs::read_to_string(&config_path)
                 .with_context(|| format!("failed to read {}", config_path.display()))?;
-            let config: Config = toml::from_str(&content)
+            let mut config: Config = toml::from_str(&content)
                 .with_context(|| format!("failed to parse {}", config_path.display()))?;
+            config.migrate_retired_agent_sections();
             config.validate()?;
             Ok(config)
         } else {
             Ok(Self::default())
+        }
+    }
+
+    /// Move settings from the retired `[plugins.claude_code]` and
+    /// `[plugins.codex]` sections into `[agents.*]`, unless an agent entry
+    /// already exists. The next save writes only the new form.
+    pub fn migrate_retired_agent_sections(&mut self) {
+        let plugins = std::mem::take(&mut self.plugins);
+        let migrated = [
+            (
+                "claude-code",
+                plugins
+                    .claude_code
+                    .as_ref()
+                    .and_then(crate::agents::config::migrate_claude_code),
+            ),
+            (
+                "codex",
+                plugins
+                    .codex
+                    .as_ref()
+                    .and_then(crate::agents::config::migrate_codex),
+            ),
+        ];
+        for (id, entry) in migrated {
+            if let Some(entry) = entry {
+                self.agents.entry(id.to_string()).or_insert(entry);
+            }
         }
     }
 
@@ -408,17 +440,11 @@ impl Config {
             bail!("harvest.max_history must be between 1 and 10000");
         }
         self.domains.validate()?;
-        if !matches!(
-            self.plugins.codex.approval_mode.as_str(),
-            "suggest" | "auto-edit" | "full-auto"
-        ) {
-            bail!("plugins.codex.approval_mode must be suggest, auto-edit, or full-auto");
-        }
-        if let Some(sandbox) = self.plugins.codex.sandbox_mode.as_deref() {
-            if !matches!(sandbox, "read-only" | "workspace-write" | "full-access") {
-                bail!(
-                    "plugins.codex.sandbox_mode must be read-only, workspace-write, or full-access"
-                );
+        crate::agents::config::validate(&self.agents)?;
+        for (id, agent) in &self.agents {
+            validate_child_environment(&format!("agents.{id}"), &agent.env)?;
+            for (name, profile) in &agent.profiles {
+                validate_child_environment(&format!("agents.{id}.profiles.{name}"), &profile.env)?;
             }
         }
         Ok(())
@@ -1346,16 +1372,13 @@ impl Default for SplashConfig {
     }
 }
 
-/// Plugin configuration section
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+/// Retired `[plugins]` section: agent settings from earlier releases, read
+/// only so they can migrate into `[agents.*]`.
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct PluginsConfig {
-    /// Claude Code plugin settings
-    #[serde(default)]
-    pub claude_code: ClaudeCodeConfig,
-    /// Codex plugin settings
-    #[serde(default)]
-    pub codex: CodexConfig,
+    pub claude_code: Option<crate::agents::config::LegacyClaudeCodeConfig>,
+    pub codex: Option<crate::agents::config::LegacyCodexConfig>,
 }
 
 #[cfg(test)]
@@ -1985,10 +2008,34 @@ mod tests {
     }
 
     #[test]
-    fn codex_policy_values_are_validated_centrally() {
-        let mut config = Config::default();
-        config.plugins.codex.approval_mode = "legacy".into();
-        assert!(config.validate().is_err());
+    fn retired_agent_sections_migrate_once_and_are_not_written_back() {
+        let mut config: Config = toml::from_str(
+            r#"
+            [plugins.claude_code]
+            approval_mode = "auto-accept"
+            [plugins.codex]
+            enabled = true
+            approval_mode = "full-auto"
+            sandbox_mode = "workspace-write"
+            [agents.codex]
+            args = ["--kept"]
+            "#,
+        )
+        .unwrap();
+        config.migrate_retired_agent_sections();
+        config.validate().unwrap();
+        assert_eq!(
+            config.agents["claude-code"].args.as_deref(),
+            Some(&["--dangerously-skip-permissions".to_string()][..])
+        );
+        // An existing agent entry always wins over a retired section.
+        assert_eq!(
+            config.agents["codex"].args.as_deref(),
+            Some(&["--kept".to_string()][..])
+        );
+        let encoded = toml::to_string(&config).unwrap();
+        assert!(!encoded.contains("[plugins"));
+        assert!(encoded.contains("[agents.claude-code]"));
     }
 
     #[test]

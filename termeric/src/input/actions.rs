@@ -37,6 +37,8 @@ pub enum Action {
     SwitchToTab(usize),
     /// Toggle search mode
     ToggleSearch,
+    /// Choose a coding agent to start in a new tab
+    NewAgent,
     /// Enter or leave keyboard copy mode.
     ToggleCopyMode,
     /// Enter quick select for visible semantic matches.

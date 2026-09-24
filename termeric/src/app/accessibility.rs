@@ -9631,18 +9631,6 @@ mod tests {
     fn info_overlay_rejects_retired_choices_and_background_actions() {
         let mut app = App::new_headless(Config::default()).unwrap();
         let stale_request = show_info_fixture(&mut app);
-        app.pending_profile_selection = Some(PendingProfileSelection {
-            request_id: stale_request,
-            terminal: crate::tabs::TerminalIdentity {
-                tab_id: 0,
-                pane_id: PaneId(0),
-            },
-            plugin_id: "fake-ai".into(),
-            profiles: std::collections::BTreeMap::from([(
-                "safe-choice".into(),
-                Some("safe-choice".into()),
-            )]),
-        });
         app.accessibility_snapshot();
         let stale_choice = *app
             .accessibility
@@ -9671,7 +9659,6 @@ mod tests {
         });
 
         assert!(app.info_overlay.is_awaiting(current));
-        assert!(app.pending_profile_selection.is_some());
         assert!(!app.settings_panel.is_active());
     }
 
@@ -9891,7 +9878,8 @@ mod tests {
         app.context_picker.open(
             cwd,
             crate::ui::context_picker::ContextTarget {
-                plugin_id: "fixture-plugin".into(),
+                agent_id: "fixture-agent".into(),
+                agent_name: "Fixture Agent".into(),
                 terminal: crate::tabs::TerminalIdentity {
                     tab_id,
                     pane_id: crate::panes::PaneId(0),

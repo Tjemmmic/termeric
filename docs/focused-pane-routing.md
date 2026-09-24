@@ -8,24 +8,23 @@ has lost its focused pane.
 
 ## Routing contract
 
-- Explicit plugin Context, Clear, Copy, and Jump to Error commands resolve the
-  live plugin launch owner, not the focused pane of a plugin-tagged tab. They
-  also work when a plugin pane lives in a shell-tagged mixed tab. Selection is
-  deterministic: active tab first, then other matching tabs in tab order. Within
-  each tab, its focused matching plugin pane wins, then its first matching pane
-  in visual order. Context/Clear/Copy do not
-  change focus; checked writes refuse a read-only selected owner without trying
-  a different pane. Jump to Error focuses the selected owner, refreshes focused
-  surfaces, and searches only its output. Profile/transcript operations retain
-  their separate tab-wide lifecycle semantics.
-- Plugin Restart resolves that same exact owner and prepares a single matching
+- [Agent commands](agents.md) act on the focused terminal and are listed only
+  while it runs an agent. New conversation writes through the checked focused
+  route, so a read-only pane refuses it. Send Context and Harvest Explain
+  capture one exact agent identity (the focused agent, else the only running
+  agent) and, on completion, write only to that terminal after confirming it
+  still runs the same agent; they never fall back to focus. Transcript, diff,
+  and export commands use the focused owner's own session state.
+- Restart Agent resolves the focused owner and prepares a single matching
   launch using its cwd and saved profile. It validates cwd and creates a fresh
   replacement tab before retiring the source pane (or its sole-owner tab), so
   unrelated panes survive. Missing/invalid launch responses, configuration or
   spawn failures, and unavailable cwd leave the old processes/layout intact.
-  Read-only and live-domain targets refuse a local restart. When no owner exists,
-  Restart retains the ordinary open-new-tab behavior. A successful PTY spawn is not proof
-  of provider readiness; a later application exit still needs operator judgment.
+  Read-only and live-domain targets refuse a local restart. A successful PTY
+  spawn is not proof of provider readiness; a later application exit still
+  needs operator judgment.
+- Jump to Previous/Next Failed Command searches the focused terminal's
+  shell-reported command regions.
 - Harvest Re-run is an exact-source action, not keyboard input. It may focus
   its producing terminal for visibility, but writes only to that captured
   owner, bypassing broadcast/alias/completion routing. Destructive confirmation

@@ -59,7 +59,7 @@ Wayland compositor caveat are defined in [quick-access.md](quick-access.md).
 | `--command PROGRAM` | Run one program directly with no arguments. |
 | `-- COMMAND ARG...` | Run a direct command and preserve every remaining argument, including values beginning with `-`; this must be last. |
 | `--terminal-profile NAME` | Launch a reusable process or Linux serial entry from `[profiles.NAME]`; exact transport settings come from the profile. |
-| `--profile PLUGIN:PROFILE` | Launch an enabled built-in plugin with exactly the named profile, such as `codex:review`. Missing plugins/profiles/CLIs fail visibly. |
+| `--profile AGENT:PROFILE` | Launch an enabled [coding agent](agents.md) with exactly the named profile, such as `codex:review`. Missing agents/profiles/CLIs fail visibly. |
 | `--workspace ID` | Restore one complete window workspace. It is exclusive with tab/cwd/title/command/profile/split controls in that window. |
 | `--title TITLE` | Set the current tab's initial title. |
 | `--geometry WIDTHxHEIGHT` | Override the current window's initial physical-pixel size (160x120 through 16384x16384). |

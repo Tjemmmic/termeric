@@ -1,0 +1,146 @@
+# Coding agents
+
+Termeric runs AI coding agents, the command-line tools that edit a
+repository from a terminal, in ordinary tabs and panes. It knows four of them
+out of the box, and any other can be added with a few lines of configuration:
+
+| Agent | Program | Resume | New conversation |
+|---|---|---|---|
+| Claude Code (`claude-code`) | `claude` | `--continue` | `/clear` |
+| Codex (`codex`) | `codex` | `resume --last` | `/new` |
+| Gemini CLI (`gemini`) | `gemini` | `--resume latest` | `/clear` |
+| OpenCode (`opencode`) | `opencode` | `--continue` | `/new` |
+
+Only agents whose program is installed on `PATH` are offered. Each one can be
+turned off on the **Agents** page of Settings.
+
+## Starting an agent
+
+**New Agent…** (Ctrl+Shift+I by default) opens a picker of installed agents
+and their profiles, and starts the choice in a new tab. The command palette
+also offers:
+
+- **Resume Agent Conversation…**, which starts the agent with its resume
+  arguments. Agents without resume support are left out.
+- **Split Right with Agent…** and **Split Down with Agent…**, which start the
+  agent in a new pane beside the focused terminal. Pane placement follows the
+  [explicit plugin-pane rules](plugin-panes.md#placement-and-safety).
+
+A new agent starts in the focused terminal's working directory unless its
+`inherit_cwd` is off. It receives the terminal size as `COLUMNS` and `LINES`.
+`termeric --profile AGENT:PROFILE` starts one from the
+[command line](command-line.md).
+
+## Agents in any pane
+
+Termeric recognizes an agent however it was started, including when you type
+`claude` or `codex` at a shell prompt. About once a second it reads the
+program in each terminal's foreground process group. A program counts as an
+agent when its name matches one of the agent's `detect` names. For Node, Bun,
+Deno, and Python programs, the script's name is used instead of the
+interpreter's. On platforms without `/proc`, only agents Termeric started
+itself are recognized.
+
+While an agent terminal is focused, the palette adds commands for it. They are
+hidden everywhere else:
+
+| Command | What it does |
+|---|---|
+| **Start New Agent Conversation** | Types the agent's own new-conversation command, such as `/clear`, then presses Enter a moment later so the agent submits it. |
+| **Restart Agent** | Starts the same agent, profile, and directory again, then closes the old process. Only offered for agents Termeric started. |
+| **Send Context to Agent…** | Gathers the chosen context and pastes it into the agent without pressing Enter, so you can add to it first. Bracketed paste is used when the agent enabled it. |
+| **Review Agent Diff** / **Copy Agent Diff** | Reviews or copies the latest unified diff the agent printed. See [diff capture](diff-capture.md). |
+| **Export Agent Session** | Exports the terminal's transcript, or its scrollback when it is not recording. See [transcript export](transcript-export.md). |
+| **Toggle Agent Transcript** | Starts or stops recording this terminal's raw transcript. |
+
+Harvest **Explain** and **Send Context to Agent…** go to the focused agent. If
+no agent is focused, they go to the only running agent. If several agents are
+running, focus the one you mean. Delivery checks that the same agent still
+owns the terminal. If it has exited or the terminal is read-only, you get a
+notice and nothing is typed.
+
+Terminal output context comes from a shell pane beside the agent in its tab,
+or else from the first shell tab. It never comes from an agent's screen.
+
+What you type or paste into an agent reaches it directly. Input that software
+sends on your behalf, through the [GUI control protocol](gui-control.md) or a
+[runtime plugin](plugins.md), still asks for confirmation when it would run a
+guarded command.
+
+## Configuration
+
+`[agents.<id>]` entries in `config.toml` change a built-in agent. An entry with
+any other id defines a new agent. Every key is optional:
+
+| Key | Meaning |
+|---|---|
+| `enabled` | `false` hides the agent from pickers and detection. |
+| `name` | Display name. A custom agent defaults to its id. |
+| `program` | Executable to launch. Its file name is also recognized. A custom agent defaults to its id. |
+| `detect` | Extra program names to recognize, for example a wrapper script. |
+| `args` | Arguments passed on every launch. |
+| `resume_args` | Arguments that continue the latest conversation. Without them, the agent cannot resume. |
+| `new_conversation` | Text typed to start over. An empty string removes the command. |
+| `inherit_cwd` | Start in the focused terminal's directory. Defaults to `true`. |
+| `env` | Environment added on every launch. |
+| `profiles.<name>` | A named launch variant with `description`, `args`, and `env`. |
+| `default_profile` | The profile used when a launch names none. It must exist. |
+
+```toml
+# Always let Claude Code act without asking, and offer a read-only variant.
+[agents.claude-code]
+args = ["--dangerously-skip-permissions"]
+
+[agents.claude-code.profiles.review]
+description = "Read-only review"
+args = ["--permission-mode", "plan"]
+
+# An agent Termeric does not ship.
+[agents.aider]
+name = "Aider"
+resume_args = ["--restore-chat-history"]
+new_conversation = "/clear"
+```
+
+Profile arguments follow the agent's `args`, and resume arguments come last.
+Agent ids use letters, digits, `-`, and `_`. Environment keys that Termeric
+owns, such as `PWD`, are rejected.
+
+### Earlier `[plugins.claude_code]` and `[plugins.codex]` sections
+
+Earlier releases configured Claude Code and Codex under `[plugins.*]`, with a
+fixed model list and friendly approval names. Those sections are still read.
+Each is converted to the matching `[agents.*]` entry, keeping only what
+differed from the defaults, and is dropped the next time Settings saves.
+
+| Earlier setting | Becomes |
+|---|---|
+| `binary` | `program` |
+| `model = "X"` | `args = ["--model", "X"]` |
+| `args`, `inherit_cwd`, `default_profile` | Unchanged |
+| Profile `extra_args` | Profile `args` |
+| Claude `approval_mode = "auto-accept"` | `--dangerously-skip-permissions` |
+| Codex `approval_mode = "auto-edit"` / `"full-auto"` | `--ask-for-approval on-request` / `never` |
+| Codex `sandbox_mode = "read-only"` / `"full-access"` | `--sandbox read-only` / `danger-full-access` |
+
+The earlier defaults, `suggest` and `workspace-write`, are dropped, so a
+converted Codex launch follows your own Codex configuration. An existing
+`[agents.<id>]` entry always wins over a converted one.
+
+## Workspaces and restarts
+
+A saved [workspace](workspaces.md) records each agent terminal's agent,
+profile, and directory. Restoring it starts a fresh agent process. The
+conversation is not resumed, so use **Resume Agent Conversation…** for that.
+An agent pane keeps its identity, transcript, and diff history when it is
+split around, collapsed, or moved to another tab or window.
+
+## Limits
+
+- Termeric cannot tell whether an agent is working, waiting for you, or done.
+  It only knows which agent is running.
+- Diffs are read from the terminal output, so an agent that never prints a
+  unified diff has nothing to review.
+- Automated tests use fake agent executables in real PTYs. They never start a
+  real agent or contact a provider. See
+  [integration acceptance](integration-acceptance.md).

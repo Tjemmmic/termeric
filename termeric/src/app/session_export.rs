@@ -4,17 +4,20 @@ use super::App;
 use crate::session::export_job::{ExportJob, ExportSource, MAX_SCROLLBACK_BYTES};
 
 impl App {
-    pub(super) fn export_plugin_session(&mut self, plugin_id: &str) {
+    /// Export one terminal: its transcript when recording, else its
+    /// scrollback as Markdown.
+    pub(super) fn export_terminal_session(&mut self, identity: crate::tabs::TerminalIdentity) {
         if self.session_export.is_some() {
             self.toasts
                 .warning("A session export is already in progress in this window");
             return;
         }
-        let Some((tab, identity)) = self.tabs.as_ref().and_then(|tabs| {
-            let identity = tabs.plugin_terminal_identity(plugin_id)?;
-            Some((tabs.tab_by_id(identity.tab_id)?, identity))
-        }) else {
-            self.toasts.warning(format!("No {plugin_id} tab is open"));
+        let Some(tab) = self
+            .tabs
+            .as_ref()
+            .and_then(|tabs| tabs.tab_by_id(identity.tab_id))
+        else {
+            self.toasts.warning("The terminal is no longer open");
             return;
         };
         let source = if let Some(recorder) = tab
@@ -117,6 +120,15 @@ mod tests {
     use crate::session::transcript::TranscriptRecorder;
     use std::time::{Duration, Instant};
 
+    fn focused(app: &App) -> crate::tabs::TerminalIdentity {
+        app.tabs
+            .as_ref()
+            .unwrap()
+            .active_tab()
+            .unwrap()
+            .focused_terminal_identity()
+    }
+
     fn app() -> App {
         let mut config = Config::default();
         config.shell.program = Some("/bin/cat".into());
@@ -165,9 +177,9 @@ mod tests {
             .active_tab_mut()
             .unwrap()
             .start_transcript(recorder);
-        app.export_plugin_session("export-fixture");
+        app.export_terminal_session(focused(&app));
         assert!(app.session_export.is_some());
-        app.export_plugin_session("some-other-destination");
+        app.export_terminal_session(focused(&app));
         assert!(
             app.toasts
                 .iter()
@@ -216,7 +228,7 @@ mod tests {
             .active_tab_mut()
             .unwrap()
             .start_transcript(recorder);
-        app.export_plugin_session("export-fixture");
+        app.export_terminal_session(focused(&app));
         assert!(app.session_export.is_none());
         assert!(
             app.toasts

@@ -394,6 +394,7 @@ pub enum SettingsPage {
     Font,
     Terminal,
     Keyboard,
+    Agents,
     Sessions,
     Accessibility,
     Plugins,
@@ -407,6 +408,7 @@ impl SettingsPage {
             Self::Font => "Font",
             Self::Terminal => "Terminal",
             Self::Keyboard => "Keyboard",
+            Self::Agents => "Agents",
             Self::Sessions => "Sessions",
             Self::Accessibility => "Accessibility",
             Self::Plugins => "Plugins",
@@ -421,6 +423,7 @@ impl SettingsPage {
             Self::Font,
             Self::Terminal,
             Self::Keyboard,
+            Self::Agents,
             Self::Sessions,
             Self::Accessibility,
             Self::Plugins,
@@ -455,6 +458,7 @@ pub enum SettingsSection {
     Startup,
     Shell,
     Keyboard,
+    Agents,
     Sessions,
     Harvest,
     Accessibility,
@@ -474,6 +478,7 @@ impl SettingsSection {
             Self::Shell => "Shell",
             Self::Sessions => "Sessions",
             Self::Keyboard => "Keyboard",
+            Self::Agents => "Agents",
             Self::Harvest => "Harvest",
             Self::Accessibility => "Accessibility",
             Self::Plugins => "Plugins",
@@ -487,6 +492,7 @@ impl SettingsSection {
             Self::Font => SettingsPage::Font,
             Self::Cursor | Self::Scrollback | Self::Bell | Self::Shell => SettingsPage::Terminal,
             Self::Keyboard => SettingsPage::Keyboard,
+            Self::Agents => SettingsPage::Agents,
             Self::Startup | Self::Sessions => SettingsPage::Sessions,
             Self::Accessibility => SettingsPage::Accessibility,
             Self::Plugins => SettingsPage::Plugins,
@@ -613,12 +619,8 @@ pub enum SettingsAction {
     SetHarvestIndicators(bool),
     /// Change the Harvest history capacity.
     SetHarvestMaxHistory(usize),
-    /// Enable or disable a plugin
-    SetPluginEnabled { plugin_id: String, enabled: bool },
-    /// Change a plugin's model
-    SetPluginModel { plugin_id: String, model: String },
-    /// Change a plugin's approval mode
-    SetPluginApprovalMode { plugin_id: String, mode: String },
+    /// Offer or hide one built-in coding agent.
+    SetAgentEnabled { agent_id: String, enabled: bool },
     /// Follow the system or override non-essential UI transitions.
     SetReduceMotion(AccessibilityPreference),
     /// Follow the system or override higher-contrast application chrome.
@@ -684,6 +686,19 @@ pub struct SettingsPanel {
     /// request-scoped manager where full source and permission details remain
     /// visible before mutations.
     runtime_plugin_summary: String,
+    /// Built-in agents with their installed and enabled state, supplied by
+    /// the application because finding executables touches the file system.
+    agent_rows: Vec<AgentSettingsRow>,
+    custom_agent_summary: String,
+}
+
+/// One built-in agent row on the Agents page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentSettingsRow {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub installed: bool,
+    pub enabled: bool,
 }
 
 impl SettingsPanel {
@@ -708,6 +723,8 @@ impl SettingsPanel {
             theme_meta: None,
             pending_section_jump: None,
             runtime_plugin_summary: "None installed (use `termeric plugin --help`)".into(),
+            agent_rows: Vec::new(),
+            custom_agent_summary: "None".into(),
         }
     }
 
@@ -723,6 +740,12 @@ impl SettingsPanel {
     /// Update the stored theme metadata (call when the theme changes)
     pub fn set_theme_meta(&mut self, meta: crate::config::theme::ThemeMeta) {
         self.theme_meta = Some(meta);
+    }
+
+    /// Built-in agent rows and a one-line summary of custom agents.
+    pub fn set_agents(&mut self, rows: Vec<AgentSettingsRow>, custom_summary: String) {
+        self.agent_rows = rows;
+        self.custom_agent_summary = custom_summary;
     }
 
     pub fn set_runtime_plugin_summary(&mut self, summary: String) {
@@ -1456,133 +1479,43 @@ impl SettingsPanel {
             ],
         ));
 
+        // Agents: built-in agents by name, then a summary of custom ones.
+        {
+            let on_off: Vec<String> = vec!["On".into(), "Off".into()];
+            let mut items: Vec<SettingItem> = self
+                .agent_rows
+                .iter()
+                .map(|row| {
+                    if !row.installed {
+                        return SettingItem {
+                            label: row.label,
+                            value: "Not installed".into(),
+                            kind: SettingKind::ReadOnly,
+                        };
+                    }
+                    SettingItem {
+                        label: row.label,
+                        value: if row.enabled { "On" } else { "Off" }.into(),
+                        kind: SettingKind::Dropdown {
+                            options: on_off.clone(),
+                            selected: usize::from(!row.enabled),
+                        },
+                    }
+                })
+                .collect();
+            items.push(SettingItem {
+                label: "Custom Agents",
+                value: self.custom_agent_summary.clone(),
+                kind: SettingKind::ReadOnly,
+            });
+            result.push((SettingsSection::Agents, items));
+        }
+
         // Plugins
         {
-            let en_dis: Vec<String> = vec!["Enabled".into(), "Disabled".into()];
-            let claude_model_opts: Vec<String> = vec![
-                "(default)".into(),
-                "sonnet".into(),
-                "opus".into(),
-                "haiku".into(),
-            ];
-            let claude_model_val = config
-                .plugins
-                .claude_code
-                .model
-                .clone()
-                .unwrap_or_else(|| "(default)".into());
-            let claude_model_sel = claude_model_opts
-                .iter()
-                .position(|m| m == &claude_model_val)
-                .unwrap_or(0);
-            let codex_model_opts: Vec<String> = vec![
-                "(default)".into(),
-                "o3-mini".into(),
-                "o4-mini".into(),
-                "gpt-4.1".into(),
-            ];
-            let codex_model_val = config
-                .plugins
-                .codex
-                .model
-                .clone()
-                .unwrap_or_else(|| "(default)".into());
-            let codex_model_sel = codex_model_opts
-                .iter()
-                .position(|m| m == &codex_model_val)
-                .unwrap_or(0);
-            let codex_approval_opts: Vec<String> =
-                vec!["suggest".into(), "auto-edit".into(), "full-auto".into()];
-            let codex_approval_sel = codex_approval_opts
-                .iter()
-                .position(|m| m == &config.plugins.codex.approval_mode)
-                .unwrap_or(0);
-            let claude_approval_opts: Vec<String> =
-                vec!["(interactive)".into(), "auto-accept".into()];
-            let claude_approval_val = config
-                .plugins
-                .claude_code
-                .approval_mode
-                .clone()
-                .unwrap_or_else(|| "(interactive)".into());
-            let claude_approval_sel = claude_approval_opts
-                .iter()
-                .position(|m| m == &claude_approval_val)
-                .unwrap_or(0);
-
             result.push((
                 SettingsSection::Plugins,
                 vec![
-                    SettingItem {
-                        label: "Claude Code",
-                        value: if config.plugins.claude_code.enabled {
-                            "Enabled".into()
-                        } else {
-                            "Disabled".into()
-                        },
-                        kind: SettingKind::Dropdown {
-                            options: en_dis.clone(),
-                            selected: if config.plugins.claude_code.enabled {
-                                0
-                            } else {
-                                1
-                            },
-                        },
-                    },
-                    SettingItem {
-                        label: "Claude Binary",
-                        value: config.plugins.claude_code.binary.clone(),
-                        kind: SettingKind::ReadOnly,
-                    },
-                    SettingItem {
-                        label: "Claude Model",
-                        value: claude_model_val,
-                        kind: SettingKind::Dropdown {
-                            options: claude_model_opts,
-                            selected: claude_model_sel,
-                        },
-                    },
-                    SettingItem {
-                        label: "Claude Approval",
-                        value: claude_approval_val,
-                        kind: SettingKind::Dropdown {
-                            options: claude_approval_opts,
-                            selected: claude_approval_sel,
-                        },
-                    },
-                    SettingItem {
-                        label: "Codex",
-                        value: if config.plugins.codex.enabled {
-                            "Enabled".into()
-                        } else {
-                            "Disabled".into()
-                        },
-                        kind: SettingKind::Dropdown {
-                            options: en_dis,
-                            selected: if config.plugins.codex.enabled { 0 } else { 1 },
-                        },
-                    },
-                    SettingItem {
-                        label: "Codex Binary",
-                        value: config.plugins.codex.binary.clone(),
-                        kind: SettingKind::ReadOnly,
-                    },
-                    SettingItem {
-                        label: "Codex Model",
-                        value: codex_model_val,
-                        kind: SettingKind::Dropdown {
-                            options: codex_model_opts,
-                            selected: codex_model_sel,
-                        },
-                    },
-                    SettingItem {
-                        label: "Codex Approval Policy",
-                        value: config.plugins.codex.approval_mode.clone(),
-                        kind: SettingKind::Dropdown {
-                            options: codex_approval_opts,
-                            selected: codex_approval_sel,
-                        },
-                    },
                     SettingItem {
                         label: "Third-party Plugins",
                         value: self.runtime_plugin_summary.clone(),
@@ -2062,34 +1995,16 @@ impl SettingsPanel {
                                 .unwrap_or_default(),
                         )
                     }
-                    (SettingsSection::Plugins, "Claude Code") => SettingsAction::SetPluginEnabled {
-                        plugin_id: "claude-code".into(),
-                        enabled: new_val == "Enabled",
-                    },
-                    (SettingsSection::Plugins, "Claude Model") => SettingsAction::SetPluginModel {
-                        plugin_id: "claude-code".into(),
-                        model: new_val,
-                    },
-                    (SettingsSection::Plugins, "Claude Approval") => {
-                        SettingsAction::SetPluginApprovalMode {
-                            plugin_id: "claude-code".into(),
-                            mode: new_val,
-                        }
-                    }
-                    (SettingsSection::Plugins, "Codex") => SettingsAction::SetPluginEnabled {
-                        plugin_id: "codex".into(),
-                        enabled: new_val == "Enabled",
-                    },
-                    (SettingsSection::Plugins, "Codex Model") => SettingsAction::SetPluginModel {
-                        plugin_id: "codex".into(),
-                        model: new_val,
-                    },
-                    (SettingsSection::Plugins, "Codex Approval Policy") => {
-                        SettingsAction::SetPluginApprovalMode {
-                            plugin_id: "codex".into(),
-                            mode: new_val,
-                        }
-                    }
+                    (SettingsSection::Agents, label) => self
+                        .agent_rows
+                        .iter()
+                        .find(|row| row.label == label)
+                        .map_or(SettingsAction::None, |row| {
+                            SettingsAction::SetAgentEnabled {
+                                agent_id: row.id.into(),
+                                enabled: new_val == "On",
+                            }
+                        }),
                     _ => SettingsAction::None,
                 }
             }

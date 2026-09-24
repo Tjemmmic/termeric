@@ -34,27 +34,24 @@ FINAL_DISPOSITIONS = DISPOSITIONS - {"unrecorded"}
 APPROVAL_STATUSES = {"not_granted", "granted"}
 CREDENTIAL_CLEANUP = {"revoked", "not_applicable", "retained_by_operator"}
 
-BUILTIN_COMMAND_CHECKS = (
+AGENT_COMMAND_CHECKS = (
     "open",
     "resume",
-    "copy_last_response",
-    "clear_session",
+    "new_conversation",
     "restart",
     "review_diff",
     "copy_diff",
     "insert_context",
     "toggle_transcript",
     "export_session",
-    "jump_to_last_error",
-    "select_profile",
 )
 FAKE_PROVIDER_CHECKS = (
-    "launch_argv_environment_and_cwd",
-    "scripted_output_diff_and_error",
-    *BUILTIN_COMMAND_CHECKS,
+    "launch_argv_environment_cwd_and_profile",
+    "scripted_output_and_diff",
+    *AGENT_COMMAND_CHECKS,
 )
 AUTHENTICATED_PROVIDER_CHECKS = (
-    *BUILTIN_COMMAND_CHECKS,
+    *AGENT_COMMAND_CHECKS,
     "transcript_and_export_redaction_review",
     "unapproved_external_effects_declined",
 )

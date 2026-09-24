@@ -16,7 +16,7 @@ A GPU-accelerated terminal emulator written in Rust, themed around roots and rhi
 - **Visual accessibility preferences** — live reduced-motion and high-contrast application chrome without rewriting terminal colors
 - **Modern terminal negotiation** — pane-local Kitty plus xterm keyboard/cursor/function/keypad/modifier/special/other-key resources with CSI-27/CSI-u formatting, DECRQSS/DECRQM status replies, UTF-8-safe C1 framing, application-controlled text-cursor shape/blink, and bounded Kitty/xterm OSC 22 mouse-pointer shapes
 - **Command palette** (Ctrl+P) with fuzzy search, plus a customizable keyboard shortcuts panel
-- **Developer integrations** — experimental built-in Claude Code, Codex, Git, diff review, and context workflows; authenticated provider checks require explicit operator consent
+- **Developer integrations** — experimental coding-agent support (Claude Code, Codex, Gemini CLI, OpenCode, or any configured agent, recognized in any pane), Git, diff review, and context workflows; authenticated provider checks require explicit operator consent
 - **Hyperlinks and shell semantics** — OSC 8 links, URL detection, OSC 7 working directories, accepted Bash/Zsh/Fish OSC 133 semantics, acceptance-pending native Nushell and opt-in Elvish semantics, and bidirectional prompt navigation through retained scrollback on Linux
 - **Harvest (experimental)** — opt-in semantic command history, per-terminal growth indicators, scoped output search, rerun/copy, and consent-gated AI explanation
 
@@ -285,10 +285,10 @@ previews each theme as you move through the list; Enter keeps it and Escape
 restores the previous one. A malformed edit keeps the last valid colors active
 and reports the file error in-app.
 
-The built-in Codex integration is tested against `codex-cli 0.137.0`. Its
-friendly approval modes map to current Codex policies as follows: `suggest`
-uses `untrusted`, `auto-edit` uses `on-request`, and `full-auto` uses `never`.
-See the starter config for the corresponding sandbox options.
+**New Agent…** (Ctrl+Shift+I) starts Claude Code, Codex, Gemini CLI, OpenCode,
+or any agent you add under `[agents.<id>]`, in a tab or a split. An agent is
+recognized in any pane, however it was started, and the palette offers its
+commands only while it is focused. See [coding agents](docs/agents.md).
 
 ### Windows and command-line launch
 
@@ -478,7 +478,8 @@ termeric/           Binary crate — windowing, rendering, UI, plugins
   src/control/        Private running-GUI discovery and inventory protocol
   src/renderer/       wgpu rendering (tab bar, panels, overlays, palette, …)
   src/ui/             UI components (animation, palette, settings, shortcuts, …)
-  src/plugin/         Plugin trait + Claude Code / Codex integrations
+  src/agents/         Coding-agent catalog, detection, and configuration
+  src/plugin/         Plugin trait, hooks, and agent launch integration
   src/panes/          Pane layout tree and split management
   src/session/        Legacy session snapshots + transcript export
   src/workspace/      Complete workspace model, archive, and recovery
@@ -524,6 +525,7 @@ termeric-core/      Library crate — terminal emulation
 - [`docs/pty-pixel-geometry.md`](docs/pty-pixel-geometry.md) — physical grid rounding, PTY winsize propagation, and pane behavior
 - [`docs/session-snapshots.md`](docs/session-snapshots.md) — focused-pane save policy, restore semantics, limits, and compatibility
 - [`docs/workspaces.md`](docs/workspaces.md) — complete workspace schema, relaunch semantics, limits, and recovery
+- [`docs/agents.md`](docs/agents.md) — built-in and configured coding agents, detection, commands, and configuration
 - [`docs/terminal-profiles.md`](docs/terminal-profiles.md) — reusable executable/argv/cwd/environment launches and workspace behavior
 - [`docs/file-drag-and-drop.md`](docs/file-drag-and-drop.md) — safe local path insertion and confirmed bounded live-domain transfer
 - [`docs/advanced-workspaces.md`](docs/advanced-workspaces.md) — tab pin/reorder/rename, pane zoom/read-only/move/layouts, cwd policy, and safe broadcast

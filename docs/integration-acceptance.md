@@ -10,8 +10,8 @@ or change external state. The authoritative product status remains
 
 | Integration | Evidence | Result on 2026-08-26 | Release interpretation |
 |---|---|---|---|
-| Claude Code built-in commands | Fake executable on a real PTY; argv, cwd, terminal-size environment, output, stdin, diff, error, transcript, export, context, profile, clear, resume, and restart paths | **Pass** | The Termeric integration contract is automated; the real Claude CLI and account are not implied. |
-| Codex built-in commands | Same fake-PTY contract, including current approval/sandbox and `resume --last` argv | **Pass** | The Termeric integration contract is automated; the real Codex CLI and account are not implied. |
+| Claude Code agent commands | Fake executable on a real PTY; picker launch with profile, argv, cwd, terminal-size environment, output, stdin, new conversation, diff, transcript, export, context, resume, and restart paths | **Pass** | The Termeric integration contract is automated; the real Claude CLI and account are not implied. |
+| Codex agent commands | Same fake-PTY contract, including `/new` and `resume --last` argv | **Pass** | The Termeric integration contract is automated; the real Codex CLI and account are not implied. |
 | Authenticated Claude Code | Manual procedure below | **Not run — operator consent required** | Named beta limitation; not a passing provider result. |
 | Authenticated Codex | Manual procedure below | **Not run — operator consent required** | Named beta limitation; not a passing provider result. |
 | Bash 5.3 | Isolated real PTY, custom user rc, multiline command, success/failure exits, OSC 7 cwd and OSC 133 regions | **Pass** | Linux shell semantics accepted. |
@@ -39,68 +39,53 @@ Make either probe fail on a missing binary by setting
 `TERMERIC_REQUIRE_NUSHELL_ACCEPTANCE=1` or
 `TERMERIC_REQUIRE_ELVISH_ACCEPTANCE=1`.
 
-## Hermetic AI command contract
+## Hermetic agent command contract
 
-The `fake_ai_clis_exercise_every_builtin_command_end_to_end` test creates an
-executable fixture, launches it through the same PTY and tab path as a real AI
-CLI, and exercises all twelve commands for both built-ins:
+The `fake_agent_clis_exercise_every_agent_command_end_to_end` test creates an
+executable fixture and configures it as the `claude-code` and `codex`
+[agents](agents.md), each with a default profile. It launches each through the
+same picker, PTY, and tab path as a real agent and exercises every agent
+command:
 
-1. open;
-2. resume;
-3. copy last response;
-4. clear session;
-5. restart;
-6. review diff;
-7. copy diff;
-8. insert context;
-9. toggle transcript;
-10. export session;
-11. jump to the last error; and
-12. select profile.
+1. open (**New Agent…**);
+2. resume (**Resume Agent Conversation…**);
+3. start a new conversation;
+4. restart;
+5. review diff;
+6. copy diff;
+7. send context;
+8. toggle transcript; and
+9. export session.
 
 The fixture records argv, cwd, `COLUMNS`, `LINES`, and PTY input. Acceptance
-asserts the exact initial, restart, and resume command vectors for both tools,
-the inherited working directory, and terminal geometry. It emits a known
-response, unified diff, and error after enough output to require scrollback.
-The context workflow selects a synthetic terminal-output source, completes the
-request against its stable destination, and proves the framed payload reaches
-the fake PTY; profile selection saves the advertised next-restart profile through the
-same choice action used by the UI. The test uses an isolated session directory
-and never reads an API key or contacts a provider. Restart acceptance also
-asserts that commands no longer resolve to a tab already entering its close
-animation.
+asserts the exact open, restart, and resume command vectors for both agents,
+the inherited working directory, terminal geometry, the applied profile, and
+that the launched terminal is recognized as that agent. The new-conversation
+and context inputs are logged with the agent's own identity, so one agent's
+entry cannot satisfy the other's assertion. The fixture emits a known response
+and unified diff. The context workflow selects a synthetic terminal-output
+source, completes the request against its stable destination, and proves the
+payload reaches the fake PTY. The test uses an isolated session directory and
+never reads an API key or contacts a provider.
 
-Profile selection additionally captures the exact live terminal identity when
-the picker opens. Completion revalidates the configured name and original
-ordinary, writable plugin owner; split/collapse can change routing but cannot
-retarget the choice to a sibling or replacement tab. Only that owner's saved
-launch changes, not the running provider configuration. Raw-shell regressions
-cover same-plugin/different-plugin sibling isolation, shell-presented owners,
-stale/replaced/canceled choices, removed configuration, and surviving-owner
-metadata after close/collapse. Workspace restoration preserves each pane's
-plugin profile alongside sibling shell/process-profile launches. See
+Profiles are chosen when an agent starts, from the picker or `--profile
+AGENT:PROFILE`; there is no separate profile-selection command. The resolved
+profile is stored on the terminal owner and survives restart, pane movement,
+and workspace save/restore. Fake-only regressions cover moved owners, failed
+replacement launches, and authoritative cwd. See
 [#125](https://github.com/Tjemmmic/termeric/issues/125).
 
-Automatic selection now has its own typed reference and picker choice; an
-explicit profile named `default` stays explicit through selection, OpenTab,
-restart, movement, and workspace save/restore. Commands prefer the active tab's
-matching owner before searching other tabs. Fake-only regressions cover moved
-owners, failed replacement launches, authoritative cwd despite profile `PWD`,
-and restoration after the configured automatic default changes. The bounded
-picker shows Automatic plus the first 31 sorted names and reports truncation;
-see [plugin profile behavior](plugin-panes.md).
-
-AI metadata, transcript recorders, and diff detectors now live beside each
-terminal owner rather than on the tab. Raw-PTY fixtures prove that output and
-successful user input are recorded only for that owner; protocol replies and
-sibling traffic are excluded. Independent recording controls preserve focus,
-read-only refusal, recorder flags, and surviving session metadata on collapse.
-Export chooses the plugin owner's transcript or scrollback, not its focused
-shell sibling. Diff review retains an exact pane identity, including delayed
-dismissal after focus changes and refusal to mark replacement-owner diffs.
-Failure/backpressure notices are owner-local and capped at 16 pending messages.
-Session chrome now reads the focused owner's metadata, so focusing a shell
-sibling cannot overwrite another terminal's Git/profile/recording state.
+Agent recognition, per-terminal transcripts, and diff detectors live beside
+each terminal owner rather than on the tab. Raw-PTY fixtures prove that output
+and successful user input are recorded only for that owner; protocol replies
+and sibling traffic are excluded. Independent recording controls preserve
+focus, read-only refusal, recorder flags, and surviving session metadata on
+collapse. Export chooses the agent owner's transcript or scrollback, not its
+focused shell sibling. Diff review retains an exact pane identity, including
+delayed dismissal after focus changes and refusal to mark replacement-owner
+diffs. Failure/backpressure notices are owner-local and capped at 16 pending
+messages. Terminal-output context comes from a shell, never from another
+agent's screen.
 
 [Raw transcript text](transcript-text.md) now incrementally decodes input and
 output across PTY/write fragments. Fixed-size carries remain with each recorder
@@ -109,18 +94,18 @@ epoch. Malformed text uses annotated replacement characters and bounded
 warnings, not silent whole-chunk loss. Protocol/sibling/refused writes are
 excluded. These local regressions do not establish real-provider acceptance.
 
-The workspace lane now restores schema-3 mixed plugin/shell/process-profile
+The workspace lane restores schema-3 mixed agent/shell/process-profile
 layouts using fake executables in real local PTYs. It checks distinct profiles
-of the same and different plugins, exact cwd/argv/environment, archive
-round-trips, nonzero primary IDs, migration without invented plugin launches,
-targeted hook validation, and failed-tab rollback. Fresh plugin owners do not
-resume recordings or conversations. [Explicit plugin-pane creation](plugin-panes.md)
-now has fake-PTY coverage for palette dispatch, profiles/cwd/geometry, ownership,
-rollback, and close/collapse/resplit. Plugin-pane movement now preserves the
-existing PTY/profile/recorder/diff owner across ordinary tabs and process-owned
-windows. Local tests cover mid-UTF-8/mid-diff transfer, stale source operations,
-read-only state, profile isolation, destination allocation limits, and archive
-round-trips; see [#126](https://github.com/Tjemmmic/termeric/issues/126).
+of the same and different agents, exact cwd/argv/environment, archive
+round-trips, nonzero primary IDs, migration without invented agent launches,
+targeted hook validation, and failed-tab rollback. Fresh agent owners do not
+resume recordings or conversations. [Agent panes](plugin-panes.md) have
+fake-PTY coverage for picker dispatch, profiles/cwd/geometry, ownership,
+rollback, and close/collapse/resplit. Pane movement preserves the existing
+PTY/profile/recorder/diff owner across ordinary tabs and process-owned
+windows. Local tests cover mid-UTF-8/mid-diff transfer, stale source
+operations, read-only state, profile isolation, destination allocation limits,
+and archive round-trips; see [#126](https://github.com/Tjemmmic/termeric/issues/126).
 These tests do not establish provider readiness or native visual acceptance.
 
 Diff capture now frames arbitrary PTY chunks with bounded line/capture/history
@@ -135,7 +120,7 @@ provider, native visual, or broader plugin-pane support.
 Run it with:
 
 ```bash
-cargo test -p termeric fake_ai_clis_exercise_every_builtin_command_end_to_end -- --nocapture
+cargo test -p termeric fake_agent_clis_exercise_every_agent_command_end_to_end -- --nocapture
 ```
 
 Generate the candidate-bound partial acceptance record and sealed artifacts
@@ -148,19 +133,12 @@ python3 scripts/run_fake_provider_acceptance.py \
 ```
 
 It resolves the exact compiled test executable from Cargo's JSON messages,
-removes `TERMERIC_REAL_CODEX_CONTRACT`, runs only the fully qualified fake-CLI
+removes provider opt-in variables, runs only the fully qualified fake-CLI
 test with libtest `--exact`, and records the test-binary and artifact digests.
 Only `fake.claude_code` and `fake.codex` become passes. Shell, Harvest, desktop,
 and authenticated-provider cases stay unrecorded until their own evidence is
 collected. CI uploads this partial record rather than treating the full
 workspace suite as evidence for every integration row.
-
-The separate installed-Codex argument/parser probe is operator opt-in and is
-skipped before launching the CLI unless
-`TERMERIC_REAL_CODEX_CONTRACT=1` is set. It invokes only
-`--version`/`--help` and is not authenticated-provider acceptance, but
-keeping it outside the default lane guarantees ordinary roadmap verification
-uses only the fake executable above.
 
 ## Shell and Harvest contract
 
@@ -538,7 +516,7 @@ allowed external effects are in scope. For each provider:
    version, selected profile, and redacted configuration;
 2. authenticate using the provider's normal CLI flow outside Termeric;
 3. open and resume a disposable conversation;
-4. exercise all twelve commands, declining any unapproved filesystem,
+4. exercise every agent command, declining any unapproved filesystem,
    network, or account mutation;
 5. verify transcript/export output after redacting secrets and personal data;
 6. record pass, fail, unavailable, or accepted limitation for each command in

@@ -46,8 +46,8 @@ The schema-1 runner executes these trusted, source-defined commands in order:
 11. the release binary's non-GUI version probe
 
 The command list cannot be supplied by a record or CLI argument. Each child
-receives `CARGO_NET_OFFLINE=true`; known provider credentials and Termeric's
-real-Codex opt-in are removed. No gate invokes installed Codex, Claude Code, an
+receives `CARGO_NET_OFFLINE=true`; known provider credentials and provider
+opt-in variables are removed. No gate invokes installed Codex, Claude Code, an
 AI SDK, authentication, or a provider service. Hermetic fake-executable tests
 inside the ordinary Rust suite remain permitted.
 

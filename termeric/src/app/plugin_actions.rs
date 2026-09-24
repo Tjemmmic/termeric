@@ -1342,7 +1342,6 @@ impl App {
                     self.dismiss_pending_kitty_download(request_id);
                     // A replacement notice may have superseded a profile
                     // picker. Any older hidden action context is obsolete too.
-                    self.pending_profile_selection = None;
                     self.pending_runtime_plugin_management = None;
                     self.pending_font_range_management = None;
                     self.pending_font_feature_management = None;
@@ -1388,23 +1387,7 @@ impl App {
                             self.start_file_upload(upload);
                         }
                     }
-                    return;
                 }
-                let selection = self
-                    .pending_profile_selection
-                    .as_ref()
-                    .filter(|pending| pending.request_id == request_id)
-                    .and_then(|pending| {
-                        pending.profiles.get(&choice_id).map(|profile| {
-                            (pending.terminal, pending.plugin_id.clone(), profile.clone())
-                        })
-                    });
-                let Some((terminal, plugin_id, profile_name)) = selection else {
-                    return;
-                };
-                self.info_overlay.dismiss(request_id);
-                self.pending_profile_selection = None;
-                self.apply_plugin_profile(terminal, &plugin_id, profile_name);
             }
             InfoOverlayAction::SubmitInput { request_id } => {
                 if !self.submit_font_feature_manager_input(request_id)
@@ -1413,7 +1396,6 @@ impl App {
                     && self.info_overlay.dismiss(request_id)
                 {
                     self.dismiss_pending_kitty_download(request_id);
-                    self.pending_profile_selection = None;
                     self.pending_runtime_plugin_management = None;
                     self.pending_font_range_management = None;
                     self.pending_font_feature_management = None;
@@ -1427,7 +1409,6 @@ impl App {
                     && self.info_overlay.dismiss(request_id)
                 {
                     self.dismiss_pending_kitty_download(request_id);
-                    self.pending_profile_selection = None;
                     self.pending_runtime_plugin_management = None;
                     self.pending_font_range_management = None;
                     self.pending_font_feature_management = None;
@@ -1490,58 +1471,8 @@ impl App {
         self.execute_plugin_actions(actions);
     }
 
-    /// Execute a plugin command by ID.
-    ///
-    /// Commands that require direct App state access (review-diff, copy-diff, etc.)
-    /// are matched only for the built-in AI plugin namespaces. Third-party
-    /// commands are routed to their exact owning plugin.
+    /// Execute a plugin command by ID, routed to its exact owning plugin.
     pub(super) fn execute_plugin_command(&mut self, command_id: &str) {
-        if let Some((plugin_id, suffix)) = command_id.split_once('.')
-            && matches!(plugin_id, "claude-code" | "codex")
-        {
-            match suffix {
-                "toggle-transcript" => {
-                    if let Some(identity) = self
-                        .tabs
-                        .as_ref()
-                        .and_then(|tabs| tabs.plugin_terminal_identity(plugin_id))
-                    {
-                        self.toggle_terminal_transcript(identity);
-                    } else {
-                        self.toasts
-                            .warning(format!("No active {plugin_id} terminal"));
-                    }
-                    return;
-                }
-                "review-diff" => {
-                    self.open_plugin_diff_review(plugin_id);
-                    return;
-                }
-                "copy-diff" => {
-                    self.copy_plugin_diff(plugin_id);
-                    return;
-                }
-                "insert-context" => {
-                    self.open_context_picker_for(plugin_id);
-                    return;
-                }
-                "export-session" => {
-                    self.export_plugin_session(plugin_id);
-                    return;
-                }
-                "jump-to-error" => {
-                    self.jump_to_last_error(plugin_id);
-                    return;
-                }
-                "select-profile" => {
-                    self.execute_plugin_actions(vec![crate::plugin::PluginAction::ListProfiles {
-                        plugin_id: plugin_id.to_string(),
-                    }]);
-                    return;
-                }
-                _ => {}
-            }
-        }
         let ctx = self.build_plugin_context();
         let actions = self.plugin_manager.execute_command(command_id, &ctx);
         if !actions.is_empty() {
@@ -1551,25 +1482,21 @@ impl App {
 
     fn selected_diff(
         &self,
-        plugin_id: &str,
-    ) -> Option<(
-        crate::tabs::TerminalIdentity,
-        crate::terminal::diff_detector::DetectedDiff,
-    )> {
+        identity: crate::tabs::TerminalIdentity,
+    ) -> Option<crate::terminal::diff_detector::DetectedDiff> {
         let tabs = self.tabs.as_ref()?;
-        let identity = tabs.plugin_terminal_identity(plugin_id)?;
         tabs.origin_for_pane(identity.tab_id, identity.pane_id)?;
-        let diff = tabs
-            .tab_by_id(identity.tab_id)?
-            .pane_session(identity.pane_id)?
-            .diff_detector
-            .latest_unreviewed()?
-            .clone();
-        Some((identity, diff))
+        Some(
+            tabs.tab_by_id(identity.tab_id)?
+                .pane_session(identity.pane_id)?
+                .diff_detector
+                .latest_unreviewed()?
+                .clone(),
+        )
     }
 
-    fn open_plugin_diff_review(&mut self, plugin_id: &str) {
-        if let Some((identity, diff)) = self.selected_diff(plugin_id) {
+    pub(super) fn open_agent_diff_review(&mut self, identity: crate::tabs::TerminalIdentity) {
+        if let Some(diff) = self.selected_diff(identity) {
             self.diff_review
                 .show(&diff, identity.tab_id, identity.pane_id);
         } else {
@@ -1577,42 +1504,38 @@ impl App {
         }
     }
 
-    fn copy_plugin_diff(&mut self, plugin_id: &str) {
-        if let Some((_, diff)) = self.selected_diff(plugin_id) {
+    pub(super) fn copy_agent_diff(&mut self, identity: crate::tabs::TerminalIdentity) {
+        if let Some(diff) = self.selected_diff(identity) {
             self.copy_to_clipboard(diff.raw, "Copied diff");
         } else {
             self.toasts.info("No unreviewed diffs to copy");
         }
     }
 
-    /// Open the context picker modal targeting a specific plugin tab
-    pub(super) fn open_context_picker_for(&mut self, plugin_id: &str) {
-        let Some((cwd, target)) = self.tabs.as_ref().and_then(|tabs| {
-            let (tab, pane_id) = tabs
-                .iter()
-                .find_map(|(_, tab)| tab.plugin_pane_id(plugin_id).map(|pane_id| (tab, pane_id)))?;
-            let terminal = crate::tabs::TerminalIdentity {
-                tab_id: tab.id,
-                pane_id,
-            };
-            let cwd = tab.pane_working_directory(pane_id).or_else(|| {
-                tabs.iter()
-                    .find(|(_, candidate)| !candidate.closed)
-                    .and_then(|(_, candidate)| candidate.working_directory())
-            });
-            Some((
-                cwd,
-                crate::ui::context_picker::ContextTarget {
-                    plugin_id: plugin_id.to_string(),
-                    terminal,
-                },
-            ))
-        }) else {
-            self.toasts
-                .warning(format!("Open {plugin_id} before inserting context"));
+    /// Open the context picker for the agent in `terminal`. Terminal output
+    /// comes from another pane of the same tab when there is one, else from
+    /// the first shell tab.
+    pub(super) fn open_context_picker_for(
+        &mut self,
+        terminal: crate::tabs::TerminalIdentity,
+        agent: &crate::agents::AgentDefinition,
+    ) {
+        let Some(tab) = self
+            .tabs
+            .as_ref()
+            .and_then(|tabs| tabs.tab_by_id(terminal.tab_id))
+        else {
             return;
         };
-        self.context_picker.open(cwd, target);
+        let cwd = tab.pane_working_directory(terminal.pane_id);
+        self.context_picker.open(
+            cwd,
+            crate::ui::context_picker::ContextTarget {
+                agent_id: agent.id.clone(),
+                agent_name: agent.name.clone(),
+                terminal,
+            },
+        );
     }
 
     pub(super) fn apply_context_picker_action(
@@ -1634,22 +1557,10 @@ impl App {
     }
 
     fn start_context_gather(&mut self, request_id: u64) {
-        let terminal_output = if let Some(tabs) = &self.tabs {
-            tabs.iter()
-                .find(|(_, t)| {
-                    matches!(
-                        t.tab_type,
-                        crate::tabs::TabType::Shell | crate::tabs::TabType::Profile { .. }
-                    ) && !t.closed
-                })
-                .and_then(|(_, tab)| {
-                    let lines = tab.focused_terminal()?.grid().export_scrollback_text();
-                    let start = lines.len().saturating_sub(50);
-                    Some(lines[start..].join("\n"))
-                })
-        } else {
-            None
-        };
+        let terminal_output = self
+            .context_picker
+            .target()
+            .and_then(|target| self.context_source_output(target.terminal));
         let Some(request) = self
             .context_picker
             .begin_gather(request_id, terminal_output)
@@ -1708,82 +1619,61 @@ impl App {
         }
     }
 
+    /// The last 50 lines of the terminal to draw context from: a non-agent
+    /// pane of the agent's tab, else the first open shell tab whose focused
+    /// terminal is not running an agent.
+    pub(super) fn context_source_output(
+        &self,
+        agent: crate::tabs::TerminalIdentity,
+    ) -> Option<String> {
+        let tabs = self.tabs.as_ref()?;
+        let tail = |terminal: &termeric_core::Terminal| {
+            let lines = terminal.grid().export_scrollback_text();
+            let start = lines.len().saturating_sub(50);
+            lines[start..].join("\n")
+        };
+        // A shell tab can host an agent started by hand; its screen is the
+        // agent's conversation, not the user's work.
+        let not_an_agent = |tab: &crate::tabs::Tab, id| {
+            tab.pane_session(id)
+                .is_some_and(|state| state.agent.is_none())
+        };
+        let tab = tabs.tab_by_id(agent.tab_id)?;
+        let sibling = tab
+            .owned_pane_ids()
+            .into_iter()
+            .filter(|id| *id != agent.pane_id)
+            .find(|id| not_an_agent(tab, *id))
+            .and_then(|id| tab.pane_terminal(id));
+        if let Some(terminal) = sibling {
+            return Some(tail(terminal));
+        }
+        tabs.iter()
+            .find(|(_, t)| {
+                matches!(
+                    t.tab_type,
+                    crate::tabs::TabType::Shell | crate::tabs::TabType::Profile { .. }
+                ) && !t.closed
+                    && t.id != agent.tab_id
+                    && not_an_agent(t, t.focused_terminal_identity().pane_id)
+            })
+            .and_then(|(_, tab)| tab.focused_terminal().map(tail))
+    }
+
+    /// Paste gathered context into the agent that asked for it.
     fn inject_context_to_target(
         &mut self,
         target: &crate::ui::context_picker::ContextTarget,
         text: &str,
     ) -> bool {
-        let origin = self.tabs.as_ref().and_then(|tabs| {
-            let tab = tabs.tab_by_id(target.terminal.tab_id)?;
-            if tab.pane_plugin_id(target.terminal.pane_id) != Some(target.plugin_id.as_str()) {
-                return None;
-            }
-            tabs.origin_for_pane(target.terminal.tab_id, target.terminal.pane_id)
-        });
-        let injected = format!("\n--- Context ---\n{text}\n--- End Context ---\n");
-        let written = origin.is_some_and(|origin| {
-            self.tabs.as_mut().is_some_and(|tabs| {
-                tabs.write_user_to_origin(origin, injected.as_bytes())
-                    .is_ok()
-            })
-        });
-        if written {
-            self.toasts
-                .success(format!("Context sent to {}", target.plugin_id));
-        } else {
-            self.toasts.warning(format!(
-                "The original {} context destination is no longer writable",
-                target.plugin_id
-            ));
-        }
-        written
-    }
-
-    /// Scroll the selected plugin owner to its last error-like line.
-    ///
-    /// Focus that exact live owner, refresh its surfaces, then scan only its
-    /// scrollback for error/failed/panic/exception patterns.
-    pub(super) fn jump_to_last_error(&mut self, plugin_id: &str) {
-        let Some(identity) = self
-            .tabs
-            .as_ref()
-            .and_then(|tabs| tabs.plugin_terminal_identity(plugin_id))
-        else {
-            log::info!("No '{}' tab found for jump-to-error", plugin_id);
-            self.toasts.warning(format!("No {plugin_id} tab is open"));
-            return;
-        };
-        if self
-            .focus_plugin_pane(identity.tab_id as u64, identity.pane_id.0)
-            .is_err()
-        {
-            self.toasts
-                .warning(format!("The {plugin_id} terminal is no longer available"));
-            return;
-        }
-        let terminal = self.tabs.as_mut().and_then(|tabs| {
-            let origin = tabs.origin_for_pane(identity.tab_id, identity.pane_id)?;
-            tabs.terminal_for_origin_mut(origin)
-        });
-        if let Some(terminal) = terminal {
-            let lines = terminal.grid().export_scrollback_text();
-            let error_pos = lines.iter().rposition(|line| {
-                let lower = line.to_lowercase();
-                lower.contains("error")
-                    || lower.contains("failed")
-                    || lower.contains("panic")
-                    || lower.contains("exception")
-            });
-            if let Some(pos) = error_pos {
-                let offset = lines.len().saturating_sub(pos);
-                terminal.grid_mut().set_scroll_offset(offset);
-                log::info!("Jumped to error at line {} in '{}'", pos, plugin_id);
-            } else {
-                log::info!("No errors found in '{}' tab output", plugin_id);
-                self.toasts
-                    .info(format!("No errors found in {plugin_id} output"));
-            }
-        }
+        self.send_to_agent(
+            super::agents::AgentTarget {
+                identity: target.terminal,
+                agent_id: target.agent_id.clone(),
+                agent_name: target.agent_name.clone(),
+            },
+            text,
+        )
     }
 
     /// Execute a list of plugin actions.
@@ -1870,38 +1760,6 @@ impl App {
                         window.request_redraw();
                     }
                 }
-                PluginAction::ClearPluginTab { plugin_id } => {
-                    let cleared = if let Some(tabs) = &mut self.tabs {
-                        // Send Ctrl+C then clear
-                        tabs.write_to_plugin_terminal(&plugin_id, b"\x03clear\r")
-                    } else {
-                        false
-                    };
-                    if cleared {
-                        self.toasts.success(format!("Cleared {plugin_id}"));
-                    } else {
-                        self.toasts
-                            .warning(format!("No writable {plugin_id} terminal found"));
-                    }
-                }
-                PluginAction::CopyFromPluginTab { plugin_id, lines } => {
-                    let text = self
-                        .tabs
-                        .as_ref()
-                        .and_then(|tabs| tabs.copy_from_plugin_terminal(&plugin_id, lines));
-                    if let Some(text) = text.filter(|text| !text.is_empty()) {
-                        self.copy_to_clipboard(
-                            text,
-                            &format!("Copied last {lines} lines from {plugin_id}"),
-                        );
-                    } else {
-                        self.toasts
-                            .warning(format!("No output available from {plugin_id}"));
-                    }
-                }
-                PluginAction::RestartPlugin { plugin_id } => {
-                    self.restart_plugin(&plugin_id);
-                }
                 PluginAction::ApplyDiff { diff_content, cwd } => {
                     self.run_git_apply("apply", &[], &diff_content, cwd.as_deref());
                 }
@@ -1910,28 +1768,6 @@ impl App {
                 }
                 PluginAction::RevertDiff { diff_content, cwd } => {
                     self.run_git_apply("revert", &["--reverse"], &diff_content, cwd.as_deref());
-                }
-                PluginAction::InjectContext { plugin_id, text } => {
-                    self.inject_context_to_plugin(&plugin_id, &text);
-                }
-                PluginAction::ToggleTranscript => self.toggle_transcript(),
-                PluginAction::ListProfiles { plugin_id } => {
-                    self.show_plugin_profiles(plugin_id);
-                }
-                PluginAction::ApplyProfile {
-                    plugin_id,
-                    profile_name,
-                } => {
-                    if let Some(terminal) = self
-                        .tabs
-                        .as_ref()
-                        .and_then(|tabs| tabs.plugin_terminal_identity(&plugin_id))
-                    {
-                        self.apply_plugin_profile(terminal, &plugin_id, Some(profile_name));
-                    } else {
-                        self.toasts
-                            .warning(format!("No active {plugin_id} terminal found"));
-                    }
                 }
             }
         }
@@ -2024,27 +1860,6 @@ impl App {
         } else {
             self.toasts.warning("No active terminal");
         }
-    }
-
-    /// Inject context text into the selected live plugin terminal owner.
-    pub(super) fn inject_context_to_plugin(&mut self, plugin_id: &str, text: &str) -> bool {
-        let injected = format!("\n--- Context ---\n{}\n--- End Context ---\n", text);
-        let written = self
-            .tabs
-            .as_mut()
-            .is_some_and(|tabs| tabs.write_to_plugin_terminal(plugin_id, injected.as_bytes()));
-        if written {
-            log::info!(
-                "Injected {} chars of context into {}",
-                injected.len(),
-                plugin_id
-            );
-            self.toasts.success(format!("Context sent to {plugin_id}"));
-        } else {
-            self.toasts
-                .warning(format!("No writable {plugin_id} terminal found"));
-        }
-        written
     }
 }
 

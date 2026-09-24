@@ -9,19 +9,11 @@ impl App {
         plugin_id: &str,
         profile: Option<&str>,
     ) -> anyhow::Result<()> {
-        let configured = match plugin_id {
-            "codex" => {
-                self.config.plugins.codex.enabled
-                    && profile
-                        .is_none_or(|name| self.config.plugins.codex.profiles.contains_key(name))
+        let configured = match self.agents.get(plugin_id) {
+            Some(agent) => {
+                agent.enabled && profile.is_none_or(|name| agent.profiles.contains_key(name))
             }
-            "claude-code" => {
-                self.config.plugins.claude_code.enabled
-                    && profile.is_none_or(|name| {
-                        self.config.plugins.claude_code.profiles.contains_key(name)
-                    })
-            }
-            _ => true, // Other registered plugins validate their own profile namespace.
+            None => true, // Other registered plugins validate their own profile namespace.
         };
         if !configured {
             anyhow::bail!(

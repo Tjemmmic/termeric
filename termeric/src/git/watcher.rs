@@ -214,16 +214,13 @@ impl GitWatcher {
         self.last_poll + self.poll_interval
     }
 
+    #[cfg(test)]
     pub fn status(&self) -> Option<&GitStatus> {
         self.status.as_ref()
     }
 
     pub fn branch(&self) -> Option<&str> {
         self.status.as_ref()?.branch.as_deref()
-    }
-
-    pub fn is_dirty(&self) -> bool {
-        self.status.as_ref().is_some_and(|status| status.dirty)
     }
 
     /// Filter the immutable branch snapshot already published by the worker.

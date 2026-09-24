@@ -48,7 +48,6 @@ enum FontRangeManagerView {
 impl App {
     pub(super) fn open_font_range_manager(&mut self) {
         self.settings_panel.close();
-        self.pending_profile_selection = None;
         self.pending_runtime_plugin_management = None;
         self.pending_font_feature_management = None;
         self.pending_file_upload = None;

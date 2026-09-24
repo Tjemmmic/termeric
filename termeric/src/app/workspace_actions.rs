@@ -1636,17 +1636,12 @@ impl App {
                     &out,
                     used_output_snapshot && target.output_truncated,
                 );
-                let plugin_id = match self.preferred_plugin_target() {
-                    Ok(plugin_id) => plugin_id,
-                    Err(message) => {
-                        self.toasts.warning(message);
-                        return;
+                match self.preferred_agent_target() {
+                    Ok(target) => {
+                        self.send_to_agent(target, &context);
                     }
-                };
-                self.execute_plugin_actions(vec![crate::plugin::PluginAction::InjectContext {
-                    plugin_id,
-                    text: context,
-                }]);
+                    Err(message) => self.toasts.warning(message),
+                }
             }
         }
     }
@@ -1748,28 +1743,6 @@ impl App {
             )) => reason.clone(),
             None => "The focused terminal is unavailable".into(),
         }
-    }
-
-    pub(super) fn preferred_plugin_target(&self) -> std::result::Result<String, String> {
-        let Some(tabs) = &self.tabs else {
-            return Err("No plugin tab is open".into());
-        };
-        let active = tabs.active_tab().and_then(|tab| match &tab.tab_type {
-            crate::tabs::TabType::Plugin { plugin_id } => Some(plugin_id.as_str()),
-            crate::tabs::TabType::Shell
-            | crate::tabs::TabType::Profile { .. }
-            | crate::tabs::TabType::Serial { .. } => None,
-        });
-        let available: Vec<String> = tabs
-            .iter()
-            .filter_map(|(_, tab)| match &tab.tab_type {
-                crate::tabs::TabType::Plugin { plugin_id } if !tab.closed && !tab.is_closing() => {
-                    Some(plugin_id.clone())
-                }
-                _ => None,
-            })
-            .collect();
-        select_plugin_target(active, &available)
     }
 
     /// Extract just the command line entered by the user (between command

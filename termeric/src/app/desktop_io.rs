@@ -282,7 +282,6 @@ impl App {
                     "  U  Upload".into(),
                     "  C  Cancel".into(),
                 ];
-                self.pending_profile_selection = None;
                 let request_id = self.info_overlay.show_choices(
                     "Confirm live-domain upload",
                     lines,

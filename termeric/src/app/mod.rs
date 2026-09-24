@@ -1,6 +1,7 @@
 //! Application state and event handling
 
 mod accessibility;
+mod agents;
 mod application;
 mod commands_input;
 mod configuration;
@@ -19,7 +20,6 @@ mod palette_input;
 mod plugin_actions;
 mod plugin_launch;
 mod plugin_panes;
-mod plugin_profiles;
 mod plugin_restart;
 mod query_paste;
 mod redraw_scheduler;
@@ -68,8 +68,6 @@ use crate::input::keybindings::{KeyAction, KeyBindingManager};
 use crate::input::{Action, MouseReportButton, MouseState, ShortcutRegistry, screen_to_grid};
 use crate::notifications::{Bell, BellConfig, Notifications};
 use crate::panes::{PaneId, PaneManager, SplitDirection};
-use crate::plugin::claude_code::ClaudeCodePlugin;
-use crate::plugin::codex::CodexPlugin;
 use crate::plugin::{PluginContext, PluginManager};
 use crate::renderer::types::{
     CellarEntryInfo, CellarRenderInfo, HarvestRenderInfo, IndicatorRenderInfo, PaneRenderData,
@@ -734,15 +732,6 @@ enum BroadcastState {
     },
 }
 
-#[derive(Debug, Clone)]
-struct PendingProfileSelection {
-    request_id: u64,
-    terminal: crate::tabs::TerminalIdentity,
-    plugin_id: String,
-    // Opaque choice IDs map to exact references; no profile name is a sentinel.
-    profiles: std::collections::BTreeMap<String, Option<String>>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PendingUnicodePicker {
     terminal: crate::tabs::TerminalIdentity,
@@ -1077,8 +1066,14 @@ pub struct App {
     last_frame_time: Instant,
     /// Last time we polled the config file for hot-reload
     last_config_check: Instant,
+    /// Last time terminals were re-examined for a foreground coding agent.
+    last_agent_scan: Instant,
+    /// Enter keys waiting to submit text typed into agents.
+    pending_agent_submits: Vec<agents::PendingAgentSubmit>,
     /// Last observed mtime of the config file (for change detection)
     last_config_mtime: Option<std::time::SystemTime>,
+    /// Coding agents with configuration applied; rebuilt on every config change.
+    agents: crate::agents::AgentCatalog,
     /// Serialized configuration last known to match the file on disk, so
     /// Settings can say when live changes have not been saved.
     saved_config: Option<String>,
@@ -1228,7 +1223,6 @@ pub struct App {
     /// Guardrail confirmation overlay
     guardrail: GuardrailOverlay,
     /// Request-scoped action context for an info-overlay profile choice.
-    pending_profile_selection: Option<PendingProfileSelection>,
     /// Request-scoped navigation and confirmation state for management of
     /// installed third-party plugins.
     pending_runtime_plugin_management: Option<PendingRuntimePluginManagement>,
@@ -1376,7 +1370,10 @@ impl App {
             cursor_motion: crate::ui::cursor_motion::CursorMotion::default(),
             last_frame_time: Instant::now(),
             last_config_check: Instant::now(),
+            last_agent_scan: Instant::now(),
+            pending_agent_submits: Vec::new(),
             saved_config: None,
+            agents: crate::agents::AgentCatalog::default(),
             last_config_mtime: use_system_state
                 .then(|| std::fs::metadata(crate::config::Config::config_path()))
                 .and_then(Result::ok)
@@ -1465,7 +1462,6 @@ impl App {
             context_picker: ContextPicker::new(),
             guardrail: GuardrailOverlay::new(),
 
-            pending_profile_selection: None,
             pending_runtime_plugin_management: None,
             pending_font_range_management: None,
             pending_font_feature_management: None,
@@ -2020,12 +2016,6 @@ impl App {
             self.tab_bar_hover_progress = (self.tab_bar_hover_progress - 0.2).max(0.0);
         }
 
-        // Update git watcher with active tab's working directory
-        let working_dir = self
-            .tabs
-            .as_ref()
-            .and_then(|t| t.active_tab())
-            .and_then(|tab| tab.working_directory());
         // Build pane render info (before renderer borrow)
         let pane_info = self.pane_render_info();
         for pi in &pane_info {
@@ -2042,41 +2032,6 @@ impl App {
 
         // Verify container trait access (before renderer borrow)
         let _has_terminal = self.focused_terminal_via_container().is_some();
-
-        // Update AI session chrome bar for plugin tabs
-        let chrome_bar_data = {
-            let branch = self.git_watcher.branch().map(|s| s.to_string());
-            let dirty = self.git_watcher.is_dirty();
-            let git_status = self.git_watcher.status();
-            let wd = working_dir.clone();
-
-            if let Some(tabs) = &mut self.tabs {
-                if let Some(tab) = tabs.active_tab_mut() {
-                    if let Some(session) = tab
-                        .focused_session_mut()
-                        .and_then(|state| state.ai_session.as_mut())
-                    {
-                        session.update_git(branch.as_deref(), dirty, wd.as_deref());
-                        Some(crate::ui::claude_chrome::ChromeBarInfo {
-                            repo_name: session.repo_name.clone(),
-                            branch: session.branch.clone(),
-                            dirty: session.dirty,
-                            ahead: git_status.map_or(0, |s| s.ahead),
-                            behind: git_status.map_or(0, |s| s.behind),
-                            host_label: session.host.badge_label(),
-                            profile: session.profile.clone(),
-                            recording: session.recording,
-                        })
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        };
 
         // Get cursor target position and calculate animations before borrowing
         let (cursor_style, _) = self.cursor_presentation();
@@ -2442,7 +2397,6 @@ impl App {
         } else {
             None
         };
-        renderer.set_chrome_bar(chrome_bar_data);
         renderer.set_info_overlay(info_overlay_data);
 
         // Update info overlay animation
@@ -3173,6 +3127,11 @@ impl App {
             self.redraw_scheduler
                 .request(redraw_scheduler::RedrawReason::ConfigReload);
         }
+        if self.refresh_agent_sessions() {
+            self.redraw_scheduler
+                .request(redraw_scheduler::RedrawReason::TerminalOutput);
+        }
+        self.submit_due_agent_input(Instant::now());
 
         let working_dir = self
             .tabs
@@ -3243,8 +3202,10 @@ impl App {
     fn next_idle_deadline(&self, now: Instant) -> Option<Instant> {
         let mut deadlines = vec![
             self.last_config_check + Self::CONFIG_POLL_INTERVAL,
+            self.next_agent_scan_deadline(),
             self.git_watcher.next_poll_deadline(),
         ];
+        deadlines.extend(self.next_agent_submit_deadline());
         if self.unicode_picker.search_pending() {
             deadlines.push(now + Duration::from_millis(16));
         }
@@ -3571,6 +3532,12 @@ impl App {
                     }
                 }
             }
+            Action::NewAgent => {
+                self.open_agent_picker(crate::ui::command_palette::palette::AgentPlacement::NewTab);
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
             Action::PreviousFailedCommand | Action::NextFailedCommand => {
                 self.jump_to_failed_command(matches!(action, Action::PreviousFailedCommand));
             }
@@ -3581,7 +3548,7 @@ impl App {
                 if self.command_palette.is_active() {
                     self.command_palette.close();
                 } else {
-                    self.command_palette.open();
+                    self.open_command_palette();
                 }
                 if let Some(window) = &self.window {
                     window.request_redraw();
@@ -3692,7 +3659,14 @@ impl App {
                 kind: crate::ui::command_palette::palette::PickKind::Theme,
                 id,
             } => self.commit_theme(&id),
+            PaletteResult::Picked {
+                kind: crate::ui::command_palette::palette::PickKind::Agent(placement),
+                id,
+            } => self.start_picked_agent(placement, &id),
             PaletteResult::RunAction(id) => {
+                if self.run_agent_command(&id) {
+                    return;
+                }
                 if let Some(value) = id.strip_prefix("plugin-pane.") {
                     self.open_plugin_pane_command(value);
                     return;
@@ -4479,23 +4453,15 @@ fn next_blink_boundary(start: Instant, now: Instant, half_period: std::time::Dur
     start + half_period.mul_f64((completed + 1) as f64)
 }
 
-fn select_plugin_target(
-    active_plugin_id: Option<&str>,
-    available_plugin_ids: &[String],
-) -> std::result::Result<String, String> {
-    if let Some(active) = active_plugin_id {
-        if available_plugin_ids.iter().any(|id| id == active) {
-            return Ok(active.to_string());
-        }
+/// The agent terminal to send to: the focused one, else the only one open.
+fn select_agent_target<T: Clone>(focused: Option<T>, open: &[T]) -> std::result::Result<T, String> {
+    if let Some(focused) = focused {
+        return Ok(focused);
     }
-
-    let mut unique = available_plugin_ids.to_vec();
-    unique.sort();
-    unique.dedup();
-    match unique.as_slice() {
+    match open {
         [only] => Ok(only.clone()),
-        [] => Err("Open an AI plugin tab before using Explain".into()),
-        _ => Err("Multiple AI plugin tabs are open; activate the intended one first".into()),
+        [] => Err("Start an agent before using Explain".into()),
+        _ => Err("Several agents are running; focus the one to ask first".into()),
     }
 }
 
@@ -4586,7 +4552,7 @@ mod base64_tests {
     use super::{
         base64_encode_standard, blink_phase_visible, command_keystrokes, cursor_opacity_at,
         cursor_state_requires_blink, next_blink_boundary, resolve_cursor_presentation,
-        select_plugin_target,
+        select_agent_target,
     };
     use std::time::{Duration, Instant};
 
@@ -4698,18 +4664,12 @@ mod base64_tests {
     }
 
     #[test]
-    fn plugin_target_prefers_active_then_unambiguous_tab() {
-        let plugins = vec!["claude-code".to_string(), "codex".to_string()];
-        assert_eq!(
-            select_plugin_target(Some("codex"), &plugins).unwrap(),
-            "codex"
-        );
-        assert_eq!(
-            select_plugin_target(None, &["claude-code".to_string()]).unwrap(),
-            "claude-code"
-        );
-        assert!(select_plugin_target(None, &plugins).is_err());
-        assert!(select_plugin_target(None, &[]).is_err());
+    fn agent_target_prefers_focus_then_the_only_open_agent() {
+        let open = [1, 2];
+        assert_eq!(select_agent_target(Some(2), &open).unwrap(), 2);
+        assert_eq!(select_agent_target(None, &[7]).unwrap(), 7);
+        assert!(select_agent_target(None, &open).is_err());
+        assert!(select_agent_target::<u8>(None, &[]).is_err());
     }
 
     #[test]

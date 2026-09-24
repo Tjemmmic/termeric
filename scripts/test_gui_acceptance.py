@@ -51,8 +51,8 @@ class GuiAcceptanceRecordTests(unittest.TestCase):
             self.assertNotIn(primary, fallbacks)
             self.assertEqual(len(fallbacks), len(set(fallbacks)))
             self.assertEqual(fallbacks, ["noto color emoji"])
-            self.assertIn("[plugins.claude_code]\nenabled = false", document)
-            self.assertIn("[plugins.codex]\nenabled = false", document)
+            for agent in ("claude-code", "codex", "gemini", "opencode"):
+                self.assertIn(f"[agents.{agent}]\nenabled = false", document)
 
     def test_app_process_replaces_user_home_and_tmux_runtime(self) -> None:
         with mock.patch.object(gui_acceptance, "check_font_profile"), tempfile.TemporaryDirectory() as directory, mock.patch.object(

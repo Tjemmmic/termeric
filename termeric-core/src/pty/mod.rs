@@ -315,6 +315,18 @@ impl PtyHandle {
     pub fn child_id(&self) -> Option<u32> {
         self.child.process_id()
     }
+
+    /// The process group in the terminal's foreground: the program the
+    /// person is interacting with, which may be a child of the shell.
+    #[cfg(unix)]
+    pub fn foreground_process_group(&self) -> Option<i32> {
+        self.master.process_group_leader()
+    }
+
+    #[cfg(not(unix))]
+    pub fn foreground_process_group(&self) -> Option<i32> {
+        None
+    }
 }
 
 fn detached_writer_error() -> std::io::Error {

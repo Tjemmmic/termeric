@@ -1,37 +1,23 @@
 # Explicit plugin panes
 
-The command palette includes **Split Right with Codex**, **Split Down with
-Claude Code**, and equivalent commands for enabled, registered declarative
-plugins with launch profiles. **Right** adds a vertical divider and **Down** a
-horizontal one. The plain command uses the automatic profile; each named
-profile has its own command, such as **Split Right with Codex (review
-profile)**.
+**Split Right with Agent…** and **Split Down with Agent…** open the
+[agent](agents.md) picker and start the chosen agent or profile in a new pane.
+Enabled, registered declarative plugins with launch profiles get their own
+**Split Right with NAME** and **Split Down with NAME** commands, plus one per
+named profile. **Right** adds a vertical divider and **Down** a horizontal one.
 These commands start a fresh process; they do not resume a provider conversation.
-Existing New Tab/Open/Resume commands retain their existing behavior.
 
-Automatic selection uses the plugin's normal repository/configured default
-rules. Explicit names take priority, including a profile literally named
-`default`. The resolved reference is stored on the new terminal owner and saved
-in [schema-3 workspaces](workspaces.md). Configuration changes refresh the
+Choosing an agent without a profile uses its `default_profile`, if any.
+Explicit names take priority, including a profile literally named `default`.
+The resolved reference is stored on the new terminal owner and saved in
+[schema-3 workspaces](workspaces.md). Configuration changes refresh the
 commands; stale selections fail rather than silently launching another profile.
 Event-only plugins do not advertise pane commands.
 
-## Selecting and restarting an existing owner
+## Restarting an existing owner
 
-Built-in **Select Profile** commands offer **Automatic profile** separately from
-**Profile: NAME**. No name is reserved: `default` is an ordinary explicit profile.
-Automatic clears the saved reference and uses repository/configured defaults at
-the next restart; the resolved launch reference is then saved on the replacement.
-The picker sorts names and shows at most 31 named profiles plus Automatic, with
-a notice if more exist. The first nine choices have number shortcuts; all choices
-are reachable with Tab/Shift+Tab and Enter, pointer, or accessibility controls. Automatic stays
-available when all named profiles have been removed.
-
-Plugin commands prefer a matching owner in the active tab, then search other
-live tabs in order. Within a tab, the focused matching owner wins, followed by
-the first matching pane in visual order. A picker captures that exact identity;
-later focus changes do not redirect it, and movement makes its old address stale.
-Selection changes only future-launch metadata, not the running process.
+**Restart Agent** acts on the focused agent terminal, and only when Termeric
+started it. The replacement uses the profile the terminal was started with.
 
 Restart revalidates the configured reference and requires one matching launch
 with the owner's cwd. Profile-provided `PWD` cannot override that cwd; fallback
@@ -39,7 +25,7 @@ notices, missing configuration, mismatched responses, and spawn failures keep
 the existing processes. Only after successful PTY creation is the original
 owner retired. Read-only/live-domain owners refuse local restart. Explicit names
 survive OpenTab, restart, movement, and archive round-trips even if the configured
-automatic default changes. This does not prove provider readiness.
+default profile changes. This does not prove provider readiness.
 
 ## Placement and safety
 

@@ -51,7 +51,8 @@ pub struct ContextSource {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContextTarget {
-    pub plugin_id: String,
+    pub agent_id: String,
+    pub agent_name: String,
     pub terminal: TerminalIdentity,
 }
 
@@ -326,6 +327,11 @@ impl ContextPicker {
             request_id: 0,
             accepting: false,
         }
+    }
+
+    /// The agent terminal the open picker gathers context for.
+    pub fn target(&self) -> Option<&ContextTarget> {
+        self.target.as_ref()
     }
 
     pub fn open(&mut self, cwd: Option<String>, target: ContextTarget) -> u64 {
@@ -993,7 +999,8 @@ mod tests {
 
     fn target(tab_id: usize) -> ContextTarget {
         ContextTarget {
-            plugin_id: "fixture-plugin".into(),
+            agent_id: "fixture-agent".into(),
+            agent_name: "Fixture Agent".into(),
             terminal: TerminalIdentity {
                 tab_id,
                 pane_id: crate::panes::PaneId(0),

@@ -204,7 +204,10 @@ fn evicted_diff_review_cannot_copy_or_dismiss_a_newer_patch() {
         .pane_session_mut(owner)
         .unwrap()
         .observe_output(patch, true);
-    app.execute_plugin_command("codex.review-diff");
+    app.open_agent_diff_review(crate::tabs::TerminalIdentity {
+        tab_id: entry.source.tab_id,
+        pane_id: owner,
+    });
     let request_id = app.diff_review.request_id();
     let target = app.diff_review.target(request_id).unwrap();
     {
@@ -276,7 +279,10 @@ fn plugin_export_uses_its_own_transcript_or_scrollback_not_focused_sibling() {
             }
         }
         let focused = app.active_harvest_source();
-        app.execute_plugin_command("codex.export-session");
+        app.export_terminal_session(crate::tabs::TerminalIdentity {
+            tab_id: entry.source.tab_id,
+            pane_id: PaneId(0),
+        });
         assert!(app.session_export.is_some());
         let deadline = Instant::now() + Duration::from_secs(5);
         while app.session_export.is_some() {
@@ -398,22 +404,14 @@ fn transcript_controls_and_close_keep_independent_owner_state() {
         let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
         tab.set_plugin_profile_reference(PaneId(0), "codex", Some("first".into()));
         tab.set_plugin_profile_reference(PaneId(2), "claude-code", Some("second".into()));
-        tab.pane_session_mut(PaneId(0))
-            .unwrap()
-            .ai_session
-            .as_mut()
-            .unwrap()
-            .repo_name = Some("owner-zero".into());
-        tab.pane_session_mut(PaneId(2))
-            .unwrap()
-            .ai_session
-            .as_mut()
-            .unwrap()
-            .repo_name = Some("owner-two".into());
     }
+    let owner = |pane_id| crate::tabs::TerminalIdentity {
+        tab_id: entry.source.tab_id,
+        pane_id,
+    };
     let focused = app.active_harvest_source();
-    app.execute_plugin_command("codex.toggle-transcript");
-    app.execute_plugin_command("claude-code.toggle-transcript");
+    app.toggle_terminal_transcript(owner(PaneId(0)));
+    app.toggle_terminal_transcript(owner(PaneId(2)));
     assert_eq!(app.active_harvest_source(), focused);
     let paths = {
         let tabs = app.tabs.as_mut().unwrap();
@@ -428,7 +426,6 @@ fn transcript_controls_and_close_keep_independent_owner_state() {
         let tab = tabs.active_tab().unwrap();
         [PaneId(0), PaneId(2)].map(|id| {
             let state = tab.pane_session(id).unwrap();
-            assert!(state.ai_session.as_ref().unwrap().recording);
             state.transcript.as_ref().unwrap().path().to_path_buf()
         })
     };
@@ -445,7 +442,7 @@ fn transcript_controls_and_close_keep_independent_owner_state() {
         .get_pane_mut(PaneId(0))
         .unwrap()
         .read_only = true;
-    app.execute_plugin_command("codex.toggle-transcript");
+    app.toggle_terminal_transcript(owner(PaneId(0)));
     assert!(latest_toast(&app).unwrap().contains("writable local"));
     for id in [PaneId(0), PaneId(2)] {
         assert!(
@@ -456,10 +453,8 @@ fn transcript_controls_and_close_keep_independent_owner_state() {
                 .unwrap()
                 .pane_session(id)
                 .unwrap()
-                .ai_session
-                .as_ref()
-                .unwrap()
-                .recording
+                .transcript
+                .is_some()
         );
     }
     // Closing the source drops/flushed its recorder, without touching another
@@ -471,21 +466,11 @@ fn transcript_controls_and_close_keep_independent_owner_state() {
     let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
     assert!(tab.pane_manager.is_none());
     let state = tab.focused_session().unwrap();
-    let ai = state.ai_session.as_ref().unwrap();
-    assert!(ai.recording);
-    assert_eq!(ai.profile, "second");
-    assert_eq!(ai.repo_name.as_deref(), Some("owner-two"));
+    assert_eq!(state.agent.as_ref().unwrap().agent_id, "claude-code");
     assert_eq!(state.transcript.as_ref().unwrap().path(), paths[1]);
-    app.execute_plugin_command("claude-code.toggle-transcript");
+    let survivor = tab.focused_terminal_identity();
+    app.toggle_terminal_transcript(survivor);
     let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
-    assert!(
-        !tab.focused_session()
-            .unwrap()
-            .ai_session
-            .as_ref()
-            .unwrap()
-            .recording
-    );
     assert!(tab.focused_session().unwrap().transcript.is_none());
     for (index, expected, absent) in [
         (0, "ZERO_INPUT", "TWO_INPUT"),
@@ -529,7 +514,10 @@ fn diff_observation_and_delayed_review_are_terminal_local() {
             .unreviewed_count(),
         0
     );
-    app.execute_plugin_command("codex.review-diff");
+    app.open_agent_diff_review(crate::tabs::TerminalIdentity {
+        tab_id: entry.source.tab_id,
+        pane_id: PaneId(0),
+    });
     let request_id = app.diff_review.request_id();
     assert_eq!(
         app.diff_review.target(request_id).unwrap().pane_id,
@@ -553,7 +541,10 @@ fn diff_observation_and_delayed_review_are_terminal_local() {
             .unreviewed_count(),
         1
     );
-    app.execute_plugin_command("claude-code.review-diff");
+    app.open_agent_diff_review(crate::tabs::TerminalIdentity {
+        tab_id: entry.source.tab_id,
+        pane_id: PaneId(1),
+    });
     let request_id = app.diff_review.request_id();
     app.close_control_pane(entry.source.tab_id as u64, 1)
         .unwrap();

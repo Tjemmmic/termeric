@@ -2301,6 +2301,16 @@ impl TabManager {
         self.tabs.iter().enumerate()
     }
 
+    /// Re-identify the coding agent in every terminal. Returns whether any
+    /// terminal changed.
+    pub(crate) fn refresh_agents(&mut self, catalog: &crate::agents::AgentCatalog) -> bool {
+        let mut changed = false;
+        for tab in &mut self.tabs {
+            changed |= tab.refresh_agents(catalog);
+        }
+        changed
+    }
+
     /// Find the index of the first tab owned by a given plugin
     #[cfg(test)]
     pub fn find_plugin_tab_index(&self, plugin_id: &str) -> Option<usize> {
@@ -2314,6 +2324,7 @@ impl TabManager {
     /// Prefer the active tab, then other live tabs in order. Within each tab,
     /// prefer its focused matching owner, then its first matching pane in
     /// visual order. Tab presentation is not launch identity.
+    #[cfg(test)]
     pub(crate) fn plugin_terminal_identity(&self, plugin_id: &str) -> Option<TerminalIdentity> {
         // Prefer the active tab's matching owner before searching other tabs.
         // Otherwise moving a focused plugin beside an earlier same-plugin tab
@@ -2328,28 +2339,6 @@ impl TabManager {
                         pane_id,
                     })
             })
-    }
-
-    /// Checked user input to the selected plugin owner, without focus/broadcast
-    /// routing or a fallback when that owner is read-only.
-    pub fn write_to_plugin_terminal(&mut self, plugin_id: &str, data: &[u8]) -> bool {
-        let Some(identity) = self.plugin_terminal_identity(plugin_id) else {
-            return false;
-        };
-        self.origin_for_pane(identity.tab_id, identity.pane_id)
-            .is_some_and(|origin| self.write_user_to_origin(origin, data).is_ok())
-    }
-
-    /// Copy the last N lines from the selected plugin owner's terminal.
-    pub fn copy_from_plugin_terminal(&self, plugin_id: &str, lines: usize) -> Option<String> {
-        let identity = self.plugin_terminal_identity(plugin_id)?;
-        let origin = self.origin_for_pane(identity.tab_id, identity.pane_id)?;
-        let all_lines = self
-            .terminal_for_origin(origin)?
-            .grid()
-            .export_scrollback_text();
-        let start = all_lines.len().saturating_sub(lines);
-        Some(all_lines[start..].join("\n"))
     }
 
     /// Get tab info for display (index, title, is_active, has_activity)

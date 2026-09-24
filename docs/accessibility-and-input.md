@@ -894,7 +894,7 @@ keyboard navigation, visibly dimmed, and carry a semantic reason; retained
 primary rows temporarily hidden by an alternate-screen application carry a
 separate reason. Retained 64-KiB snapshots are labeled as truncated before
 Copy or Explain. The Explain item states
-that it sends the selected command/output to an unambiguous open AI plugin tab;
+that it sends the selected command/output to the focused agent, or the only running one;
 automated accessibility tests inspect that contract but deliberately never
 invoke a provider-backed explanation.
 

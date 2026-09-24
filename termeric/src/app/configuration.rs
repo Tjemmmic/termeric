@@ -522,25 +522,54 @@ impl App {
         }
     }
 
+    /// Hand Settings the installed and enabled state of each built-in agent.
+    fn sync_agent_settings_rows(&mut self) {
+        const BUILTIN: [(&str, &str); 4] = [
+            ("claude-code", "Claude Code"),
+            ("codex", "Codex"),
+            ("gemini", "Gemini CLI"),
+            ("opencode", "OpenCode"),
+        ];
+        let rows = BUILTIN
+            .iter()
+            .filter_map(|(id, label)| {
+                let agent = self.agents.get(id)?;
+                Some(crate::ui::settings::AgentSettingsRow {
+                    id,
+                    label,
+                    installed: agent.installed_path().is_some(),
+                    enabled: agent.enabled,
+                })
+            })
+            .collect();
+        let custom: Vec<&str> = self
+            .agents
+            .all()
+            .iter()
+            .filter(|agent| BUILTIN.iter().all(|(id, _)| *id != agent.id))
+            .map(|agent| agent.name.as_str())
+            .collect();
+        let summary = if custom.is_empty() {
+            "None (add [agents.<id>] to config.toml)".to_string()
+        } else {
+            custom.join(", ")
+        };
+        self.settings_panel.set_agents(rows, summary);
+    }
+
     pub(super) fn sync_plugins_from_config(&mut self) {
         self.plugin_runtime_generation = self.plugin_runtime_generation.wrapping_add(1).max(1);
         self.structured_plugin_worker
             .set_generation(self.plugin_runtime_generation);
         let ctx = self.build_plugin_context();
         self.plugin_manager.unload_all();
-        if self.config.plugins.claude_code.enabled {
-            let plugin = ClaudeCodePlugin::new(self.config.plugins.claude_code.clone());
+        self.agents = crate::agents::AgentCatalog::from_config(&self.config.agents);
+        self.sync_agent_settings_rows();
+        for agent in self.agents.enabled() {
+            let plugin = crate::plugin::agent::AgentPlugin::new(agent.clone());
             if let Err(error) = self.plugin_manager.register(Box::new(plugin), &ctx) {
-                log::error!("Failed to register Claude Code plugin: {error}");
-                self.toasts
-                    .error(format!("Claude Code plugin failed: {error}"));
-            }
-        }
-        if self.config.plugins.codex.enabled {
-            let plugin = CodexPlugin::new(self.config.plugins.codex.clone());
-            if let Err(error) = self.plugin_manager.register(Box::new(plugin), &ctx) {
-                log::error!("Failed to register Codex plugin: {error}");
-                self.toasts.error(format!("Codex plugin failed: {error}"));
+                log::error!("Failed to register agent {:?}: {error}", agent.id);
+                self.toasts.error(format!("{} failed: {error}", agent.name));
             }
         }
         let (runtime_plugins, statuses, registry_error) =
@@ -956,40 +985,14 @@ impl App {
             SettingsAction::SetHarvestMaxHistory(limit) => {
                 self.config.harvest.max_history = limit;
             }
-            SettingsAction::SetPluginEnabled { plugin_id, enabled } => match plugin_id.as_str() {
-                "claude-code" => {
-                    self.config.plugins.claude_code.enabled = enabled;
-                }
-                "codex" => {
-                    self.config.plugins.codex.enabled = enabled;
-                }
-                _ => log::warn!("Unknown plugin: {}", plugin_id),
-            },
-            SettingsAction::SetPluginModel { plugin_id, model } => {
-                let model_val = if model == "(default)" {
-                    None
-                } else {
-                    Some(model)
-                };
-                match plugin_id.as_str() {
-                    "claude-code" => self.config.plugins.claude_code.model = model_val,
-                    "codex" => self.config.plugins.codex.model = model_val,
-                    _ => {}
+            SettingsAction::SetAgentEnabled { agent_id, enabled } => {
+                // Built-in agents are on by default: record only an opt-out.
+                let entry = self.config.agents.entry(agent_id.clone()).or_default();
+                entry.enabled = (!enabled).then_some(false);
+                if *entry == crate::agents::AgentConfig::default() {
+                    self.config.agents.remove(&agent_id);
                 }
             }
-            SettingsAction::SetPluginApprovalMode { plugin_id, mode } => match plugin_id.as_str() {
-                "claude-code" => {
-                    self.config.plugins.claude_code.approval_mode = if mode == "(interactive)" {
-                        None
-                    } else {
-                        Some(mode)
-                    };
-                }
-                "codex" => {
-                    self.config.plugins.codex.approval_mode = mode;
-                }
-                _ => {}
-            },
             SettingsAction::ManageRuntimePlugins => {
                 self.open_runtime_plugin_manager();
                 return;

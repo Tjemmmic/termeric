@@ -1,10 +1,11 @@
 //! Integration state owned by one terminal, transferred with its PTY.
 use super::transcript::{TranscriptNotice, TranscriptRecorder, TranscriptWrite};
+use crate::agents::AgentSession;
 use crate::terminal::diff_detector::DiffDetector;
-use crate::ui::claude_chrome::AiSessionState;
 
 pub(crate) struct TerminalSession {
-    pub ai_session: Option<AiSessionState>,
+    /// The coding agent in this terminal's foreground, if any.
+    pub agent: Option<AgentSession>,
     pub transcript: Option<TranscriptRecorder>,
     pub diff_detector: DiffDetector,
     failure_reported: bool,
@@ -13,21 +14,17 @@ pub(crate) struct TerminalSession {
 
 impl Default for TerminalSession {
     fn default() -> Self {
-        Self::new(false)
-    }
-}
-
-impl TerminalSession {
-    pub fn new(plugin: bool) -> Self {
         Self {
-            ai_session: plugin.then(AiSessionState::default),
+            agent: None,
             transcript: None,
             diff_detector: DiffDetector::new(),
             failure_reported: false,
             notices: Vec::new(),
         }
     }
+}
 
+impl TerminalSession {
     fn notice(&mut self, text: String) {
         if self.notices.len() < 16 {
             self.notices.push(text);
@@ -109,12 +106,6 @@ impl TerminalSession {
             return false;
         };
         let notices = recorder.poll_notices();
-        let stopped = notices.iter().any(|notice| {
-            matches!(
-                notice,
-                TranscriptNotice::CapReached { .. } | TranscriptNotice::Failed(_)
-            )
-        });
         for notice in &notices {
             match notice {
                 TranscriptNotice::CapReached { max_bytes } => self.notice(format!("Transcript reached its {} MiB cap; recording stopped before data was truncated", max_bytes / (1024 * 1024))),
@@ -128,9 +119,6 @@ impl TerminalSession {
                     if *input { "input" } else { "output" })),
             }
         }
-        if stopped && let Some(session) = &mut self.ai_session {
-            session.recording = false;
-        }
         !notices.is_empty()
     }
 
@@ -139,16 +127,10 @@ impl TerminalSession {
         drop(self.stop_transcript());
         self.transcript = Some(recorder);
         self.failure_reported = false;
-        if let Some(session) = &mut self.ai_session {
-            session.recording = true;
-        }
     }
 
     pub fn stop_transcript(&mut self) -> Option<TranscriptRecorder> {
         self.finish_recorded_text();
-        if let Some(session) = &mut self.ai_session {
-            session.recording = false;
-        }
         self.transcript.take()
     }
 
@@ -182,7 +164,7 @@ mod tests {
     #[test]
     fn terminal_eof_finalizes_pending_text_once_without_stopping_a_healthy_recorder() {
         let directory = tempfile::tempdir().unwrap();
-        let mut session = TerminalSession::new(true);
+        let mut session = TerminalSession::default();
         session.start_transcript(
             TranscriptRecorder::new(directory.path(), None, None, "Local", "fixture").unwrap(),
         );
@@ -190,7 +172,7 @@ mod tests {
         session.record_input(b"input \xe2");
         session.finish_stream();
         session.finish_stream();
-        assert!(session.ai_session.as_ref().unwrap().recording);
+        assert!(session.transcript.is_some());
         assert_eq!(session.drain_notices().len(), 3); // Two text directions plus strict diff-observer rejection.
         let recorder = session.transcript.as_ref().unwrap();
         let checkpoint = recorder.checkpoint().unwrap();
@@ -211,7 +193,7 @@ mod tests {
     fn recording_epochs_never_share_pending_input_or_output() {
         let directory = tempfile::tempdir().unwrap();
         for replace in [false, true] {
-            let mut session = TerminalSession::new(true);
+            let mut session = TerminalSession::default();
             let first =
                 TranscriptRecorder::new(directory.path(), None, None, "Local", "first").unwrap();
             let first_path = first.path().to_owned();
@@ -234,7 +216,7 @@ mod tests {
             session.record_input(b"\x82\xac second");
             session.poll_notices();
             assert!(
-                session.ai_session.as_ref().unwrap().recording,
+                session.transcript.is_some(),
                 "replacement is a warning, not a stopped recorder"
             );
             session.finish_stream();
@@ -249,7 +231,7 @@ mod tests {
     #[test]
     fn input_and_output_decoders_are_separate_and_replacement_notices_stay_bounded() {
         let directory = tempfile::tempdir().unwrap();
-        let mut session = TerminalSession::new(true);
+        let mut session = TerminalSession::default();
         session.start_transcript(
             TranscriptRecorder::new(directory.path(), None, None, "Local", "fixture").unwrap(),
         );
@@ -261,7 +243,7 @@ mod tests {
             session.record_input(b"\xff");
             session.poll_notices();
         }
-        assert!(session.ai_session.as_ref().unwrap().recording);
+        assert!(session.transcript.is_some());
         assert_eq!(session.drain_notices().len(), 2);
         let mut recorder = session.stop_transcript().unwrap();
         recorder.finish(std::time::Duration::from_secs(2)).unwrap();
@@ -276,7 +258,7 @@ mod tests {
     fn diff_entries_use_completion_epoch_without_replaying_pre_recording_raw_output() {
         use super::super::transcript::{EntryKind, TranscriptEntry};
         let directory = tempfile::tempdir().unwrap();
-        let mut session = TerminalSession::new(true);
+        let mut session = TerminalSession::default();
         let patch = b"--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n+new\n";
         session.observe_output(patch, true);
         session.start_transcript(
@@ -300,7 +282,7 @@ mod tests {
     fn raw_transcript_preserves_split_utf8_in_both_directions() {
         use super::super::transcript::{EntryKind, TranscriptEntry};
         let directory = tempfile::tempdir().unwrap();
-        let mut session = TerminalSession::new(false);
+        let mut session = TerminalSession::default();
         session.start_transcript(
             TranscriptRecorder::new(directory.path(), None, None, "Local", "fixture").unwrap(),
         );
@@ -335,7 +317,7 @@ mod tests {
     fn completed_diffs_are_recorded_once_at_boundaries_and_eof_even_after_eviction() {
         use super::super::transcript::{EntryKind, TranscriptEntry};
         let directory = tempfile::tempdir().unwrap();
-        let mut session = TerminalSession::new(true);
+        let mut session = TerminalSession::default();
         session.start_transcript(
             TranscriptRecorder::new(directory.path(), None, None, "Local", "fixture").unwrap(),
         );
@@ -379,8 +361,8 @@ mod tests {
     #[test]
     fn rejected_capture_notices_are_bounded_and_shell_output_is_not_captured() {
         let patch = b"--- a/file\n+++ b/file\n@@ -1,2 +1,2 @@\n-old\n+new\nfinished\n";
-        let mut plugin = TerminalSession::new(true);
-        let mut shell = TerminalSession::new(false);
+        let mut plugin = TerminalSession::default();
+        let mut shell = TerminalSession::default();
         for _ in 0..100 {
             plugin.observe_output(patch, true);
             shell.observe_output(patch, false);
@@ -394,13 +376,13 @@ mod tests {
     #[test]
     fn recorder_flags_and_bounded_failure_notices_belong_to_one_owner() {
         let directory = tempfile::tempdir().unwrap();
-        let mut first = TerminalSession::new(true);
-        let second = TerminalSession::new(true);
+        let mut first = TerminalSession::default();
+        let second = TerminalSession::default();
         first.start_transcript(
             TranscriptRecorder::new(directory.path(), None, None, "Local", "fixture").unwrap(),
         );
-        assert!(first.ai_session.as_ref().unwrap().recording);
-        assert!(!second.ai_session.as_ref().unwrap().recording);
+        assert!(first.transcript.is_some());
+        assert!(!second.transcript.is_some());
         first.handle_write(Err(std::io::Error::other("fixture failure")));
         first.handle_write(Err(std::io::Error::other("duplicate failure")));
         assert_eq!(first.notices.len(), 1);
@@ -410,7 +392,7 @@ mod tests {
         assert_eq!(first.notices.len(), 16);
         assert!(second.notices.is_empty());
         let mut recorder = first.stop_transcript().unwrap();
-        assert!(!first.ai_session.as_ref().unwrap().recording);
+        assert!(!first.transcript.is_some());
         recorder.finish(std::time::Duration::from_secs(2)).unwrap();
         assert_eq!(first.drain_notices().len(), 16);
         assert!(first.drain_notices().is_empty());

@@ -1106,6 +1106,25 @@ Versioning once public beta tags begin.
 
 ### Changed
 
+- Coding agents are one catalog instead of separate Claude Code and Codex
+  plugins. Claude Code, Codex, Gemini CLI, and OpenCode are built in, and
+  `[agents.<id>]` in `config.toml` changes one or adds any other agent. One
+  **New Agent…** picker (Ctrl+Shift+I) starts an installed agent or one of its
+  profiles in a tab or split, with **Resume Agent Conversation…** beside it.
+  Agents are recognized in any pane from the terminal's foreground process,
+  including ones typed at a shell prompt, and the palette shows agent commands
+  only while an agent terminal is focused. The per-agent command copies are
+  gone. **Start New Agent Conversation** types the agent's own command (`/clear`
+  or `/new`), and **Send Context to Agent…** pastes into the agent without
+  pressing Enter. Codex is now enabled whenever it is installed. See
+  [coding agents](docs/agents.md).
+
+- `[plugins.claude_code]` and `[plugins.codex]` are converted to
+  `[agents.claude-code]` and `[agents.codex]` when read. Models and approval
+  names become the agents' own flags, and the old sections are dropped the
+  next time Settings saves. `--profile PLUGIN:PROFILE` is now
+  `--profile AGENT:PROFILE` with the same ids.
+
 - The 26 "Theme: …" command palette entries are replaced by one **Change
   Theme…** picker. It lists every built-in and custom theme by origin
   (Termeric, Guest, Custom), starts on the current theme, previews the
@@ -1261,6 +1280,15 @@ Versioning once public beta tags begin.
   application identity; closing or losing one window no longer exits siblings.
 
 ### Removed
+
+- The Claude/Codex session bar under the tabs. It hid the bottom terminal
+  rows and showed a fixed "Local" badge.
+
+- Claude and Codex **Copy Last Response**, **Jump to Last Error**, and
+  **Select Profile** commands, and the fixed model and approval-mode lists in
+  Settings. Copy Last Response copied screen lines rather than the response.
+  **Jump to Previous/Next Failed Command** replaces Jump to Last Error for
+  every terminal. Profiles are chosen when an agent starts.
 
 - Destructive-command confirmations for input you type, paste, complete,
   broadcast, or re-run from Harvest in agent tabs. The check matched text

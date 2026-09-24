@@ -18,7 +18,6 @@ mod style;
 mod text;
 
 mod buffer;
-mod chrome;
 mod cursor;
 pub(crate) mod draw;
 mod git;
@@ -670,7 +669,6 @@ pub struct Renderer {
     diff_review: Option<DiffReviewInfo>,
     context_picker: Option<ContextPickerInfo>,
     guardrail: Option<GuardrailInfo>,
-    chrome_bar: Option<crate::ui::claude_chrome::ChromeBarInfo>,
     /// Transient toast notifications for the current frame
     toasts: Vec<crate::ui::toast::ToastInfo>,
     /// Visual bell intensity (0.0 = off, 1.0 = full flash)
@@ -903,7 +901,6 @@ impl Renderer {
             diff_review: None,
             context_picker: None,
             guardrail: None,
-            chrome_bar: None,
             toasts: Vec::new(),
             bell_intensity: 0.0,
             acceptance_surface_loss_pending: std::env::var_os(
@@ -1210,10 +1207,6 @@ impl Renderer {
         self.guardrail = info;
     }
 
-    pub fn set_chrome_bar(&mut self, info: Option<crate::ui::claude_chrome::ChromeBarInfo>) {
-        self.chrome_bar = info;
-    }
-
     /// Draw pane dividers from the same current layout used by hit testing.
     fn draw_pane_dividers(
         &mut self,
@@ -1258,20 +1251,11 @@ impl Renderer {
         self.bell_intensity = intensity;
     }
 
-    /// Top edge of the terminal area: below the tab bar and any chrome bar.
-    /// Overlays such as the find box float above it and never move it.
+    /// Top edge of the terminal area, directly below the tab bar. Overlays
+    /// such as the find box float above it and never move it, so the grid
+    /// size computed from the window always matches what is drawn.
     pub fn content_top(&self) -> f32 {
-        self.tab_bar_height() + self.chrome_bar_height()
-    }
-
-    /// Height of the chrome bar (0 if no chrome bar is active)
-    pub fn chrome_bar_height(&self) -> f32 {
-        if self.chrome_bar.is_some() {
-            // Whole pixels keep the terminal grid below the bar pixel-aligned.
-            (self.cell_height * 1.4).round()
-        } else {
-            0.0
-        }
+        self.tab_bar_height()
     }
 
     /// Render the terminal grid with tab bar
@@ -1616,27 +1600,15 @@ impl Renderer {
         // Calculate brightness multiplier for focus dimming (1.0 = full brightness, lower = dimmed)
         let brightness = 1.0 - focus_dim;
 
-        // Content starts below the tab bar and the chrome bar (Claude tabs).
-        // The find box floats over it.
-        let chrome_height = self.chrome_bar_height();
-        let content_top = tab_bar_height + chrome_height;
+        // Content starts directly below the tab bar; the find box floats
+        // over it.
+        let content_top = tab_bar_height;
 
         // ── LAYER 0: Base content (tab bar, grid, cursor, scrollbar) ──
         // Render tab bar first
         self.build_tab_bar(tabs, window_width, window_height, tab_bar_height);
         if let Some(target) = self.tab_bar_keyboard_focus {
             self.build_tab_bar_keyboard_focus(target, tabs, window_width, window_height);
-        }
-
-        // Render chrome bar for Claude tabs (sits between tab bar and content)
-        if let Some(ref info) = self.chrome_bar.clone() {
-            self.build_chrome_bar(
-                info,
-                content_left,
-                content_width,
-                tab_bar_height,
-                chrome_height,
-            );
         }
 
         // ── Render terminal grid(s) ──
@@ -1821,12 +1793,7 @@ impl Renderer {
         self.rect_pipeline.mark_layer();
         self.text_pipeline.mark_layer();
         if let Some(search_info) = search_bar {
-            self.build_search_bar(
-                search_info,
-                content_left,
-                content_width,
-                tab_bar_height + chrome_height,
-            );
+            self.build_search_bar(search_info, content_left, content_width, content_top);
         }
 
         // ── LAYER 5: Git completion dropdown (overlays grid) ──

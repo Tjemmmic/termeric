@@ -91,11 +91,16 @@ impl Hook {
 pub enum HookResponse {
     /// Plugin didn't handle this hook
     Ignored,
-    /// Plugin handled it, continue processing other plugins
+    /// Plugin handled it, continue processing other plugins. No shipped
+    /// plugin answers this way today; the manager and fixtures still honor it.
+    #[cfg_attr(not(test), allow(dead_code))]
     Handled,
     /// Plugin wants to execute an action
     Action(PluginAction),
-    /// Plugin wants to execute several actions (notice + open, etc.)
+    /// Plugin wants to execute several actions (notice + open, etc.). Launch
+    /// validation must still reject extra or mismatched actions, so fixtures
+    /// exercise it even though no shipped plugin answers this way today.
+    #[cfg_attr(not(test), allow(dead_code))]
     Actions(Vec<PluginAction>),
 }
 
@@ -135,12 +140,6 @@ pub enum PluginAction {
     /// user needs to actually see — failed profile lookups, config warnings,
     /// etc.
     ShowNotice { title: String, lines: Vec<String> },
-    /// Clear a plugin-owned tab (send Ctrl+C + clear)
-    ClearPluginTab { plugin_id: String },
-    /// Launch a fresh replacement, then retire only the selected plugin owner.
-    RestartPlugin { plugin_id: String },
-    /// Copy N lines from a plugin tab to clipboard
-    CopyFromPluginTab { plugin_id: String, lines: usize },
     /// Apply a detected diff to the filesystem via `git apply`
     ApplyDiff {
         diff_content: String,
@@ -156,19 +155,6 @@ pub enum PluginAction {
         diff_content: String,
         cwd: Option<String>,
     },
-    /// Toggle transcript recording for the active AI plugin session.
-    ToggleTranscript,
-    /// Inject context text into a specific plugin-owned tab.
-    InjectContext { plugin_id: String, text: String },
-    /// List available profiles for a plugin (shows selection overlay)
-    ListProfiles { plugin_id: String },
-    /// Save an explicit named profile for one plugin owner's next restart.
-    /// Every name, including "default", is literal; automatic selection is a
-    /// separate host picker choice and never a string sentinel.
-    ApplyProfile {
-        plugin_id: String,
-        profile_name: String,
-    },
 }
 
 impl PluginAction {
@@ -182,16 +168,9 @@ impl PluginAction {
             Self::Notify { .. } => "notify",
             Self::ShowMessage { .. } => "show-message",
             Self::ShowNotice { .. } => "show-notice",
-            Self::ClearPluginTab { .. } => "clear-plugin-tab",
-            Self::RestartPlugin { .. } => "restart-plugin",
-            Self::CopyFromPluginTab { .. } => "copy-from-plugin-tab",
             Self::ApplyDiff { .. } => "apply-diff",
             Self::StageDiff { .. } => "stage-diff",
             Self::RevertDiff { .. } => "revert-diff",
-            Self::ToggleTranscript => "toggle-transcript",
-            Self::InjectContext { .. } => "inject-context",
-            Self::ListProfiles { .. } => "list-profiles",
-            Self::ApplyProfile { .. } => "apply-profile",
         }
     }
 }

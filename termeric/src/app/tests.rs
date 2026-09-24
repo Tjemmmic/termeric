@@ -7714,14 +7714,21 @@ fn plugin_context_command_never_targets_a_focused_shell_sibling() {
         .tab_type = crate::tabs::TabType::Plugin {
         plugin_id: "synthetic-capture".into(),
     };
-    assert!(app.inject_context_to_plugin("synthetic-capture", "fixture context"));
+    let tab_id = app.tabs.as_ref().unwrap().active_tab().unwrap().id;
+    assert!(app.send_to_agent(
+        super::agents::AgentTarget {
+            identity: crate::tabs::TerminalIdentity {
+                tab_id,
+                pane_id: PaneId(0),
+            },
+            agent_id: "synthetic-capture".into(),
+            agent_name: "Synthetic".into(),
+        },
+        "fixture context"
+    ));
     assert_eq!(
         fenced_harvest_capture(&mut app, &captures),
-        vec![
-            b"\n--- Context ---\nfixture context\n--- End Context ---\n".to_vec(),
-            vec![],
-            vec![],
-        ]
+        vec![b"fixture context".to_vec(), vec![], vec![]]
     );
 }
 
@@ -7732,8 +7739,6 @@ mod plugin_terminal_tests;
 mod plugin_restart_tests;
 
 #[cfg(unix)]
-mod plugin_profile_tests;
-
 #[cfg(unix)]
 mod terminal_session_tests;
 
@@ -7766,6 +7771,12 @@ fn context_picker_targets_the_plugin_owner_not_its_focused_shell_sibling() {
         plugin_id: "synthetic-capture".into(),
         profile: None,
     };
+    let owner = crate::tabs::TerminalIdentity {
+        tab_id: tab.id,
+        pane_id: PaneId(0),
+    };
+    mark_capture_plugin_owner(&mut app, PaneId(0), "synthetic-capture");
+    let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
     for (pane_id, directory) in [
         (PaneId(0), plugin_directory.path()),
         (PaneId(2), sibling_directory.path()),
@@ -7778,7 +7789,7 @@ fn context_picker_targets_the_plugin_owner_not_its_focused_shell_sibling() {
             .terminal
             .process(format!("\x1b]7;file://localhost{}\x07", directory.display()).as_bytes());
     }
-    app.open_context_picker_for("synthetic-capture");
+    app.open_context_picker_for(owner, &synthetic_agent("synthetic-capture"));
     let request_id = app.context_picker.request_id();
     for source in app
         .context_picker
@@ -7806,11 +7817,7 @@ fn context_picker_targets_the_plugin_owner_not_its_focused_shell_sibling() {
     app.handle_context_gathered(request_id, Ok("fixture context".into()));
     assert_eq!(
         fenced_harvest_capture(&mut app, &captures),
-        vec![
-            b"\n--- Context ---\nfixture context\n--- End Context ---\n".to_vec(),
-            vec![],
-            vec![],
-        ]
+        vec![b"fixture context".to_vec(), vec![], vec![]]
     );
 }
 
@@ -7910,6 +7917,18 @@ fn unicode_picker_tracks_only_the_same_focused_owner_through_topology_changes() 
 }
 
 #[cfg(unix)]
+/// A custom agent definition with `id`, for fixtures that mark raw local
+/// capture shells as agents.
+fn synthetic_agent(id: &str) -> crate::agents::AgentDefinition {
+    crate::agents::AgentCatalog::from_config(&std::collections::BTreeMap::from([(
+        id.to_string(),
+        crate::agents::AgentConfig::default(),
+    )]))
+    .get(id)
+    .unwrap()
+    .clone()
+}
+
 fn mark_capture_plugin_owner(app: &mut App, pane_id: PaneId, plugin_id: &str) {
     let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
     let launch = crate::workspace::WorkspaceLaunch::Plugin {
@@ -7934,10 +7953,12 @@ fn mark_capture_plugin_owner(app: &mut App, pane_id: PaneId, plugin_id: &str) {
         );
         tab.restore_terminal_owner(panes.take_remaining_pane().unwrap());
     }
-    tab.pane_session_mut(pane_id)
-        .unwrap()
-        .ai_session
-        .get_or_insert_with(Default::default);
+    // What an agent scan records for a terminal Termeric launched.
+    tab.pane_session_mut(pane_id).unwrap().agent = Some(crate::agents::AgentSession {
+        agent_id: plugin_id.into(),
+        launched: true,
+        profile: None,
+    });
 }
 
 #[cfg(unix)]
@@ -7960,7 +7981,13 @@ fn context_picker_completion_preserves_plugin_owner_across_topology_changes() {
             harvest_rerun_capture_fixture_in(transition == "nonzero-collapse");
         let source = app.active_harvest_source().unwrap();
         mark_capture_plugin_owner(&mut app, PaneId(source.pane_id), "synthetic-capture");
-        app.open_context_picker_for("synthetic-capture");
+        app.open_context_picker_for(
+            crate::tabs::TerminalIdentity {
+                tab_id: source.tab_id,
+                pane_id: PaneId(source.pane_id),
+            },
+            &synthetic_agent("synthetic-capture"),
+        );
         let request_id = app.context_picker.request_id();
         for item in app
             .context_picker
@@ -8047,9 +8074,7 @@ fn context_picker_completion_preserves_plugin_owner_across_topology_changes() {
             .map(|(origin, _)| {
                 let mut bytes = vec![0];
                 if allowed && Some(*origin) == source_origin {
-                    bytes.extend_from_slice(
-                        b"\n--- Context ---\nlocal fixture\n--- End Context ---\n",
-                    );
+                    bytes.extend_from_slice(b"local fixture");
                 }
                 bytes
             })
@@ -8089,7 +8114,8 @@ fn completed_context_never_falls_back_to_a_replacement_plugin_tab() {
     let request = app.context_picker.open(
         None,
         crate::ui::context_picker::ContextTarget {
-            plugin_id: "fixture-plugin".into(),
+            agent_id: "fixture-plugin".into(),
+            agent_name: "Fixture".into(),
             terminal: crate::tabs::TerminalIdentity {
                 tab_id: original_id,
                 pane_id: PaneId(0),
@@ -8112,9 +8138,150 @@ fn completed_context_never_falls_back_to_a_replacement_plugin_tab() {
 
     assert_eq!(
         latest_toast(&app),
-        Some("The original fixture-plugin context destination is no longer writable")
+        Some("Fixture is no longer running in that terminal")
     );
     assert!(!app.context_picker.is_awaiting(request));
+}
+
+#[cfg(unix)]
+#[test]
+fn typed_agent_input_is_submitted_separately_and_only_to_the_same_agent() {
+    use std::io::Read;
+    let temp = tempfile::tempdir().unwrap();
+    let capture = temp.path().join("capture");
+    let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+    // Raw mode: bytes reach the capture file exactly as written.
+    let tab_id = tabs
+        .new_tab_with_command(
+            "/bin/sh",
+            &[
+                "-c".into(),
+                format!(
+                    "stty raw -echo; printf RAW_READY; exec cat > {}",
+                    capture.display()
+                ),
+            ],
+            None,
+            None,
+            None,
+            HashMap::new(),
+        )
+        .unwrap();
+    let tab = tabs.active_tab_mut().unwrap();
+    let pane_id = tab.focused_terminal_identity().pane_id;
+    tab.pane_session_mut(pane_id).unwrap().agent = Some(crate::agents::AgentSession {
+        agent_id: "codex".into(),
+        launched: false,
+        profile: None,
+    });
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.tabs = Some(tabs);
+    let target = super::agents::AgentTarget {
+        identity: crate::tabs::TerminalIdentity { tab_id, pane_id },
+        agent_id: "codex".into(),
+        agent_name: "Codex".into(),
+    };
+    let read = |expected_len: usize| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let mut bytes = Vec::new();
+            if let Ok(mut file) = std::fs::File::open(&capture) {
+                file.read_to_end(&mut bytes).unwrap();
+            }
+            if bytes.len() >= expected_len || Instant::now() > deadline {
+                return bytes;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    };
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let tabs = app.tabs.as_mut().unwrap();
+        tabs.poll_events();
+        let ready = tabs
+            .active_tab()
+            .and_then(Tab::focused_terminal)
+            .is_some_and(|terminal| {
+                terminal
+                    .grid()
+                    .export_scrollback_text()
+                    .concat()
+                    .contains("RAW_READY")
+            });
+        if ready {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the capture never entered raw mode"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    app.submit_to_agent(target.clone(), b"/new").unwrap();
+    let due = app.next_agent_submit_deadline().unwrap();
+    app.submit_due_agent_input(due - Duration::from_millis(1));
+    assert_eq!(
+        read(4),
+        b"/new",
+        "Enter must wait for the typed text to settle"
+    );
+    app.submit_due_agent_input(due);
+    assert_eq!(read(5), b"/new\r");
+    assert_eq!(app.next_agent_submit_deadline(), None);
+
+    // An agent that exits before its Enter is due never receives it.
+    app.submit_to_agent(target.clone(), b"x").unwrap();
+    let tabs = app.tabs.as_mut().unwrap();
+    tabs.active_tab_mut()
+        .unwrap()
+        .pane_session_mut(pane_id)
+        .unwrap()
+        .agent = None;
+    app.submit_due_agent_input(Instant::now() + super::agents::AGENT_SUBMIT_DELAY);
+    // The refusal is synchronous, so the typed text is all that arrived.
+    assert_eq!(read(6), b"/new\rx");
+    assert_eq!(
+        latest_toast(&app),
+        Some("Codex is no longer running in that terminal")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_read_only_agent_refuses_context_with_its_own_reason() {
+    let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+    let tab_id = tabs
+        .new_tab_with_command(
+            "/bin/sh",
+            &["-c".into(), "sleep 30".into()],
+            None,
+            None,
+            None,
+            HashMap::new(),
+        )
+        .unwrap();
+    let tab = tabs.active_tab_mut().unwrap();
+    let pane_id = tab.focused_terminal_identity().pane_id;
+    tab.pane_session_mut(pane_id).unwrap().agent = Some(crate::agents::AgentSession {
+        agent_id: "codex".into(),
+        launched: false,
+        profile: None,
+    });
+    assert!(tab.toggle_focused_pane_read_only());
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.tabs = Some(tabs);
+
+    let sent = app.send_to_agent(
+        super::agents::AgentTarget {
+            identity: crate::tabs::TerminalIdentity { tab_id, pane_id },
+            agent_id: "codex".into(),
+            agent_name: "Codex".into(),
+        },
+        "context",
+    );
+    assert!(!sent);
+    assert_eq!(latest_toast(&app), Some("Codex's terminal is read-only"));
 }
 
 #[test]
@@ -10041,29 +10208,43 @@ fn representative_git_color_output_maps_to_rendered_sgr_state() {
 }
 
 #[test]
-fn headless_config_application_updates_plugins_harvest_and_palette() {
+fn headless_config_application_updates_agents_harvest_and_palette() {
     let mut config = Config::default();
     config.harvest.enabled = true;
     config.harvest.max_history = 7;
-    config.plugins.claude_code.enabled = false;
-    config.plugins.codex.enabled = true;
+    config.agents.insert(
+        "claude-code".into(),
+        crate::agents::AgentConfig {
+            enabled: Some(false),
+            ..Default::default()
+        },
+    );
 
     let mut app = App::new_headless(config).unwrap();
-    assert_eq!(app.plugin_manager.count(), 1);
+    // One launch integration per enabled built-in agent.
+    assert_eq!(app.plugin_manager.count(), 3);
     assert!(app.harvest.is_some());
-    app.command_palette.open();
-    let enabled_count = app.command_palette.build_info().total_count;
+    let per_agent = |app: &App| {
+        app.command_palette
+            .command_ids()
+            .filter(|id| id.starts_with("codex.") || id.contains(".codex."))
+            .count()
+    };
+    assert_eq!(per_agent(&app), 0, "agents add no per-agent commands");
 
     let mut disabled = app.config.clone();
     disabled.harvest.enabled = false;
-    disabled.plugins.codex.enabled = false;
+    disabled.agents.insert(
+        "codex".into(),
+        crate::agents::AgentConfig {
+            enabled: Some(false),
+            ..Default::default()
+        },
+    );
     app.apply_config(disabled).unwrap();
-    assert_eq!(app.plugin_manager.count(), 0);
+    assert_eq!(app.plugin_manager.count(), 2);
     assert!(app.harvest.is_none());
-    app.command_palette.open();
-    let disabled_count = app.command_palette.build_info().total_count;
-    // Existing plugin/Harvest commands plus two explicit pane placements.
-    assert_eq!(enabled_count - disabled_count, 18);
+    assert!(app.agents.get("codex").is_some_and(|agent| !agent.enabled));
 }
 
 #[test]
@@ -10942,18 +11123,49 @@ fn config_reload_only_overrides_application_keyboard_type_when_profile_changes()
 }
 
 #[test]
-fn headless_plugin_dispatch_surfaces_missing_target() {
+fn sending_to_an_agent_requires_one_to_be_running() {
+    let app = App::new_headless(Config::default()).unwrap();
+    assert_eq!(
+        app.preferred_agent_target().unwrap_err(),
+        "Start an agent before using Explain"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn context_output_comes_from_a_shell_never_from_another_agent() {
     let mut app = App::new_headless(Config::default()).unwrap();
-    app.execute_plugin_actions(vec![PluginAction::InjectContext {
-        plugin_id: "codex".into(),
-        text: "context".into(),
-    }]);
-    let messages: Vec<_> = app
-        .toasts
-        .iter()
-        .map(|toast| toast.message.as_str())
-        .collect();
-    assert_eq!(messages, vec!["No writable codex terminal found"]);
+    let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+    let mut open = |text: &str, agent: Option<&str>| {
+        let tab_id = tabs
+            .new_tab_with_command(
+                "/bin/sh",
+                &["-c".into(), "sleep 30".into()],
+                None,
+                None,
+                None,
+                HashMap::new(),
+            )
+            .unwrap();
+        let tab = tabs.active_tab_mut().unwrap();
+        tab.focused_terminal_mut().unwrap().process(text.as_bytes());
+        let pane_id = tab.focused_terminal_identity().pane_id;
+        tab.pane_session_mut(pane_id).unwrap().agent =
+            agent.map(|agent_id| crate::agents::AgentSession {
+                agent_id: agent_id.into(),
+                launched: false,
+                profile: None,
+            });
+        crate::tabs::TerminalIdentity { tab_id, pane_id }
+    };
+    let asking = open("ASKING_AGENT", Some("codex"));
+    open("OTHER_AGENT", Some("claude-code"));
+    open("USER_WORK", None);
+    app.tabs = Some(tabs);
+
+    let output = app.context_source_output(asking).unwrap();
+    assert!(output.contains("USER_WORK"), "{output:?}");
+    assert!(!output.contains("AGENT"), "{output:?}");
 }
 
 #[cfg(unix)]
@@ -11045,32 +11257,17 @@ fn plugin_spawn_failure_is_visible_without_a_preflight_process() {
 
 #[cfg(unix)]
 #[test]
-fn fake_ai_clis_exercise_every_builtin_command_end_to_end() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
-
+fn fake_agent_clis_exercise_every_agent_command_end_to_end() {
+    use crate::ui::command_palette::palette::AgentPlacement;
     let temp = tempfile::tempdir().unwrap();
     let fake_cli = temp.path().join("fake-ai");
     let invocation_log = temp.path().join("fake-ai.log");
     std::fs::write(
         &fake_cli,
         r#"#!/bin/sh
-if [ "${1-}" = "--version" ]; then
-  printf 'fake-ai 1.0\n'
-  exit 0
-fi
-trap 'printf "signal=INT\tplugin=%s\n" "$TERMERIC_FAKE_AI_PLUGIN" >> "$TERMERIC_FAKE_AI_LOG"' INT
 printf 'launch\tcwd=%s\targv=%s\tcolumns=%s\tlines=%s\n' "$PWD" "$*" "${COLUMNS-}" "${LINES-}" >> "$TERMERIC_FAKE_AI_LOG"
-printf '%s\r\n' 'FAKE_AI_RESPONSE_26' '--- a/example.txt' '+++ b/example.txt' '@@ -1 +1 @@' '-old' '+new' 'END_DIFF_26' 'ERROR acceptance failure marker'
-i=0
-while [ "$i" -lt 40 ]; do
-  printf 'padding line %s\r\n' "$i"
-  i=$((i + 1))
-done
-printf '%s\r\n' 'ERROR acceptance failure marker after scrollback'
+printf '%s\r\n' 'FAKE_AI_RESPONSE_26' '--- a/example.txt' '+++ b/example.txt' '@@ -1 +1 @@' '-old' '+new' 'END_DIFF_26'
 printf '%s\r\n' 'FAKE_AI_READY_26'
-while [ ! -e "$TERMERIC_FAKE_AI_GATE" ]; do sleep 0.01; done
 while :; do
   if IFS= read -r line; then
     printf 'stdin=%s\tplugin=%s\n' "$line" "$TERMERIC_FAKE_AI_PLUGIN" >> "$TERMERIC_FAKE_AI_LOG"
@@ -11086,46 +11283,29 @@ done
     std::fs::set_permissions(&fake_cli, permissions).unwrap();
 
     let mut config = Config::default();
-    config.plugins.claude_code.enabled = true;
-    config.plugins.claude_code.binary = fake_cli.display().to_string();
-    config.plugins.claude_code.default_profile = Some("acceptance".into());
-    config.plugins.claude_code.profiles.insert(
-        "acceptance".into(),
-        crate::plugin::claude_profiles::ClaudeProfile {
-            env: HashMap::from([
-                (
-                    "TERMERIC_FAKE_AI_LOG".into(),
-                    invocation_log.display().to_string(),
-                ),
-                (
-                    "TERMERIC_FAKE_AI_GATE".into(),
-                    temp.path().join("claude-code-ready").display().to_string(),
-                ),
-                ("TERMERIC_FAKE_AI_PLUGIN".into(), "claude-code".into()),
-            ]),
-            ..Default::default()
-        },
-    );
-    config.plugins.codex.enabled = true;
-    config.plugins.codex.binary = fake_cli.display().to_string();
-    config.plugins.codex.default_profile = Some("acceptance".into());
-    config.plugins.codex.profiles.insert(
-        "acceptance".into(),
-        crate::plugin::codex_profiles::CodexProfile {
-            env: HashMap::from([
-                (
-                    "TERMERIC_FAKE_AI_LOG".into(),
-                    invocation_log.display().to_string(),
-                ),
-                (
-                    "TERMERIC_FAKE_AI_GATE".into(),
-                    temp.path().join("codex-ready").display().to_string(),
-                ),
-                ("TERMERIC_FAKE_AI_PLUGIN".into(), "codex".into()),
-            ]),
-            ..Default::default()
-        },
-    );
+    for agent in ["claude-code", "codex"] {
+        config.agents.insert(
+            agent.into(),
+            crate::agents::AgentConfig {
+                program: Some(fake_cli.display().to_string()),
+                default_profile: Some("acceptance".into()),
+                profiles: std::collections::BTreeMap::from([(
+                    "acceptance".into(),
+                    crate::agents::config::AgentProfileConfig {
+                        env: std::collections::BTreeMap::from([
+                            (
+                                "TERMERIC_FAKE_AI_LOG".into(),
+                                invocation_log.display().to_string(),
+                            ),
+                            ("TERMERIC_FAKE_AI_PLUGIN".into(), agent.into()),
+                        ]),
+                        ..Default::default()
+                    },
+                )]),
+                ..Default::default()
+            },
+        );
+    }
 
     let mut app = App::new_headless(config).unwrap();
     let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
@@ -11142,34 +11322,33 @@ done
     crate::session::set_test_sessions_base_dir(Some(temp.path().join("sessions")));
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        for (plugin_id, resume_argument) in
-            [("claude-code", "--continue"), ("codex", "resume --last")]
-        {
-            app.execute_plugin_command(&format!("{plugin_id}.open"));
-            wait_for_plugin_fixture(&mut app, plugin_id, "FAKE_AI_RESPONSE_26");
-            wait_for_plugin_fixture(&mut app, plugin_id, "END_DIFF_26");
-            wait_for_plugin_fixture(&mut app, plugin_id, "FAKE_AI_READY_26");
+        for (agent_id, new_conversation, resume) in [
+            ("claude-code", "/clear", "--continue"),
+            ("codex", "/new", "resume --last"),
+        ] {
+            app.start_picked_agent(AgentPlacement::NewTab, agent_id);
+            wait_for_plugin_fixture(&mut app, agent_id, "FAKE_AI_READY_26");
+            let focused = app.focused_agent().expect("the started agent is focused");
+            assert!(focused.session.launched);
+            assert_eq!(focused.session.profile.as_deref(), Some("acceptance"));
+            assert!(app.unavailable_agent_commands().is_empty());
 
-            app.execute_plugin_command(&format!("{plugin_id}.copy-last"));
-            assert_eq!(latest_toast(&app), Some("Clipboard not available"));
+            app.run_agent_command("agent.new-conversation");
+            // The command is typed now and submitted once it has settled.
+            app.submit_due_agent_input(Instant::now() + super::agents::AGENT_SUBMIT_DELAY);
+            wait_for_file_text(
+                &invocation_log,
+                &format!("stdin={new_conversation}\tplugin={agent_id}"),
+            );
 
-            app.execute_plugin_command(&format!("{plugin_id}.clear"));
-            // Keep the fixture out of its read loop until this exact plugin
-            // acknowledges Ctrl+C. Readiness must imply the trap is installed;
-            // earlier output markers alone do not establish that contract.
-            wait_for_file_text(&invocation_log, &format!("signal=INT\tplugin={plugin_id}"));
-            std::fs::write(temp.path().join(format!("{plugin_id}-ready")), b"release").unwrap();
-            wait_for_file_text(&invocation_log, &format!("stdin=clear\tplugin={plugin_id}"));
-
-            app.execute_plugin_command(&format!("{plugin_id}.review-diff"));
+            app.run_agent_command("agent.review-diff");
             assert!(app.diff_review.is_active());
             let request_id = app.diff_review.request_id();
             app.diff_review.dismiss(request_id);
-
-            app.execute_plugin_command(&format!("{plugin_id}.copy-diff"));
+            app.run_agent_command("agent.copy-diff");
             assert_eq!(latest_toast(&app), Some("Clipboard not available"));
 
-            app.execute_plugin_command(&format!("{plugin_id}.insert-context"));
+            app.run_agent_command("agent.insert-context");
             assert!(app.context_picker.is_active());
             let request_id = app.context_picker.request_id();
             for source in app
@@ -11190,44 +11369,25 @@ done
                     request_id,
                     source: crate::ui::context_picker::ContextSourceId::TerminalOutput,
                 });
-            let gather = app
-                .context_picker
+            app.context_picker
                 .begin_gather(request_id, Some("FAKE_CONTEXT_SOURCE_26".into()))
                 .expect("fake context source should be selected");
-            assert_eq!(
-                gather.selected,
-                [crate::ui::context_picker::ContextSourceId::TerminalOutput]
-            );
-            app.handle_context_gathered(request_id, Ok("FAKE_CONTEXT_PAYLOAD_26".into()));
+            app.handle_context_gathered(request_id, Ok("FAKE_CONTEXT_PAYLOAD_26\n".into()));
             wait_for_file_text(
                 &invocation_log,
-                &format!("stdin=FAKE_CONTEXT_PAYLOAD_26\tplugin={plugin_id}"),
+                &format!("stdin=FAKE_CONTEXT_PAYLOAD_26\tplugin={agent_id}"),
             );
 
-            app.execute_plugin_command(&format!("{plugin_id}.toggle-transcript"));
-            let recording = app
-                .tabs
-                .as_ref()
-                .unwrap()
-                .iter()
-                .find(|(_, tab)| {
-                    matches!(
-                        &tab.tab_type,
-                        crate::tabs::TabType::Plugin { plugin_id: id } if id == plugin_id
-                    ) && !tab.is_closing()
-                })
-                .is_some_and(|(_, tab)| {
-                    tab.focused_session()
-                        .unwrap()
-                        .ai_session
-                        .as_ref()
-                        .is_some_and(|session| session.recording)
-                        && tab.focused_session().unwrap().transcript.is_some()
-                });
-            assert!(recording, "{plugin_id} fake session was not live");
-
+            app.toggle_transcript();
+            assert!(
+                app.tabs
+                    .as_ref()
+                    .and_then(TabManager::active_tab)
+                    .is_some_and(|tab| tab.focused_session().unwrap().transcript.is_some()),
+                "{agent_id} transcript did not start"
+            );
             let export_guard = crate::session::export_job::EXPORT_TEST_LOCK.lock().unwrap();
-            app.execute_plugin_command(&format!("{plugin_id}.export-session"));
+            app.run_agent_command("agent.export");
             let export_deadline = Instant::now() + Duration::from_secs(5);
             while app.session_export.is_some() && Instant::now() < export_deadline {
                 app.poll_session_export();
@@ -11235,113 +11395,35 @@ done
             }
             assert!(latest_toast(&app).is_some_and(|message| message.contains("Exported")));
             drop(export_guard);
+            app.toggle_transcript();
 
-            // Keep the final error marker in the evidence for this assertion,
-            // which must prove an actual scrollback jump, not just command dispatch.
-            wait_for_plugin_fixture(
-                &mut app,
-                plugin_id,
-                "ERROR acceptance failure marker after scrollback",
-            );
-            app.execute_plugin_command(&format!("{plugin_id}.jump-to-error"));
-            let scroll_offset = app
-                .tabs
-                .as_ref()
-                .unwrap()
-                .active_tab()
-                .unwrap()
-                .focused_terminal()
-                .unwrap()
-                .grid()
-                .scroll_offset();
-            assert!(
-                scroll_offset > 0,
-                "{plugin_id} did not jump to its error output"
-            );
+            app.run_agent_command("agent.restart");
+            wait_for_plugin_fixture(&mut app, agent_id, "FAKE_AI_READY_26");
 
-            app.execute_plugin_command(&format!("{plugin_id}.select-profile"));
-            assert!(app.info_overlay.is_active());
-            let request_id = app.info_overlay.request_id();
-            assert!(app.pending_profile_selection.as_ref().is_some_and(
-                |pending| pending.plugin_id == plugin_id
-                    && pending.profiles
-                        == std::collections::BTreeMap::from([
-                            ("profile-choice:0".into(), None),
-                            ("profile-choice:1".into(), Some("acceptance".into())),
-                        ])
-            ));
-            app.apply_info_overlay_action(crate::ui::info_overlay::InfoOverlayAction::Choose {
-                request_id,
-                choice_id: "profile-choice:1".into(),
-            });
-            let selected_profile = app
-                .tabs
-                .as_ref()
-                .and_then(|tabs| {
-                    tabs.iter()
-                        .find(|(_, tab)| {
-                            matches!(
-                                &tab.tab_type,
-                                crate::tabs::TabType::Plugin { plugin_id: id }
-                                    if id == plugin_id && !tab.is_closing()
-                            )
-                        })
-                        .map(|(_, tab)| tab)
-                })
-                .and_then(|tab| tab.focused_session().unwrap().ai_session.as_ref())
-                .map(|session| session.profile.as_str());
-            assert_eq!(selected_profile, Some("acceptance"));
-            assert!(app.pending_profile_selection.is_none());
-            app.info_overlay.dismiss(app.info_overlay.request_id());
-
-            app.execute_plugin_command(&format!("{plugin_id}.restart"));
-            wait_for_plugin_fixture(&mut app, plugin_id, "FAKE_AI_RESPONSE_26");
-            let log = std::fs::read_to_string(&invocation_log).unwrap();
-            assert!(
-                log.lines()
-                    .filter(|line| line.starts_with("launch\t"))
-                    .all(|line| line.contains("columns=80\tlines=24")),
-                "terminal geometry was not passed to fake AI CLI: {log}"
-            );
-
-            app.execute_plugin_command(&format!("{plugin_id}.resume"));
-            wait_for_file_text(&invocation_log, resume_argument);
-
-            // Stop the active transcript if restart preserved an active
-            // recorder; this also exercises the stop/flush half of the action.
-            if app
-                .tabs
-                .as_ref()
-                .and_then(|tabs| tabs.active_tab())
-                .is_some_and(|tab| tab.focused_session().unwrap().transcript.is_some())
-            {
-                app.execute_plugin_command(&format!("{plugin_id}.toggle-transcript"));
-            }
+            app.start_picked_agent(AgentPlacement::Resume, agent_id);
+            // An earlier tab of this agent already shows READY; wait for the
+            // resumed launch itself.
+            wait_for_file_text(&invocation_log, &format!("argv={resume}\t"));
         }
 
         let log = std::fs::read_to_string(&invocation_log).unwrap();
+        assert!(
+            log.lines()
+                .filter(|line| line.starts_with("launch\t"))
+                .all(|line| line.contains("columns=80\tlines=24")),
+            "terminal geometry was not passed to the fake agent: {log}"
+        );
         let cwd = temp.path().display();
-        let expected = [
-            (format!("launch\tcwd={cwd}\targv=\t"), 2),
+        for (prefix, count) in [
+            // Open and restart for each agent.
+            (format!("launch\tcwd={cwd}\targv=\t"), 4),
             (format!("launch\tcwd={cwd}\targv=--continue\t"), 1),
-            (
-                format!(
-                    "launch\tcwd={cwd}\targv=--ask-for-approval untrusted --sandbox workspace-write\t"
-                ),
-                2,
-            ),
-            (
-                format!(
-                    "launch\tcwd={cwd}\targv=--ask-for-approval untrusted --sandbox workspace-write resume --last\t"
-                ),
-                1,
-            ),
-        ];
-        for (prefix, count) in expected {
+            (format!("launch\tcwd={cwd}\targv=resume --last\t"), 1),
+        ] {
             assert_eq!(
                 log.lines().filter(|line| line.starts_with(&prefix)).count(),
                 count,
-                "fake AI launch contract mismatch for {prefix:?}: {log}"
+                "fake agent launch contract mismatch for {prefix:?}: {log}"
             );
         }
     }));
@@ -12084,12 +12166,17 @@ fn complete_workspace_round_trip_restores_nested_panes_plugin_profile_and_focus(
         let mut config = Config::default();
         config.shell.program = Some("/bin/sh".into());
         config.shell.args = vec!["-c".into(), "sleep 30".into()];
-        config.plugins.codex.enabled = true;
-        config.plugins.codex.binary = fake_cli.display().to_string();
-        config.plugins.codex.default_profile = Some("archived".into());
-        config.plugins.codex.profiles.insert(
-            "archived".into(),
-            crate::plugin::codex_profiles::CodexProfile::default(),
+        config.agents.insert(
+            "codex".into(),
+            crate::agents::AgentConfig {
+                program: Some(fake_cli.display().to_string()),
+                default_profile: Some("archived".into()),
+                profiles: std::collections::BTreeMap::from([(
+                    "archived".into(),
+                    Default::default(),
+                )]),
+                ..Default::default()
+            },
         );
         let mut app = App::new_headless(config).unwrap();
         let mut tabs = TabManager::new(
@@ -12150,11 +12237,8 @@ fn complete_workspace_round_trip_restores_nested_panes_plugin_profile_and_focus(
         ));
         assert_eq!(
             plugin
-                .focused_session()
-                .unwrap()
-                .ai_session
-                .as_ref()
-                .map(|session| session.profile.as_str()),
+                .pane_plugin_launch(plugin.focused_terminal_identity().pane_id)
+                .and_then(|(_, profile)| profile),
             Some("archived")
         );
         assert_eq!(
@@ -12246,10 +12330,13 @@ fn workspace_restore_partially_recovers_missing_cwd_profile_and_cli() {
         let mut config = Config::default();
         config.shell.program = Some("/bin/sh".into());
         config.shell.args = vec!["-c".into(), "sleep 30".into()];
-        config.plugins.claude_code.enabled = true;
-        config.plugins.claude_code.binary = fake_cli.display().to_string();
-        config.plugins.codex.enabled = true;
-        config.plugins.codex.binary = temp.path().join("missing-codex").display().to_string();
+        config
+            .agents
+            .entry("claude-code".into())
+            .or_default()
+            .program = Some(fake_cli.display().to_string());
+        config.agents.entry("codex".into()).or_default().program =
+            Some(temp.path().join("missing-codex").display().to_string());
         let mut app = App::new_headless(config).unwrap();
         let mut current = TabManager::new(80, 24, ShellConfig::default(), 100, 1024 * 1024);
         current
@@ -12946,11 +13033,13 @@ fn cli_named_profile_launches_the_exact_builtin_plugin_profile() {
     permissions.set_mode(0o755);
     std::fs::set_permissions(&fake_cli, permissions).unwrap();
     let mut config = Config::default();
-    config.plugins.codex.enabled = true;
-    config.plugins.codex.binary = fake_cli.display().to_string();
-    config.plugins.codex.profiles.insert(
-        "review".into(),
-        crate::plugin::codex_profiles::CodexProfile::default(),
+    config.agents.insert(
+        "codex".into(),
+        crate::agents::AgentConfig {
+            program: Some(fake_cli.display().to_string()),
+            profiles: std::collections::BTreeMap::from([("review".into(), Default::default())]),
+            ..Default::default()
+        },
     );
     let mut app = App::new_headless(config).unwrap();
     app.allow_auto_restore = false;
@@ -12965,11 +13054,8 @@ fn cli_named_profile_launches_the_exact_builtin_plugin_profile() {
         crate::tabs::TabType::Plugin { plugin_id } if plugin_id == "codex"
     ));
     assert_eq!(
-        tab.focused_session()
-            .unwrap()
-            .ai_session
-            .as_ref()
-            .map(|session| session.profile.as_str()),
+        tab.pane_plugin_launch(tab.focused_terminal_identity().pane_id)
+            .and_then(|(_, profile)| profile),
         Some("review")
     );
 }

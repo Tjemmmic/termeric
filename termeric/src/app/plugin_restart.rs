@@ -4,11 +4,29 @@ use crate::plugin::{Hook, PluginAction};
 use crate::tabs::{TabType, TerminalIdentity};
 
 impl App {
+    /// Restart the first terminal owned by `plugin_id`, or open one.
+    #[cfg(test)]
     pub(super) fn restart_plugin(&mut self, plugin_id: &str) {
+        let target = self
+            .tabs
+            .as_ref()
+            .and_then(|tabs| tabs.plugin_terminal_identity(plugin_id));
+        self.restart_plugin_at(plugin_id, target);
+    }
+
+    /// Launch a replacement for the exact `target` terminal owned by
+    /// `plugin_id`, then retire it; with no target, open a new one.
+    pub(super) fn restart_plugin_at(&mut self, plugin_id: &str, target: Option<TerminalIdentity>) {
         let Some(tabs) = self.tabs.as_ref() else {
             return;
         };
-        let target = tabs.plugin_terminal_identity(plugin_id);
+        let target = target.filter(|identity| {
+            tabs.tab_by_id(identity.tab_id)
+                .is_some_and(|tab| tab.pane_plugin_id(identity.pane_id) == Some(plugin_id))
+                && tabs
+                    .origin_for_pane(identity.tab_id, identity.pane_id)
+                    .is_some()
+        });
         let mut ctx = self.build_plugin_context();
         let mut saved_profile = None;
         if let Some(identity) = target {

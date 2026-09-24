@@ -4,20 +4,21 @@ use crate::tabs::TerminalIdentity;
 
 impl App {
     pub(super) fn toggle_terminal_transcript(&mut self, identity: TerminalIdentity) {
-        let Some((session, recording)) = self.tabs.as_ref().and_then(|tabs| {
+        let Some((agent, recording, cwd)) = self.tabs.as_ref().and_then(|tabs| {
             let origin = tabs.origin_for_pane(identity.tab_id, identity.pane_id)?;
             let tab = tabs.tab_by_id(identity.tab_id)?;
-            if tab.live_domain.is_some()
-                || tabs.origin_read_only(origin) != Some(false)
-                || tab.pane_plugin_id(identity.pane_id).is_none()
-            {
+            if tab.live_domain.is_some() || tabs.origin_read_only(origin) != Some(false) {
                 return None;
             }
             let state = tab.pane_session(identity.pane_id)?;
-            Some((state.ai_session.clone()?, state.transcript.is_some()))
+            Some((
+                state.agent.clone()?,
+                state.transcript.is_some(),
+                tab.pane_working_directory(identity.pane_id),
+            ))
         }) else {
             self.toasts
-                .warning("Activate a writable local plugin terminal to toggle its transcript");
+                .warning("Focus a writable local agent terminal to toggle its transcript");
             return;
         };
         if recording {
@@ -57,12 +58,22 @@ impl App {
                 );
                 return;
             };
+            let repo = cwd.as_deref().and_then(|cwd| {
+                std::path::Path::new(cwd)
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            });
+            let branch = self.git_watcher.branch().map(str::to_owned);
+            let label = match &agent.profile {
+                Some(profile) => format!("{} ({profile})", agent.agent_id),
+                None => agent.agent_id.clone(),
+            };
             match crate::session::transcript::TranscriptRecorder::new(
                 &base.join("transcripts"),
-                session.repo_name.as_deref(),
-                session.branch.as_deref(),
-                &session.host.badge_label(),
-                &session.profile,
+                repo.as_deref(),
+                branch.as_deref(),
+                "Local",
+                &label,
             ) {
                 Ok(recorder) => {
                     let path = recorder.path().display().to_string();

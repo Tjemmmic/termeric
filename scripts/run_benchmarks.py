@@ -387,8 +387,10 @@ def actual_display_metrics() -> list[dict[str, Any]]:
             '[cursor]\nblink = false\n\n'
             '[session]\nenabled = false\nauto_restore = false\nauto_save = false\n\n'
             '[splash]\nmode = "never"\n\n'
-            '[plugins.claude_code]\nenabled = false\n\n'
-            '[plugins.codex]\nenabled = false\n',
+            '[agents.claude-code]\nenabled = false\n\n'
+            '[agents.codex]\nenabled = false\n\n'
+            '[agents.gemini]\nenabled = false\n\n'
+            '[agents.opencode]\nenabled = false\n',
             encoding="utf-8",
         )
         latency_path = Path(config_home) / "key-to-present.samples"

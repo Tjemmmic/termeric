@@ -340,8 +340,8 @@ class CrossTerminalBenchmarkTests(unittest.TestCase):
                     self.assertTrue(spec.command[-2:] == fixture or name == "termeric")
                     if name == "termeric":
                         config = (run_dir / "xdg-config" / "termeric" / "config.toml").read_text()
-                        self.assertIn("[plugins.claude_code]\nenabled = false", config)
-                        self.assertIn("[plugins.codex]\nenabled = false", config)
+                        for agent in ("claude-code", "codex", "gemini", "opencode"):
+                            self.assertIn(f"[agents.{agent}]\nenabled = false", config)
                         self.assertNotIn("WINIT_UNIX_BACKEND", spec.environment)
                     elif name == "alacritty":
                         self.assertNotIn("WINIT_UNIX_BACKEND", spec.environment)

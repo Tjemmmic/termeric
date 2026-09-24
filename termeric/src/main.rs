@@ -7,6 +7,7 @@
 // explicit geometry/state rather than hiding unrelated inputs in generic bags.
 #![allow(clippy::collapsible_if, clippy::too_many_arguments)]
 
+mod agents;
 mod app;
 mod cli;
 mod config;

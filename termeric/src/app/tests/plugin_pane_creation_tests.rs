@@ -83,8 +83,9 @@ fn explicit_plugin_panes_spawn_one_owner_with_exact_profile_cwd_and_geometry() {
             }
         );
         assert_eq!(
-            pane.integration.ai_session.as_ref().unwrap().profile,
-            profile
+            pane.launch_profile(),
+            Some(profile),
+            "the launch identity carries the profile the agent scan reports"
         );
         assert!(pane.integration.transcript.is_none());
         assert!(matches!(
@@ -138,55 +139,23 @@ fn explicit_plugin_panes_spawn_one_owner_with_exact_profile_cwd_and_geometry() {
             .get_pane(ordinary)
             .unwrap()
             .integration
-            .ai_session
+            .agent
             .is_none()
     );
 }
 
 #[test]
-fn plugin_pane_palette_commands_are_explicit_and_refresh_with_configuration() {
+fn agents_split_through_the_picker_instead_of_per_agent_commands() {
+    use crate::ui::command_palette::palette::AgentPlacement;
     let (mut app, dir, _) = fixture();
-    app.refresh_launch_profile_commands();
-    let commands = app.plugin_pane_commands();
-    assert!(
-        commands
-            .iter()
-            .any(|command| command.id == "plugin-pane.vertical.codex.default")
-    );
-    assert!(
-        commands
-            .iter()
-            .any(|command| command.id == "plugin-pane.horizontal.claude-code.")
-    );
-    app.handle_palette_result(crate::ui::command_palette::PaletteResult::RunAction(
-        "plugin-pane.vertical.codex.red".into(),
-    ));
-    wait_for_file_text(&dir.path().join("red"), "--fixture=red");
-    assert_eq!(app.tabs.as_ref().unwrap().count(), 1);
-    assert_eq!(
-        app.tabs
-            .as_ref()
-            .unwrap()
-            .active_tab()
-            .unwrap()
-            .pane_manager
-            .as_ref()
-            .unwrap()
-            .pane_count(),
-        2
-    );
-    app.config.plugins.codex.enabled = false;
     app.refresh_launch_profile_commands();
     assert!(
         app.plugin_pane_commands()
             .iter()
-            .all(|command| !command.id.contains(".codex."))
+            .all(|command| !command.id.contains(".codex.") && !command.id.contains(".claude-code.")),
+        "agents never get a split command per agent and profile"
     );
-    app.handle_palette_result(crate::ui::command_palette::PaletteResult::RunAction(
-        "plugin-pane.vertical.codex.blue".into(),
-    ));
-    assert!(!dir.path().join("blue").exists());
-    assert_eq!(
+    let pane_count = |app: &App| {
         app.tabs
             .as_ref()
             .unwrap()
@@ -194,10 +163,18 @@ fn plugin_pane_palette_commands_are_explicit_and_refresh_with_configuration() {
             .unwrap()
             .pane_manager
             .as_ref()
-            .unwrap()
-            .pane_count(),
-        2
-    );
+            .map_or(1, |panes| panes.pane_count())
+    };
+    app.start_picked_agent(AgentPlacement::SplitRight, "codex/red");
+    wait_for_file_text(&dir.path().join("red"), "--fixture=red");
+    assert_eq!(app.tabs.as_ref().unwrap().count(), 1);
+    assert_eq!(pane_count(&app), 2);
+
+    app.config.agents.get_mut("codex").unwrap().enabled = Some(false);
+    app.sync_plugins_from_config();
+    app.start_picked_agent(AgentPlacement::SplitRight, "codex/blue");
+    assert!(!dir.path().join("blue").exists());
+    assert_eq!(pane_count(&app), 2);
 }
 
 #[test]
@@ -244,26 +221,12 @@ fn created_plugin_owner_survives_close_collapse_and_resplit_with_its_exact_profi
         .unwrap();
     assert_eq!(panes.get_pane(id).unwrap().pty.child_id(), before);
     assert_eq!(
-        panes
-            .get_pane(id)
-            .unwrap()
-            .integration
-            .ai_session
-            .as_ref()
-            .unwrap()
-            .profile,
-        "default"
+        panes.get_pane(id).unwrap().launch_profile(),
+        Some("default")
     );
     assert_eq!(
-        panes
-            .get_pane(sibling)
-            .unwrap()
-            .integration
-            .ai_session
-            .as_ref()
-            .unwrap()
-            .profile,
-        "blue"
+        panes.get_pane(sibling).unwrap().launch_profile(),
+        Some("blue")
     );
 }
 
@@ -292,7 +255,8 @@ fn plugin_pane_spawn_failure_rolls_back_single_and_split_owners() {
             .unwrap()
             .capture_workspace_tab(0, false)
             .unwrap();
-        app.config.plugins.claude_code.binary = "/nonexistent-termeric-plugin-fixture".into();
+        app.config.agents.get_mut("claude-code").unwrap().program =
+            Some("/nonexistent-termeric-plugin-fixture".into());
         app.sync_plugins_from_config();
         assert!(
             app.launch_plugin_pane(
@@ -426,7 +390,13 @@ fn plugin_pane_launch_refuses_stale_read_only_missing_profile_and_broadcast_targ
                     .toggle_focused_pane_read_only();
             }
             "profile" => {
-                app.config.plugins.codex.profiles.remove("red");
+                app.config
+                    .agents
+                    .get_mut("codex")
+                    .unwrap()
+                    .profiles
+                    .remove("red");
+                app.sync_plugins_from_config();
             }
             "broadcast" => {
                 app.broadcast = BroadcastState::Active {

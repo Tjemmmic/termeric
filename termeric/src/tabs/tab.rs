@@ -346,7 +346,7 @@ impl Tab {
             last_command: Some(program.to_string()),
             tab_type: tab_type.clone().unwrap_or(TabType::Shell),
             live_domain: None,
-            integration: TerminalSession::new(matches!(tab_type, Some(TabType::Plugin { .. }))),
+            integration: TerminalSession::default(),
             pane_manager: None,
             single_pane_id: crate::panes::PaneId(0),
             pane_allocation: Default::default(),
@@ -597,6 +597,7 @@ impl Tab {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn plugin_pane_id(&self, plugin_id: &str) -> Option<crate::panes::PaneId> {
         let focused = self.focused_terminal_identity().pane_id;
         if self.pane_plugin_id(focused) == Some(plugin_id) {
@@ -1000,12 +1001,6 @@ impl Tab {
         if self.pane_plugin_id(pane_id) != Some(plugin_id) {
             return false;
         }
-        if let Some(session) = self
-            .pane_session_mut(pane_id)
-            .and_then(|state| state.ai_session.as_mut())
-        {
-            session.profile = profile.clone().unwrap_or_else(|| "default".into());
-        }
         let launch = if let Some(panes) = &mut self.pane_manager {
             &mut panes
                 .get_pane_mut(pane_id)
@@ -1167,8 +1162,60 @@ impl Tab {
         self.pane_session(self.focused_terminal_identity().pane_id)
     }
 
+    #[cfg(test)]
     pub(crate) fn focused_session_mut(&mut self) -> Option<&mut TerminalSession> {
         self.pane_session_mut(self.focused_terminal_identity().pane_id)
+    }
+
+    /// Re-identify the coding agent in each of this tab's terminals from its
+    /// foreground process. A terminal Termeric launched as an agent keeps
+    /// that identity even where the platform cannot report the foreground
+    /// process. Returns whether any terminal changed.
+    pub(crate) fn refresh_agents(&mut self, catalog: &crate::agents::AgentCatalog) -> bool {
+        fn observe(
+            catalog: &crate::agents::AgentCatalog,
+            pty: Option<&PtyHandle>,
+            launch: &crate::workspace::WorkspaceLaunch,
+        ) -> Option<crate::agents::AgentSession> {
+            let (launched_id, profile) = match launch {
+                crate::workspace::WorkspaceLaunch::Plugin { plugin_id, profile } => (
+                    catalog.get(plugin_id).map(|agent| agent.id.as_str()),
+                    profile,
+                ),
+                _ => (None, &None),
+            };
+            let foreground = pty
+                .and_then(PtyHandle::foreground_process_group)
+                .and_then(crate::agents::detect::foreground_argv)
+                .and_then(|argv| catalog.identify(&argv).map(|agent| agent.id.clone()));
+            let agent_id = foreground.or_else(|| launched_id.map(str::to_owned))?;
+            let launched = launched_id == Some(agent_id.as_str());
+            Some(crate::agents::AgentSession {
+                profile: launched.then(|| profile.clone()).flatten(),
+                launched,
+                agent_id,
+            })
+        }
+        let mut changed = false;
+        if let Some(panes) = &mut self.pane_manager {
+            for id in panes.pane_ids() {
+                let Some(pane) = panes.get_pane_mut(id).filter(|pane| !pane.closed) else {
+                    continue;
+                };
+                let observed = observe(catalog, Some(&pane.pty), &pane.launch);
+                if pane.integration.agent != observed {
+                    pane.integration.agent = observed;
+                    changed = true;
+                }
+            }
+        } else if self.terminal.is_some() {
+            let observed = observe(catalog, self.pty.as_ref(), &self.terminal_launch);
+            if self.integration.agent != observed {
+                self.integration.agent = observed;
+                changed = true;
+            }
+        }
+        changed
     }
 
     pub(crate) fn owned_pane_ids(&self) -> Vec<crate::panes::PaneId> {

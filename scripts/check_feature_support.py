@@ -54,7 +54,7 @@ HIGHLIGHT_CAPABILITIES = {
     "Command palette": {"Settings, command palette, and configurable shortcuts"},
     "Developer integrations": {
         "Git status/completion/diff workflow",
-        "Claude Code and Codex integrations",
+        "Coding agents",
     },
     "Hyperlinks and shell semantics": {
         "OSC 8 hyperlinks and detected URLs",

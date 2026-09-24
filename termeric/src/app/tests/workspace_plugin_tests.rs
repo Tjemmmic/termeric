@@ -28,35 +28,39 @@ pub(super) fn fixture() -> (App, tempfile::TempDir, WorkspaceTabSnapshot) {
             ..Default::default()
         },
     );
-    config.plugins.codex.enabled = true;
-    config.plugins.codex.binary = program.display().to_string();
-    config.plugins.claude_code.enabled = true;
-    config.plugins.claude_code.binary = program.display().to_string();
+    for agent in ["codex", "claude-code"] {
+        config.agents.entry(agent.into()).or_default().program =
+            Some(program.display().to_string());
+    }
     for name in ["red", "blue", "default"] {
-        config.plugins.codex.profiles.insert(
+        config.agents.get_mut("codex").unwrap().profiles.insert(
             name.into(),
-            crate::plugin::codex_profiles::CodexProfile {
-                extra_args: vec![format!("--fixture={name}")],
-                env: HashMap::from([
+            crate::agents::config::AgentProfileConfig {
+                args: vec![format!("--fixture={name}")],
+                env: std::collections::BTreeMap::from([
                     ("TEST_TAG".into(), name.into()),
                     ("CAPTURE_DIR".into(), dir.path().display().to_string()),
-                    ("PWD".into(), dir.path().display().to_string()),
                 ]),
                 ..Default::default()
             },
         );
     }
-    config.plugins.claude_code.profiles.insert(
-        "green".into(),
-        crate::plugin::claude_profiles::ClaudeProfile {
-            extra_args: vec!["--fixture=green".into()],
-            env: HashMap::from([
-                ("TEST_TAG".into(), "green".into()),
-                ("CAPTURE_DIR".into(), dir.path().display().to_string()),
-            ]),
-            ..Default::default()
-        },
-    );
+    config
+        .agents
+        .get_mut("claude-code")
+        .unwrap()
+        .profiles
+        .insert(
+            "green".into(),
+            crate::agents::config::AgentProfileConfig {
+                args: vec!["--fixture=green".into()],
+                env: std::collections::BTreeMap::from([
+                    ("TEST_TAG".into(), "green".into()),
+                    ("CAPTURE_DIR".into(), dir.path().display().to_string()),
+                ]),
+                ..Default::default()
+            },
+        );
     let identities = [
         (0, WorkspaceLaunch::Shell),
         (
@@ -147,6 +151,7 @@ fn mixed_plugin_workspaces_restore_exact_profiles_cwds_and_terminal_owners() {
         let mut tabs = manager(&app);
         let (_, warnings) = app.restore_workspace_tab(&mut tabs, &snapshot).unwrap();
         assert!(warnings.is_empty());
+        tabs.refresh_agents(&app.agents);
         for (id, tag) in [(7, "red"), (9, "blue"), (11, "green")] {
             let path = dir.path().join(tag);
             wait_for_file_text(&path, &format!("--fixture={tag}"));
@@ -156,7 +161,9 @@ fn mixed_plugin_workspaces_restore_exact_profiles_cwds_and_terminal_owners() {
             );
             let tab = tabs.active_tab().unwrap();
             let state = tab.pane_session(PaneId(id)).unwrap();
-            assert_eq!(state.ai_session.as_ref().unwrap().profile, tag);
+            let agent = state.agent.as_ref().unwrap();
+            assert!(agent.launched);
+            assert_eq!(agent.profile.as_deref(), Some(tag));
             assert!(state.transcript.is_none());
             assert_eq!(state.diff_detector.unreviewed_count(), 0);
             // Restored plugin owners are valid ordinary transfer sources.
@@ -166,8 +173,8 @@ fn mixed_plugin_workspaces_restore_exact_profiles_cwds_and_terminal_owners() {
             );
         }
         let tab = tabs.active_tab().unwrap();
-        assert!(tab.pane_session(PaneId(0)).unwrap().ai_session.is_none());
-        assert!(tab.pane_session(PaneId(13)).unwrap().ai_session.is_none());
+        assert!(tab.pane_session(PaneId(0)).unwrap().agent.is_none());
+        assert!(tab.pane_session(PaneId(13)).unwrap().agent.is_none());
         assert_eq!(tab.pane_manager.as_ref().unwrap().focused_id(), PaneId(9));
         let mut captured = tabs
             .capture_workspace("roundtrip".into(), true, Default::default())
@@ -294,11 +301,14 @@ fn missing_profile_and_spawn_failure_keep_existing_tabs_and_focus() {
                 });
             }
             "binary" => {
-                app.config.plugins.claude_code.binary =
-                    dir.path().join("missing-program").display().to_string();
+                app.config.agents.get_mut("claude-code").unwrap().program =
+                    Some(dir.path().join("missing-program").display().to_string());
                 app = App::new_headless(app.config.clone()).unwrap();
             }
-            "disabled" => app.config.plugins.claude_code.enabled = false,
+            "disabled" => {
+                app.config.agents.get_mut("claude-code").unwrap().enabled = Some(false);
+                app = App::new_headless(app.config.clone()).unwrap();
+            }
             "process-profile" => {
                 // A missing process-profile reference is never replaced with a shell.
                 snapshot
@@ -357,7 +367,7 @@ fn rollback_drops_only_new_workspace_owners_without_animation() {
 #[test]
 fn resolved_default_profile_is_saved_as_the_actual_owner_reference() {
     let (mut app, _dir, mut snapshot) = fixture();
-    app.config.plugins.codex.default_profile = Some("red".into());
+    app.config.agents.get_mut("codex").unwrap().default_profile = Some("red".into());
     app = App::new_headless(app.config.clone()).unwrap();
     snapshot.primary_pane = 7;
     snapshot.launch = WorkspaceLaunch::Plugin {
@@ -372,6 +382,7 @@ fn resolved_default_profile_is_saved_as_the_actual_owner_reference() {
         .launch = Some(snapshot.launch.clone());
     let mut tabs = manager(&app);
     app.restore_workspace_tab(&mut tabs, &snapshot).unwrap();
+    tabs.refresh_agents(&app.agents);
     let captured = tabs
         .active_tab()
         .unwrap()
@@ -389,11 +400,12 @@ fn resolved_default_profile_is_saved_as_the_actual_owner_reference() {
             .unwrap()
             .pane_session(PaneId(7))
             .unwrap()
-            .ai_session
+            .agent
             .as_ref()
             .unwrap()
-            .profile,
-        "red"
+            .profile
+            .as_deref(),
+        Some("red")
     );
 }
 

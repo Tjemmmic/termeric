@@ -221,7 +221,7 @@ fn parse_collected(
             "--profile" => {
                 let value = next_utf8(&arguments, &mut index, "--profile")?;
                 let (plugin_id, profile) = value.split_once(':').ok_or_else(|| {
-                    anyhow::anyhow!("--profile expects PLUGIN:PROFILE (for example codex:review)")
+                    anyhow::anyhow!("--profile expects AGENT:PROFILE (for example codex:review)")
                 })?;
                 validate_identifier("plugin", plugin_id)?;
                 validate_single_line("profile", profile)?;
@@ -415,7 +415,7 @@ Launch selection:\n  \
   --command PROGRAM            Run PROGRAM directly without arguments\n  \
   --                           Preserve all remaining command arguments exactly\n  \
   --terminal-profile NAME      Launch a configured reusable terminal profile\n  \
-  --profile PLUGIN:PROFILE     Launch a built-in plugin with a named profile\n  \
+  --profile AGENT:PROFILE      Launch a coding agent with a named profile\n  \
   --workspace ID               Restore one complete workspace (exclusive)\n  \
   --title TITLE                Set the current tab title\n\n\
 Native identity and size:\n  \

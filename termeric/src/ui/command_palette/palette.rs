@@ -79,12 +79,25 @@ pub enum PaletteResult {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PickKind {
     Theme,
+    /// Choose a coding agent (and profile) to start.
+    Agent(AgentPlacement),
+}
+
+/// Where a picked agent starts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AgentPlacement {
+    NewTab,
+    /// A new tab continuing the agent's most recent conversation.
+    Resume,
+    SplitRight,
+    SplitDown,
 }
 
 impl PickKind {
     fn dialog_label(self) -> &'static str {
         match self {
             Self::Theme => "Choose theme",
+            Self::Agent(_) => "Choose agent",
         }
     }
 }
@@ -260,6 +273,9 @@ pub struct CommandPalette {
     item_noun: String,
     show_category: bool,
     pick: Option<QuickPick>,
+    /// Commands that do not apply right now (for example, agent commands
+    /// when no agent is focused). They stay registered but are not listed.
+    unavailable: std::collections::HashSet<String>,
 }
 
 impl CommandPalette {
@@ -278,6 +294,7 @@ impl CommandPalette {
             item_noun: "command".into(),
             show_category: true,
             pick: None,
+            unavailable: std::collections::HashSet::new(),
         }
     }
 
@@ -377,6 +394,12 @@ impl CommandPalette {
         self.update_entries();
     }
 
+    /// Hide commands that do not apply to the current focus. Takes effect
+    /// the next time the list is rebuilt, e.g. on [`Self::open`].
+    pub fn set_unavailable(&mut self, ids: impl IntoIterator<Item = String>) {
+        self.unavailable = ids.into_iter().collect();
+    }
+
     /// Close the palette immediately (no close animation).
     pub fn close(&mut self) {
         self.pick = None;
@@ -422,6 +445,12 @@ impl CommandPalette {
         self.items()
             .get(entry.registry_index)
             .map(|item| item.id.as_str())
+    }
+
+    /// Whether a row is listed: pick items always are; commands unless
+    /// they do not apply right now.
+    fn is_listed(&self, command: &RegisteredCommand) -> bool {
+        self.pick.is_some() || !self.unavailable.contains(&command.id)
     }
 
     /// The list rows are drawn from: the active pick, or the commands.
@@ -718,6 +747,7 @@ impl CommandPalette {
                 .items()
                 .iter()
                 .enumerate()
+                .filter(|(_, cmd)| self.is_listed(cmd))
                 .map(|(i, cmd)| {
                     let recency_bonus = recency
                         .then(|| self.recently_used.iter().position(|r| r == &cmd.id))
@@ -740,6 +770,7 @@ impl CommandPalette {
                 .items()
                 .iter()
                 .enumerate()
+                .filter(|(_, cmd)| self.is_listed(cmd))
                 .filter_map(|(i, cmd)| {
                     // Try matching against title
                     let title_match = FuzzySearch::new(query, &cmd.title).best_match();
@@ -1120,16 +1151,39 @@ pub fn core_commands(
             destructive: true,
         });
     }
-    // ── Transcript ──
-    commands.push(RegisteredCommand {
-        id: "core.toggle-transcript".into(),
-        title: "Toggle Transcript Recording".into(),
-        category: "Sessions".into(),
-        shortcut: None,
-        icon: None,
-        source: CommandSource::Core,
-        destructive: false,
-    });
+    // ── Agents ── (those acting on "the agent" are listed only while the
+    // focused terminal runs one)
+    for (id, title, shortcut) in [
+        (
+            "agent.new",
+            "New Agent…",
+            shortcut(BindableAction::NewAgent),
+        ),
+        ("agent.resume", "Resume Agent Conversation…", None),
+        ("agent.split-right", "Split Right with Agent…", None),
+        ("agent.split-down", "Split Down with Agent…", None),
+        (
+            "agent.new-conversation",
+            "Start New Agent Conversation",
+            None,
+        ),
+        ("agent.restart", "Restart Agent", None),
+        ("agent.insert-context", "Send Context to Agent…", None),
+        ("agent.review-diff", "Review Agent Diff", None),
+        ("agent.copy-diff", "Copy Agent Diff", None),
+        ("agent.export", "Export Agent Session", None),
+        ("core.toggle-transcript", "Toggle Agent Transcript", None),
+    ] {
+        commands.push(RegisteredCommand {
+            id: id.into(),
+            title: title.into(),
+            category: "Agents".into(),
+            shortcut,
+            icon: None,
+            source: CommandSource::Core,
+            destructive: false,
+        });
+    }
 
     // ── Panes ──
     commands.push(RegisteredCommand {

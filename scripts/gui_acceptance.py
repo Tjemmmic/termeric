@@ -146,10 +146,16 @@ save_scrollback = false
 [splash]
 mode = "never"
 
-[plugins.claude_code]
+[agents.claude-code]
 enabled = false
 
-[plugins.codex]
+[agents.codex]
+enabled = false
+
+[agents.gemini]
+enabled = false
+
+[agents.opencode]
 enabled = false
 
 [bell]

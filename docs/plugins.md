@@ -799,10 +799,9 @@ grant. Responses use the handler's existing schema and permissions; API v9 does
 not implicitly grant UI, workspace query, navigation, topology, terminal text,
 or any other authority. Both process-per-event and persistent handlers are
 valid. Undeclared IDs, another plugin's namespace, missing subscriptions, API
-v8 or older manifests, and namespace/profile conflicts fail closed. Direct
-diff, context, export, and profile-selection commands are reserved to the
-compiled-in `claude-code` and `codex` integrations even if a third-party command
-uses the same local suffix.
+v8 or older manifests, and namespace/profile conflicts fail closed. Enabled
+[coding agents](agents.md) register first, so a plugin whose id matches one is
+refused.
 
 ## Manifest API v10 typed settings
 
@@ -2851,39 +2850,28 @@ than an unregistered plugin at its executable location.
 
 ## Built-in integration boundary
 
-Claude Code and Codex remain compiled-in privileged integrations. They use
-internal transcript, diff review/apply, clipboard, context collection,
-approval, resume, and profile-selection types that the public APIs intentionally do
-not expose. Their launch commands still pass through the same `PluginManager`,
-palette namespace checks, `PluginAction::OpenTab`, PTY ownership, and workspace
-restore dispatch as declarative plugins. Moving them entirely onto the public
-layer would either remove those reviewed features or prematurely grant
-third-party access to arbitrary terminal state, filesystem mutation, clipboard,
-and secrets. API v32's public surface includes current-window inventory,
-navigation, topology, exact presented-text reads, ordinary pane/tab lifecycle,
-pane movement, bounded terminal input, same-tab pane layouts, command-scoped
-exact-window closure, process-wide read-only inventory, persistent handlers,
-non-activating cross-window tab/pane navigation, bounded cross-window
-presentation-safe terminal reads, guarded cross-window UTF-8 terminal input,
-cross-window ordinary local-tab creation,
-cross-window ordinary pane creation,
-cross-window ordinary pane movement,
-cross-window ordinary tab movement,
-cross-window exact ordinary pane closure,
-cross-window exact ordinary tab closure,
-cross-window exact ordinary pane layout operations,
-exact non-final process-window closure,
-exact process-window native focus requests,
-namespaced commands,
-non-secret settings, and narrowly granted completed-region snapshots. Those
-capabilities are not enough to represent the privileged
-workflows; broader migration waits for a separately designed sandboxed API.
-
-Built-in context collection is bounded local preprocessing, not an AI request:
-it gathers selected Git, tree, terminal/test, and explicitly workspace-bounded
-file inputs on a timeout-controlled worker, then writes the resulting bundle
-only to the captured tab/pane terminal. Provider-side interpretation starts
-after that PTY write and remains outside automated acceptance.
+[Coding agents](agents.md) are compiled-in privileged integrations. Each
+enabled agent registers as a built-in plugin, so its launches pass through the
+same `PluginManager`, `PluginAction::OpenTab`, PTY ownership, pane launch, and
+workspace restore dispatch as declarative plugins. Agent commands, such as
+diff review, context, transcript, and export, are application commands that
+use internal types the public APIs intentionally do not expose. Moving them
+onto the public layer would either remove those reviewed features or
+prematurely grant third-party access to arbitrary terminal state, filesystem
+mutation, clipboard, and secrets. API v32's public surface includes
+current-window inventory, navigation, topology, exact presented-text reads,
+ordinary pane/tab lifecycle, pane movement, bounded terminal input, same-tab
+pane layouts, command-scoped exact-window closure, process-wide read-only
+inventory, persistent handlers, non-activating cross-window tab/pane
+navigation, bounded cross-window presentation-safe terminal reads, guarded
+cross-window UTF-8 terminal input, cross-window ordinary local-tab and pane
+creation, cross-window ordinary pane and tab movement, cross-window exact
+ordinary pane and tab closure, cross-window exact ordinary pane layout
+operations, exact non-final process-window closure, exact process-window native
+focus requests, namespaced commands, non-secret settings, and narrowly granted
+completed-region snapshots. Those capabilities are not enough to represent the
+privileged workflows; broader migration waits for a separately designed
+sandboxed API.
 
 ## Compatibility policy
 

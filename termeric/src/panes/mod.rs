@@ -142,6 +142,15 @@ pub(crate) struct LocalPaneLaunch {
 }
 
 impl Pane {
+    /// The profile of a pane launched from a plugin or agent profile.
+    #[cfg(test)]
+    pub(crate) fn launch_profile(&self) -> Option<&str> {
+        match &self.launch {
+            crate::workspace::WorkspaceLaunch::Plugin { profile, .. } => profile.as_deref(),
+            _ => None,
+        }
+    }
+
     /// Create a new pane with a shell
     pub fn new(
         id: PaneId,
@@ -214,7 +223,7 @@ impl Pane {
             harvest: crate::harvest::HarvestTerminalState::default(),
             shell_integration: launch.integration,
             last_command: None,
-            integration: crate::session::terminal_state::TerminalSession::new(plugin),
+            integration: crate::session::terminal_state::TerminalSession::default(),
             launch: crate::workspace::WorkspaceLaunch::Shell,
             launch_shell: shell.clone(),
             event_overflow_reported: false,
@@ -731,11 +740,6 @@ impl PaneManager {
                 matches!(launch, crate::workspace::WorkspaceLaunch::Plugin { .. }),
             )?;
             pane.launch.clone_from(launch);
-            if let crate::workspace::WorkspaceLaunch::Plugin { profile, .. } = launch
-                && let Some(session) = &mut pane.integration.ai_session
-            {
-                session.profile = profile.clone().unwrap_or_else(|| "default".into());
-            }
             pane.launch_shell.clone_from(shell);
             pane.terminal
                 .set_screen_checksum_reporting(manager.screen_checksum_reporting);
@@ -1170,11 +1174,6 @@ impl PaneManager {
         };
         pane.launch
             .clone_from(launch.map_or(&self.split_launch, |launch| &launch.identity));
-        if let crate::workspace::WorkspaceLaunch::Plugin { profile, .. } = &pane.launch
-            && let Some(session) = &mut pane.integration.ai_session
-        {
-            session.profile = profile.clone().unwrap_or_else(|| "default".into());
-        }
         pane.terminal
             .set_screen_checksum_reporting(self.screen_checksum_reporting);
         pane.terminal

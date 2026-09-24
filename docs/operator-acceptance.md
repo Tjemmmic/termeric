@@ -151,13 +151,13 @@ python3 scripts/check_feature_support.py
 python3 -m unittest scripts.test_check_feature_support
 ```
 
-Run the fake AI executable workflow explicitly. It exercises all twelve
-Claude/Codex integration commands through a real local PTY but cannot reach a
+Run the fake agent executable workflow explicitly. It exercises every agent
+command for Claude Code and Codex through a real local PTY but cannot reach a
 provider:
 
 ```bash
 cargo test -p termeric \
-  fake_ai_clis_exercise_every_builtin_command_end_to_end -- --nocapture
+  fake_agent_clis_exercise_every_agent_command_end_to_end -- --nocapture
 ```
 
 For a clean candidate, also produce the sealed partial record directly:
@@ -170,10 +170,6 @@ python3 scripts/run_fake_provider_acceptance.py \
 
 This command executes only the exact fake-provider test and leaves every
 shell, desktop, Harvest, and authenticated-provider row unrecorded.
-
-Do not set `TERMERIC_REAL_CODEX_CONTRACT` in this lane. That separate opt-in
-probe launches the installed CLI for `--version` and `--help`; it still is not
-authenticated-provider acceptance.
 
 ### 2. Shell integration
 
@@ -587,18 +583,17 @@ sibling. Read-only, broadcast and cancelled states must also refuse insertion.
 Check keyboard/mouse selection, the refusal notice and unchanged sibling input
 when convenient; automated byte-capture checks are not native visual acceptance.
 
-Context routing has separate local-fixture coverage for plugin-owner selection,
+Context routing has separate local-fixture coverage for agent-owner selection,
 working directory, asynchronous completion and split/collapse refusal. Testing
 context insertion with a real AI CLI remains part of the explicitly authorized
 provider section below, not this provider-free manual check.
 
-Direct plugin Context, Clear, Copy, and Jump to Error also have provider-free
-raw-shell coverage for mixed-pane ownership. When you choose to test real
-plugins later, keep a shell sibling focused and verify that Context/Clear/Copy
-still address only the plugin pane; Jump to Error should deliberately focus that
-pane and leave the sibling's scroll position alone. A read-only plugin pane must
-refuse Context/Clear without redirecting to a writable sibling. These are later
-operator checks, not permission for an automated provider run.
+Agent commands act only on the focused agent terminal and are hidden while a
+shell sibling is focused. When you choose to test real agents later, focus the
+shell sibling and confirm the agent commands disappear from the palette, then
+focus the agent and confirm they return. A read-only agent pane must refuse
+new-conversation and context input without redirecting to a writable sibling.
+These are later operator checks, not permission for an automated provider run.
 
 ## Authenticated Codex, Claude Code, and Harvest Explain
 
@@ -615,24 +610,19 @@ for an automated agent or CI job to run a provider.
 5. Record only the CLI version and a redacted configuration summary. Never
    record credentials, raw login output, conversation identifiers, private
    prompts, or unreviewed transcripts.
-6. Start with conservative Termeric settings. Codex is disabled by default;
-   enable it explicitly. Claude Code defaults to enabled, but declaring both is
-   clearer for an acceptance profile:
+6. Start with conservative Termeric settings. Every installed agent is
+   enabled by default. Remove any `[agents.claude-code]` or `[agents.codex]`
+   arguments that skip approvals, and add one harmless profile to exercise
+   profile launch:
 
 ```toml
-[plugins.claude_code]
-enabled = true
-binary = "claude"
-inherit_cwd = true
-copy_lines = 50
+[agents.codex.profiles.acceptance]
+description = "Read-only acceptance"
+args = ["--sandbox", "read-only"]
 
-[plugins.codex]
-enabled = true
-binary = "codex"
-inherit_cwd = true
-approval_mode = "suggest"
-sandbox_mode = "read-only"
-copy_lines = 50
+[agents.claude-code.profiles.acceptance]
+description = "Plan-only acceptance"
+args = ["--permission-mode", "plan"]
 
 [harvest]
 enabled = true
@@ -640,55 +630,53 @@ show_indicators = true
 max_history = 100
 ```
 
-Use `workspace-write` only for the planned disposable-repository diff test.
-Do not use Claude's `auto-accept`, Codex `full-auto`, or `full-access` for this
-acceptance run.
+Use a writable sandbox only for the planned disposable-repository diff test.
+Do not use `--dangerously-skip-permissions`, `--ask-for-approval never`, or
+`danger-full-access` for this acceptance run.
 
 ### Per-provider checklist
 
 Open the command palette with Ctrl+Shift+P. Repeat the following for Claude
 Code and Codex, recording expected and actual behavior separately:
 
-1. **Open**: launch from a nested directory. Confirm the plugin tab has the
-   exact cwd, terminal size, selected profile/model, and visible provider
-   identity. Send a harmless unique phrase and receive one response.
-2. **Resume**: close the plugin tab, run Resume, and confirm the prior unique
-   phrase remains known. A new unrelated conversation is a failure.
-3. **Copy Last Response**: confirm the clipboard receives only the configured
-   recent response lines from the correct provider tab.
-4. **Clear Session**: start a long response, clear it, and verify cancellation
-   is immediate, output is cleared, and input is not delivered to another pane.
-5. **Restart**: restart from a mixed split-pane layout with a shell sibling
-   focused. Confirm a fresh replacement tab keeps the source provider, profile,
-   and cwd; only the old plugin PTY exits, while sibling PIDs and contents
-   survive. Repeat with a nonzero sole survivor. An invalid configuration,
-   missing executable, or missing cwd must preserve the original session and
-   focus. Read-only targets refuse restart until unlocked. Successful local PTY
-   creation is not provider readiness: separately confirm the new tool starts
-   normally. These checks remain manual and require your provider consent.
-6. **Review Diff**: with `workspace-write` explicitly approved, ask the provider
-   to make one harmless, predetermined edit in the disposable repository.
+1. **Open**: run **New Agent…** from a nested directory and choose the
+   `acceptance` profile. Confirm the tab has the exact cwd, terminal size, and
+   profile arguments. Send a harmless unique phrase and receive one response.
+2. **Resume**: close the agent tab, run **Resume Agent Conversation…**, and
+   confirm the prior unique phrase remains known. A new unrelated conversation
+   is a failure.
+3. **Recognition**: in a plain shell tab, start the agent by typing its
+   command. Within about a second the agent commands must appear in the
+   palette while that pane is focused, and disappear after the agent exits.
+4. **Start New Agent Conversation**: confirm the agent receives its own
+   command (`/clear` or `/new`) and starts over, and that no input reaches
+   another pane.
+5. **Restart Agent**: restart from a mixed split-pane layout with the agent
+   focused. Confirm the replacement keeps the agent, profile, and cwd; only the
+   old agent PTY exits, while sibling PIDs and contents survive. An invalid
+   configuration, missing executable, or missing cwd must preserve the original
+   session and focus. Read-only targets refuse restart until unlocked.
+   Successful local PTY creation is not provider readiness: separately confirm
+   the new tool starts normally. These checks remain manual and require your
+   provider consent.
+6. **Review Agent Diff**: with a writable sandbox explicitly approved, ask the
+   agent to make one harmless, predetermined edit in the disposable repository.
    Confirm the review overlay shows that exact diff, supports keyboard/pointer
    scrolling, and does not mutate or stage anything merely by reviewing it.
-7. **Copy Diff**: confirm the clipboard contains that exact diff and no
+7. **Copy Agent Diff**: confirm the clipboard contains that exact diff and no
    unrelated terminal output or secrets.
-8. **Insert Context**: select one small disposable file and one bounded terminal
-   output source. Verify preview, size budget, cancellation, and insertion into
-   the exact provider pane captured when the picker opened, even if focus moves
-   before completion.
-9. **Toggle Transcript**: start recording, exchange one unique prompt/response,
-   then stop. Verify visible recording state, bounded JSONL output, correct
-   provider ownership, and error reporting for an unwritable destination.
-10. **Export Session**: export Markdown and preserve JSONL. Review both for
-    completeness, ordering, automatic redaction behavior, and accidental
+8. **Send Context to Agent…**: select one small disposable file and one
+   bounded terminal output source. Verify preview, size budget, cancellation,
+   and that the text is pasted into the exact agent pane captured when the
+   picker opened, without being submitted, even if focus moves before
+   completion.
+9. **Toggle Agent Transcript**: start recording, exchange one unique
+   prompt/response, then stop. Verify visible recording state, bounded JSONL
+   output, correct agent ownership, and error reporting for an unwritable
+   destination.
+10. **Export Agent Session**: export Markdown and preserve JSONL. Review both
+    for completeness, ordering, automatic redaction behavior, and accidental
     secrets before retaining either artifact.
-11. **Jump to Last Error**: produce or locate a known provider error after
-    enough output to scroll. Confirm the command selects the correct plugin tab
-    and lands on that error without disturbing another pane.
-12. **Select Profile**: configure two harmless profiles, switch between them,
-    and confirm the selected profile is used for open, restart, and resume. A
-    missing or removed profile must fail visibly rather than silently using a
-    default.
 
 Also test two providers in different panes and windows. While a picker, diff,
 or transcript action is pending, change focus and close/reopen unrelated panes;
@@ -732,7 +720,7 @@ python3 scripts/integration_acceptance_record.py validate \
 
 Revoke disposable credentials or sessions if that was the approved cleanup
 plan. Authenticated provider evidence completes issue #26 only when both
-provider cases, their twelve commands, redaction review, and unapproved-effect
+provider cases, their agent commands, redaction review, and unapproved-effect
 denial are recorded. A CLI version, fake executable pass, unrecorded row, or
 token-free parser probe is not a substitute.
 

@@ -29,7 +29,7 @@ from scripts.native_acceptance_record import require_clean_candidate
 
 
 FAKE_PROVIDER_TEST = (
-    "app::tests::fake_ai_clis_exercise_every_builtin_command_end_to_end"
+    "app::tests::fake_agent_clis_exercise_every_agent_command_end_to_end"
 )
 FAKE_PROVIDER_CASES = ("fake.claude_code", "fake.codex")
 PROVIDER_OPT_IN_ENVIRONMENT = ("TERMERIC_REAL_CODEX_CONTRACT",)
