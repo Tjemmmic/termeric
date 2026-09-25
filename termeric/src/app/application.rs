@@ -2041,8 +2041,7 @@ impl Application {
                 return Err("That supervisor is no longer running".into());
             }
             agents.sort_by_key(|agent| (agent.window_id, agent.tab_id, agent.pane_id));
-            let truncated = agents.len() > crate::control::protocol::MAX_AGENT_SUMMARIES;
-            agents.truncate(crate::control::protocol::MAX_AGENT_SUMMARIES);
+            let truncated = crate::control::protocol::fit_agent_summaries(&mut agents);
             return Ok(Response::Agents {
                 process_id: std::process::id(),
                 agents,

@@ -250,6 +250,30 @@ impl AgentSummary {
     }
 }
 
+/// Room kept in an agent list frame for everything but the summaries.
+const AGENT_LIST_ENVELOPE_BYTES: usize = 1024;
+
+/// Keeps the agent summaries that fit one frame, in order, and reports
+/// whether any were left out.
+pub fn fit_agent_summaries(agents: &mut Vec<AgentSummary>) -> bool {
+    let budget = MAX_FRAME_BYTES - AGENT_LIST_ENVELOPE_BYTES;
+    let mut used = 0usize;
+    let fitting = agents
+        .iter()
+        .take(MAX_AGENT_SUMMARIES)
+        .take_while(|agent| {
+            // Serializing a summary of plain fields cannot fail; one that
+            // somehow did is left out rather than guessed at.
+            let size = serde_json::to_vec(agent).map_or(usize::MAX, |bytes| bytes.len() + 1);
+            used = used.saturating_add(size);
+            used <= budget
+        })
+        .count();
+    let truncated = fitting < agents.len();
+    agents.truncate(fitting);
+    truncated
+}
+
 /// Validate a bounded list of agent summaries from a GUI.
 pub fn validate_agent_summaries(agents: &[AgentSummary]) -> anyhow::Result<()> {
     anyhow::ensure!(
@@ -1476,6 +1500,39 @@ pub fn read_frame<T: DeserializeOwned>(reader: &mut impl Read) -> anyhow::Result
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn agent_lists_are_cut_to_fit_one_frame() {
+        use super::*;
+        let summary = |index: u64| AgentSummary {
+            window_id: 1,
+            tab_id: index,
+            pane_id: 0,
+            agent_id: "claude-code".into(),
+            name: "Claude Code".into(),
+            tab_title: "tab".into(),
+            state: Some(AgentState::Idle),
+            detail: None,
+            last_message: Some("m".repeat(MAX_AGENT_SUMMARY_MESSAGE_BYTES)),
+            seconds_in_state: Some(1),
+        };
+        let mut few: Vec<_> = (1..=3).map(summary).collect();
+        assert!(!fit_agent_summaries(&mut few));
+        assert_eq!(few.len(), 3);
+
+        let mut many: Vec<_> = (1..=40).map(summary).collect();
+        assert!(fit_agent_summaries(&mut many));
+        assert!(many.len() < 40 && !many.is_empty());
+        assert_eq!(many.last().unwrap().tab_id, many.len() as u64);
+        let frame = ServerFrame::Agents {
+            version: PROTOCOL_VERSION,
+            process_id: 1,
+            agents: many,
+            truncated: true,
+        };
+        let mut wire = Vec::new();
+        write_frame(&mut wire, &frame).unwrap();
+    }
+
     #[test]
     fn launch_environment_policy_is_bounded_unambiguous_and_strict() {
         use super::*;

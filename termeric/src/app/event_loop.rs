@@ -1963,11 +1963,13 @@ impl ApplicationHandler<AppEvent> for App {
                             }
                             Some(_) => Err("That supervisor is no longer running".to_string()),
                         }
-                        .map(|agents| {
+                        .map(|mut agents| {
+                            let truncated =
+                                crate::control::protocol::fit_agent_summaries(&mut agents);
                             crate::control::protocol::Response::Agents {
                                 process_id: std::process::id(),
                                 agents,
-                                truncated: false,
+                                truncated,
                             }
                         })
                     }
