@@ -39,6 +39,8 @@ pub enum Action {
     ToggleSearch,
     /// Choose a coding agent to start in a new tab
     NewAgent,
+    /// Open the docked agent view with the keyboard, or close it.
+    ToggleAgentView,
     /// Enter or leave keyboard copy mode.
     ToggleCopyMode,
     /// Enter quick select for visible semantic matches.

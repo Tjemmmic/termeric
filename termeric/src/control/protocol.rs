@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::collections::HashSet;
 use std::io::{Read, Write};
 
-pub const PROTOCOL_VERSION: u32 = 22;
+pub const PROTOCOL_VERSION: u32 = 23;
 pub const JSON_SCHEMA_VERSION: u32 = 3;
 pub const MAX_FRAME_BYTES: usize = 256 * 1024;
 pub const MAX_WINDOWS: usize = 32;
@@ -36,6 +36,10 @@ pub const MAX_AGENT_EVENT_DETAIL_BYTES: usize = 512;
 pub const MAX_AGENT_LAST_MESSAGE_BYTES: usize = 64 * 1024;
 pub const MAX_AGENT_TRANSCRIPT_PATH_BYTES: usize = 4 * 1024;
 pub const MAX_AGENT_SUMMARIES: usize = 256;
+/// Longest reason given with an answer to an agent's approval request.
+pub const MAX_APPROVAL_REASON_BYTES: usize = 2 * 1024;
+/// Longest approval-request identifier an agent uses.
+pub const MAX_APPROVAL_ID_BYTES: usize = 128;
 pub const MAX_AGENT_SUMMARY_MESSAGE_BYTES: usize = 16 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -188,6 +192,32 @@ pub enum Request {
         text: String,
         supervisor: Option<String>,
     },
+    /// The recent conversation of one agent view session, as text.
+    ReadConversation {
+        window_id: u64,
+        session_id: u64,
+    },
+    /// Answer a pending approval in an agent view session. With a supervisor
+    /// token the answer is the supervisor's and follows its mode: in Assist
+    /// mode it is shown to the person as a suggestion instead.
+    AnswerApproval {
+        request_id: String,
+        window_id: u64,
+        session_id: u64,
+        approval_id: String,
+        allow: bool,
+        reason: String,
+        supervisor: Option<String>,
+    },
+    /// Send a message to an agent view session, as a new turn of its
+    /// conversation. With a supervisor token, the send is the supervisor's.
+    SubmitToSession {
+        request_id: String,
+        window_id: u64,
+        session_id: u64,
+        text: String,
+        supervisor: Option<String>,
+    },
     /// A coding agent's hook reporting what the agent is doing. The terminal
     /// is named by the identity its processes inherited, not by focus.
     AgentEvent {
@@ -200,13 +230,17 @@ pub enum Request {
     },
 }
 
-/// One terminal running a coding agent.
+/// One coding agent: in a terminal, named by tab and pane, or in the agent
+/// view, named by its session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentSummary {
     pub window_id: u64,
     pub tab_id: u64,
     pub pane_id: u32,
+    /// Set for an agent view session, whose tab and pane are zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<u64>,
     pub agent_id: String,
     pub name: String,
     pub tab_title: String,
@@ -248,6 +282,19 @@ impl AgentSummary {
         );
         Ok(())
     }
+}
+
+/// `text` without control characters, cut on a character boundary to fit
+/// `limit` bytes, for summary fields with protocol bounds.
+pub fn printable_within(text: &str, limit: usize) -> String {
+    let mut output = String::with_capacity(text.len().min(limit));
+    for character in text.chars().filter(|character| !character.is_control()) {
+        if output.len() + character.len_utf8() > limit {
+            break;
+        }
+        output.push(character);
+    }
+    output
 }
 
 /// Room kept in an agent list frame for everything but the summaries.
@@ -521,6 +568,28 @@ pub enum Response {
         agents: Vec<AgentSummary>,
         truncated: bool,
     },
+    Conversation {
+        process_id: u32,
+        window_id: u64,
+        session_id: u64,
+        text: String,
+        truncated: bool,
+    },
+    ApprovalAnswered {
+        process_id: u32,
+        request_id: String,
+        window_id: u64,
+        session_id: u64,
+        /// False when the answer was recorded as a suggestion for the person.
+        answered: bool,
+    },
+    SessionInputAccepted {
+        process_id: u32,
+        request_id: String,
+        window_id: u64,
+        session_id: u64,
+        pending_approval: bool,
+    },
     AgentInputAccepted {
         process_id: u32,
         request_id: String,
@@ -710,6 +779,30 @@ pub enum ServerFrame {
         agents: Vec<AgentSummary>,
         truncated: bool,
     },
+    Conversation {
+        version: u32,
+        process_id: u32,
+        window_id: u64,
+        session_id: u64,
+        text: String,
+        truncated: bool,
+    },
+    ApprovalAnswered {
+        version: u32,
+        process_id: u32,
+        request_id: String,
+        window_id: u64,
+        session_id: u64,
+        answered: bool,
+    },
+    SessionInputAccepted {
+        version: u32,
+        process_id: u32,
+        request_id: String,
+        window_id: u64,
+        session_id: u64,
+        pending_approval: bool,
+    },
     AgentInputAccepted {
         version: u32,
         process_id: u32,
@@ -767,6 +860,72 @@ impl Request {
                 }
                 if !valid_agent_id(agent_id) {
                     return Err("Agent ID must be 1-64 letters, digits, '-' or '_'".into());
+                }
+                if text.trim().is_empty() || text.len() > MAX_CONTROL_INPUT_BYTES {
+                    return Err(format!(
+                        "Agent input must be 1 to {MAX_CONTROL_INPUT_BYTES} UTF-8 bytes of text"
+                    ));
+                }
+                if !valid_control_input_text(text) {
+                    return Err("Agent input permits printable UTF-8, tab, and newline only".into());
+                }
+                Ok(())
+            }
+            Self::ReadConversation {
+                window_id,
+                session_id,
+            } => {
+                if *window_id == 0 || *session_id == 0 {
+                    return Err("Conversation reads need a nonzero window and session".into());
+                }
+                Ok(())
+            }
+            Self::AnswerApproval {
+                request_id,
+                window_id,
+                session_id,
+                approval_id,
+                reason,
+                supervisor,
+                ..
+            } => {
+                validate_supervisor(supervisor.as_deref())?;
+                if !valid_request_id(request_id) {
+                    return Err(
+                        "GUI control request ID must be exactly 32 lowercase hex digits".into(),
+                    );
+                }
+                if *window_id == 0 || *session_id == 0 {
+                    return Err("Approval answers need a nonzero window and session".into());
+                }
+                if !valid_approval_id(approval_id) {
+                    return Err(format!(
+                        "Approval IDs are 1 to {MAX_APPROVAL_ID_BYTES} visible ASCII characters"
+                    ));
+                }
+                if reason.len() > MAX_APPROVAL_REASON_BYTES || !valid_control_input_text(reason) {
+                    return Err(format!(
+                        "An approval reason is at most {MAX_APPROVAL_REASON_BYTES} bytes of \
+                         printable text"
+                    ));
+                }
+                Ok(())
+            }
+            Self::SubmitToSession {
+                request_id,
+                window_id,
+                session_id,
+                text,
+                supervisor,
+            } => {
+                validate_supervisor(supervisor.as_deref())?;
+                if !valid_request_id(request_id) {
+                    return Err(
+                        "GUI control request ID must be exactly 32 lowercase hex digits".into(),
+                    );
+                }
+                if *window_id == 0 || *session_id == 0 {
+                    return Err("Session input needs a nonzero window and session".into());
                 }
                 if text.trim().is_empty() || text.len() > MAX_CONTROL_INPUT_BYTES {
                     return Err(format!(
@@ -1083,6 +1242,7 @@ impl Request {
             | Self::ReadText { .. }
             | Self::LaunchStatus { .. }
             | Self::ListAgents { .. }
+            | Self::ReadConversation { .. }
             | Self::AgentEvent { .. } => None,
             Self::CreateWindow { request_id, .. }
             | Self::LaunchWindow { request_id, .. }
@@ -1101,7 +1261,9 @@ impl Request {
             | Self::ResizeWindow { request_id, .. }
             | Self::ResizeDivider { request_id, .. }
             | Self::SendText { request_id, .. }
-            | Self::SubmitToAgent { request_id, .. } => Some(request_id),
+            | Self::SubmitToAgent { request_id, .. }
+            | Self::AnswerApproval { request_id, .. }
+            | Self::SubmitToSession { request_id, .. } => Some(request_id),
         }
     }
 }
@@ -1282,6 +1444,12 @@ fn unsafe_control_metadata_character(character: char) -> bool {
                 | '\u{202a}'..='\u{202e}'
                 | '\u{2066}'..='\u{2069}'
         )
+}
+
+/// An agent's own identifier for one approval request.
+pub fn valid_approval_id(value: &str) -> bool {
+    (1..=MAX_APPROVAL_ID_BYTES).contains(&value.len())
+        && value.bytes().all(|byte| byte.is_ascii_graphic())
 }
 
 pub fn valid_request_id(value: &str) -> bool {
@@ -1501,12 +1669,21 @@ pub fn read_frame<T: DeserializeOwned>(reader: &mut impl Read) -> anyhow::Result
 #[cfg(test)]
 mod tests {
     #[test]
+    fn printable_within_strips_controls_and_cuts_on_characters() {
+        use super::*;
+        assert_eq!(printable_within("a\u{1b}[31mb\nc", 64), "a[31mbc");
+        assert_eq!(printable_within("ééé", 5), "éé");
+        assert_eq!(printable_within("", 5), "");
+    }
+
+    #[test]
     fn agent_lists_are_cut_to_fit_one_frame() {
         use super::*;
         let summary = |index: u64| AgentSummary {
             window_id: 1,
             tab_id: index,
             pane_id: 0,
+            session_id: None,
             agent_id: "claude-code".into(),
             name: "Claude Code".into(),
             tab_title: "tab".into(),

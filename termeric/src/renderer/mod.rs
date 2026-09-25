@@ -6,6 +6,7 @@
 //! - Cursor rendering
 //! - Tab bar rendering
 
+mod agent_view;
 mod background_image;
 mod glyph_cache;
 mod image;
@@ -672,6 +673,10 @@ pub struct Renderer {
     tab_bar_position: TabBarPosition,
     // Git completion overlay state
     git_completions: Option<GitCompletionInfo>,
+    /// The docked agent view's scene, drawn right of the terminals.
+    agent_view: Option<std::sync::Arc<crate::ui::agent_view::scene::Scene>>,
+    /// Width reserved on the right for the agent view.
+    dock_width: f32,
     // Bounded information/error/choice overlay state
     info_overlay: Option<InfoOverlayInfo>,
     diff_review: Option<DiffReviewInfo>,
@@ -905,6 +910,8 @@ impl Renderer {
             tab_bar_viewport_anchor: tab_bar::TabBarViewportAnchor::default(),
             tab_bar_position: TabBarPosition::Top,
             git_completions: None,
+            agent_view: None,
+            dock_width: 0.0,
             info_overlay: None,
             diff_review: None,
             context_picker: None,
@@ -972,7 +979,8 @@ impl Renderer {
             width,
             height,
             self.padding,
-            self.tab_bar_width_for(width as f32),
+            self.tab_bar_width_for(width as f32)
+                + (width as f32 - self.content_right_for(width as f32)),
             self.tab_bar_height(),
             self.cell_width,
             self.cell_height,
@@ -1612,7 +1620,7 @@ impl Renderer {
         let padding = self.padding;
         let tab_bar_height = self.tab_bar_height();
         let content_left = self.tab_bar_width();
-        let content_width = (window_width - content_left).max(0.0);
+        let content_width = self.content_width_for(window_width);
 
         // Calculate brightness multiplier for focus dimming (1.0 = full brightness, lower = dimmed)
         let brightness = 1.0 - focus_dim;
@@ -1781,6 +1789,15 @@ impl Renderer {
                 .push_rect(0.0, 0.0, window_width, window_height, flash_color);
         }
 
+        // ── Agent view: the docked panel right of the terminals, then its
+        // menus, which must cover its own text ──
+        self.rect_pipeline.mark_layer();
+        self.text_pipeline.mark_layer();
+        self.build_agent_view();
+        self.rect_pipeline.mark_layer();
+        self.text_pipeline.mark_layer();
+        self.build_agent_view_overlay();
+
         // ── LAYER 1: Harvest indicators (in gutter, alongside grid) ──
         self.rect_pipeline.mark_layer();
         self.text_pipeline.mark_layer();
@@ -1945,7 +1962,9 @@ impl Renderer {
         self.text_pipeline.mark_layer();
         if !self.toasts.is_empty() {
             let toasts = self.toasts.clone();
-            self.build_toasts(&toasts, window_width, window_height);
+            // Toasts sit in the terminal area's corner, clear of the dock.
+            let toast_width = self.content_right_for(window_width);
+            self.build_toasts(&toasts, toast_width, window_height);
         }
 
         // ── LAYER 17: Platform IME preedit (never PTY-owned) ──

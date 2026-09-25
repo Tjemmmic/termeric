@@ -1652,6 +1652,118 @@ pub(super) fn submit_to_agent(
     }
 }
 
+/// One agent view session's recent conversation, and whether older parts
+/// were left out.
+pub(super) fn read_conversation(
+    process_id: u32,
+    window_id: u64,
+    session_id: u64,
+) -> anyhow::Result<(String, bool)> {
+    let reading = Request::ReadConversation {
+        window_id,
+        session_id,
+    };
+    reading.validate().map_err(anyhow::Error::msg)?;
+    match request(&endpoint_for(process_id)?, reading)? {
+        ServerFrame::Conversation {
+            version,
+            process_id: returned,
+            window_id: returned_window,
+            session_id: returned_session,
+            text,
+            truncated,
+        } if version == protocol::PROTOCOL_VERSION
+            && returned == process_id
+            && (returned_window, returned_session) == (window_id, session_id) =>
+        {
+            Ok((text, truncated))
+        }
+        ServerFrame::Error { message, .. } => anyhow::bail!(message),
+        _ => anyhow::bail!("Invalid conversation response"),
+    }
+}
+
+/// Answer one pending approval in an agent view session. Returns whether it
+/// was answered, rather than kept as a suggestion for the person.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn answer_approval(
+    process_id: u32,
+    window_id: u64,
+    session_id: u64,
+    approval_id: &str,
+    allow: bool,
+    reason: &str,
+    supervisor: Option<&str>,
+) -> anyhow::Result<bool> {
+    let request_id = generate_request_id()?;
+    let answer = Request::AnswerApproval {
+        request_id: request_id.clone(),
+        window_id,
+        session_id,
+        approval_id: approval_id.into(),
+        allow,
+        reason: reason.into(),
+        supervisor: supervisor.map(str::to_owned),
+    };
+    answer.validate().map_err(anyhow::Error::msg)?;
+    match request(&endpoint_for(process_id)?, answer)? {
+        ServerFrame::ApprovalAnswered {
+            version,
+            process_id: returned,
+            request_id: returned_id,
+            window_id: returned_window,
+            session_id: returned_session,
+            answered,
+        } if version == protocol::PROTOCOL_VERSION
+            && returned == process_id
+            && returned_id == request_id
+            && (returned_window, returned_session) == (window_id, session_id) =>
+        {
+            Ok(answered)
+        }
+        ServerFrame::Error { message, .. } => anyhow::bail!(message),
+        _ => anyhow::bail!("Invalid approval response"),
+    }
+}
+
+/// Send a message to an agent view session. Returns whether it waits for the
+/// person's approval.
+pub(super) fn submit_to_session(
+    process_id: u32,
+    window_id: u64,
+    session_id: u64,
+    text: &str,
+    supervisor: Option<&str>,
+) -> anyhow::Result<bool> {
+    let request_id = generate_request_id()?;
+    let submission = Request::SubmitToSession {
+        request_id: request_id.clone(),
+        window_id,
+        session_id,
+        text: text.into(),
+        supervisor: supervisor.map(str::to_owned),
+    };
+    submission.validate().map_err(anyhow::Error::msg)?;
+    match request(&endpoint_for(process_id)?, submission)? {
+        ServerFrame::SessionInputAccepted {
+            version,
+            process_id: returned,
+            request_id: returned_id,
+            window_id: returned_window,
+            session_id: returned_session,
+            pending_approval,
+        } if version == protocol::PROTOCOL_VERSION
+            && returned == process_id
+            && returned_id == request_id
+            && (returned_window, returned_session) == (window_id, session_id) =>
+        {
+            Ok(pending_approval)
+        }
+        ServerFrame::Error { message, .. } => anyhow::bail!(message),
+        _ => anyhow::bail!("Invalid session input response"),
+    }
+}
+
 /// How long an agent hook waits for the GUI. A hook runs inside the agent's
 /// turn, so a busy or stuck GUI must not hold the agent up for long.
 const AGENT_EVENT_TIMEOUT: Duration = Duration::from_secs(2);

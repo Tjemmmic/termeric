@@ -213,7 +213,7 @@ mod tests {
                 rect_center: [2.0, 3.0],
                 rect_half_size: [1.0, 1.0],
                 corner_radius: 0.0,
-                _pad: 0.0,
+                stroke: 0.0,
             }],
             indices: vec![0],
         }

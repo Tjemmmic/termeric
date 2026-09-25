@@ -2,13 +2,22 @@
 //! first, and the supervisor's latest activity.
 //!
 //! Each row shows what one agent is doing and what it waits for; choosing a
-//! row shows that terminal. While a supervisor runs, the foot of the panel
+//! row shows that agent's terminal, or its conversation in the agent view. While a supervisor runs, the foot of the panel
 //! names its mode, offers Take Over or Hand Back, and lists what it did most
 //! recently. Geometry, hit-testing, and keyboard focus all come from
 //! [`AgentsPanelLayout`], so what is drawn is what is clicked and announced.
 
 use crate::tabs::TerminalIdentity;
 use crate::ui::animation::PanelAnimation;
+
+/// Where an agent in the panel runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AgentOrigin {
+    /// In a terminal pane, watched through its hooks.
+    Terminal(TerminalIdentity),
+    /// In the docked agent view.
+    AgentView(crate::agent_view::session::SessionId),
+}
 
 /// What a row's dot shows, matching the tab badges.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,7 +34,7 @@ pub enum AgentRowState {
 /// One agent, as the panel shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentRow {
-    pub identity: TerminalIdentity,
+    pub identity: AgentOrigin,
     pub name: String,
     /// Where it runs: its tab's title.
     pub place: String,
@@ -317,7 +326,7 @@ pub struct AgentsPanel {
     hovered: Option<AgentsControl>,
     /// The agents in the order last shown. Clicks and keys act on what the
     /// person saw, even when the list has changed since.
-    shown: Vec<TerminalIdentity>,
+    shown: Vec<AgentOrigin>,
     /// When the rows were last described, to keep "3 min" current.
     described_at: Option<std::time::Instant>,
 }
@@ -328,7 +337,7 @@ const REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Focus {
     Close,
-    Agent(TerminalIdentity),
+    Agent(AgentOrigin),
     Supervisor,
 }
 
@@ -414,7 +423,7 @@ impl AgentsPanel {
     }
 
     /// The row the last frame showed an agent at.
-    pub fn shown_index(&self, identity: TerminalIdentity) -> Option<usize> {
+    pub fn shown_index(&self, identity: AgentOrigin) -> Option<usize> {
         self.shown.iter().position(|shown| *shown == identity)
     }
 
@@ -424,7 +433,7 @@ impl AgentsPanel {
     }
 
     /// The agent a row of the last frame showed.
-    pub fn shown_agent(&self, index: usize) -> Option<TerminalIdentity> {
+    pub fn shown_agent(&self, index: usize) -> Option<AgentOrigin> {
         self.shown.get(index).copied()
     }
 
@@ -584,10 +593,10 @@ mod tests {
 
     fn row(tab_id: usize, name: &str) -> AgentRow {
         AgentRow {
-            identity: TerminalIdentity {
+            identity: AgentOrigin::Terminal(TerminalIdentity {
                 tab_id,
                 pane_id: PaneId(0),
-            },
+            }),
             name: name.into(),
             place: format!("tab {tab_id}"),
             state: AgentRowState::Working,

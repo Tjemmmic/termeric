@@ -7,6 +7,7 @@
 //! - Diff review overlay
 //! - Context picker modal
 
+pub mod agent_view;
 pub mod agents_panel;
 pub mod animation;
 pub mod command_palette;
@@ -20,8 +21,10 @@ pub mod info_overlay;
 pub mod popup_menu;
 pub mod settings;
 pub mod shortcuts_panel;
+pub mod text_area;
 pub mod text_input;
 pub mod text_input_viewport;
+pub mod text_layout;
 pub mod toast;
 pub mod unicode_picker;
 pub mod workspace_menu;

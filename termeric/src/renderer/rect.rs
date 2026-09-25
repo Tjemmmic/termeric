@@ -5,6 +5,7 @@ use bytemuck::{Pod, Zeroable};
 use wgpu::*;
 
 use super::buffer::{BufferStats, GrowableBuffer};
+use super::text::TextClip;
 
 /// Vertex for rectangle rendering (with rounded-corner metadata)
 #[repr(C)]
@@ -15,7 +16,8 @@ pub struct RectVertex {
     pub rect_center: [f32; 2],
     pub rect_half_size: [f32; 2],
     pub corner_radius: f32,
-    pub _pad: f32,
+    /// Outline width; zero fills the shape.
+    pub stroke: f32,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -60,6 +62,12 @@ impl RectVertex {
                     shader_location: 4,
                     format: VertexFormat::Float32,
                 },
+                // stroke
+                VertexAttribute {
+                    offset: 44,
+                    shader_location: 5,
+                    format: VertexFormat::Float32,
+                },
             ],
         }
     }
@@ -87,6 +95,8 @@ pub struct RectPipeline {
     layer_boundaries: Vec<u32>,
     // Screen size
     screen_size: [f32; 2],
+    // Bounds applied to every shape pushed while set.
+    clip: Option<TextClip>,
 }
 
 impl RectPipeline {
@@ -182,6 +192,7 @@ impl RectPipeline {
             indices: Vec::new(),
             layer_boundaries: Vec::new(),
             screen_size: [800.0, 600.0],
+            clip: None,
         })
     }
 
@@ -200,6 +211,47 @@ impl RectPipeline {
         self.vertices.clear();
         self.indices.clear();
         self.layer_boundaries.clear();
+        self.clip = None;
+    }
+
+    /// Clips every shape pushed from now on to `clip`, or stops clipping.
+    /// Clipping cuts a shape's quad but keeps its outline, so a rounded card
+    /// scrolled half out of view keeps its visible corners.
+    pub(super) fn set_clip(&mut self, clip: Option<TextClip>) -> Option<TextClip> {
+        std::mem::replace(&mut self.clip, clip)
+    }
+
+    /// The quad `x0..x1, y0..y1` cut to the current clip, if any remains.
+    fn clipped(&self, x0: f32, y0: f32, x1: f32, y1: f32) -> Option<[f32; 4]> {
+        let [x0, y0, x1, y1] = match self.clip {
+            Some(clip) => [
+                x0.max(clip.left),
+                y0.max(clip.top),
+                x1.min(clip.right),
+                y1.min(clip.bottom),
+            ],
+            None => [x0, y0, x1, y1],
+        };
+        (x0 < x1 && y0 < y1).then_some([x0, y0, x1, y1])
+    }
+
+    fn push_quad(&mut self, quad: [f32; 4], template: RectVertex) {
+        let [x0, y0, x1, y1] = quad;
+        let base_idx = self.vertices.len() as u32;
+        for position in [[x0, y0], [x1, y0], [x1, y1], [x0, y1]] {
+            self.vertices.push(RectVertex {
+                position,
+                ..template
+            });
+        }
+        self.indices.extend_from_slice(&[
+            base_idx,
+            base_idx + 1,
+            base_idx + 2,
+            base_idx,
+            base_idx + 2,
+            base_idx + 3,
+        ]);
     }
 
     pub(super) fn checkpoint(&self) -> (usize, usize) {
@@ -257,40 +309,32 @@ impl RectPipeline {
         thickness: f32,
         color: [f32; 4],
     ) {
-        let base_idx = self.vertices.len() as u32;
         let half_t = thickness / 2.0;
         let pad = half_t + 1.0; // Extra pixel for anti-aliasing
 
         // Axis-aligned bounding box of the line with padding
-        let min_x = x1.min(x2) - pad;
-        let min_y = y1.min(y2) - pad;
-        let max_x = x1.max(x2) + pad;
-        let max_y = y1.max(y2) + pad;
+        let Some(quad) = self.clipped(
+            x1.min(x2) - pad,
+            y1.min(y2) - pad,
+            x1.max(x2) + pad,
+            y1.max(y2) + pad,
+        ) else {
+            return;
+        };
 
         // Encode line endpoints in rect_center (start) and rect_half_size (end)
         // Negative corner_radius signals the shader to use line SDF
-        let make_vert = |pos: [f32; 2]| RectVertex {
-            position: pos,
-            color,
-            rect_center: [x1, y1],
-            rect_half_size: [x2, y2],
-            corner_radius: -half_t,
-            _pad: 0.0,
-        };
-
-        self.vertices.push(make_vert([min_x, min_y]));
-        self.vertices.push(make_vert([max_x, min_y]));
-        self.vertices.push(make_vert([max_x, max_y]));
-        self.vertices.push(make_vert([min_x, max_y]));
-
-        self.indices.extend_from_slice(&[
-            base_idx,
-            base_idx + 1,
-            base_idx + 2,
-            base_idx,
-            base_idx + 2,
-            base_idx + 3,
-        ]);
+        self.push_quad(
+            quad,
+            RectVertex {
+                position: [0.0, 0.0],
+                color,
+                rect_center: [x1, y1],
+                rect_half_size: [x2, y2],
+                corner_radius: -half_t,
+                stroke: 0.0,
+            },
+        );
     }
 
     /// Push a sharp rectangle (no rounding)
@@ -308,38 +352,55 @@ impl RectPipeline {
         color: [f32; 4],
         radius: f32,
     ) {
-        let base_idx = self.vertices.len() as u32;
+        self.push_shape(x, y, width, height, color, radius, 0.0);
+    }
 
-        let x0 = x;
-        let y0 = y;
-        let x1 = x + width;
-        let y1 = y + height;
+    /// Push the outline of a rounded rectangle, `stroke` pixels wide and
+    /// drawn inside its bounds.
+    #[allow(clippy::too_many_arguments)]
+    pub fn push_rounded_outline(
+        &mut self,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        color: [f32; 4],
+        radius: f32,
+        stroke: f32,
+    ) {
+        if stroke > 0.0 {
+            self.push_shape(x, y, width, height, color, radius, stroke);
+        }
+    }
 
-        let center = [x + width * 0.5, y + height * 0.5];
-        let half_size = [width * 0.5, height * 0.5];
-
-        let make_vert = |pos: [f32; 2]| RectVertex {
-            position: pos,
-            color,
-            rect_center: center,
-            rect_half_size: half_size,
-            corner_radius: radius,
-            _pad: 0.0,
+    #[allow(clippy::too_many_arguments)]
+    fn push_shape(
+        &mut self,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        color: [f32; 4],
+        radius: f32,
+        stroke: f32,
+    ) {
+        let Some(quad) = self.clipped(x, y, x + width, y + height) else {
+            return;
         };
-
-        self.vertices.push(make_vert([x0, y0]));
-        self.vertices.push(make_vert([x1, y0]));
-        self.vertices.push(make_vert([x1, y1]));
-        self.vertices.push(make_vert([x0, y1]));
-
-        self.indices.extend_from_slice(&[
-            base_idx,
-            base_idx + 1,
-            base_idx + 2,
-            base_idx,
-            base_idx + 2,
-            base_idx + 3,
-        ]);
+        // A radius beyond half the shorter side has no shape to round; the
+        // largest possible one draws the intended pill or circle.
+        let radius = radius.min(width.min(height) * 0.5).max(0.0);
+        self.push_quad(
+            quad,
+            RectVertex {
+                position: [0.0, 0.0],
+                color,
+                rect_center: [x + width * 0.5, y + height * 0.5],
+                rect_half_size: [width * 0.5, height * 0.5],
+                corner_radius: radius,
+                stroke,
+            },
+        );
     }
 
     /// Upload vertex data to GPU

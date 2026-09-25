@@ -15,6 +15,9 @@ use cosmic_text::{
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ops::Range;
+use std::sync::Arc;
+
+use crate::ui::text_layout::{LaidLine, LaidRun, TextLayout, TextSize, TextSpan, UiFace};
 use unicode_segmentation::UnicodeSegmentation;
 use wgpu::*;
 
@@ -213,6 +216,8 @@ pub enum TextFace {
     Terminal,
     /// The desktop's generic sans-serif family, for application chrome.
     UiSans,
+    /// The desktop's generic monospace family, for code in chrome.
+    UiMono,
 }
 
 /// Vertical metrics of the UI face at one pixel size.
@@ -761,10 +766,155 @@ pub struct GlyphCache {
     /// Parsed `wght`-axis capability by resolved face. Variation axes are
     /// intrinsic to a face, so this avoids reparsing `fvar` on glyph misses.
     weight_axis_faces: HashMap<cosmic_text::fontdb::ID, bool>,
-    /// UI text widths by pixel size, bounded by `MAX_UI_WIDTH_ENTRIES`.
-    ui_widths: HashMap<u32, HashMap<Box<str>, f32>>,
+    /// UI text widths by pixel size and face, bounded by
+    /// `MAX_UI_WIDTH_ENTRIES`.
+    ui_widths: HashMap<(u32, UiFace), HashMap<Box<str>, f32>>,
     /// UI face vertical metrics by pixel size.
     ui_metrics: HashMap<u32, UiFontMetrics>,
+    /// Wrapped UI paragraphs kept between frames.
+    ui_layouts: UiLayoutCache,
+}
+
+/// Everything a wrapped UI paragraph's layout depends on.
+#[derive(Clone, Debug, PartialEq)]
+struct UiLayoutKey {
+    spans: Vec<(Box<str>, UiFace)>,
+    size: (u32, u32),
+    width_bits: Option<u32>,
+}
+
+impl UiLayoutKey {
+    fn matches(&self, spans: &[TextSpan<'_>], size: (u32, u32), width_bits: Option<u32>) -> bool {
+        self.size == size
+            && self.width_bits == width_bits
+            && self.spans.len() == spans.len()
+            && self
+                .spans
+                .iter()
+                .zip(spans)
+                .all(|((text, face), span)| **text == *span.text && *face == span.face)
+    }
+}
+
+fn ui_layout_hash(spans: &[TextSpan<'_>], size: (u32, u32), width_bits: Option<u32>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for span in spans {
+        span.text.hash(&mut hasher);
+        span.face.hash(&mut hasher);
+    }
+    size.hash(&mut hasher);
+    width_bits.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Most wrapped UI paragraphs kept between frames.
+const MAX_UI_LAYOUTS: usize = 2048;
+/// Most paragraph text, in bytes, kept between frames.
+const MAX_UI_LAYOUT_BYTES: usize = 4 * 1024 * 1024;
+
+/// Wrapped UI paragraphs by content, bounded by count and by text size.
+/// Lookups hash the borrowed spans and compare in place, so an unchanged
+/// paragraph costs no allocation per frame. When full, the least recently
+/// used paragraphs go first: those on screen stay, while stale ones, such as
+/// every frame's version of a streamed answer, do not pile up.
+#[derive(Default)]
+struct UiLayoutCache {
+    entries: HashMap<u64, Vec<UiLayoutEntry>>,
+    count: usize,
+    bytes: usize,
+    /// Advances on every use, so each entry's stamp is unique.
+    clock: u64,
+}
+
+struct UiLayoutEntry {
+    key: UiLayoutKey,
+    layout: Arc<TextLayout>,
+    bytes: usize,
+    last_used: u64,
+}
+
+impl UiLayoutCache {
+    fn get(
+        &mut self,
+        spans: &[TextSpan<'_>],
+        size: (u32, u32),
+        width_bits: Option<u32>,
+    ) -> Option<Arc<TextLayout>> {
+        let hash = ui_layout_hash(spans, size, width_bits);
+        let entry = self
+            .entries
+            .get_mut(&hash)?
+            .iter_mut()
+            .find(|entry| entry.key.matches(spans, size, width_bits))?;
+        self.clock += 1;
+        entry.last_used = self.clock;
+        Some(Arc::clone(&entry.layout))
+    }
+
+    fn insert(
+        &mut self,
+        spans: &[TextSpan<'_>],
+        size: (u32, u32),
+        width_bits: Option<u32>,
+        layout: Arc<TextLayout>,
+    ) {
+        let bytes: usize = spans.iter().map(|span| span.text.len()).sum();
+        if self.count >= MAX_UI_LAYOUTS || self.bytes + bytes > MAX_UI_LAYOUT_BYTES {
+            self.evict(MAX_UI_LAYOUTS / 2, MAX_UI_LAYOUT_BYTES / 2);
+        }
+        self.clock += 1;
+        let key = UiLayoutKey {
+            spans: spans
+                .iter()
+                .map(|span| (Box::from(span.text), span.face))
+                .collect(),
+            size,
+            width_bits,
+        };
+        self.entries
+            .entry(ui_layout_hash(spans, size, width_bits))
+            .or_default()
+            .push(UiLayoutEntry {
+                key,
+                layout,
+                bytes,
+                last_used: self.clock,
+            });
+        self.count += 1;
+        self.bytes += bytes;
+    }
+
+    /// Drops the least recently used paragraphs until at most `count` of
+    /// them, holding at most `bytes` of text, remain.
+    fn evict(&mut self, count: usize, bytes: usize) {
+        let mut ages: Vec<(u64, usize)> = self
+            .entries
+            .values()
+            .flatten()
+            .map(|entry| (entry.last_used, entry.bytes))
+            .collect();
+        ages.sort_unstable_by_key(|(last_used, _)| *last_used);
+        let (mut remaining_count, mut remaining_bytes) = (self.count, self.bytes);
+        let mut cutoff = None;
+        for (last_used, size) in ages {
+            if remaining_count <= count && remaining_bytes <= bytes {
+                break;
+            }
+            remaining_count -= 1;
+            remaining_bytes -= size;
+            cutoff = Some(last_used);
+        }
+        let Some(cutoff) = cutoff else {
+            return;
+        };
+        self.entries.retain(|_, entries| {
+            entries.retain(|entry| entry.last_used > cutoff);
+            !entries.is_empty()
+        });
+        self.count = remaining_count;
+        self.bytes = remaining_bytes;
+    }
 }
 
 impl GlyphCache {
@@ -972,6 +1122,7 @@ impl GlyphCache {
             weight_axis_faces: HashMap::new(),
             ui_widths: HashMap::new(),
             ui_metrics: HashMap::new(),
+            ui_layouts: UiLayoutCache::default(),
         })
     }
 
@@ -1473,23 +1624,28 @@ impl GlyphCache {
         self.shape_keyed(key, text, style, metrics, queue)
     }
 
-    /// Shape application-chrome text in the desktop's sans-serif face at an
-    /// explicit pixel size. Positions follow the shaped advances.
+    /// Shape application-chrome text in a desktop UI face at an explicit
+    /// pixel size. Positions follow the shaped advances.
     pub(super) fn shape_ui_text(
         &mut self,
         text: &str,
         size_px: f32,
+        face: UiFace,
         queue: &Queue,
     ) -> Option<LigatureRun> {
         if text.is_empty() {
             return None;
         }
         let metrics = ui_text_metrics(size_px);
+        let style = FontStyle {
+            bold: face.bold,
+            italic: face.italic,
+        };
         let key = LigatureKey::new(
             text,
             metrics.font_size,
             metrics.line_height,
-            FontStyle::default(),
+            style,
             false,
             FontFeatures::new(),
             "",
@@ -1498,25 +1654,31 @@ impl GlyphCache {
             Weight::NORMAL.0,
             Weight::BOLD.0,
             GlyphPlacement::Shaped,
-            TextFace::UiSans,
+            if face.mono {
+                TextFace::UiMono
+            } else {
+                TextFace::UiSans
+            },
         );
-        self.shape_keyed(key, text, FontStyle::default(), metrics, queue)
+        self.shape_keyed(key, text, style, metrics, queue)
     }
 
     /// Advance width of UI text without rasterizing it.
     pub(super) fn ui_text_width(&mut self, text: &str, size_px: f32) -> f32 {
+        self.ui_text_width_in(text, UiFace::SANS, size_px)
+    }
+
+    /// Advance width of UI text in `face` without rasterizing it.
+    pub(super) fn ui_text_width_in(&mut self, text: &str, face: UiFace, size_px: f32) -> f32 {
         if text.is_empty() {
             return 0.0;
         }
-        if let Some(width) = self
-            .ui_widths
-            .get(&size_px.to_bits())
-            .and_then(|sizes| sizes.get(text))
-        {
+        let key = (size_px.to_bits(), face);
+        if let Some(width) = self.ui_widths.get(&key).and_then(|sizes| sizes.get(text)) {
             return *width;
         }
         let mut buffer = Buffer::new(&mut self.font_system, ui_text_metrics(size_px));
-        buffer.set_text(text, &ui_attrs(), Shaping::Advanced, None);
+        buffer.set_text(text, &ui_face_attrs(face), Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut self.font_system, false);
         let width = buffer
             .layout_runs()
@@ -1526,10 +1688,108 @@ impl GlyphCache {
             self.ui_widths.clear();
         }
         self.ui_widths
-            .entry(size_px.to_bits())
+            .entry(key)
             .or_default()
             .insert(text.into(), width);
         width
+    }
+
+    /// Lays out styled UI text, wrapped at `width` when given. Layouts are
+    /// cached, so an unchanged paragraph costs one lookup per frame.
+    pub(super) fn layout_ui_text(
+        &mut self,
+        spans: &[TextSpan<'_>],
+        size: TextSize,
+        width: Option<f32>,
+    ) -> Arc<TextLayout> {
+        let size_bits = (size.font_px.to_bits(), size.line_px.to_bits());
+        let width_bits = width.map(f32::to_bits);
+        if let Some(layout) = self.ui_layouts.get(spans, size_bits, width_bits) {
+            return layout;
+        }
+        let layout = Arc::new(self.lay_out_ui_text(spans, size, width));
+        self.ui_layouts
+            .insert(spans, size_bits, width_bits, Arc::clone(&layout));
+        layout
+    }
+
+    fn lay_out_ui_text(
+        &mut self,
+        spans: &[TextSpan<'_>],
+        size: TextSize,
+        width: Option<f32>,
+    ) -> TextLayout {
+        let metrics = Metrics::new(size.font_px, size.line_px);
+        let mut buffer = Buffer::new(&mut self.font_system, metrics);
+        buffer.set_wrap(cosmic_text::Wrap::WordOrGlyph);
+        buffer.set_size(width, None);
+        let default = ui_face_attrs(UiFace::SANS);
+        buffer.set_rich_text(
+            spans
+                .iter()
+                .enumerate()
+                .map(|(index, span)| (span.text, ui_face_attrs(span.face).metadata(index))),
+            &default,
+            Shaping::Advanced,
+            None,
+        );
+        buffer.shape_until_scroll(&mut self.font_system, false);
+        // Byte offset where each hard line starts in the joined spans.
+        let mut line_starts = vec![0];
+        let mut offset = 0;
+        for span in spans {
+            for (index, _) in span.text.match_indices('\n') {
+                line_starts.push(offset + index + 1);
+            }
+            offset += span.text.len();
+        }
+        let mut layout = TextLayout::default();
+        for run in buffer.layout_runs() {
+            let line_start = line_starts.get(run.line_i).copied().unwrap_or(0);
+            let mut runs: Vec<LaidRun> = Vec::new();
+            let mut previous_end = None;
+            for glyph in run.glyphs {
+                let text = &run.text[glyph.start..glyph.end];
+                match runs.last_mut() {
+                    // Extend while the span and the byte order both continue.
+                    Some(last)
+                        if last.span == glyph.metadata && previous_end == Some(glyph.start) =>
+                    {
+                        last.text.push_str(text);
+                        last.width = glyph.x + glyph.w - last.x;
+                    }
+                    _ => runs.push(LaidRun {
+                        x: glyph.x,
+                        width: glyph.w,
+                        text: text.to_owned(),
+                        span: glyph.metadata,
+                        start: line_start + glyph.start,
+                    }),
+                }
+                previous_end = Some(glyph.end);
+            }
+            layout.width = layout.width.max(run.line_w);
+            layout.lines.push(LaidLine {
+                top: run.line_top,
+                baseline: run.line_y,
+                height: run.line_height,
+                runs,
+            });
+        }
+        if layout.lines.is_empty() {
+            let ascent = self.ui_font_metrics(size.font_px).ascent;
+            layout.lines.push(LaidLine {
+                top: 0.0,
+                baseline: ((size.line_px - size.font_px) / 2.0 + ascent).round(),
+                height: size.line_px,
+                runs: Vec::new(),
+            });
+        }
+        layout.height = layout
+            .lines
+            .last()
+            .map_or(0.0, |line| line.top + line.height);
+        layout
     }
 
     /// Ascent and descent of the UI face at a pixel size.
@@ -1538,7 +1798,7 @@ impl GlyphCache {
             return *metrics;
         }
         let mut buffer = Buffer::new(&mut self.font_system, ui_text_metrics(size_px));
-        buffer.set_text("Hg", &ui_attrs(), Shaping::Advanced, None);
+        buffer.set_text("Hg", &ui_face_attrs(UiFace::SANS), Shaping::Advanced, None);
         let metrics = buffer
             .line_layout(&mut self.font_system, 0)
             .and_then(|lines| lines.first())
@@ -1656,9 +1916,14 @@ impl GlyphCache {
     ) -> Option<(LigatureRun, bool)> {
         let mut placed = Vec::new();
 
-        if face == TextFace::UiSans {
+        if matches!(face, TextFace::UiSans | TextFace::UiMono) {
             let mut buffer = Buffer::new(&mut self.font_system, metrics);
-            buffer.set_text(text, &ui_attrs(), Shaping::Advanced, None);
+            let face = UiFace {
+                mono: face == TextFace::UiMono,
+                bold: style.bold,
+                italic: style.italic,
+            };
+            buffer.set_text(text, &ui_face_attrs(face), Shaping::Advanced, None);
             buffer.shape_until_scroll(&mut self.font_system, false);
             for run in buffer.layout_runs() {
                 placed.extend(place_glyphs(text, run.glyphs, placement));
@@ -2245,8 +2510,19 @@ fn desktop_font_system() -> FontSystem {
     FontSystem::new_with_locale_and_db(locale, database)
 }
 
-fn ui_attrs() -> Attrs<'static> {
-    Attrs::new().family(Family::SansSerif)
+fn ui_face_attrs(face: UiFace) -> Attrs<'static> {
+    let mut attrs = Attrs::new().family(if face.mono {
+        Family::Monospace
+    } else {
+        Family::SansSerif
+    });
+    if face.bold {
+        attrs = attrs.weight(Weight::BOLD);
+    }
+    if face.italic {
+        attrs = attrs.style(Style::Italic);
+    }
+    attrs
 }
 
 fn ui_text_metrics(size_px: f32) -> Metrics {
@@ -3017,6 +3293,42 @@ fn resolve_configured_family(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ui_layouts_keep_what_is_used_and_stay_within_their_bounds() {
+        let mut cache = UiLayoutCache::default();
+        let layout = Arc::new(TextLayout {
+            lines: Vec::new(),
+            width: 0.0,
+            height: 0.0,
+        });
+        fn spans(text: &str) -> [TextSpan<'_>; 1] {
+            [TextSpan {
+                text,
+                face: UiFace::SANS,
+            }]
+        }
+        let lookup = |cache: &mut UiLayoutCache, text: &str| cache.get(&spans(text), (1, 1), None);
+        let insert = |cache: &mut UiLayoutCache, text: &str| {
+            cache.insert(&spans(text), (1, 1), None, Arc::clone(&layout));
+        };
+        let on_screen = "on screen";
+        insert(&mut cache, on_screen);
+        // Many small stale paragraphs, then a few large ones, as a streamed
+        // answer leaves behind; the paragraph on screen is used every frame.
+        let small = (0..MAX_UI_LAYOUTS * 2).map(|index| index.to_string());
+        let large = (0..20).map(|index| format!("{index}{}", "x".repeat(512 * 1024)));
+        for text in small.chain(large) {
+            assert!(lookup(&mut cache, on_screen).is_some());
+            insert(&mut cache, &text);
+            assert!(cache.count <= MAX_UI_LAYOUTS);
+            assert!(cache.bytes <= MAX_UI_LAYOUT_BYTES);
+        }
+        assert!(lookup(&mut cache, on_screen).is_some());
+        let counted: usize = cache.entries.values().map(Vec::len).sum();
+        assert_eq!(counted, cache.count);
+        assert!(lookup(&mut cache, "never laid out").is_none());
+    }
+
     use super::*;
     use std::sync::Arc;
 

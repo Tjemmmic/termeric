@@ -103,6 +103,7 @@ const AGENTS_EMPTY: NodeId = NodeId(173);
 const AGENTS_SUPERVISOR: NodeId = NodeId(174);
 const AGENTS_SUPERVISOR_TOGGLE: NodeId = NodeId(175);
 const AGENTS_ACTIVITY: NodeId = NodeId(176);
+const AGENT_VIEW_PANE: NodeId = NodeId(177);
 const SHORTCUT_CLEAR_ACTION: i32 = 1;
 const TAB_BASE: u64 = 1_000;
 const PANE_BASE: u64 = 10_000;
@@ -123,6 +124,8 @@ const PALETTE_ENTRY_BASE: u64 = 1 << 60;
 const WORKSPACE_MENU_ENTRY_BASE: u64 = 1 << 47;
 const AGENTS_ENTRY_BASE: u64 = 1 << 46;
 const AGENTS_ACTIVITY_BASE: u64 = 1 << 45;
+const AGENT_VIEW_ENTRY_BASE: u64 = 1 << 44;
+const AGENT_VIEW_TEXT_BASE: u64 = 1 << 43;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum SettingsSemanticTarget {
@@ -228,8 +231,8 @@ pub(super) struct AccessibilityState {
     next_commands_node: u64,
     /// Agent rows, by the terminal they show, so a row keeps its node as
     /// urgency reorders the list.
-    agents_nodes: HashMap<crate::tabs::TerminalIdentity, NodeId>,
-    agents_targets: HashMap<NodeId, crate::tabs::TerminalIdentity>,
+    agents_nodes: HashMap<crate::ui::agents_panel::AgentOrigin, NodeId>,
+    agents_targets: HashMap<NodeId, crate::ui::agents_panel::AgentOrigin>,
     next_agents_node: u64,
     session_nodes: HashMap<SessionSemanticTarget, NodeId>,
     session_targets: HashMap<NodeId, SessionSemanticTarget>,
@@ -258,6 +261,9 @@ pub(super) struct AccessibilityState {
     harvest_nodes: HashMap<HarvestSemanticTarget, NodeId>,
     harvest_targets: HashMap<NodeId, HarvestSemanticTarget>,
     next_harvest_node: u64,
+    agent_view_nodes: HashMap<crate::ui::agent_view::scene::Target, NodeId>,
+    agent_view_targets: HashMap<NodeId, crate::ui::agent_view::scene::Target>,
+    next_agent_view_node: u64,
 }
 
 impl Default for AccessibilityState {
@@ -307,6 +313,9 @@ impl Default for AccessibilityState {
             harvest_nodes: HashMap::new(),
             harvest_targets: HashMap::new(),
             next_harvest_node: HARVEST_ACTION_BASE,
+            agent_view_nodes: HashMap::new(),
+            agent_view_targets: HashMap::new(),
+            next_agent_view_node: AGENT_VIEW_ENTRY_BASE,
         }
     }
 }
@@ -434,7 +443,7 @@ impl AccessibilityState {
             .retain(|_, target| targets.contains(target));
     }
 
-    fn agents_node(&mut self, identity: crate::tabs::TerminalIdentity) -> NodeId {
+    fn agents_node(&mut self, identity: crate::ui::agents_panel::AgentOrigin) -> NodeId {
         if let Some(node) = self.agents_nodes.get(&identity) {
             return *node;
         }
@@ -445,11 +454,30 @@ impl AccessibilityState {
         node
     }
 
-    fn retain_agents(&mut self, shown: &HashSet<crate::tabs::TerminalIdentity>) {
+    fn retain_agents(&mut self, shown: &HashSet<crate::ui::agents_panel::AgentOrigin>) {
         self.agents_nodes
             .retain(|identity, _| shown.contains(identity));
         self.agents_targets
             .retain(|_, identity| shown.contains(identity));
+    }
+
+    /// A stable node for an agent view target across frames.
+    fn agent_view_node(&mut self, target: &crate::ui::agent_view::scene::Target) -> NodeId {
+        if let Some(node) = self.agent_view_nodes.get(target) {
+            return *node;
+        }
+        let node = NodeId(self.next_agent_view_node);
+        self.next_agent_view_node = self.next_agent_view_node.saturating_add(1);
+        self.agent_view_nodes.insert(target.clone(), node);
+        self.agent_view_targets.insert(node, target.clone());
+        node
+    }
+
+    fn retain_agent_view(&mut self, shown: &HashSet<&crate::ui::agent_view::scene::Target>) {
+        self.agent_view_nodes
+            .retain(|target, _| shown.contains(target));
+        self.agent_view_targets
+            .retain(|_, target| shown.contains(target));
     }
 
     fn is_agents_node(&self, node: NodeId) -> bool {
@@ -943,6 +971,7 @@ impl App {
         }
         self.reconcile_mouse_selection_presentation();
         let snapshot = self.accessibility_snapshot();
+        let snapshot = self.with_agent_view_accessibility(snapshot);
         let snapshot = self.with_toast_accessibility(snapshot);
         let update = self.accessibility.update(snapshot);
         if let Some(adapter) = &mut self.accessibility_adapter {
@@ -1048,6 +1077,12 @@ impl App {
         }
         if self.session_panel.is_open() {
             self.handle_session_accessibility_action(request);
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            return;
+        }
+        if self.handle_agent_view_accessibility_action(&request) {
             if let Some(window) = &self.window {
                 window.request_redraw();
             }
@@ -2614,18 +2649,171 @@ impl App {
         )
     }
 
+    /// Adds the docked agent view beside the terminals. Modal surfaces
+    /// replace the tree, so the panel joins only the ordinary one.
+    fn with_agent_view_accessibility(
+        &mut self,
+        mut snapshot: SemanticSnapshot,
+    ) -> SemanticSnapshot {
+        use crate::ui::agent_view::scene::{HitRole, Node as SceneNode, Target};
+
+        let ordinary = snapshot
+            .nodes
+            .iter()
+            .any(|(id, node)| *id == ROOT && node.children().contains(&TAB_LIST));
+        let Some(scene) = self
+            .agent_view
+            .scene
+            .clone()
+            .filter(|_| ordinary && self.agent_view.state.is_open())
+        else {
+            return snapshot;
+        };
+        let shown: HashSet<&Target> = scene.hits.iter().map(|hit| &hit.target).collect();
+        self.accessibility.retain_agent_view(&shown);
+        let composer = self
+            .agent_view
+            .state
+            .composer()
+            .map(|composer| composer.text().to_owned())
+            .unwrap_or_default();
+        let bounds = |bounds: crate::ui::agent_view::scene::Bounds| {
+            rect(bounds.x, bounds.y, bounds.width, bounds.height)
+        };
+        let mut children = Vec::with_capacity(scene.nodes.len());
+        let mut text_index = 0;
+        for node in &scene.nodes {
+            match node {
+                SceneNode::Text(text) => {
+                    let id = NodeId(AGENT_VIEW_TEXT_BASE + text_index);
+                    text_index += 1;
+                    let mut label = Node::new(if text.heading {
+                        Role::Heading
+                    } else {
+                        Role::Label
+                    });
+                    label.set_label(text.text.clone());
+                    let visible = match text.clip {
+                        Some(clip) => text.bounds.intersect(clip),
+                        None => Some(text.bounds),
+                    };
+                    if let Some(visible) = visible {
+                        label.set_bounds(bounds(visible));
+                    }
+                    snapshot.nodes.push((id, label));
+                    children.push(id);
+                }
+                SceneNode::Hit(index) => {
+                    let hit = &scene.hits[*index];
+                    if hit.target == Target::DismissMenu {
+                        continue;
+                    }
+                    let id = self.accessibility.agent_view_node(&hit.target);
+                    let mut control = match hit.role {
+                        HitRole::Button => Node::new(Role::Button),
+                        HitRole::Toggle { expanded } => {
+                            let mut node = Node::new(Role::Button);
+                            node.set_expanded(expanded);
+                            node
+                        }
+                        HitRole::Option { selected } => {
+                            let mut node = Node::new(Role::RadioButton);
+                            node.set_toggled(accesskit::Toggled::from(selected));
+                            node
+                        }
+                        HitRole::TextInput => {
+                            let mut node = Node::new(Role::MultilineTextInput);
+                            node.set_value(composer.clone());
+                            node
+                        }
+                        HitRole::ListItem => Node::new(Role::ListItem),
+                        HitRole::MenuItem { checked } => {
+                            let mut node = Node::new(Role::MenuItemCheckBox);
+                            node.set_toggled(accesskit::Toggled::from(checked));
+                            node
+                        }
+                    };
+                    control.set_label(hit.label.clone());
+                    control.add_action(Action::Click);
+                    control.add_action(Action::Focus);
+                    if let Some(visible) = hit.visible_bounds() {
+                        control.set_bounds(bounds(visible));
+                    }
+                    snapshot.nodes.push((id, control));
+                    children.push(id);
+                }
+            }
+        }
+        let mut pane = Node::new(Role::Pane);
+        pane.set_label("Agent view");
+        pane.set_bounds(bounds(scene.panel));
+        pane.set_children(children);
+        snapshot.nodes.push((AGENT_VIEW_PANE, pane));
+        if let Some((_, root)) = snapshot.nodes.iter_mut().find(|(id, _)| *id == ROOT) {
+            let mut children = root.children().to_vec();
+            children.push(AGENT_VIEW_PANE);
+            root.set_children(children);
+        }
+        if self.agent_view.state.has_keyboard() {
+            let focused = match &self.agent_view.state.focus {
+                crate::ui::agent_view::Focus::Composer => Target::Composer,
+                crate::ui::agent_view::Focus::Target(target) => target.clone(),
+            };
+            if let Some(node) = self.accessibility.agent_view_nodes.get(&focused) {
+                snapshot.focus = *node;
+            }
+        }
+        snapshot
+    }
+
+    /// Clicks and focus requests on the agent view. Returns whether the
+    /// node was the panel's.
+    fn handle_agent_view_accessibility_action(&mut self, request: &ActionRequest) -> bool {
+        use crate::ui::agent_view::scene::Target;
+        let Some(target) = self
+            .accessibility
+            .agent_view_targets
+            .get(&request.target_node)
+            .cloned()
+        else {
+            return request.target_node == AGENT_VIEW_PANE;
+        };
+        let focus = if target == Target::Composer {
+            crate::ui::agent_view::Focus::Composer
+        } else {
+            crate::ui::agent_view::Focus::Target(target.clone())
+        };
+        match request.action {
+            Action::Click => {
+                self.set_agent_view_keyboard(true);
+                self.agent_view.state.focus = focus;
+                self.activate_agent_view_target(target);
+            }
+            Action::Focus => {
+                self.set_agent_view_keyboard(true);
+                self.agent_view.state.focus = focus;
+                self.agent_view.state.focus_visible = true;
+                self.reveal_agent_view_target(&target);
+                self.request_agent_view_redraw();
+            }
+            _ => {}
+        }
+        true
+    }
+
     fn with_toast_accessibility(&self, mut snapshot: SemanticSnapshot) -> SemanticSnapshot {
         let toasts = self.toasts.build_accessibility_info();
         if toasts.is_empty() {
             return snapshot;
         }
+        // Toasts sit in the terminal area's corner, clear of the dock.
         let (window_width, window_height, cell_width, cell_height) = self
             .renderer
             .as_ref()
             .map(|renderer| {
-                let (width, height) = renderer.window_size();
+                let (_, height) = renderer.window_size();
                 (
-                    width as f32,
+                    renderer.content_right(),
                     height as f32,
                     renderer.cell_width(),
                     renderer.cell_height(),
@@ -2685,6 +2873,7 @@ impl App {
             padding,
             content_left,
             content_top,
+            content_right,
         ) = self
             .renderer
             .as_ref()
@@ -2699,9 +2888,10 @@ impl App {
                     renderer.padding(),
                     renderer.tab_bar_width(),
                     renderer.content_top(),
+                    renderer.content_right(),
                 )
             })
-            .unwrap_or((1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0));
+            .unwrap_or((1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0));
 
         if self.guardrail.is_active() {
             return self.guardrail_accessibility_snapshot(width, height);
@@ -3188,7 +3378,7 @@ impl App {
                     rect(
                         content_left + padding,
                         content_top + padding,
-                        width - content_left - padding * 2.0,
+                        content_right - content_left - padding * 2.0,
                         height - content_top - padding * 2.0,
                     ),
                     cell_width,
@@ -3456,6 +3646,11 @@ impl App {
                 )
             })
             .unwrap_or((8.0, 16.0, 8.0, 0.0, 40.0));
+        // The menu stays inside the terminal area, clear of the dock.
+        let window_width = self
+            .renderer
+            .as_ref()
+            .map_or(window_width, |renderer| renderer.content_right());
         let layout = crate::harvest::SproutMenuLayout::calculate(
             row,
             col,

@@ -1,8 +1,8 @@
 //! Process-level ownership for independent native windows.
 
 use super::{
-    App, AppEvent, PendingPluginWindowClose, clear_pty_wake_pending, clear_transcript_wake_pending,
-    redraw_scheduler::RedrawReason,
+    App, AppEvent, PendingPluginWindowClose, clear_agent_view_wake_pending, clear_pty_wake_pending,
+    clear_transcript_wake_pending, redraw_scheduler::RedrawReason,
 };
 use crate::cli::{LaunchPlan, WindowLaunch};
 use crate::config::Config;
@@ -2048,6 +2048,26 @@ impl Application {
                 truncated,
             });
         }
+        if let Request::ReadConversation {
+            window_id,
+            session_id,
+        } = request
+        {
+            let native_id = self.control_native_window_id(window_id)?;
+            let (text, truncated) = self
+                .windows
+                .get(&native_id)
+                .filter(|window| !window.should_exit)
+                .ok_or_else(|| format!("GUI window {window_id} is closing"))?
+                .read_agent_view_conversation(session_id)?;
+            return Ok(Response::Conversation {
+                process_id: std::process::id(),
+                window_id,
+                session_id,
+                text,
+                truncated,
+            });
+        }
         if let Request::AgentEvent {
             terminal_id,
             agent_id,
@@ -2249,10 +2269,43 @@ impl Application {
                 supervisor.as_deref(),
                 peer_process,
             ),
+            Request::AnswerApproval {
+                request_id,
+                window_id,
+                session_id,
+                approval_id,
+                allow,
+                reason,
+                supervisor,
+            } => self.answer_control_approval(
+                request_id,
+                *window_id,
+                *session_id,
+                approval_id,
+                *allow,
+                reason,
+                supervisor.as_deref(),
+                peer_process,
+            ),
+            Request::SubmitToSession {
+                request_id,
+                window_id,
+                session_id,
+                text,
+                supervisor,
+            } => self.submit_control_text_to_session(
+                request_id,
+                *window_id,
+                *session_id,
+                text,
+                supervisor.as_deref(),
+                peer_process,
+            ),
             Request::Inventory
             | Request::ReadText { .. }
             | Request::LaunchStatus { .. }
             | Request::ListAgents { .. }
+            | Request::ReadConversation { .. }
             | Request::AgentEvent { .. } => {
                 unreachable!("read-only and agent requests returned before mutation dispatch")
             }
@@ -3794,6 +3847,66 @@ impl Application {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn answer_control_approval(
+        &mut self,
+        request_id: &str,
+        window_id: u64,
+        session_id: u64,
+        approval_id: &str,
+        allow: bool,
+        reason: &str,
+        supervisor: Option<&str>,
+        peer_process: Option<u32>,
+    ) -> std::result::Result<crate::control::protocol::Response, String> {
+        let native_id = self.control_native_window_id(window_id)?;
+        let answered = self
+            .windows
+            .get_mut(&native_id)
+            .filter(|window| !window.should_exit)
+            .ok_or_else(|| format!("GUI window {window_id} is closing"))?
+            .answer_agent_view_approval(
+                session_id,
+                approval_id,
+                allow,
+                reason,
+                supervisor,
+                peer_process,
+            )?;
+        Ok(crate::control::protocol::Response::ApprovalAnswered {
+            process_id: std::process::id(),
+            request_id: request_id.to_string(),
+            window_id,
+            session_id,
+            answered,
+        })
+    }
+
+    fn submit_control_text_to_session(
+        &mut self,
+        request_id: &str,
+        window_id: u64,
+        session_id: u64,
+        text: &str,
+        supervisor: Option<&str>,
+        peer_process: Option<u32>,
+    ) -> std::result::Result<crate::control::protocol::Response, String> {
+        let native_id = self.control_native_window_id(window_id)?;
+        let pending_approval = self
+            .windows
+            .get_mut(&native_id)
+            .filter(|window| !window.should_exit)
+            .ok_or_else(|| format!("GUI window {window_id} is closing"))?
+            .submit_to_agent_view(session_id, text, supervisor, peer_process)?;
+        Ok(crate::control::protocol::Response::SessionInputAccepted {
+            process_id: std::process::id(),
+            request_id: request_id.to_string(),
+            window_id,
+            session_id,
+            pending_approval,
+        })
+    }
+
     fn control_native_window_id(&self, window_id: u64) -> std::result::Result<WindowId, String> {
         self.control_window_ids
             .iter()
@@ -4352,6 +4465,14 @@ impl ApplicationHandler<AppEvent> for Application {
             }
             AppEvent::StructuredPluginCompleted(completion) => {
                 self.handle_structured_plugin_completed(completion);
+                self.remove_closed_windows(event_loop);
+                return;
+            }
+            AppEvent::AgentView => {
+                clear_agent_view_wake_pending();
+                for window in self.windows.values_mut() {
+                    window.process_agent_view_events();
+                }
                 self.remove_closed_windows(event_loop);
                 return;
             }

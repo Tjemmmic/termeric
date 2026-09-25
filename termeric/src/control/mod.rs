@@ -267,6 +267,83 @@ pub fn submit_to_agent(
     }
 }
 
+/// One agent view session's recent conversation, and whether older parts
+/// were left out.
+pub fn read_conversation(
+    process_id: u32,
+    window_id: u64,
+    session_id: u64,
+) -> anyhow::Result<(String, bool)> {
+    #[cfg(unix)]
+    {
+        client::read_conversation(process_id, window_id, session_id)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (process_id, window_id, session_id);
+        anyhow::bail!("Agent control needs a Unix control socket")
+    }
+}
+
+/// Answer one pending approval in an agent view session. Returns whether it
+/// was answered, rather than kept as a suggestion for the person.
+#[allow(clippy::too_many_arguments)]
+pub fn answer_approval(
+    process_id: u32,
+    window_id: u64,
+    session_id: u64,
+    approval_id: &str,
+    allow: bool,
+    reason: &str,
+    supervisor: Option<&str>,
+) -> anyhow::Result<bool> {
+    #[cfg(unix)]
+    {
+        client::answer_approval(
+            process_id,
+            window_id,
+            session_id,
+            approval_id,
+            allow,
+            reason,
+            supervisor,
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (
+            process_id,
+            window_id,
+            session_id,
+            approval_id,
+            allow,
+            reason,
+            supervisor,
+        );
+        anyhow::bail!("Agent control needs a Unix control socket")
+    }
+}
+
+/// Send a message to an agent view session. Returns whether it waits for the
+/// person's approval.
+pub fn submit_to_session(
+    process_id: u32,
+    window_id: u64,
+    session_id: u64,
+    text: &str,
+    supervisor: Option<&str>,
+) -> anyhow::Result<bool> {
+    #[cfg(unix)]
+    {
+        client::submit_to_session(process_id, window_id, session_id, text, supervisor)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (process_id, window_id, session_id, text, supervisor);
+        anyhow::bail!("Agent control needs a Unix control socket")
+    }
+}
+
 /// A pane's recent terminal text, oldest first.
 pub fn read_terminal_text(
     process_id: u32,

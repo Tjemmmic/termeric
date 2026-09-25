@@ -4,14 +4,22 @@
 use super::*;
 use crate::agents::AgentActivity;
 use crate::ui::agents_panel::{
-    AgentRow, AgentRowState, AgentsNavigationKey, AgentsPanelAction, AgentsPanelInfo,
+    AgentOrigin, AgentRow, AgentRowState, AgentsNavigationKey, AgentsPanelAction, AgentsPanelInfo,
     AgentsPanelLayout,
 };
 use winit::keyboard::{Key, NamedKey};
 
 impl App {
-    /// This window's agents as panel rows, the most urgent first.
+    /// This window's agents as panel rows, the most urgent first: those in
+    /// terminals, then those in the agent view.
     pub(super) fn agents_panel_rows(&self) -> Vec<AgentRow> {
+        let mut rows = self.terminal_agent_rows();
+        rows.extend(self.agent_view_rows());
+        rows
+    }
+
+    /// Agents running in terminal panes.
+    pub(super) fn terminal_agent_rows(&self) -> Vec<AgentRow> {
         self.agent_terminals()
             .into_iter()
             .map(|terminal| {
@@ -54,7 +62,7 @@ impl App {
                     }
                 };
                 AgentRow {
-                    identity: terminal.identity,
+                    identity: AgentOrigin::Terminal(terminal.identity),
                     name: terminal.name,
                     place: terminal.tab_title,
                     state,
@@ -199,11 +207,22 @@ impl App {
             AgentsPanelAction::Close => self.agents_panel.close(),
             AgentsPanelAction::Show(index) => {
                 // The row the person saw, even if the list moved since.
-                if let Some(identity) = self.agents_panel.shown_agent(index) {
-                    self.agents_panel.close();
-                    if !self.activate_notification_origin(identity) {
-                        self.toasts.info("That agent's terminal has closed");
+                match self.agents_panel.shown_agent(index) {
+                    Some(AgentOrigin::Terminal(identity)) => {
+                        self.agents_panel.close();
+                        if !self.activate_notification_origin(identity) {
+                            self.toasts.info("That agent's terminal has closed");
+                        }
                     }
+                    Some(AgentOrigin::AgentView(id)) => {
+                        self.agents_panel.close();
+                        if self.agent_view.session(id).is_some() {
+                            self.show_agent_session(id);
+                        } else {
+                            self.toasts.info("That agent view session has closed");
+                        }
+                    }
+                    None => {}
                 }
             }
             AgentsPanelAction::ToggleSupervisor => {

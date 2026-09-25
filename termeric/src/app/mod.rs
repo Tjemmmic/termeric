@@ -3,6 +3,8 @@
 mod accessibility;
 mod agent_changes;
 mod agent_hooks;
+mod agent_view;
+mod agent_view_input;
 mod agents;
 mod agents_panel;
 mod application;
@@ -102,6 +104,8 @@ pub(crate) enum AppEvent {
     Pty,
     Git,
     Transcript,
+    /// A docked agent view's agent wrote output.
+    AgentView,
     ControlRequest {
         request: crate::control::protocol::Request,
         /// The requesting process, where the platform reports it.
@@ -638,6 +642,7 @@ mod control_inventory_tests {
 static EVENT_LOOP_PROXY: OnceLock<EventLoopProxy<AppEvent>> = OnceLock::new();
 static PTY_WAKE_PENDING: AtomicBool = AtomicBool::new(false);
 static TRANSCRIPT_WAKE_PENDING: AtomicBool = AtomicBool::new(false);
+static AGENT_VIEW_WAKE_PENDING: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn install_event_loop_proxy(proxy: EventLoopProxy<AppEvent>) {
     if EVENT_LOOP_PROXY.set(proxy).is_err() {
@@ -680,6 +685,22 @@ pub(crate) fn transcript_event_waker() -> Option<Arc<dyn Fn() + Send + Sync>> {
             TRANSCRIPT_WAKE_PENDING.store(false, Ordering::Release);
         }
     }))
+}
+
+/// Wakes the event loop when an agent view's agent writes output. Wakes
+/// coalesce until the loop drains every window's sessions.
+pub(crate) fn agent_view_event_waker() -> Arc<dyn Fn() + Send + Sync> {
+    Arc::new(|| {
+        if AGENT_VIEW_WAKE_PENDING.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let sent = EVENT_LOOP_PROXY
+            .get()
+            .is_some_and(|proxy| proxy.send_event(AppEvent::AgentView).is_ok());
+        if !sent {
+            AGENT_VIEW_WAKE_PENDING.store(false, Ordering::Release);
+        }
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -873,6 +894,10 @@ fn clear_pty_wake_pending() {
 
 fn clear_transcript_wake_pending() {
     TRANSCRIPT_WAKE_PENDING.store(false, Ordering::Release);
+}
+
+fn clear_agent_view_wake_pending() {
+    AGENT_VIEW_WAKE_PENDING.store(false, Ordering::Release);
 }
 
 /// Opt-in native key-event-to-surface-present probe used by the release
@@ -1188,6 +1213,8 @@ pub struct App {
     commands_panel: crate::ui::commands::panel::CommandsPanel,
     /// This window's agents and supervisor at a glance.
     agents_panel: crate::ui::agents_panel::AgentsPanel,
+    /// The docked agent view and its sessions.
+    agent_view: agent_view::AgentViewWindow,
     /// Buffer tracking what the user has typed on the current line (for alias expansion)
     input_line_buffer: String,
     /// Git repository watcher (tracks branch, dirty status per tab)
@@ -1460,6 +1487,7 @@ impl App {
             session_panel: crate::session::panel::SessionPanel::new(),
             commands_panel: crate::ui::commands::panel::CommandsPanel::new(),
             agents_panel: crate::ui::agents_panel::AgentsPanel::new(),
+            agent_view: agent_view::AgentViewWindow::default(),
             input_line_buffer: String::new(),
             git_watcher: crate::git::GitWatcher::new(git_event_waker()),
             git_completions: crate::git::BranchCompletions::default(),
@@ -1939,6 +1967,9 @@ impl App {
         if let Some(renderer) = &mut self.renderer {
             renderer.resize(width, height);
         }
+        // The dock's width depends on the window's; settle it first so the
+        // terminals are sized once.
+        self.apply_agent_dock_width();
         self.sync_terminal_geometry(width, height);
     }
 
@@ -1951,6 +1982,7 @@ impl App {
             renderer.set_scale_factor(scale_factor as f32);
             renderer.resize(new_inner_size.width, new_inner_size.height);
         }
+        self.apply_agent_dock_width();
         self.sync_terminal_geometry(new_inner_size.width, new_inner_size.height);
     }
 
@@ -2068,7 +2100,17 @@ impl App {
 
         // Get cursor target position and calculate animations before borrowing
         let (cursor_style, _) = self.cursor_presentation();
-        let cursor_opacity = self.cursor_opacity();
+        // While the agent view has the keyboard, the terminal cursor rests
+        // dim and steady, so typing clearly goes to the panel.
+        let terminal_keyboard = !self.agent_view.state.has_keyboard();
+        let resting_cursor = |opacity: f32| {
+            if terminal_keyboard {
+                opacity
+            } else {
+                AGENT_VIEW_RESTING_CURSOR
+            }
+        };
+        let cursor_opacity = resting_cursor(self.cursor_opacity());
         let cursor_elapsed = self.cursor_blink_start.elapsed().as_secs_f32();
         let configured_cursor_style = self.config.cursor.style;
         let configured_cursor_blink = self.config.cursor.blink;
@@ -2101,6 +2143,9 @@ impl App {
             && self
                 .active_terminal()
                 .is_some_and(|term| term.synchronized_output_deadline().is_some());
+        // The IME places its window at the panel's caret, so the scene comes
+        // first.
+        self.prepare_agent_view_frame();
         let ime_preedit_info = self.ime_preedit_render_info(&pane_info);
         let chrome_focus_target = self.chrome_focus_render_target();
         let broadcast_render = self.broadcast_render_targets();
@@ -2652,11 +2697,11 @@ impl App {
                         is_zoomed: pm.zoomed_id() == Some(*pane_id),
                         cursor_pos: cpos,
                         cursor_style: pane_cursor_style,
-                        cursor_opacity: cursor_opacity_at(
+                        cursor_opacity: resting_cursor(cursor_opacity_at(
                             pane_cursor_blink,
                             cursor_elapsed,
                             cursor_blink_period,
-                        ),
+                        )),
                         url_cache: &self.pane_url_caches[&terminal_key],
                         copy_mode: (*focused).then_some(copy_mode_info.as_ref()).flatten(),
                         images: term.presentation_images(),
@@ -2760,7 +2805,7 @@ impl App {
                     renderer.cell_height(),
                     renderer.tab_bar_width(),
                     renderer.content_top(),
-                    harvest_window_width as f32,
+                    renderer.content_right(),
                     harvest_window_height as f32,
                 )
             });
@@ -3125,6 +3170,7 @@ impl App {
     }
 
     fn poll_idle_sources(&mut self, now: Instant) {
+        self.poll_agent_view(now);
         if self.unicode_picker.poll_search() {
             self.redraw_scheduler
                 .request(redraw_scheduler::RedrawReason::Search);
@@ -3260,6 +3306,7 @@ impl App {
         deadlines.extend(self.next_agent_submit_deadline());
         deadlines.extend(self.agents_panel.refresh_deadline());
         deadlines.extend(self.next_agent_change_deadline(now));
+        deadlines.extend(self.next_agent_view_deadline(now));
         if self.unicode_picker.search_pending() {
             deadlines.push(now + Duration::from_millis(16));
         }
@@ -3592,6 +3639,7 @@ impl App {
                     window.request_redraw();
                 }
             }
+            Action::ToggleAgentView => self.toggle_agent_view(),
             Action::PreviousFailedCommand | Action::NextFailedCommand => {
                 self.jump_to_failed_command(matches!(action, Action::PreviousFailedCommand));
             }
@@ -4069,16 +4117,23 @@ impl App {
             self.alt_graph_active = false;
             self.terminal_mouse_capture = None;
             self.finish_native_pointer_gesture();
+            self.cancel_agent_view_gestures();
         }
         if self.window_focused == focused {
             return;
         }
-        if let Some(report) =
-            crate::input::encode_focus_report(self.active_keyboard_mode(), focused)
+        // Terminals track the keyboard: while the agent view holds it, a
+        // window focus change is no focus change for them.
+        let terminal_had_focus = self.terminal_has_focus();
+        self.window_focused = focused;
+        if self.terminal_has_focus() != terminal_had_focus
+            && let Some(report) = crate::input::encode_focus_report(
+                self.active_keyboard_mode(),
+                self.terminal_has_focus(),
+            )
         {
             self.write_terminal_protocol_input(report);
         }
-        self.window_focused = focused;
         self.focus_change_time = Instant::now();
         if focused {
             self.reset_cursor_blink();
@@ -4497,6 +4552,9 @@ fn update_visible_url_cache(
     }
 }
 
+/// The terminal cursor's opacity while the agent view has the keyboard.
+const AGENT_VIEW_RESTING_CURSOR: f32 = 0.35;
+
 fn cursor_opacity_at(blink: bool, elapsed_seconds: f32, period_seconds: f32) -> f32 {
     if !blink {
         return 1.0;
@@ -4572,6 +4630,8 @@ fn command_keystrokes(command: &str) -> [Vec<u8>; 3] {
     ]
 }
 
+/// `window_width` is the right edge of the terminal area, which the menu
+/// stays inside.
 fn sprout_menu_render_info(
     menu: &crate::harvest::SproutMenu,
     padding: f32,

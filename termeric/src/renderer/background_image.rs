@@ -361,7 +361,7 @@ impl Renderer {
         let viewport = (
             content_left,
             content_top,
-            (self.size.0 as f32 - content_left).max(0.0),
+            self.content_width_for(self.size.0 as f32),
             (self.size.1 as f32 - content_top).max(0.0),
         );
         self.background_image.queue(

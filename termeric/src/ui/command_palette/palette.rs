@@ -1169,6 +1169,12 @@ pub fn core_commands(
             shortcut(BindableAction::NewAgent),
         ),
         ("agent.resume", "Resume Agent Conversation…", None),
+        (
+            "agent.view",
+            "Agent View",
+            shortcut(BindableAction::ToggleAgentView),
+        ),
+        ("agent.view-new", "New Agent View Session", None),
         ("agent.go-to", "Go to Agent…", None),
         ("agent.panel", "Show Agents", None),
         ("agent.split-right", "Split Right with Agent…", None),

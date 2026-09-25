@@ -22,6 +22,7 @@ pub enum BindableAction {
     Paste,
     ToggleSearch,
     NewAgent,
+    ToggleAgentView,
     ToggleCopyMode,
     QuickSelect,
     OpenUnicodePicker,
@@ -98,12 +99,13 @@ impl BindableAction {
     /// Every variant, in display order.
     pub fn all() -> &'static [BindableAction] {
         use BindableAction::*;
-        static ALL: [BindableAction; 62] = [
+        static ALL: [BindableAction; 63] = [
             // General
             Copy,
             Paste,
             ToggleSearch,
             NewAgent,
+            ToggleAgentView,
             ToggleCopyMode,
             QuickSelect,
             OpenUnicodePicker,
@@ -195,6 +197,12 @@ impl BindableAction {
                 label: "New Agent",
                 category: General,
                 default_binding: Some(KeyChord::new("i", true, false, true, false)),
+            },
+            ToggleAgentView => ActionMeta {
+                id: "toggle_agent_view",
+                label: "Agent View",
+                category: General,
+                default_binding: Some(KeyChord::new("a", true, false, true, false)),
             },
             ToggleSearch => ActionMeta {
                 id: "toggle_search",
@@ -492,6 +500,7 @@ impl BindableAction {
             Self::Paste => Action::Paste,
             Self::ToggleSearch => Action::ToggleSearch,
             Self::NewAgent => Action::NewAgent,
+            Self::ToggleAgentView => Action::ToggleAgentView,
             Self::ToggleCopyMode => Action::ToggleCopyMode,
             Self::QuickSelect => Action::QuickSelect,
             Self::OpenUnicodePicker => Action::OpenUnicodePicker,

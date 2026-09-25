@@ -16,7 +16,10 @@ use crate::input::keybindings::KeyChord;
 use crate::ui::settings::SettingsKey;
 
 use super::redraw_scheduler::RedrawReason;
-use super::{App, AppEvent, clear_pty_wake_pending, clear_transcript_wake_pending};
+use super::{
+    App, AppEvent, clear_agent_view_wake_pending, clear_pty_wake_pending,
+    clear_transcript_wake_pending,
+};
 
 impl ApplicationHandler<AppEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
@@ -1106,6 +1109,26 @@ impl ApplicationHandler<AppEvent> for App {
                     return;
                 }
 
+                // The docked agent view takes keys only while it has keyboard
+                // focus. Global shortcuts still apply, except the chords its
+                // composer edits with.
+                if self.agent_view_has_keyboard() {
+                    if event.state == winit::event::ElementState::Pressed {
+                        if !super::agent_view_input::composer_chord(
+                            &event.logical_key,
+                            self.modifiers,
+                        ) && let Some(bindable) = self
+                            .shortcut_registry
+                            .check(&event.logical_key, self.modifiers)
+                            && self.handle_action(bindable.to_action())
+                        {
+                            return;
+                        }
+                        self.handle_agent_view_key(&event.logical_key, event.text.as_deref());
+                    }
+                    return;
+                }
+
                 // Handle search mode input
                 if self.handle_search_mode_input(&event) {
                     return;
@@ -1380,7 +1403,7 @@ impl ApplicationHandler<AppEvent> for App {
                         let hit = self.last_cursor_pos.and_then(|pos| {
                             let renderer = self.renderer.as_ref()?;
                             let menu = self.harvest.as_ref()?.sprout_menu.as_ref()?;
-                            let (window_width, window_height) = renderer.window_size();
+                            let (_, window_height) = renderer.window_size();
                             let info = super::sprout_menu_render_info(
                                 menu,
                                 renderer.padding(),
@@ -1388,7 +1411,7 @@ impl ApplicationHandler<AppEvent> for App {
                                 renderer.cell_height(),
                                 renderer.tab_bar_width(),
                                 renderer.content_top(),
-                                window_width as f32,
+                                renderer.content_right(),
                                 window_height as f32,
                             );
                             crate::renderer::sprout_menu_hit_test(&info, pos.0 as f32, pos.1 as f32)
@@ -1834,6 +1857,11 @@ impl ApplicationHandler<AppEvent> for App {
                 {
                     return;
                 }
+                if let Some((x, y)) = self.last_cursor_pos
+                    && self.handle_agent_view_wheel(x as f32, y as f32, delta)
+                {
+                    return;
+                }
                 let scroll_speed = self.config.scrollback.scroll_speed;
                 let (x_delta, y_delta) = match delta {
                     winit::event::MouseScrollDelta::LineDelta(x, y) => {
@@ -2005,6 +2033,84 @@ impl ApplicationHandler<AppEvent> for App {
                             })
                         }
                     }
+                    crate::control::protocol::Request::ReadConversation {
+                        window_id,
+                        session_id,
+                    } => {
+                        if window_id != 1 {
+                            Err(format!("GUI window {window_id} does not exist"))
+                        } else {
+                            self.read_agent_view_conversation(session_id).map(
+                                |(text, truncated)| {
+                                    crate::control::protocol::Response::Conversation {
+                                        process_id: std::process::id(),
+                                        window_id,
+                                        session_id,
+                                        text,
+                                        truncated,
+                                    }
+                                },
+                            )
+                        }
+                    }
+                    crate::control::protocol::Request::AnswerApproval {
+                        request_id,
+                        window_id,
+                        session_id,
+                        approval_id,
+                        allow,
+                        reason,
+                        supervisor,
+                    } => {
+                        if window_id != 1 {
+                            Err(format!("GUI window {window_id} does not exist"))
+                        } else {
+                            self.answer_agent_view_approval(
+                                session_id,
+                                &approval_id,
+                                allow,
+                                &reason,
+                                supervisor.as_deref(),
+                                peer_process,
+                            )
+                            .map(|answered| {
+                                crate::control::protocol::Response::ApprovalAnswered {
+                                    process_id: std::process::id(),
+                                    request_id,
+                                    window_id,
+                                    session_id,
+                                    answered,
+                                }
+                            })
+                        }
+                    }
+                    crate::control::protocol::Request::SubmitToSession {
+                        request_id,
+                        window_id,
+                        session_id,
+                        text,
+                        supervisor,
+                    } => {
+                        if window_id != 1 {
+                            Err(format!("GUI window {window_id} does not exist"))
+                        } else {
+                            self.submit_to_agent_view(
+                                session_id,
+                                &text,
+                                supervisor.as_deref(),
+                                peer_process,
+                            )
+                            .map(|pending_approval| {
+                                crate::control::protocol::Response::SessionInputAccepted {
+                                    process_id: std::process::id(),
+                                    request_id,
+                                    window_id,
+                                    session_id,
+                                    pending_approval,
+                                }
+                            })
+                        }
+                    }
                     crate::control::protocol::Request::AgentEvent {
                         terminal_id,
                         agent_id,
@@ -2065,6 +2171,10 @@ impl ApplicationHandler<AppEvent> for App {
                 if self.process_pty_events() {
                     self.redraw_scheduler.request(RedrawReason::WindowEvent);
                 }
+            }
+            AppEvent::AgentView => {
+                clear_agent_view_wake_pending();
+                self.process_agent_view_events();
             }
             AppEvent::AccessKit(event) => {
                 self.redraw_scheduler.request(RedrawReason::Accessibility);

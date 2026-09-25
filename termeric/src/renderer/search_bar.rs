@@ -213,7 +213,7 @@ impl Renderer {
         SearchBarLayout::calculate(
             info,
             self.tab_bar_width_for(window_width),
-            (window_width - self.tab_bar_width_for(window_width)).max(0.0),
+            self.content_width_for(window_width),
             self.content_top(),
             self.cell_width,
             self.cell_height,

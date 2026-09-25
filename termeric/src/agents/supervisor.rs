@@ -273,6 +273,85 @@ pub fn event_message(name: &str, where_: &str, status: &AgentStatus) -> Option<S
     Some(format!("Termeric: {name} ({where_}) {what}"))
 }
 
+/// Something an agent view session did that the supervisor should hear.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionEvent {
+    /// It waits for an answer to one approval request.
+    Approval {
+        session: u64,
+        title: String,
+        approval_id: String,
+        request: String,
+    },
+    Finished {
+        session: u64,
+        title: String,
+        answer: Option<String>,
+    },
+    Failed {
+        session: u64,
+        title: String,
+        error: String,
+    },
+}
+
+/// What the supervisor is told about an agent view session.
+pub fn session_message(window_id: u64, event: &SessionEvent) -> String {
+    let first_line = |text: &str| {
+        let line = text
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .unwrap_or("");
+        match line.char_indices().nth(300) {
+            Some((cut, _)) => format!("{}…", &line[..cut]),
+            None => line.to_owned(),
+        }
+    };
+    let (session, title, what) = match event {
+        SessionEvent::Approval {
+            session,
+            title,
+            approval_id,
+            request,
+        } => (
+            session,
+            title,
+            format!(
+                "asks: {}. Decide with answer_approval (approval_id {approval_id}), \
+                 read it with read_conversation, or leave it for the person.",
+                first_line(request)
+            ),
+        ),
+        SessionEvent::Finished {
+            session,
+            title,
+            answer,
+        } => (
+            session,
+            title,
+            match answer {
+                Some(answer) => format!("finished. Its answer begins: {}", first_line(answer)),
+                None => "finished its turn".to_owned(),
+            },
+        ),
+        SessionEvent::Failed {
+            session,
+            title,
+            error,
+        } => (
+            session,
+            title,
+            format!("stopped with an error: {}", first_line(error)),
+        ),
+    };
+    format!(
+        "Termeric: Claude Code in the agent view (window {window_id}, session {session}, \
+         \"{}\") {what}",
+        first_line(title)
+    )
+}
+
 /// Why a message sent through Termeric's agent tools may not be sent now.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SendRefusal {
@@ -416,6 +495,34 @@ impl SendLimits {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_messages_name_the_session_and_how_to_answer() {
+        let approval = session_message(
+            2,
+            &SessionEvent::Approval {
+                session: 7,
+                title: "Fix the build".into(),
+                approval_id: "req-1".into(),
+                request: "Run cargo test\nsecond line".into(),
+            },
+        );
+        assert_eq!(
+            approval,
+            "Termeric: Claude Code in the agent view (window 2, session 7, \"Fix the build\") \
+             asks: Run cargo test. Decide with answer_approval (approval_id req-1), read it \
+             with read_conversation, or leave it for the person."
+        );
+        let finished = session_message(
+            2,
+            &SessionEvent::Finished {
+                session: 7,
+                title: "Fix".into(),
+                answer: Some("\nAll green.".into()),
+            },
+        );
+        assert!(finished.ends_with("finished. Its answer begins: All green."));
+    }
     use crate::agents::AgentReport;
     use crate::control::protocol::AgentEventKind;
 

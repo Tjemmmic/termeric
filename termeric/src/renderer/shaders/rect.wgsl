@@ -6,6 +6,7 @@ struct VertexInput {
     @location(2) rect_center: vec2<f32>,
     @location(3) rect_half_size: vec2<f32>,
     @location(4) corner_radius: f32,
+    @location(5) stroke: f32,
 }
 
 struct VertexOutput {
@@ -15,6 +16,7 @@ struct VertexOutput {
     @location(2) rect_center: vec2<f32>,
     @location(3) rect_half_size: vec2<f32>,
     @location(4) corner_radius: f32,
+    @location(5) stroke: f32,
 }
 
 struct Uniforms {
@@ -39,6 +41,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.rect_center = in.rect_center;
     out.rect_half_size = in.rect_half_size;
     out.corner_radius = in.corner_radius;
+    out.stroke = in.stroke;
 
     return out;
 }
@@ -73,15 +76,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         return vec4<f32>(in.color.rgb, in.color.a * alpha);
     }
 
-    // If corner_radius is 0, skip SDF (fast path for sharp rects)
-    if in.corner_radius <= 0.0 {
+    // If corner_radius is 0, skip SDF (fast path for filled sharp rects)
+    if in.corner_radius <= 0.0 && in.stroke <= 0.0 {
         return in.color;
     }
 
-    let dist = sdf_rounded_rect(in.pixel_pos, in.rect_center, in.rect_half_size, in.corner_radius);
+    let dist = sdf_rounded_rect(in.pixel_pos, in.rect_center, in.rect_half_size, max(in.corner_radius, 0.0));
 
-    // Anti-aliased edge: smoothstep over ~1px
-    let alpha = 1.0 - smoothstep(-0.5, 0.5, dist);
+    // Anti-aliased edge: smoothstep over ~1px. An outline keeps only the band
+    // within `stroke` pixels inside the edge.
+    var alpha = 1.0 - smoothstep(-0.5, 0.5, dist);
+    if in.stroke > 0.0 {
+        alpha = alpha - (1.0 - smoothstep(-0.5, 0.5, dist + in.stroke));
+    }
 
     if alpha <= 0.0 {
         discard;

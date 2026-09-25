@@ -1,15 +1,16 @@
 //! Reviewing what an agent changed in its Git working tree: a list of changed
 //! files, each file's diff, and staging or reverting it.
 //!
-//! Git work runs on a worker thread. Every job is bound to the terminal it was
-//! started for and to that terminal's baseline, so a result that arrives
-//! after the agent was restarted, or the terminal closed, is dropped.
+//! Git work runs on a worker thread. Every job is bound to the agent it was
+//! started for — a terminal's, or an agent view session's — and to that
+//! agent's baseline, so a result that arrives after the agent was restarted,
+//! or its terminal or session closed, is dropped.
 
 use super::*;
 use crate::agents::changes::{self, Baseline, ChangeKind, ChangedFile};
 use crate::tabs::TerminalIdentity;
 use crate::ui::command_palette::palette::{CommandSource, PickKind, RegisteredCommand};
-use crate::ui::diff_review::ChangeReviewTarget;
+use crate::ui::diff_review::{ChangeOwner, ChangeReviewTarget};
 use crate::ui::info_overlay::InfoOverlayChoice;
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -36,14 +37,14 @@ enum ChangeResult {
 }
 
 pub(super) struct ChangeJob {
-    identity: TerminalIdentity,
+    owner: ChangeOwner,
     baseline: Baseline,
     receiver: mpsc::Receiver<Result<ChangeResult, String>>,
 }
 
 /// The terminal whose changes the open picker lists.
 pub(super) struct ChangeList {
-    identity: TerminalIdentity,
+    owner: ChangeOwner,
     baseline: Baseline,
     /// The listed files; picker rows are indexes into this.
     paths: Vec<PathBuf>,
@@ -53,7 +54,7 @@ pub(super) struct ChangeList {
 /// computed from.
 pub(super) struct ChangeReview {
     request_id: u64,
-    identity: TerminalIdentity,
+    owner: ChangeOwner,
     baseline: Baseline,
     path: PathBuf,
 }
@@ -61,7 +62,7 @@ pub(super) struct ChangeReview {
 /// A revert waiting for the person to confirm it.
 pub(super) struct PendingRevert {
     request_id: u64,
-    identity: TerminalIdentity,
+    owner: ChangeOwner,
     baseline: Baseline,
     path: PathBuf,
 }
@@ -80,13 +81,36 @@ impl App {
         Some((identity, baseline))
     }
 
-    fn baseline_is_current(&self, identity: TerminalIdentity, baseline: &Baseline) -> bool {
-        self.tabs
-            .as_ref()
-            .and_then(|tabs| tabs.tab_by_id(identity.tab_id))
-            .and_then(|tab| tab.pane_session(identity.pane_id))
-            .and_then(|session| session.agent_changes.baseline())
-            .is_some_and(|current| current == baseline)
+    fn baseline_is_current(&self, owner: ChangeOwner, baseline: &Baseline) -> bool {
+        match owner {
+            ChangeOwner::Terminal(identity) => self
+                .tabs
+                .as_ref()
+                .and_then(|tabs| tabs.tab_by_id(identity.tab_id))
+                .and_then(|tab| tab.pane_session(identity.pane_id))
+                .and_then(|session| session.agent_changes.baseline())
+                .is_some_and(|current| current == baseline),
+            ChangeOwner::AgentView(id) => self
+                .agent_view
+                .baseline(id)
+                .is_some_and(|current| current == baseline),
+        }
+    }
+
+    /// List the files an agent view session changed since it started.
+    pub(super) fn review_agent_view_changes(&mut self, id: crate::agent_view::session::SessionId) {
+        match self.agent_view.baseline(id).cloned() {
+            Some(baseline) => {
+                self.start_change_job(ChangeOwner::AgentView(id), baseline, ChangeTask::List);
+            }
+            None => {
+                let reason = self.agent_view.baseline_unavailable(id);
+                self.toasts.info(match reason {
+                    Some(reason) => format!("Changes cannot be reviewed: {reason}"),
+                    None => "Still taking a snapshot of the folder; try again in a moment".into(),
+                });
+            }
+        }
     }
 
     /// List the files the focused terminal's agent changed.
@@ -114,15 +138,10 @@ impl App {
             });
             return;
         };
-        self.start_change_job(identity, baseline, task);
+        self.start_change_job(ChangeOwner::Terminal(identity), baseline, task);
     }
 
-    fn start_change_job(
-        &mut self,
-        identity: TerminalIdentity,
-        baseline: Baseline,
-        task: ChangeTask,
-    ) {
+    fn start_change_job(&mut self, owner: ChangeOwner, baseline: Baseline, task: ChangeTask) {
         // One job at a time: a replaced worker would keep running, and two
         // stages could overwrite each other's index.
         if self.agent_change_job.is_some() {
@@ -156,7 +175,7 @@ impl App {
         match spawned {
             Ok(_) => {
                 self.agent_change_job = Some(ChangeJob {
-                    identity,
+                    owner,
                     baseline,
                     receiver,
                 })
@@ -186,30 +205,29 @@ impl App {
             }
         };
         let ChangeJob {
-            identity, baseline, ..
+            owner, baseline, ..
         } = self
             .agent_change_job
             .take()
             .expect("a job was checked above");
-        if !self.baseline_is_current(identity, &baseline) {
-            // The agent restarted or its terminal closed meanwhile.
+        if !self.baseline_is_current(owner, &baseline) {
+            // The agent restarted or its terminal or session closed meanwhile.
             return false;
         }
         match result {
             Err(error) => self.toasts.error(format!("Agent changes: {error}")),
-            Ok(ChangeResult::List(files)) => self.show_change_list(identity, baseline, &files),
+            Ok(ChangeResult::List(files)) => self.show_change_list(owner, baseline, &files),
             Ok(ChangeResult::Diff(path, text)) => {
                 let request_id = self.diff_review.show_change(
                     &text,
                     ChangeReviewTarget {
-                        tab_id: identity.tab_id,
-                        pane_id: identity.pane_id,
+                        owner,
                         path: path.clone(),
                     },
                 );
                 self.agent_change_review = Some(ChangeReview {
                     request_id,
-                    identity,
+                    owner,
                     baseline,
                     path,
                 });
@@ -220,22 +238,17 @@ impl App {
                     [path] => format!("Staged {}", path.display()),
                     paths => format!("Staged {} files", paths.len()),
                 });
-                self.start_change_job(identity, baseline, ChangeTask::List);
+                self.start_change_job(owner, baseline, ChangeTask::List);
             }
             Ok(ChangeResult::Reverted(path)) => {
                 self.toasts.success(format!("Reverted {}", path.display()));
-                self.start_change_job(identity, baseline, ChangeTask::List);
+                self.start_change_job(owner, baseline, ChangeTask::List);
             }
         }
         true
     }
 
-    fn show_change_list(
-        &mut self,
-        identity: TerminalIdentity,
-        baseline: Baseline,
-        files: &[ChangedFile],
-    ) {
+    fn show_change_list(&mut self, owner: ChangeOwner, baseline: Baseline, files: &[ChangedFile]) {
         if files.is_empty() {
             self.toasts
                 .info("The agent has not changed any files since it started");
@@ -269,7 +282,7 @@ impl App {
             })
             .collect();
         self.agent_change_list = Some(ChangeList {
-            identity,
+            owner,
             baseline,
             paths: files.iter().map(|file| file.path.clone()).collect(),
         });
@@ -285,7 +298,7 @@ impl App {
     /// Act on a row picked from the change list.
     pub(super) fn pick_agent_change(&mut self, id: &str) {
         let Some(ChangeList {
-            identity,
+            owner,
             baseline,
             paths,
         }) = self.agent_change_list.take()
@@ -295,11 +308,11 @@ impl App {
         let Some(path) = id.parse::<usize>().ok().and_then(|index| paths.get(index)) else {
             return;
         };
-        if !self.baseline_is_current(identity, &baseline) {
-            self.toasts.warning("That agent's terminal has changed");
+        if !self.baseline_is_current(owner, &baseline) {
+            self.toasts.warning("That agent has restarted or closed");
             return;
         }
-        self.start_change_job(identity, baseline, ChangeTask::Diff(path.clone()));
+        self.start_change_job(owner, baseline, ChangeTask::Diff(path.clone()));
     }
 
     /// The change the diff viewer shows as `request_id`, while its terminal
@@ -310,7 +323,7 @@ impl App {
             .agent_change_review
             .take()
             .filter(|review| review.request_id == request_id)?;
-        if !self.baseline_is_current(review.identity, &review.baseline) {
+        if !self.baseline_is_current(review.owner, &review.baseline) {
             self.toasts
                 .warning("The agent has restarted since this diff was shown; review it again");
             return None;
@@ -325,7 +338,7 @@ impl App {
         };
         self.diff_review.dismiss(request_id);
         self.start_change_job(
-            review.identity,
+            review.owner,
             review.baseline,
             ChangeTask::Stage(vec![review.path]),
         );
@@ -359,7 +372,7 @@ impl App {
         );
         self.pending_revert = Some(PendingRevert {
             request_id: revert_request,
-            identity: review.identity,
+            owner: review.owner,
             baseline: review.baseline,
             path: review.path,
         });
@@ -380,14 +393,14 @@ impl App {
             return true;
         };
         if choice_id == REVERT_CHOICE {
-            if self.baseline_is_current(pending.identity, &pending.baseline) {
+            if self.baseline_is_current(pending.owner, &pending.baseline) {
                 self.start_change_job(
-                    pending.identity,
+                    pending.owner,
                     pending.baseline,
                     ChangeTask::Revert(pending.path),
                 );
             } else {
-                self.toasts.warning("That agent's terminal has changed");
+                self.toasts.warning("That agent has restarted or closed");
             }
         }
         true

@@ -1,15 +1,15 @@
 //! Application-chrome text in the desktop's sans-serif UI face.
 
-use std::borrow::Cow;
+use std::sync::Arc;
 
-use unicode_segmentation::UnicodeSegmentation;
-
+use super::glyph_cache::GlyphCache;
+use super::text::TextClip;
 use super::{Renderer, physical_font_size};
+pub(super) use crate::ui::text_layout::fit_with_ellipsis;
+use crate::ui::text_layout::{TextLayout, TextMeasure, TextSize, TextSpan, UiFace};
 
 /// Chrome label size in points, the common desktop UI default.
 pub(super) const UI_LABEL_POINTS: f32 = 10.0;
-
-const ELLIPSIS: &str = "…";
 
 impl Renderer {
     /// Physical pixel size of chrome labels at the current display scale.
@@ -51,6 +51,62 @@ impl Renderer {
         self.text_pipeline
             .push_ui_text(&fitted, x.round(), baseline, size_px, color, None);
         width
+    }
+}
+
+impl TextMeasure for GlyphCache {
+    fn layout(
+        &mut self,
+        spans: &[TextSpan<'_>],
+        size: TextSize,
+        width: Option<f32>,
+    ) -> Arc<TextLayout> {
+        self.layout_ui_text(spans, size, width)
+    }
+
+    fn width(&mut self, text: &str, face: UiFace, font_px: f32) -> f32 {
+        self.ui_text_width_in(text, face, font_px)
+    }
+}
+
+impl Renderer {
+    /// Measures and wraps chrome text in the desktop's UI faces.
+    pub fn text_measure(&mut self) -> &mut impl TextMeasure {
+        &mut self.glyph_cache
+    }
+
+    /// Draws a laid-out paragraph with its top-left corner at (`x`, `y`).
+    /// `paint` gives each span's face and color.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn push_text_layout(
+        &mut self,
+        layout: &TextLayout,
+        x: f32,
+        y: f32,
+        font_px: f32,
+        paint: impl Fn(usize) -> (UiFace, [f32; 4]),
+        clip: Option<TextClip>,
+    ) {
+        for line in &layout.lines {
+            let baseline = (y + line.baseline).round();
+            if let Some(clip) = clip
+                && (baseline + line.height < clip.top || baseline - line.height > clip.bottom)
+            {
+                continue;
+            }
+            for run in &line.runs {
+                let (face, color) = paint(run.span);
+                self.text_pipeline.push_ui_text_in(
+                    &run.text,
+                    face,
+                    (x + run.x).round(),
+                    baseline,
+                    font_px,
+                    color,
+                    clip,
+                );
+            }
+        }
     }
 }
 
@@ -124,75 +180,5 @@ impl Renderer {
             run_highlighted = Some(highlighted);
         }
         self.glyph_cache.ui_text_width(&fitted, size_px)
-    }
-}
-
-/// The longest grapheme prefix of `text` that fits `max_width` once an
-/// ellipsis is appended, or `text` itself when it already fits. Returns an
-/// empty string when not even the ellipsis fits.
-pub(super) fn fit_with_ellipsis(
-    text: &str,
-    max_width: f32,
-    mut measure: impl FnMut(&str) -> f32,
-) -> Cow<'_, str> {
-    if text.is_empty() || max_width <= 0.0 {
-        return Cow::Borrowed("");
-    }
-    if measure(text) <= max_width {
-        return Cow::Borrowed(text);
-    }
-    if measure(ELLIPSIS) > max_width {
-        return Cow::Borrowed("");
-    }
-    // `ends[k]` is the byte length of the first `k` graphemes.
-    let ends: Vec<usize> = text
-        .grapheme_indices(true)
-        .map(|(start, _)| start)
-        .collect();
-    let candidate = |kept: usize| format!("{}{ELLIPSIS}", text[..ends[kept]].trim_end());
-    // Invariant: `low` graphemes fit; `high` graphemes do not.
-    let (mut low, mut high) = (0, ends.len());
-    while high - low > 1 {
-        let middle = (low + high) / 2;
-        if measure(&candidate(middle)) <= max_width {
-            low = middle;
-        } else {
-            high = middle;
-        }
-    }
-    Cow::Owned(candidate(low))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Ten pixels per grapheme, like a monospace face.
-    fn width(text: &str) -> f32 {
-        text.graphemes(true).count() as f32 * 10.0
-    }
-
-    #[test]
-    fn text_that_fits_is_returned_unchanged() {
-        assert_eq!(fit_with_ellipsis("claude", 60.0, width), "claude");
-        assert_eq!(fit_with_ellipsis("", 60.0, width), "");
-    }
-
-    #[test]
-    fn long_text_keeps_the_longest_prefix_that_fits_with_an_ellipsis() {
-        assert_eq!(fit_with_ellipsis("tjemmmic@emrakul", 60.0, width), "tjemm…");
-        assert_eq!(fit_with_ellipsis("tjemmmic@emrakul", 20.0, width), "t…");
-        assert_eq!(fit_with_ellipsis("tjemmmic@emrakul", 15.0, width), "…");
-        assert_eq!(fit_with_ellipsis("tjemmmic@emrakul", 10.0, width), "…");
-        assert_eq!(fit_with_ellipsis("tjemmmic@emrakul", 9.0, width), "");
-        assert_eq!(fit_with_ellipsis("tjemmmic@emrakul", 0.0, width), "");
-    }
-
-    #[test]
-    fn truncation_never_splits_a_grapheme_or_leaves_trailing_space() {
-        let family = "👩‍👩‍👧 family";
-        assert_eq!(fit_with_ellipsis(family, 30.0, width), "👩‍👩‍👧…");
-        assert_eq!(fit_with_ellipsis("ab cdef", 40.0, width), "ab…");
-        assert_eq!(fit_with_ellipsis("e\u{301}tude", 30.0, width), "e\u{301}t…");
     }
 }

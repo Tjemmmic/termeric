@@ -236,6 +236,63 @@ fn serve_client(
                 pending_approval,
             }
         }
+        Response::Conversation {
+            process_id,
+            window_id,
+            session_id,
+            text,
+            truncated,
+        } => {
+            if process_id == 0
+                || window_id == 0
+                || session_id == 0
+                || text.len() > protocol::MAX_TERMINAL_TEXT_BYTES as usize
+            {
+                anyhow::bail!("GUI event loop returned an invalid conversation");
+            }
+            ServerFrame::Conversation {
+                version: protocol::PROTOCOL_VERSION,
+                process_id,
+                window_id,
+                session_id,
+                text,
+                truncated,
+            }
+        }
+        Response::ApprovalAnswered {
+            process_id,
+            request_id,
+            window_id,
+            session_id,
+            answered,
+        } => {
+            validate_action_response(process_id, &request_id, window_id)?;
+            ServerFrame::ApprovalAnswered {
+                version: protocol::PROTOCOL_VERSION,
+                process_id,
+                request_id,
+                window_id,
+                session_id,
+                answered,
+            }
+        }
+        Response::SessionInputAccepted {
+            process_id,
+            request_id,
+            window_id,
+            session_id,
+            pending_approval,
+        } => {
+            validate_action_response(process_id, &request_id, window_id)?;
+            ServerFrame::SessionInputAccepted {
+                version: protocol::PROTOCOL_VERSION,
+                process_id,
+                request_id,
+                window_id,
+                session_id,
+                pending_approval,
+            }
+        }
         Response::AgentEventRecorded { process_id } => {
             if process_id == 0 || process_id > i32::MAX as u32 {
                 anyhow::bail!("GUI event loop returned an invalid agent-event response");

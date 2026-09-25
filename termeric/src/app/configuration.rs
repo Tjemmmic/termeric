@@ -887,6 +887,8 @@ impl App {
                 if let Some(renderer) = &mut self.renderer {
                     renderer.set_tab_bar_position(position);
                 }
+                // The rail's width limits the dock's.
+                self.apply_agent_dock_width();
                 if let Some(window) = self.window.clone() {
                     let size = window.inner_size();
                     self.sync_terminal_geometry(size.width, size.height);

@@ -22,11 +22,15 @@ const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 
 const INSTRUCTIONS: &str = "Termeric is the terminal these agents run in. \
 list_agents shows every coding agent in Termeric with its state (working, needs_input, \
-finished, failed) and where it is: window_id, tab_id, and pane_id. read_terminal reads a \
-pane's recent screen and scrollback. send_to_agent gives an agent a prompt, as if typed and \
-submitted; Termeric refuses it unless the person enabled external input, while the person is \
-typing to that agent, and for text starting with `!` or `/`, which the agent would run as a \
-command.";
+finished, failed) and where it is: window_id, tab_id, and pane_id for an agent in a terminal, \
+or window_id and session_id for a Claude Code session in Termeric's agent view. \
+read_terminal reads a pane's recent screen and scrollback; read_conversation reads an agent \
+view session, ending with any approvals it waits for. send_to_agent gives an agent in a \
+terminal a prompt, as if typed and submitted; send_to_session gives an agent view session its \
+next message. answer_approval allows or denies one pending approval in an agent view \
+session. Termeric refuses sends and answers unless the person enabled external input or \
+Termeric started you as its supervisor, while the person is typing to that agent, and for \
+text starting with `!` or `/`, which the agent would run as a command.";
 
 /// What the server needs from a running Termeric.
 pub trait Backend {
@@ -46,6 +50,16 @@ pub trait Backend {
         agent_id: &str,
         text: &str,
     ) -> Result<bool>;
+    fn read_conversation(&self, window_id: u64, session_id: u64) -> Result<(String, bool)>;
+    fn answer_approval(
+        &self,
+        window_id: u64,
+        session_id: u64,
+        approval_id: &str,
+        allow: bool,
+        reason: &str,
+    ) -> Result<bool>;
+    fn submit_to_session(&self, window_id: u64, session_id: u64, text: &str) -> Result<bool>;
 }
 
 /// The Termeric process to talk to: the one named, else the one owning the
@@ -111,6 +125,39 @@ impl Backend for ControlBackend {
             tab_id,
             pane_id,
             agent_id,
+            text,
+            self.supervisor.as_deref(),
+        )
+    }
+
+    fn read_conversation(&self, window_id: u64, session_id: u64) -> Result<(String, bool)> {
+        crate::control::read_conversation(self.process()?, window_id, session_id)
+    }
+
+    fn answer_approval(
+        &self,
+        window_id: u64,
+        session_id: u64,
+        approval_id: &str,
+        allow: bool,
+        reason: &str,
+    ) -> Result<bool> {
+        crate::control::answer_approval(
+            self.process()?,
+            window_id,
+            session_id,
+            approval_id,
+            allow,
+            reason,
+            self.supervisor.as_deref(),
+        )
+    }
+
+    fn submit_to_session(&self, window_id: u64, session_id: u64, text: &str) -> Result<bool> {
+        crate::control::submit_to_session(
+            self.process()?,
+            window_id,
+            session_id,
             text,
             self.supervisor.as_deref(),
         )
@@ -215,12 +262,28 @@ fn pane_schema(extra: &[(&str, Value, bool)]) -> Value {
     json!({"type": "object", "properties": properties, "required": required})
 }
 
+/// The schema of a tool addressed to one agent view session.
+fn session_schema(extra: &[(&str, Value, bool)]) -> Value {
+    let mut properties = json!({
+        "window_id": {"type": "integer", "minimum": 1, "description": "From list_agents."},
+        "session_id": {"type": "integer", "minimum": 1, "description": "From list_agents."},
+    });
+    let mut required = vec!["window_id", "session_id"];
+    for (name, schema, is_required) in extra {
+        properties[*name] = schema.clone();
+        if *is_required {
+            required.push(name);
+        }
+    }
+    json!({"type": "object", "properties": properties, "required": required})
+}
+
 fn tools() -> Value {
     json!([
         {
             "name": "list_agents",
             "title": "List agents",
-            "description": "Every coding agent running in Termeric: its name, state (working, needs_input, finished, failed, idle, or null when unknown), what it is waiting for, its last answer, and its window_id, tab_id, and pane_id.",
+            "description": "Every coding agent running in Termeric: its name, state (working, needs_input, finished, failed, idle, or null when unknown), what it is waiting for, its last answer, and where it is: window_id with tab_id and pane_id for an agent in a terminal, or window_id with session_id for an agent view session.",
             "inputSchema": {"type": "object", "properties": {}},
             "annotations": {"readOnlyHint": true},
         },
@@ -248,6 +311,39 @@ fn tools() -> Value {
                 ),
                 ("text", json!({"type": "string", "description": "The prompt."}), true),
             ]),
+            "annotations": {"readOnlyHint": false, "destructiveHint": false},
+        },
+        {
+            "name": "read_conversation",
+            "title": "Read an agent view session",
+            "description": "The recent conversation of one agent view session, oldest first: the person's messages, Claude's answers, the tools it used, and last, each approval it waits for with its approval_id.",
+            "inputSchema": session_schema(&[]),
+            "annotations": {"readOnlyHint": true},
+        },
+        {
+            "name": "answer_approval",
+            "title": "Answer an approval",
+            "description": "Allow or deny one pending approval in an agent view session, with a short reason the person can read. In assist mode the answer is shown to the person as a suggestion instead; in watch mode it is refused.",
+            "inputSchema": session_schema(&[
+                (
+                    "approval_id",
+                    json!({"type": "string", "description": "From read_conversation or the notice about it."}),
+                    true,
+                ),
+                ("allow", json!({"type": "boolean", "description": "True to allow, false to deny."}), true),
+                ("reason", json!({"type": "string", "description": "Why, in one sentence."}), true),
+            ]),
+            "annotations": {"readOnlyHint": false, "destructiveHint": false},
+        },
+        {
+            "name": "send_to_session",
+            "title": "Send to an agent view session",
+            "description": "Give an agent view session its next message. Plain text of at most 4000 bytes and 80 lines, not starting with `!` or `/`. Refused while the person is writing to that session.",
+            "inputSchema": session_schema(&[(
+                "text",
+                json!({"type": "string", "description": "The message."}),
+                true,
+            )]),
             "annotations": {"readOnlyHint": false, "destructiveHint": false},
         },
     ])
@@ -389,6 +485,73 @@ impl<B: Backend> Server<B> {
                 };
                 Ok((text, None))
             })(),
+            "read_conversation" => (|| {
+                let (text, truncated) = self.backend.read_conversation(
+                    integer(&arguments, "window_id")?,
+                    integer(&arguments, "session_id")?,
+                )?;
+                let text = if text.is_empty() {
+                    "The session has no conversation yet.".to_owned()
+                } else if truncated {
+                    format!("[Earlier parts left out]\n{text}")
+                } else {
+                    text
+                };
+                Ok((text, None))
+            })(),
+            "answer_approval" => (|| {
+                let approval_id = arguments
+                    .get("approval_id")
+                    .and_then(Value::as_str)
+                    .context("`approval_id` must be a string")?;
+                let allow = arguments
+                    .get("allow")
+                    .and_then(Value::as_bool)
+                    .context("`allow` must be true or false")?;
+                let reason = arguments
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .context("`reason` must be a string")?;
+                let answered = self.backend.answer_approval(
+                    integer(&arguments, "window_id")?,
+                    integer(&arguments, "session_id")?,
+                    approval_id,
+                    allow,
+                    reason,
+                )?;
+                let verb = if allow { "allowed" } else { "denied" };
+                let text = if answered {
+                    format!("Approval {approval_id} {verb}.")
+                } else {
+                    format!(
+                        "Your answer was shown to the person as a suggestion; they decide \
+                         approval {approval_id}."
+                    )
+                };
+                Ok((text, None))
+            })(),
+            "send_to_session" => (|| {
+                let text = arguments
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .context("`text` must be a string")?;
+                let (window_id, session_id) = (
+                    integer(&arguments, "window_id")?,
+                    integer(&arguments, "session_id")?,
+                );
+                let pending = self
+                    .backend
+                    .submit_to_session(window_id, session_id, text)?;
+                let text = if pending {
+                    format!(
+                        "Waiting for the person to approve your message to session {session_id}. \
+                         Termeric will tell you whether it was sent."
+                    )
+                } else {
+                    format!("Sent to session {session_id} in window {window_id}.")
+                };
+                Ok((text, None))
+            })(),
             _ => Err(anyhow::anyhow!("Unknown tool {name}")),
         };
         match outcome {
@@ -421,6 +584,7 @@ mod tests {
                     pane_id: 0,
                     agent_id: "codex".into(),
                     name: "Codex".into(),
+                    session_id: None,
                     tab_title: "api".into(),
                     state: Some(AgentState::NeedsInput),
                     detail: Some("Approve shell: cargo test".into()),
@@ -451,6 +615,37 @@ mod tests {
                 .push((window, tab, pane, agent.into(), text.into()));
             Ok(text.contains("approve me"))
         }
+
+        fn read_conversation(&self, window: u64, session: u64) -> Result<(String, bool)> {
+            Ok((
+                format!("{window}/{session}: Waiting for approval r1: Bash ls"),
+                session == 9,
+            ))
+        }
+
+        fn answer_approval(
+            &self,
+            _window: u64,
+            session: u64,
+            approval: &str,
+            allow: bool,
+            reason: &str,
+        ) -> Result<bool> {
+            if approval != "r1" {
+                bail!("Approval {approval} is no longer pending");
+            }
+            self.sent
+                .borrow_mut()
+                .push((0, session, 0, format!("answer {allow}"), reason.into()));
+            Ok(session != 2)
+        }
+
+        fn submit_to_session(&self, window: u64, session: u64, text: &str) -> Result<bool> {
+            self.sent
+                .borrow_mut()
+                .push((window, session, 0, "session".into(), text.into()));
+            Ok(false)
+        }
     }
 
     fn request(server: &mut Server<Fake>, id: u64, method: &str, params: Value) -> Value {
@@ -470,7 +665,7 @@ mod tests {
     }
 
     #[test]
-    fn handshake_negotiates_a_version_and_lists_three_tools() {
+    fn handshake_negotiates_a_version_and_lists_its_tools() {
         let mut server = Server::new(Fake::default());
         let init = request(
             &mut server,
@@ -498,7 +693,17 @@ mod tests {
             .iter()
             .map(|tool| tool["name"].as_str().unwrap().to_owned())
             .collect();
-        assert_eq!(names, ["list_agents", "read_terminal", "send_to_agent"]);
+        assert_eq!(
+            names,
+            [
+                "list_agents",
+                "read_terminal",
+                "send_to_agent",
+                "read_conversation",
+                "answer_approval",
+                "send_to_session"
+            ]
+        );
         let send = &request(&mut server, 4, "tools/list", json!({}))["result"]["tools"][2];
         assert_eq!(
             send["inputSchema"]["required"],
@@ -568,6 +773,47 @@ mod tests {
         assert_eq!(
             gone["content"][0]["text"],
             "gemini is no longer running in that terminal"
+        );
+        let conversation = call(
+            &mut server,
+            "read_conversation",
+            json!({"window_id": 1, "session_id": 9}),
+        );
+        assert_eq!(
+            conversation["content"][0]["text"],
+            "[Earlier parts left out]\n1/9: Waiting for approval r1: Bash ls"
+        );
+        let answered = call(
+            &mut server,
+            "answer_approval",
+            json!({"window_id": 1, "session_id": 3, "approval_id": "r1", "allow": true, "reason": "tests are allowed"}),
+        );
+        assert_eq!(answered["content"][0]["text"], "Approval r1 allowed.");
+        let suggested = call(
+            &mut server,
+            "answer_approval",
+            json!({"window_id": 1, "session_id": 2, "approval_id": "r1", "allow": false, "reason": "no"}),
+        );
+        assert!(
+            suggested["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("as a suggestion")
+        );
+        let stale = call(
+            &mut server,
+            "answer_approval",
+            json!({"window_id": 1, "session_id": 3, "approval_id": "r7", "allow": true, "reason": ""}),
+        );
+        assert_eq!(stale["isError"], true);
+        let session = call(
+            &mut server,
+            "send_to_session",
+            json!({"window_id": 1, "session_id": 3, "text": "Run the tests next"}),
+        );
+        assert_eq!(
+            session["content"][0]["text"],
+            "Sent to session 3 in window 1."
         );
         let invalid = call(&mut server, "read_terminal", json!({"window_id": -1}));
         assert_eq!(invalid["isError"], true);

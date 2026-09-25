@@ -13,6 +13,7 @@ enum PasteTarget {
     TabRename,
     ShortcutsFilter,
     SettingsFilter,
+    AgentView,
     Blocked,
     Terminal,
 }
@@ -77,6 +78,13 @@ impl App {
         if self.tab_rename.is_some() {
             return PasteTarget::TabRename;
         }
+        if self.agent_view_has_keyboard() {
+            return if self.agent_view_accepts_text() {
+                PasteTarget::AgentView
+            } else {
+                PasteTarget::Blocked
+            };
+        }
         if self.search.is_active() {
             return PasteTarget::Search;
         }
@@ -112,6 +120,7 @@ impl App {
         match target {
             PasteTarget::Blocked => return false,
             PasteTarget::Terminal => return self.write_paste_text(text),
+            PasteTarget::AgentView => return self.paste_into_agent_view(text),
             _ => {}
         }
         if text.is_empty() {
@@ -153,7 +162,7 @@ impl App {
                 }
                 accepted
             }
-            PasteTarget::Blocked | PasteTarget::Terminal => unreachable!(),
+            PasteTarget::Blocked | PasteTarget::Terminal | PasteTarget::AgentView => unreachable!(),
         };
         if accepted {
             self.ime.clear_preedit();

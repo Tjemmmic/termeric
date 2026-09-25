@@ -218,6 +218,7 @@ impl App {
                     window_id,
                     tab_id: terminal.identity.tab_id as u64,
                     pane_id: terminal.identity.pane_id.0,
+                    session_id: None,
                     agent_id: terminal.agent_id,
                     name: printable(&terminal.name),
                     tab_title: printable(&terminal.tab_title),
@@ -241,6 +242,7 @@ impl App {
                     seconds_in_state: status.map(|status| status.since.elapsed().as_secs()),
                 }
             })
+            .chain(self.agent_view_summaries(window_id))
             .collect()
     }
 
@@ -252,10 +254,11 @@ impl App {
         self.control_agents(window_id)
             .into_iter()
             .filter(|agent| {
-                !self.is_supervisor_terminal(TerminalIdentity {
-                    tab_id: agent.tab_id as usize,
-                    pane_id: crate::panes::PaneId(agent.pane_id),
-                })
+                agent.session_id.is_some()
+                    || !self.is_supervisor_terminal(TerminalIdentity {
+                        tab_id: agent.tab_id as usize,
+                        pane_id: crate::panes::PaneId(agent.pane_id),
+                    })
             })
             .collect()
     }
@@ -529,6 +532,8 @@ impl App {
             "agent.split-down" => self.open_agent_picker(AgentPlacement::SplitDown),
             "agent.go-to" => self.open_agent_list(),
             "agent.panel" => self.toggle_agents_panel(),
+            "agent.view" => self.toggle_agent_view(),
+            "agent.view-new" => self.new_agent_session_page(),
             "supervisor.start" => self.start_supervisor(),
             "supervisor.mode" => self.open_supervisor_mode_picker(),
             "supervisor.take-over" => self.take_over_from_supervisor(),

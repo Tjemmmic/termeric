@@ -77,11 +77,13 @@ pub(super) enum QueuedContent {
         text: String,
         cell_width: f32,
     },
-    /// Application-chrome text in the desktop's sans-serif face. Its queued
-    /// `y` is the baseline rather than a cell top.
+    /// Application-chrome text in a desktop UI face. Its queued `y` is the
+    /// baseline rather than a cell top, and its weight and slant come from
+    /// the queued style.
     UiText {
         text: Box<str>,
         size_px: f32,
+        mono: bool,
     },
 }
 
@@ -247,8 +249,21 @@ fn queued_glyphs(
                     .collect()
             })
             .unwrap_or_default(),
-        QueuedContent::UiText { text, size_px } => glyph_cache
-            .shape_ui_text(text, *size_px, queue)
+        QueuedContent::UiText {
+            text,
+            size_px,
+            mono,
+        } => glyph_cache
+            .shape_ui_text(
+                text,
+                *size_px,
+                crate::ui::text_layout::UiFace {
+                    mono: *mono,
+                    bold: queued.style.bold,
+                    italic: queued.style.italic,
+                },
+                queue,
+            )
             .map(|run| {
                 run.glyphs
                     .into_iter()
@@ -697,16 +712,43 @@ impl TextPipeline {
         color: [f32; 4],
         clip: Option<TextClip>,
     ) {
+        self.push_ui_text_in(
+            text,
+            crate::ui::text_layout::UiFace::SANS,
+            x,
+            baseline_y,
+            size_px,
+            color,
+            clip,
+        );
+    }
+
+    /// Queue UI text in a specific UI face.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn push_ui_text_in(
+        &mut self,
+        text: &str,
+        face: crate::ui::text_layout::UiFace,
+        x: f32,
+        baseline_y: f32,
+        size_px: f32,
+        color: [f32; 4],
+        clip: Option<TextClip>,
+    ) {
         if !text.is_empty() {
             self.queued.push(QueuedChar {
                 content: QueuedContent::UiText {
                     text: text.into(),
                     size_px,
+                    mono: face.mono,
                 },
                 x,
                 y: baseline_y,
                 color,
-                style: FontStyle::default(),
+                style: FontStyle {
+                    bold: face.bold,
+                    italic: face.italic,
+                },
                 clip,
             });
         }

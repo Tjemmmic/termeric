@@ -111,6 +111,9 @@ impl App {
         if self.tab_rename.is_some() {
             return true;
         }
+        if self.agent_view_has_keyboard() {
+            return self.agent_view_accepts_text();
+        }
         if self.search.is_active() {
             return true;
         }
@@ -143,6 +146,8 @@ impl App {
             self.commands_panel.insert_form_text(text);
         } else if self.tab_rename.is_some() {
             self.insert_tab_rename_text(text);
+        } else if self.agent_view_has_keyboard() {
+            self.commit_agent_view_text(text);
         } else if self.search.is_active() {
             let cursor = self.search_cursor_pos;
             if self
@@ -185,6 +190,24 @@ impl App {
             info.entries.len(),
         )
         .input_viewport(&info.input, info.cursor)
+    }
+
+    /// Match commit_ime_text's destination priority: the agent view's
+    /// message box yields to every modal surface and rename field above it.
+    fn agent_view_owns_ime_text(&self) -> bool {
+        self.agent_view_has_keyboard()
+            && self.agent_view_accepts_text()
+            && self.accepts_ime_text()
+            && !self.info_overlay.is_active()
+            && !self.domain_picker.is_active()
+            && !self.command_palette.is_active()
+            && !self.unicode_picker.is_active()
+            && !self.shortcuts_panel.is_active()
+            && !self.settings_panel.is_active()
+            && !self.session_panel.is_open()
+            && !self.commands_panel.is_open()
+            && !self.agents_panel.is_open()
+            && self.tab_rename.is_none()
     }
 
     /// Match commit_ime_text's destination priority: a retained search must
@@ -463,6 +486,30 @@ impl App {
                 max_width: view.right - view.cursor_x,
             });
         }
+        if self.agent_view_owns_ime_text() {
+            let scene = self.agent_view.scene.as_ref()?;
+            let caret = scene.caret?.bounds;
+            if let Some(window) = &self.window {
+                window.set_ime_cursor_area(
+                    winit::dpi::PhysicalPosition::new(
+                        caret.x.round() as i32,
+                        caret.y.round() as i32,
+                    ),
+                    winit::dpi::PhysicalSize::new(
+                        caret.width.ceil().max(1.0) as u32,
+                        caret.height.ceil().max(1.0) as u32,
+                    ),
+                );
+            }
+            let preedit = self.ime.preedit()?;
+            return Some(crate::renderer::ImePreeditRenderInfo {
+                text: preedit.text.clone(),
+                cursor: preedit.cursor,
+                x: caret.x,
+                y: caret.y,
+                max_width: (scene.panel.right() - caret.x).max(renderer.cell_width()),
+            });
+        }
         if self.search_owns_ime_text() {
             let info = self.search.build_info(self.search_cursor_pos);
             let layout = renderer.search_bar_layout(&info, renderer.window_size().0 as f32);
@@ -503,12 +550,14 @@ impl App {
                 (pane.rect.width - cursor_offset).max(renderer.cell_width()),
             )
         } else {
-            let (window_width, _) = renderer.window_size();
             let cursor_offset = cursor.col as f32 * renderer.cell_width();
             (
                 content_left + renderer.padding(),
                 content_top + renderer.padding(),
-                (window_width as f32 - content_left - renderer.padding() * 2.0 - cursor_offset)
+                (renderer.content_right()
+                    - content_left
+                    - renderer.padding() * 2.0
+                    - cursor_offset)
                     .max(renderer.cell_width()),
             )
         };
@@ -1439,6 +1488,23 @@ mod tests {
         assert!(app.handle_tab_rename_key(&Key::Named(NamedKey::Escape)));
         app.write_to_pty(b"Z");
         wait_for(&mut app, "5a");
+    }
+
+    #[test]
+    fn the_agent_view_composes_only_when_nothing_above_it_takes_text() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.open_agent_view(true);
+        assert!(app.agent_view_owns_ime_text());
+        app.tab_rename = Some(TabRenameState {
+            tab_id: 0,
+            original: None,
+            input: String::new(),
+            max_chars: 128,
+        });
+        assert!(!app.agent_view_owns_ime_text());
+        app.tab_rename = None;
+        app.command_palette.open();
+        assert!(!app.agent_view_owns_ime_text());
     }
 
     #[test]

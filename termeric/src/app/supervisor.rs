@@ -27,10 +27,40 @@ enum ApprovalOutcome {
     Unanswered,
 }
 
+/// Where a supervisor message goes.
+enum SendTarget {
+    /// An agent in a terminal, typed into as if by the person.
+    Terminal(AgentTarget),
+    /// An agent view session, as a new turn of its conversation.
+    Session {
+        id: crate::agent_view::session::SessionId,
+        name: String,
+    },
+}
+
+impl SendTarget {
+    fn name(&self) -> &str {
+        match self {
+            SendTarget::Terminal(target) => &target.agent_name,
+            SendTarget::Session { name, .. } => name,
+        }
+    }
+
+    /// The key its sends are rate-limited under.
+    fn key(&self) -> String {
+        match self {
+            SendTarget::Terminal(target) => {
+                format!("{}:{}", target.identity.tab_id, target.identity.pane_id.0)
+            }
+            SendTarget::Session { id, .. } => format!("session:{}", id.control_id()),
+        }
+    }
+}
+
 /// A message the supervisor asked to send, waiting for the person.
 struct PendingApproval {
     request_id: u64,
-    target: AgentTarget,
+    target: SendTarget,
     text: String,
     shown_at: Instant,
 }
@@ -58,6 +88,10 @@ pub(super) struct Supervisor {
 }
 
 impl Supervisor {
+    pub(super) fn mode(&self) -> SupervisorMode {
+        self.mode
+    }
+
     fn note(&mut self, entry: String) {
         if self.log.len() == MAX_LOG_ENTRIES {
             self.log.pop_front();
@@ -660,7 +694,7 @@ impl App {
                 supervisor.note(format!("Asked you to approve a message to {agent_name}"));
                 supervisor.approval = Some(PendingApproval {
                     request_id,
-                    target,
+                    target: SendTarget::Terminal(target),
                     text: text.to_owned(),
                     shown_at: Instant::now(),
                 });
@@ -746,11 +780,8 @@ impl App {
         else {
             return;
         };
-        let name = approval.target.agent_name.clone();
-        let key = format!(
-            "{}:{}",
-            approval.target.identity.tab_id, approval.target.identity.pane_id.0
-        );
+        let name = approval.target.name().to_owned();
+        let key = approval.target.key();
         // Declined and unanswered messages count toward the limits too, so a
         // supervisor cannot ask faster than it could send.
         if let Some(supervisor) = &mut self.supervisor {
@@ -760,7 +791,15 @@ impl App {
         }
         let (entry, outcome) = match outcome {
             ApprovalOutcome::Send => {
-                match self.paste_and_submit_for_supervisor(approval.target, &approval.text) {
+                let sent = match approval.target {
+                    SendTarget::Terminal(target) => {
+                        self.paste_and_submit_for_supervisor(target, &approval.text)
+                    }
+                    SendTarget::Session { id, .. } => {
+                        self.prompt_agent_view_session(id, &approval.text)
+                    }
+                };
+                match sent {
                     Ok(()) => (
                         format!("You approved; sent to {name}: {}", one_line(&approval.text)),
                         format!(
@@ -790,6 +829,218 @@ impl App {
             supervisor.note(entry);
         }
         self.tell_supervisor(outcome);
+    }
+}
+
+impl App {
+    /// Checks that a request comes from this window's supervisor.
+    fn check_supervisor_request(
+        &self,
+        token: &str,
+        peer_process: Option<u32>,
+    ) -> Result<(), String> {
+        if !self.owns_supervisor_token(token) {
+            return Err(
+                "This supervisor does not oversee that window, or it has been stopped".into(),
+            );
+        }
+        if !self.is_supervisor_process(peer_process) {
+            return Err("Only the supervisor Termeric started may act as the supervisor".into());
+        }
+        Ok(())
+    }
+
+    /// The supervisor answers an agent view approval: in Auto mode it
+    /// decides, in Assist mode its answer is shown to the person as a
+    /// suggestion, and in Watch mode it is refused. Returns whether it
+    /// decided.
+    pub(super) fn supervised_session_answer(
+        &mut self,
+        token: &str,
+        peer_process: Option<u32>,
+        id: crate::agent_view::session::SessionId,
+        approval_id: &str,
+        allow: bool,
+        reason: &str,
+    ) -> Result<bool, String> {
+        use crate::agent_view::transcript::DecidedBy;
+        self.check_supervisor_request(token, peer_process)?;
+        let mode = self
+            .supervisor
+            .as_ref()
+            .expect("the token was checked")
+            .mode;
+        let reason = reason.trim();
+        let session = self
+            .agent_view
+            .session_mut(id)
+            .ok_or_else(|| "That agent view session has closed".to_string())?;
+        let title = session.title();
+        let verb = if allow { "allow" } else { "deny" };
+        let decided = match mode {
+            SupervisorMode::Watch => {
+                return Err(
+                    "The supervisor only watches; answer approvals in Assist or Auto mode".into(),
+                );
+            }
+            SupervisorMode::Assist => {
+                if !session.suggest(approval_id, allow, reason) {
+                    return Err(format!("Approval {approval_id} is no longer pending"));
+                }
+                false
+            }
+            SupervisorMode::Auto => {
+                let note = (!reason.is_empty()).then(|| reason.to_owned());
+                let answered = if allow {
+                    session.answer(
+                        approval_id,
+                        crate::agent_view::event::ApprovalDecision::Allow {
+                            input: session
+                                .transcript()
+                                .approval(approval_id)
+                                .map(|approval| approval.input.clone())
+                                .unwrap_or_default(),
+                            remember: None,
+                        },
+                        DecidedBy::Supervisor,
+                        note,
+                    )
+                } else {
+                    session.answer(
+                        approval_id,
+                        crate::agent_view::event::ApprovalDecision::Deny {
+                            message: if reason.is_empty() {
+                                "The supervisor declined this action.".to_owned()
+                            } else {
+                                reason.to_owned()
+                            },
+                            interrupt: false,
+                        },
+                        DecidedBy::Supervisor,
+                        note,
+                    )
+                };
+                if !answered {
+                    return Err(format!("Approval {approval_id} is no longer pending"));
+                }
+                true
+            }
+        };
+        if let Some(supervisor) = &mut self.supervisor {
+            supervisor.note(if decided {
+                format!("Chose to {verb} a request in \"{title}\"")
+            } else {
+                format!("Suggested you {verb} a request in \"{title}\"")
+            });
+        }
+        self.request_agent_view_redraw();
+        Ok(decided)
+    }
+
+    /// The supervisor sends a message to an agent view session, within its
+    /// mode and limits. Returns whether it waits for the person.
+    pub(super) fn supervised_session_submit(
+        &mut self,
+        token: &str,
+        peer_process: Option<u32>,
+        id: crate::agent_view::session::SessionId,
+        text: &str,
+    ) -> Result<bool, String> {
+        self.check_supervisor_request(token, peer_process)?;
+        let name = self
+            .agent_view
+            .session(id)
+            .map(|session| format!("\"{}\"", session.title()))
+            .ok_or_else(|| "That agent view session has closed".to_string())?;
+        if self
+            .agent_view
+            .state
+            .conversation(id)
+            .is_some_and(|view| !view.composer.is_empty())
+        {
+            return Err("The person is writing a message to that session; try again later".into());
+        }
+        let target = SendTarget::Session {
+            id,
+            name: name.clone(),
+        };
+        let key = target.key();
+        let per_minute = self.config.supervisor.max_sends_per_minute;
+        let supervisor = self.supervisor.as_mut().expect("the token was checked");
+        if let Err(refusal) =
+            supervisor
+                .limits
+                .check(supervisor.mode, per_minute, &key, text, Instant::now())
+        {
+            supervisor.note(format!("Refused a message to {name}: {refusal}"));
+            return Err(refusal.to_string());
+        }
+        match supervisor.mode {
+            SupervisorMode::Watch => unreachable!("watch mode was refused above"),
+            SupervisorMode::Auto => {
+                self.prompt_agent_view_session(id, text)?;
+                let supervisor = self.supervisor.as_mut().expect("still running");
+                supervisor.limits.record(&key, text, Instant::now());
+                supervisor.note(format!("Sent to {name}: {}", one_line(text)));
+                Ok(false)
+            }
+            SupervisorMode::Assist => {
+                if supervisor.approval.is_some() {
+                    return Err(
+                        "Another message is waiting for the person's approval; wait for its outcome"
+                            .into(),
+                    );
+                }
+                if self.info_overlay.is_awaiting_current() {
+                    return Err("The person has another dialog open; try again in a minute".into());
+                }
+                let mut lines = vec![
+                    format!("The supervisor wants to send this to {name} in the agent view:"),
+                    String::new(),
+                ];
+                lines.extend(text.lines().map(|line| format!("  {line}")));
+                lines.push(String::new());
+                let choice_line = lines.len();
+                lines.push("  Don't send".into());
+                lines.push("  Send".into());
+                let request_id = self.info_overlay.show_choices(
+                    "Supervisor message",
+                    lines,
+                    vec![
+                        InfoOverlayChoice::new(DECLINE_CHOICE, "Don't send", choice_line, None),
+                        InfoOverlayChoice::new(SEND_CHOICE, "Send", choice_line + 1, None),
+                    ],
+                );
+                let supervisor = self.supervisor.as_mut().expect("still running");
+                supervisor.note(format!("Asked you to approve a message to {name}"));
+                supervisor.approval = Some(PendingApproval {
+                    request_id,
+                    target,
+                    text: text.to_owned(),
+                    shown_at: Instant::now(),
+                });
+                Ok(true)
+            }
+        }
+    }
+
+    /// Tells the supervisor, once per request, what agent view sessions
+    /// need, and when their turns end.
+    pub(super) fn supervise_agent_view(
+        &mut self,
+        events: Vec<crate::agents::supervisor::SessionEvent>,
+    ) {
+        if self.supervisor.is_none() || events.is_empty() {
+            return;
+        }
+        for event in events {
+            let message =
+                crate::agents::supervisor::session_message(self.control_window_id, &event);
+            if let Some(supervisor) = &mut self.supervisor {
+                supervisor.note(message.trim_start_matches("Termeric: ").to_owned());
+            }
+            self.tell_supervisor(message);
+        }
     }
 }
 

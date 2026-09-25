@@ -60,11 +60,19 @@ impl DiffReviewRow {
     }
 }
 
+/// Whose agent made a reviewed change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChangeOwner {
+    /// An agent running in a terminal.
+    Terminal(crate::tabs::TerminalIdentity),
+    /// A session in the docked agent view.
+    AgentView(crate::agent_view::session::SessionId),
+}
+
 /// The agent-changed file a review shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChangeReviewTarget {
-    pub tab_id: usize,
-    pub pane_id: crate::panes::PaneId,
+    pub owner: ChangeOwner,
     /// Relative to the repository root.
     pub path: std::path::PathBuf,
 }
@@ -812,8 +820,10 @@ mod tests {
     fn change_reviews_parse_git_patches_and_expire_with_the_review() {
         let mut overlay = DiffReviewOverlay::new();
         let target = ChangeReviewTarget {
-            tab_id: 1,
-            pane_id: crate::panes::PaneId(0),
+            owner: ChangeOwner::Terminal(crate::tabs::TerminalIdentity {
+                tab_id: 1,
+                pane_id: crate::panes::PaneId(0),
+            }),
             path: "src/lib.rs".into(),
         };
         let patch = "diff --git a/src/lib.rs b/src/lib.rs\nindex 1..2 100644\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1,2 @@\n keep\n-old\n+new\n@@ -9 +9 @@\n-a\n+b\n\\ No newline at end of file\n";

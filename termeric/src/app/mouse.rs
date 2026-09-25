@@ -153,6 +153,15 @@ impl App {
             || self.workspace_menu.is_some()
     }
 
+    /// A terminal-side drag is in progress: a selection, scrollbar, pane
+    /// divider, or tab. It keeps the pointer even over the docked panel.
+    pub(super) fn native_pointer_gesture_active(&self) -> bool {
+        self.mouse_pressed
+            || self.scrollbar_dragging.is_some()
+            || self.divider_dragging.is_some()
+            || self.tab_dragging.is_some()
+    }
+
     /// A modal takes native pointer ownership even if the physical button
     /// remains held. Do this before dispatch/dismissal and animation cleanup,
     /// not only on release (which the modal may consume).
@@ -256,6 +265,18 @@ impl App {
         position: (f64, f64),
     ) {
         self.finish_obscured_native_pointer_gesture();
+        // The docked agent view owns its area below the side panels, which
+        // slide over it, and above terminal scrollbars and dividers.
+        if !self.pointer_panel_owns_input() {
+            let (x, y) = (position.0 as f32, position.1 as f32);
+            let handled = match state {
+                ElementState::Pressed => self.handle_agent_view_press(x, y, button),
+                ElementState::Released => self.handle_agent_view_release(),
+            };
+            if handled {
+                return;
+            }
+        }
         let Some(renderer) = &self.renderer else {
             return;
         };
@@ -750,6 +771,12 @@ impl App {
     /// Handle mouse movement
     pub(super) fn handle_mouse_move(&mut self, position: (f64, f64)) {
         self.finish_obscured_native_pointer_gesture();
+        if !self.pointer_panel_owns_input()
+            && !self.native_pointer_gesture_active()
+            && self.handle_agent_view_motion(position.0 as f32, position.1 as f32)
+        {
+            return;
+        }
         let Some(renderer) = &self.renderer else {
             return;
         };
@@ -1574,11 +1601,10 @@ impl App {
         let Some(renderer) = &self.renderer else {
             return false;
         };
-        let (window_width, _) = renderer.window_size();
-
-        // Scrollbar is 6px wide + 2px margin from right edge, with an expanded hit area
+        // Scrollbar is 6px wide + 2px margin from the terminal area's right
+        // edge, with an expanded hit area
         let scrollbar_hit_width = 16.0_f32;
-        let scrollbar_x = window_width as f32 - scrollbar_hit_width;
+        let scrollbar_x = renderer.content_right() - scrollbar_hit_width;
 
         let content_top = renderer.content_top();
         let padding = renderer.padding();

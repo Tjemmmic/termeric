@@ -1,0 +1,1356 @@
+//! The agent view in one window: its sessions, frame, input, and actions.
+//!
+//! The panel is docked right of the terminals and never modal: it takes
+//! keys only while it has keyboard focus, which a click in it or its shortcut
+//! gives and a click in a terminal or Escape takes back. Sessions belong to
+//! the window and end with it; Claude Code keeps their logs, so they can be
+//! continued later.
+
+use std::collections::HashSet;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::{Instant, SystemTime};
+
+use super::*;
+use crate::agent_view::history::{self, PastConversation};
+use crate::agent_view::session::{AgentProgram, AgentSession, SessionId, StartOptions};
+use crate::agent_view::transcript::{Activity, DecidedBy};
+use crate::ui::agent_view::colors::Colors;
+use crate::ui::agent_view::layout::{
+    self, AgentAvailability, Input, NewSessionInfo, PastSession, Suggestions,
+};
+use crate::ui::agent_view::scene::{Bounds, Scene};
+use crate::ui::agent_view::{AgentViewState, Focus, Screen};
+
+/// Earlier conversations listed per folder.
+const PAST_LIMIT: usize = 12;
+/// How near the divider a press starts a width drag, in logical pixels.
+pub(super) const DIVIDER_GRAB: f32 = 4.0;
+
+/// The agent view's state in one window.
+#[derive(Default)]
+pub(super) struct AgentViewWindow {
+    pub state: AgentViewState,
+    /// Sessions in the order they started.
+    pub sessions: Vec<AgentSession>,
+    /// The last scene drawn, for hit testing and accessibility.
+    pub scene: Option<Arc<Scene>>,
+    colors: Option<(u64, Colors)>,
+    /// Earlier conversations for a folder, loaded when a page needs them.
+    pub past: Option<(PathBuf, Vec<PastConversation>)>,
+    /// Whether the Claude Code executable was found, by program name.
+    /// Unset while the search is still running.
+    installed: Option<(String, bool)>,
+    /// A search for the executable is running; its answer wakes the loop.
+    looking: bool,
+    /// A press in the composer that may become a selection drag.
+    pub selecting: bool,
+    /// The last composer press, to recognize a double-click.
+    pub last_press: Option<(Instant, f32, f32)>,
+    /// The pointer shows the resize cursor over the divider.
+    resize_cursor: bool,
+    /// Sessions already announced as needing the person.
+    announced: HashSet<SessionId>,
+    /// Each session's working tree as it started, for reviewing changes.
+    tracking: std::collections::HashMap<SessionId, crate::agents::changes::ChangeTracking>,
+    /// What the supervisor has been told about each session.
+    told: std::collections::HashMap<SessionId, Told>,
+}
+
+/// What the supervisor already heard about one session.
+#[derive(Default)]
+struct Told {
+    approvals: HashSet<String>,
+    turns: usize,
+}
+
+impl AgentViewWindow {
+    pub fn session(&self, id: SessionId) -> Option<&AgentSession> {
+        self.sessions.iter().find(|session| session.id() == id)
+    }
+
+    pub fn session_mut(&mut self, id: SessionId) -> Option<&mut AgentSession> {
+        self.sessions.iter_mut().find(|session| session.id() == id)
+    }
+
+    pub fn active_session_mut(&mut self) -> Option<&mut AgentSession> {
+        let id = self.state.active?;
+        self.session_mut(id)
+    }
+
+    pub fn baseline(&self, id: SessionId) -> Option<&crate::agents::changes::Baseline> {
+        self.tracking.get(&id)?.baseline()
+    }
+
+    pub fn baseline_unavailable(&self, id: SessionId) -> Option<String> {
+        self.tracking
+            .get(&id)?
+            .unavailable_reason()
+            .map(str::to_owned)
+    }
+
+    /// Collects finished snapshots.
+    pub fn poll_tracking(&mut self) {
+        for tracking in self.tracking.values_mut() {
+            tracking.poll();
+        }
+    }
+
+    /// Whether a snapshot is still being taken.
+    pub fn capturing(&self) -> bool {
+        self.tracking.values().any(|tracking| {
+            tracking.baseline().is_none() && tracking.unavailable_reason().is_none()
+        })
+    }
+
+    /// Sessions most recently active first.
+    pub fn by_recency(&self) -> Vec<&AgentSession> {
+        let mut sessions: Vec<&AgentSession> = self.sessions.iter().collect();
+        sessions.sort_by_key(|session| std::cmp::Reverse(session.last_change()));
+        sessions
+    }
+}
+
+impl App {
+    // ── Sessions ─────────────────────────────────────────────────────────
+
+    /// The Claude Code program and environment from the agent catalog.
+    fn agent_view_program(&self) -> AgentProgram {
+        let definition = self.agents.get("claude-code");
+        let program = definition.map_or_else(
+            || "claude".to_owned(),
+            |definition| definition.program.clone(),
+        );
+        let env = definition
+            .and_then(|definition| definition.launch(None, false).ok())
+            .map(|launch| launch.env.into_iter().collect())
+            .unwrap_or_default();
+        AgentProgram {
+            program,
+            args: Vec::new(),
+            env,
+        }
+    }
+
+    fn agent_view_availability(&mut self) -> AgentAvailability {
+        use crate::agent_view::process::{Lookup, find_program};
+        let program = self.agent_view_program().program;
+        if let Some((known, installed)) = &self.agent_view.installed
+            && *known == program
+        {
+            return if *installed {
+                AgentAvailability::Ready
+            } else {
+                AgentAvailability::NotInstalled
+            };
+        }
+        let installed = match find_program(&program, &super::agent_view_event_waker()) {
+            Lookup::Found(_) => true,
+            Lookup::Missing => false,
+            Lookup::Searching => {
+                self.agent_view.looking = true;
+                return AgentAvailability::Looking;
+            }
+        };
+        self.agent_view.installed = Some((program, installed));
+        if installed {
+            AgentAvailability::Ready
+        } else {
+            AgentAvailability::NotInstalled
+        }
+    }
+
+    /// Where a new session starts: the chosen folder, else the focused
+    /// terminal's, else home.
+    fn agent_view_default_cwd(&self) -> (PathBuf, String) {
+        if let Some(cwd) = self
+            .tabs
+            .as_ref()
+            .and_then(TabManager::active_tab)
+            .and_then(|tab| tab.working_directory())
+            .map(PathBuf::from)
+            .filter(|path| path.is_dir())
+        {
+            return (cwd, "From the focused terminal".to_owned());
+        }
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/"));
+        (home, "Your home folder".to_owned())
+    }
+
+    fn agent_view_new_session_info(&mut self) -> NewSessionInfo {
+        let availability = self.agent_view_availability();
+        let (default, source) = self.agent_view_default_cwd();
+        let (cwd, cwd_source) = match &self.agent_view.state.new_session.cwd {
+            Some(cwd) if *cwd != default => (cwd.clone(), "Chosen folder".to_owned()),
+            _ => (default, source),
+        };
+        let mut cwd_choices: Vec<PathBuf> = Vec::new();
+        if let Some(tabs) = &self.tabs {
+            for (_, tab) in tabs.iter() {
+                if let Some(path) = tab.working_directory().map(PathBuf::from)
+                    && path.is_dir()
+                    && !cwd_choices.contains(&path)
+                {
+                    cwd_choices.push(path);
+                }
+            }
+        }
+        NewSessionInfo {
+            cwd,
+            cwd_source,
+            cwd_choices,
+            availability,
+        }
+    }
+
+    /// Earlier conversations for `cwd`, read once per folder.
+    fn agent_view_past(&mut self, cwd: &std::path::Path, refresh: bool) -> Vec<PastSession> {
+        let stale = refresh
+            || self
+                .agent_view
+                .past
+                .as_ref()
+                .is_none_or(|(folder, _)| folder != cwd);
+        if stale {
+            self.agent_view.past = Some((
+                cwd.to_path_buf(),
+                history::past_conversations(cwd, PAST_LIMIT),
+            ));
+        }
+        let now = SystemTime::now();
+        // Conversations open here are listed with the sessions instead.
+        let open: HashSet<String> = self
+            .agent_view
+            .sessions
+            .iter()
+            .filter(|session| !session.handed_off())
+            .filter_map(|session| session.conversation_id().map(str::to_owned))
+            .collect();
+        self.agent_view
+            .past
+            .as_ref()
+            .map(|(_, past)| {
+                past.iter()
+                    .filter(|past| !open.contains(&past.id))
+                    .map(|past| PastSession {
+                        id: past.id.clone(),
+                        title: past.title.clone(),
+                        when: history::ago(past.modified, now),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Starts a session from the new-session page, or continues an earlier
+    /// conversation. Returns whether it started.
+    pub(super) fn start_agent_session(&mut self, resume: Option<(String, String)>) -> bool {
+        let info = self.agent_view_new_session_info();
+        let form = &self.agent_view.state.new_session;
+        let options = StartOptions {
+            cwd: info.cwd.clone(),
+            mode: form.mode,
+            model: form.model.clone().filter(|model| model != "default"),
+            resume,
+        };
+        let prompt = form.composer.text().trim().to_owned();
+        let program = self.agent_view_program();
+        match AgentSession::start(program, options, super::agent_view_event_waker()) {
+            Ok(mut session) => {
+                let id = session.id();
+                let mut tracking = crate::agents::changes::ChangeTracking::default();
+                tracking.start_capture(("claude-code", None), Some(session.cwd().to_path_buf()));
+                self.agent_view.tracking.insert(id, tracking);
+                if !prompt.is_empty()
+                    && let Err(error) = session.prompt(&prompt, Vec::new())
+                {
+                    self.toasts.error(error.to_string());
+                }
+                self.agent_view.sessions.push(session);
+                self.agent_view.state.new_session.composer.clear();
+                self.agent_view.state.show(id);
+                if !prompt.is_empty() {
+                    self.agent_view
+                        .state
+                        .conversation_mut(id)
+                        .remember_sent(&prompt);
+                }
+                self.set_agent_view_keyboard(true);
+                self.request_agent_view_redraw();
+                true
+            }
+            Err(error) => {
+                self.toasts.error(error.to_string());
+                false
+            }
+        }
+    }
+
+    /// Drains every session's output; redraws when anything changed.
+    pub(super) fn process_agent_view_events(&mut self) {
+        if std::mem::take(&mut self.agent_view.looking) {
+            // The search for Claude Code may have finished.
+            self.request_agent_view_redraw();
+        }
+        let mut changed = false;
+        for session in &mut self.agent_view.sessions {
+            changed |= session.pump();
+        }
+        if !changed {
+            return;
+        }
+        // Forget question choices for requests that were answered or
+        // withdrawn.
+        let pending: Vec<(SessionId, Vec<String>)> = self
+            .agent_view
+            .sessions
+            .iter()
+            .map(|session| {
+                (
+                    session.id(),
+                    session
+                        .transcript()
+                        .approvals()
+                        .iter()
+                        .map(|approval| approval.request_id.clone())
+                        .collect(),
+                )
+            })
+            .collect();
+        for (id, requests) in pending {
+            let requests: Vec<&str> = requests.iter().map(String::as_str).collect();
+            if self.agent_view.state.conversation(id).is_some() {
+                self.agent_view
+                    .state
+                    .conversation_mut(id)
+                    .retain_requests(&requests);
+            }
+        }
+        self.announce_agent_view_attention();
+        let events = self.agent_view_supervisor_events();
+        self.supervise_agent_view(events);
+        self.request_agent_view_redraw();
+    }
+
+    /// What the supervisor has not yet heard: new approval requests and
+    /// finished turns. Each is reported once.
+    pub(super) fn agent_view_supervisor_events(
+        &mut self,
+    ) -> Vec<crate::agents::supervisor::SessionEvent> {
+        use crate::agent_view::transcript::Item;
+        use crate::agents::supervisor::SessionEvent;
+        let mut events = Vec::new();
+        let window = &mut self.agent_view;
+        let live: HashSet<SessionId> = window.sessions.iter().map(AgentSession::id).collect();
+        window.told.retain(|id, _| live.contains(id));
+        for session in &window.sessions {
+            let told = window.told.entry(session.id()).or_default();
+            let transcript = session.transcript();
+            let control_id = session.id().control_id();
+            let title = session.title();
+            let pending: HashSet<String> = transcript
+                .approvals()
+                .iter()
+                .map(|approval| approval.request_id.clone())
+                .collect();
+            for approval in transcript.approvals() {
+                if told.approvals.insert(approval.request_id.clone()) {
+                    events.push(SessionEvent::Approval {
+                        session: control_id,
+                        title: title.clone(),
+                        approval_id: approval.request_id.clone(),
+                        request: crate::agent_view::present::approval_text(approval, session.cwd()),
+                    });
+                }
+            }
+            told.approvals.retain(|id| pending.contains(id));
+            let ends: Vec<_> = transcript
+                .items()
+                .iter()
+                .filter_map(|item| match item {
+                    Item::TurnEnd(end) => Some(end),
+                    _ => None,
+                })
+                .collect();
+            if ends.len() > told.turns {
+                told.turns = ends.len();
+                if let Some(end) = ends.last().filter(|end| !end.interrupted) {
+                    events.push(match &end.outcome.error {
+                        Some(error) => SessionEvent::Failed {
+                            session: control_id,
+                            title: title.clone(),
+                            error: error.clone(),
+                        },
+                        None => SessionEvent::Finished {
+                            session: control_id,
+                            title: title.clone(),
+                            answer: transcript.last_answer().map(str::to_owned),
+                        },
+                    });
+                }
+            }
+        }
+        events
+    }
+
+    /// Tells the person, once per request, when a session needs them and
+    /// they cannot see it.
+    fn announce_agent_view_attention(&mut self) {
+        let waiting: Vec<(SessionId, String)> = self
+            .agent_view
+            .sessions
+            .iter()
+            .filter(|session| session.activity() == Activity::NeedsYou)
+            .map(|session| (session.id(), session.title()))
+            .collect();
+        self.agent_view
+            .announced
+            .retain(|id| waiting.iter().any(|(waiting, _)| waiting == id));
+        let visible = |app: &App, id: SessionId| {
+            app.window_focused
+                && app.agent_view.state.is_open()
+                && app.agent_view.state.screen == Screen::Conversation
+                && app.agent_view.state.active == Some(id)
+        };
+        for (id, title) in waiting {
+            if self.agent_view.announced.contains(&id) || visible(self, id) {
+                continue;
+            }
+            self.agent_view.announced.insert(id);
+            self.notify_agent_view(&title);
+        }
+    }
+
+    // ── Frame ────────────────────────────────────────────────────────────
+
+    /// The panel's area in physical window pixels.
+    fn agent_view_panel_bounds(&self) -> Option<Bounds> {
+        let renderer = self.renderer.as_ref()?;
+        let width = renderer.dock_width();
+        if width <= 0.0 {
+            return None;
+        }
+        let (window_width, window_height) = renderer.window_size();
+        let top = renderer.content_top();
+        Some(Bounds::new(
+            window_width as f32 - width,
+            top,
+            width,
+            (window_height as f32 - top).max(0.0),
+        ))
+    }
+
+    /// Sets the dock's width for the current window without resizing
+    /// terminals. Returns whether it changed.
+    /// The physical width the panel and terminals share, beside any side
+    /// tab bar, and the scale factor.
+    pub(super) fn agent_dock_room(&self) -> Option<(f32, f32)> {
+        let renderer = self.renderer.as_ref()?;
+        let (window_width, _) = renderer.window_size();
+        let window_width = window_width as f32;
+        Some((
+            window_width - renderer.tab_bar_width_for(window_width),
+            renderer.scale_factor(),
+        ))
+    }
+
+    pub(super) fn apply_agent_dock_width(&mut self) -> bool {
+        let Some((room, scale)) = self.agent_dock_room() else {
+            return false;
+        };
+        let width = self.agent_view.state.physical_width(room, scale);
+        let Some(renderer) = &mut self.renderer else {
+            return false;
+        };
+        let changed = renderer.set_dock_width(width);
+        if width == 0.0 && self.agent_view.state.has_keyboard() {
+            // Keys must never reach a message box nobody can see.
+            self.set_agent_view_keyboard(false);
+        }
+        changed
+    }
+
+    /// Whether the panel has room to show. Without a renderer nothing is
+    /// laid out, so nothing is hidden either.
+    fn agent_view_docked(&self) -> bool {
+        self.renderer
+            .as_ref()
+            .is_none_or(|renderer| renderer.dock_width() > 0.0)
+    }
+
+    /// Recomputes the dock's width and resizes terminals when it changes.
+    pub(super) fn sync_agent_dock(&mut self) {
+        if self.apply_agent_dock_width()
+            && let Some(window) = &self.window
+        {
+            let size = window.inner_size();
+            self.sync_terminal_geometry(size.width, size.height);
+        }
+    }
+
+    /// When the panel next needs attention without new input.
+    pub(super) fn next_agent_view_deadline(&self, now: Instant) -> Option<Instant> {
+        let mut deadlines: Vec<Instant> = self
+            .agent_view
+            .sessions
+            .iter()
+            .filter_map(AgentSession::handshake_deadline)
+            .collect();
+        if self.agent_view.capturing() {
+            deadlines.push(now + std::time::Duration::from_millis(50));
+        }
+        if self.agent_view.state.is_open() {
+            if self.agent_view_animating() {
+                // Spinners and slides at 30 frames a second.
+                deadlines.push(now + std::time::Duration::from_millis(33));
+            } else if self.agent_view.state.has_keyboard() {
+                deadlines.push(self.agent_view.state.next_caret_toggle(now));
+            }
+        }
+        deadlines.into_iter().min()
+    }
+
+    /// Runs what came due: handshake timeouts, finished snapshots, and
+    /// animation frames.
+    pub(super) fn poll_agent_view(&mut self, now: Instant) {
+        if self.agent_view.sessions.iter().any(|session| {
+            session
+                .handshake_deadline()
+                .is_some_and(|deadline| deadline <= now)
+        }) {
+            self.process_agent_view_events();
+        }
+        self.agent_view.poll_tracking();
+        if self.agent_view.state.is_open()
+            && (self.agent_view_animating()
+                || (self.agent_view.state.has_keyboard()
+                    && self.agent_view.state.next_caret_toggle(now)
+                        <= now + std::time::Duration::from_millis(5)))
+        {
+            self.request_agent_view_redraw();
+        }
+    }
+
+    /// Builds this frame's scene, or clears it when the panel is closed.
+    pub(super) fn prepare_agent_view_frame(&mut self) {
+        let Some(panel) = self.agent_view_panel_bounds() else {
+            self.agent_view.scene = None;
+            if let Some(renderer) = &mut self.renderer {
+                renderer.set_agent_view(None);
+            }
+            return;
+        };
+        let theme_key = self.agent_view_theme_key();
+        if self
+            .agent_view
+            .colors
+            .as_ref()
+            .is_none_or(|(key, _)| *key != theme_key)
+        {
+            let colors = Colors::from_theme(&self.theme, self.high_contrast_enabled());
+            self.agent_view.colors = Some((theme_key, colors));
+        }
+        let new_session = self.agent_view_new_session_info();
+        let past = match self.agent_view.state.screen {
+            Screen::Sessions | Screen::NewSession => {
+                let cwd = match (self.agent_view.state.screen, self.agent_view.state.active) {
+                    (Screen::Sessions, Some(id)) => self.agent_view.session(id).map_or_else(
+                        || new_session.cwd.clone(),
+                        |session| session.cwd().to_path_buf(),
+                    ),
+                    _ => new_session.cwd.clone(),
+                };
+                self.agent_view_past(&cwd, false)
+            }
+            Screen::Conversation => Vec::new(),
+        };
+        let suggestions = self.agent_view_suggestions();
+        let terminal_agents = self.agent_view_terminal_rows();
+        let supervisor = self.agent_view_supervisor_card();
+        let banner = self.agent_view_banner();
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let Some(renderer) = &mut self.renderer else {
+            return;
+        };
+        let scale = renderer.scale_factor();
+        let sessions = self.agent_view.by_recency();
+        let colors = &self
+            .agent_view
+            .colors
+            .as_ref()
+            .expect("colors were just set")
+            .1;
+        let input = Input {
+            panel,
+            scale,
+            now: Instant::now(),
+            colors,
+            state: &self.agent_view.state,
+            sessions: &sessions,
+            suggestions,
+            banner,
+            terminal_agents: &terminal_agents,
+            past: &past,
+            supervisor,
+            new_session,
+            home,
+        };
+        let scene = Arc::new(layout::build(&input, renderer.text_measure()));
+        renderer.set_agent_view(Some(Arc::clone(&scene)));
+        self.agent_view.scene = Some(scene);
+    }
+
+    fn agent_view_theme_key(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.theme.meta.name.hash(&mut hasher);
+        for color in [
+            self.theme.ui.background,
+            self.theme.ui.foreground,
+            self.theme.ui.tab_active,
+        ] {
+            color.to_f32_array().map(f32::to_bits).hash(&mut hasher);
+        }
+        self.high_contrast_enabled().hash(&mut hasher);
+        hasher.finish()
+    }
+
+    /// Whether the panel needs frames soon without new input: an animation,
+    /// a spinner, or a blinking caret.
+    pub(super) fn agent_view_animating(&self) -> bool {
+        if !self.agent_view.state.is_open() {
+            return false;
+        }
+        let now = Instant::now();
+        let state = &self.agent_view.state;
+        if state.animating(now) || state.sessions_scroll.animating(now) {
+            return true;
+        }
+        let active = state.active.and_then(|id| self.agent_view.session(id));
+        // Working sessions show spinners; the caret blinks on its own
+        // schedule (see `next_agent_view_deadline`).
+        let busy =
+            self.agent_view.sessions.iter().any(|session| {
+                matches!(session.activity(), Activity::Working | Activity::Starting)
+            });
+        busy || active
+            .and_then(|session| state.conversation(session.id()))
+            .is_some_and(|view| view.scroll.animating(now))
+    }
+
+    pub(super) fn request_agent_view_redraw(&mut self) {
+        self.redraw_scheduler
+            .request(redraw_scheduler::RedrawReason::Animation);
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+    }
+
+    // ── Opening and focus ────────────────────────────────────────────────
+
+    /// Opens the panel with keyboard focus, or, if it already has focus,
+    /// closes it.
+    pub(super) fn toggle_agent_view(&mut self) {
+        let state = &mut self.agent_view.state;
+        if state.is_open() && state.has_keyboard() {
+            self.close_agent_view();
+        } else {
+            self.open_agent_view(true);
+        }
+    }
+
+    pub(super) fn open_agent_view(&mut self, keyboard: bool) {
+        let state = &mut self.agent_view.state;
+        state.open();
+        if state.active.is_none() {
+            state.screen = if self.agent_view.sessions.is_empty() {
+                Screen::NewSession
+            } else {
+                Screen::Sessions
+            };
+        }
+        self.agent_view.state.focus = Focus::Composer;
+        self.sync_agent_dock();
+        let docked = self.agent_view_docked();
+        if keyboard && !docked {
+            self.toasts
+                .info("The window is too narrow for the agent view; it shows when there is room");
+        }
+        self.set_agent_view_keyboard(keyboard && docked);
+        self.request_agent_view_redraw();
+    }
+
+    pub(super) fn close_agent_view(&mut self) {
+        let terminal_had_focus = self.terminal_has_focus();
+        self.agent_view.state.close();
+        self.report_terminal_focus(terminal_had_focus);
+        self.sync_agent_dock();
+        self.request_agent_view_redraw();
+    }
+
+    /// Whether keys go to a terminal: the window is focused and the panel
+    /// does not hold the keyboard.
+    pub(super) fn terminal_has_focus(&self) -> bool {
+        self.window_focused && !self.agent_view.state.has_keyboard()
+    }
+
+    /// Gives the keyboard to the panel or back to the terminals, telling
+    /// terminal programs that track focus, as a window focus change would.
+    pub(super) fn set_agent_view_keyboard(&mut self, keyboard: bool) {
+        let terminal_had_focus = self.terminal_has_focus();
+        self.agent_view.state.set_keyboard(keyboard);
+        self.report_terminal_focus(terminal_had_focus);
+    }
+
+    fn report_terminal_focus(&mut self, terminal_had_focus: bool) {
+        let focused = self.terminal_has_focus();
+        if focused != terminal_had_focus
+            && let Some(report) =
+                crate::input::encode_focus_report(self.active_keyboard_mode(), focused)
+        {
+            self.write_terminal_protocol_input(report);
+        }
+    }
+
+    /// Opens the panel on a new-session page.
+    pub(super) fn new_agent_session_page(&mut self) {
+        self.open_agent_view(true);
+        self.agent_view.state.screen = Screen::NewSession;
+        self.agent_view.state.new_session.cwd = None;
+        self.agent_view.state.menu = None;
+        // Look again: Claude Code may have been installed, and conversations
+        // finished, since the page last showed.
+        self.agent_view.installed = None;
+        self.agent_view.past = None;
+        self.request_agent_view_redraw();
+    }
+
+    /// Shows a session in the panel.
+    pub(super) fn show_agent_session(&mut self, id: SessionId) {
+        if self.agent_view.session(id).is_none() {
+            return;
+        }
+        self.open_agent_view(true);
+        self.agent_view.state.show(id);
+        self.request_agent_view_redraw();
+    }
+}
+
+impl App {
+    // ── Services the panel uses ──────────────────────────────────────────
+
+    /// Copies text; an empty `label` copies quietly.
+    pub(super) fn copy_agent_view_text(&mut self, text: &str, label: &str) {
+        if label.is_empty() {
+            match &mut self.clipboard {
+                Some(clipboard) => {
+                    if let Err(error) = clipboard.set_text(text) {
+                        self.toasts.error(format!("Copy failed: {error}"));
+                    }
+                }
+                None => self.toasts.warning("Clipboard not available"),
+            }
+        } else {
+            self.copy_to_clipboard(text.to_owned(), label);
+        }
+    }
+
+    pub(super) fn agent_view_clipboard_text(&mut self) -> Option<String> {
+        let clipboard = self.clipboard.as_mut()?;
+        match clipboard.get_text() {
+            Ok(text) => Some(text),
+            Err(error) => {
+                log::debug!("agent view: clipboard read failed: {error}");
+                None
+            }
+        }
+    }
+
+    pub(super) fn agent_view_selection_text(&self) -> Option<String> {
+        self.native_selection_text()
+            .filter(|text| !text.trim().is_empty())
+    }
+
+    /// The focused terminal's last finished command: its text, output, and
+    /// whether it failed.
+    pub(super) fn agent_view_last_command(&self) -> Option<(String, String, bool)> {
+        let terminal = self.active_terminal()?;
+        if terminal
+            .mode()
+            .contains(termeric_core::term::TerminalMode::ALT_SCREEN)
+        {
+            return None;
+        }
+        let tracker = &terminal.shell_integration().prompt_tracker;
+        let region = tracker.completed_region(tracker.completed_count().checked_sub(1)?)?;
+        let (command, _) = App::extract_command_text(terminal, region);
+        let command = command.trim().to_owned();
+        let (output, truncated) = App::extract_output_text(terminal, region);
+        if command.is_empty() || output.trim().is_empty() {
+            return None;
+        }
+        let output = if truncated {
+            format!("{}\n[output shortened]", output.trim_end())
+        } else {
+            output.trim_end().to_owned()
+        };
+        Some((command, output, region.is_failure()))
+    }
+
+    /// What the composer offers to attach. Cheap enough to run per frame:
+    /// it counts rows rather than copying text.
+    fn agent_view_suggestions(&self) -> Suggestions {
+        let terminal = self.active_terminal();
+        let selection_lines = terminal
+            .and_then(|terminal| terminal.selection())
+            .filter(|selection| selection.start != selection.end)
+            .map(|selection| (selection.end.row - selection.start.row).unsigned_abs() as usize + 1);
+        let last_command = terminal.and_then(|terminal| {
+            if terminal
+                .mode()
+                .contains(termeric_core::term::TerminalMode::ALT_SCREEN)
+            {
+                return None;
+            }
+            let tracker = &terminal.shell_integration().prompt_tracker;
+            let region = tracker.completed_region(tracker.completed_count().checked_sub(1)?)?;
+            let (command, _) = App::extract_command_text(terminal, region);
+            let command = command.trim().to_owned();
+            let rows = match (region.output_row, region.finish_row) {
+                (Some(start), Some(end)) if end > start => usize::try_from(end - start).ok()?,
+                _ => return None,
+            };
+            (!command.is_empty()).then(|| (shorten_command(&command), rows, region.is_failure()))
+        });
+        Suggestions {
+            selection_lines,
+            last_command,
+        }
+    }
+
+    fn agent_view_terminal_rows(&self) -> Vec<layout::TerminalAgentRow> {
+        self.terminal_agent_rows()
+            .into_iter()
+            .filter_map(|row| match row.identity {
+                crate::ui::agents_panel::AgentOrigin::Terminal(identity) => {
+                    Some(layout::TerminalAgentRow {
+                        identity,
+                        name: row.name,
+                        place: format!("Terminal · {}", row.place),
+                        needs_you: matches!(
+                            row.state,
+                            crate::ui::agents_panel::AgentRowState::NeedsYou
+                        ),
+                        summary: row.summary,
+                    })
+                }
+                crate::ui::agents_panel::AgentOrigin::AgentView(_) => None,
+            })
+            .collect()
+    }
+
+    /// The agent view's sessions as Agents panel rows.
+    pub(super) fn agent_view_rows(&self) -> Vec<crate::ui::agents_panel::AgentRow> {
+        use crate::ui::agents_panel::{AgentOrigin, AgentRow, AgentRowState};
+        self.agent_view
+            .by_recency()
+            .into_iter()
+            .map(|session| {
+                let activity = session.activity();
+                let state = match activity {
+                    Activity::Starting | Activity::Working => AgentRowState::Working,
+                    Activity::NeedsYou => AgentRowState::NeedsYou,
+                    Activity::Finished { success: true } => AgentRowState::Done,
+                    Activity::Finished { success: false } => AgentRowState::Failed,
+                    Activity::Idle | Activity::Stopped | Activity::Exited => AgentRowState::Idle,
+                };
+                AgentRow {
+                    identity: AgentOrigin::AgentView(session.id()),
+                    name: format!("Claude Code · {}", session.title()),
+                    place: "Agent view".to_owned(),
+                    state,
+                    summary: format!(
+                        "{} · {}",
+                        activity.label(),
+                        crate::ui::agent_view::layout::session_summary(session)
+                    ),
+                }
+            })
+            .collect()
+    }
+
+    fn agent_view_supervisor_card(&self) -> Option<layout::SupervisorCard> {
+        let summary = self.supervisor_summary()?;
+        Some(layout::SupervisorCard {
+            status: summary.mode,
+            latest: summary.entries.first().cloned(),
+            held: summary.held,
+        })
+    }
+
+    /// While a supervisor runs, a conversation says what it may do there.
+    fn agent_view_banner(&self) -> Option<layout::Banner> {
+        let summary = self.supervisor_summary()?;
+        let (title, detail) = if summary.held {
+            (
+                "You took over from the supervisor",
+                "It watches but answers nothing until you hand back.",
+            )
+        } else {
+            match self.supervisor.as_ref().map(|supervisor| supervisor.mode()) {
+                Some(crate::agents::supervisor::SupervisorMode::Auto) => (
+                    "The supervisor is steering",
+                    "It may answer approvals and send messages here, following your rules.",
+                ),
+                Some(crate::agents::supervisor::SupervisorMode::Assist) => (
+                    "The supervisor is assisting",
+                    "It suggests answers to approvals; you decide.",
+                ),
+                _ => (
+                    "The supervisor is watching",
+                    "It reads this conversation but acts on nothing.",
+                ),
+            }
+        };
+        Some(layout::Banner {
+            title: title.to_owned(),
+            detail: detail.to_owned(),
+            action: Some((
+                if summary.held {
+                    "Hand back"
+                } else {
+                    "Take over"
+                }
+                .to_owned(),
+                crate::ui::agent_view::scene::Target::ToggleSupervisor,
+            )),
+            supervisor: true,
+        })
+    }
+
+    fn notify_agent_view(&mut self, title: &str) {
+        if !self.config.agent_status.notify {
+            return;
+        }
+        if let Some(error) = self.notifications.notify("Claude Code needs you", title) {
+            self.toasts.error(error);
+        }
+    }
+
+    /// Continues the shown conversation, or starts Claude Code, in a new
+    /// terminal tab.
+    pub(super) fn open_agent_view_in_terminal(&mut self) {
+        let Some(agent) = self
+            .agents
+            .get("claude-code")
+            .filter(|agent| agent.enabled)
+            .cloned()
+        else {
+            self.toasts
+                .error("Claude Code is disabled in the agent settings");
+            return;
+        };
+        let (cwd, resume) = match (self.agent_view.state.screen, self.agent_view.state.active) {
+            (Screen::Conversation, Some(id)) => match self.agent_view.session(id) {
+                Some(session) => (
+                    session.cwd().to_path_buf(),
+                    session.conversation_id().map(str::to_owned),
+                ),
+                None => return,
+            },
+            _ => (self.agent_view_new_session_info().cwd, None),
+        };
+        let context = self.build_plugin_context();
+        let cwd_text = cwd.display().to_string();
+        match crate::plugin::agent::open_tab_action(&agent, &context, None, false, Some(&cwd_text))
+        {
+            Ok(mut action) => {
+                if let (Some(resume), crate::plugin::PluginAction::OpenTab { args, .. }) =
+                    (resume, &mut action)
+                {
+                    args.extend(["--resume".to_owned(), resume]);
+                    // Two processes must not write one conversation.
+                    if let Some(session) = self.agent_view.active_session_mut() {
+                        session.hand_off();
+                    }
+                }
+                self.execute_plugin_actions(vec![action]);
+                self.set_agent_view_keyboard(false);
+            }
+            Err(error) => self.toasts.error(error),
+        }
+    }
+
+    pub(super) fn set_agent_view_cursor(&mut self, resize: bool) {
+        if self.agent_view.resize_cursor == resize {
+            return;
+        }
+        self.agent_view.resize_cursor = resize;
+        if let Some(window) = &self.window {
+            window.set_cursor(if resize {
+                winit::window::CursorIcon::EwResize
+            } else {
+                winit::window::CursorIcon::Default
+            });
+        }
+    }
+}
+
+/// A long command, shortened for a chip.
+fn shorten_command(command: &str) -> String {
+    const LIMIT: usize = 40;
+    let first = command.lines().next().unwrap_or_default().trim();
+    match first.char_indices().nth(LIMIT) {
+        Some((end, _)) => format!("{}…", first[..end].trim_end()),
+        None => first.to_owned(),
+    }
+}
+
+impl App {
+    // ── The control socket and the supervisor ───────────────────────────
+
+    /// This window's agent view sessions as control summaries.
+    pub(super) fn agent_view_summaries(
+        &self,
+        window_id: u64,
+    ) -> Vec<crate::control::protocol::AgentSummary> {
+        use crate::control::protocol::{
+            AgentState, AgentSummary, MAX_AGENT_EVENT_DETAIL_BYTES,
+            MAX_AGENT_SUMMARY_MESSAGE_BYTES, MAX_METADATA_BYTES, printable_within,
+        };
+        self.agent_view
+            .sessions
+            .iter()
+            .map(|session| {
+                let transcript = session.transcript();
+                let state = match session.activity() {
+                    Activity::Starting | Activity::Working => AgentState::Working,
+                    Activity::NeedsYou => AgentState::NeedsInput,
+                    Activity::Finished { success: true } => AgentState::Finished,
+                    Activity::Finished { success: false } => AgentState::Failed,
+                    Activity::Idle | Activity::Stopped | Activity::Exited => AgentState::Idle,
+                };
+                AgentSummary {
+                    window_id,
+                    tab_id: 0,
+                    pane_id: 0,
+                    session_id: Some(session.id().control_id()),
+                    agent_id: "claude-code".to_owned(),
+                    name: "Claude Code".to_owned(),
+                    tab_title: printable_within(
+                        &format!("Agent view: {}", session.title()),
+                        MAX_METADATA_BYTES,
+                    ),
+                    state: Some(state),
+                    detail: (session.activity() == Activity::NeedsYou).then(|| {
+                        printable_within(
+                            &crate::ui::agent_view::layout::session_summary(session),
+                            MAX_AGENT_EVENT_DETAIL_BYTES,
+                        )
+                    }),
+                    last_message: transcript
+                        .last_answer()
+                        .map(|answer| printable_within(answer, MAX_AGENT_SUMMARY_MESSAGE_BYTES)),
+                    seconds_in_state: Some(session.last_change().elapsed().as_secs()),
+                }
+            })
+            .collect()
+    }
+
+    fn control_session(&self, session_id: u64) -> Result<SessionId, String> {
+        self.agent_view
+            .sessions
+            .iter()
+            .map(AgentSession::id)
+            .find(|id| id.control_id() == session_id)
+            .ok_or_else(|| format!("Agent view session {session_id} does not exist"))
+    }
+
+    /// One session's recent conversation for another program to read.
+    pub(super) fn read_agent_view_conversation(
+        &self,
+        session_id: u64,
+    ) -> Result<(String, bool), String> {
+        let id = self.control_session(session_id)?;
+        let session = self.agent_view.session(id).expect("the id was just found");
+        let transcript = session.transcript();
+        Ok(crate::agent_view::present::conversation_text(
+            transcript.items(),
+            transcript.approvals(),
+            session.cwd(),
+            crate::control::protocol::MAX_TERMINAL_TEXT_BYTES as usize,
+        ))
+    }
+
+    /// Answers a session's pending approval for another program: the
+    /// supervisor, or a person's own tooling when control input is allowed.
+    /// Returns whether it was answered rather than suggested.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn answer_agent_view_approval(
+        &mut self,
+        session_id: u64,
+        approval_id: &str,
+        allow: bool,
+        reason: &str,
+        supervisor: Option<&str>,
+        peer_process: Option<u32>,
+    ) -> Result<bool, String> {
+        let id = self.control_session(session_id)?;
+        if let Some(token) = supervisor {
+            return self.supervised_session_answer(
+                token,
+                peer_process,
+                id,
+                approval_id,
+                allow,
+                reason,
+            );
+        }
+        if !self.config.security.allow_gui_control_input {
+            return Err(
+                "External control input is disabled; set security.allow_gui_control_input = true"
+                    .into(),
+            );
+        }
+        let session = self
+            .agent_view
+            .session_mut(id)
+            .expect("the id was just found");
+        let answered = if allow {
+            session.allow(approval_id, false, DecidedBy::Person)
+        } else {
+            session.deny(approval_id, Some(reason), DecidedBy::Person, false)
+        };
+        if !answered {
+            return Err(format!("Approval {approval_id} is no longer pending"));
+        }
+        self.request_agent_view_redraw();
+        Ok(true)
+    }
+
+    /// Sends a message to a session for another program. Returns whether it
+    /// waits for the person's approval.
+    pub(super) fn submit_to_agent_view(
+        &mut self,
+        session_id: u64,
+        text: &str,
+        supervisor: Option<&str>,
+        peer_process: Option<u32>,
+    ) -> Result<bool, String> {
+        let id = self.control_session(session_id)?;
+        if let Some(token) = supervisor {
+            return self.supervised_session_submit(token, peer_process, id, text);
+        }
+        if !self.config.security.allow_gui_control_input {
+            return Err(
+                "External control input is disabled; set security.allow_gui_control_input = true"
+                    .into(),
+            );
+        }
+        crate::agents::supervisor::check_message(text).map_err(|refusal| refusal.to_string())?;
+        self.prompt_agent_view_session(id, text)?;
+        Ok(false)
+    }
+
+    /// Sends a message on another program's behalf, refusing while the
+    /// person is writing one, so the two never interleave.
+    pub(super) fn prompt_agent_view_session(
+        &mut self,
+        id: SessionId,
+        text: &str,
+    ) -> Result<(), String> {
+        if self
+            .agent_view
+            .state
+            .conversation(id)
+            .is_some_and(|view| !view.composer.is_empty())
+        {
+            return Err("The person is writing a message to that session; try again later".into());
+        }
+        let session = self
+            .agent_view
+            .session_mut(id)
+            .ok_or_else(|| "That agent view session has closed".to_string())?;
+        session
+            .prompt(text, Vec::new())
+            .map_err(|error| error.to_string())?;
+        self.request_agent_view_redraw();
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent_view::event::{AgentEvent, ApprovalRequest, Handshake, PermissionMode};
+    use crate::agent_view::transcript::Transcript;
+    use crate::control::protocol::AgentState;
+
+    /// A window with one agent view session waiting for approval `r1`.
+    fn app_with_waiting_session() -> (App, SessionId) {
+        app_with_session_waiting_on("Run the tests", "cargo test")
+    }
+
+    /// A window with one session, started by `prompt`, waiting for approval
+    /// `r1` to run `command`.
+    fn app_with_session_waiting_on(prompt: &str, command: &str) -> (App, SessionId) {
+        let mut app = App::new_headless(crate::config::Config::default()).unwrap();
+        let mut transcript = Transcript::new(PermissionMode::AskBeforeEdits);
+        transcript.apply(AgentEvent::Ready(Handshake::default()));
+        transcript.push_user(prompt.into(), Vec::new());
+        transcript.apply(AgentEvent::ApprovalRequested(ApprovalRequest {
+            request_id: "r1".into(),
+            tool_use_id: Some("t1".into()),
+            tool_name: "Bash".into(),
+            input: serde_json::json!({"command": command}),
+            title: None,
+            description: Some("Run the tests".into()),
+            reason: None,
+            remember: None,
+            from_sub_agent: false,
+        }));
+        let session = AgentSession::detached(PathBuf::from("/work"), transcript);
+        let id = session.id();
+        app.agent_view.sessions.push(session);
+        (app, id)
+    }
+
+    #[test]
+    fn sessions_are_listed_and_read_over_the_control_socket() {
+        let (app, id) = app_with_waiting_session();
+        let listed = app.control_agents(4);
+        let session = listed
+            .iter()
+            .find(|agent| agent.session_id == Some(id.control_id()))
+            .expect("the session is listed");
+        assert_eq!(
+            (session.window_id, session.tab_id, session.pane_id),
+            (4, 0, 0)
+        );
+        assert_eq!(session.state, Some(AgentState::NeedsInput));
+        assert_eq!(session.detail.as_deref(), Some("Wants to run cargo test"));
+        crate::control::protocol::validate_agent_summaries(&listed).unwrap();
+        let (text, truncated) = app.read_agent_view_conversation(id.control_id()).unwrap();
+        assert!(!truncated);
+        assert!(text.starts_with("Person: Run the tests"));
+        assert!(text.ends_with("Waiting for approval r1: Bash cargo test (Run the tests)"));
+        assert!(
+            app.read_agent_view_conversation(id.control_id() + 1000)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn long_commands_and_prompts_stay_within_summary_bounds() {
+        use crate::control::protocol::{MAX_AGENT_EVENT_DETAIL_BYTES, MAX_METADATA_BYTES};
+        let prompt = "é".repeat(MAX_METADATA_BYTES);
+        let command = format!("git commit -m \"{}\"", "ü".repeat(2_000));
+        let (app, _) = app_with_session_waiting_on(&prompt, &command);
+        let listed = app.control_agents(1);
+        crate::control::protocol::validate_agent_summaries(&listed).unwrap();
+        let session = listed
+            .iter()
+            .find(|agent| agent.session_id.is_some())
+            .unwrap();
+        assert!(session.tab_title.len() <= MAX_METADATA_BYTES);
+        let detail = session.detail.as_deref().unwrap();
+        assert!(detail.starts_with("Wants to run git commit"));
+        assert!(detail.len() <= MAX_AGENT_EVENT_DETAIL_BYTES);
+    }
+
+    #[test]
+    fn outside_answers_need_the_external_input_opt_in() {
+        let (mut app, id) = app_with_waiting_session();
+        let session = id.control_id();
+        let refused = app
+            .answer_agent_view_approval(session, "r1", true, "", None, None)
+            .unwrap_err();
+        assert!(refused.contains("allow_gui_control_input"), "{refused}");
+        app.config.security.allow_gui_control_input = true;
+        assert!(
+            app.answer_agent_view_approval(session, "r9", true, "", None, None)
+                .unwrap_err()
+                .contains("no longer pending")
+        );
+        assert!(
+            app.answer_agent_view_approval(session, "r1", true, "", None, None)
+                .unwrap()
+        );
+        assert!(
+            app.agent_view
+                .session(id)
+                .unwrap()
+                .transcript()
+                .approvals()
+                .is_empty()
+        );
+        // Messages follow the same rules as those typed to terminal agents.
+        assert!(
+            app.submit_to_agent_view(session, "/compact", None, None)
+                .unwrap_err()
+                .contains("run as a command")
+        );
+        // A person's unsent draft is never interleaved with another message.
+        app.agent_view
+            .state
+            .conversation_mut(id)
+            .composer
+            .insert("half written");
+        assert!(
+            app.submit_to_agent_view(session, "next step", None, None)
+                .unwrap_err()
+                .contains("writing a message")
+        );
+    }
+
+    #[test]
+    fn only_the_running_supervisor_may_act_on_sessions() {
+        let (mut app, id) = app_with_waiting_session();
+        let token = "0".repeat(32);
+        let refused = app
+            .answer_agent_view_approval(id.control_id(), "r1", true, "", Some(&token), None)
+            .unwrap_err();
+        assert!(refused.contains("does not oversee"), "{refused}");
+        assert!(
+            app.submit_to_agent_view(id.control_id(), "hello", Some(&token), None)
+                .unwrap_err()
+                .contains("does not oversee")
+        );
+        assert_eq!(
+            app.agent_view
+                .session(id)
+                .unwrap()
+                .transcript()
+                .approvals()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn the_supervisor_hears_each_request_and_turn_once() {
+        use crate::agents::supervisor::SessionEvent;
+        let (mut app, id) = app_with_waiting_session();
+        let first = app.agent_view_supervisor_events();
+        assert!(matches!(
+            first.as_slice(),
+            [SessionEvent::Approval { approval_id, request, .. }]
+                if approval_id == "r1" && request == "Bash cargo test (Run the tests)"
+        ));
+        assert!(app.agent_view_supervisor_events().is_empty());
+        let session = app.agent_view.session_mut(id).unwrap();
+        session.deny("r1", None, DecidedBy::Person, false);
+        assert!(app.agent_view_supervisor_events().is_empty());
+    }
+
+    #[test]
+    fn the_dock_leaves_terminals_their_minimum_width() {
+        let mut state = AgentViewState::default();
+        state.open();
+        // The rail's width comes out of what the dock may take.
+        assert_eq!(state.physical_width(1000.0 - 200.0, 1.0), 440.0);
+        assert_eq!(state.physical_width(700.0 - 200.0, 1.0), 0.0);
+    }
+}
