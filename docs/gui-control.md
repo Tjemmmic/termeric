@@ -18,9 +18,11 @@ environment clearing and variable removal in GUI protocol v17.
 command-tab launch in protocol v18. Protocol v19 adds the [agent status](agents.md#agent-status) report sent by
 agent hooks. Protocol v20 adds `list_agents` and `submit_to_agent` for
 [`termeric mcp`](agents.md#letting-an-agent-direct-the-others). Protocol v21
-adds the [supervisor](agents.md#the-supervisor) token to both. Current protocol
-v22 adds the `stopped` agent event, for a turn that was interrupted or an
-agent idle at its prompt. Client and
+adds the [supervisor](agents.md#the-supervisor) token to both. Protocol v22
+adds the `stopped` agent event, for a turn that was interrupted or an agent
+idle at its prompt. Current protocol v23 adds `read_conversation`,
+`answer_approval`, and `submit_to_session` for sessions in the
+[agent view](agent-view.md), and lists those sessions in `list_agents`. Client and
 server must be rebuilt together; mismatched protocol versions fail rather than
 dropping the mode.
 
@@ -535,7 +537,7 @@ connected peer's operating-system user in addition to token authentication.
 Token files are opened without following symlinks and validated by owner, type,
 permissions, and exact size before their fixed-size contents are read.
 
-Protocol version 22 accepts exactly `inventory`, `launch_status`, `agent_event`, `list_agents`, `submit_to_agent`, ID-targeted `read_text`,
+Protocol version 23 accepts exactly `inventory`, `launch_status`, `agent_event`, `list_agents`, `submit_to_agent`, `read_conversation`, `answer_approval`, `submit_to_session`, ID-targeted `read_text`,
 `send_text`, `create_window`, `launch_window`, `create_tab`, `launch_tab`,
 `split_pane`, `focus_window`, `select_tab`, `focus_pane`,
 `close_window`, `close_tab`, `close_pane`, `move_tab`, `move_pane`,
@@ -556,8 +558,10 @@ not written to process logs. A failed private window launch may return its
 detailed startup diagnostic to the authenticated requester while logging only a
 generic initialization failure.
 
-`list_agents` returns at most 256 agent terminals with their window, tab, and
-pane IDs, agent, state, detail, and at most 16 KiB of last answer.
+`list_agents` returns at most 256 agents, as many as fit one frame, with
+`truncated` set when any were left out; each has its window, tab, and pane
+IDs, agent, state, detail, and at most 16 KiB of last answer. An
+[agent view](agent-view.md) session has tab and pane 0 and a `session_id`.
 `submit_to_agent` is an ID-targeted mutation like `send_text`, under the same
 `security.allow_gui_control_input` opt-in. It names the agent it expects and is
 refused if that pane, checked again at the moment of writing, runs another
@@ -574,6 +578,19 @@ must decide first. An unknown token is refused. Because the token appears in
 process listings, a `submit_to_agent` carrying it must also come from a
 process descended from the supervisor terminal's child, as the socket's peer
 credentials show; this needs Linux, and elsewhere such a request is refused.
+
+`read_conversation` returns an agent view session's recent conversation as at
+most 64 KiB of text, newest last, ending with the approvals it waits for and
+their ids, and whether older parts were left out. `answer_approval` allows or
+denies one such approval with a reason of at most 2 KiB of printable text;
+`submit_to_session` sends a session its next message, under the same text
+rules as `submit_to_agent`, and is refused while the person has an unsent
+message in that session. Both are ID-targeted mutations under the
+`security.allow_gui_control_input` opt-in, and accept the same `supervisor`
+token with the same process check. With it they follow that supervisor's
+mode: Auto answers and sends within its limits; Assist shows an answer to the
+person as a suggestion (`answered` is false) and holds a message for their
+approval (`pending_approval`); Watch refuses both.
 
 `agent_event` is sent by `termeric agent-event`, the command agent hooks run.
 It names a terminal by the random `TERMERIC_TERMINAL_ID` its processes

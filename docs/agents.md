@@ -14,6 +14,11 @@ out of the box, and any other can be added with a few lines of configuration:
 Only agents whose program is installed on `PATH` are offered. Each one can be
 turned off on the **Agents** page of Settings.
 
+Claude Code can also work in the experimental [agent view](agent-view.md), a
+panel docked beside the terminals where Termeric drives it without its
+terminal interface and shows approvals, questions, plans, and diffs as native
+controls.
+
 ## Starting an agent
 
 **New Agent…** (Ctrl+Shift+I by default) opens a picker of installed agents
@@ -275,13 +280,16 @@ asking you, because Termeric decides every send itself.
 ## Letting an agent direct the others
 
 `termeric mcp` is a [Model Context Protocol](https://modelcontextprotocol.io)
-server on standard input and output. It gives an agent three tools:
+server on standard input and output. It gives an agent these tools:
 
 | Tool | What it does |
 |---|---|
-| `list_agents` | Every agent in Termeric, with its window, tab, and pane, state, what it is waiting for, and last answer |
+| `list_agents` | Every agent in Termeric, with its window, tab, and pane (or agent view session), state, what it is waiting for, and last answer |
 | `read_terminal` | A pane's screen and up to 256 lines of scrollback |
 | `send_to_agent` | Pastes a prompt into one agent and submits it, if that pane still runs the named agent |
+| `read_conversation` | An [agent view](agent-view.md) session's recent conversation and the approvals it waits for |
+| `answer_approval` | Allows or denies one approval in an agent view session, with a reason |
+| `send_to_session` | Sends an agent view session its next message |
 
 Register it once with each agent that should use it:
 
