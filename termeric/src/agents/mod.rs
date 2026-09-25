@@ -249,20 +249,24 @@ impl AgentCatalog {
 
 /// Resolve `program` through `PATH` unless it already names a path.
 pub fn find_executable(program: &str) -> Option<PathBuf> {
-    use std::os::unix::fs::PermissionsExt;
-    let is_executable = |path: &std::path::Path| {
-        path.metadata()
-            .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
-    };
     if program.contains('/') {
         let path = PathBuf::from(program);
         return is_executable(&path).then_some(path);
     }
-    std::env::var_os("PATH").and_then(|paths| {
-        std::env::split_paths(&paths)
-            .map(|dir| dir.join(program))
-            .find(|candidate| is_executable(candidate))
-    })
+    std::env::var_os("PATH").and_then(|paths| find_executable_in(program, &paths))
+}
+
+/// Resolve a bare `program` name through an explicit search path.
+pub fn find_executable_in(program: &str, paths: &std::ffi::OsStr) -> Option<PathBuf> {
+    std::env::split_paths(paths)
+        .map(|dir| dir.join(program))
+        .find(|candidate| is_executable(candidate))
+}
+
+fn is_executable(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    path.metadata()
+        .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
 }
 
 #[cfg(test)]
