@@ -8,6 +8,22 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- The agent view (experimental). **Agent View** (Ctrl+Shift+A) opens a panel
+  beside the terminals where Claude Code works in a conversation instead of a
+  terminal: streamed answers, edit diffs, command output, to-dos, and
+  sub-agents, with approvals, questions, and plans answered by buttons. The
+  message box queues follow-ups, attaches the terminal selection or the last
+  command's output, and lists Claude Code's own commands when a message starts
+  with `/`. The permission chip offers every Claude Code mode; **Bypass
+  permissions** appears only after **Allow Bypass Permissions** is turned on
+  in Settings. Earlier conversations can be continued, sessions can be handed
+  to a terminal, and the supervisor oversees sessions through GUI control
+  protocol v23 (`read_conversation`, `answer_approval`, `send_to_session`).
+  See [agent view](docs/agent-view.md).
+
+- **Clear Scrollback** and **Reset Terminal** are in the command palette.
+  Neither had an entry or a default shortcut before.
+
 - The supervisor. **Start Supervisor** runs Claude Code or Codex as an agent
   that watches the other agents in its window and answers them for you, as
   far as its mode allows. Watch only reports. Assist asks you before each
@@ -1143,6 +1159,20 @@ Versioning once public beta tags begin.
 
 ### Changed
 
+- The root themes have new palettes. Turmeric (the default), Ginger, Daikon,
+  Beet, Taro, Wasabi, Galangal, Horseradish, and Parsnip were redesigned,
+  Turnip and Yuca took softer versions of their palettes, and Malanga's
+  darker colors were lifted. Each still draws on its
+  root's skin, flesh, and leaves, and now every normal ANSI color reaches
+  WCAG AA contrast (4.5:1) against its background, on top of the existing
+  palette rules.
+
+- The command palette offers **Attach Live Domain…** only while a live-domain
+  daemon runs or an SSH host is saved, and **Cancel Upload** only during an
+  upload. **Show Agents** is also offered when the only agents are agent view
+  sessions. The Keyboard Shortcuts editor names actions as the palette does,
+  and **Close Pane** is marked destructive like **Close Tab**.
+
 - Coding agents are one catalog instead of separate Claude Code and Codex
   plugins. Claude Code, Codex, Gemini CLI, and OpenCode are built in, and
   `[agents.<id>]` in `config.toml` changes one or adds any other agent. One
@@ -1339,6 +1369,10 @@ Versioning once public beta tags begin.
   workspaces are the supported way to save open tabs on demand.
 
 ### Fixed
+
+- `list_agents` failed for every agent once a few agents' latest answers
+  together exceeded one control frame. The list now keeps the agents that fit
+  and reports the rest as truncated.
 
 - The Keyboard Shortcuts editor repeated category headings (General,
   Navigation, Tabs, and Panes each appeared twice) because it started a new
