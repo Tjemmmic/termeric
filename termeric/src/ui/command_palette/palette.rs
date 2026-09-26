@@ -948,6 +948,25 @@ pub fn core_commands(
             source: CommandSource::Core,
             destructive: false,
         },
+        // ── Terminal ──
+        RegisteredCommand {
+            id: "core.clear-scrollback".into(),
+            title: "Clear Scrollback".into(),
+            category: "Terminal".into(),
+            shortcut: shortcut(BindableAction::ClearScrollback),
+            icon: None,
+            source: CommandSource::Core,
+            destructive: true,
+        },
+        RegisteredCommand {
+            id: "core.reset-terminal".into(),
+            title: "Reset Terminal".into(),
+            category: "Terminal".into(),
+            shortcut: shortcut(BindableAction::ResetTerminal),
+            icon: None,
+            source: CommandSource::Core,
+            destructive: true,
+        },
         // ── Search ──
         RegisteredCommand {
             id: "core.find".into(),
@@ -1239,7 +1258,7 @@ pub fn core_commands(
         shortcut: shortcut(BindableAction::ClosePane),
         icon: None,
         source: CommandSource::Core,
-        destructive: false,
+        destructive: true,
     });
     for (id, title, action) in [
         (

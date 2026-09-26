@@ -3969,6 +3969,8 @@ impl App {
                         return;
                     }
                     "core.rename-tab" => Action::RenameTab,
+                    "core.clear-scrollback" => Action::ClearScrollback,
+                    "core.reset-terminal" => Action::ResetTerminal,
                     "core.move-tab-left" => Action::MoveTabLeft,
                     "core.move-tab-right" => Action::MoveTabRight,
                     "core.toggle-pin-tab" => Action::TogglePinTab,
