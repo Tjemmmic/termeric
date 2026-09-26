@@ -1801,9 +1801,11 @@ pub fn menu_items(input: &Input<'_>, kind: MenuKind) -> Vec<MenuItem> {
             ];
             if session.is_some() {
                 items.push(MenuItem {
-                    text: "Close session".into(),
-                    detail: "End Claude Code; the conversation can be continued later".into(),
-                    action: MenuAction::CloseSession,
+                    text: "End session".into(),
+                    detail: "Stop Claude Code and remove this session; continue it later from \
+                             New session"
+                        .into(),
+                    action: MenuAction::EndSession,
                     checked: false,
                 });
             }

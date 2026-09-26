@@ -242,9 +242,9 @@ impl App {
                 _ => self.agent_view.state.new_session.model = Some(model),
             },
             MenuAction::SetFolder(path) => self.agent_view.state.new_session.cwd = Some(path),
-            MenuAction::CloseSession => {
-                if let Some(session) = self.agent_view.active_session_mut() {
-                    session.close();
+            MenuAction::EndSession => {
+                if let Some(id) = self.agent_view.state.active {
+                    self.end_agent_session(id);
                 }
             }
             MenuAction::OpenInTerminal => self.open_agent_view_in_terminal(),
@@ -1192,7 +1192,7 @@ fn menu_kind_of(action: &MenuAction) -> MenuKind {
         MenuAction::SetMode(_) => MenuKind::Mode,
         MenuAction::SetModel(_) => MenuKind::Model,
         MenuAction::SetFolder(_) => MenuKind::Folder,
-        MenuAction::CloseSession
+        MenuAction::EndSession
         | MenuAction::OpenInTerminal
         | MenuAction::CopyConversation
         | MenuAction::HidePanel => MenuKind::More,

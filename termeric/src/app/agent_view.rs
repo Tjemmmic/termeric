@@ -728,6 +728,32 @@ impl App {
     }
 
     /// Shows a session in the panel.
+    /// Ends a session and removes it from the panel. Claude Code keeps the
+    /// conversation, so it is offered under earlier conversations again.
+    pub(super) fn end_agent_session(&mut self, id: SessionId) {
+        let window = &mut self.agent_view;
+        let Some(index) = window
+            .sessions
+            .iter()
+            .position(|session| session.id() == id)
+        else {
+            return;
+        };
+        // Dropping the session ends its process group.
+        drop(window.sessions.remove(index));
+        window.tracking.remove(&id);
+        window.told.remove(&id);
+        window.announced.remove(&id);
+        window.past = None;
+        let next = if window.sessions.is_empty() {
+            Screen::NewSession
+        } else {
+            Screen::Sessions
+        };
+        window.state.forget(id, next);
+        self.request_agent_view_redraw();
+    }
+
     pub(super) fn show_agent_session(&mut self, id: SessionId) {
         if self.agent_view.session(id).is_none() {
             return;
@@ -1258,6 +1284,30 @@ mod tests {
         let detail = session.detail.as_deref().unwrap();
         assert!(detail.starts_with("Wants to run git commit"));
         assert!(detail.len() <= MAX_AGENT_EVENT_DETAIL_BYTES);
+    }
+
+    #[test]
+    fn ending_a_session_removes_it_and_everything_kept_for_it() {
+        let (mut app, id) = app_with_waiting_session();
+        app.agent_view.state.open();
+        app.agent_view.state.show(id);
+        app.agent_view.state.composer_mut().insert("draft");
+        app.agent_view.tracking.insert(id, Default::default());
+        app.agent_view.announced.insert(id);
+        app.end_agent_session(id);
+        assert!(app.agent_view.session(id).is_none());
+        assert!(app.agent_view.state.active.is_none());
+        assert_eq!(app.agent_view.state.screen, Screen::NewSession);
+        assert!(app.agent_view.state.conversation(id).is_none());
+        assert!(!app.agent_view.tracking.contains_key(&id));
+        assert!(!app.agent_view.announced.contains(&id));
+        assert!(
+            app.control_agents(1)
+                .iter()
+                .all(|agent| agent.session_id != Some(id.control_id()))
+        );
+        // Ending it again is harmless.
+        app.end_agent_session(id);
     }
 
     #[test]

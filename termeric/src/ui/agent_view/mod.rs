@@ -473,6 +473,18 @@ impl AgentViewState {
         self.conversations.entry(id).or_default()
     }
 
+    /// Forgets a conversation that ended. If it was showing, the panel
+    /// moves to `next`.
+    pub fn forget(&mut self, id: SessionId, next: Screen) {
+        self.conversations.remove(&id);
+        if self.active == Some(id) {
+            self.active = None;
+            self.screen = next;
+            self.menu = None;
+            self.focus = Focus::Composer;
+        }
+    }
+
     /// Shows a conversation.
     pub fn show(&mut self, id: SessionId) {
         self.active = Some(id);

@@ -123,9 +123,10 @@ A session that needs you while you cannot see it sends a desktop
 notification, following `agent_status.notify`.
 
 The **⋯** menu offers **Open in a terminal**, which ends the session here and
-continues the same conversation in a new tab; **Copy conversation**; **Close
-session**, which ends Claude Code but keeps the conversation, so the next
-message continues it; and **Hide panel**.
+continues the same conversation in a new tab; **Copy conversation**; **End
+session**, which stops Claude Code and removes the session from the panel
+(Claude Code keeps the conversation, so the new-session page offers it again
+under earlier conversations); and **Hide panel**.
 
 A conversation opened in a terminal stays readable in the panel but takes no
 more messages there, because two Claude Code processes must never write one

@@ -191,7 +191,7 @@ pub enum MenuAction {
     SetMode(PermissionMode),
     SetModel(String),
     SetFolder(std::path::PathBuf),
-    CloseSession,
+    EndSession,
     OpenInTerminal,
     CopyConversation,
     HidePanel,
