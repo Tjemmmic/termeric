@@ -541,3 +541,83 @@ fn caret_movement_follows_text_changed_since_the_last_frame() {
     composer.insert("x");
     assert_eq!(composer.text(), "é\nxé");
 }
+
+fn session_with_commands(prompt: Option<&str>) -> AgentSession {
+    let mut transcript = Transcript::new(PermissionMode::AskBeforeEdits);
+    transcript.apply(AgentEvent::Ready(Handshake {
+        commands: ["compact", "context", "review"]
+            .into_iter()
+            .map(|name| crate::agent_view::event::SlashCommand {
+                name: name.into(),
+                description: format!("What /{name} does"),
+                argument_hint: if name == "review" {
+                    "<pr>".into()
+                } else {
+                    String::new()
+                },
+            })
+            .collect(),
+        ..Handshake::default()
+    }));
+    if let Some(prompt) = prompt {
+        transcript.push_user(prompt.into(), Vec::new());
+    }
+    AgentSession::detached(PathBuf::from("/w"), transcript)
+}
+
+#[test]
+fn typing_a_slash_lists_the_agents_matching_commands() {
+    let session = session_with_commands(None);
+    let mut state = open_on(&session);
+    state.set_keyboard(true);
+    state.composer_mut().insert("/co");
+    let scene = scene_for(&state, &[&session], PANEL);
+    let listed: Vec<_> = scene
+        .hits
+        .iter()
+        .filter_map(|hit| match &hit.target {
+            Target::Command(name) => Some((name.as_str(), hit.role)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            ("compact", HitRole::Option { selected: true }),
+            ("context", HitRole::Option { selected: false }),
+        ]
+    );
+    // The list sits above the message box, which keeps the keyboard.
+    let composer = scene.hit_for(&Target::Composer).unwrap();
+    let first = scene.hit_for(&Target::Command("compact".into())).unwrap();
+    assert!(first.bounds.bottom() <= composer.bounds.y);
+
+    // Past the command's name, or without the keyboard, it is gone.
+    state.composer_mut().insert(" now");
+    let scene = scene_for(&state, &[&session], PANEL);
+    assert!(
+        !scene
+            .hits
+            .iter()
+            .any(|hit| matches!(hit.target, Target::Command(_)))
+    );
+}
+
+#[test]
+fn only_a_command_the_agent_did_not_list_offers_its_terminal() {
+    for (prompt, offered) in [
+        ("/permissions", true),
+        ("/compact", false),
+        ("/etc/hosts is broken", false),
+        ("hello", false),
+    ] {
+        let session = session_with_commands(Some(prompt));
+        let state = open_on(&session);
+        let scene = scene_for(&state, &[&session], PANEL);
+        assert_eq!(
+            targets(&scene).contains(&Target::RunInTerminal),
+            offered,
+            "{prompt}"
+        );
+    }
+}

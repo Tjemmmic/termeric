@@ -242,6 +242,9 @@ pub enum Target {
     ReviewChanges(usize),
     Relaunch,
     OpenInTerminal,
+    /// Continue in Claude Code's terminal to run a command it runs only
+    /// there.
+    RunInTerminal,
     ScrollToEnd,
     // Composer.
     Composer,
@@ -250,6 +253,8 @@ pub enum Target {
     RemoveAttachment(usize),
     /// Withdraw a message waiting for the current turn to end.
     CancelQueued(usize),
+    /// Complete the message box to one of the agent's `/` commands.
+    Command(String),
     Send,
     Stop,
     // Menus.

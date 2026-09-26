@@ -103,6 +103,7 @@ def handle_control(message):
             ],
             "commands": [
                 {"name": "compact", "description": "Summarize the conversation", "argumentHint": ""},
+                {"name": "context", "description": "Show current context usage", "argumentHint": ""},
                 {"name": "review", "description": "Review a pull request", "argumentHint": "<pr>"},
             ],
             "current_permission_mode": mode,

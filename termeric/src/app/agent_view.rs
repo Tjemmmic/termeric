@@ -1359,6 +1359,57 @@ mod tests {
     }
 
     #[test]
+    fn the_command_menu_takes_arrows_tab_and_escape_while_it_shows() {
+        use winit::keyboard::{Key, NamedKey};
+        let mut app = App::new_headless(crate::config::Config::default()).unwrap();
+        let mut transcript = Transcript::new(PermissionMode::AskBeforeEdits);
+        transcript.apply(AgentEvent::Ready(Handshake {
+            commands: ["compact", "context", "review"]
+                .into_iter()
+                .map(|name| crate::agent_view::event::SlashCommand {
+                    name: name.into(),
+                    description: String::new(),
+                    argument_hint: if name == "review" {
+                        "<pr>".into()
+                    } else {
+                        String::new()
+                    },
+                })
+                .collect(),
+            ..Handshake::default()
+        }));
+        let session = AgentSession::detached(PathBuf::from("/work"), transcript);
+        let id = session.id();
+        app.agent_view.sessions.push(session);
+        app.open_agent_view(true);
+        app.agent_view.state.show(id);
+        let named = |key| Key::Named(key);
+        let text = |app: &App| app.agent_view.state.composer().unwrap().text().to_owned();
+
+        app.agent_view.state.composer_mut().insert("/co");
+        assert!(app.handle_agent_view_key(&named(NamedKey::ArrowDown), None));
+        assert!(app.handle_agent_view_key(&named(NamedKey::Tab), None));
+        assert_eq!(text(&app), "/context ");
+
+        // Enter on a command that takes an argument completes it only.
+        app.agent_view.state.composer_mut().set_text("/rev");
+        assert!(app.handle_agent_view_key(&named(NamedKey::Enter), None));
+        assert_eq!(text(&app), "/review ");
+
+        // Escape hides the menu for what was typed; typing more shows it.
+        app.agent_view.state.composer_mut().set_text("/c");
+        assert!(app.handle_agent_view_key(&named(NamedKey::Escape), None));
+        assert!(app.agent_command_matches().is_empty());
+        assert!(app.agent_view.state.has_keyboard());
+        app.agent_view.state.composer_mut().insert("o");
+        assert_eq!(app.agent_command_matches().len(), 2);
+
+        // With nothing matching, keys go to the message box as usual.
+        app.agent_view.state.composer_mut().set_text("/zz");
+        assert!(app.agent_command_matches().is_empty());
+    }
+
+    #[test]
     fn outside_answers_need_the_external_input_opt_in() {
         let (mut app, id) = app_with_waiting_session();
         let session = id.control_id();

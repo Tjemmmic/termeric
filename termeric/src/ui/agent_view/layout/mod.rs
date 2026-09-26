@@ -205,6 +205,8 @@ struct Builder<'a, 'b> {
     clip: Option<Bounds>,
     caret: Option<Caret>,
     composer_geometry: Option<ComposerGeometry>,
+    /// The message box, which the command menu opens above.
+    composer_box: Option<Bounds>,
 }
 
 /// Builds the scene for one frame.
@@ -217,6 +219,7 @@ pub fn build(input: &Input<'_>, measure: &mut dyn TextMeasure) -> Scene {
         clip: None,
         caret: None,
         composer_geometry: None,
+        composer_box: None,
     };
     builder.scene()
 }
@@ -291,6 +294,9 @@ impl Builder<'_, '_> {
                 menu.anchor,
                 menu.highlighted,
             );
+        }
+        if let Some(anchor) = self.composer_box {
+            self.command_menu(&mut overlay, anchor);
         }
         self.focus_ring(&mut base, &mut feed, &mut overlay, viewport);
 
@@ -1416,6 +1422,7 @@ impl Builder<'_, '_> {
         }
 
         let box_bounds = Bounds::new(inner_x, box_top, inner_width, box_height);
+        self.composer_box = Some(box_bounds);
         let focused = state.has_keyboard() && state.focus == Focus::Composer;
         region.prims.push(Prim::Fill {
             bounds: box_bounds,
@@ -1859,6 +1866,130 @@ fn offered_models(input: &Input) -> Vec<ModelChoice> {
 }
 
 impl Builder<'_, '_> {
+    /// The raised card menus and the command list draw on.
+    fn popover_frame(&self, region: &mut Region, bounds: Bounds) {
+        for spread in [8.0, 4.0] {
+            let grow = self.m.px(spread);
+            region.prims.push(Prim::Fill {
+                bounds: Bounds::new(
+                    bounds.x - grow / 2.0,
+                    bounds.y + grow / 2.0,
+                    bounds.width + grow,
+                    bounds.height + grow / 2.0,
+                ),
+                radius: self.m.radius + grow,
+                color: [0.0, 0.0, 0.0, 0.12],
+            });
+        }
+        region.prims.push(Prim::Fill {
+            bounds,
+            radius: self.m.radius,
+            color: self.c.surface,
+        });
+        region.prims.push(Prim::Outline {
+            bounds,
+            radius: self.m.radius,
+            stroke: self.m.stroke,
+            color: self.c.border,
+        });
+    }
+
+    /// The agent's commands matching what follows a leading `/`, above the
+    /// message box. Typing continues in the box while it shows.
+    fn command_menu(&mut self, region: &mut Region, anchor: Bounds) {
+        let input = self.input;
+        let offered = super::commands::offered(input.state, input.sessions);
+        let shown = super::commands::shown(input.state, offered);
+        if shown.is_empty() {
+            return;
+        }
+        let highlighted = input.state.commands.highlighted.min(shown.len() - 1);
+        let row_pad = self.m.px(10.0);
+        let row_height = self.m.body.line_px + self.m.small.line_px + self.m.px(8.0);
+        let height = row_height * shown.len() as f32 + self.m.px(6.0) * 2.0;
+        let bounds = Bounds::new(
+            anchor.x,
+            (anchor.y - height - self.m.px(6.0)).round(),
+            anchor.width,
+            height.round(),
+        );
+        self.popover_frame(region, bounds);
+        let text_width = bounds.width - self.m.px(8.0) - row_pad * 2.0;
+        for (index, command) in shown.into_iter().enumerate() {
+            let row = Bounds::new(
+                bounds.x + self.m.px(4.0),
+                bounds.y + self.m.px(6.0) + row_height * index as f32,
+                bounds.width - self.m.px(8.0),
+                row_height,
+            );
+            let target = Target::Command(command.name.clone());
+            let selected = index == highlighted;
+            if selected || self.hovered(&target) {
+                region.prims.push(Prim::Fill {
+                    bounds: row,
+                    radius: self.m.px(6.0),
+                    color: self.c.surface_hover,
+                });
+            }
+            let name = format!("/{}", command.name);
+            let text_x = row.x + row_pad;
+            let line_top = row.y + self.m.px(4.0);
+            let name_width = self.label(
+                region,
+                &name,
+                text_x,
+                line_top,
+                self.m.body.line_px,
+                text_width,
+                UiFace::SANS_BOLD,
+                self.m.body,
+                self.c.text_strong,
+            );
+            if !command.argument_hint.is_empty() {
+                let gap = self.m.px(6.0);
+                self.label(
+                    region,
+                    &command.argument_hint,
+                    text_x + name_width + gap,
+                    line_top,
+                    self.m.body.line_px,
+                    (text_width - name_width - gap).max(0.0),
+                    UiFace::SANS,
+                    self.m.body,
+                    self.c.text_muted,
+                );
+            }
+            self.label(
+                region,
+                &command.description,
+                text_x,
+                line_top + self.m.body.line_px,
+                self.m.small.line_px,
+                text_width,
+                UiFace::SANS,
+                self.m.small,
+                self.c.text_secondary,
+            );
+            let mut label = name;
+            if !command.argument_hint.is_empty() {
+                label.push(' ');
+                label.push_str(&command.argument_hint);
+            }
+            if !command.description.is_empty() {
+                label.push_str(". ");
+                label.push_str(&command.description);
+            }
+            self.hit(
+                region,
+                row,
+                target,
+                HitRole::Option { selected },
+                label,
+                false,
+            );
+        }
+    }
+
     fn menu(
         &mut self,
         region: &mut Region,
@@ -1914,30 +2045,7 @@ impl Builder<'_, '_> {
         }
         .max(panel.y + self.m.px(4.0));
         let bounds = Bounds::new(x.round(), y.round(), width, height.round());
-        for spread in [8.0, 4.0] {
-            let grow = self.m.px(spread);
-            region.prims.push(Prim::Fill {
-                bounds: Bounds::new(
-                    bounds.x - grow / 2.0,
-                    bounds.y + grow / 2.0,
-                    bounds.width + grow,
-                    bounds.height + grow / 2.0,
-                ),
-                radius: self.m.radius + grow,
-                color: [0.0, 0.0, 0.0, 0.12],
-            });
-        }
-        region.prims.push(Prim::Fill {
-            bounds,
-            radius: self.m.radius,
-            color: self.c.surface,
-        });
-        region.prims.push(Prim::Outline {
-            bounds,
-            radius: self.m.radius,
-            stroke: self.m.stroke,
-            color: self.c.border,
-        });
+        self.popover_frame(region, bounds);
         let mut row_y = bounds.y + self.m.px(6.0);
         for (index, (item, (row_height, detail))) in items.iter().zip(rows).enumerate() {
             let row = Bounds::new(

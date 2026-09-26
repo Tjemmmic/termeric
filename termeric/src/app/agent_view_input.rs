@@ -6,8 +6,9 @@ use winit::keyboard::{Key, NamedKey};
 
 use super::*;
 use crate::agent_view::present;
-use crate::agent_view::session::QuestionAnswer;
+use crate::agent_view::session::{AgentSession, QuestionAnswer};
 use crate::agent_view::transcript::{Attachment, DecidedBy, Item};
+use crate::ui::agent_view::commands;
 use crate::ui::agent_view::scene::{Bounds, MenuAction, MenuKind, Target};
 use crate::ui::agent_view::{ComposerIntent, Focus, OpenMenu, Screen};
 use crate::ui::text_input::TextInputEdit;
@@ -163,7 +164,7 @@ impl App {
                     self.toasts.error(message);
                 }
             }
-            Target::OpenInTerminal => self.open_agent_view_in_terminal(),
+            Target::OpenInTerminal | Target::RunInTerminal => self.open_agent_view_in_terminal(),
             Target::ScrollToEnd => {
                 if let Some(id) = active {
                     self.agent_view
@@ -184,6 +185,7 @@ impl App {
                     }
                 }
             }
+            Target::Command(name) => self.accept_agent_command(&name),
             Target::CancelQueued(index) => {
                 if let Some(text) = self
                     .agent_view
@@ -525,6 +527,12 @@ impl App {
             self.request_agent_view_redraw();
             return true;
         }
+        if self.handle_agent_command_menu_key(key) {
+            self.agent_view.state.touch_caret();
+            self.request_agent_view_redraw();
+            return true;
+        }
+        let typed_before = self.agent_view_typed_command();
         match key {
             Key::Named(NamedKey::Tab) if !control => {
                 self.move_agent_view_focus(if shift { -1 } else { 1 });
@@ -559,6 +567,9 @@ impl App {
                     if !self.handle_agent_composer_key(key, text) {
                         return true;
                     }
+                    if self.agent_view_typed_command() != typed_before {
+                        self.agent_view.state.commands.highlighted = 0;
+                    }
                 }
             },
         }
@@ -566,6 +577,92 @@ impl App {
         self.ime.clear_preedit();
         self.request_agent_view_redraw();
         true
+    }
+
+    /// The agent's commands matching what is typed, as the menu shows them:
+    /// each name and whether it takes an argument.
+    pub(super) fn agent_command_matches(&self) -> Vec<(String, bool)> {
+        let sessions: Vec<&AgentSession> = self.agent_view.sessions.iter().collect();
+        let offered = commands::offered(&self.agent_view.state, &sessions);
+        commands::shown(&self.agent_view.state, offered)
+            .into_iter()
+            .map(|command| (command.name.clone(), !command.argument_hint.is_empty()))
+            .collect()
+    }
+
+    fn agent_view_typed_command(&self) -> Option<String> {
+        let composer = self.agent_view.state.composer()?;
+        commands::typed_name(composer.text(), composer.caret()).map(str::to_owned)
+    }
+
+    /// Keys for the command menu while it shows. Returns false for keys it
+    /// leaves to the message box.
+    fn handle_agent_command_menu_key(&mut self, key: &Key) -> bool {
+        let matches = self.agent_command_matches();
+        if matches.is_empty() {
+            return false;
+        }
+        let modifiers = self.modifiers;
+        let plain = modifiers.is_empty();
+        let count = matches.len();
+        let highlighted = self.agent_view.state.commands.highlighted.min(count - 1);
+        match key {
+            Key::Named(NamedKey::ArrowDown) if plain => {
+                self.agent_view.state.commands.highlighted = (highlighted + 1) % count;
+            }
+            Key::Named(NamedKey::ArrowUp) if plain => {
+                self.agent_view.state.commands.highlighted = (highlighted + count - 1) % count;
+            }
+            Key::Named(NamedKey::Escape) if plain => {
+                self.agent_view.state.commands.dismissed = self.agent_view_typed_command();
+            }
+            Key::Named(NamedKey::Tab) if plain => {
+                let (name, _) = &matches[highlighted];
+                self.complete_agent_command(name);
+            }
+            Key::Named(NamedKey::Enter) if plain => {
+                let (name, _) = matches[highlighted].clone();
+                self.accept_agent_command(&name);
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// Puts `/name ` in the message box, keeping anything after the first
+    /// word.
+    fn complete_agent_command(&mut self, name: &str) {
+        let state = &mut self.agent_view.state;
+        let composer = state.composer_mut();
+        let (text, caret) = commands::complete(composer.text(), name);
+        composer.set_text(&text);
+        composer.place(caret, false);
+        state.commands = commands::CommandMenu::default();
+        state.focus = Focus::Composer;
+    }
+
+    /// Chooses a command: completes it, and sends it at once when it takes
+    /// no argument, as Claude Code's own prompt does.
+    fn accept_agent_command(&mut self, name: &str) {
+        let takes_argument = {
+            let sessions: Vec<&AgentSession> = self.agent_view.sessions.iter().collect();
+            commands::offered(&self.agent_view.state, &sessions)
+                .iter()
+                .find(|command| command.name == name)
+                .is_some_and(|command| !command.argument_hint.is_empty())
+        };
+        self.complete_agent_command(name);
+        self.set_agent_view_keyboard(true);
+        if takes_argument {
+            return;
+        }
+        match self.agent_view.state.screen {
+            Screen::NewSession => {
+                self.start_agent_session(None);
+            }
+            Screen::Conversation => self.send_agent_message(),
+            Screen::Sessions => {}
+        }
     }
 
     fn handle_agent_view_menu_key(&mut self, key: &Key) {

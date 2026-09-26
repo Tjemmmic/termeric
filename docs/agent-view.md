@@ -96,6 +96,17 @@ so every message starts a turn of its own; × on the chip cancels it and puts
 the text back in the box. With the box empty, the send button becomes
 **Stop**; Escape also stops the turn, and queued messages then go in order.
 
+Typing `/` at the start of a message lists the commands Claude Code runs
+without its terminal: its built-in ones, such as `/compact`, `/context`, and
+`/init`, and your own skills and commands, filtered as you type. Up and Down
+move through the list, Tab completes the highlighted command, Enter completes
+it and sends it when it takes no argument, and Escape hides the list. Claude
+Code refuses commands that open one of its own screens, such as
+`/permissions`; sending one of those shows **Open in a terminal**, which
+continues the conversation in Claude Code's terminal interface. Claude Code
+sends its list when a session connects, so the list appears once a session
+has started.
+
 Up and Down on the first and last lines recall earlier messages. Ctrl+A,
 Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+Z, and Ctrl+Shift+Z (or Ctrl+Y) work as in any
 text field, and double-clicking selects a word. Input methods compose at the
@@ -249,7 +260,7 @@ program = "/path/to/termeric/termeric/tests/fixtures/agent_view/fake_claude.py"
 ## Limits
 
 - Claude Code only; Codex's app server is not driven yet.
-- No slash-command completion, image attachments, or file mentions.
+- No image attachments or file mentions.
 - Sessions do not survive a restart of Termeric, though their conversations
   can be continued.
 - Accessibility exposes the visible part of the conversation.

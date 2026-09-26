@@ -7,6 +7,7 @@
 //! `crate::agent_view`; [`layout`] turns both into a [`scene::Scene`].
 
 pub mod colors;
+pub mod commands;
 pub mod layout;
 pub mod scene;
 
@@ -338,6 +339,8 @@ pub struct AgentViewState {
     resize: Option<(f32, f32)>,
     /// When the caret last moved, so it blinks from visible.
     pub caret_moved: Instant,
+    /// The `/` command menu above the message box.
+    pub commands: commands::CommandMenu,
 }
 
 impl Default for AgentViewState {
@@ -358,6 +361,7 @@ impl Default for AgentViewState {
             sessions_scroll: Scroll::default(),
             resize: None,
             caret_moved: Instant::now(),
+            commands: commands::CommandMenu::default(),
         }
     }
 }

@@ -116,7 +116,11 @@ impl Builder<'_, '_> {
     ) -> f32 {
         match &session.transcript().items()[index] {
             Item::User { text, attachments } => {
-                self.user_message(region, text, attachments, x, y, width)
+                let height = self.user_message(region, text, attachments, x, y, width);
+                match unlisted_command(session, index, text) {
+                    Some(name) => height + self.run_in_terminal(region, name, x, y + height, width),
+                    None => height,
+                }
             }
             Item::Text { text, .. } => {
                 if text.trim().is_empty() {
@@ -1871,6 +1875,48 @@ impl Builder<'_, '_> {
 
     /// Lays buttons out left to right, wrapping, with the last one pushed
     /// right when it fits on the first row. Returns the bottom.
+    /// Offers Claude Code's terminal for a command it does not run here.
+    fn run_in_terminal(
+        &mut self,
+        region: &mut Region,
+        name: &str,
+        x: f32,
+        y: f32,
+        width: f32,
+    ) -> f32 {
+        let top = y + self.m.px(6.0);
+        let note = format!("Claude Code runs /{name} only in its own terminal.");
+        let text_height = self
+            .paragraph(
+                region,
+                &[(
+                    &note,
+                    SpanPaint {
+                        face: UiFace::SANS,
+                        color: self.c.text_secondary,
+                    },
+                )],
+                x,
+                top,
+                width,
+                self.m.small,
+            )
+            .height;
+        let buttons = [(
+            "Open in a terminal".to_owned(),
+            ButtonKind::Secondary,
+            Target::RunInTerminal,
+        )];
+        let bottom = self.button_rows(
+            region,
+            &buttons,
+            x,
+            top + text_height + self.m.px(6.0),
+            width,
+        );
+        bottom - y
+    }
+
     fn button_rows(
         &mut self,
         region: &mut Region,
@@ -2775,4 +2821,20 @@ pub(super) fn spinner_phase(now: std::time::Instant) -> f32 {
     static ORIGIN: OnceLock<std::time::Instant> = OnceLock::new();
     let origin = *ORIGIN.get_or_init(std::time::Instant::now);
     now.saturating_duration_since(origin).as_secs_f32().fract()
+}
+
+/// The command a person's latest message invoked, when the agent did not
+/// list it among the commands it runs without its terminal. Only the latest
+/// message offers the terminal: earlier ones were already answered.
+fn unlisted_command<'a>(session: &AgentSession, index: usize, text: &'a str) -> Option<&'a str> {
+    if session.handed_off() {
+        return None;
+    }
+    let items = session.transcript().items();
+    let latest = !items[index + 1..]
+        .iter()
+        .any(|item| matches!(item, Item::User { .. }));
+    let listed = &session.transcript().handshake()?.commands;
+    let name = crate::ui::agent_view::commands::invoked_name(text)?;
+    (latest && !listed.iter().any(|command| command.name == name)).then_some(name)
 }
