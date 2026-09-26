@@ -1364,6 +1364,20 @@ impl PaneManager {
     }
 
     /// Resize the total available space
+    /// Whether the panes are already laid out for this area and cell size.
+    pub fn is_laid_out_for(
+        &self,
+        total_width: f32,
+        total_height: f32,
+        cell_width: f32,
+        cell_height: f32,
+    ) -> bool {
+        self.total_width == total_width
+            && self.total_height == total_height
+            && self.cell_width == cell_width
+            && self.cell_height == cell_height
+    }
+
     pub fn resize(
         &mut self,
         total_width: f32,

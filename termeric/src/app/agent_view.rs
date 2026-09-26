@@ -348,7 +348,12 @@ impl App {
             Ok(session) => {
                 let id = session.id();
                 self.agent_view.sessions.push(session);
-                self.send_first_agent_message(id, &prompt)
+                let sent = self.send_first_agent_message(id, &prompt);
+                if !sent {
+                    // Nothing was said, so there is no conversation to keep.
+                    self.end_agent_session(id);
+                }
+                sent
             }
             Err(error) => {
                 self.toasts.error(error.to_string());
@@ -634,13 +639,11 @@ impl App {
                 .is_none_or(|renderer| renderer.dock_width() > 0.0)
     }
 
-    /// Recomputes the dock's width and resizes terminals when it changes.
+    /// Recomputes the dock's width and fits the active tab to what is left.
+    /// The dock belongs to the active tab, so other tabs keep their size.
     pub(super) fn sync_agent_dock(&mut self) {
-        if self.apply_agent_dock_width()
-            && let Some(window) = &self.window
-        {
-            let size = window.inner_size();
-            self.sync_terminal_geometry(size.width, size.height);
+        if self.apply_agent_dock_width() {
+            self.sync_active_terminal_geometry();
         }
     }
 
@@ -1322,9 +1325,10 @@ impl App {
     }
 
     fn control_session(&self, session_id: u64) -> Result<SessionId, String> {
+        // A session started ahead of its first message is not a conversation
+        // anyone outside may join.
         self.agent_view
-            .sessions
-            .iter()
+            .conversations()
             .map(AgentSession::id)
             .find(|id| id.control_id() == session_id)
             .ok_or_else(|| format!("Agent view session {session_id} does not exist"))

@@ -226,6 +226,8 @@ impl App {
                 .push("the saved focused tab was unavailable; focused the first tab".into());
             replacement.set_active_workspace_tab(0);
         }
+        // The old tabs' conversations end with them.
+        self.retire_agent_view_tabs();
         self.tabs = Some(replacement);
         if let Err(error) = self.remember_workspace(id) {
             outcome.warnings.push(format!(

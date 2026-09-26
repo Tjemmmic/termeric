@@ -1070,8 +1070,9 @@ impl App {
         button: winit::event::MouseButton,
     ) -> bool {
         if !self.agent_view_contains(x, y) {
-            // A press anywhere else gives the keyboard back to the terminals.
-            if self.agent_view.state.has_keyboard() {
+            // A press anywhere else gives the keyboard back to the terminals,
+            // unless the panel covers them.
+            if self.agent_view.state.has_keyboard() && !self.agent_view_fills_tab() {
                 self.set_agent_view_keyboard(false);
                 self.request_agent_view_redraw();
             }

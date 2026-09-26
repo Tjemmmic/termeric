@@ -1822,6 +1822,53 @@ impl TabManager {
     ///
     /// Skips tabs with active pane managers — those terminals are at pane
     /// dimensions and are managed by PaneManager::resize() instead.
+    /// Whether the active tab already has `geometry`, so fitting it would
+    /// change nothing.
+    pub(crate) fn active_has_geometry(
+        &self,
+        geometry: TerminalGeometry,
+        content_size: (f32, f32),
+        cell_size: (f32, f32),
+    ) -> bool {
+        self.geometry == geometry
+            && self
+                .tabs
+                .get(self.active)
+                .is_none_or(|tab| match &tab.pane_manager {
+                    Some(panes) => panes.is_laid_out_for(
+                        content_size.0,
+                        content_size.1,
+                        cell_size.0,
+                        cell_size.1,
+                    ),
+                    None => tab.has_geometry(geometry),
+                })
+    }
+
+    /// Fits only the active tab to `geometry`, which new tabs then take too.
+    /// Other tabs keep their size until they are shown, so a change that
+    /// differs from tab to tab, such as the agent view's dock, never
+    /// reflows or signals programs in tabs nobody is looking at.
+    pub(crate) fn resize_active_geometry(
+        &mut self,
+        geometry: TerminalGeometry,
+        content_size: (f32, f32),
+        cell_size: (f32, f32),
+    ) {
+        self.geometry = geometry;
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        match &mut tab.pane_manager {
+            Some(panes) => panes.resize(content_size.0, content_size.1, cell_size.0, cell_size.1),
+            None => {
+                if let Err(error) = tab.resize_geometry(geometry) {
+                    log::error!("Failed to resize tab {}: {error}", tab.id);
+                }
+            }
+        }
+    }
+
     pub(crate) fn resize_geometry(&mut self, geometry: TerminalGeometry) {
         self.geometry = geometry;
 
@@ -2050,13 +2097,19 @@ impl TabManager {
             }
         }
 
-        // Now remove them
+        // Now remove them, keeping the same tab active: removing tabs before
+        // it would otherwise shift a different tab under the active index.
+        let active_id = self.tabs.get(self.active).map(|tab| tab.id);
         self.tabs.retain(|tab| {
             !(tab.closed || tab.is_close_complete() || self.reduced_motion && tab.is_closing())
         });
 
         if self.tabs.len() != initial_count {
-            if self.active >= self.tabs.len() && !self.tabs.is_empty() {
+            if let Some(index) =
+                active_id.and_then(|id| self.tabs.iter().position(|tab| tab.id == id))
+            {
+                self.active = index;
+            } else if self.active >= self.tabs.len() && !self.tabs.is_empty() {
                 self.active = self.tabs.len() - 1;
             }
             true
@@ -2551,6 +2604,26 @@ mod tests {
     use crate::panes::{PaneManager, SplitDirection};
     use std::collections::HashSet;
     use std::time::{Duration, Instant};
+
+    #[cfg(unix)]
+    #[test]
+    fn removing_closed_tabs_keeps_the_same_tab_active() {
+        let shell = ShellConfig {
+            program: Some("/bin/sh".into()),
+            args: vec!["-c".into(), "sleep 5".into()],
+            env: Default::default(),
+        };
+        let mut manager = TabManager::new(80, 24, shell, 100, 1024 * 1024);
+        for _ in 0..3 {
+            manager.new_tab().unwrap();
+        }
+        let ids: Vec<usize> = manager.iter().map(|(_, tab)| tab.id).collect();
+        manager.switch_to(1);
+        assert!(manager.close_tab_by_id(ids[0]));
+        manager.set_reduced_motion(true);
+        manager.cleanup_closed(false, false);
+        assert_eq!(manager.active_tab_id(), Some(ids[1]));
+    }
 
     #[test]
     fn test_tab_manager_navigation() {

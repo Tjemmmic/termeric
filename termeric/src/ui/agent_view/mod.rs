@@ -57,13 +57,18 @@ pub enum Layout {
 }
 
 /// One tab's agent view, kept while another tab shows.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default)]
 pub struct TabPanel {
     pub open: bool,
     pub layout: Layout,
     /// The tab's conversation.
     pub session: Option<SessionId>,
     pub screen: Screen,
+    /// The panel held the keyboard when the tab was left, so the tab's
+    /// terminal was last told it lost focus.
+    pub keyboard: bool,
+    /// The tab's new-session page: its draft, folder, mode, and model.
+    pub new_session: NewSessionForm,
 }
 
 /// A scroll position that can follow new content and animate.
@@ -398,13 +403,15 @@ impl AgentViewState {
         self.open
     }
 
-    /// This tab's panel as it is, to keep while another tab shows.
-    pub fn stash(&self) -> TabPanel {
+    /// Takes this tab's panel, to keep while another tab shows.
+    pub fn stash(&mut self) -> TabPanel {
         TabPanel {
             open: self.open,
             layout: self.layout,
             session: self.active,
             screen: self.screen,
+            keyboard: self.has_keyboard(),
+            new_session: std::mem::take(&mut self.new_session),
         }
     }
 
@@ -433,6 +440,7 @@ impl AgentViewState {
         self.layout = panel.layout;
         self.active = panel.session;
         self.screen = panel.screen;
+        self.new_session = panel.new_session;
         self.keyboard = panel.open && panel.layout == Layout::Full;
         self.focus = Focus::Composer;
         self.menu = None;

@@ -37,20 +37,40 @@ impl App {
         if tab == self.agent_view.state.tab {
             return;
         }
-        let terminal_had_focus = self.terminal_has_focus();
+        // A session started ahead of a message serves only the page showing
+        // it; coming back to the tab starts another.
+        if let Some(id) = self.agent_view.state.active
+            && self
+                .agent_view
+                .session(id)
+                .is_some_and(AgentSession::is_blank)
+        {
+            self.end_agent_session(id);
+        }
         let window = &mut self.agent_view;
         if let Some(previous) = window.state.tab {
-            window.tabs.insert(previous, window.state.stash());
+            let panel = window.state.stash();
+            window.tabs.insert(previous, panel);
         }
-        match tab {
+        // What the newly shown terminal was last told about focus: it lost
+        // it if its panel held the keyboard when the tab was left.
+        let told_unfocused = match tab {
             Some(tab) => {
                 let panel = window.tabs.remove(&tab).unwrap_or_default();
+                let told_unfocused = panel.keyboard;
                 window.state.restore(tab, panel);
+                told_unfocused
             }
-            None => window.state.unbind(),
-        }
-        self.report_terminal_focus(terminal_had_focus);
-        self.sync_agent_dock();
+            None => {
+                window.state.unbind();
+                false
+            }
+        };
+        self.report_terminal_focus(self.window_focused && !told_unfocused);
+        // Only the tab now shown takes the dock's width; the others keep
+        // their size until they show.
+        self.apply_agent_dock_width();
+        self.sync_active_terminal_geometry();
         self.request_agent_view_redraw();
     }
 
@@ -86,6 +106,23 @@ impl App {
             }
             self.agent_view.state.unbind();
             self.bind_agent_view_to_active_tab();
+        }
+    }
+
+    /// Ends every tab's conversation, before a new set of tabs replaces
+    /// the window's, as when a workspace opens: tab ids start over there, so
+    /// nothing may carry over by id.
+    pub(super) fn retire_agent_view_tabs(&mut self) {
+        let window = &mut self.agent_view;
+        let mut ended: Vec<SessionId> = window
+            .tabs
+            .drain()
+            .filter_map(|(_, panel)| panel.session)
+            .collect();
+        ended.extend(window.state.active);
+        window.state.unbind();
+        for id in ended {
+            self.end_agent_session(id);
         }
     }
 
@@ -206,6 +243,40 @@ impl App {
         }
     }
 
+    /// Why tab `tab` may not move to `destination`: a window has one
+    /// supervisor, and the supervisor's tab takes it along.
+    pub(super) fn agent_view_tab_move_refusal(
+        &self,
+        destination: &App,
+        tab: usize,
+    ) -> Option<String> {
+        let supervisor_tab = self
+            .supervisor_session()
+            .and_then(|id| self.agent_session_tab(id));
+        (supervisor_tab == Some(tab) && destination.supervisor_running())
+            .then(|| "The other window already has a supervisor".to_owned())
+    }
+
+    /// Moves tab `from`'s conversation to `destination`'s tab `to`, and the
+    /// supervisor with it when the tab is the supervisor's.
+    pub(super) fn move_agent_view_tab(
+        source: &mut App,
+        destination: &mut App,
+        from: usize,
+        to: usize,
+    ) {
+        let supervisor_moves = source
+            .supervisor_session()
+            .and_then(|id| source.agent_session_tab(id))
+            == Some(from);
+        if let Some(transfer) = source.take_agent_view_tab(from) {
+            destination.adopt_agent_view_tab(to, transfer);
+        }
+        if supervisor_moves {
+            destination.supervisor = source.supervisor.take();
+        }
+    }
+
     /// Takes a tab's agent view out of this window, for the window the tab
     /// moves to.
     pub(super) fn take_agent_view_tab(&mut self, tab: usize) -> Option<AgentViewTransfer> {
@@ -256,19 +327,21 @@ impl App {
         {
             window.seen.insert(id, now);
         }
-        let mut panels: Vec<(usize, TabPanel)> = window
+        // Each tab's panel: open, layout, and conversation.
+        let mut panels: Vec<(usize, bool, Layout, Option<SessionId>)> = window
             .tabs
             .iter()
-            .map(|(tab, panel)| (*tab, panel.clone()))
+            .map(|(tab, panel)| (*tab, panel.open, panel.layout, panel.session))
             .collect();
         if let Some(tab) = window.state.tab {
-            panels.push((tab, window.state.stash()));
+            let state = &window.state;
+            panels.push((tab, state.is_open(), state.layout, state.active));
         }
         let shown: std::collections::HashMap<usize, TabAgentView> = panels
             .into_iter()
-            .filter_map(|(tab, panel)| {
-                let session = window.session(panel.session?)?;
-                if session.is_blank() && panel.layout == Layout::Split {
+            .filter_map(|(tab, open, layout, session)| {
+                let session = window.session(session?)?;
+                if session.is_blank() && layout == Layout::Split {
                     return None;
                 }
                 let unseen = window
@@ -285,7 +358,7 @@ impl App {
                     Activity::Finished { success: false } if unseen => Some(AgentBadge::Failed),
                     _ => None,
                 };
-                let title = (panel.open && panel.layout == Layout::Full).then(|| {
+                let title = (open && layout == Layout::Full).then(|| {
                     if session.is_blank() {
                         "Claude Code".to_owned()
                     } else {
@@ -432,6 +505,52 @@ mod tests {
             .conversation(first)
             .map(|view| view.composer.text().to_owned());
         assert_eq!(draft.as_deref(), Some("unsent draft"));
+    }
+
+    #[test]
+    fn each_tab_keeps_its_own_new_session_page() {
+        let mut app = two_tabs(Config::default());
+        app.open_agent_view(true);
+        app.agent_view
+            .state
+            .new_session
+            .composer
+            .insert("draft for tab one");
+        switch(&mut app, 1);
+        app.open_agent_view(true);
+        assert!(app.agent_view.state.new_session.composer.is_empty());
+        switch(&mut app, 0);
+        assert_eq!(
+            app.agent_view.state.new_session.composer.text(),
+            "draft for tab one"
+        );
+    }
+
+    #[test]
+    fn opening_a_workspace_ends_the_old_tabs_conversations() {
+        let mut app = two_tabs(Config::default());
+        let first = converse(&mut app, "first");
+        switch(&mut app, 1);
+        let second = converse(&mut app, "second");
+        app.retire_agent_view_tabs();
+        assert!(app.agent_view.session(first).is_none());
+        assert!(app.agent_view.session(second).is_none());
+        assert!(app.agent_view.tabs.is_empty());
+        assert_eq!(app.agent_view.state.tab, None);
+    }
+
+    #[test]
+    fn a_press_outside_a_panel_filling_the_tab_keeps_the_keyboard() {
+        let mut app = two_tabs(Config::default());
+        converse(&mut app, "first");
+        app.set_agent_view_layout(Layout::Full);
+        // Without a renderer every press is outside the panel, like one on
+        // the tab bar.
+        app.handle_agent_view_press(5.0, 5.0, winit::event::MouseButton::Left);
+        assert!(app.agent_view.state.has_keyboard());
+        app.set_agent_view_layout(Layout::Split);
+        app.handle_agent_view_press(5.0, 5.0, winit::event::MouseButton::Left);
+        assert!(!app.agent_view.state.has_keyboard());
     }
 
     #[test]

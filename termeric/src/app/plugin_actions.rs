@@ -1748,6 +1748,9 @@ impl App {
                                     );
                                 }
                                 log::info!("Plugin opened tab {} running '{}'", id, program);
+                                // The new tab is active; what describes the
+                                // focused tab follows it.
+                                self.refresh_focused_terminal_surfaces();
                                 self.dispatch_plugin_hook(crate::plugin::Hook::TabCreated {
                                     tab_id: id,
                                 });

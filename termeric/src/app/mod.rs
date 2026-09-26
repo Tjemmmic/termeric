@@ -1747,15 +1747,17 @@ impl App {
             self.handle_terminal_event(event);
         }
 
-        let (persistence_notices, user_notices, topology_changed, should_exit) = {
+        let (persistence_notices, user_notices, topology_changed, should_exit, active_changed) = {
             let Some(tabs) = &mut self.tabs else {
                 return lifecycle_changed;
             };
             let auto_save = self.automatic_persistence
                 && self.config.session.enabled
                 && self.config.session.auto_save;
+            let active_before = tabs.active_tab_id();
             let topology_changed =
                 tabs.cleanup_closed(auto_save, self.config.session.save_scrollback);
+            let active_changed = tabs.active_tab_id() != active_before;
             let should_exit = topology_changed && tabs.is_empty();
             let persistence_notices = tabs.drain_persistence_notices();
             let user_notices = tabs.drain_user_notices();
@@ -1764,10 +1766,16 @@ impl App {
                 user_notices,
                 topology_changed,
                 should_exit,
+                active_changed,
             )
         };
         if topology_changed {
             self.reconcile_broadcast_state();
+        }
+        if active_changed && !should_exit {
+            // Another tab now shows; everything describing the focused one
+            // follows it.
+            self.refresh_focused_terminal_surfaces();
         }
         let file_transfers_pruned = self.prune_stale_kitty_file_transfers();
         let mut changed = lifecycle_changed
@@ -2025,6 +2033,35 @@ impl App {
             geometry.pixel_width,
             geometry.pixel_height
         );
+    }
+
+    /// Fits only the active tab to the window, as when the agent view's dock
+    /// differs between tabs. Every other geometry change resizes all tabs
+    /// through `sync_terminal_geometry`.
+    pub(super) fn sync_active_terminal_geometry(&mut self) {
+        let (Some(window), Some(renderer)) = (&self.window, &self.renderer) else {
+            return;
+        };
+        let size = window.inner_size();
+        let geometry = renderer.calculate_grid_geometry(size.width, size.height);
+        let cell = (renderer.cell_width(), renderer.cell_height());
+        let content = (geometry.cols as f32 * cell.0, geometry.rows as f32 * cell.1);
+        if self
+            .tabs
+            .as_ref()
+            .is_none_or(|tabs| tabs.active_has_geometry(geometry, content, cell))
+        {
+            return;
+        }
+        // A geometry change invalidates native drag coordinates.
+        self.finish_native_pointer_gesture();
+        self.cols = geometry.cols;
+        self.rows = geometry.rows;
+        self.prepare_copy_mode_reflow();
+        if let Some(tabs) = &mut self.tabs {
+            tabs.resize_active_geometry(geometry, content, cell);
+        }
+        self.finish_copy_mode_reflow();
     }
 
     /// Render the terminal

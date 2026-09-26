@@ -226,17 +226,14 @@ impl App {
             env: base.env,
         };
         let (cwd, _) = self.agent_view_default_cwd();
-        if !self.open_agent_view_tab(&cwd, crate::ui::agent_view::Layout::Full) {
-            return Err("Could not open a tab for the supervisor".into());
-        }
-        self.open_agent_view(true);
         let options = StartOptions {
-            cwd,
+            cwd: cwd.clone(),
             mode: crate::agent_view::event::PermissionMode::AskBeforeEdits,
             model: None,
             resume: None,
             allow_bypass: false,
         };
+        // Started before its tab opens, so a failure leaves nothing behind.
         let mut session = AgentSession::start(program, options, super::agent_view_event_waker())
             .map_err(|error| error.to_string())?;
         session.set_title("Supervisor");
@@ -244,6 +241,10 @@ impl App {
         session
             .prompt(supervisor::KICKOFF, Vec::new())
             .map_err(|error| error.to_string())?;
+        if !self.open_agent_view_tab(&cwd, crate::ui::agent_view::Layout::Full) {
+            return Err("Could not open a tab for the supervisor".into());
+        }
+        self.open_agent_view(true);
         self.agent_view.sessions.push(session);
         self.agent_view.state.show(id);
         let mut started = Supervisor {

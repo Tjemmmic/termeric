@@ -738,6 +738,11 @@ impl Tab {
     }
 
     /// Resize the terminal model and PTY from one canonical geometry.
+    /// Whether the tab's own terminal already has `geometry`.
+    pub(crate) fn has_geometry(&self, geometry: TerminalGeometry) -> bool {
+        self.geometry == geometry
+    }
+
     pub(crate) fn resize_geometry(&mut self, geometry: TerminalGeometry) -> anyhow::Result<()> {
         if self.geometry == geometry {
             return Ok(());

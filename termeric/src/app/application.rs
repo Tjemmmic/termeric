@@ -3504,6 +3504,9 @@ impl Application {
             .validate_window_tab_transfer_destination(pinned, destination_index)
             .map_err(|error| format!("Could not move tab {tab_id}: {error:#}"))?;
 
+        if let Some(refusal) = source.agent_view_tab_move_refusal(destination, tab_id) {
+            return Err(format!("Could not move tab {tab_id}: {refusal}"));
+        }
         if source
             .tab_rename
             .as_ref()
@@ -3529,9 +3532,7 @@ impl Application {
             .attach_window_transferred_tab_at(tab, destination_index)
             .expect("prevalidated destination remains attachable");
         // The tab's agent view conversation moves with it.
-        if let Some(agent_view) = source.take_agent_view_tab(tab_id) {
-            destination.adopt_agent_view_tab(destination_tab_id, agent_view);
-        }
+        App::move_agent_view_tab(source, destination, tab_id, destination_tab_id);
 
         source.broadcast = super::BroadcastState::Inactive;
         destination.broadcast = super::BroadcastState::Inactive;
@@ -4041,6 +4042,14 @@ impl Application {
         if destination.tabs.is_none() {
             anyhow::bail!("No destination workspace is active");
         }
+        let moving = source
+            .tabs
+            .as_ref()
+            .and_then(crate::tabs::TabManager::active_tab_id)
+            .expect("the source tab was validated");
+        if let Some(refusal) = source.agent_view_tab_move_refusal(destination, moving) {
+            anyhow::bail!(refusal);
+        }
         if let Some(rename) = source.tab_rename.take()
             && let Some(tab) = source.tabs.as_mut().and_then(|tabs| {
                 tabs.all_tabs_mut()
@@ -4060,6 +4069,8 @@ impl Application {
             .as_mut()
             .expect("destination tabs were validated")
             .attach_window_transferred_tab(tab);
+        // The tab's agent view conversation moves with it.
+        App::move_agent_view_tab(source, destination, moving, id);
 
         source.broadcast = super::BroadcastState::Inactive;
         destination.broadcast = super::BroadcastState::Inactive;
@@ -8185,6 +8196,32 @@ mod tests {
             source.tabs.as_ref().unwrap().active_tab().unwrap().title,
             "survivor"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_moved_tab_takes_its_agent_view_conversation_to_the_next_window() {
+        use crate::agent_view::event::{AgentEvent, Handshake, PermissionMode};
+        use crate::agent_view::session::AgentSession;
+        use crate::agent_view::transcript::Transcript;
+        if !std::path::Path::new("/bin/sh").is_file() {
+            return;
+        }
+        let (mut source, mut destination, _) = pane_transfer_fixture();
+        let mut transcript = Transcript::new(PermissionMode::AskBeforeEdits);
+        transcript.apply(AgentEvent::Ready(Handshake::default()));
+        transcript.push_user("fix the build".into(), Vec::new());
+        let session = AgentSession::detached(std::env::temp_dir(), transcript);
+        let id = session.id();
+        source.agent_view.sessions.push(session);
+        source.open_agent_view(true);
+        source.agent_view.state.show(id);
+
+        let moved = Application::transfer_active_tab(&mut source, &mut destination).unwrap();
+        source.reconcile_agent_view_tabs();
+        assert!(source.agent_view.session(id).is_none());
+        assert!(destination.agent_view.session(id).is_some());
+        assert_eq!(destination.agent_session_tab(id), Some(moved));
     }
 
     #[cfg(unix)]
