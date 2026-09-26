@@ -193,6 +193,11 @@ impl AgentProcess {
         }
     }
 
+    /// The agent's process id, which leads its process group.
+    pub fn process_id(&self) -> u32 {
+        self.process_id
+    }
+
     #[cfg(test)]
     pub fn has_exited(&self) -> bool {
         self.exited

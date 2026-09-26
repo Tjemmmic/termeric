@@ -245,6 +245,8 @@ impl App {
     /// its title while the agent view fills the tab.
     pub(super) fn sync_agent_view_tab_bar(&mut self) {
         let now = Instant::now();
+        // A message the supervisor holds for the person needs them too.
+        let waiting = self.supervisor_request().map(|request| request.session);
         let window = &mut self.agent_view;
         // What the person is looking at counts as seen.
         if window.state.is_open()
@@ -274,6 +276,7 @@ impl App {
                     .get(&session.id())
                     .is_none_or(|seen| session.last_change() > *seen);
                 let badge = match session.activity() {
+                    _ if waiting == Some(session.id()) => Some(AgentBadge::NeedsYou),
                     Activity::Working | Activity::Starting if !session.is_blank() => {
                         Some(AgentBadge::Working)
                     }

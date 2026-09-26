@@ -196,8 +196,9 @@ with the same stage and revert actions and the same safeguards.
 
 ## The supervisor
 
-A running [supervisor](agents.md#the-supervisor) oversees agent view sessions
-as well as terminal agents. It is told, once each, when a session asks for a
+A running [supervisor](agents.md#the-supervisor) is itself an agent view
+conversation, in a tab of its own, and oversees the other agent view
+sessions as well as terminal agents. It is told, once each, when a session asks for a
 decision and when a turn ends, and its tools reach sessions directly:
 
 - `read_conversation` reads a session's recent conversation, ending with the
@@ -209,8 +210,8 @@ Its mode decides what these do. **Auto** answers and sends, within the same
 limits as its terminal sends, and the conversation shows *Allowed by the
 supervisor* with its reason. **Assist** shows its answer on the approval
 card as a suggestion for you to act on, tells the supervisor how you settled
-it, and asks before each message, as for terminal agents. **Watch** refuses
-both. Its tools are allowed up front, so it never stops at Claude Code's own
+it, and holds each message as a **Send** / **Don't send** card in the
+supervisor's own conversation. **Watch** refuses both. Its tools are allowed up front, so it never stops at Claude Code's own
 permission prompt to use them. A banner in each conversation says
 which applies, with **Take over** and **Hand back**. A message is refused
 while you are writing one to the same session.

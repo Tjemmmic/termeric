@@ -172,7 +172,8 @@ pub struct SupervisorServer<'a> {
 }
 
 /// Arguments that start `agent_id` as a supervisor whose MCP server runs
-/// `termeric mcp --process PID --supervisor TOKEN`.
+/// `termeric mcp --process PID --supervisor TOKEN`. Claude Code runs in the
+/// agent view, which sends [`KICKOFF`] as its first message.
 pub fn launch_args(
     agent_id: &str,
     server: &SupervisorServer,
@@ -204,7 +205,6 @@ pub fn launch_args(
                 CLAUDE_TOOLS.into(),
                 "--append-system-prompt".into(),
                 instructions.into(),
-                KICKOFF.into(),
             ])
         }
         "codex" => {
@@ -692,7 +692,11 @@ mod tests {
         offered.sort_unstable();
         assert_eq!(allowed, offered);
         assert_eq!(claude[5], "RULES");
-        assert_eq!(claude.last().unwrap(), KICKOFF);
+        assert_eq!(
+            claude.len(),
+            6,
+            "the first message is sent, not an argument"
+        );
 
         let codex = launch_args("codex", &server, "RULES").unwrap();
         // Each `-c` override is TOML, parsed as Codex parses it.

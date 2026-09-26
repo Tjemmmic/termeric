@@ -201,26 +201,32 @@ once when it starts.
 ## The supervisor
 
 A supervisor is an agent that watches the other agents in its window and
-answers them for you, as far as you allow. **Start Supervisor** opens the
-configured agent, Claude Code or Codex, in a tab of its own. It starts with the
+answers them for you, as far as you allow. It is a conversation in the
+[agent view](agent-view.md): **Start Supervisor** opens a tab named
+**Supervisor**, filled by a Claude Code conversation that has the
 [MCP tools](#letting-an-agent-direct-the-others) already connected, its
-instructions, and your rules. It then summarizes what each agent is doing.
-The supervisor learns that an agent needs you, finished, or failed only
-through [status hooks](#agent-status), so starting one without them offers to
-set them up.
+instructions, and your rules. It first summarizes what each agent is doing.
+**Start Supervisor** while one runs goes to its tab.
 
-Whenever another agent in the window needs input, finishes, or fails, Termeric
-tells the supervisor with a message that begins `Termeric:`. While the
-supervisor is busy, messages wait and arrive together once it finishes, if its
-[status hooks](#agent-status) are set up. The supervisor reads terminals and
-sends prompts through the same tools as any MCP client. Termeric then decides
-each message it tries to send, according to the mode:
+Termeric tells the supervisor things as messages in that conversation, each
+beginning `Termeric:`: an agent that needs input, finished, or failed, and
+what became of the messages it tried to send. While it is busy, or while you
+are writing to it, they wait and arrive together once it is free. You can
+talk to it there as to any agent. It hears about agents in terminals only
+through [status hooks](#agent-status), so starting one without them offers to
+set them up; agent view sessions need no hooks.
+
+Termeric decides each message the supervisor tries to send, according to the
+mode. A banner at the top of its conversation says which applies:
 
 | Mode | What happens to a message |
 |---|---|
 | Watch | Refused. The supervisor reports and suggests instead. |
-| Assist (default) | Shown to you in full with **Send** and **Don't send**. The supervisor is told the outcome. |
+| Assist (default) | Waits as a card in the supervisor's conversation, in full, with **Send** and **Don't send**; the tab shows that it needs you. The supervisor is told the outcome. |
 | Auto | Sent at once, within the limits below. |
+
+For an agent view session's approval, Assist shows the supervisor's answer on
+the approval card as a suggestion, and Auto answers it.
 
 In every mode Termeric enforces these limits, whatever the supervisor's
 instructions say:
@@ -236,22 +242,16 @@ instructions say:
   with `!` or `/`, which the agent would run as a shell or agent command
   without its own approval. Control and text-direction characters are refused,
   so what you approve is what is sent.
-- It waits while you type to that agent. Nothing it sends, or Termeric tells
-  it, is added to a prompt you are writing. If a message cannot be delivered
-  after all, the supervisor is told.
+- It waits while you type to that agent. Nothing it sends is added to a
+  prompt you are writing. If a message cannot be delivered after all, or its
+  recipient ends while the message waits for you, the supervisor is told.
 
-The approval dialog has no single-key shortcuts, because it can open while
-you type. Enter and Escape leave the message unsent, **Don't send** comes
-before **Send**, and **Send** does nothing for the first second. It never replaces a
-dialog you have open. If another dialog replaces it, the message is not sent
-and the supervisor is told.
-
-**Take Over from Supervisor** puts it in watch mode until **Hand Back to
-Supervisor**, and tells it so. **Supervisor Mode…** changes the mode,
-including for a running supervisor. The foot of the **Show Agents** panel
-lists what it was told, what it asked, and what was sent or refused, newest
-first. **Stop Supervisor** closes
-its terminal, and its tab when it is alone there.
+**Take Over from Supervisor**, or **Take over** on its banner, puts it in
+watch mode until you hand back, and tells it so. **Supervisor Mode…** changes
+the mode, including for a running supervisor. The foot of the **Show Agents**
+panel lists what it was told, what it asked, and what was sent or refused,
+newest first. **Stop Supervisor** ends it and closes its tab; closing the tab
+stops it too.
 
 The rules are plain language in `supervisor.md`, beside `config.toml`.
 **Edit Supervisor Rules** opens it in `$VISUAL` or `$EDITOR`, creating it with
@@ -263,20 +263,23 @@ own approvals.
 
 ```toml
 [supervisor]
-agent = "claude-code"      # or "codex"
+agent = "claude-code"      # the agent view drives Claude Code for now
 mode = "assist"            # "watch", "assist", or "auto"
 max_sends_per_minute = 6   # 1 to 60
 ```
 
+The supervisor runs Claude Code, the agent the agent view drives today;
+Codex can supervise again once the agent view drives Codex.
+
 The supervisor's MCP server, named `termeric_supervisor` so it never replaces
 a `termeric` server you registered, carries a random token that identifies it
-to Termeric. The token is on the supervisor's command line, where your other
-programs can read it, so Termeric also requires each send to come from a
-process started under the supervisor's terminal. An agent the supervisor
-oversees cannot borrow its authority. That check needs Linux; elsewhere the
-supervisor can read and report but not send. Other MCP clients use the
-ordinary rules below. Codex is told to run the supervisor's tools without
-asking you, because Termeric decides every send itself.
+to Termeric. Its tools are allowed up front, so it never stops at Claude
+Code's own permission prompt to use them. The token is on the supervisor's
+command line, where your other programs can read it, so Termeric also
+requires each send to come from a process started under the supervisor's own
+Claude Code process. An agent the supervisor oversees cannot borrow its
+authority. That check needs Linux; elsewhere the supervisor can read and
+report but not send. Other MCP clients use the ordinary rules below.
 
 ## Letting an agent direct the others
 

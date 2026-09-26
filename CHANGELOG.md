@@ -1159,6 +1159,17 @@ Versioning once public beta tags begin.
 
 ### Changed
 
+- The supervisor runs in the agent view instead of a terminal. **Start
+  Supervisor** opens a Supervisor tab filled by its conversation; Termeric
+  tells it things as messages there instead of typing into a terminal, and in
+  Assist mode each message it wants to send waits as a **Send** / **Don't
+  send** card in that conversation, with the tab marked as needing you,
+  instead of a pop-up dialog. The supervisor runs Claude Code for now.
+
+- Each tab has its own agent view conversation, beside its terminal or
+  filling the tab, and switching tabs switches the conversation. **Open
+  Agents In** makes **New Agent…** open Claude Code in a new tab's agent view.
+
 - The root themes have new palettes. Turmeric (the default), Ginger, Daikon,
   Beet, Taro, Wasabi, Galangal, Horseradish, and Parsnip were redesigned,
   Turnip and Yuca took softer versions of their palettes, and Malanga's

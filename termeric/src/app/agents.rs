@@ -155,10 +155,7 @@ impl App {
                 None => !(*id == "core.toggle-transcript" && recording),
                 Some(agent) => match *id {
                     "agent.new-conversation" => agent.definition.new_conversation.is_none(),
-                    // Restarting would drop the supervisor's wiring.
-                    "agent.restart" => {
-                        !agent.session.launched || self.is_supervisor_terminal(agent.identity)
-                    }
+                    "agent.restart" => !agent.session.launched,
                     "agent.copy-last-response" => agent.status.as_ref().is_none_or(|status| {
                         status.last_message.is_none() && status.transcript_path.is_none()
                     }),
@@ -254,12 +251,12 @@ impl App {
     ) -> Vec<crate::control::protocol::AgentSummary> {
         self.control_agents(window_id)
             .into_iter()
+            // The supervisor does not oversee itself.
             .filter(|agent| {
-                agent.session_id.is_some()
-                    || !self.is_supervisor_terminal(TerminalIdentity {
-                        tab_id: agent.tab_id as usize,
-                        pane_id: crate::panes::PaneId(agent.pane_id),
-                    })
+                agent.session_id.is_none_or(|session| {
+                    self.supervisor_session()
+                        .is_none_or(|own| own.control_id() != session)
+                })
             })
             .collect()
     }

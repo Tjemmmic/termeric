@@ -3216,7 +3216,7 @@ impl App {
         }
         self.submit_due_agent_input(Instant::now());
         if self.retire_closed_supervisor()
-            | self.settle_replaced_supervisor_approval()
+            | self.settle_orphaned_supervisor_approval()
             | self.deliver_supervisor_messages()
             | self.agents_panel.take_refresh_due(Instant::now())
         {

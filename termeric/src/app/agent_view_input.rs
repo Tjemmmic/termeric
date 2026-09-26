@@ -187,6 +187,8 @@ impl App {
             }
             Target::Command(name) => self.accept_agent_command(&name),
             Target::SetLayout(layout) => self.set_agent_view_layout(layout),
+            Target::SupervisorSend => self.answer_supervisor_request(true),
+            Target::SupervisorDecline => self.answer_supervisor_request(false),
             Target::CancelQueued(index) => {
                 if let Some(text) = self
                     .agent_view

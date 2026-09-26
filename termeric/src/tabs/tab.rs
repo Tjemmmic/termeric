@@ -1334,6 +1334,7 @@ impl Tab {
     }
 
     /// The identity `pane_id`'s processes inherited.
+    #[cfg(test)]
     pub(crate) fn pane_terminal_id(&self, pane_id: crate::panes::PaneId) -> Option<&str> {
         if let Some(panes) = &self.pane_manager {
             return panes.get_pane(pane_id)?.pty.terminal_id();

@@ -35,6 +35,15 @@ fn new_session_info() -> NewSessionInfo {
 }
 
 fn scene_for(state: &AgentViewState, sessions: &[&AgentSession], panel: Bounds) -> Scene {
+    scene_with_request(state, sessions, panel, None)
+}
+
+fn scene_with_request(
+    state: &AgentViewState,
+    sessions: &[&AgentSession],
+    panel: Bounds,
+    supervisor_request: Option<SupervisorRequest>,
+) -> Scene {
     let colors = colors();
     let input = Input {
         panel,
@@ -55,6 +64,7 @@ fn scene_for(state: &AgentViewState, sessions: &[&AgentSession], panel: Bounds) 
         new_session: new_session_info(),
         home: Some(PathBuf::from("/home/me")),
         allow_bypass: false,
+        supervisor_request,
     };
     let scene = build(&input, &mut measure());
     assert_unique_targets(&scene);
@@ -396,6 +406,7 @@ fn an_open_menu_lists_its_choices_above_everything() {
             new_session: new_session_info(),
             home: None,
             allow_bypass: false,
+            supervisor_request: None,
         },
         MenuKind::Model,
     );
@@ -415,6 +426,7 @@ fn an_open_menu_lists_its_choices_above_everything() {
             new_session: new_session_info(),
             home: None,
             allow_bypass: true,
+            supervisor_request: None,
         },
         MenuKind::Mode,
     );
@@ -620,4 +632,30 @@ fn only_a_command_the_agent_did_not_list_offers_its_terminal() {
             "{prompt}"
         );
     }
+}
+
+#[test]
+fn a_supervisor_message_waits_as_a_card_in_its_conversation_only() {
+    let supervisor = session_with_commands(Some("Call list_agents"));
+    let worker = session_with_commands(Some("Fix the build"));
+    let request = SupervisorRequest {
+        session: supervisor.id(),
+        recipient: "Codex".into(),
+        text: "yes, run it".into(),
+    };
+    let decisions = |state: &AgentViewState| {
+        let scene =
+            scene_with_request(state, &[&supervisor, &worker], PANEL, Some(request.clone()));
+        let all = targets(&scene);
+        (
+            all.contains(&Target::SupervisorSend),
+            all.contains(&Target::SupervisorDecline),
+            scene
+                .nodes
+                .iter()
+                .any(|node| matches!(node, Node::Text(text) if text.text == "yes, run it")),
+        )
+    };
+    assert_eq!(decisions(&open_on(&supervisor)), (true, true, true));
+    assert_eq!(decisions(&open_on(&worker)), (false, false, false));
 }

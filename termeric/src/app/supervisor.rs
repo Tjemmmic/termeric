@@ -1,19 +1,21 @@
 //! The running supervisor in one window: starting it, telling it what other
 //! agents need, deciding each message it sends, and letting the person take
 //! over. The policy itself lives in `crate::agents::supervisor`.
+//!
+//! The supervisor is a conversation in the agent view, in a tab of its own:
+//! Termeric tells it things as messages of that conversation, and a message
+//! it wants to send in Assist mode waits there as a card for the person.
 
 use super::agents::AgentTarget;
 use super::*;
+use crate::agent_view::session::{AgentProgram, AgentSession, SessionId, StartOptions};
 use crate::agents::supervisor::{self, SendLimits, SupervisorMode};
 use crate::agents::{AgentActivity, AgentStatus};
 use crate::tabs::TerminalIdentity;
-use crate::ui::info_overlay::InfoOverlayChoice;
 use std::collections::VecDeque;
 
 const MAX_QUEUED_MESSAGES: usize = 32;
 const MAX_LOG_ENTRIES: usize = 200;
-const SEND_CHOICE: &str = "supervisor-send";
-const DECLINE_CHOICE: &str = "supervisor-decline";
 /// Rules are given to the agent on its command line, and read by it on every
 /// turn; more than this is not a rule list.
 const MAX_RULES_BYTES: u64 = 16 * 1024;
@@ -23,7 +25,7 @@ const MAX_RULES_BYTES: u64 = 16 * 1024;
 enum ApprovalOutcome {
     Send,
     Decline,
-    /// Another dialog replaced it before the person answered.
+    /// The session it was for ended before the person answered.
     Unanswered,
 }
 
@@ -59,24 +61,15 @@ impl SendTarget {
 
 /// A message the supervisor asked to send, waiting for the person.
 struct PendingApproval {
-    request_id: u64,
     target: SendTarget,
     text: String,
-    shown_at: Instant,
 }
-
-/// How long the approval dialog ignores **Send** after it opens. It opens on
-/// its own, while the person may be typing elsewhere, and keys meant for
-/// that, such as Tab then Enter, must not approve it.
-const APPROVAL_ARMING: Duration = Duration::from_secs(1);
 
 pub(super) struct Supervisor {
     /// Proves a control request comes from this supervisor's MCP server.
     token: String,
-    /// The supervisor terminal's process identity, which survives moves.
-    terminal_id: String,
-    agent_id: String,
-    agent_name: String,
+    /// The supervisor's conversation in the agent view.
+    session: SessionId,
     mode: SupervisorMode,
     /// The mode to return to after the person takes over.
     held_mode: Option<SupervisorMode>,
@@ -128,26 +121,18 @@ impl App {
             .is_some_and(|supervisor| supervisor.held_mode.is_some())
     }
 
-    /// The supervisor's terminal, while it is open.
-    fn supervisor_terminal(&self) -> Option<TerminalIdentity> {
-        let supervisor = self.supervisor.as_ref()?;
-        self.tabs
-            .as_ref()?
-            .terminal_with_id(&supervisor.terminal_id)
+    /// The supervisor's conversation, while it is open.
+    pub(super) fn supervisor_session(&self) -> Option<SessionId> {
+        let id = self.supervisor.as_ref()?.session;
+        self.agent_view.session(id).map(AgentSession::id)
     }
 
-    fn supervisor_target(&self) -> Option<AgentTarget> {
-        let supervisor = self.supervisor.as_ref()?;
-        Some(AgentTarget {
-            identity: self.supervisor_terminal()?,
-            agent_id: supervisor.agent_id.clone(),
-            agent_name: supervisor.agent_name.clone(),
-        })
-    }
-
-    /// Whether `identity` is the supervisor's own terminal.
-    pub(super) fn is_supervisor_terminal(&self, identity: TerminalIdentity) -> bool {
-        self.supervisor_terminal() == Some(identity)
+    /// Whether `id` is the supervisor's own conversation, which it neither
+    /// oversees nor sends to.
+    pub(super) fn is_supervisor_session(&self, id: SessionId) -> bool {
+        self.supervisor
+            .as_ref()
+            .is_some_and(|supervisor| supervisor.session == id)
     }
 
     fn ensure_rules_file(&self) -> anyhow::Result<String> {
@@ -173,94 +158,19 @@ impl App {
         }
     }
 
-    /// Start the configured agent as this window's supervisor, or show the
-    /// one already running.
+    /// Start the configured agent as this window's supervisor, in a tab of
+    /// its own filled by its conversation, or show the one already running.
     pub(super) fn start_supervisor(&mut self) {
-        if let Some(identity) = self.supervisor_terminal() {
-            self.activate_notification_origin(identity);
+        if let Some(id) = self.supervisor_session() {
+            self.show_agent_session(id);
             return;
         }
-        let result = (|| -> Result<(), String> {
-            let config = self.config.supervisor.clone();
-            let agent = self
-                .agents
-                .get(&config.agent)
-                .filter(|agent| agent.enabled && agent.installed_path().is_some())
-                .cloned()
-                .ok_or_else(|| {
-                    format!(
-                        "The supervisor runs {}, which is not installed or is turned off",
-                        config.agent
-                    )
-                })?;
-            let rules = self
-                .ensure_rules_file()
-                .map_err(|error| format!("Could not read the supervisor rules: {error:#}"))?;
-            let token = new_token().ok_or("Could not create a supervisor token")?;
-            let executable = std::env::current_exe()
-                .and_then(|path| path.canonicalize())
-                .map_err(|error| format!("Could not locate the Termeric executable: {error}"))?;
-            let runtime_directory = std::env::var("XDG_RUNTIME_DIR").ok();
-            let server = supervisor::SupervisorServer {
-                termeric: &executable,
-                token: &token,
-                process_id: std::process::id(),
-                runtime_directory: runtime_directory.as_deref(),
-            };
-            let extra = supervisor::launch_args(
-                &agent.id,
-                &server,
-                &supervisor::instructions(config.mode, &rules),
-            )
-            .ok_or_else(|| format!("{} cannot be a supervisor", agent.name))?;
-            let ctx = self.build_plugin_context();
-            let mut action =
-                crate::plugin::agent::open_tab_action(&agent, &ctx, None, false, None)?;
-            if let crate::plugin::hooks::PluginAction::OpenTab { args, title, .. } = &mut action {
-                args.extend(extra);
-                *title = Some("Supervisor".into());
-            }
-            let before = self.tabs.as_ref().map(TabManager::active_tab_id);
-            self.execute_plugin_actions(vec![action]);
-            let tab = self
-                .tabs
-                .as_ref()
-                .and_then(TabManager::active_tab)
-                .filter(|tab| Some(Some(tab.id)) != before)
-                .ok_or_else(|| format!("{} did not start", agent.name))?;
-            let terminal_id = tab
-                .pane_terminal_id(tab.focused_terminal_identity().pane_id)
-                .ok_or("The supervisor's terminal has no identity")?
-                .to_owned();
-            let mut started = Supervisor {
-                token,
-                terminal_id,
-                agent_id: agent.id.clone(),
-                agent_name: agent.name.clone(),
-                mode: config.mode,
-                held_mode: None,
-                limits: SendLimits::default(),
-                queue: VecDeque::new(),
-                log: VecDeque::new(),
-                approval: None,
-            };
-            started.note(format!(
-                "Started {} as the supervisor in {} mode",
-                agent.name,
-                config.mode.label().to_lowercase()
-            ));
-            self.supervisor = Some(started);
-            if let Some(tabs) = &mut self.tabs {
-                tabs.refresh_agents(&self.agents);
-            }
-            Ok(())
-        })();
-        if let Err(error) = result {
+        if let Err(error) = self.launch_supervisor() {
             self.toasts.error(error);
             return;
         }
         // Without status hooks the supervisor is never told that an agent
-        // needs input, finished, or failed, and only sees what it asks for.
+        // in a terminal needs input, finished, or failed.
         if matches!(
             self.agent_hook_summary(),
             super::agent_hooks::HookSetupSummary::NotSetUp
@@ -268,25 +178,103 @@ impl App {
         ) {
             self.open_agent_hook_setup_because(
                 true,
-                Some("The supervisor hears when an agent needs you, finishes, or fails only through these hooks."),
+                Some("The supervisor hears when an agent in a terminal needs you, finishes, or fails only through these hooks."),
             );
         }
     }
 
-    /// Forget the supervisor, and close the approval dialog it left open.
-    fn end_supervision(&mut self) {
-        if let Some(approval) = self
-            .supervisor
-            .take()
-            .and_then(|supervisor| supervisor.approval)
-        {
-            self.info_overlay.dismiss(approval.request_id);
+    fn launch_supervisor(&mut self) -> Result<(), String> {
+        let config = self.config.supervisor.clone();
+        // The agent view drives Claude Code; other agents supervise once it
+        // drives them too.
+        if config.agent != "claude-code" {
+            return Err(
+                "The supervisor runs in the agent view, which drives Claude Code for now; choose Claude Code as the supervisor in Settings"
+                    .into(),
+            );
         }
+        let agent = self
+            .agents
+            .get(&config.agent)
+            .filter(|agent| agent.enabled)
+            .cloned()
+            .ok_or("The supervisor runs Claude Code, which is turned off")?;
+        let rules = self
+            .ensure_rules_file()
+            .map_err(|error| format!("Could not read the supervisor rules: {error:#}"))?;
+        let token = new_token().ok_or("Could not create a supervisor token")?;
+        let executable = std::env::current_exe()
+            .and_then(|path| path.canonicalize())
+            .map_err(|error| format!("Could not locate the Termeric executable: {error}"))?;
+        let runtime_directory = std::env::var("XDG_RUNTIME_DIR").ok();
+        let server = supervisor::SupervisorServer {
+            termeric: &executable,
+            token: &token,
+            process_id: std::process::id(),
+            runtime_directory: runtime_directory.as_deref(),
+        };
+        let extra = supervisor::launch_args(
+            &agent.id,
+            &server,
+            &supervisor::instructions(config.mode, &rules),
+        )
+        .ok_or_else(|| format!("{} cannot be a supervisor", agent.name))?;
+        let base = self.agent_view_program();
+        let program = AgentProgram {
+            program: base.program,
+            args: base.args.into_iter().chain(extra).collect(),
+            env: base.env,
+        };
+        let (cwd, _) = self.agent_view_default_cwd();
+        if !self.open_agent_view_tab(&cwd, crate::ui::agent_view::Layout::Full) {
+            return Err("Could not open a tab for the supervisor".into());
+        }
+        self.open_agent_view(true);
+        let options = StartOptions {
+            cwd,
+            mode: crate::agent_view::event::PermissionMode::AskBeforeEdits,
+            model: None,
+            resume: None,
+            allow_bypass: false,
+        };
+        let mut session = AgentSession::start(program, options, super::agent_view_event_waker())
+            .map_err(|error| error.to_string())?;
+        session.set_title("Supervisor");
+        let id = session.id();
+        session
+            .prompt(supervisor::KICKOFF, Vec::new())
+            .map_err(|error| error.to_string())?;
+        self.agent_view.sessions.push(session);
+        self.agent_view.state.show(id);
+        let mut started = Supervisor {
+            token,
+            session: id,
+            mode: config.mode,
+            held_mode: None,
+            limits: SendLimits::default(),
+            queue: VecDeque::new(),
+            log: VecDeque::new(),
+            approval: None,
+        };
+        started.note(format!(
+            "Started {} as the supervisor in {} mode",
+            agent.name,
+            config.mode.label().to_lowercase()
+        ));
+        self.supervisor = Some(started);
+        self.request_agent_view_redraw();
+        Ok(())
+    }
+
+    /// Forget the supervisor, and any message it left waiting.
+    fn end_supervision(&mut self) {
+        self.supervisor = None;
+        self.request_agent_view_redraw();
     }
 
     /// Tell the supervisor that text meant for another agent was dropped.
     pub(super) fn report_undelivered(&mut self, target: &AgentTarget, reason: &str) {
-        if self.supervisor.is_none() || self.is_supervisor_terminal(target.identity) {
+        if self.supervisor.is_none() {
             return;
         }
         let name = &target.agent_name;
@@ -298,38 +286,31 @@ impl App {
         ));
     }
 
-    /// End supervision and close the supervisor's terminal: its pane, or
-    /// its tab when it is the only pane there.
+    /// End supervision, its conversation, and the tab it had.
     pub(super) fn stop_supervisor(&mut self) {
-        let terminal = self.supervisor_terminal();
+        let session = self.supervisor_session();
+        let tab = session.and_then(|id| self.agent_session_tab(id));
         self.end_supervision();
-        if let Some(identity) = terminal {
-            let alone = self
-                .tabs
-                .as_ref()
-                .and_then(|tabs| tabs.tab_by_id(identity.tab_id))
-                .is_some_and(|tab| tab.owned_pane_ids().len() <= 1);
-            let closed = if alone {
-                self.close_plugin_tab(identity.tab_id as u64).map(|_| ())
-            } else {
-                self.close_control_pane(identity.tab_id as u64, identity.pane_id.0)
-                    .map(|_| ())
-            };
-            if let Err(error) = closed {
-                self.toasts
-                    .warning(format!("The supervisor's terminal stayed open: {error}"));
-            }
+        if let Some(id) = session {
+            self.end_agent_session(id);
+        }
+        if let Some(tab) = tab
+            && let Err(error) = self.close_plugin_tab(tab as u64)
+        {
+            self.toasts
+                .warning(format!("The supervisor's tab stayed open: {error}"));
         }
         self.toasts.info("Supervisor stopped");
     }
 
-    /// Forget a supervisor whose terminal has closed. Returns whether it did.
+    /// Forget a supervisor whose conversation ended, as when its tab closed.
+    /// Returns whether it did.
     pub(super) fn retire_closed_supervisor(&mut self) -> bool {
-        if self.supervisor.is_none() || self.supervisor_terminal().is_some() {
+        if self.supervisor.is_none() || self.supervisor_session().is_some() {
             return false;
         }
         self.end_supervision();
-        self.toasts.info("The supervisor's terminal closed");
+        self.toasts.info("The supervisor's tab closed");
         true
     }
 
@@ -495,42 +476,45 @@ impl App {
         self.deliver_supervisor_messages();
     }
 
-    /// Deliver every waiting message as one prompt, unless the supervisor is
-    /// busy or the person is typing to it. Returns whether it delivered.
+    /// Deliver every waiting message as one message of its conversation,
+    /// once it has finished its turn and while the person is not writing to
+    /// it. Returns whether it delivered.
     pub(super) fn deliver_supervisor_messages(&mut self) -> bool {
-        let Some(target) = self.supervisor_target() else {
+        let Some(id) = self.supervisor_session() else {
             return false;
         };
-        let Some(supervisor) = &self.supervisor else {
-            return false;
-        };
-        if supervisor.queue.is_empty() {
+        if self
+            .supervisor
+            .as_ref()
+            .is_none_or(|supervisor| supervisor.queue.is_empty())
+        {
             return false;
         }
-        let busy = self
-            .tabs
-            .as_ref()
-            .and_then(|tabs| tabs.tab_by_id(target.identity.tab_id))
-            .and_then(|tab| tab.pane_session(target.identity.pane_id))
-            .and_then(|session| session.agent_status.as_ref())
-            .is_some_and(|status| {
-                matches!(
-                    status.activity,
-                    AgentActivity::Working | AgentActivity::NeedsInput
-                )
-            });
-        if busy || self.refuse_while_person_types(&target).is_err() {
+        let busy = self.agent_view.session(id).is_none_or(|session| {
+            session.transcript().turn_active() || session.queued().next().is_some()
+        });
+        let person_writing = self
+            .agent_view
+            .state
+            .conversation(id)
+            .is_some_and(|view| !view.composer.is_empty());
+        if busy || person_writing {
             return false;
         }
         let Some(supervisor) = &mut self.supervisor else {
             return false;
         };
         let message = supervisor.queue.drain(..).collect::<Vec<_>>().join("\n");
-        if let Err(error) = self.paste_and_submit_to_agent(target, &message)
+        let sent = self
+            .agent_view
+            .session_mut(id)
+            .map(|session| session.prompt(&message, Vec::new()));
+        if let Some(Err(error)) = sent
             && let Some(supervisor) = &mut self.supervisor
         {
             supervisor.note(format!("Could not reach the supervisor: {error}"));
         }
+        self.request_agent_view_redraw();
         true
     }
 
@@ -544,10 +528,6 @@ impl App {
         status: Option<&AgentStatus>,
     ) {
         if self.supervisor.is_none() {
-            return;
-        }
-        if self.is_supervisor_terminal(identity) {
-            self.deliver_supervisor_messages();
             return;
         }
         let Some(status) = status.filter(|status| before != Some(status.activity)) else {
@@ -576,22 +556,17 @@ impl App {
             .is_some_and(|supervisor| supervisor.token == token)
     }
 
-    /// Whether `process` runs under the supervisor's terminal. The token is
-    /// on the supervisor's command line, where any program of the same
-    /// person can read it, so it alone does not show that a request comes
-    /// from the supervisor rather than, say, an agent it oversees.
+    /// Whether `process` runs under the supervisor's own agent process. The
+    /// token is on the supervisor's command line, where any program of the
+    /// same person can read it, so it alone does not show that a request
+    /// comes from the supervisor rather than, say, an agent it oversees.
     fn is_supervisor_process(&self, process: Option<u32>) -> bool {
         let Some(process) = process else {
             return false;
         };
-        self.supervisor_terminal()
-            .and_then(|identity| {
-                self.tabs
-                    .as_ref()?
-                    .tab_by_id(identity.tab_id)?
-                    .pane_child_process(identity.pane_id)
-            })
-            .is_some_and(|child| crate::agents::detect::descends_from(process, child))
+        self.supervisor_session()
+            .and_then(|id| self.agent_view.session(id)?.process_id())
+            .is_some_and(|agent| crate::agents::detect::descends_from(process, agent))
     }
 
     /// Decide a message the supervisor asked to send. Returns whether it is
@@ -618,9 +593,6 @@ impl App {
                 .map_err(|_| "Target tab ID does not fit this platform".to_string())?,
             pane_id: crate::panes::PaneId(pane_id),
         };
-        if self.is_supervisor_terminal(identity) {
-            return Err("The supervisor cannot send to itself".into());
-        }
         let agent_name = self
             .agents
             .get(agent_id)
@@ -658,118 +630,81 @@ impl App {
                 Ok(false)
             }
             SupervisorMode::Assist => {
-                if supervisor.approval.is_some() {
-                    return Err(
-                        "Another message is waiting for the person's approval; wait for its outcome"
-                            .into(),
-                    );
-                }
-                // Never replace a dialog the person is reading or answering.
-                if self.info_overlay.is_awaiting_current() {
-                    return Err("The person has another dialog open; try again in a minute".into());
-                }
-                let mut lines = vec![
-                    format!("The supervisor wants to send this to {agent_name}:"),
-                    String::new(),
-                ];
-                // The whole message, which the limits keep short enough to
-                // read: the person approves exactly what is sent.
-                lines.extend(text.lines().map(|line| format!("  {line}")));
-                lines.push(String::new());
-                let choice_line = lines.len();
-                // No single-key shortcuts, and Send after Don't send and
-                // disarmed for a moment: the dialog can open while the
-                // person is typing, and stray keys must not approve it.
-                lines.push("  Don't send".into());
-                lines.push("  Send".into());
-                let request_id = self.info_overlay.show_choices(
-                    "Supervisor message",
-                    lines,
-                    vec![
-                        InfoOverlayChoice::new(DECLINE_CHOICE, "Don't send", choice_line, None),
-                        InfoOverlayChoice::new(SEND_CHOICE, "Send", choice_line + 1, None),
-                    ],
-                );
-                let supervisor = self.supervisor.as_mut().expect("still running");
-                supervisor.note(format!("Asked you to approve a message to {agent_name}"));
-                supervisor.approval = Some(PendingApproval {
-                    request_id,
-                    target: SendTarget::Terminal(target),
-                    text: text.to_owned(),
-                    shown_at: Instant::now(),
-                });
-                Ok(true)
+                self.hold_supervisor_message(SendTarget::Terminal(target), text)
             }
         }
     }
 
-    /// Answer an approval dialog. Returns whether the choice was its.
-    pub(super) fn handle_supervisor_choice(&mut self, request_id: u64, choice_id: &str) -> bool {
-        if !matches!(choice_id, SEND_CHOICE | DECLINE_CHOICE) {
-            return false;
+    /// Holds a message for the person, as a card in the supervisor's
+    /// conversation. Returns that it waits for them.
+    fn hold_supervisor_message(&mut self, target: SendTarget, text: &str) -> Result<bool, String> {
+        let supervisor = self.supervisor.as_mut().expect("the token was checked");
+        if supervisor.approval.is_some() {
+            return Err(
+                "Another message is waiting for the person's approval; wait for its outcome".into(),
+            );
         }
-        let Some(supervisor) = &mut self.supervisor else {
-            return false;
-        };
-        let Some(approval) = supervisor
-            .approval
-            .as_ref()
-            .filter(|approval| approval.request_id == request_id)
-        else {
-            return false;
-        };
-        if choice_id == SEND_CHOICE && approval.shown_at.elapsed() < APPROVAL_ARMING {
-            // Too soon to be a decision about this message; it stays open.
-            self.toasts
-                .info("Read the message first; Send works in a moment");
-            return true;
+        let name = target.name().to_owned();
+        supervisor.note(format!("Asked you to approve a message to {name}"));
+        supervisor.approval = Some(PendingApproval {
+            target,
+            text: text.to_owned(),
+        });
+        let visible = self.window_focused
+            && self.agent_view.state.is_open()
+            && self.agent_view.state.active == Some(supervisor.session);
+        if !visible {
+            self.notify_agent_view(&format!("The supervisor wants to message {name}"));
         }
-        self.info_overlay.dismiss(request_id);
-        self.resolve_supervisor_approval(if choice_id == SEND_CHOICE {
+        self.request_agent_view_redraw();
+        Ok(true)
+    }
+
+    /// The message waiting for the person, as the supervisor's conversation
+    /// shows it.
+    pub(super) fn supervisor_request(
+        &self,
+    ) -> Option<crate::ui::agent_view::layout::SupervisorRequest> {
+        let supervisor = self.supervisor.as_ref()?;
+        let approval = supervisor.approval.as_ref()?;
+        Some(crate::ui::agent_view::layout::SupervisorRequest {
+            session: supervisor.session,
+            recipient: approval.target.name().to_owned(),
+            text: approval.text.clone(),
+        })
+    }
+
+    /// The person's answer to the waiting message.
+    pub(super) fn answer_supervisor_request(&mut self, send: bool) {
+        self.resolve_supervisor_approval(if send {
             ApprovalOutcome::Send
         } else {
             ApprovalOutcome::Decline
         });
-        true
+        self.request_agent_view_redraw();
     }
 
-    /// Make the waiting approval old enough to accept **Send**.
-    #[cfg(test)]
-    pub(super) fn arm_supervisor_approval(&mut self) {
-        if let Some(approval) = self
-            .supervisor
-            .as_mut()
-            .and_then(|supervisor| supervisor.approval.as_mut())
-        {
-            approval.shown_at -= APPROVAL_ARMING;
-        }
-    }
-
-    /// Treat a dismissed approval dialog as declined.
-    pub(super) fn cancel_supervisor_approval(&mut self, request_id: u64) {
-        if self
+    /// Settle a waiting message whose recipient ended, which can no longer
+    /// be sent. Returns whether one was settled.
+    pub(super) fn settle_orphaned_supervisor_approval(&mut self) -> bool {
+        let target = match self
             .supervisor
             .as_ref()
             .and_then(|supervisor| supervisor.approval.as_ref())
-            .is_some_and(|approval| approval.request_id == request_id)
+            .map(|approval| &approval.target)
         {
-            self.resolve_supervisor_approval(ApprovalOutcome::Decline);
-        }
-    }
-
-    /// Settle an approval whose dialog another dialog replaced: it can no
-    /// longer be answered, and the supervisor would otherwise wait for it
-    /// forever. Returns whether one was settled.
-    pub(super) fn settle_replaced_supervisor_approval(&mut self) -> bool {
-        let replaced = self
-            .supervisor
-            .as_ref()
-            .and_then(|supervisor| supervisor.approval.as_ref())
-            .is_some_and(|approval| !self.info_overlay.is_awaiting(approval.request_id));
-        if replaced {
+            Some(SendTarget::Session { id, .. }) => Err(*id),
+            Some(SendTarget::Terminal(target)) => Ok(target.clone()),
+            None => return false,
+        };
+        let orphaned = match target {
+            Err(id) => self.agent_view.session(id).is_none(),
+            Ok(target) => self.recheck_agent_target(&target).is_err(),
+        };
+        if orphaned {
             self.resolve_supervisor_approval(ApprovalOutcome::Unanswered);
         }
-        replaced
+        orphaned
     }
 
     fn resolve_supervisor_approval(&mut self, outcome: ApprovalOutcome) {
@@ -819,9 +754,9 @@ impl App {
                 format!("Termeric: the person declined your message to {name}; it was not sent."),
             ),
             ApprovalOutcome::Unanswered => (
-                format!("A message to {name} was closed without an answer"),
+                format!("A message to {name} was dropped: {name} ended"),
                 format!(
-                    "Termeric: your message to {name} was not sent; the person closed it without answering. Ask again later only if it still matters."
+                    "Termeric: your message to {name} was not sent; {name} ended before the person answered."
                 ),
             ),
         };
@@ -865,6 +800,9 @@ impl App {
     ) -> Result<bool, String> {
         use crate::agent_view::transcript::DecidedBy;
         self.check_supervisor_request(token, peer_process)?;
+        if self.is_supervisor_session(id) {
+            return Err("The supervisor cannot answer its own requests".into());
+        }
         let mode = self
             .supervisor
             .as_ref()
@@ -973,6 +911,9 @@ impl App {
         text: &str,
     ) -> Result<bool, String> {
         self.check_supervisor_request(token, peer_process)?;
+        if self.is_supervisor_session(id) {
+            return Err("The supervisor cannot send to itself".into());
+        }
         let name = self
             .agent_view
             .session(id)
@@ -1010,43 +951,7 @@ impl App {
                 supervisor.note(format!("Sent to {name}: {}", one_line(text)));
                 Ok(false)
             }
-            SupervisorMode::Assist => {
-                if supervisor.approval.is_some() {
-                    return Err(
-                        "Another message is waiting for the person's approval; wait for its outcome"
-                            .into(),
-                    );
-                }
-                if self.info_overlay.is_awaiting_current() {
-                    return Err("The person has another dialog open; try again in a minute".into());
-                }
-                let mut lines = vec![
-                    format!("The supervisor wants to send this to {name} in the agent view:"),
-                    String::new(),
-                ];
-                lines.extend(text.lines().map(|line| format!("  {line}")));
-                lines.push(String::new());
-                let choice_line = lines.len();
-                lines.push("  Don't send".into());
-                lines.push("  Send".into());
-                let request_id = self.info_overlay.show_choices(
-                    "Supervisor message",
-                    lines,
-                    vec![
-                        InfoOverlayChoice::new(DECLINE_CHOICE, "Don't send", choice_line, None),
-                        InfoOverlayChoice::new(SEND_CHOICE, "Send", choice_line + 1, None),
-                    ],
-                );
-                let supervisor = self.supervisor.as_mut().expect("still running");
-                supervisor.note(format!("Asked you to approve a message to {name}"));
-                supervisor.approval = Some(PendingApproval {
-                    request_id,
-                    target,
-                    text: text.to_owned(),
-                    shown_at: Instant::now(),
-                });
-                Ok(true)
-            }
+            SupervisorMode::Assist => self.hold_supervisor_message(target, text),
         }
     }
 

@@ -254,6 +254,10 @@ pub enum Target {
     AttachSelection,
     AttachLastCommand,
     RemoveAttachment(usize),
+    /// Send the message the supervisor asked to send.
+    SupervisorSend,
+    /// Refuse the message the supervisor asked to send.
+    SupervisorDecline,
     /// Withdraw a message waiting for the current turn to end.
     CancelQueued(usize),
     /// Complete the message box to one of the agent's `/` commands.

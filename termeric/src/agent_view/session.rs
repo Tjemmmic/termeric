@@ -272,6 +272,25 @@ impl AgentSession {
         self.resumed.is_none() && self.transcript.first_prompt().is_none() && self.queued.is_empty()
     }
 
+    /// The arguments given before the protocol's own.
+    #[cfg(test)]
+    pub fn program_args(&self) -> &[String] {
+        &self.program.args
+    }
+
+    /// Names the conversation, instead of its first message.
+    pub fn set_title(&mut self, title: &str) {
+        self.title = Some(title.to_owned());
+    }
+
+    /// The running agent's process id.
+    pub fn process_id(&self) -> Option<u32> {
+        self.process
+            .as_ref()
+            .filter(|_| !self.closing)
+            .map(AgentProcess::process_id)
+    }
+
     /// Whether the conversation was handed to a terminal.
     pub fn handed_off(&self) -> bool {
         self.handed_off

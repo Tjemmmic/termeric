@@ -98,6 +98,16 @@ impl Builder<'_, '_> {
             }
         }
 
+        if let Some(request) = self
+            .input
+            .supervisor_request
+            .as_ref()
+            .filter(|request| request.session == session.id())
+        {
+            let height = self.supervisor_request_card(&mut region, request, x, y, width);
+            y += height + self.m.gap;
+        }
+
         y = self.status_line(&mut region, session, x, y, width);
         (region, y + self.m.pad)
     }
@@ -1873,8 +1883,103 @@ impl Builder<'_, '_> {
         bounds.height
     }
 
-    /// Lays buttons out left to right, wrapping, with the last one pushed
-    /// right when it fits on the first row. Returns the bottom.
+    /// A message the supervisor wants to send, for the person to decide.
+    fn supervisor_request_card(
+        &mut self,
+        region: &mut Region,
+        request: &super::SupervisorRequest,
+        x: f32,
+        y: f32,
+        width: f32,
+    ) -> f32 {
+        let pad = self.m.px(12.0);
+        let inner = width - pad * 2.0;
+        let mut body = Region::default();
+        let mut cursor = y + pad;
+        body.prims.push(Prim::Icon {
+            icon: Icon::Eye,
+            center: [x + pad + self.m.px(8.0), cursor + self.m.body.line_px / 2.0],
+            size: self.m.icon,
+            color: self.c.supervisor,
+        });
+        let title = format!("Send this to {}?", request.recipient);
+        cursor += self.read_paragraph(
+            &mut body,
+            &[(
+                &title,
+                SpanPaint {
+                    face: UiFace::SANS_BOLD,
+                    color: self.c.text_strong,
+                },
+            )],
+            x + pad + self.m.px(24.0),
+            cursor,
+            inner - self.m.px(24.0),
+            self.m.body,
+            true,
+        );
+        cursor += self.m.px(8.0);
+        // The whole message, as it would be sent.
+        let box_pad = self.m.px(9.0);
+        let mut message = Region::default();
+        let layout = self.paragraph(
+            &mut message,
+            &[(
+                &request.text,
+                SpanPaint {
+                    face: UiFace::SANS,
+                    color: self.c.text,
+                },
+            )],
+            x + pad + box_pad,
+            cursor + box_pad,
+            inner - box_pad * 2.0,
+            self.m.body,
+        );
+        let bounds = Bounds::new(x + pad, cursor, inner, layout.height + box_pad * 2.0);
+        body.prims.push(Prim::Fill {
+            bounds,
+            radius: self.m.px(6.0),
+            color: self.c.well,
+        });
+        body.nodes.push(RegionNode::Text(TextNode {
+            bounds,
+            clip: None,
+            text: request.text.clone(),
+            heading: false,
+        }));
+        merge(&mut body, message);
+        cursor += bounds.height + self.m.px(10.0);
+        let buttons = [
+            (
+                "Send".to_owned(),
+                ButtonKind::Primary,
+                Target::SupervisorSend,
+            ),
+            (
+                "Don't send".to_owned(),
+                ButtonKind::Ghost,
+                Target::SupervisorDecline,
+            ),
+        ];
+        cursor = self.button_rows(&mut body, &buttons, x + pad, cursor, inner);
+        cursor += pad;
+        let card = Bounds::new(x, y, width, (cursor - y).round());
+        region.prims.push(Prim::Fill {
+            bounds: card,
+            radius: self.m.radius,
+            color: self.c.supervisor_surface,
+        });
+        region.prims.push(Prim::Outline {
+            bounds: card,
+            radius: self.m.radius,
+            stroke: self.m.stroke,
+            color: self.c.supervisor,
+        });
+        merge(region, body);
+        card.height
+    }
+
     /// Offers Claude Code's terminal for a command it does not run here.
     fn run_in_terminal(
         &mut self,
@@ -1917,6 +2022,8 @@ impl Builder<'_, '_> {
         bottom - y
     }
 
+    /// Lays buttons out left to right, wrapping, with the last one pushed
+    /// right when it fits on the first row. Returns the bottom.
     fn button_rows(
         &mut self,
         region: &mut Region,

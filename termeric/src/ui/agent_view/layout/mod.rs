@@ -100,6 +100,15 @@ pub enum AgentAvailability {
     Looking,
 }
 
+/// A message the supervisor asked to send, waiting for the person in the
+/// supervisor's conversation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SupervisorRequest {
+    pub session: crate::agent_view::session::SessionId,
+    pub recipient: String,
+    pub text: String,
+}
+
 /// Everything a scene is built from.
 pub struct Input<'a> {
     /// The panel's area in physical window pixels.
@@ -119,6 +128,8 @@ pub struct Input<'a> {
     pub home: Option<PathBuf>,
     /// The person opted in to modes that skip every check.
     pub allow_bypass: bool,
+    /// A message the supervisor waits for the person to approve.
+    pub supervisor_request: Option<SupervisorRequest>,
 }
 
 impl Input<'_> {

@@ -441,10 +441,15 @@ impl App {
         use crate::agent_view::transcript::Item;
         use crate::agents::supervisor::SessionEvent;
         let mut events = Vec::new();
+        let own = self.supervisor_session();
         let window = &mut self.agent_view;
         let live: HashSet<SessionId> = window.sessions.iter().map(AgentSession::id).collect();
         window.told.retain(|id, _| live.contains(id));
-        for session in window.sessions.iter().filter(|session| !session.is_blank()) {
+        for session in window
+            .sessions
+            .iter()
+            .filter(|session| !session.is_blank() && Some(session.id()) != own)
+        {
             let told = window.told.entry(session.id()).or_default();
             let transcript = session.transcript();
             let control_id = session.id().control_id();
@@ -722,6 +727,7 @@ impl App {
         let terminal_agents = self.agent_view_terminal_rows();
         let supervisor = self.agent_view_supervisor_card();
         let banner = self.agent_view_banner();
+        let supervisor_request = self.supervisor_request();
         let home = std::env::var_os("HOME").map(PathBuf::from);
         let Some(renderer) = &mut self.renderer else {
             return;
@@ -749,6 +755,7 @@ impl App {
             new_session,
             home,
             allow_bypass: self.config.agent_view.allow_bypass_permissions,
+            supervisor_request,
         };
         let scene = Arc::new(layout::build(&input, renderer.text_measure()));
         renderer.set_agent_view(Some(Arc::clone(&scene)));
@@ -1120,7 +1127,36 @@ impl App {
     /// While a supervisor runs, a conversation says what it may do there.
     fn agent_view_banner(&self) -> Option<layout::Banner> {
         let summary = self.supervisor_summary()?;
-        let (title, detail) = if summary.held {
+        let own = self
+            .agent_view
+            .state
+            .active
+            .is_some_and(|id| self.is_supervisor_session(id));
+        // In the supervisor's own conversation: what it may do everywhere.
+        let (title, detail) = if own {
+            use crate::agents::supervisor::SupervisorMode;
+            match (
+                summary.held,
+                self.supervisor.as_ref().map(|supervisor| supervisor.mode()),
+            ) {
+                (true, _) => (
+                    "You took over",
+                    "The supervisor watches and sends nothing until you hand back.",
+                ),
+                (false, Some(SupervisorMode::Auto)) => (
+                    "Auto: the supervisor steers",
+                    "It answers agents on its own, following your rules and Termeric's limits.",
+                ),
+                (false, Some(SupervisorMode::Assist)) => (
+                    "Assist: you approve what it sends",
+                    "Messages it wants to send to agents wait here for you.",
+                ),
+                _ => (
+                    "Watch: the supervisor reports",
+                    "It reads what agents do and sends nothing.",
+                ),
+            }
+        } else if summary.held {
             (
                 "You took over from the supervisor",
                 "It watches but answers nothing until you hand back.",
@@ -1157,7 +1193,7 @@ impl App {
         })
     }
 
-    fn notify_agent_view(&mut self, title: &str) {
+    pub(super) fn notify_agent_view(&mut self, title: &str) {
         if !self.config.agent_status.notify {
             return;
         }
