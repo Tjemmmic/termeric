@@ -172,7 +172,8 @@ impl App {
             .collect();
         if self.agent_terminals().is_empty() {
             hidden.push("agent.go-to");
-            if !self.supervisor_running() {
+            // The panel also lists agent view sessions.
+            if !self.supervisor_running() && self.agent_view.sessions.is_empty() {
                 hidden.push("agent.panel");
             }
         }
@@ -411,7 +412,8 @@ impl App {
 
     /// Open the palette with commands that do not apply hidden.
     pub(super) fn open_command_palette(&mut self) {
-        let unavailable = self.unavailable_agent_commands();
+        let mut unavailable = self.unavailable_agent_commands();
+        unavailable.extend(self.unavailable_domain_commands());
         self.command_palette.set_unavailable(unavailable);
         self.command_palette.open();
     }

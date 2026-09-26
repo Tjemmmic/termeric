@@ -7,6 +7,8 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 const TOKEN_BYTES: usize = 64;
+/// The daemon's socket, inside the runtime directory.
+pub(crate) const SOCKET_NAME: &str = "domain-v1.sock";
 
 #[derive(Debug, Clone)]
 pub struct RuntimePaths {
@@ -23,7 +25,7 @@ impl RuntimePaths {
     pub fn from_directory(directory: PathBuf) -> anyhow::Result<Self> {
         ensure_private_directory(&directory)?;
         Ok(Self {
-            socket: directory.join("domain-v1.sock"),
+            socket: directory.join(SOCKET_NAME),
             token: directory.join("domain-v1.token"),
             directory,
         })

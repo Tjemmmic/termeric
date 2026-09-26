@@ -56,7 +56,8 @@ window.
 The command palette's **Attach Live Domain...** action provides the same flow
 without leaving the GUI. It first lists this computer and every saved SSH
 profile, then discovers that authority's live domains and opens the selection
-in a separate native window. Host/domain rows support fuzzy keyboard filtering,
+in a separate native window. The palette offers it once a local daemon is
+running or an SSH profile is saved. Host/domain rows support fuzzy keyboard filtering,
 arrow/Enter navigation, mouse selection, wheel scrolling, and Escape to return
 one level or close.
 

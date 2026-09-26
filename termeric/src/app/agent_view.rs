@@ -1444,6 +1444,16 @@ mod tests {
     }
 
     #[test]
+    fn show_agents_is_offered_for_agent_view_sessions_alone() {
+        let mut app = App::new_headless(crate::config::Config::default()).unwrap();
+        let hidden = |app: &App| app.unavailable_agent_commands();
+        assert!(hidden(&app).contains(&"agent.panel".to_owned()));
+        let (with_session, _) = app_with_waiting_session();
+        app = with_session;
+        assert!(!hidden(&app).contains(&"agent.panel".to_owned()));
+    }
+
+    #[test]
     fn outside_answers_need_the_external_input_opt_in() {
         let (mut app, id) = app_with_waiting_session();
         let session = id.control_id();

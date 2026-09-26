@@ -5,6 +5,23 @@ use crate::domain::protocol::{Request, Response};
 use crate::ui::domain_picker::{DomainPickerCommand, DomainPickerPrepared};
 
 impl App {
+    /// Live-domain commands to hide from the palette: attaching until a
+    /// local daemon runs or an SSH host is configured, and cancelling an
+    /// upload unless one runs.
+    pub(super) fn unavailable_domain_commands(&self) -> Vec<String> {
+        let mut hidden = Vec::new();
+        let daemon_running = crate::domain::paths::discover_runtime_directory()
+            .join(crate::domain::paths::SOCKET_NAME)
+            .exists();
+        if !daemon_running && self.config.domains.ssh_hosts.is_empty() {
+            hidden.push("core.attach-domain".to_owned());
+        }
+        if self.active_file_upload.is_none() {
+            hidden.push("core.cancel-file-upload".to_owned());
+        }
+        hidden
+    }
+
     pub(super) fn open_domain_picker(&mut self) {
         self.ime.clear_preedit();
         self.command_palette.close();
@@ -166,6 +183,28 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn live_domain_commands_show_only_where_they_can_act() {
+        let mut app = App::new_headless(crate::config::Config::default()).unwrap();
+        // Nothing to cancel without an upload.
+        assert!(
+            app.unavailable_domain_commands()
+                .contains(&"core.cancel-file-upload".to_owned())
+        );
+        // A saved SSH host is somewhere to attach, whatever runs locally.
+        app.config.domains.ssh_hosts.insert(
+            "build".into(),
+            crate::config::SshHostProfile {
+                destination: "build.example".into(),
+                description: None,
+            },
+        );
+        assert!(
+            !app.unavailable_domain_commands()
+                .contains(&"core.attach-domain".to_owned())
+        );
+    }
 
     #[test]
     fn domain_picker_stage_changes_retire_composition_without_external_discovery() {
