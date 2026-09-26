@@ -132,7 +132,10 @@ pub fn instructions(mode: SupervisorMode, rules: &str) -> String {
          Termeric sends you messages beginning \"Termeric:\" when an agent in your window needs \
          input, finishes, or fails. Use the termeric tools: list_agents to see every agent and \
          its window_id, tab_id, and pane_id; read_terminal to read an agent's screen before \
-         deciding; send_to_agent to answer it. Keep each message to an agent short and specific, \
+         deciding; send_to_agent to answer it. Agents in Termeric's agent view have a \
+         session_id instead of a pane: read_conversation reads one, answer_approval allows or \
+         denies one of its approval requests by approval_id, and send_to_session sends it its \
+         next message. Keep each message to an agent short and specific, \
          in plain words: Termeric refuses messages starting with `!` or `/`, which the agent \
          would run as commands, and any message while the person is typing to that agent. \
          Never send to yourself. {}\n\nThe person's rules:\n\n{}",
@@ -151,7 +154,9 @@ pub const SERVER_NAME: &str = "termeric_supervisor";
 /// The tools the supervisor may call without asking the person, as Claude
 /// Code names them.
 const CLAUDE_TOOLS: &str = "mcp__termeric_supervisor__list_agents,\
-mcp__termeric_supervisor__read_terminal,mcp__termeric_supervisor__send_to_agent";
+mcp__termeric_supervisor__read_terminal,mcp__termeric_supervisor__send_to_agent,\
+mcp__termeric_supervisor__read_conversation,mcp__termeric_supervisor__answer_approval,\
+mcp__termeric_supervisor__send_to_session";
 
 /// How the supervisor's MCP server reaches the Termeric that started it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -293,6 +298,16 @@ pub enum SessionEvent {
         title: String,
         error: String,
     },
+    /// An approval the supervisor suggested an answer for was settled.
+    SuggestionSettled {
+        session: u64,
+        title: String,
+        approval_id: String,
+        suggested_allow: bool,
+        /// Whether the person allowed it; `None` when the agent withdrew
+        /// the request before anyone answered.
+        allowed: Option<bool>,
+    },
 }
 
 /// What the supervisor is told about an agent view session.
@@ -344,6 +359,33 @@ pub fn session_message(window_id: u64, event: &SessionEvent) -> String {
             title,
             format!("stopped with an error: {}", first_line(error)),
         ),
+        SessionEvent::SuggestionSettled {
+            session,
+            title,
+            approval_id,
+            suggested_allow,
+            allowed,
+        } => {
+            let suggested = if *suggested_allow {
+                "allowing"
+            } else {
+                "denying"
+            };
+            (
+                session,
+                title,
+                match allowed {
+                    Some(allowed) => format!(
+                        "had approval {approval_id} {} by the person; you suggested {suggested}.",
+                        if *allowed { "allowed" } else { "denied" }
+                    ),
+                    None => format!(
+                        "withdrew approval {approval_id} before anyone answered; you suggested \
+                         {suggested}."
+                    ),
+                },
+            )
+        }
     };
     format!(
         "Termeric: Claude Code in the agent view (window {window_id}, session {session}, \
@@ -522,6 +564,23 @@ mod tests {
             },
         );
         assert!(finished.ends_with("finished. Its answer begins: All green."));
+        let settled = |allowed| {
+            session_message(
+                2,
+                &SessionEvent::SuggestionSettled {
+                    session: 7,
+                    title: "Fix".into(),
+                    approval_id: "req-1".into(),
+                    suggested_allow: true,
+                    allowed,
+                },
+            )
+        };
+        assert!(
+            settled(Some(false))
+                .ends_with("had approval req-1 denied by the person; you suggested allowing.")
+        );
+        assert!(settled(None).contains("withdrew approval req-1 before anyone answered"));
     }
     use crate::agents::AgentReport;
     use crate::control::protocol::AgentEventKind;
@@ -622,12 +681,16 @@ mod tests {
         let definition = &config["mcpServers"]["termeric_supervisor"];
         assert_eq!(definition["args"], serde_json::json!(expected_args));
         assert_eq!(definition["env"]["XDG_RUNTIME_DIR"], "/run/user/1000");
-        assert!(
-            claude[3]
-                .split(',')
-                .all(|tool| tool.starts_with("mcp__termeric_supervisor__"))
-        );
-        assert_eq!(claude[3].split(',').count(), 3);
+        // Every tool the server offers is allowed up front, so a
+        // supervisor never stops at its own permission prompt.
+        let mut allowed: Vec<&str> = claude[3].split(',').collect();
+        allowed.sort_unstable();
+        let mut offered: Vec<String> = crate::mcp::tool_names()
+            .into_iter()
+            .map(|name| format!("mcp__termeric_supervisor__{name}"))
+            .collect();
+        offered.sort_unstable();
+        assert_eq!(allowed, offered);
         assert_eq!(claude[5], "RULES");
         assert_eq!(claude.last().unwrap(), KICKOFF);
 

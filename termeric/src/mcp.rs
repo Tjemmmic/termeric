@@ -278,6 +278,17 @@ fn session_schema(extra: &[(&str, Value, bool)]) -> Value {
     json!({"type": "object", "properties": properties, "required": required})
 }
 
+/// The names of every tool the server offers.
+#[cfg(test)]
+pub(crate) fn tool_names() -> Vec<String> {
+    tools()
+        .as_array()
+        .expect("the tools are a list")
+        .iter()
+        .filter_map(|tool| tool["name"].as_str().map(str::to_owned))
+        .collect()
+}
+
 fn tools() -> Value {
     json!([
         {

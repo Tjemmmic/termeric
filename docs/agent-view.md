@@ -183,8 +183,10 @@ decision and when a turn ends, and its tools reach sessions directly:
 Its mode decides what these do. **Auto** answers and sends, within the same
 limits as its terminal sends, and the conversation shows *Allowed by the
 supervisor* with its reason. **Assist** shows its answer on the approval
-card as a suggestion for you to act on, and asks before each message, as for
-terminal agents. **Watch** refuses both. A banner in each conversation says
+card as a suggestion for you to act on, tells the supervisor how you settled
+it, and asks before each message, as for terminal agents. **Watch** refuses
+both. Its tools are allowed up front, so it never stops at Claude Code's own
+permission prompt to use them. A banner in each conversation says
 which applies, with **Take over** and **Hand back**. A message is refused
 while you are writing one to the same session.
 

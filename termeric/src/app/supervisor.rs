@@ -877,12 +877,37 @@ impl App {
             .ok_or_else(|| "That agent view session has closed".to_string())?;
         let title = session.title();
         let verb = if allow { "allow" } else { "deny" };
+        if mode == SupervisorMode::Watch {
+            return Err(
+                "The supervisor only watches; answer approvals in Assist or Auto mode".into(),
+            );
+        }
+        // Answers count toward the same limits as messages, so a supervisor
+        // cannot act faster than it may send.
+        let key = SendTarget::Session {
+            id,
+            name: format!("\"{title}\""),
+        }
+        .key();
+        let action = format!("{verb} approval {approval_id}");
+        let per_minute = self.config.supervisor.max_sends_per_minute;
+        let supervisor = self.supervisor.as_mut().expect("the token was checked");
+        if let Err(refusal) =
+            supervisor
+                .limits
+                .check(mode, per_minute, &key, &action, Instant::now())
+        {
+            supervisor.note(format!(
+                "Refused to {verb} a request in \"{title}\": {refusal}"
+            ));
+            return Err(refusal.to_string());
+        }
+        let session = self
+            .agent_view
+            .session_mut(id)
+            .ok_or_else(|| "That agent view session has closed".to_string())?;
         let decided = match mode {
-            SupervisorMode::Watch => {
-                return Err(
-                    "The supervisor only watches; answer approvals in Assist or Auto mode".into(),
-                );
-            }
+            SupervisorMode::Watch => unreachable!("watch mode was refused above"),
             SupervisorMode::Assist => {
                 if !session.suggest(approval_id, allow, reason) {
                     return Err(format!("Approval {approval_id} is no longer pending"));
@@ -927,6 +952,7 @@ impl App {
             }
         };
         if let Some(supervisor) = &mut self.supervisor {
+            supervisor.limits.record(&key, &action, Instant::now());
             supervisor.note(if decided {
                 format!("Chose to {verb} a request in \"{title}\"")
             } else {

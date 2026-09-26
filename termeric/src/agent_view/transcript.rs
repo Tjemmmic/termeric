@@ -786,6 +786,14 @@ impl Transcript {
         }
     }
 
+    /// The tool call with this tool use id.
+    pub fn tool(&self, id: &str) -> Option<&ToolCall> {
+        self.items.iter().find_map(|item| match item {
+            Item::Tool(tool) if tool.id == id => Some(tool),
+            _ => None,
+        })
+    }
+
     fn tool_mut(&mut self, id: &str) -> Option<&mut ToolCall> {
         self.items.iter_mut().rev().find_map(|item| match item {
             Item::Tool(tool) if tool.id == id => Some(tool),

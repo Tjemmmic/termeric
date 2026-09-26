@@ -63,6 +63,9 @@ pub(super) struct AgentViewWindow {
 struct Told {
     approvals: HashSet<String>,
     turns: usize,
+    /// Pending approvals the supervisor suggested an answer for: whether
+    /// it suggested allowing, and the tool call the decision lands on.
+    suggested: std::collections::HashMap<String, (bool, Option<String>)>,
 }
 
 impl AgentViewWindow {
@@ -368,6 +371,37 @@ impl App {
                 }
             }
             told.approvals.retain(|id| pending.contains(id));
+            for approval in transcript.approvals() {
+                if let Some(suggestion) = transcript.suggestion(&approval.request_id) {
+                    told.suggested.insert(
+                        approval.request_id.clone(),
+                        (suggestion.allow, approval.tool_use_id.clone()),
+                    );
+                }
+            }
+            let settled: Vec<String> = told
+                .suggested
+                .keys()
+                .filter(|id| !pending.contains(*id))
+                .cloned()
+                .collect();
+            for approval_id in settled {
+                let (suggested_allow, tool_use_id) = told
+                    .suggested
+                    .remove(&approval_id)
+                    .expect("the id was just listed");
+                let allowed = tool_use_id
+                    .and_then(|id| transcript.tool(&id))
+                    .and_then(|tool| tool.decision.as_ref())
+                    .map(|decision| decision.allowed);
+                events.push(SessionEvent::SuggestionSettled {
+                    session: control_id,
+                    title: title.clone(),
+                    approval_id,
+                    suggested_allow,
+                    allowed,
+                });
+            }
             let ends: Vec<_> = transcript
                 .items()
                 .iter()
@@ -1491,6 +1525,29 @@ mod tests {
         assert!(app.agent_view_supervisor_events().is_empty());
         let session = app.agent_view.session_mut(id).unwrap();
         session.deny("r1", None, DecidedBy::Person, false);
+        assert!(app.agent_view_supervisor_events().is_empty());
+    }
+
+    #[test]
+    fn the_supervisor_hears_how_its_suggestion_was_settled() {
+        use crate::agents::supervisor::SessionEvent;
+        let (mut app, id) = app_with_waiting_session();
+        app.agent_view_supervisor_events();
+        let session = app.agent_view.session_mut(id).unwrap();
+        assert!(session.suggest("r1", true, "tests are safe"));
+        assert!(app.agent_view_supervisor_events().is_empty());
+        let session = app.agent_view.session_mut(id).unwrap();
+        session.deny("r1", None, DecidedBy::Person, false);
+        let settled = app.agent_view_supervisor_events();
+        assert!(matches!(
+            settled.as_slice(),
+            [SessionEvent::SuggestionSettled {
+                approval_id,
+                suggested_allow: true,
+                allowed: Some(false),
+                ..
+            }] if approval_id == "r1"
+        ));
         assert!(app.agent_view_supervisor_events().is_empty());
     }
 

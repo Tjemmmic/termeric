@@ -228,7 +228,8 @@ instructions say:
 - It sends only to agents in its own window, never to itself or to a terminal
   without that agent.
 - It sends at most `max_sends_per_minute` messages (6 by default). Messages
-  you decline count too, so it cannot ask faster than it could send.
+  you decline count too, so it cannot ask faster than it could send, and so
+  do its answers to agent view approvals.
 - It cannot send the same message to the same agent twice within 30 seconds,
   however the spacing or capitals differ.
 - A message is plain text of at most 4000 bytes and 80 lines. It may not start
