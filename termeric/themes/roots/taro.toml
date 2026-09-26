@@ -4,33 +4,33 @@ author = "Termeric"
 description = "Dusty brown skin, pale lavender flesh, purple veins — elephant ear"
 
 [primary]
-black = "#2D252D"   # Deep taro soil, lifted off the background
-red = "#C75656"     # Red tinted toward muted purple-rose
-green = "#3D8945"   # Giant elephant ear leaf, richer so it reads as green
-yellow = "#D8C25A"  # Creamy spadix flower, softened
-blue = "#7770BF"    # Blue tinted toward purple vein blue
-magenta = "#9C63B9" # Purple flesh vein, richer so it reads as magenta
-cyan = "#3C8679"    # Cyan tinted toward velvety leaf green
-white = "#E8E0F0"   # Pale lavender flesh
+black = "#342D2A"   # Dusty brown skin, a step above the background
+red = "#CF686B"     # Purple-rose red
+green = "#5EAA59"   # Elephant-ear leaf
+yellow = "#CDAD42"  # Creamy spadix
+blue = "#7D8ACA"    # Periwinkle
+magenta = "#B173C0" # Purple vein
+cyan = "#53A99D"    # Velvety leaf teal
+white = "#C7BED1"   # Pale lavender flesh
 
 [bright]
-black = "#7D6557"   # Dark dusty brown skin, lifted for readable dim text
-red = "#D37C7C"     # Bright red tinted toward light purple-rose
-green = "#51A74B"   # Bright leaf green, richer so it reads as green
-yellow = "#E1D88E"  # Light flower yellow, softened
-blue = "#928DCC"    # Bright blue tinted toward light violet
-magenta = "#B184C8" # Bright purple, lifted for contrast
-cyan = "#50B0A0"    # Bright cyan tinted toward bright velvety green
-white = "#F0E8F8"   # Bright lavender
+black = "#887A70"   # Fibrous brown for dim hints
+red = "#E38F8F"     # Light purple-rose
+green = "#84C781"   # Light leaf
+yellow = "#DFC86E"  # Light spadix
+blue = "#A0A9DF"    # Light periwinkle
+magenta = "#CB96D8" # Light purple vein
+cyan = "#78C5BD"    # Light leaf teal
+white = "#F2ECF7"   # Bright lavender
 
 [ui]
-background = "#181418"
-foreground = "#E8E0F0"
-cursor = "#7B5C9B"
-cursor_text = "#E8E0F0"
-selection = "#7B5C9B30"
-border = "#5C4A40"
-tab_active = "#7B5C9B"
-tab_inactive = "#281828"
-search_match = "#E8D88C66"
-url = "#9B80B8"
+background = "#1A1614"   # Dusty brown skin
+foreground = "#E5DCEE"   # Lavender flesh
+cursor = "#BA8FD7"       # Purple vein
+cursor_text = "#1A1614"  # Text under the cursor
+selection = "#673E8159"  # Lavender tint
+border = "#363233"       # Chrome separators
+tab_active = "#BA8FD7"   # Purple vein
+tab_inactive = "#24201F" # Tab strip
+search_match = "#7B661F" # Spadix cream
+url = "#C59DD7"          # Lavender

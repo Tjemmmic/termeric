@@ -4,33 +4,33 @@ author = "Termeric"
 description = "Bright green rhizome with vivid chartreuse flesh"
 
 [primary]
-black = "#1D2C1D"   # Deep green-black soil, lifted off the background
-red = "#C65854"     # Red tinted toward earthy brown-red
-green = "#5C8C32"   # Bright rhizome green skin
-yellow = "#C8C850"  # Yellow tinted toward fresh chartreuse flesh
-blue = "#4E7EAE"    # Blue tinted toward cool green-teal
-magenta = "#B65D89" # Magenta tinted toward warm earth
-cyan = "#2EC2AA"    # Cyan tinted toward vivid wasabi paste green
-white = "#C8D8A0"   # Warm pale green flesh
+black = "#293033"   # Slate plate, a step above the background
+red = "#D76654"     # Salmon red
+green = "#75A83B"   # Wasabi green
+yellow = "#D4AB39"  # Tamago yellow
+blue = "#6690C5"    # Soy-glaze blue
+magenta = "#C86E9B" # Pickled-ginger pink
+cyan = "#4CA9A6"    # Nori teal
+white = "#CEC6B5"   # Rice white
 
 [bright]
-black = "#4C724C"   # Dark heart-shaped leaf, lifted for readable dim text
-red = "#D37E7B"     # Bright red tinted toward light earthy brown
-green = "#71BE32"   # Bright grated wasabi, nudged apart from neighbouring hues
-yellow = "#D9D96F"  # Bright yellow tinted toward bright chartreuse
-blue = "#7399C0"    # Bright blue tinted toward light green-teal
-magenta = "#C67FA3" # Bright magenta tinted toward light earth
-cyan = "#50D0BB"    # Bright cyan tinted toward vivid bright green
-white = "#D8E8B8"   # Light green-white
+black = "#717F85"   # Slate grey for dim hints
+red = "#E39180"     # Light salmon
+green = "#8BC84F"   # Bright wasabi
+yellow = "#E1C875"  # Light tamago
+blue = "#90AFDC"    # Light glaze blue
+magenta = "#DD94B8" # Light gari pink
+cyan = "#6EC7C7"    # Light nori teal
+white = "#F8F6EF"   # Bright rice white
 
 [ui]
-background = "#101810"
-foreground = "#C8D8A0"
-cursor = "#7BC828"
-cursor_text = "#101810"
-selection = "#5C8C3230"
-border = "#2D5C2D"
-tab_active = "#7BC828"
-tab_inactive = "#182818"
-search_match = "#A0C85066"
-url = "#98E040"
+background = "#151819"   # Dark slate plate
+foreground = "#EDE7DC"   # Rice white
+cursor = "#8BCA38"       # Wasabi green
+cursor_text = "#151819"  # Text under the cursor
+selection = "#435D264D"  # Wasabi tint
+border = "#333534"       # Chrome separators
+tab_active = "#8BCA38"   # Wasabi green
+tab_inactive = "#202223" # Tab strip
+search_match = "#80651A" # Tamago yellow
+url = "#8DC44D"          # Wasabi green

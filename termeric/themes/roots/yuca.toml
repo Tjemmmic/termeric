@@ -4,33 +4,33 @@ author = "Termeric"
 description = "Bark-brown skin with bright starchy white flesh — cassava root"
 
 [primary]
-black = "#2F251F"   # Dark bark, lifted off the background
-red = "#CC6966"     # Red tinted toward pink-coral inner bark
-green = "#43883B"   # Deep tropical leaf green, lifted for contrast
-yellow = "#C6A56C"  # Woody tan bark, lifted for contrast
-blue = "#4D7DAC"    # Blue tinted toward cool tropical shadow
-magenta = "#BA6690" # Magenta tinted toward warm coral
-cyan = "#3C867A"    # Cyan tinted toward tropical green
+black = "#362A23"   # Dark bark, lifted off the background
+red = "#C77573"     # Red tinted toward pink-coral inner bark
+green = "#52954A"   # Deep tropical leaf green, lifted for contrast
+yellow = "#C6AD81"  # Woody tan bark, lifted for contrast
+blue = "#6289AF"    # Blue tinted toward cool tropical shadow
+magenta = "#B67294" # Magenta tinted toward warm coral
+cyan = "#4A9286"    # Cyan tinted toward tropical green
 white = "#FAFAF8"   # Bright starchy white flesh
 
 [bright]
-black = "#7F6455"   # Rough woody bark, lifted for readable dim text
-red = "#DB9694"     # Bright red tinted toward light coral
-green = "#59A64B"   # Bright tropical, richer so it reads as green
-yellow = "#D8C090"  # Light bark tan
-blue = "#7198BF"    # Bright blue tinted toward light teal
-magenta = "#CC8CAC" # Bright magenta tinted toward light warm coral
-cyan = "#4DAB9B"    # Bright cyan tinted toward mid tropical
+black = "#856959"   # Rough woody bark, lifted for readable dim text
+red = "#D8A19F"     # Bright red tinted toward light coral
+green = "#67AB5B"   # Bright tropical, richer so it reads as green
+yellow = "#DAC8A6"  # Light bark tan
+blue = "#7E9EBD"    # Bright blue tinted toward light teal
+magenta = "#CA97B0" # Bright magenta tinted toward light warm coral
+cyan = "#64AFA2"    # Bright cyan tinted toward mid tropical
 white = "#FEFEFE"   # Chalky white
 
 [ui]
-background = "#1A1410"
-foreground = "#FAFAF8"
-cursor = "#D4A090"
-cursor_text = "#1A1410"
-selection = "#C8A87040"
-border = "#5C4030"
-tab_active = "#D4A090"
-tab_inactive = "#2A2018"
-search_match = "#4A804066"
-url = "#68A058"
+background = "#231B15"     # Terminal background
+foreground = "#FAFAF8"     # Primary text
+cursor = "#D4A090"         # Block cursor
+cursor_text = "#231B15"    # Text under the cursor
+selection = "#C8A87040"    # Selection tint over the background
+border = "#624533"         # Chrome separators
+tab_active = "#D4A090"     # Active-tab accent line
+tab_inactive = "#31261C"   # Tab strip
+search_match = "#4A804066" # Search matches (drawn at 35% / 65% alpha)
+url = "#6EA65D"            # Hyperlinks

@@ -4,33 +4,33 @@ author = "Termeric"
 description = "Pale sandy tones from ginger root — warm and understated"
 
 [primary]
-black = "#2F2920"   # Dark ginger bark, lifted off the background
-red = "#C75B57"     # Red tinted toward pink ginger shoot
-green = "#71853C"   # Warm olive leaf, lifted for contrast
-yellow = "#C8A86A"  # Pale straw flesh
-blue = "#5483B2"    # Blue tinted toward cool ginger shadows
-magenta = "#C07299" # Magenta tinted toward pink young ginger
-cyan = "#4FB0A0"    # Cyan tinted toward reed green leaf
-white = "#EDE0C0"   # Fibrous cream flesh
+black = "#35312B"   # Papery skin, a step above the background
+red = "#CA8883"     # Muted pink-red
+green = "#99B377"   # Muted olive leaf
+yellow = "#D2BE85"  # Straw
+blue = "#88A2BF"    # Muted shadow blue
+magenta = "#BC8EAD" # Muted shoot pink
+cyan = "#82B6AD"    # Muted reed teal
+white = "#CCC1A9"   # Fibrous cream
 
 [bright]
-black = "#7A6851"   # Medium bark, lifted for readable dim text
-red = "#D5817E"     # Bright red tinted toward light coral
-green = "#94B04F"   # Bright reed green, richer so it reads as green
-yellow = "#DFC889"  # Bright straw, lifted for contrast
-blue = "#80A3C6"    # Bright blue tinted toward light blue-grey
-magenta = "#D49CB8" # Bright magenta tinted toward light pink
-cyan = "#70C4B6"    # Bright cyan tinted toward bright leaf
-white = "#F5EDD8"   # Light fibrous cream
+black = "#877E6F"   # Sand for dim hints
+red = "#DCA8A2"     # Light muted pink-red
+green = "#B5CD9B"   # Light olive leaf
+yellow = "#E3D6A8"  # Light straw
+blue = "#A9BDD6"    # Light shadow blue
+magenta = "#D5ADC7" # Light shoot pink
+cyan = "#A5CEC9"    # Light reed teal
+white = "#F0E9D7"   # Light fibrous cream
 
 [ui]
-background = "#1E1810"
-foreground = "#EDE0C0"
-cursor = "#D4A068"
-cursor_text = "#1E1810"
-selection = "#C8A86A59"
-border = "#3D3428"
-tab_active = "#D4A068"
-tab_inactive = "#2D2820"
-search_match = "#8FA55A66"
-url = "#A8C470"
+background = "#1F1C19"   # Sandy dark (papery skin)
+foreground = "#E6DDC6"   # Straw cream
+cursor = "#D7BA75"       # Straw gold
+cursor_text = "#1F1C19"  # Text under the cursor
+selection = "#6B59344D"  # Straw tint
+border = "#3B3731"       # Chrome separators
+tab_active = "#D7BA75"   # Straw gold
+tab_inactive = "#292622" # Tab strip
+search_match = "#566F35" # Olive leaf
+url = "#A3C07F"          # Olive leaf

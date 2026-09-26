@@ -4,33 +4,33 @@ author = "Termeric"
 description = "Crisp whites and greens from the Japanese radish"
 
 [primary]
-black = "#283025"   # Deep soil, lifted off the background
-red = "#C66353"     # Radish blush, richer so it reads as red
-green = "#4B9041"   # Dark leathery leaf, richer so it reads as green
-yellow = "#B6C072"  # Pale green top, richer so it reads as yellow
-blue = "#4E86AE"    # Cool shadow, richer so it reads as blue
-magenta = "#B96493" # Muted rose, richer so it reads as magenta
-cyan = "#4BA798"    # Cyan tinted toward bright leaf green
-white = "#F0EDE8"   # Clean white skin
+black = "#2A322E"   # Deep soil, a step above the background
+red = "#D3696C"     # Radish blush
+green = "#5EAD4A"   # Leathery leaf green
+yellow = "#C8B140"  # Pale green-top yellow
+blue = "#5E94C2"    # Cool shadow blue
+magenta = "#BE74A5" # Muted rose
+cyan = "#4AAC9B"    # Leaf-vein teal
+white = "#C3CBBC"   # Clean white skin
 
 [bright]
-black = "#647261"   # Dark earth, lifted for readable dim text
-red = "#D28979"     # Warm blush, richer so it reads as red
-green = "#6CAA4D"   # Bright radish leaf, lifted for contrast
-yellow = "#D3D39C"  # Bright yellow tinted toward pale green fade
-blue = "#78A3C2"    # Light blue, richer so it reads as blue
-magenta = "#CA88A0" # Light rose, richer so it reads as magenta
-cyan = "#70C4B6"    # Bright cyan tinted toward spring green
-white = "#FAFAF5"   # Crisp translucent white
+black = "#718276"   # Grey-green for dim hints
+red = "#E59191"     # Bright blush
+green = "#83CA71"   # Bright leaf green
+yellow = "#DCCD69"  # Bright green-top yellow
+blue = "#89B2DA"    # Light shadow blue
+magenta = "#D797C1" # Light rose
+cyan = "#6ECABD"    # Bright leaf-vein teal
+white = "#FBFCF9"   # Crisp translucent white
 
 [ui]
-background = "#1A1F18"
-foreground = "#F0EDE8"
-cursor = "#6BA34F"
-cursor_text = "#1A1F18"
-selection = "#B8C08040"
-border = "#3A4238"
-tab_active = "#6BA34F"
-tab_inactive = "#2A3028"
-search_match = "#D4E0C466"
-url = "#88C470"
+background = "#161A18"   # Cool green-charcoal
+foreground = "#EBEFE5"   # Crisp white
+cursor = "#6BC355"       # Fresh leaf green
+cursor_text = "#161A18"  # Text under the cursor
+selection = "#3B5F334D"  # Leaf tint
+border = "#343835"       # Chrome separators
+tab_active = "#6BC355"   # Fresh leaf green
+tab_inactive = "#212522" # Tab strip
+search_match = "#756A22" # Green-top yellow
+url = "#7BC7A1"          # Leaf teal

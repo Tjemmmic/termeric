@@ -4,33 +4,33 @@ author = "Termeric"
 description = "Sandy tan skin with sharp white flesh — bold and pungent"
 
 [primary]
-black = "#2C281D"   # Dark root earth, lifted off the background
-red = "#C65753"     # Red tinted toward sandy reddish-brown
-green = "#56873D"   # Large crinkled leaf green, lifted for contrast
-yellow = "#D8C65A"  # Pale yellow core, lifted for contrast
-blue = "#4D85AB"    # Cool earth shadow, richer so it reads as blue
-magenta = "#B65C89"  # Magenta tinted toward warm sandy tan
-cyan = "#3C867A"    # Cyan tinted toward bold leaf green
-white = "#FAFAF8"   # Sharp white flesh
+black = "#312F2B"   # Root earth, a step above the background
+red = "#DB6864"     # Pungent red
+green = "#6CB349"   # Crinkled leaf green
+yellow = "#D4B539"  # Pale yellow cross-section
+blue = "#6B98CB"    # Cool earth shadow
+magenta = "#C878AD" # Muted mauve
+cyan = "#4FB4A6"    # Leaf teal
+white = "#D1CFC3"   # Sharp white flesh
 
 [bright]
-black = "#77684F"   # Rough scarred skin, lifted for readable dim text
-red = "#D37E7B"     # Bright red tinted toward light sandy tan
-green = "#6EA44A"   # Bright bold leaf, richer so it reads as green
-yellow = "#E1D08E"  # Bright pale yellow, softened
-blue = "#76A4C2"    # Light blue, richer so it reads as blue
-magenta = "#C681A4" # Bright magenta tinted toward light sandy
-cyan = "#4DAB9B"    # Bright cyan tinted toward mid leaf green
-white = "#FEFEFE"   # Brightest white
+black = "#837F75"   # Scarred grey for dim hints
+red = "#E79791"     # Bright pungent red
+green = "#94D17B"   # Bright leaf green
+yellow = "#E4D382"  # Bright cross-section
+blue = "#97B8E2"    # Light shadow blue
+magenta = "#DE9DC8" # Light mauve
+cyan = "#81D1C9"    # Bright leaf teal
+white = "#FFFFFE"   # Brightest white
 
 [ui]
-background = "#181610"
-foreground = "#FAFAF8"
-cursor = "#F0E8B8"
-cursor_text = "#181610"
-selection = "#C8B89040"
-border = "#4A4030"
-tab_active = "#F0E8B8"
-tab_inactive = "#282418"
-search_match = "#5A804066"
-url = "#78A058"
+background = "#171614"   # Neutral charcoal
+foreground = "#F6F5F0"   # Sharp white
+cursor = "#F0E4A7"       # Pale yellow cross-section
+cursor_text = "#171614"  # Text under the cursor
+selection = "#635A2A4D"  # Cross-section tint
+border = "#363533"       # Chrome separators
+tab_active = "#F0E4A7"   # Pale yellow cross-section
+tab_inactive = "#22211F" # Tab strip
+search_match = "#43732B" # Leaf green
+url = "#88C869"          # Crinkled leaf

@@ -4,33 +4,33 @@ author = "Termeric"
 description = "Colors inspired by the turmeric root — skin, flesh, and leaves"
 
 [primary]
-black = "#302520"   # Deep brown-black (dried skin), lifted off the background
-red = "#C85848"     # Earthy red, lifted for contrast
-green = "#5A9442"   # Turmeric leaf green, richer so it reads as green
-yellow = "#C29F2E"  # Earthy yellow (inner layer), softened
-blue = "#5483B2"    # Blue tinted toward muted teal
-magenta = "#BA6789" # Dusty rose, richer so it reads as magenta
-cyan = "#42947F"    # Leaf green-cyan, richer so it reads as cyan
-white = "#D4C4A8"   # Cream/tan (turmeric skin)
+black = "#352F2B"   # Milky brown, a step above the background
+red = "#CB867E"     # Muted cinnamon red
+green = "#8EB479"   # Muted leaf green
+yellow = "#D8BB77"  # Golden milk
+blue = "#89A0C2"    # Muted slate blue
+magenta = "#BE8CA9" # Muted rose
+cyan = "#7DB5AD"    # Muted sage-teal
+white = "#CCC0A7"   # Steamed milk
 
 [bright]
-black = "#7E6454"   # Lighter brown, lifted for readable dim text
-red = "#DB7A76"     # Bright red tinted toward warm coral
-green = "#7ABB67"   # Bright leaf green, lifted for contrast
-yellow = "#D0A250"  # Bright orange-yellow (turmeric core), softened
-blue = "#83A5C8"    # Bright blue tinted toward lighter teal
-magenta = "#CE93B1" # Light dusty rose, nudged apart from neighbouring hues
-cyan = "#68BBAD"    # Bright cyan tinted toward bright leaf green
-white = "#F5EBD9"   # Light cream
+black = "#887C6F"   # Muted brown for dim hints
+red = "#DDA79E"     # Light cinnamon
+green = "#AECD9E"   # Light leaf
+yellow = "#E7D49E"  # Light honey
+blue = "#A9BBD8"    # Light slate blue
+magenta = "#D5ABC4" # Light rose
+cyan = "#A3CDC9"    # Light sage-teal
+white = "#F0E8D1"   # Milk foam
 
 [ui]
-background = "#1C1410"  # Dark brown (dried turmeric)
-foreground = "#D4C4A8"  # Cream/tan (skin color)
-cursor = "#E07B20"      # Bright orange (turmeric core)
-cursor_text = "#1C1410" # Dark brown
-selection = "#C9A22759"  # Earthy yellow selection
-border = "#3D3028"      # Medium brown
-tab_active = "#E07B20"  # Bright orange (core)
-tab_inactive = "#2D2420" # Darker brown
-search_match = "#7CB86A66" # Leaf green
-url = "#6BB89E"         # Bright leaf green
+background = "#1E1B18"   # Milky dark brown
+foreground = "#E9DBBB"   # Creamy gold-white
+cursor = "#E0A750"       # Honey gold
+cursor_text = "#1E1B18"  # Text under the cursor
+selection = "#705A304D"  # Golden milk tint
+border = "#3A362F"       # Chrome separators
+tab_active = "#E0A750"   # Honey gold
+tab_inactive = "#282520" # Tab strip
+search_match = "#7D6324" # Honey gold
+url = "#86C1B9"          # Sage-teal

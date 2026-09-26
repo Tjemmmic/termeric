@@ -4,33 +4,33 @@ author = "Termeric"
 description = "Deep burgundy and vivid crimson from the beetroot"
 
 [primary]
-black = "#2E1F26"   # Deepest beet skin, lifted off the background
-red = "#D34242"     # Red tinted toward vivid crimson flesh
-green = "#647E39"   # Dark red-green leaves, richer so it reads as green
-yellow = "#D4B24D"  # Yellow tinted toward magenta-pink streak
-blue = "#736CBD"    # Blue tinted toward deep purple shadow
-magenta = "#CF3A8A"  # Dark beet magenta, nudged apart from neighbouring hues
-cyan = "#3A8276"    # Cyan tinted toward beet leaf vein
-white = "#F0D0D8"   # Pale pink-white rings
+black = "#362B2C"   # Roasted skin, a step above the background
+red = "#C95C66"     # Roasted crimson
+green = "#719550"   # Wilted beet greens
+yellow = "#C89C42"  # Caramelized gold
+blue = "#6D7FB7"    # Dusky purple-blue
+magenta = "#BB5F99" # Roasted magenta
+cyan = "#539A8E"    # Muted vein teal
+white = "#D1C0B7"   # Warm roasted flesh
 
 [bright]
-black = "#84586A"   # Dark burgundy, lifted for readable dim text
-red = "#D97272"     # Bright red tinted toward bright beet red
-green = "#7D9B45"   # Beet leaf, richer so it reads as green
-yellow = "#DEC782"  # Bright yellow tinted toward light magenta
-blue = "#8E89CA"    # Bright blue tinted toward light purple
-magenta = "#D66CA5" # Bright magenta, nudged apart from neighbouring hues
-cyan = "#479E90"    # Bright cyan tinted toward bright leaf
-white = "#F8E0E8"   # Light blush
+black = "#8D7478"   # Dusty maroon for dim hints
+red = "#DC8288"     # Light roasted crimson
+green = "#8CB869"   # Light beet greens
+yellow = "#DBBB6F"  # Light caramel
+blue = "#93A0D1"    # Light dusky blue
+magenta = "#D388B7" # Light roasted magenta
+cyan = "#6FBAB0"    # Light vein teal
+white = "#F5EDE7"   # Light roasted cream
 
 [ui]
-background = "#1A0810"
-foreground = "#F0D0D8"
-cursor = "#C41E3A"
-cursor_text = "#F0D0D8"
-selection = "#6B183240"
-border = "#4A1028"
-tab_active = "#C41E3A"
-tab_inactive = "#300818"
-search_match = "#D44D6E66"
-url = "#E878A0"
+background = "#171212"   # Near-black maroon
+foreground = "#E9D9D0"   # Warm cream
+cursor = "#D46C7D"       # Caramelized rose
+cursor_text = "#171212"  # Text under the cursor
+selection = "#792E3A59"  # Rose tint
+border = "#342E2D"       # Chrome separators
+tab_active = "#D46C7D"   # Caramelized rose
+tab_inactive = "#221C1C" # Tab strip
+search_match = "#7E6125" # Caramel gold
+url = "#D58EBB"          # Roasted magenta

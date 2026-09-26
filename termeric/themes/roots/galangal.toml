@@ -4,33 +4,33 @@ author = "Termeric"
 description = "Pale pinkish-tan with hot pink shoots — lesser ginger"
 
 [primary]
-black = "#30252C"   # Deep galangal bark, lifted off the background
-red = "#D85A5A"     # Red tinted toward hot pink shoot
-green = "#4D883D"   # Long blade leaf green, lifted for contrast
-yellow = "#CEAE64"  # Resinous golden flesh, lifted for contrast
-blue = "#7871BF"    # Cool purple shadow, richer so it reads as blue
-magenta = "#CB4A8F" # Bright magenta shoot, lifted for contrast
-cyan = "#4AA696"    # Cyan tinted toward tropical blade green
-white = "#F5F0E4"   # Pale ivory flesh
+black = "#38302D"   # Tan bark, a step above the background
+red = "#D58380"     # Soft shoot red
+green = "#8AB779"   # Soft blade green
+yellow = "#D7BE81"  # Soft resin gold
+blue = "#8DA0CC"    # Soft shadow blue
+magenta = "#D184B0" # Dusty pink shoot
+cyan = "#7AB8B1"    # Soft blade teal
+white = "#D0BAA7"   # Pale pinkish-tan flesh
 
 [bright]
-black = "#7C6172"   # Medium bark, lifted for readable dim text
-red = "#DE8282"     # Bright red tinted toward light hot pink
-green = "#66A64A"   # Bright blade green, richer so it reads as green
-yellow = "#E0C88F"  # Light golden, lifted for contrast
-blue = "#8F8FCD"    # Light purple, richer so it reads as blue
-magenta = "#DA73AA" # Bright pink, softened
-cyan = "#68C0B1"    # Bright cyan tinted toward bright tropical
-white = "#FAF5F0"   # Bright ivory
+black = "#8E7C75"   # Pinkish tan for dim hints
+red = "#E4A6A1"     # Light shoot red
+green = "#A8D19C"   # Light blade green
+yellow = "#E7D6A5"  # Light resin
+blue = "#AEBCE0"    # Light shadow blue
+magenta = "#E3A7C9" # Light dusty pink
+cyan = "#9CD1CD"    # Light blade teal
+white = "#F1E0CE"   # Light pinkish-tan
 
 [ui]
-background = "#1A1418"
-foreground = "#F5F0E4"
-cursor = "#E05A8C"
-cursor_text = "#1A1418"
-selection = "#C8408040"
-border = "#3D3038"
-tab_active = "#E05A8C"
-tab_inactive = "#2A2028"
-search_match = "#D4B87866"
-url = "#E878A0"
+background = "#221C1B"   # Lifted pinkish-tan dark
+foreground = "#EBD7C4"   # Pinkish-tan cream
+cursor = "#DE8DAD"       # Dusty pink
+cursor_text = "#221C1B"  # Text under the cursor
+selection = "#8238504D"  # Dusty pink tint
+border = "#3E3633"       # Chrome separators
+tab_active = "#DE8DAD"   # Dusty pink
+tab_inactive = "#2C2523" # Tab strip
+search_match = "#467336" # Blade green
+url = "#DF9EC2"          # Dusty pink

@@ -4,33 +4,33 @@ author = "Termeric"
 description = "Cream-to-purple gradient, pure white flesh, sage green leaves"
 
 [primary]
-black = "#2C262F"   # Deep root soil, lifted off the background
-red = "#C75858"     # Red tinted toward purple-rose top
-green = "#7BAA4D"   # Fuzzy sage green leaf, richer so it reads as green
-yellow = "#C4B36E"  # Pale cream skin, lifted for contrast
-blue = "#6083B8"    # Cool purple-blue, richer so it reads as blue
-magenta = "#B459A7"  # Mid purple, richer so it reads as magenta
-cyan = "#6AC4B5"    # Cyan tinted toward bright spring leaf
+black = "#312B35"   # Deep root soil, lifted off the background
+red = "#C26D6D"     # Red tinted toward purple-rose top
+green = "#89AD64"   # Fuzzy sage green leaf, richer so it reads as green
+yellow = "#C6B989"  # Pale cream skin, lifted for contrast
+blue = "#6C88B2"    # Cool purple-blue, richer so it reads as blue
+magenta = "#B26EA9" # Mid purple, richer so it reads as magenta
+cyan = "#88C7BC"    # Cyan tinted toward bright spring leaf
 white = "#FAF8F0"   # Pure white flesh
 
 [bright]
-black = "#746384"   # Dark purple-grey, lifted for readable dim text
-red = "#D47D7D"     # Bright red tinted toward light purple
-green = "#A0C46A"   # Spring green
-yellow = "#D3C19C"  # Fine hairlike cream, richer so it reads as yellow
-blue = "#8CA6CC"    # Light blue, richer so it reads as blue
-magenta = "#C781BD" # Bright purple, richer so it reads as magenta
-cyan = "#80D8C9"    # Bright cyan tinted toward bright spring
+black = "#79678A"   # Dark purple-grey, lifted for readable dim text
+red = "#CE8888"     # Bright red tinted toward light purple
+green = "#AEC788"   # Spring green
+yellow = "#D9CEB6"  # Fine hairlike cream, richer so it reads as yellow
+blue = "#97ACC9"    # Light blue, richer so it reads as blue
+magenta = "#C38CBB" # Bright purple, richer so it reads as magenta
+cyan = "#A5DCD2"    # Bright cyan tinted toward bright spring
 white = "#FEFCF8"   # Brightest white
 
 [ui]
-background = "#18151A"
-foreground = "#FAF8F0"
-cursor = "#9B5BA0"
-cursor_text = "#FAF8F0"
-selection = "#9B5BA030"
-border = "#383040"
-tab_active = "#9B5BA0"
-tab_inactive = "#28222A"
-search_match = "#A0C46A66"
-url = "#B8D880"
+background = "#1F1B22"     # Terminal background
+foreground = "#FAF8F0"     # Primary text
+cursor = "#985A9D"         # Block cursor
+cursor_text = "#FAF8F0"    # Text under the cursor
+selection = "#9B5BA030"    # Selection tint over the background
+border = "#3D3445"         # Chrome separators
+tab_active = "#985A9D"     # Active-tab accent line
+tab_inactive = "#2D2730"   # Tab strip
+search_match = "#83AC4466" # Search matches (drawn at 35% / 65% alpha)
+url = "#C2DD92"            # Hyperlinks

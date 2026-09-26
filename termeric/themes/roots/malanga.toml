@@ -5,12 +5,12 @@ description = "Grey-brown skin with purple splotches — tropical root vibes"
 
 [primary]
 black = "#2F2828"   # Deep root bark, lifted off the background
-red = "#C85959"     # Red tinted toward purple-red skin blush
-green = "#3F8C3F"   # Dark earthy leaf green, richer so it reads as green
+red = "#CB6363"     # Red tinted toward purple-red skin blush
+green = "#429442"   # Dark earthy leaf green, richer so it reads as green
 yellow = "#CEA530"  # Rich yellow flower, softened
-blue = "#697ABC"    # Cool grey-violet, richer so it reads as blue
-magenta = "#9B67BB" # Dark purple splotch, lifted for contrast
-cyan = "#3E897D"    # Cyan tinted toward deep forest green
+blue = "#6F80BF"    # Cool grey-violet, richer so it reads as blue
+magenta = "#A06FBE" # Dark purple splotch, lifted for contrast
+cyan = "#419083"    # Cyan tinted toward deep forest green
 white = "#F0E8DC"   # Creamy white flesh
 
 [bright]
@@ -24,13 +24,13 @@ cyan = "#4AA696"    # Bright cyan tinted toward mid forest
 white = "#FAF4E8"   # Bright cream
 
 [ui]
-background = "#1C1818"
-foreground = "#F0E8DC"
-cursor = "#D4A82A"
-cursor_text = "#1C1818"
-selection = "#4A2D5C40"
-border = "#3D3838"
-tab_active = "#D4A82A"
-tab_inactive = "#2C2828"
-search_match = "#4A6A4A66"
-url = "#9B6878"
+background = "#1C1818"     # Terminal background
+foreground = "#F0E8DC"     # Primary text
+cursor = "#D4A82A"         # Block cursor
+cursor_text = "#1C1818"    # Text under the cursor
+selection = "#4A2D5C40"    # Selection tint over the background
+border = "#3D3838"         # Chrome separators
+tab_active = "#D4A82A"     # Active-tab accent line
+tab_inactive = "#2C2828"   # Tab strip
+search_match = "#4A6A4A66" # Search matches (drawn at 35% / 65% alpha)
+url = "#A47684"            # Hyperlinks
