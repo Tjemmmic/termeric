@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime};
 
 use super::*;
+use crate::agent_view::event::PermissionMode;
 use crate::agent_view::history::{self, PastConversation};
 use crate::agent_view::session::{AgentProgram, AgentSession, SessionId, StartOptions};
 use crate::agent_view::transcript::{Activity, DecidedBy};
@@ -254,6 +255,7 @@ impl App {
             mode: form.mode,
             model: form.model.clone().filter(|model| model != "default"),
             resume,
+            allow_bypass: self.config.agent_view.allow_bypass_permissions,
         };
         let prompt = form.composer.text().trim().to_owned();
         let program = self.agent_view_program();
@@ -596,6 +598,7 @@ impl App {
             supervisor,
             new_session,
             home,
+            allow_bypass: self.config.agent_view.allow_bypass_permissions,
         };
         let scene = Arc::new(layout::build(&input, renderer.text_measure()));
         renderer.set_agent_view(Some(Arc::clone(&scene)));
@@ -728,6 +731,23 @@ impl App {
     }
 
     /// Shows a session in the panel.
+    /// Applies `[agent_view]` settings to the panel and every session.
+    pub(super) fn sync_agent_view_config(&mut self) {
+        let allowed = self.config.agent_view.allow_bypass_permissions;
+        for session in &mut self.agent_view.sessions {
+            session.set_bypass_allowed(allowed);
+        }
+        let form = &mut self.agent_view.state.new_session;
+        if !allowed && form.mode.skips_every_check() {
+            form.mode = PermissionMode::AskBeforeEdits;
+        }
+        // The mode menu reads the setting each frame; an open panel shows
+        // the change on its next one.
+        if self.agent_view.state.is_open() {
+            self.request_agent_view_redraw();
+        }
+    }
+
     /// Ends a session and removes it from the panel. Claude Code keeps the
     /// conversation, so it is offered under earlier conversations again.
     pub(super) fn end_agent_session(&mut self, id: SessionId) {
@@ -1308,6 +1328,34 @@ mod tests {
         );
         // Ending it again is harmless.
         app.end_agent_session(id);
+    }
+
+    #[test]
+    fn bypass_permissions_needs_the_opt_in_and_ends_with_it() {
+        let (mut app, id) = app_with_waiting_session();
+        let mode = |app: &App| app.agent_view.session(id).unwrap().transcript().mode();
+        app.agent_view
+            .session_mut(id)
+            .unwrap()
+            .set_mode(PermissionMode::BypassPermissions);
+        assert_eq!(mode(&app), PermissionMode::AskBeforeEdits);
+
+        app.config.agent_view.allow_bypass_permissions = true;
+        app.sync_agent_view_config();
+        app.agent_view
+            .session_mut(id)
+            .unwrap()
+            .set_mode(PermissionMode::BypassPermissions);
+        assert_eq!(mode(&app), PermissionMode::BypassPermissions);
+        app.agent_view.state.new_session.mode = PermissionMode::BypassPermissions;
+
+        app.config.agent_view.allow_bypass_permissions = false;
+        app.sync_agent_view_config();
+        assert_eq!(mode(&app), PermissionMode::AskBeforeEdits);
+        assert_eq!(
+            app.agent_view.state.new_session.mode,
+            PermissionMode::AskBeforeEdits
+        );
     }
 
     #[test]

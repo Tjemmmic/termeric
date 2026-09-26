@@ -33,6 +33,9 @@ pub struct LaunchOptions {
     pub model: Option<String>,
     /// Continue an earlier conversation by its session id.
     pub resume: Option<String>,
+    /// Let the session switch to the mode that skips every check, which
+    /// Claude Code refuses unless launched with this allowance.
+    pub allow_bypass: bool,
 }
 
 /// Arguments for a headless Claude Code process speaking this protocol.
@@ -58,6 +61,9 @@ pub fn launch_args(options: &LaunchOptions) -> Vec<String> {
     }
     if let Some(session) = &options.resume {
         args.extend(["--resume".into(), session.clone()]);
+    }
+    if options.allow_bypass {
+        args.push("--allow-dangerously-skip-permissions".into());
     }
     args
 }
@@ -367,7 +373,8 @@ fn mode_name(mode: PermissionMode) -> &'static str {
 
 fn parse_mode(name: &str) -> Option<PermissionMode> {
     Some(match name {
-        "default" => PermissionMode::AskBeforeEdits,
+        // Claude Code 2.1.283 renamed `default` to `manual`.
+        "default" | "manual" => PermissionMode::AskBeforeEdits,
         "acceptEdits" => PermissionMode::EditWithoutAsking,
         "plan" => PermissionMode::PlanOnly,
         "bypassPermissions" => PermissionMode::BypassPermissions,
@@ -763,6 +770,7 @@ mod tests {
             mode: PermissionMode::PlanOnly,
             model: Some("sonnet".into()),
             resume: Some("abc".into()),
+            allow_bypass: false,
         });
         let joined = args.join(" ");
         assert!(joined.starts_with("-p --input-format stream-json --output-format stream-json"));
@@ -772,6 +780,12 @@ mod tests {
         let plain = launch_args(&LaunchOptions::default()).join(" ");
         assert!(plain.contains("--permission-mode default"));
         assert!(!plain.contains("--model") && !plain.contains("--resume"));
+        assert!(!plain.contains("dangerously"));
+        let allowed = launch_args(&LaunchOptions {
+            allow_bypass: true,
+            ..LaunchOptions::default()
+        });
+        assert!(allowed.contains(&"--allow-dangerously-skip-permissions".to_owned()));
     }
 
     #[test]

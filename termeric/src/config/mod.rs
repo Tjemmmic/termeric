@@ -69,6 +69,9 @@ pub struct Config {
     /// `[agent_status]`: presentation of agent hook reports.
     #[serde(default)]
     pub agent_status: crate::agents::config::AgentStatusConfig,
+    /// `[agent_view]`: the docked conversation panel.
+    #[serde(default)]
+    pub agent_view: crate::agents::config::AgentViewConfig,
     /// `[supervisor]`: the agent that oversees the others, and its authority.
     #[serde(default)]
     pub supervisor: crate::agents::supervisor::SupervisorConfig,

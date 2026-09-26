@@ -625,6 +625,8 @@ pub enum SettingsAction {
     SetUpAgentStatus,
     /// Notify when an agent the person is not looking at needs them.
     SetAgentNotifications(bool),
+    /// Offer agents' modes that run every action without asking.
+    SetAllowBypassPermissions(bool),
     /// Choose which agent supervises.
     SetSupervisorAgent(String),
     /// Choose how much the supervisor may do.
@@ -1561,6 +1563,15 @@ impl SettingsPanel {
                         .unwrap_or(0),
                 },
             });
+            let bypass = config.agent_view.allow_bypass_permissions;
+            items.push(SettingItem {
+                label: "Allow Bypass Permissions",
+                value: if bypass { "On" } else { "Off" }.into(),
+                kind: SettingKind::Dropdown {
+                    options: on_off.clone(),
+                    selected: usize::from(!bypass),
+                },
+            });
             items.push(SettingItem {
                 label: "Notify When Agents Need You",
                 value: if config.agent_status.notify {
@@ -2060,6 +2071,9 @@ impl SettingsPanel {
                                 .copied()
                                 .unwrap_or_default(),
                         )
+                    }
+                    (SettingsSection::Agents, "Allow Bypass Permissions") => {
+                        SettingsAction::SetAllowBypassPermissions(new_val == "On")
                     }
                     (SettingsSection::Agents, "Notify When Agents Need You") => {
                         SettingsAction::SetAgentNotifications(new_val == "On")

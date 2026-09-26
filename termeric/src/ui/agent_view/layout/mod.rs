@@ -117,6 +117,8 @@ pub struct Input<'a> {
     pub supervisor: Option<SupervisorCard>,
     pub new_session: NewSessionInfo,
     pub home: Option<PathBuf>,
+    /// The person opted in to modes that skip every check.
+    pub allow_bypass: bool,
 }
 
 impl Input<'_> {
@@ -1529,10 +1531,10 @@ impl Builder<'_, '_> {
                 ),
             ),
         };
-        let mode_icon = if mode == PermissionMode::PlanOnly {
-            Icon::Plan
-        } else {
-            Icon::Shield
+        let mode_icon = match mode {
+            PermissionMode::PlanOnly => Icon::Plan,
+            mode if mode.skips_every_check() => Icon::Warning,
+            _ => Icon::Shield,
         };
         let mode_name = format!("Permissions: {}", mode.label());
         let model_name = format!("Model: {model_label}");
@@ -1747,20 +1749,13 @@ pub fn menu_items(input: &Input<'_>, kind: MenuKind) -> Vec<MenuItem> {
                 (Screen::Conversation, Some(session)) => session.transcript().mode(),
                 _ => input.state.new_session.mode,
             };
-            PermissionMode::SELECTABLE
-                .iter()
+            PermissionMode::selectable(input.allow_bypass)
+                .into_iter()
                 .map(|mode| MenuItem {
                     text: mode.label().to_owned(),
-                    detail: match mode {
-                        PermissionMode::AskBeforeEdits => "Approve each edit and command",
-                        PermissionMode::EditWithoutAsking => {
-                            "Edits apply at once; commands still ask"
-                        }
-                        _ => "Read and plan, then ask before changing anything",
-                    }
-                    .to_owned(),
-                    action: MenuAction::SetMode(*mode),
-                    checked: *mode == current,
+                    detail: mode.description().to_owned(),
+                    action: MenuAction::SetMode(mode),
+                    checked: mode == current,
                 })
                 .collect()
         }

@@ -107,9 +107,22 @@ Chips above the box attach context from the focused terminal:
 - the **last command**, when shell integration recorded one, attaches its
   output (up to 64 KiB), marked when it failed.
 
-The permission chip switches between **Ask before edits**, **Edit without
-asking**, and **Plan only**. The model chip lists the models Claude Code
-offers for this account. The ring beside the send button shows how much of
+The permission chip switches between Claude Code's modes:
+
+- **Ask before edits** approves each edit and command;
+- **Edit without asking** applies edits at once, and commands still ask;
+- **Plan only** reads and plans, then asks before changing anything;
+- **Auto** lets Claude Code's safety classifier approve or block each action;
+- **Deny unless allowed** runs only actions already allowed and refuses the rest;
+- **Bypass permissions** runs everything without asking. It is offered only
+  after you turn on **Allow Bypass Permissions** on the Settings **Agents**
+  page (`[agent_view] allow_bypass_permissions = true`), which starts Claude
+  Code with `--allow-dangerously-skip-permissions`. Use it only in a sandbox.
+  Turning the setting off returns any session in that mode to asking.
+
+Some accounts cannot use **Auto**; Claude Code's refusal then shows in the
+conversation. The model chip lists the models Claude Code offers for this
+account. The ring beside the send button shows how much of
 the model's context the conversation fills.
 
 ## Sessions

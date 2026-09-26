@@ -55,6 +55,8 @@ pub struct StartOptions {
     pub model: Option<String>,
     /// Continue an earlier conversation: its agent session id and title.
     pub resume: Option<(String, String)>,
+    /// The person opted in to the mode that skips every check.
+    pub allow_bypass: bool,
 }
 
 /// Why a session could not start.
@@ -111,6 +113,8 @@ pub struct AgentSession {
     /// The conversation this session continued, until the agent reports
     /// its own id.
     resumed: Option<String>,
+    /// The person opted in to the mode that skips every check.
+    allow_bypass: bool,
     codec: ClaudeCodec,
     transcript: Transcript,
     backlog: VecDeque<String>,
@@ -160,6 +164,7 @@ impl AgentSession {
             relaunch_on_exit: false,
             handed_off: false,
             resumed: resume.clone(),
+            allow_bypass: options.allow_bypass,
             codec: ClaudeCodec::new(),
             transcript,
             backlog: VecDeque::new(),
@@ -184,6 +189,7 @@ impl AgentSession {
             mode: self.transcript.mode(),
             model: self.model.clone(),
             resume,
+            allow_bypass: self.allow_bypass,
         }));
         let spec = LaunchSpec {
             program,
@@ -222,6 +228,7 @@ impl AgentSession {
             relaunch_on_exit: false,
             handed_off: false,
             resumed: None,
+            allow_bypass: false,
             codec: ClaudeCodec::new(),
             transcript,
             backlog: VecDeque::new(),
@@ -673,11 +680,30 @@ impl AgentSession {
         self.transcript.mark_interrupting();
     }
 
+    /// Switches the permission mode. The mode that skips every check is
+    /// refused unless the person opted in to it.
     pub fn set_mode(&mut self, mode: PermissionMode) {
+        if mode.skips_every_check() && !self.allow_bypass {
+            return;
+        }
         if self.is_running() {
             self.command(&AgentCommand::SetMode(mode));
         }
         self.transcript.set_mode(mode);
+    }
+
+    /// Follows the person's opt-in to the mode that skips every check. A
+    /// session in that mode when the opt-in is withdrawn goes back to asking.
+    /// A running agent keeps the launch allowance it had; the panel just no
+    /// longer offers or accepts the mode.
+    pub fn set_bypass_allowed(&mut self, allowed: bool) {
+        self.allow_bypass = allowed;
+        if !allowed && self.transcript.mode().skips_every_check() {
+            if self.is_running() {
+                self.command(&AgentCommand::SetMode(PermissionMode::AskBeforeEdits));
+            }
+            self.transcript.set_mode(PermissionMode::AskBeforeEdits);
+        }
     }
 
     pub fn set_model(&mut self, value: &str) {
@@ -742,6 +768,7 @@ mod tests {
                 mode: PermissionMode::AskBeforeEdits,
                 model: None,
                 resume: None,
+                allow_bypass: false,
             },
             Arc::new(|| {}),
         )
@@ -774,6 +801,7 @@ mod tests {
                 mode: PermissionMode::AskBeforeEdits,
                 model: None,
                 resume: None,
+                allow_bypass: false,
             },
             Arc::new(|| {}),
         )
@@ -978,6 +1006,7 @@ mod tests {
                 mode: PermissionMode::AskBeforeEdits,
                 model: None,
                 resume: Some(("earlier-id".into(), "Earlier".into())),
+                allow_bypass: false,
             },
             Arc::new(|| {}),
         )

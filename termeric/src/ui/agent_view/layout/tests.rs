@@ -54,6 +54,7 @@ fn scene_for(state: &AgentViewState, sessions: &[&AgentSession], panel: Bounds) 
         supervisor: None,
         new_session: new_session_info(),
         home: Some(PathBuf::from("/home/me")),
+        allow_bypass: false,
     };
     let scene = build(&input, &mut measure());
     assert_unique_targets(&scene);
@@ -347,7 +348,12 @@ fn an_open_menu_lists_its_choices_above_everything() {
             _ => None,
         })
         .collect();
-    assert_eq!(modes.len(), 3);
+    // Every mode but the one that skips every check, which needs an opt-in.
+    assert_eq!(
+        modes.iter().map(|(mode, _)| *mode).collect::<Vec<_>>(),
+        PermissionMode::selectable(false)
+    );
+    assert_eq!(modes.len(), 5);
     assert_eq!(
         modes[0],
         (
@@ -389,8 +395,32 @@ fn an_open_menu_lists_its_choices_above_everything() {
             supervisor: None,
             new_session: new_session_info(),
             home: None,
+            allow_bypass: false,
         },
         MenuKind::Model,
+    );
+    let opted_in = menu_items(
+        &Input {
+            panel: PANEL,
+            scale: 1.0,
+            now: Instant::now(),
+            colors: &colors(),
+            state: &state,
+            sessions: &[&session],
+            suggestions: Suggestions::default(),
+            banner: None,
+            terminal_agents: &[],
+            past: &[],
+            supervisor: None,
+            new_session: new_session_info(),
+            home: None,
+            allow_bypass: true,
+        },
+        MenuKind::Mode,
+    );
+    assert_eq!(
+        opted_in.last().map(|item| item.action.clone()),
+        Some(MenuAction::SetMode(PermissionMode::BypassPermissions))
     );
     assert_eq!(items[0].text, "Sonnet 5");
 }

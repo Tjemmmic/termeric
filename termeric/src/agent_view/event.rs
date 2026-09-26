@@ -15,31 +15,59 @@ pub enum PermissionMode {
     EditWithoutAsking,
     /// Read and plan only, then ask to start.
     PlanOnly,
-    /// Never ask. Only reported, never offered by the panel.
+    /// Never ask. Offered only when the person opted in.
     BypassPermissions,
-    /// Deny anything not already allowed. Only reported.
+    /// Refuse anything not already allowed, without asking.
     DontAsk,
-    /// A classifier decides. Only reported.
+    /// A safety classifier approves or blocks each action.
     Auto,
 }
 
 impl PermissionMode {
-    /// The modes a person can choose in the panel, in menu order.
-    pub const SELECTABLE: [PermissionMode; 3] = [
-        PermissionMode::AskBeforeEdits,
-        PermissionMode::EditWithoutAsking,
-        PermissionMode::PlanOnly,
-    ];
+    /// The modes a person can choose, in menu order. The mode that skips
+    /// every check is offered only when the person opted in to it.
+    pub fn selectable(allow_bypass: bool) -> Vec<PermissionMode> {
+        let mut modes = vec![
+            PermissionMode::AskBeforeEdits,
+            PermissionMode::EditWithoutAsking,
+            PermissionMode::PlanOnly,
+            PermissionMode::Auto,
+            PermissionMode::DontAsk,
+        ];
+        if allow_bypass {
+            modes.push(PermissionMode::BypassPermissions);
+        }
+        modes
+    }
 
     pub fn label(self) -> &'static str {
         match self {
             PermissionMode::AskBeforeEdits => "Ask before edits",
             PermissionMode::EditWithoutAsking => "Edit without asking",
             PermissionMode::PlanOnly => "Plan only",
-            PermissionMode::BypassPermissions => "Never ask",
+            PermissionMode::BypassPermissions => "Bypass permissions",
             PermissionMode::DontAsk => "Deny unless allowed",
-            PermissionMode::Auto => "Automatic approval",
+            PermissionMode::Auto => "Auto",
         }
+    }
+
+    /// What choosing the mode means, for menus.
+    pub fn description(self) -> &'static str {
+        match self {
+            PermissionMode::AskBeforeEdits => "Approve each edit and command",
+            PermissionMode::EditWithoutAsking => "Edits apply at once; commands still ask",
+            PermissionMode::PlanOnly => "Read and plan, then ask before changing anything",
+            PermissionMode::Auto => "A safety classifier approves or blocks each action",
+            PermissionMode::DontAsk => "Only actions already allowed run; the rest are refused",
+            PermissionMode::BypassPermissions => {
+                "Everything runs without asking. Use only in a sandbox"
+            }
+        }
+    }
+
+    /// Whether the mode lets actions run with no check at all.
+    pub fn skips_every_check(self) -> bool {
+        self == PermissionMode::BypassPermissions
     }
 }
 

@@ -448,6 +448,7 @@ impl App {
             self.tab_bar_hover_progress = 0.0;
         }
         self.set_padding(self.config.window.padding);
+        self.sync_agent_view_config();
         if let Some(renderer) = &mut self.renderer {
             renderer.set_ligatures(self.config.font.ligatures);
             renderer.set_font_features(&self.config.font.features);
@@ -992,6 +993,9 @@ impl App {
             }
             SettingsAction::SetAgentNotifications(notify) => {
                 self.config.agent_status.notify = notify;
+            }
+            SettingsAction::SetAllowBypassPermissions(allowed) => {
+                self.config.agent_view.allow_bypass_permissions = allowed;
             }
             SettingsAction::SetSupervisorAgent(agent) => {
                 self.config.supervisor.agent = agent;

@@ -22,6 +22,15 @@ impl Default for AgentStatusConfig {
     }
 }
 
+/// `[agent_view]`: the docked conversation panel.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AgentViewConfig {
+    /// Offer each agent's mode that runs every action without asking, such
+    /// as Claude Code's Bypass permissions. Off unless the person opts in.
+    pub allow_bypass_permissions: bool,
+}
+
 /// One `[agents.<id>]` entry. For a built-in agent every field is an
 /// override; for any other id the entry defines a custom agent.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]

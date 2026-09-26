@@ -235,6 +235,8 @@ impl App {
         match action {
             MenuAction::SetMode(mode) => match (screen, self.agent_view.active_session_mut()) {
                 (Screen::Conversation, Some(session)) => session.set_mode(mode),
+                _ if mode.skips_every_check()
+                    && !self.config.agent_view.allow_bypass_permissions => {}
                 _ => self.agent_view.state.new_session.mode = mode,
             },
             MenuAction::SetModel(model) => match (screen, self.agent_view.active_session_mut()) {
