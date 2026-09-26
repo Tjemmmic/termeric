@@ -43,7 +43,7 @@ impl App {
             }
             Target::NewSession => self.new_agent_session_page(),
             Target::Back => {
-                if active.is_some() {
+                if self.agent_view_conversation().is_some() {
                     self.agent_view.state.screen = Screen::Conversation;
                 }
             }
@@ -186,6 +186,7 @@ impl App {
                 }
             }
             Target::Command(name) => self.accept_agent_command(&name),
+            Target::SetLayout(layout) => self.set_agent_view_layout(layout),
             Target::CancelQueued(index) => {
                 if let Some(text) = self
                     .agent_view
@@ -239,11 +240,23 @@ impl App {
                 (Screen::Conversation, Some(session)) => session.set_mode(mode),
                 _ if mode.skips_every_check()
                     && !self.config.agent_view.allow_bypass_permissions => {}
-                _ => self.agent_view.state.new_session.mode = mode,
+                (_, session) => {
+                    // A session started ahead of the first message follows
+                    // the form.
+                    if let Some(session) = session.filter(|session| session.is_blank()) {
+                        session.set_mode(mode);
+                    }
+                    self.agent_view.state.new_session.mode = mode;
+                }
             },
             MenuAction::SetModel(model) => match (screen, self.agent_view.active_session_mut()) {
                 (Screen::Conversation, Some(session)) => session.set_model(&model),
-                _ => self.agent_view.state.new_session.model = Some(model),
+                (_, session) => {
+                    if let Some(session) = session.filter(|session| session.is_blank()) {
+                        session.set_model(&model);
+                    }
+                    self.agent_view.state.new_session.model = Some(model);
+                }
             },
             MenuAction::SetFolder(path) => self.agent_view.state.new_session.cwd = Some(path),
             MenuAction::EndSession => {
@@ -815,8 +828,11 @@ impl App {
             }
             return;
         }
-        // Nothing left to cancel: give the keyboard back to the terminals.
-        self.set_agent_view_keyboard(false);
+        // Nothing left to cancel: give the keyboard back to the terminals,
+        // unless the panel covers them.
+        if !self.agent_view_fills_tab() {
+            self.set_agent_view_keyboard(false);
+        }
     }
 
     /// Edits the composer. Returns false when the key did nothing.
@@ -1015,6 +1031,11 @@ impl App {
 
     /// Whether a point is on the panel or its divider.
     pub(super) fn agent_view_contains(&self, x: f32, y: f32) -> bool {
+        if self.agent_view_fills_tab() {
+            return self
+                .agent_view_panel_bounds()
+                .is_some_and(|panel| panel.contains(x, y));
+        }
         let Some(renderer) = &self.renderer else {
             return false;
         };
@@ -1028,6 +1049,10 @@ impl App {
     }
 
     fn on_agent_view_divider(&self, x: f32) -> bool {
+        // A panel filling the tab has no divider to drag.
+        if self.agent_view_fills_tab() {
+            return false;
+        }
         let Some(renderer) = &self.renderer else {
             return false;
         };

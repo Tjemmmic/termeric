@@ -8,7 +8,7 @@ mod title;
 
 #[cfg(test)]
 pub(crate) use tab::SessionCapture;
-pub(crate) use tab::{LiveDomainTab, TabTerminalOwner};
+pub(crate) use tab::{LiveDomainTab, TabAgentView, TabTerminalOwner};
 pub use tab::{Tab, TabType};
 pub(crate) use title::{
     get_foreground_process, get_process_cwd, presentation_working_directory,
@@ -2361,7 +2361,7 @@ impl TabManager {
             .iter()
             .enumerate()
             .map(|(i, tab)| TabInfo {
-                title: tab.title.clone(),
+                title: tab.display_title().to_owned(),
                 pinned: tab.pinned,
                 broadcast_armed: false,
                 broadcast_active: false,

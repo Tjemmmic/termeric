@@ -21,7 +21,7 @@ use crate::ui::agent_view::layout::{
     self, AgentAvailability, Input, NewSessionInfo, PastSession, Suggestions,
 };
 use crate::ui::agent_view::scene::{Bounds, Scene};
-use crate::ui::agent_view::{AgentViewState, Focus, Screen};
+use crate::ui::agent_view::{AgentViewState, Focus, Layout, Screen};
 
 /// Earlier conversations listed per folder.
 const PAST_LIMIT: usize = 12;
@@ -56,6 +56,14 @@ pub(super) struct AgentViewWindow {
     tracking: std::collections::HashMap<SessionId, crate::agents::changes::ChangeTracking>,
     /// What the supervisor has been told about each session.
     told: std::collections::HashMap<SessionId, Told>,
+    /// Every other tab's agent view, by tab id; the active tab's is `state`.
+    pub tabs: std::collections::HashMap<usize, crate::ui::agent_view::TabPanel>,
+    /// When the person last looked at each conversation, for the tab bar's
+    /// done and failed badges.
+    pub seen: std::collections::HashMap<SessionId, Instant>,
+    /// A folder where starting ahead of the first message failed, so it is
+    /// not retried every frame.
+    pub warm_failed: Option<PathBuf>,
 }
 
 /// What the supervisor already heard about one session.
@@ -107,6 +115,54 @@ impl AgentViewWindow {
         })
     }
 
+    /// Takes a session out of this window with its view and change
+    /// tracking, forgetting what was said about it here.
+    pub fn detach_session(
+        &mut self,
+        id: SessionId,
+    ) -> Option<(
+        AgentSession,
+        Option<crate::ui::agent_view::ConversationView>,
+        Option<crate::agents::changes::ChangeTracking>,
+    )> {
+        let index = self
+            .sessions
+            .iter()
+            .position(|session| session.id() == id)?;
+        let session = self.sessions.remove(index);
+        self.told.remove(&id);
+        self.announced.remove(&id);
+        self.seen.remove(&id);
+        Some((
+            session,
+            self.state.take_conversation(id),
+            self.tracking.remove(&id),
+        ))
+    }
+
+    /// Adds a session that arrived from another window.
+    pub fn attach_session(
+        &mut self,
+        session: AgentSession,
+        view: Option<crate::ui::agent_view::ConversationView>,
+        tracking: Option<crate::agents::changes::ChangeTracking>,
+    ) {
+        let id = session.id();
+        self.sessions.push(session);
+        if let Some(view) = view {
+            self.state.put_conversation(id, view);
+        }
+        if let Some(tracking) = tracking {
+            self.tracking.insert(id, tracking);
+        }
+    }
+
+    /// Sessions that hold a conversation, leaving out those started ahead
+    /// of a first message.
+    pub fn conversations(&self) -> impl Iterator<Item = &AgentSession> {
+        self.sessions.iter().filter(|session| !session.is_blank())
+    }
+
     /// Sessions most recently active first.
     pub fn by_recency(&self) -> Vec<&AgentSession> {
         let mut sessions: Vec<&AgentSession> = self.sessions.iter().collect();
@@ -119,7 +175,7 @@ impl App {
     // ── Sessions ─────────────────────────────────────────────────────────
 
     /// The Claude Code program and environment from the agent catalog.
-    fn agent_view_program(&self) -> AgentProgram {
+    pub(super) fn agent_view_program(&self) -> AgentProgram {
         let definition = self.agents.get("claude-code");
         let program = definition.map_or_else(
             || "claude".to_owned(),
@@ -136,7 +192,7 @@ impl App {
         }
     }
 
-    fn agent_view_availability(&mut self) -> AgentAvailability {
+    pub(super) fn agent_view_availability(&mut self) -> AgentAvailability {
         use crate::agent_view::process::{Lookup, find_program};
         let program = self.agent_view_program().program;
         if let Some((known, installed)) = &self.agent_view.installed
@@ -166,7 +222,7 @@ impl App {
 
     /// Where a new session starts: the chosen folder, else the focused
     /// terminal's, else home.
-    fn agent_view_default_cwd(&self) -> (PathBuf, String) {
+    pub(super) fn agent_view_default_cwd(&self) -> (PathBuf, String) {
         if let Some(cwd) = self
             .tabs
             .as_ref()
@@ -183,7 +239,7 @@ impl App {
         (home, "Your home folder".to_owned())
     }
 
-    fn agent_view_new_session_info(&mut self) -> NewSessionInfo {
+    pub(super) fn agent_view_new_session_info(&mut self) -> NewSessionInfo {
         let availability = self.agent_view_availability();
         let (default, source) = self.agent_view_default_cwd();
         let (cwd, cwd_source) = match &self.agent_view.state.new_session.cwd {
@@ -251,7 +307,34 @@ impl App {
     /// Starts a session from the new-session page, or continues an earlier
     /// conversation. Returns whether it started.
     pub(super) fn start_agent_session(&mut self, resume: Option<(String, String)>) -> bool {
+        self.bind_agent_view_to_active_tab();
         let info = self.agent_view_new_session_info();
+        let prompt = self
+            .agent_view
+            .state
+            .new_session
+            .composer
+            .text()
+            .trim()
+            .to_owned();
+        // A session already started for this folder takes the message.
+        if let Some(id) = self.agent_view.state.active
+            && let Some(session) = self.agent_view.session(id)
+            && session.is_blank()
+        {
+            if resume.is_none() && session.cwd() == info.cwd {
+                return self.send_first_agent_message(id, &prompt);
+            }
+            self.end_agent_session(id);
+        }
+        // A tab holds one conversation; another one gets a tab of its own.
+        if self.agent_view_conversation().is_some() {
+            let layout = self.agent_view.state.layout;
+            if !self.open_agent_view_tab(&info.cwd, layout) {
+                return false;
+            }
+            self.open_agent_view(true);
+        }
         let form = &self.agent_view.state.new_session;
         let options = StartOptions {
             cwd: info.cwd.clone(),
@@ -260,37 +343,48 @@ impl App {
             resume,
             allow_bypass: self.config.agent_view.allow_bypass_permissions,
         };
-        let prompt = form.composer.text().trim().to_owned();
         let program = self.agent_view_program();
         match AgentSession::start(program, options, super::agent_view_event_waker()) {
-            Ok(mut session) => {
+            Ok(session) => {
                 let id = session.id();
-                let mut tracking = crate::agents::changes::ChangeTracking::default();
-                tracking.start_capture(("claude-code", None), Some(session.cwd().to_path_buf()));
-                self.agent_view.tracking.insert(id, tracking);
-                if !prompt.is_empty()
-                    && let Err(error) = session.prompt(&prompt, Vec::new())
-                {
-                    self.toasts.error(error.to_string());
-                }
                 self.agent_view.sessions.push(session);
-                self.agent_view.state.new_session.composer.clear();
-                self.agent_view.state.show(id);
-                if !prompt.is_empty() {
-                    self.agent_view
-                        .state
-                        .conversation_mut(id)
-                        .remember_sent(&prompt);
-                }
-                self.set_agent_view_keyboard(true);
-                self.request_agent_view_redraw();
-                true
+                self.send_first_agent_message(id, &prompt)
             }
             Err(error) => {
                 self.toasts.error(error.to_string());
                 false
             }
         }
+    }
+
+    /// Sends a new session its first message from the new-session page and
+    /// shows the conversation. Changes are tracked from here, when the work
+    /// starts.
+    fn send_first_agent_message(&mut self, id: SessionId, prompt: &str) -> bool {
+        let Some(session) = self.agent_view.session_mut(id) else {
+            return false;
+        };
+        let cwd = session.cwd().to_path_buf();
+        if !prompt.is_empty()
+            && let Err(error) = session.prompt(prompt, Vec::new())
+        {
+            self.toasts.error(error.to_string());
+            return false;
+        }
+        let mut tracking = crate::agents::changes::ChangeTracking::default();
+        tracking.start_capture(("claude-code", None), Some(cwd));
+        self.agent_view.tracking.insert(id, tracking);
+        self.agent_view.state.new_session.composer.clear();
+        self.agent_view.state.show(id);
+        if !prompt.is_empty() {
+            self.agent_view
+                .state
+                .conversation_mut(id)
+                .remember_sent(prompt);
+        }
+        self.set_agent_view_keyboard(true);
+        self.request_agent_view_redraw();
+        true
     }
 
     /// Drains every session's output; redraws when anything changed.
@@ -350,7 +444,7 @@ impl App {
         let window = &mut self.agent_view;
         let live: HashSet<SessionId> = window.sessions.iter().map(AgentSession::id).collect();
         window.told.retain(|id, _| live.contains(id));
-        for session in &window.sessions {
+        for session in window.sessions.iter().filter(|session| !session.is_blank()) {
             let told = window.told.entry(session.id()).or_default();
             let transcript = session.transcript();
             let control_id = session.id().control_id();
@@ -461,25 +555,35 @@ impl App {
 
     // ── Frame ────────────────────────────────────────────────────────────
 
-    /// The panel's area in physical window pixels.
-    fn agent_view_panel_bounds(&self) -> Option<Bounds> {
+    /// Whether the panel fills the tab, covering its terminal.
+    pub(super) fn agent_view_fills_tab(&self) -> bool {
+        let state = &self.agent_view.state;
+        state.is_open() && state.tab.is_some() && state.layout == Layout::Full
+    }
+
+    /// The panel's area in physical window pixels: the dock, or the whole
+    /// terminal area when the panel fills the tab.
+    pub(super) fn agent_view_panel_bounds(&self) -> Option<Bounds> {
         let renderer = self.renderer.as_ref()?;
+        let (window_width, window_height) = renderer.window_size();
+        let top = renderer.content_top();
+        let height = (window_height as f32 - top).max(0.0);
+        if self.agent_view_fills_tab() {
+            let left = renderer.tab_bar_width_for(window_width as f32);
+            return Some(Bounds::new(
+                left,
+                top,
+                (window_width as f32 - left).max(0.0),
+                height,
+            ));
+        }
         let width = renderer.dock_width();
         if width <= 0.0 {
             return None;
         }
-        let (window_width, window_height) = renderer.window_size();
-        let top = renderer.content_top();
-        Some(Bounds::new(
-            window_width as f32 - width,
-            top,
-            width,
-            (window_height as f32 - top).max(0.0),
-        ))
+        Some(Bounds::new(window_width as f32 - width, top, width, height))
     }
 
-    /// Sets the dock's width for the current window without resizing
-    /// terminals. Returns whether it changed.
     /// The physical width the panel and terminals share, beside any side
     /// tab bar, and the scale factor.
     pub(super) fn agent_dock_room(&self) -> Option<(f32, f32)> {
@@ -496,12 +600,19 @@ impl App {
         let Some((room, scale)) = self.agent_dock_room() else {
             return false;
         };
-        let width = self.agent_view.state.physical_width(room, scale);
+        // A panel filling the tab covers the terminal, which keeps its size
+        // underneath rather than shrinking to nothing.
+        let fills_tab = self.agent_view_fills_tab();
+        let width = if fills_tab {
+            0.0
+        } else {
+            self.agent_view.state.physical_width(room, scale)
+        };
         let Some(renderer) = &mut self.renderer else {
             return false;
         };
         let changed = renderer.set_dock_width(width);
-        if width == 0.0 && self.agent_view.state.has_keyboard() {
+        if width == 0.0 && !fills_tab && self.agent_view.state.has_keyboard() {
             // Keys must never reach a message box nobody can see.
             self.set_agent_view_keyboard(false);
         }
@@ -511,9 +622,11 @@ impl App {
     /// Whether the panel has room to show. Without a renderer nothing is
     /// laid out, so nothing is hidden either.
     fn agent_view_docked(&self) -> bool {
-        self.renderer
-            .as_ref()
-            .is_none_or(|renderer| renderer.dock_width() > 0.0)
+        self.agent_view_fills_tab()
+            || self
+                .renderer
+                .as_ref()
+                .is_none_or(|renderer| renderer.dock_width() > 0.0)
     }
 
     /// Recomputes the dock's width and resizes terminals when it changes.
@@ -559,6 +672,7 @@ impl App {
             self.process_agent_view_events();
         }
         self.agent_view.poll_tracking();
+        self.reconcile_agent_view_tabs();
         if self.agent_view.state.is_open()
             && (self.agent_view_animating()
                 || (self.agent_view.state.has_keyboard()
@@ -571,6 +685,8 @@ impl App {
 
     /// Builds this frame's scene, or clears it when the panel is closed.
     pub(super) fn prepare_agent_view_frame(&mut self) {
+        self.ensure_agent_view_warm_session();
+        self.sync_agent_view_tab_bar();
         let Some(panel) = self.agent_view_panel_bounds() else {
             self.agent_view.scene = None;
             if let Some(renderer) = &mut self.renderer {
@@ -699,15 +815,11 @@ impl App {
     }
 
     pub(super) fn open_agent_view(&mut self, keyboard: bool) {
-        let state = &mut self.agent_view.state;
-        state.open();
-        if state.active.is_none() {
-            state.screen = if self.agent_view.sessions.is_empty() {
-                Screen::NewSession
-            } else {
-                Screen::Sessions
-            };
+        self.bind_agent_view_to_active_tab();
+        if self.agent_view_conversation().is_none() {
+            self.agent_view.state.screen = Screen::NewSession;
         }
+        self.agent_view.state.open();
         self.agent_view.state.focus = Focus::Composer;
         self.sync_agent_dock();
         let docked = self.agent_view_docked();
@@ -720,6 +832,16 @@ impl App {
     }
 
     pub(super) fn close_agent_view(&mut self) {
+        // A session started ahead of a message that never came holds no
+        // conversation worth keeping.
+        if let Some(id) = self.agent_view.state.active
+            && self
+                .agent_view
+                .session(id)
+                .is_some_and(AgentSession::is_blank)
+        {
+            self.end_agent_session(id);
+        }
         let terminal_had_focus = self.terminal_has_focus();
         self.agent_view.state.close();
         self.report_terminal_focus(terminal_had_focus);
@@ -741,7 +863,7 @@ impl App {
         self.report_terminal_focus(terminal_had_focus);
     }
 
-    fn report_terminal_focus(&mut self, terminal_had_focus: bool) {
+    pub(super) fn report_terminal_focus(&mut self, terminal_had_focus: bool) {
         let focused = self.terminal_has_focus();
         if focused != terminal_had_focus
             && let Some(report) =
@@ -751,8 +873,21 @@ impl App {
         }
     }
 
-    /// Opens the panel on a new-session page.
+    /// Opens the panel on a new-session page. A tab holds one conversation,
+    /// so a tab that already has one opens a new tab beside it.
     pub(super) fn new_agent_session_page(&mut self) {
+        self.bind_agent_view_to_active_tab();
+        if let Some(id) = self.agent_view_conversation() {
+            let cwd = self
+                .agent_view
+                .session(id)
+                .map(|session| session.cwd().to_path_buf())
+                .expect("the conversation exists");
+            let layout = self.agent_view.state.layout;
+            if !self.open_agent_view_tab(&cwd, layout) {
+                return;
+            }
+        }
         self.open_agent_view(true);
         self.agent_view.state.screen = Screen::NewSession;
         self.agent_view.state.new_session.cwd = None;
@@ -764,7 +899,6 @@ impl App {
         self.request_agent_view_redraw();
     }
 
-    /// Shows a session in the panel.
     /// Applies `[agent_view]` settings to the panel and every session.
     pub(super) fn sync_agent_view_config(&mut self) {
         let allowed = self.config.agent_view.allow_bypass_permissions;
@@ -798,18 +932,30 @@ impl App {
         window.tracking.remove(&id);
         window.told.remove(&id);
         window.announced.remove(&id);
+        window.seen.remove(&id);
         window.past = None;
-        let next = if window.sessions.is_empty() {
-            Screen::NewSession
-        } else {
-            Screen::Sessions
-        };
-        window.state.forget(id, next);
+        for panel in window.tabs.values_mut() {
+            if panel.session == Some(id) {
+                panel.session = None;
+                panel.screen = Screen::NewSession;
+            }
+        }
+        // The tab keeps its panel, now on a new-session page.
+        window.state.forget(id, Screen::NewSession);
         self.request_agent_view_redraw();
     }
 
+    /// Shows a session in its tab, switching to that tab.
     pub(super) fn show_agent_session(&mut self, id: SessionId) {
         if self.agent_view.session(id).is_none() {
+            return;
+        }
+        self.bind_agent_view_to_active_tab();
+        if let Some(tab) = self.agent_session_tab(id)
+            && Some(tab) != self.agent_view.state.tab
+            && let Err(error) = self.select_tab_by_stable_id(tab as u64, true)
+        {
+            self.toasts.error(error);
             return;
         }
         self.open_agent_view(true);
@@ -937,6 +1083,7 @@ impl App {
         self.agent_view
             .by_recency()
             .into_iter()
+            .filter(|session| !session.is_blank())
             .map(|session| {
                 let activity = session.activity();
                 let state = match activity {
@@ -1101,8 +1248,7 @@ impl App {
             MAX_AGENT_SUMMARY_MESSAGE_BYTES, MAX_METADATA_BYTES, printable_within,
         };
         self.agent_view
-            .sessions
-            .iter()
+            .conversations()
             .map(|session| {
                 let transcript = session.transcript();
                 let state = match session.activity() {

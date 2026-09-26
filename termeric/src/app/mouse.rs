@@ -1589,6 +1589,8 @@ impl App {
 
         self.refresh_focused_url_cache();
         self.git_watcher.invalidate();
+        // The agent view follows the tab: each tab has its own.
+        self.bind_agent_view_to_active_tab();
         self.reset_cursor_blink();
         self.refresh_terminal_pointer_cursor();
         if let Some(window) = &self.window {

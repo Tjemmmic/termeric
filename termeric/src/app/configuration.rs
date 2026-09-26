@@ -997,6 +997,9 @@ impl App {
             SettingsAction::SetAllowBypassPermissions(allowed) => {
                 self.config.agent_view.allow_bypass_permissions = allowed;
             }
+            SettingsAction::SetOpenAgentsIn(place) => {
+                self.config.agent_view.open_agents_in = place;
+            }
             SettingsAction::SetSupervisorAgent(agent) => {
                 self.config.supervisor.agent = agent;
             }

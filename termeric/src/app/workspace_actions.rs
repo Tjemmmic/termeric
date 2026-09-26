@@ -2957,21 +2957,27 @@ impl App {
                     .into(),
             );
         }
-        let id = self.create_local_tab(dispatch_plugin_hook)?;
+        let id = self.create_local_tab_in(dispatch_plugin_hook, None)?;
         u64::try_from(id).map_err(|_| "Created tab ID does not fit the control protocol".into())
     }
 
-    fn create_local_tab(
+    /// Opens a shell tab, in `cwd` when given.
+    pub(super) fn create_local_tab_in(
         &mut self,
         dispatch_plugin_hook: bool,
+        cwd: Option<&std::path::Path>,
     ) -> std::result::Result<usize, String> {
+        let tab_count = self.tabs.as_ref().map_or(0, TabManager::count);
+        validate_ordinary_tab_creation_capacity(tab_count)?;
         let tabs = self
             .tabs
             .as_mut()
             .ok_or_else(|| "Target window has no initialized tab manager".to_string())?;
-        let id = tabs
-            .new_tab()
-            .map_err(|error| format!("Could not create a new tab: {error:#}"))?;
+        let id = match cwd {
+            Some(cwd) => tabs.new_tab_with_cwd(Some(&cwd.to_string_lossy()), None),
+            None => tabs.new_tab(),
+        }
+        .map_err(|error| format!("Could not create a new tab: {error:#}"))?;
         log::info!("Created new tab {id}");
         self.maybe_show_splash(true);
         if dispatch_plugin_hook {
@@ -2992,7 +2998,7 @@ impl App {
         self.select_tab_by_stable_id(tab_id, false)
     }
 
-    fn select_tab_by_stable_id(
+    pub(super) fn select_tab_by_stable_id(
         &mut self,
         tab_id: u64,
         dispatch_hook: bool,

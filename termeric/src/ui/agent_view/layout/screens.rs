@@ -19,11 +19,17 @@ impl Builder<'_, '_> {
         let width = viewport.width - self.m.px(20.0);
         let mut y = self.m.px(12.0);
 
+        // Sessions started ahead of a first message hold no conversation.
+        let conversations: Vec<&AgentSession> = input
+            .sessions
+            .iter()
+            .copied()
+            .filter(|session| !session.is_blank())
+            .collect();
         let groups: [(&str, Vec<&AgentSession>); 3] = [
             (
                 "Needs you",
-                input
-                    .sessions
+                conversations
                     .iter()
                     .copied()
                     .filter(|session| session.activity() == Activity::NeedsYou)
@@ -31,8 +37,7 @@ impl Builder<'_, '_> {
             ),
             (
                 "Working",
-                input
-                    .sessions
+                conversations
                     .iter()
                     .copied()
                     .filter(|session| {
@@ -42,8 +47,7 @@ impl Builder<'_, '_> {
             ),
             (
                 "Recent",
-                input
-                    .sessions
+                conversations
                     .iter()
                     .copied()
                     .filter(|session| {

@@ -3528,6 +3528,10 @@ impl Application {
             .expect("validated destination tab manager remains present")
             .attach_window_transferred_tab_at(tab, destination_index)
             .expect("prevalidated destination remains attachable");
+        // The tab's agent view conversation moves with it.
+        if let Some(agent_view) = source.take_agent_view_tab(tab_id) {
+            destination.adopt_agent_view_tab(destination_tab_id, agent_view);
+        }
 
         source.broadcast = super::BroadcastState::Inactive;
         destination.broadcast = super::BroadcastState::Inactive;

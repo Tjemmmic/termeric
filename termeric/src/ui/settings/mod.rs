@@ -627,6 +627,8 @@ pub enum SettingsAction {
     SetAgentNotifications(bool),
     /// Offer agents' modes that run every action without asking.
     SetAllowBypassPermissions(bool),
+    /// Where New Agent… opens agents the agent view can drive.
+    SetOpenAgentsIn(crate::agents::config::OpenAgentsIn),
     /// Choose which agent supervises.
     SetSupervisorAgent(String),
     /// Choose how much the supervisor may do.
@@ -1563,6 +1565,18 @@ impl SettingsPanel {
                         .unwrap_or(0),
                 },
             });
+            let places = crate::agents::config::OpenAgentsIn::ALL;
+            items.push(SettingItem {
+                label: "Open Agents In",
+                value: config.agent_view.open_agents_in.label().into(),
+                kind: SettingKind::Dropdown {
+                    options: places.iter().map(|place| place.label().into()).collect(),
+                    selected: places
+                        .iter()
+                        .position(|place| *place == config.agent_view.open_agents_in)
+                        .unwrap_or(0),
+                },
+            });
             let bypass = config.agent_view.allow_bypass_permissions;
             items.push(SettingItem {
                 label: "Allow Bypass Permissions",
@@ -2071,6 +2085,12 @@ impl SettingsPanel {
                                 .copied()
                                 .unwrap_or_default(),
                         )
+                    }
+                    (SettingsSection::Agents, "Open Agents In") => {
+                        crate::agents::config::OpenAgentsIn::ALL
+                            .get(option_idx)
+                            .copied()
+                            .map_or(SettingsAction::None, SettingsAction::SetOpenAgentsIn)
                     }
                     (SettingsSection::Agents, "Allow Bypass Permissions") => {
                         SettingsAction::SetAllowBypassPermissions(new_val == "On")

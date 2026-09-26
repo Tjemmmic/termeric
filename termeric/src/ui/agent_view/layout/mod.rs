@@ -27,7 +27,7 @@ use super::scene::{
     Bounds, Caret, ComposerGeometry, Hit, HitRole, Icon, Layer, MenuAction, MenuKind, Node, Prim,
     Scene, SpanPaint, Target, TextNode, composer_layout,
 };
-use super::{AgentViewState, Focus, Screen};
+use super::{AgentViewState, Focus, Layout, Screen};
 
 /// Points per UI body line, the desktop's usual chrome size.
 const BODY_POINTS: f32 = 10.0;
@@ -122,7 +122,14 @@ pub struct Input<'a> {
 }
 
 impl Input<'_> {
+    /// The shown session, when it holds a conversation: a session started
+    /// ahead of its first message belongs to the new-session page.
     fn active(&self) -> Option<&AgentSession> {
+        self.tab_session().filter(|session| !session.is_blank())
+    }
+
+    /// The tab's session, including one started ahead of its first message.
+    fn tab_session(&self) -> Option<&AgentSession> {
         let id = self.state.active?;
         self.sessions
             .iter()
@@ -130,6 +137,10 @@ impl Input<'_> {
             .find(|session| session.id() == id)
     }
 }
+
+/// Widest the conversation grows, in logical pixels, so lines stay easy to
+/// read when the panel fills a wide tab.
+const COLUMN_WIDTH: f32 = 860.0;
 
 /// Sizes in physical pixels.
 #[derive(Clone, Copy, Debug)]
@@ -242,17 +253,19 @@ impl Builder<'_, '_> {
         });
 
         let header = self.header(&mut base, panel);
+        // A panel filling a wide tab keeps its content to a readable column.
+        let column = self.column(panel);
         let mut top = header.bottom();
         if let Some(banner) = self.input.banner.clone()
             && self.input.state.screen == Screen::Conversation
         {
-            top = self.banner(&mut base, panel, top, &banner);
+            top = self.banner(&mut base, column, top, &banner);
         }
         let composer_top = match self.input.state.screen {
             Screen::Sessions => panel.bottom(),
-            _ => self.composer(&mut base, panel),
+            _ => self.composer(&mut base, column),
         };
-        let viewport = Bounds::new(panel.x, top, panel.width, (composer_top - top).max(0.0));
+        let viewport = Bounds::new(column.x, top, column.width, (composer_top - top).max(0.0));
 
         let (mut feed, feed_height) = match input.state.screen {
             Screen::Conversation => match input.active() {
@@ -866,6 +879,40 @@ fn with_alpha(mut color: [f32; 4], alpha: f32) -> [f32; 4] {
 // ── Header and banner ────────────────────────────────────────────────────
 
 impl Builder<'_, '_> {
+    /// The part of the panel its content uses: all of it, or a centred
+    /// column when the panel is much wider than lines read well.
+    fn column(&self, panel: Bounds) -> Bounds {
+        let widest = self.m.px(COLUMN_WIDTH);
+        if panel.width <= widest {
+            return panel;
+        }
+        Bounds::new(
+            (panel.x + (panel.width - widest) / 2.0).round(),
+            panel.y,
+            widest,
+            panel.height,
+        )
+    }
+
+    /// The button that switches between the panel beside the terminal and
+    /// the panel filling the tab. Only a panel bound to a tab has one.
+    fn layout_toggle(&self) -> Option<(Icon, Target, &'static str)> {
+        let state = self.input.state;
+        state.tab?;
+        Some(match state.layout {
+            Layout::Split => (
+                Icon::Expand,
+                Target::SetLayout(Layout::Full),
+                "Fill the tab",
+            ),
+            Layout::Full => (
+                Icon::Terminal,
+                Target::SetLayout(Layout::Split),
+                "Show the terminal beside",
+            ),
+        })
+    }
+
     fn header(&mut self, region: &mut Region, panel: Bounds) -> Bounds {
         let input = self.input;
         let height = self.m.px(56.0);
@@ -876,11 +923,14 @@ impl Builder<'_, '_> {
         let muted = self.c.text_secondary;
         match self.input.state.screen {
             Screen::Conversation => {
-                for (icon, target, label) in [
-                    (Icon::More, Target::OpenMenu(MenuKind::More), "More actions"),
+                let mut buttons =
+                    vec![(Icon::More, Target::OpenMenu(MenuKind::More), "More actions")];
+                buttons.extend(self.layout_toggle());
+                buttons.extend([
                     (Icon::History, Target::ShowSessions, "All sessions"),
                     (Icon::Plus, Target::NewSession, "New session"),
-                ] {
+                ]);
+                for (icon, target, label) in buttons {
                     right -= button;
                     self.icon_button(
                         region,
@@ -1015,15 +1065,23 @@ impl Builder<'_, '_> {
                 );
             }
             Screen::NewSession => {
-                right -= button;
-                self.icon_button(
-                    region,
-                    Bounds::new(right, button_y, button, button),
-                    Icon::History,
-                    Target::ShowSessions,
-                    "All sessions",
-                    muted,
-                );
+                let mut buttons: Vec<(Icon, Target, &str)> =
+                    self.layout_toggle().into_iter().collect();
+                buttons.push((Icon::History, Target::ShowSessions, "All sessions"));
+                for (index, (icon, target, label)) in buttons.into_iter().enumerate() {
+                    if index > 0 {
+                        right -= self.m.px(2.0);
+                    }
+                    right -= button;
+                    self.icon_button(
+                        region,
+                        Bounds::new(right, button_y, button, button),
+                        icon,
+                        target,
+                        label,
+                        muted,
+                    );
+                }
                 let title_x = if self.input.active().is_some() {
                     let back = Bounds::new(header.x + self.m.px(8.0), button_y, button, button);
                     self.icon_button(
@@ -1844,8 +1902,8 @@ pub fn menu_items(input: &Input<'_>, kind: MenuKind) -> Vec<MenuItem> {
 /// session's (they share an account), else a fallback list until one starts.
 fn offered_models(input: &Input) -> Vec<ModelChoice> {
     let shown = match input.state.screen {
-        Screen::Conversation => input.active(),
-        _ => None,
+        Screen::Sessions => None,
+        _ => input.tab_session(),
     };
     let reported = shown
         .into_iter()

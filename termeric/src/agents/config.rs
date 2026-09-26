@@ -29,6 +29,37 @@ pub struct AgentViewConfig {
     /// Offer each agent's mode that runs every action without asking, such
     /// as Claude Code's Bypass permissions. Off unless the person opts in.
     pub allow_bypass_permissions: bool,
+    /// Where **New Agent…** opens an agent the agent view can drive.
+    pub open_agents_in: OpenAgentsIn,
+}
+
+/// Where **New Agent…** opens an agent the agent view can drive.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OpenAgentsIn {
+    /// The agent's own interface in a terminal tab.
+    #[default]
+    Terminal,
+    /// A new tab with the agent view beside its terminal.
+    Split,
+    /// A new tab with the agent view filling it.
+    Full,
+}
+
+impl OpenAgentsIn {
+    pub const ALL: [OpenAgentsIn; 3] = [
+        OpenAgentsIn::Terminal,
+        OpenAgentsIn::Split,
+        OpenAgentsIn::Full,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            OpenAgentsIn::Terminal => "Terminal",
+            OpenAgentsIn::Split => "Agent View Beside Terminal",
+            OpenAgentsIn::Full => "Agent View Filling Tab",
+        }
+    }
 }
 
 /// One `[agents.<id>]` entry. For a built-in agent every field is an

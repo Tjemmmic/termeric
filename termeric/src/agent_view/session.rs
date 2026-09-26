@@ -265,6 +265,13 @@ impl AgentSession {
         self.process.is_some() && !self.closing
     }
 
+    /// Whether nothing was said yet: a session started ahead of its first
+    /// message, so the agent's commands and models are ready. It stays out
+    /// of every list of conversations until a message is sent.
+    pub fn is_blank(&self) -> bool {
+        self.resumed.is_none() && self.transcript.first_prompt().is_none() && self.queued.is_empty()
+    }
+
     /// Whether the conversation was handed to a terminal.
     pub fn handed_off(&self) -> bool {
         self.handed_off

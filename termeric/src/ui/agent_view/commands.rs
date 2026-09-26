@@ -70,11 +70,12 @@ pub fn complete(text: &str, name: &str) -> (String, usize) {
 /// The commands the agent offers here: the shown session's, else those of
 /// any session that has connected, since they share one installation.
 pub fn offered<'a>(state: &AgentViewState, sessions: &[&'a AgentSession]) -> &'a [SlashCommand] {
+    // The tab's own session first: skills and commands can differ by folder.
     let shown = match state.screen {
-        Screen::Conversation => state
+        Screen::Sessions => None,
+        _ => state
             .active
             .and_then(|id| sessions.iter().find(|session| session.id() == id)),
-        _ => None,
     };
     shown
         .into_iter()

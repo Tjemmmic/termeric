@@ -38,11 +38,32 @@ pub const CARET_HOLD: Duration = Duration::from_millis(600);
 pub const CARET_PHASE: Duration = Duration::from_millis(530);
 
 /// Which page the panel shows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Screen {
     Conversation,
     Sessions,
+    #[default]
     NewSession,
+}
+
+/// How the panel shares its tab with the tab's terminal.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Layout {
+    /// Beside the terminal.
+    #[default]
+    Split,
+    /// Over the whole tab. The terminal keeps running underneath.
+    Full,
+}
+
+/// One tab's agent view, kept while another tab shows.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TabPanel {
+    pub open: bool,
+    pub layout: Layout,
+    /// The tab's conversation.
+    pub session: Option<SessionId>,
+    pub screen: Screen,
 }
 
 /// A scroll position that can follow new content and animate.
@@ -341,6 +362,10 @@ pub struct AgentViewState {
     pub caret_moved: Instant,
     /// The `/` command menu above the message box.
     pub commands: commands::CommandMenu,
+    /// The tab whose agent view this is. Each tab has its own; the others
+    /// wait as [`TabPanel`]s.
+    pub tab: Option<usize>,
+    pub layout: Layout,
 }
 
 impl Default for AgentViewState {
@@ -362,6 +387,8 @@ impl Default for AgentViewState {
             resize: None,
             caret_moved: Instant::now(),
             commands: commands::CommandMenu::default(),
+            tab: None,
+            layout: Layout::Split,
         }
     }
 }
@@ -369,6 +396,49 @@ impl Default for AgentViewState {
 impl AgentViewState {
     pub fn is_open(&self) -> bool {
         self.open
+    }
+
+    /// This tab's panel as it is, to keep while another tab shows.
+    pub fn stash(&self) -> TabPanel {
+        TabPanel {
+            open: self.open,
+            layout: self.layout,
+            session: self.active,
+            screen: self.screen,
+        }
+    }
+
+    /// Shows no tab's panel, as when the window has no tabs.
+    pub fn unbind(&mut self) {
+        self.restore(0, TabPanel::default());
+        self.tab = None;
+    }
+
+    /// A conversation's view state, leaving with its session.
+    pub fn take_conversation(&mut self, id: SessionId) -> Option<ConversationView> {
+        self.conversations.remove(&id)
+    }
+
+    /// A conversation's view state, arriving with its session.
+    pub fn put_conversation(&mut self, id: SessionId, view: ConversationView) {
+        self.conversations.insert(id, view);
+    }
+
+    /// Shows `tab`'s panel as it was left, without the opening slide. The
+    /// keyboard stays with the terminals unless the panel fills the tab.
+    pub fn restore(&mut self, tab: usize, panel: TabPanel) {
+        self.tab = Some(tab);
+        self.open = panel.open;
+        self.opened_at = None;
+        self.layout = panel.layout;
+        self.active = panel.session;
+        self.screen = panel.screen;
+        self.keyboard = panel.open && panel.layout == Layout::Full;
+        self.focus = Focus::Composer;
+        self.menu = None;
+        self.hover = None;
+        self.resize = None;
+        self.commands = commands::CommandMenu::default();
     }
 
     pub fn open(&mut self) {

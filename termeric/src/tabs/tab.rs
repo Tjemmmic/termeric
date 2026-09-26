@@ -81,6 +81,14 @@ const TAB_SLIDE_DURATION: f32 = 0.15;
 const TAB_CLOSE_DURATION: f32 = 0.12;
 
 /// A single terminal tab
+/// How a tab's agent view conversation shows in the tab bar.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct TabAgentView {
+    /// Set while the agent view fills the tab.
+    pub title: Option<String>,
+    pub badge: Option<crate::agents::AgentBadge>,
+}
+
 pub struct Tab {
     /// Unique tab ID
     pub id: usize,
@@ -132,6 +140,8 @@ pub struct Tab {
     pub harvest: crate::harvest::HarvestTerminalState,
     /// Whether Termeric installed semantic prompt hooks for this shell.
     pub shell_integration: ShellIntegrationSupport,
+    /// The tab's agent view conversation, as the tab bar shows it.
+    pub(crate) agent_view: TabAgentView,
     /// Frozen shell/command profile inherited by future panes in this tab.
     split_shell: ShellConfig,
     /// Launch identity/configuration for the single owner. Pane mode transfers
@@ -218,6 +228,7 @@ impl Tab {
             pane_allocation: Default::default(),
             single_read_only: false,
             harvest: crate::harvest::HarvestTerminalState::default(),
+            agent_view: TabAgentView::default(),
             shell_integration: launch.integration,
             split_shell: shell.clone(),
             terminal_launch: crate::workspace::WorkspaceLaunch::Shell,
@@ -352,6 +363,7 @@ impl Tab {
             pane_allocation: Default::default(),
             single_read_only: false,
             harvest: crate::harvest::HarvestTerminalState::default(),
+            agent_view: TabAgentView::default(),
             shell_integration: ShellIntegrationSupport::Unavailable(
                 "Direct command tabs do not provide shell prompt marks".into(),
             ),
@@ -895,6 +907,7 @@ impl Tab {
             pane_allocation: Default::default(),
             single_read_only: false,
             harvest: crate::harvest::HarvestTerminalState::default(),
+            agent_view: TabAgentView::default(),
             shell_integration: launch.integration,
             split_shell: shell.clone(),
             terminal_launch: crate::workspace::WorkspaceLaunch::Shell,
@@ -1305,7 +1318,14 @@ impl Tab {
         self.owned_pane_ids()
             .into_iter()
             .filter_map(|id| self.pane_session(id)?.agent_status.as_ref()?.badge())
+            .chain(self.agent_view.badge)
             .max()
+    }
+
+    /// The title the tab bar shows: the conversation's while the agent view
+    /// fills the tab, else the terminal's.
+    pub(crate) fn display_title(&self) -> &str {
+        self.agent_view.title.as_deref().unwrap_or(&self.title)
     }
 
     #[cfg(test)]

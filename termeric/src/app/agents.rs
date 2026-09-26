@@ -459,6 +459,21 @@ impl App {
         else {
             return;
         };
+        // The agent view drives Claude Code; the person may prefer it.
+        let in_view = match self.config.agent_view.open_agents_in {
+            crate::agents::config::OpenAgentsIn::Terminal => None,
+            crate::agents::config::OpenAgentsIn::Split => {
+                Some(crate::ui::agent_view::Layout::Split)
+            }
+            crate::agents::config::OpenAgentsIn::Full => Some(crate::ui::agent_view::Layout::Full),
+        };
+        if let Some(layout) = in_view
+            && agent.id == "claude-code"
+            && matches!(placement, AgentPlacement::NewTab | AgentPlacement::Resume)
+        {
+            self.open_agent_in_view(layout);
+            return;
+        }
         match placement {
             AgentPlacement::NewTab | AgentPlacement::Resume => {
                 let ctx = self.build_plugin_context();

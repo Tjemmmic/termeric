@@ -16,7 +16,29 @@ terminals. Claude Code is the only agent it drives today.
 closes it when it already has the keyboard. The command palette also offers
 **Agent View** and **New Agent View Session**.
 
-The panel reserves its width on the right; terminals reflow into what is left
+Each tab has its own agent view and one conversation. Switching tabs switches
+the conversation, and a tab without one shows no panel, so two Claude Code
+sessions in two folders are simply two tabs. **New session** in a tab that
+already holds a conversation opens a new tab for the new one, in the same
+folder. A tab moved to another window takes its conversation along, and
+closing a tab ends its conversation (Claude Code keeps it, so it can be
+continued later).
+
+The panel sits beside the tab's terminal, or fills the tab: the button left
+of the clock in the header switches between the two. Filling the tab covers
+the terminal, which keeps running at its size underneath, gives the panel the
+keyboard, keeps the conversation to a readable column, and names the tab after
+the conversation. A tab's agent view shows its state in the tab bar like an
+agent in a terminal: working, needs you, or done and failed until you look.
+
+**Open Agents In** on the Settings **Agents** page
+(`[agent_view] open_agents_in`) makes **New Agent…** and **Resume Agent
+Conversation…** open Claude Code in a new tab's agent view, beside its
+terminal (`split`) or filling it (`full`), instead of in a terminal
+(`terminal`, the default). Other agents still open in terminals, and agent
+profiles apply only to terminal launches.
+
+Beside the terminal, the panel reserves its width on the right; terminals reflow into what is left
 and always keep at least 360 logical pixels. Drag the panel's left edge to
 resize it. When the window is too narrow for both, the panel hides until
 there is room, and while hidden it gives the keyboard back to the terminal.
@@ -40,7 +62,9 @@ The **New session** page shows:
 - **Open Claude in a terminal instead**, which starts it in a new tab.
 
 Type what Claude should work on and press Enter. The permission and model
-chips under the message apply to the new session.
+chips under the message apply to the new session. Claude Code starts as soon
+as the page has the keyboard, so its commands and your account's models are
+listed before the first message; closing the panel before a message ends it.
 
 Termeric looks for `claude` on its own `PATH` and then on the `PATH` your
 login shell sets up, so a desktop-launched Termeric finds a `claude`
@@ -139,7 +163,8 @@ the model's context the conversation fills.
 ## Sessions
 
 The clock button, or the title in the header, opens **Agents**: this window's
-sessions grouped into *Needs you*, *Working*, and *Recent*; agents running in
+sessions, in every tab, grouped into *Needs you*, *Working*, and *Recent*
+(choosing one goes to its tab); agents running in
 terminals; earlier conversations to continue; and the supervisor, when one
 runs. **Show Agents** in the command palette lists agent view sessions too.
 
@@ -158,7 +183,7 @@ conversation. Once the terminal is done with it, continue it from the
 new-session page. A message sent while a session is still closing waits and
 goes once Claude Code has restarted.
 
-Sessions belong to their window and end with it. Claude Code keeps every
+Sessions belong to their tab and end with it, or with its window. Claude Code keeps every
 conversation in its logs, so any of them can be continued later from the
 new-session page.
 

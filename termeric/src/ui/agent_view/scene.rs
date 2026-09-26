@@ -91,6 +91,7 @@ pub enum Icon {
     Agent,
     Folder,
     Warning,
+    Expand,
 }
 
 /// How one span of a paragraph is painted.
@@ -202,6 +203,8 @@ pub enum MenuAction {
 pub enum Target {
     // Header.
     ShowSessions,
+    /// Show the panel beside the terminal, or filling the tab.
+    SetLayout(super::Layout),
     /// The conversation's title, which also opens the sessions page. A
     /// target of its own because every target must be unique in a scene.
     SessionTitle,

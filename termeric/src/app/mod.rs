@@ -5,6 +5,7 @@ mod agent_changes;
 mod agent_hooks;
 mod agent_view;
 mod agent_view_input;
+mod agent_view_tabs;
 mod agents;
 mod agents_panel;
 mod application;
