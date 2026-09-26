@@ -861,8 +861,8 @@ mod tests {
         }
         let filtered = panel.build_entries(&registry);
         assert!(filtered.len() < all_count);
-        // Should find "Copy"
-        assert!(filtered.iter().any(|e| e.label == "Copy"));
+        // Should find "Copy Selection"
+        assert!(filtered.iter().any(|e| e.label == "Copy Selection"));
     }
 
     #[test]
@@ -902,8 +902,8 @@ mod tests {
         assert_ne!(recorded, BindableAction::ToggleSearch);
         panel.handle_key(ShortcutsKey::RecordedChord(search), &registry);
         let notice = panel.build_info(&registry).notice.unwrap();
-        assert_eq!(notice, ShortcutNotice::Reassigned("Toggle Search"));
-        assert_eq!(notice.message(), "Toggle Search is now unset");
+        assert_eq!(notice, ShortcutNotice::Reassigned("Find"));
+        assert_eq!(notice.message(), "Find is now unset");
 
         panel.handle_key(ShortcutsKey::Enter, &registry);
         assert!(panel.tick_recording_timeout(std::time::Duration::ZERO));

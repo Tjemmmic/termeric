@@ -182,7 +182,7 @@ impl BindableAction {
             // ── General ──
             Copy => ActionMeta {
                 id: "copy",
-                label: "Copy",
+                label: "Copy Selection",
                 category: General,
                 default_binding: Some(KeyChord::new("c", true, false, true, false)),
             },
@@ -206,7 +206,7 @@ impl BindableAction {
             },
             ToggleSearch => ActionMeta {
                 id: "toggle_search",
-                label: "Toggle Search",
+                label: "Find",
                 category: General,
                 default_binding: Some(KeyChord::new("f", true, false, true, false)),
             },
@@ -218,12 +218,12 @@ impl BindableAction {
             },
             QuickSelect => ActionMeta {
                 id: "quick_select",
-                label: "Quick Select Hints",
+                label: "Quick Select Links and Matches",
                 category: Navigation,
                 default_binding: Some(KeyChord::new("u", true, false, true, false)),
             },
             OpenUnicodePicker => {
-                action_meta("open_unicode_picker", "Unicode Character Picker", General)
+                action_meta("open_unicode_picker", "Insert Unicode Character", General)
             }
             ToggleCommandPalette => ActionMeta {
                 id: "toggle_command_palette",
@@ -233,7 +233,7 @@ impl BindableAction {
             },
             ToggleSettings => ActionMeta {
                 id: "toggle_settings",
-                label: "Settings",
+                label: "Open Settings",
                 category: General,
                 default_binding: Some(KeyChord::new(",", true, false, false, false)),
             },
@@ -465,13 +465,13 @@ impl BindableAction {
             },
             PreviousFailedCommand => ActionMeta {
                 id: "previous_failed_command",
-                label: "Previous Failed Command",
+                label: "Jump to Previous Failed Command",
                 category: Navigation,
                 default_binding: None,
             },
             NextFailedCommand => ActionMeta {
                 id: "next_failed_command",
-                label: "Next Failed Command",
+                label: "Jump to Next Failed Command",
                 category: Navigation,
                 default_binding: None,
             },
@@ -1165,7 +1165,7 @@ mod tests {
     fn unicode_picker_is_discoverable_without_reserving_a_default_chord() {
         let meta = BindableAction::OpenUnicodePicker.meta();
         assert_eq!(meta.id, "open_unicode_picker");
-        assert_eq!(meta.label, "Unicode Character Picker");
+        assert_eq!(meta.label, "Insert Unicode Character");
         assert!(meta.default_binding.is_none());
         assert!(BindableAction::all().contains(&BindableAction::OpenUnicodePicker));
     }
