@@ -6,6 +6,8 @@
 //! here knows any command by name.
 
 use crate::agent_view::event::SlashCommand;
+#[cfg(test)]
+use crate::agent_view::event::invoked_name;
 use crate::agent_view::session::AgentSession;
 
 use super::{AgentViewState, Focus, Screen};
@@ -28,19 +30,6 @@ pub fn typed_name(text: &str, caret: usize) -> Option<&str> {
     let rest = text.strip_prefix('/')?;
     let name = rest.get(..caret.checked_sub(1)?)?;
     (!name.chars().any(char::is_whitespace)).then_some(name)
-}
-
-/// The command a message invokes, if it starts with one. Paths such as
-/// `/etc/hosts` are not commands.
-pub fn invoked_name(message: &str) -> Option<&str> {
-    let rest = message.trim_start().strip_prefix('/')?;
-    let name = rest.split(char::is_whitespace).next()?;
-    let mut characters = name.chars();
-    let first = characters.next()?;
-    let starts_well = first.is_ascii_alphanumeric() || first == '_';
-    let rest_valid = characters
-        .all(|character| character.is_ascii_alphanumeric() || matches!(character, ':' | '_' | '-'));
-    (starts_well && rest_valid).then_some(name)
 }
 
 /// Commands whose names start with `typed`, then those that contain it,
@@ -68,8 +57,10 @@ pub fn complete(text: &str, name: &str) -> (String, usize) {
 }
 
 /// The commands the agent offers here: the shown session's, else those of
-/// any session that has connected, since they share one installation.
+/// any session of the same agent that has connected, since they share one
+/// installation.
 pub fn offered<'a>(state: &AgentViewState, sessions: &[&'a AgentSession]) -> &'a [SlashCommand] {
+    let agent = state.agent(sessions);
     // The tab's own session first: skills and commands can differ by folder.
     let shown = match state.screen {
         Screen::Sessions => None,
@@ -80,6 +71,7 @@ pub fn offered<'a>(state: &AgentViewState, sessions: &[&'a AgentSession]) -> &'a
     shown
         .into_iter()
         .chain(sessions.iter())
+        .filter(|session| session.agent() == agent)
         .find_map(|session| session.transcript().handshake())
         .map_or(&[], |handshake| handshake.commands.as_slice())
 }

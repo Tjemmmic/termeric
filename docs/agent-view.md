@@ -1,14 +1,19 @@
 # Agent view
 
-The agent view is a panel docked right of the terminals where Claude Code
-works in a conversation instead of a terminal. Termeric starts Claude Code
+The agent view is a panel docked right of the terminals where a coding agent
+works in a conversation instead of a terminal. Termeric starts the agent
 without its terminal interface and talks to it over its structured protocol,
 so approvals, questions, plans, edits, and command output appear as native
 controls: buttons to allow or deny, choices to pick, diffs to read.
 
 It is **experimental**. It sits beside the [terminal integration](agents.md),
 which keeps working unchanged, and it can be removed without touching
-terminals. Claude Code is the only agent it drives today.
+terminals. It drives two agents, each through its own protocol:
+
+- **Claude Code**, over its stream-json protocol;
+- **Codex**, over its app server (`codex app-server`).
+
+Gemini CLI and OpenCode still run in terminals.
 
 ## Opening it
 
@@ -17,11 +22,11 @@ closes it when it already has the keyboard. The command palette also offers
 **Agent View** and **New Agent View Session**.
 
 Each tab has its own agent view and one conversation. Switching tabs switches
-the conversation, and a tab without one shows no panel, so two Claude Code
-sessions in two folders are simply two tabs. **New session** in a tab that
+the conversation, and a tab without one shows no panel, so Claude Code in one
+folder and Codex in another are simply two tabs. **New session** in a tab that
 already holds a conversation opens a new tab for the new one, in the same
 folder. A tab moved to another window takes its conversation along, and
-closing a tab ends its conversation (Claude Code keeps it, so it can be
+closing a tab ends its conversation (the agent keeps it, so it can be
 continued later).
 
 The panel sits beside the tab's terminal, or fills the tab: the button left
@@ -33,9 +38,10 @@ agent in a terminal: working, needs you, or done and failed until you look.
 
 **Open Agents In** on the Settings **Agents** page
 (`[agent_view] open_agents_in`) makes **New Agent…** and **Resume Agent
-Conversation…** open Claude Code in a new tab's agent view, beside its
-terminal (`split`) or filling it (`full`), instead of in a terminal
-(`terminal`, the default). Other agents still open in terminals, and agent
+Conversation…** open Claude Code and Codex in a new tab's agent view,
+beside its terminal (`split`) or filling it (`full`), instead of in a
+terminal (`terminal`, the default). Other agents still open in terminals,
+and a launch that names an agent profile opens in a terminal, because
 profiles apply only to terminal launches.
 
 Beside the terminal, the panel reserves its width on the right; terminals reflow into what is left
@@ -54,40 +60,52 @@ working, except the chords the message box edits with.
 
 The **New session** page shows:
 
-- the agent: Claude Code, and whether it was found;
+- the agent to start, Claude Code or Codex, and whether each was found. An
+  agent that is not installed, or is turned off on the Settings **Agents**
+  page, is listed with the reason and cannot be chosen. A new session from a
+  tab's conversation starts with the same agent;
 - the folder: the focused terminal's working directory, or another open
   terminal's from the folder menu;
-- earlier conversations in that folder, from Claude Code's own logs, to
-  continue;
-- **Open Claude in a terminal instead**, which starts it in a new tab.
+- for Claude Code, earlier conversations in that folder, from its own logs,
+  to continue;
+- **Open Claude in a terminal instead** (or Codex), which starts it in a new
+  tab.
 
-Type what Claude should work on and press Enter. The permission and model
-chips under the message apply to the new session. Claude Code starts as soon
-as the page has the keyboard, so its commands and your account's models are
-listed before the first message; closing the panel before a message ends it.
+Type what the agent should work on and press Enter. The permission and model
+chips under the message apply to the new session; choosing another agent
+resets them to that agent's defaults. The agent starts as soon as the page
+has the keyboard, so its commands and your account's models are listed before
+the first message; closing the panel before a message ends it. Codex opens
+its conversation (a thread) only with the first message, so a session that
+never got one leaves nothing in Codex's history.
 
-Termeric looks for `claude` on its own `PATH` and then on the `PATH` your
-login shell sets up, so a desktop-launched Termeric finds a `claude`
+Termeric looks for `claude` and `codex` on its own `PATH` and then on the
+`PATH` your login shell sets up, so a desktop-launched Termeric finds agents
 installed through a shell profile. The login shell is asked once, in the
-background; until it answers, the page shows *Looking for Claude Code…*. `[agents.claude-code]` in the
-configuration sets the program and environment; its arguments apply only to
-terminal launches, because the agent view needs its own.
+background; until it answers, the page shows *Looking for Claude Code…*.
+`[agents.claude-code]` and `[agents.codex]` in the configuration set each
+program and environment; their arguments apply only to terminal launches,
+because the agent view needs its own.
 
 ## The conversation
 
-- **Messages** you send appear as cards. Claude's answers are rendered
+- **Messages** you send appear as cards. The agent's answers are rendered
   Markdown: headings, lists, quotes, tables, code blocks, bold, italic,
   inline code, and links.
 - **Quiet exploration** (reading files and searching) folds into one
   *Explored* row that expands.
 - **Edits** show a diff card with added and removed line counts. Once an edit
   is made, the diff comes from Claude Code's own patch, with line numbers.
+  Codex's patches show one card per file, numbered from its hunks, with new
+  and deleted files marked.
 - **Commands** show a card with the command, its status, and the end of its
   output, which expands.
 - **Sub-agents** show their task, how many steps they took, and their latest
   step; their report expands.
-- **To-dos** show as a checklist; only the latest list stays open.
-- **Thinking** shows as a collapsed *Thought* row.
+- **To-dos**, and Codex's plan steps, show as a checklist; only the latest
+  list stays open.
+- **Thinking**, and Codex's reasoning summaries, show as a collapsed
+  *Thought* row.
 - Each turn ends with its duration and changed files, **Review changes**,
   and a button that copies the answer.
 
@@ -96,40 +114,55 @@ back to the latest message.
 
 ## Decisions
 
-When Claude Code needs permission, a card asks for it under the tool call:
+When the agent needs permission, a card asks for it under the tool call:
 
 - **Allow** runs it once.
-- **Always allow …** appears when Claude Code suggests a rule it can
-  describe, such as *Always allow cargo test in this project*. The rule is
-  Claude Code's own and is saved where it says.
-- **Deny** refuses and ends the turn; the message box then asks what Claude
-  should do instead.
+- **Always allow …** appears when the agent offers to remember the answer.
+  Claude Code suggests rules it can describe, such as *Always allow cargo
+  test in this project*, saved where it says. Codex offers *Always allow
+  cargo test commands* when it proposes a command prefix to allow (saved to
+  Codex's own rules), otherwise *Allow this command for the rest of the
+  session*, and for patches *Allow edits to these files for the rest of the
+  session*.
+- **Deny** refuses and ends the turn; the message box then asks what the
+  agent should do instead.
 
-A **question** Claude asks shows its options as choices; **Other** lets you
-type an answer in the message box. **Skip** declines to answer.
+A denial with a reason, from the supervisor or `answer_approval`, lets the
+agent continue its turn. Claude Code reads the reason with the refusal;
+Codex takes none, so the reason follows as a note to the running turn.
 
-A **plan** (from *Plan only* mode) shows as a card with **Start, ask before
-edits**, **Start, edit without asking**, or **Keep planning**, which asks
-what to change.
+A **question** the agent asks shows its options as choices; **Other** lets
+you type an answer in the message box. **Skip** declines to answer.
+
+A **plan** (from Claude Code's *Plan only* mode) shows as a card with
+**Start, ask before edits**, **Start, edit without asking**, or **Keep
+planning**, which asks what to change.
 
 ## The message box
 
-Enter sends and Shift+Enter starts a new line. While Claude works, a message
+Enter sends and Shift+Enter starts a new line. While the agent works, a message
 you send waits as a *Queued* chip above the box and goes when the turn ends,
 so every message starts a turn of its own; × on the chip cancels it and puts
 the text back in the box. With the box empty, the send button becomes
 **Stop**; Escape also stops the turn, and queued messages then go in order.
 
-Typing `/` at the start of a message lists the commands Claude Code runs
-without its terminal: its built-in ones, such as `/compact`, `/context`, and
-`/init`, and your own skills and commands, filtered as you type. Up and Down
-move through the list, Tab completes the highlighted command, Enter completes
-it and sends it when it takes no argument, and Escape hides the list. Claude
-Code refuses commands that open one of its own screens, such as
-`/permissions`; sending one of those shows **Open in a terminal**, which
-continues the conversation in Claude Code's terminal interface. Claude Code
-sends its list when a session connects, so the list appears once a session
-has started.
+Typing `/` at the start of a message lists the commands the agent runs
+without its terminal, filtered as you type. Up and Down move through the
+list, Tab completes the highlighted command, Enter completes it and sends it
+when it takes no argument, and Escape hides the list. The list appears once
+a session has started:
+
+- Claude Code sends its own list: built-in commands such as `/compact`,
+  `/context`, and `/init`, and your own skills and commands. It refuses
+  commands that open one of its own screens, such as `/permissions`.
+- Codex has no list of its own, so Termeric offers `/compact` (compacts the
+  conversation), `/review` (reviews uncommitted changes, or what you write
+  after it), and your Codex skills, which go to Codex with the message. Its
+  other commands, such as `/status`, work only in its terminal.
+
+Sending a command the agent runs only in its terminal shows **Open in a
+terminal**, which continues the conversation in the agent's terminal
+interface.
 
 Up and Down on the first and last lines recall earlier messages. Ctrl+A,
 Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+Z, and Ctrl+Shift+Z (or Ctrl+Y) work as in any
@@ -142,7 +175,7 @@ Chips above the box attach context from the focused terminal:
 - the **last command**, when shell integration recorded one, attaches its
   output (up to 64 KiB), marked when it failed.
 
-The permission chip switches between Claude Code's modes:
+The permission chip switches between the agent's modes. Claude Code's:
 
 - **Ask before edits** approves each edit and command;
 - **Edit without asking** applies edits at once, and commands still ask;
@@ -155,37 +188,54 @@ The permission chip switches between Claude Code's modes:
   Code with `--allow-dangerously-skip-permissions`. Use it only in a sandbox.
   Turning the setting off returns any session in that mode to asking.
 
-Some accounts cannot use **Auto**; Claude Code's refusal then shows in the
-conversation. The model chip lists the models Claude Code offers for this
-account. The ring beside the send button shows how much of
-the model's context the conversation fills.
+Codex's, which pair an approval policy with a sandbox:
+
+- **Ask before changes** (`on-request`, read-only sandbox) reads and runs
+  read-only commands, and asks before editing or anything else;
+- **Auto** (`on-request`, workspace-write sandbox) edits and runs commands in
+  the folder, and asks before leaving it or using the network;
+- **Full access** (`never`, no sandbox) runs everything without asking. Like
+  **Bypass permissions**, it needs **Allow Bypass Permissions**; turning the
+  setting off returns the session to asking. Use it only in a sandbox.
+
+A session never starts in a mode that skips every check without that
+setting, whoever asked for it. Codex takes a mode or model change with the
+next message, since it applies them per turn.
+
+Some accounts cannot use Claude Code's **Auto**; its refusal then shows in the
+conversation. The model chip lists the models the agent offers for this
+account; *Default* keeps the model the agent's own settings choose. The ring
+beside the send button shows how much of the model's context the
+conversation fills.
 
 ## Sessions
 
 The clock button, or the title in the header, opens **Agents**: this window's
 sessions, in every tab, grouped into *Needs you*, *Working*, and *Recent*
 (choosing one goes to its tab); agents running in
-terminals; earlier conversations to continue; and the supervisor, when one
-runs. **Show Agents** in the command palette lists agent view sessions too.
+terminals; earlier Claude Code conversations to continue; and the supervisor,
+when one runs. **Show Agents** in the command palette lists agent view sessions too.
 
 A session that needs you while you cannot see it sends a desktop
 notification, following `agent_status.notify`.
 
 The **⋯** menu offers **Open in a terminal**, which ends the session here and
 continues the same conversation in a new tab; **Copy conversation**; **End
-session**, which stops Claude Code and removes the session from the panel
-(Claude Code keeps the conversation, so the new-session page offers it again
-under earlier conversations); and **Hide panel**.
+session**, which stops the agent and removes the session from the panel
+(the agent keeps the conversation: Claude Code's new-session page offers it
+again under earlier conversations, and `codex resume` continues a Codex one);
+and **Hide panel**. **Open in a terminal** runs `claude --resume <id>` or
+`codex resume <id>`.
 
 A conversation opened in a terminal stays readable in the panel but takes no
-more messages there, because two Claude Code processes must never write one
-conversation. Once the terminal is done with it, continue it from the
-new-session page. A message sent while a session is still closing waits and
-goes once Claude Code has restarted.
+more messages there, because two agent processes must never write one
+conversation. Once the terminal is done with a Claude Code conversation,
+continue it from the new-session page. A message sent while a session is
+still closing waits and goes once the agent has restarted; Codex continues
+the same thread.
 
-Sessions belong to their tab and end with it, or with its window. Claude Code keeps every
-conversation in its logs, so any of them can be continued later from the
-new-session page.
+Sessions belong to their tab and end with it, or with its window. The agents
+keep every conversation in their logs, so any of them can be continued later.
 
 ## Reviewing changes
 
@@ -218,6 +268,14 @@ while you are writing one to the same session.
 
 ## How it works
 
+Each agent's protocol translates to and from the same agent-neutral events
+and commands (`agent_view/protocol.rs`), so the session, conversation, and
+panel do not know which agent they show. Tool calls are presented in Claude
+Code's vocabulary (`Bash`, `Edit`, `TodoWrite`, `AskUserQuestion`, …), which
+other protocols translate into, plus `Patch` for a change to several files.
+
+### Claude Code
+
 Termeric runs:
 
 ```text
@@ -237,16 +295,43 @@ Code does not answer the first request within 30 seconds, the session
 explains that and offers the terminal instead. The agent view was built
 against Claude Code 2.1.278 to 2.1.282 and warns about releases before 2.1.
 
-Claude Code runs in its own process group, which closing a session ends
-completely; commands it leaves running when it exits end with it. It inherits Termeric's environment except `TERMERIC_TERMINAL_ID`,
-so hooks it runs are not mistaken for a terminal's.
+### Codex
+
+Termeric runs `codex app-server`, which speaks JSON-RPC over its pipes, one
+message per line. After `initialize`, Termeric reads the account (to say
+when Codex is not signed in), `model/list`, and `skills/list`. The first
+message starts a thread (`thread/start`, or `thread/resume` to continue one)
+with the mode's approval policy and sandbox; each message is a `turn/start`
+carrying the mode's sandbox policy and the chosen model. Streamed items
+(agent text, reasoning summaries, commands, file changes, MCP tool calls,
+web searches, plan updates) become the same events as Claude Code's, and
+`turn/completed` ends the turn.
+
+Codex asks through requests the panel must answer: command and patch
+approvals, permission requests, and questions become approval cards; an MCP
+server's request for input is declined with a notice, and any other request
+is refused with an error, because a request left unanswered stalls the turn.
+Only the conversation's own thread shapes it; sub-agents' threads are
+ignored except for their requests. Turns are stopped with `turn/interrupt`,
+and a note written after declining reaches the running turn through
+`turn/steer`. The agent view was built against Codex 0.157.
+
+### Both
+
+Each agent runs in its own process group, which closing a session ends
+completely; commands it leaves running when it exits end with it. It
+inherits Termeric's environment except `TERMERIC_TERMINAL_ID`, so hooks it
+runs are not mistaken for a terminal's.
 
 The code is split so each layer can be tested without the next:
 
 | Module | Contents |
 |---|---|
 | `agent_view/event.rs` | Agent-neutral events and commands |
-| `agent_view/claude.rs` | The stream-json protocol, both directions |
+| `agent_view/agent.rs` | The agents it drives: names, modes, programs, and protocols |
+| `agent_view/protocol.rs` | What every protocol provides to a session |
+| `agent_view/claude.rs` | Claude Code's stream-json protocol, both directions |
+| `agent_view/codex.rs` | Codex's app-server protocol, both directions |
 | `agent_view/process.rs` | The process, its pipes, and bounded line reading |
 | `agent_view/session.rs` | One conversation: process, protocol, and transcript |
 | `agent_view/transcript.rs` | The conversation model the panel shows |
@@ -274,23 +359,33 @@ text is exposed for what is on screen.
 
 ## Testing
 
-`termeric/tests/fixtures/agent_view/fake_claude.py` speaks the same protocol
-without an account. Words in each prompt choose what it does: `edit`, `run`,
-`ask`, `plan`, `todo`, `agent`, `slow`, `fail`, or `crash`. Session tests run
-whole conversations through it, and it can stand in for Claude Code in the
-GUI:
+`termeric/tests/fixtures/agent_view/fake_claude.py` and `fake_codex.py`
+speak each agent's protocol without an account or any usage. Words in each
+prompt choose what they do: `edit`, `run`, `ask`, `todo`, `slow`, `fail`, or
+`crash` for both; `plan` and `agent` for Claude Code; `settings` for Codex,
+which answers with the mode and model its turn ran with. Session tests run
+whole conversations through them, and they can stand in for the real agents
+in the GUI:
 
 ```toml
 [agents.claude-code]
 program = "/path/to/termeric/termeric/tests/fixtures/agent_view/fake_claude.py"
+
+[agents.codex]
+program = "/path/to/termeric/termeric/tests/fixtures/agent_view/fake_codex.py"
 ```
 
 ## Limits
 
-- Claude Code only; Codex's app server is not driven yet.
+- Claude Code and Codex only; Gemini CLI and OpenCode run in terminals.
+- Earlier conversations are listed only for Claude Code; a Codex
+  conversation is continued with `codex resume` in a terminal.
+- Codex shows a command's output when the command ends, not while it runs,
+  and does not show Codex's plan-mode proposals.
 - No image attachments or file mentions.
 - Sessions do not survive a restart of Termeric, though their conversations
   can be continued.
 - Accessibility exposes the visible part of the conversation.
-- The protocol is not a documented contract of Claude Code; a release that
-  changes it can break the panel until Termeric follows.
+- Neither protocol is a stable contract (Claude Code's is undocumented, and
+  Codex marks its app server experimental); a release that changes one can
+  break the panel until Termeric follows.

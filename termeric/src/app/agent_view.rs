@@ -3,7 +3,7 @@
 //! The panel is docked right of the terminals and never modal: it takes
 //! keys only while it has keyboard focus, which a click in it or its shortcut
 //! gives and a click in a terminal or Escape takes back. Sessions belong to
-//! the window and end with it; Claude Code keeps their logs, so they can be
+//! the window and end with it; the agents keep their logs, so they can be
 //! continued later.
 
 use std::collections::HashSet;
@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime};
 
 use super::*;
-use crate::agent_view::event::PermissionMode;
+use crate::agent_view::agent::AgentKind;
 use crate::agent_view::history::{self, PastConversation};
 use crate::agent_view::session::{AgentProgram, AgentSession, SessionId, StartOptions};
 use crate::agent_view::transcript::{Activity, DecidedBy};
@@ -39,9 +39,9 @@ pub(super) struct AgentViewWindow {
     colors: Option<(u64, Colors)>,
     /// Earlier conversations for a folder, loaded when a page needs them.
     pub past: Option<(PathBuf, Vec<PastConversation>)>,
-    /// Whether the Claude Code executable was found, by program name.
-    /// Unset while the search is still running.
-    installed: Option<(String, bool)>,
+    /// Whether each agent's executable was found, by program name. A
+    /// program is missing while the search for it runs.
+    installed: std::collections::HashMap<String, bool>,
     /// A search for the executable is running; its answer wakes the loop.
     looking: bool,
     /// A press in the composer that may become a selection drag.
@@ -61,9 +61,9 @@ pub(super) struct AgentViewWindow {
     /// When the person last looked at each conversation, for the tab bar's
     /// done and failed badges.
     pub seen: std::collections::HashMap<SessionId, Instant>,
-    /// A folder where starting ahead of the first message failed, so it is
-    /// not retried every frame.
-    pub warm_failed: Option<PathBuf>,
+    /// An agent and folder where starting ahead of the first message
+    /// failed, so it is not retried every frame.
+    pub warm_failed: Option<(AgentKind, PathBuf)>,
 }
 
 /// What the supervisor already heard about one session.
@@ -174,11 +174,11 @@ impl AgentViewWindow {
 impl App {
     // ── Sessions ─────────────────────────────────────────────────────────
 
-    /// The Claude Code program and environment from the agent catalog.
-    pub(super) fn agent_view_program(&self) -> AgentProgram {
-        let definition = self.agents.get("claude-code");
+    /// An agent's program and environment from the agent catalog.
+    pub(super) fn agent_view_program(&self, agent: AgentKind) -> AgentProgram {
+        let definition = self.agents.get(agent.catalog_id());
         let program = definition.map_or_else(
-            || "claude".to_owned(),
+            || agent.default_program().to_owned(),
             |definition| definition.program.clone(),
         );
         let env = definition
@@ -192,12 +192,19 @@ impl App {
         }
     }
 
-    pub(super) fn agent_view_availability(&mut self) -> AgentAvailability {
+    /// Whether `agent` can start: turned on in the agent settings and
+    /// installed.
+    pub(super) fn agent_view_availability(&mut self, agent: AgentKind) -> AgentAvailability {
         use crate::agent_view::process::{Lookup, find_program};
-        let program = self.agent_view_program().program;
-        if let Some((known, installed)) = &self.agent_view.installed
-            && *known == program
+        if self
+            .agents
+            .get(agent.catalog_id())
+            .is_some_and(|definition| !definition.enabled)
         {
+            return AgentAvailability::Disabled;
+        }
+        let program = self.agent_view_program(agent).program;
+        if let Some(installed) = self.agent_view.installed.get(&program) {
             return if *installed {
                 AgentAvailability::Ready
             } else {
@@ -212,7 +219,7 @@ impl App {
                 return AgentAvailability::Looking;
             }
         };
-        self.agent_view.installed = Some((program, installed));
+        self.agent_view.installed.insert(program, installed);
         if installed {
             AgentAvailability::Ready
         } else {
@@ -240,7 +247,17 @@ impl App {
     }
 
     pub(super) fn agent_view_new_session_info(&mut self) -> NewSessionInfo {
-        let availability = self.agent_view_availability();
+        let agent = self.agent_view.state.new_session.agent;
+        let agents: Vec<(AgentKind, AgentAvailability)> = AgentKind::ALL
+            .into_iter()
+            .map(|kind| (kind, self.agent_view_availability(kind)))
+            .collect();
+        let availability = agents
+            .iter()
+            .find(|(kind, _)| *kind == agent)
+            .map_or(AgentAvailability::NotInstalled, |(_, availability)| {
+                *availability
+            });
         let (default, source) = self.agent_view_default_cwd();
         let (cwd, cwd_source) = match &self.agent_view.state.new_session.cwd {
             Some(cwd) if *cwd != default => (cwd.clone(), "Chosen folder".to_owned()),
@@ -261,7 +278,9 @@ impl App {
             cwd,
             cwd_source,
             cwd_choices,
+            agent,
             availability,
+            agents,
         }
     }
 
@@ -305,7 +324,7 @@ impl App {
     }
 
     /// Starts a session from the new-session page, or continues an earlier
-    /// conversation. Returns whether it started.
+    /// Claude Code conversation. Returns whether it started.
     pub(super) fn start_agent_session(&mut self, resume: Option<(String, String)>) -> bool {
         self.bind_agent_view_to_active_tab();
         let info = self.agent_view_new_session_info();
@@ -317,16 +336,33 @@ impl App {
             .text()
             .trim()
             .to_owned();
-        // A session already started for this folder takes the message.
+        // Earlier conversations are Claude Code's; see `lists_history`.
+        let agent = if resume.is_some() {
+            AgentKind::ClaudeCode
+        } else {
+            info.agent
+        };
+        // A session already started for this agent and folder takes the
+        // message.
         if let Some(id) = self.agent_view.state.active
             && let Some(session) = self.agent_view.session(id)
             && session.is_blank()
         {
-            if resume.is_none() && session.cwd() == info.cwd {
+            if resume.is_none() && session.cwd() == info.cwd && session.agent() == agent {
                 return self.send_first_agent_message(id, &prompt);
             }
             self.end_agent_session(id);
         }
+        let form = &self.agent_view.state.new_session;
+        // A form set up for another agent says nothing about this one.
+        let (mode, model) = if agent == form.agent {
+            (
+                form.mode_id(),
+                form.model.clone().filter(|model| model != "default"),
+            )
+        } else {
+            (agent.default_mode().to_owned(), None)
+        };
         // A tab holds one conversation; another one gets a tab of its own.
         if self.agent_view_conversation().is_some() {
             let layout = self.agent_view.state.layout;
@@ -335,15 +371,15 @@ impl App {
             }
             self.open_agent_view(true);
         }
-        let form = &self.agent_view.state.new_session;
         let options = StartOptions {
+            agent,
             cwd: info.cwd.clone(),
-            mode: form.mode,
-            model: form.model.clone().filter(|model| model != "default"),
+            mode,
+            model,
             resume,
             allow_bypass: self.config.agent_view.allow_bypass_permissions,
         };
-        let program = self.agent_view_program();
+        let program = self.agent_view_program(agent);
         match AgentSession::start(program, options, super::agent_view_event_waker()) {
             Ok(session) => {
                 let id = session.id();
@@ -370,6 +406,7 @@ impl App {
             return false;
         };
         let cwd = session.cwd().to_path_buf();
+        let agent = session.agent();
         if !prompt.is_empty()
             && let Err(error) = session.prompt(prompt, Vec::new())
         {
@@ -377,7 +414,7 @@ impl App {
             return false;
         }
         let mut tracking = crate::agents::changes::ChangeTracking::default();
-        tracking.start_capture(("claude-code", None), Some(cwd));
+        tracking.start_capture((agent.catalog_id(), None), Some(cwd));
         self.agent_view.tracking.insert(id, tracking);
         self.agent_view.state.new_session.composer.clear();
         self.agent_view.state.show(id);
@@ -395,7 +432,7 @@ impl App {
     /// Drains every session's output; redraws when anything changed.
     pub(super) fn process_agent_view_events(&mut self) {
         if std::mem::take(&mut self.agent_view.looking) {
-            // The search for Claude Code may have finished.
+            // The search for an agent's program may have finished.
             self.request_agent_view_redraw();
         }
         let mut changed = false;
@@ -538,28 +575,34 @@ impl App {
     /// Tells the person, once per request, when a session needs them and
     /// they cannot see it.
     fn announce_agent_view_attention(&mut self) {
-        let waiting: Vec<(SessionId, String)> = self
+        let waiting: Vec<(SessionId, String, String)> = self
             .agent_view
             .sessions
             .iter()
             .filter(|session| session.activity() == Activity::NeedsYou)
-            .map(|session| (session.id(), session.title()))
+            .map(|session| {
+                (
+                    session.id(),
+                    format!("{} needs you", session.agent().name()),
+                    session.title(),
+                )
+            })
             .collect();
         self.agent_view
             .announced
-            .retain(|id| waiting.iter().any(|(waiting, _)| waiting == id));
+            .retain(|id| waiting.iter().any(|(waiting, ..)| waiting == id));
         let visible = |app: &App, id: SessionId| {
             app.window_focused
                 && app.agent_view.state.is_open()
                 && app.agent_view.state.screen == Screen::Conversation
                 && app.agent_view.state.active == Some(id)
         };
-        for (id, title) in waiting {
+        for (id, summary, title) in waiting {
             if self.agent_view.announced.contains(&id) || visible(self, id) {
                 continue;
             }
             self.agent_view.announced.insert(id);
-            self.notify_agent_view(&title);
+            self.notify_agent_view(&summary, &title);
         }
     }
 
@@ -722,7 +765,14 @@ impl App {
                     ),
                     _ => new_session.cwd.clone(),
                 };
-                self.agent_view_past(&cwd, false)
+                // Earlier conversations are Claude Code's: a page starting
+                // another agent does not offer them.
+                let screen = self.agent_view.state.screen;
+                if screen == Screen::Sessions || new_session.agent.lists_history() {
+                    self.agent_view_past(&cwd, false)
+                } else {
+                    Vec::new()
+                }
             }
             Screen::Conversation => Vec::new(),
         };
@@ -888,23 +938,26 @@ impl App {
     pub(super) fn new_agent_session_page(&mut self) {
         self.bind_agent_view_to_active_tab();
         if let Some(id) = self.agent_view_conversation() {
-            let cwd = self
+            let (cwd, agent) = self
                 .agent_view
                 .session(id)
-                .map(|session| session.cwd().to_path_buf())
+                .map(|session| (session.cwd().to_path_buf(), session.agent()))
                 .expect("the conversation exists");
             let layout = self.agent_view.state.layout;
             if !self.open_agent_view_tab(&cwd, layout) {
                 return;
             }
+            // Another conversation with the same agent, unless the person
+            // picks another.
+            self.agent_view.state.new_session.choose_agent(agent);
         }
         self.open_agent_view(true);
         self.agent_view.state.screen = Screen::NewSession;
         self.agent_view.state.new_session.cwd = None;
         self.agent_view.state.menu = None;
-        // Look again: Claude Code may have been installed, and conversations
+        // Look again: an agent may have been installed, and conversations
         // finished, since the page last showed.
-        self.agent_view.installed = None;
+        self.agent_view.installed.clear();
         self.agent_view.past = None;
         self.request_agent_view_redraw();
     }
@@ -916,8 +969,13 @@ impl App {
             session.set_bypass_allowed(allowed);
         }
         let form = &mut self.agent_view.state.new_session;
-        if !allowed && form.mode.skips_every_check() {
-            form.mode = PermissionMode::AskBeforeEdits;
+        let unrestricted = form
+            .agent
+            .modes()
+            .iter()
+            .any(|mode| mode.unrestricted && Some(&mode.id) == form.mode.as_ref());
+        if !allowed && unrestricted {
+            form.mode = None;
         }
         // The mode menu reads the setting each frame; an open panel shows
         // the change on its next one.
@@ -926,8 +984,9 @@ impl App {
         }
     }
 
-    /// Ends a session and removes it from the panel. Claude Code keeps the
-    /// conversation, so it is offered under earlier conversations again.
+    /// Ends a session and removes it from the panel. The agent keeps the
+    /// conversation; Claude Code's are offered under earlier conversations
+    /// again.
     pub(super) fn end_agent_session(&mut self, id: SessionId) {
         let window = &mut self.agent_view;
         let Some(index) = window
@@ -1105,7 +1164,7 @@ impl App {
                 };
                 AgentRow {
                     identity: AgentOrigin::AgentView(session.id()),
-                    name: format!("Claude Code · {}", session.title()),
+                    name: format!("{} · {}", session.agent().name(), session.title()),
                     place: "Agent view".to_owned(),
                     state,
                     summary: format!(
@@ -1196,37 +1255,42 @@ impl App {
         })
     }
 
-    pub(super) fn notify_agent_view(&mut self, title: &str) {
+    pub(super) fn notify_agent_view(&mut self, summary: &str, title: &str) {
         if !self.config.agent_status.notify {
             return;
         }
-        if let Some(error) = self.notifications.notify("Claude Code needs you", title) {
+        if let Some(error) = self.notifications.notify(summary, title) {
             self.toasts.error(error);
         }
     }
 
-    /// Continues the shown conversation, or starts Claude Code, in a new
-    /// terminal tab.
+    /// Continues the shown conversation, or starts the chosen agent, in a
+    /// new terminal tab.
     pub(super) fn open_agent_view_in_terminal(&mut self) {
-        let Some(agent) = self
-            .agents
-            .get("claude-code")
-            .filter(|agent| agent.enabled)
-            .cloned()
-        else {
-            self.toasts
-                .error("Claude Code is disabled in the agent settings");
-            return;
-        };
-        let (cwd, resume) = match (self.agent_view.state.screen, self.agent_view.state.active) {
+        let (kind, cwd, resume) = match (self.agent_view.state.screen, self.agent_view.state.active)
+        {
             (Screen::Conversation, Some(id)) => match self.agent_view.session(id) {
                 Some(session) => (
+                    session.agent(),
                     session.cwd().to_path_buf(),
                     session.conversation_id().map(str::to_owned),
                 ),
                 None => return,
             },
-            _ => (self.agent_view_new_session_info().cwd, None),
+            _ => {
+                let info = self.agent_view_new_session_info();
+                (info.agent, info.cwd, None)
+            }
+        };
+        let Some(agent) = self
+            .agents
+            .get(kind.catalog_id())
+            .filter(|agent| agent.enabled)
+            .cloned()
+        else {
+            self.toasts
+                .error(format!("{} is disabled in the agent settings", kind.name()));
+            return;
         };
         let context = self.build_plugin_context();
         let cwd_text = cwd.display().to_string();
@@ -1236,7 +1300,7 @@ impl App {
                 if let (Some(resume), crate::plugin::PluginAction::OpenTab { args, .. }) =
                     (resume, &mut action)
                 {
-                    args.extend(["--resume".to_owned(), resume]);
+                    args.extend(kind.resume_args(&resume));
                     // Two processes must not write one conversation.
                     if let Some(session) = self.agent_view.active_session_mut() {
                         session.hand_off();
@@ -1302,8 +1366,8 @@ impl App {
                     tab_id: 0,
                     pane_id: 0,
                     session_id: Some(session.id().control_id()),
-                    agent_id: "claude-code".to_owned(),
-                    name: "Claude Code".to_owned(),
+                    agent_id: session.agent().catalog_id().to_owned(),
+                    name: session.agent().name().to_owned(),
                     tab_title: printable_within(
                         &format!("Agent view: {}", session.title()),
                         MAX_METADATA_BYTES,
@@ -1343,6 +1407,7 @@ impl App {
         let session = self.agent_view.session(id).expect("the id was just found");
         let transcript = session.transcript();
         Ok(crate::agent_view::present::conversation_text(
+            session.agent().short_name(),
             transcript.items(),
             transcript.approvals(),
             session.cwd(),
@@ -1450,7 +1515,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_view::event::{AgentEvent, ApprovalRequest, Handshake, PermissionMode};
+    use crate::agent_view::event::{AgentEvent, ApprovalRequest, Handshake};
     use crate::agent_view::transcript::Transcript;
     use crate::control::protocol::AgentState;
 
@@ -1463,7 +1528,7 @@ mod tests {
     /// `r1` to run `command`.
     fn app_with_session_waiting_on(prompt: &str, command: &str) -> (App, SessionId) {
         let mut app = App::new_headless(crate::config::Config::default()).unwrap();
-        let mut transcript = Transcript::new(PermissionMode::AskBeforeEdits);
+        let mut transcript = Transcript::new("Claude Code", "default");
         transcript.apply(AgentEvent::Ready(Handshake::default()));
         transcript.push_user(prompt.into(), Vec::new());
         transcript.apply(AgentEvent::ApprovalRequested(ApprovalRequest {
@@ -1553,36 +1618,40 @@ mod tests {
     #[test]
     fn bypass_permissions_needs_the_opt_in_and_ends_with_it() {
         let (mut app, id) = app_with_waiting_session();
-        let mode = |app: &App| app.agent_view.session(id).unwrap().transcript().mode();
+        let mode = |app: &App| {
+            app.agent_view
+                .session(id)
+                .unwrap()
+                .transcript()
+                .mode()
+                .to_owned()
+        };
         app.agent_view
             .session_mut(id)
             .unwrap()
-            .set_mode(PermissionMode::BypassPermissions);
-        assert_eq!(mode(&app), PermissionMode::AskBeforeEdits);
+            .set_mode("bypassPermissions");
+        assert_eq!(mode(&app), "default");
 
         app.config.agent_view.allow_bypass_permissions = true;
         app.sync_agent_view_config();
         app.agent_view
             .session_mut(id)
             .unwrap()
-            .set_mode(PermissionMode::BypassPermissions);
-        assert_eq!(mode(&app), PermissionMode::BypassPermissions);
-        app.agent_view.state.new_session.mode = PermissionMode::BypassPermissions;
+            .set_mode("bypassPermissions");
+        assert_eq!(mode(&app), "bypassPermissions");
+        app.agent_view.state.new_session.mode = Some("bypassPermissions".into());
 
         app.config.agent_view.allow_bypass_permissions = false;
         app.sync_agent_view_config();
-        assert_eq!(mode(&app), PermissionMode::AskBeforeEdits);
-        assert_eq!(
-            app.agent_view.state.new_session.mode,
-            PermissionMode::AskBeforeEdits
-        );
+        assert_eq!(mode(&app), "default");
+        assert_eq!(app.agent_view.state.new_session.mode, None);
     }
 
     #[test]
     fn the_command_menu_takes_arrows_tab_and_escape_while_it_shows() {
         use winit::keyboard::{Key, NamedKey};
         let mut app = App::new_headless(crate::config::Config::default()).unwrap();
-        let mut transcript = Transcript::new(PermissionMode::AskBeforeEdits);
+        let mut transcript = Transcript::new("Claude Code", "default");
         transcript.apply(AgentEvent::Ready(Handshake {
             commands: ["compact", "context", "review"]
                 .into_iter()

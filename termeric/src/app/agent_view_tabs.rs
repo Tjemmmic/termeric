@@ -10,6 +10,7 @@ use std::collections::HashSet;
 use std::time::Instant;
 
 use super::*;
+use crate::agent_view::agent::AgentKind;
 use crate::agent_view::session::{AgentSession, SessionId, StartOptions};
 use crate::agent_view::transcript::Activity;
 use crate::agents::AgentBadge;
@@ -168,7 +169,7 @@ impl App {
     /// Opens a new tab in the focused terminal's folder with the agent view
     /// on its new-session page, where earlier conversations can also be
     /// continued.
-    pub(super) fn open_agent_in_view(&mut self, layout: Layout) {
+    pub(super) fn open_agent_in_view(&mut self, agent: AgentKind, layout: Layout) {
         let (cwd, _) = self.agent_view_default_cwd();
         if !self.open_agent_view_tab(&cwd, layout) {
             return;
@@ -176,6 +177,7 @@ impl App {
         self.open_agent_view(true);
         self.agent_view.state.screen = Screen::NewSession;
         self.agent_view.state.new_session.cwd = None;
+        self.agent_view.state.new_session.choose_agent(agent);
         self.request_agent_view_redraw();
     }
 
@@ -194,7 +196,7 @@ impl App {
 
     /// Starts a session ahead of the first message on a new-session page
     /// that has the keyboard, so the agent's commands and models are ready.
-    /// A session started for another folder ends first.
+    /// A session started for another agent or folder ends first.
     pub(super) fn ensure_agent_view_warm_session(&mut self) {
         let state = &self.agent_view.state;
         if !state.is_open()
@@ -205,29 +207,31 @@ impl App {
             return;
         }
         let cwd = self.agent_view_new_session_info().cwd;
+        let agent = self.agent_view.state.new_session.agent;
         if let Some(id) = self.agent_view.state.active {
             match self.agent_view.session(id) {
                 Some(session) if !session.is_blank() => return,
-                Some(session) if session.cwd() == cwd => return,
+                Some(session) if session.cwd() == cwd && session.agent() == agent => return,
                 Some(_) => self.end_agent_session(id),
                 None => self.agent_view.state.active = None,
             }
         }
-        if self.agent_view.warm_failed.as_ref() == Some(&cwd)
-            || self.agent_view_availability() != AgentAvailability::Ready
+        if self.agent_view.warm_failed.as_ref() == Some(&(agent, cwd.clone()))
+            || self.agent_view_availability(agent) != AgentAvailability::Ready
         {
             return;
         }
         let form = &self.agent_view.state.new_session;
         let options = StartOptions {
+            agent: form.agent,
             cwd: cwd.clone(),
-            mode: form.mode,
+            mode: form.mode_id(),
             model: form.model.clone().filter(|model| model != "default"),
             resume: None,
             allow_bypass: self.config.agent_view.allow_bypass_permissions,
         };
         match AgentSession::start(
-            self.agent_view_program(),
+            self.agent_view_program(agent),
             options,
             super::agent_view_event_waker(),
         ) {
@@ -236,9 +240,10 @@ impl App {
                 self.agent_view.sessions.push(session);
             }
             Err(error) => {
-                // Said once per folder; a message then reports it again.
+                // Said once per agent and folder; a message then reports it
+                // again.
                 log::warn!("agent view: could not start ahead of a message: {error}");
-                self.agent_view.warm_failed = Some(cwd);
+                self.agent_view.warm_failed = Some((agent, cwd));
             }
         }
     }
@@ -360,7 +365,7 @@ impl App {
                 };
                 let title = (open && layout == Layout::Full).then(|| {
                     if session.is_blank() {
-                        "Claude Code".to_owned()
+                        session.agent().name().to_owned()
                     } else {
                         session.title()
                     }
@@ -385,7 +390,7 @@ impl App {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use crate::agent_view::event::{AgentEvent, Handshake, PermissionMode};
+    use crate::agent_view::event::{AgentEvent, Handshake};
     use crate::agent_view::transcript::Transcript;
     use crate::config::{Config, ShellConfig};
 
@@ -421,7 +426,7 @@ mod tests {
 
     /// Shows a new conversation in the active tab's panel.
     fn converse(app: &mut App, prompt: &str) -> SessionId {
-        let mut transcript = Transcript::new(PermissionMode::AskBeforeEdits);
+        let mut transcript = Transcript::new("Claude Code", "default");
         transcript.apply(AgentEvent::Ready(Handshake::default()));
         transcript.push_user(prompt.into(), Vec::new());
         let session = AgentSession::detached(std::env::temp_dir(), transcript);
@@ -632,5 +637,71 @@ mod tests {
         assert_eq!(app.agent_view.state.screen, Screen::Conversation);
         assert!(!app.agent_view.session(warm).unwrap().is_blank());
         assert_eq!(app.agent_view.sessions.len(), 1);
+    }
+
+    #[test]
+    fn choosing_another_agent_starts_it_ahead_instead() {
+        if crate::agents::find_executable("python3").is_none() {
+            return;
+        }
+        let fixture = |name: &str| {
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/agent_view")
+                .join(name)
+                .display()
+                .to_string()
+        };
+        let mut config = Config::default();
+        for (id, script, delay) in [
+            ("claude-code", "fake_claude.py", "FAKE_CLAUDE_DELAY"),
+            ("codex", "fake_codex.py", "FAKE_CODEX_DELAY"),
+        ] {
+            config.agents.insert(
+                id.into(),
+                crate::agents::AgentConfig {
+                    program: Some(fixture(script)),
+                    env: [(delay.to_owned(), "0".to_owned())].into(),
+                    ..Default::default()
+                },
+            );
+        }
+        let mut app = two_tabs(config);
+        app.open_agent_view(true);
+        app.ensure_agent_view_warm_session();
+        let claude = app.agent_view.state.active.unwrap();
+        assert_eq!(
+            app.agent_view.session(claude).unwrap().agent(),
+            AgentKind::ClaudeCode
+        );
+
+        app.activate_agent_view_target(crate::ui::agent_view::scene::Target::ChooseAgent(
+            AgentKind::Codex,
+        ));
+        app.ensure_agent_view_warm_session();
+        assert!(app.agent_view.session(claude).is_none());
+        let codex = app.agent_view.state.active.unwrap();
+        assert_eq!(
+            app.agent_view.session(codex).unwrap().agent(),
+            AgentKind::Codex
+        );
+
+        app.agent_view
+            .state
+            .new_session
+            .composer
+            .insert("hello there");
+        assert!(app.start_agent_session(None));
+        assert_eq!(app.agent_view.state.active, Some(codex));
+        let row = &app.agent_view_rows()[0];
+        assert_eq!(row.name, "Codex · hello there");
+        let summary = &app.agent_view_summaries(1)[0];
+        assert_eq!(
+            (summary.agent_id.as_str(), summary.name.as_str()),
+            ("codex", "Codex")
+        );
+
+        // Another conversation from this tab starts with the same agent.
+        app.new_agent_session_page();
+        assert_eq!(app.agent_view.state.new_session.agent, AgentKind::Codex);
     }
 }

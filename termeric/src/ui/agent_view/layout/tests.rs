@@ -4,6 +4,7 @@ use std::time::Instant;
 use serde_json::json;
 
 use super::*;
+use crate::agent_view::agent::AgentKind;
 use crate::agent_view::event::{
     AgentEvent, ApprovalRequest, AssistantMessage, ContentBlock, Handshake, RememberOption, Thread,
     ToolResult, TurnOutcome,
@@ -30,7 +31,12 @@ fn new_session_info() -> NewSessionInfo {
         cwd: PathBuf::from("/home/me/dev/termeric"),
         cwd_source: "From the focused terminal".into(),
         cwd_choices: vec![PathBuf::from("/home/me/dev/other")],
+        agent: AgentKind::ClaudeCode,
         availability: AgentAvailability::Ready,
+        agents: vec![
+            (AgentKind::ClaudeCode, AgentAvailability::Ready),
+            (AgentKind::Codex, AgentAvailability::NotInstalled),
+        ],
     }
 }
 
@@ -113,7 +119,7 @@ fn result(transcript: &mut Transcript, id: &str) {
 
 /// A conversation with exploration, an edit, and a command awaiting approval.
 fn busy_session() -> AgentSession {
-    let mut transcript = Transcript::new(PermissionMode::AskBeforeEdits);
+    let mut transcript = Transcript::new("Claude Code", "default");
     transcript.apply(AgentEvent::Ready(Handshake::default()));
     transcript.push_user("Fix the scrollbar capture test.".into(), Vec::new());
     message(
@@ -332,7 +338,7 @@ fn scrolling_away_offers_a_way_back_and_hides_offscreen_text() {
 
 #[test]
 fn an_open_menu_lists_its_choices_above_everything() {
-    let mut transcript = Transcript::new(PermissionMode::AskBeforeEdits);
+    let mut transcript = Transcript::new("Claude Code", "default");
     transcript.apply(AgentEvent::Ready(Handshake {
         models: vec![crate::agent_view::event::ModelChoice {
             value: "sonnet".into(),
@@ -354,28 +360,26 @@ fn an_open_menu_lists_its_choices_above_everything() {
         .hits
         .iter()
         .filter_map(|hit| match &hit.target {
-            Target::Menu(MenuAction::SetMode(mode)) => Some((*mode, hit.role)),
+            Target::Menu(MenuAction::SetMode(mode)) => Some((mode.clone(), hit.role)),
             _ => None,
         })
         .collect();
     // Every mode but the one that skips every check, which needs an opt-in.
     assert_eq!(
-        modes.iter().map(|(mode, _)| *mode).collect::<Vec<_>>(),
-        PermissionMode::selectable(false)
+        modes
+            .iter()
+            .map(|(mode, _)| mode.as_str())
+            .collect::<Vec<_>>(),
+        ["default", "acceptEdits", "plan", "auto", "dontAsk"]
     );
     assert_eq!(modes.len(), 5);
     assert_eq!(
         modes[0],
-        (
-            PermissionMode::AskBeforeEdits,
-            HitRole::MenuItem { checked: true }
-        )
+        ("default".to_owned(), HitRole::MenuItem { checked: true })
     );
     // The menu sits above its anchor, since the composer is low in the panel.
     let first = scene
-        .hit_for(&Target::Menu(MenuAction::SetMode(
-            PermissionMode::AskBeforeEdits,
-        )))
+        .hit_for(&Target::Menu(MenuAction::SetMode("default".into())))
         .unwrap();
     assert!(first.bounds.bottom() <= 820.0);
     assert_eq!(
@@ -432,7 +436,7 @@ fn an_open_menu_lists_its_choices_above_everything() {
     );
     assert_eq!(
         opted_in.last().map(|item| item.action.clone()),
-        Some(MenuAction::SetMode(PermissionMode::BypassPermissions))
+        Some(MenuAction::SetMode("bypassPermissions".into()))
     );
     assert_eq!(items[0].text, "Sonnet 5");
 }
@@ -440,7 +444,7 @@ fn an_open_menu_lists_its_choices_above_everything() {
 #[test]
 fn the_sessions_page_groups_by_what_needs_attention() {
     let waiting = busy_session();
-    let mut done = Transcript::new(PermissionMode::AskBeforeEdits);
+    let mut done = Transcript::new("Claude Code", "default");
     done.apply(AgentEvent::Ready(Handshake::default()));
     done.push_user("Summarize the diff".into(), Vec::new());
     message(
@@ -517,7 +521,7 @@ fn the_model_chip_names_the_chosen_model() {
     state.new_session.model = Some("haiku".into());
     assert_eq!(chip(&state, &[]), "Model: Haiku");
     // Once any session has listed the account's models, their names apply.
-    let mut transcript = Transcript::new(PermissionMode::AskBeforeEdits);
+    let mut transcript = Transcript::new("Claude Code", "default");
     transcript.apply(AgentEvent::Ready(Handshake {
         models: vec![ModelChoice {
             value: "haiku".into(),
@@ -555,7 +559,7 @@ fn caret_movement_follows_text_changed_since_the_last_frame() {
 }
 
 fn session_with_commands(prompt: Option<&str>) -> AgentSession {
-    let mut transcript = Transcript::new(PermissionMode::AskBeforeEdits);
+    let mut transcript = Transcript::new("Claude Code", "default");
     transcript.apply(AgentEvent::Ready(Handshake {
         commands: ["compact", "context", "review"]
             .into_iter()
@@ -658,4 +662,125 @@ fn a_supervisor_message_waits_as_a_card_in_its_conversation_only() {
     };
     assert_eq!(decisions(&open_on(&supervisor)), (true, true, true));
     assert_eq!(decisions(&open_on(&worker)), (false, false, false));
+}
+
+fn new_session_input<'a>(
+    state: &'a AgentViewState,
+    sessions: &'a [&'a AgentSession],
+    colors: &'a Colors,
+    agents: Vec<(AgentKind, AgentAvailability)>,
+) -> Input<'a> {
+    Input {
+        panel: PANEL,
+        scale: 1.0,
+        now: Instant::now() + std::time::Duration::from_secs(1),
+        colors,
+        state,
+        sessions,
+        suggestions: Suggestions::default(),
+        banner: None,
+        terminal_agents: &[],
+        past: &[],
+        supervisor: None,
+        new_session: NewSessionInfo {
+            agent: state.new_session.agent,
+            agents,
+            ..new_session_info()
+        },
+        home: Some(PathBuf::from("/home/me")),
+        allow_bypass: false,
+        supervisor_request: None,
+    }
+}
+
+#[test]
+fn the_new_session_page_chooses_among_the_agents_it_drives() {
+    use AgentAvailability::{NotInstalled, Ready};
+    use AgentKind::{ClaudeCode, Codex};
+    let colors = colors();
+    let mut state = AgentViewState::default();
+    state.open();
+    state.set_keyboard(true);
+    let role = |scene: &Scene, agent| {
+        scene
+            .hit_for(&Target::ChooseAgent(agent))
+            .map(|hit| hit.role)
+    };
+    let both = vec![(ClaudeCode, Ready), (Codex, Ready)];
+    let scene = build(
+        &new_session_input(&state, &[], &colors, both.clone()),
+        &mut measure(),
+    );
+    assert_unique_targets(&scene);
+    assert_eq!(
+        role(&scene, ClaudeCode),
+        Some(HitRole::Option { selected: true })
+    );
+    assert_eq!(
+        role(&scene, Codex),
+        Some(HitRole::Option { selected: false })
+    );
+    // An agent that cannot start is shown with the reason, not offered.
+    let scene = build(
+        &new_session_input(
+            &state,
+            &[],
+            &colors,
+            vec![(ClaudeCode, Ready), (Codex, NotInstalled)],
+        ),
+        &mut measure(),
+    );
+    assert_eq!(role(&scene, Codex), None);
+
+    // Another agent's mode and model mean nothing to Codex.
+    state.new_session.mode = Some("plan".into());
+    state.new_session.model = Some("haiku".into());
+    state.new_session.choose_agent(Codex);
+    assert_eq!(
+        (
+            state.new_session.mode.as_deref(),
+            state.new_session.model.as_deref()
+        ),
+        (None, None)
+    );
+    assert_eq!(state.new_session.mode_id(), "read-only");
+    // A Claude session's models are not Codex's.
+    let mut transcript = Transcript::new("Claude Code", "default");
+    transcript.apply(AgentEvent::Ready(Handshake {
+        models: vec![ModelChoice {
+            value: "haiku".into(),
+            display_name: "Haiku 4.5".into(),
+            description: String::new(),
+        }],
+        ..Handshake::default()
+    }));
+    let claude = AgentSession::detached(PathBuf::from("/home/me"), transcript);
+    let sessions = [&claude];
+    let input = new_session_input(&state, &sessions, &colors, both);
+    let scene = build(&input, &mut measure());
+    assert_eq!(
+        role(&scene, Codex),
+        Some(HitRole::Option { selected: true })
+    );
+    assert_eq!(
+        scene.hit_for(&Target::Composer).unwrap().label,
+        "Message Codex"
+    );
+    let models: Vec<MenuAction> = menu_items(&input, MenuKind::Model)
+        .into_iter()
+        .map(|item| item.action)
+        .collect();
+    assert_eq!(models, [MenuAction::SetModel("default".into())]);
+    let modes: Vec<MenuAction> = menu_items(&input, MenuKind::Mode)
+        .into_iter()
+        .map(|item| item.action)
+        .collect();
+    // Full access waits for the opt-in.
+    assert_eq!(
+        modes,
+        [
+            MenuAction::SetMode("read-only".into()),
+            MenuAction::SetMode("auto".into())
+        ]
+    );
 }

@@ -8201,14 +8201,14 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_moved_tab_takes_its_agent_view_conversation_to_the_next_window() {
-        use crate::agent_view::event::{AgentEvent, Handshake, PermissionMode};
+        use crate::agent_view::event::{AgentEvent, Handshake};
         use crate::agent_view::session::AgentSession;
         use crate::agent_view::transcript::Transcript;
         if !std::path::Path::new("/bin/sh").is_file() {
             return;
         }
         let (mut source, mut destination, _) = pane_transfer_fixture();
-        let mut transcript = Transcript::new(PermissionMode::AskBeforeEdits);
+        let mut transcript = Transcript::new("Claude Code", "default");
         transcript.apply(AgentEvent::Ready(Handshake::default()));
         transcript.push_user("fix the build".into(), Vec::new());
         let session = AgentSession::detached(std::env::temp_dir(), transcript);

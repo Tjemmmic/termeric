@@ -9,8 +9,8 @@ Versioning once public beta tags begin.
 ### Added
 
 - The agent view (experimental). **Agent View** (Ctrl+Shift+A) opens a panel
-  beside the terminals where Claude Code works in a conversation instead of a
-  terminal: streamed answers, edit diffs, command output, to-dos, and
+  beside the terminals where Claude Code or Codex works in a conversation
+  instead of a terminal: streamed answers, edit diffs, command output, to-dos, and
   sub-agents, with approvals, questions, and plans answered by buttons. The
   message box queues follow-ups, attaches the terminal selection or the last
   command's output, and lists Claude Code's own commands when a message starts
@@ -19,7 +19,11 @@ Versioning once public beta tags begin.
   in Settings. Earlier conversations can be continued, sessions can be handed
   to a terminal, and the supervisor oversees sessions through GUI control
   protocol v23 (`read_conversation`, `answer_approval`, `send_to_session`).
-  See [agent view](docs/agent-view.md).
+  Codex runs through its app server with its own modes (Ask before changes,
+  Auto, and Full access behind the same opt-in), models, skills, `/compact`,
+  and `/review`; the new-session page chooses the agent, and **Open Agents
+  In** opens either one from **New Agent…**. See
+  [agent view](docs/agent-view.md).
 
 - **Clear Scrollback** and **Reset Terminal** are in the command palette.
   Neither had an entry or a default shortcut before.

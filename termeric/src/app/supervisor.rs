@@ -219,7 +219,7 @@ impl App {
             &supervisor::instructions(config.mode, &rules),
         )
         .ok_or_else(|| format!("{} cannot be a supervisor", agent.name))?;
-        let base = self.agent_view_program();
+        let base = self.agent_view_program(crate::agent_view::agent::AgentKind::ClaudeCode);
         let program = AgentProgram {
             program: base.program,
             args: base.args.into_iter().chain(extra).collect(),
@@ -228,7 +228,8 @@ impl App {
         let (cwd, _) = self.agent_view_default_cwd();
         let options = StartOptions {
             cwd: cwd.clone(),
-            mode: crate::agent_view::event::PermissionMode::AskBeforeEdits,
+            agent: crate::agent_view::agent::AgentKind::ClaudeCode,
+            mode: crate::agent_view::claude::ASK_MODE.into(),
             model: None,
             resume: None,
             allow_bypass: false,
@@ -655,7 +656,10 @@ impl App {
             && self.agent_view.state.is_open()
             && self.agent_view.state.active == Some(supervisor.session);
         if !visible {
-            self.notify_agent_view(&format!("The supervisor wants to message {name}"));
+            self.notify_agent_view(
+                "The supervisor needs you",
+                &format!("The supervisor wants to message {name}"),
+            );
         }
         self.request_agent_view_redraw();
         Ok(true)

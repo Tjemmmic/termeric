@@ -456,7 +456,8 @@ impl App {
         else {
             return;
         };
-        // The agent view drives Claude Code; the person may prefer it.
+        // The person may prefer the agent view for the agents it drives. A
+        // profile is a terminal launch's, so it keeps the terminal.
         let in_view = match self.config.agent_view.open_agents_in {
             crate::agents::config::OpenAgentsIn::Terminal => None,
             crate::agents::config::OpenAgentsIn::Split => {
@@ -465,10 +466,11 @@ impl App {
             crate::agents::config::OpenAgentsIn::Full => Some(crate::ui::agent_view::Layout::Full),
         };
         if let Some(layout) = in_view
-            && agent.id == "claude-code"
+            && let Some(kind) = crate::agent_view::agent::AgentKind::from_catalog_id(&agent.id)
+            && profile.is_none()
             && matches!(placement, AgentPlacement::NewTab | AgentPlacement::Resume)
         {
-            self.open_agent_in_view(layout);
+            self.open_agent_in_view(kind, layout);
             return;
         }
         match placement {

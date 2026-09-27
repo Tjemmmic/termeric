@@ -7,9 +7,12 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Map, Value};
 
-use super::claude::{self, ClaudeCodec, LaunchOptions};
-use super::event::{AgentCommand, AgentEvent, ApprovalDecision, PermissionMode, model_name};
+use super::agent::{AgentKind, Launch};
+use super::event::{
+    AgentCommand, AgentEvent, ApprovalDecision, DECLINED_MESSAGE, ModeChoice, model_name,
+};
 use super::process::{AgentProcess, LaunchSpec, Lookup, ProcessOutput, SendError, Waker};
+use super::protocol::{Exchange, Protocol};
 use super::transcript::{
     Activity, Attachment, DecidedBy, Decision, NoticeKind, Transcript, compose_prompt,
 };
@@ -50,8 +53,10 @@ pub struct AgentProgram {
 /// How a session starts.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StartOptions {
+    pub agent: AgentKind,
     pub cwd: PathBuf,
-    pub mode: PermissionMode,
+    /// The id of the mode to start in, one of the agent's.
+    pub mode: String,
     pub model: Option<String>,
     /// Continue an earlier conversation: its agent session id and title.
     pub resume: Option<(String, String)>,
@@ -62,10 +67,16 @@ pub struct StartOptions {
 /// Why a session could not start.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StartError {
-    NotInstalled(String),
+    NotInstalled {
+        agent: AgentKind,
+        program: String,
+    },
     /// Termeric is still asking the login shell where programs are.
-    StillLooking,
-    Launch(String),
+    StillLooking(AgentKind),
+    Launch {
+        agent: AgentKind,
+        error: String,
+    },
     /// The conversation was handed to a terminal, which now writes it.
     ContinuedInTerminal,
 }
@@ -73,14 +84,17 @@ pub enum StartError {
 impl std::fmt::Display for StartError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            StartError::NotInstalled(program) => {
-                write!(formatter, "Claude Code ({program}) is not installed")
+            StartError::NotInstalled { agent, program } => {
+                write!(formatter, "{} ({program}) is not installed", agent.name())
             }
-            StartError::StillLooking => write!(
+            StartError::StillLooking(agent) => write!(
                 formatter,
-                "Still looking for Claude Code on your login shell's PATH; try again in a moment"
+                "Still looking for {} on your login shell's PATH; try again in a moment",
+                agent.name()
             ),
-            StartError::Launch(error) => write!(formatter, "Claude Code could not start: {error}"),
+            StartError::Launch { agent, error } => {
+                write!(formatter, "{} could not start: {error}", agent.name())
+            }
             StartError::ContinuedInTerminal => {
                 write!(formatter, "This conversation continues in a terminal")
             }
@@ -95,9 +109,11 @@ pub struct QuestionAnswer {
     pub answer: String,
 }
 
-/// A conversation with Claude Code.
+/// A conversation with an agent.
 pub struct AgentSession {
     id: SessionId,
+    /// The agent, and so the protocol, this session drives.
+    agent: AgentKind,
     title: Option<String>,
     cwd: PathBuf,
     program: AgentProgram,
@@ -115,12 +131,13 @@ pub struct AgentSession {
     resumed: Option<String>,
     /// The person opted in to the mode that skips every check.
     allow_bypass: bool,
-    codec: ClaudeCodec,
+    /// The protocol of the latest process.
+    protocol: Option<Box<dyn Protocol>>,
     transcript: Transcript,
     backlog: VecDeque<String>,
     handshake_deadline: Option<Instant>,
     /// Mode to apply once an approved plan's tool call finishes.
-    mode_after_plan: Option<(String, PermissionMode)>,
+    mode_after_plan: Option<(String, String)>,
     /// Messages written while a turn ran, sent in order as turns end.
     queued: VecDeque<(String, Vec<Attachment>)>,
     waker: Waker,
@@ -145,7 +162,19 @@ impl AgentSession {
         options: StartOptions,
         waker: Waker,
     ) -> Result<Self, StartError> {
-        let mut transcript = Transcript::new(options.mode);
+        // A mode that skips every check needs the person's opt-in, whatever
+        // asked for it.
+        let unrestricted = options
+            .agent
+            .modes()
+            .iter()
+            .any(|mode| mode.unrestricted && mode.id == options.mode);
+        let mode = if unrestricted && !options.allow_bypass {
+            options.agent.default_mode().to_owned()
+        } else {
+            options.mode
+        };
+        let mut transcript = Transcript::new(options.agent.name(), mode);
         let (title, resume) = match options.resume {
             Some((session_id, title)) => {
                 transcript.push_notice(NoticeKind::Info, "Continuing an earlier conversation");
@@ -155,6 +184,7 @@ impl AgentSession {
         };
         let mut session = Self {
             id: SessionId::next(),
+            agent: options.agent,
             title,
             cwd: options.cwd,
             program,
@@ -165,7 +195,7 @@ impl AgentSession {
             handed_off: false,
             resumed: resume.clone(),
             allow_bypass: options.allow_bypass,
-            codec: ClaudeCodec::new(),
+            protocol: None,
             transcript,
             backlog: VecDeque::new(),
             handshake_deadline: None,
@@ -179,18 +209,26 @@ impl AgentSession {
     }
 
     fn launch(&mut self, resume: Option<String>) -> Result<(), StartError> {
+        let agent = self.agent;
         let program = match super::process::find_program(&self.program.program, &self.waker) {
             Lookup::Found(program) => program,
-            Lookup::Missing => return Err(StartError::NotInstalled(self.program.program.clone())),
-            Lookup::Searching => return Err(StartError::StillLooking),
+            Lookup::Missing => {
+                return Err(StartError::NotInstalled {
+                    agent,
+                    program: self.program.program.clone(),
+                });
+            }
+            Lookup::Searching => return Err(StartError::StillLooking(agent)),
         };
-        let mut args = self.program.args.clone();
-        args.extend(claude::launch_args(&LaunchOptions {
-            mode: self.transcript.mode(),
+        let (protocol_args, protocol) = agent.connect(&Launch {
+            cwd: self.cwd.clone(),
+            mode: self.transcript.mode().to_owned(),
             model: self.model.clone(),
             resume,
             allow_bypass: self.allow_bypass,
-        }));
+        });
+        let mut args = self.program.args.clone();
+        args.extend(protocol_args);
         let spec = LaunchSpec {
             program,
             args,
@@ -198,13 +236,17 @@ impl AgentSession {
             env: self.program.env.clone(),
             env_remove: TERMINAL_ENVIRONMENT.map(String::from).to_vec(),
         };
-        let process = AgentProcess::spawn(&spec, self.waker.clone())
-            .map_err(|error| StartError::Launch(error.to_string()))?;
-        self.codec = ClaudeCodec::new();
+        let process =
+            AgentProcess::spawn(&spec, self.waker.clone()).map_err(|error| StartError::Launch {
+                agent,
+                error: error.to_string(),
+            })?;
         self.backlog.clear();
         self.process = Some(process);
-        let initialize = self.codec.initialize();
-        self.send_line(initialize);
+        let protocol = self.protocol.insert(protocol);
+        for line in protocol.start() {
+            self.send_line(line);
+        }
         self.handshake_deadline = Some(Instant::now() + HANDSHAKE_TIMEOUT);
         Ok(())
     }
@@ -215,6 +257,7 @@ impl AgentSession {
     pub fn detached(cwd: PathBuf, transcript: Transcript) -> Self {
         Self {
             id: SessionId::next(),
+            agent: AgentKind::ClaudeCode,
             title: None,
             cwd,
             program: AgentProgram {
@@ -229,7 +272,7 @@ impl AgentSession {
             handed_off: false,
             resumed: None,
             allow_bypass: false,
-            codec: ClaudeCodec::new(),
+            protocol: None,
             transcript,
             backlog: VecDeque::new(),
             handshake_deadline: None,
@@ -242,6 +285,10 @@ impl AgentSession {
 
     pub fn id(&self) -> SessionId {
         self.id
+    }
+
+    pub fn agent(&self) -> AgentKind {
+        self.agent
     }
 
     pub fn transcript(&self) -> &Transcript {
@@ -374,46 +421,36 @@ impl AgentSession {
     }
 
     fn handle_line(&mut self, line: &str) {
-        let decoded = self.codec.decode(line);
-        for reply in decoded.replies {
-            self.send_line(reply);
+        let Some(protocol) = self.protocol.as_mut() else {
+            return;
+        };
+        let exchange = protocol.decode(line);
+        self.apply(exchange);
+    }
+
+    /// Sends a protocol's lines and applies its events.
+    fn apply(&mut self, exchange: Exchange) {
+        for line in exchange.lines {
+            self.send_line(line);
         }
         let mut refused = false;
-        for event in decoded.events {
+        for event in exchange.events {
             match &event {
                 AgentEvent::Ready(_) => self.handshake_deadline = None,
                 AgentEvent::HandshakeFailed(_) => refused = true,
                 AgentEvent::Unrecognized(text) => {
                     log::debug!("agent view: unrecognized agent output: {text}");
                 }
-                AgentEvent::SessionStarted(info) => {
-                    if let Some(version) = claude::parse_version(&info.version)
-                        && version < claude::MINIMUM_VERSION
-                    {
-                        self.transcript.push_notice(
-                            NoticeKind::Warning,
-                            format!(
-                                "Claude Code {} is older than the agent view supports; \
-                                 update it if anything looks wrong",
-                                info.version
-                            ),
-                        );
+                AgentEvent::ToolResult { result, .. }
+                    if self
+                        .mode_after_plan
+                        .as_ref()
+                        .is_some_and(|(tool_use_id, _)| *tool_use_id == result.tool_use_id) =>
+                {
+                    let (_, mode) = self.mode_after_plan.take().expect("just matched");
+                    if !result.is_error {
+                        self.set_mode(&mode);
                     }
-                }
-                AgentEvent::ToolResult { result, .. } => {
-                    if let Some((tool_use_id, mode)) = &self.mode_after_plan
-                        && *tool_use_id == result.tool_use_id
-                    {
-                        let mode = *mode;
-                        self.mode_after_plan = None;
-                        if !result.is_error {
-                            self.set_mode(mode);
-                        }
-                    }
-                }
-                AgentEvent::TurnFinished(_) => {
-                    let query = self.codec.encode(&AgentCommand::QueryContextUsage);
-                    self.send_line(query);
                 }
                 _ => {}
             }
@@ -433,8 +470,11 @@ impl AgentSession {
         }
         self.transcript.push_notice(
             NoticeKind::Error,
-            "Claude Code did not answer. This version may not support the agent view; \
-             open it in a terminal instead.",
+            format!(
+                "{} did not answer. This version may not support the agent view; \
+                 open it in a terminal instead.",
+                self.agent.name()
+            ),
         );
         self.close();
     }
@@ -479,8 +519,11 @@ impl AgentSession {
     }
 
     fn command(&mut self, command: &AgentCommand) {
-        let line = self.codec.encode(command);
-        self.send_line(line);
+        let Some(protocol) = self.protocol.as_mut() else {
+            return;
+        };
+        let exchange = protocol.encode(command);
+        self.apply(exchange);
     }
 
     /// Relaunches a closed agent on the same conversation. An agent still
@@ -638,9 +681,7 @@ impl AgentSession {
             .map(str::trim)
             .filter(|message| !message.is_empty())
             .map(str::to_owned);
-        let text = note
-            .clone()
-            .unwrap_or_else(|| "The person declined this action.".to_owned());
+        let text = note.clone().unwrap_or_else(|| DECLINED_MESSAGE.to_owned());
         self.answer(
             request_id,
             ApprovalDecision::Deny {
@@ -683,7 +724,7 @@ impl AgentSession {
     }
 
     /// Approves a plan and switches to `mode` once the agent leaves planning.
-    pub fn approve_plan(&mut self, request_id: &str, mode: PermissionMode) -> bool {
+    pub fn approve_plan(&mut self, request_id: &str, mode: &str) -> bool {
         let tool_use_id = self
             .transcript
             .approval(request_id)
@@ -692,7 +733,7 @@ impl AgentSession {
             return false;
         }
         match tool_use_id {
-            Some(id) => self.mode_after_plan = Some((id, mode)),
+            Some(id) => self.mode_after_plan = Some((id, mode.to_owned())),
             None => self.set_mode(mode),
         }
         true
@@ -706,14 +747,35 @@ impl AgentSession {
         self.transcript.mark_interrupting();
     }
 
-    /// Switches the permission mode. The mode that skips every check is
-    /// refused unless the person opted in to it.
-    pub fn set_mode(&mut self, mode: PermissionMode) {
-        if mode.skips_every_check() && !self.allow_bypass {
+    /// The modes the agent offers: those it reported, else those it is
+    /// known to have.
+    pub fn modes(&self) -> Vec<ModeChoice> {
+        self.transcript
+            .handshake()
+            .map(|handshake| handshake.modes.clone())
+            .filter(|modes| !modes.is_empty())
+            .unwrap_or_else(|| self.agent.modes())
+    }
+
+    /// Whether the agent runs in a mode that asks about nothing.
+    pub fn unrestricted(&self) -> bool {
+        self.modes()
+            .iter()
+            .any(|mode| mode.unrestricted && mode.id == self.transcript.mode())
+    }
+
+    /// Switches to the mode with id `mode`. An unrestricted mode is refused
+    /// unless the person opted in to such modes.
+    pub fn set_mode(&mut self, mode: &str) {
+        let unrestricted = self
+            .modes()
+            .iter()
+            .any(|choice| choice.id == mode && choice.unrestricted);
+        if unrestricted && !self.allow_bypass {
             return;
         }
         if self.is_running() {
-            self.command(&AgentCommand::SetMode(mode));
+            self.command(&AgentCommand::SetMode(mode.to_owned()));
         }
         self.transcript.set_mode(mode);
     }
@@ -724,11 +786,12 @@ impl AgentSession {
     /// longer offers or accepts the mode.
     pub fn set_bypass_allowed(&mut self, allowed: bool) {
         self.allow_bypass = allowed;
-        if !allowed && self.transcript.mode().skips_every_check() {
+        if !allowed && self.unrestricted() {
+            let asking = self.agent.default_mode();
             if self.is_running() {
-                self.command(&AgentCommand::SetMode(PermissionMode::AskBeforeEdits));
+                self.command(&AgentCommand::SetMode(asking.to_owned()));
             }
-            self.transcript.set_mode(PermissionMode::AskBeforeEdits);
+            self.transcript.set_mode(asking);
         }
     }
 
@@ -791,7 +854,8 @@ mod tests {
             program,
             StartOptions {
                 cwd: std::env::temp_dir(),
-                mode: PermissionMode::AskBeforeEdits,
+                agent: AgentKind::ClaudeCode,
+                mode: "default".into(),
                 model: None,
                 resume: None,
                 allow_bypass: false,
@@ -824,7 +888,8 @@ mod tests {
             },
             StartOptions {
                 cwd: std::env::temp_dir(),
-                mode: PermissionMode::AskBeforeEdits,
+                agent: AgentKind::ClaudeCode,
+                mode: "default".into(),
                 model: None,
                 resume: None,
                 allow_bypass: false,
@@ -834,7 +899,10 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             error,
-            StartError::NotInstalled("/nonexistent/claude".into())
+            StartError::NotInstalled {
+                agent: AgentKind::ClaudeCode,
+                program: "/nonexistent/claude".into(),
+            }
         );
     }
 
@@ -958,9 +1026,9 @@ mod tests {
             session.activity() == Activity::NeedsYou
         });
         let request = session.transcript().approvals()[0].request_id.clone();
-        assert!(session.approve_plan(&request, PermissionMode::EditWithoutAsking));
+        assert!(session.approve_plan(&request, "acceptEdits"));
         pump_until(&mut session, |session| {
-            session.transcript().mode() == PermissionMode::EditWithoutAsking
+            session.transcript().mode() == "acceptEdits"
                 && matches!(session.activity(), Activity::Finished { .. })
         });
     }
@@ -1029,7 +1097,8 @@ mod tests {
             program,
             StartOptions {
                 cwd: std::env::temp_dir(),
-                mode: PermissionMode::AskBeforeEdits,
+                agent: AgentKind::ClaudeCode,
+                mode: "default".into(),
                 model: None,
                 resume: Some(("earlier-id".into(), "Earlier".into())),
                 allow_bypass: false,
@@ -1104,6 +1173,438 @@ mod tests {
         pump_until(&mut session, |session| {
             session.activity() == Activity::Finished { success: true }
         });
+    }
+
+    fn fake_codex() -> Option<AgentProgram> {
+        let python = crate::agents::find_executable("python3")?;
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/agent_view/fake_codex.py");
+        Some(AgentProgram {
+            program: python.display().to_string(),
+            args: vec![script.display().to_string()],
+            env: vec![("FAKE_CODEX_DELAY".into(), "0".into())],
+        })
+    }
+
+    fn start_codex(program: AgentProgram, resume: Option<(String, String)>) -> AgentSession {
+        AgentSession::start(
+            program,
+            StartOptions {
+                cwd: std::env::temp_dir(),
+                agent: AgentKind::Codex,
+                mode: "read-only".into(),
+                model: None,
+                resume,
+                allow_bypass: false,
+            },
+            Arc::new(|| {}),
+        )
+        .unwrap()
+    }
+
+    fn finished(session: &AgentSession) -> bool {
+        matches!(session.activity(), Activity::Finished { .. })
+    }
+
+    #[test]
+    fn a_codex_conversation_runs_through_the_fake_app_server() {
+        let Some(program) = fake_codex() else {
+            eprintln!("skipping: python3 is unavailable");
+            return;
+        };
+        let mut session = start_codex(program, None);
+        pump_until(&mut session, |session| {
+            session
+                .transcript()
+                .handshake()
+                .is_some_and(|handshake| handshake.models.len() > 1)
+        });
+        // The thread opens with the first message, so nothing is kept yet.
+        assert_eq!(session.conversation_id(), None);
+        let handshake = session.transcript().handshake().unwrap();
+        let models: Vec<&str> = handshake
+            .models
+            .iter()
+            .map(|model| model.value.as_str())
+            .collect();
+        assert_eq!(models, ["default", "gpt-fake-5", "gpt-fake-mini"]);
+        pump_until(&mut session, |session| {
+            let commands = &session.transcript().handshake().unwrap().commands;
+            commands.iter().any(|command| command.name == "deploy")
+        });
+        let commands: Vec<String> = session
+            .transcript()
+            .handshake()
+            .unwrap()
+            .commands
+            .iter()
+            .map(|command| command.name.clone())
+            .collect();
+        assert_eq!(commands, ["compact", "review", "deploy"]);
+        let deploy = &session.transcript().handshake().unwrap().commands[2];
+        assert_eq!(deploy.description, "Deploy the app");
+        assert_eq!(session.model_label(), "Default");
+
+        session.prompt("hello there", Vec::new()).unwrap();
+        pump_until(&mut session, |session| {
+            session.activity() == Activity::Finished { success: true }
+        });
+        assert!(
+            session
+                .transcript()
+                .last_answer()
+                .unwrap()
+                .contains("**bold**")
+        );
+        let context = session.transcript().context().unwrap();
+        assert_eq!((context.used_tokens, context.max_tokens), (64_000, 256_000));
+        let thread = session.conversation_id().unwrap().to_owned();
+        assert_eq!(session.transcript().session().unwrap().session_id, thread);
+
+        session.prompt("please fail", Vec::new()).unwrap();
+        pump_until(&mut session, finished);
+        let Some(Item::TurnEnd(end)) = session.transcript().items().last() else {
+            panic!()
+        };
+        assert!(!end.outcome.success);
+        assert_eq!(
+            end.outcome.error.as_deref(),
+            Some("The fake Codex failed on purpose. Codex's usage limit was reached.")
+        );
+    }
+
+    #[test]
+    fn codex_commands_and_patches_are_approved_and_declined() {
+        let Some(program) = fake_codex() else {
+            return;
+        };
+        let mut session = start_codex(program, None);
+        session.prompt("please run the tests", Vec::new()).unwrap();
+        pump_until(&mut session, |session| {
+            session.activity() == Activity::NeedsYou
+        });
+        let approval = session.transcript().approvals()[0].clone();
+        assert_eq!(approval.tool_name, "Bash");
+        // The login shell Codex wraps commands in is not shown.
+        assert_eq!(
+            approval.input["command"],
+            "cargo test -p termeric scrollbar"
+        );
+        assert_eq!(approval.reason.as_deref(), Some("It runs the test suite"));
+        assert_eq!(
+            approval.remember.as_ref().unwrap().label,
+            "Always allow cargo test commands"
+        );
+        assert!(session.allow(&approval.request_id, true, DecidedBy::Person));
+        pump_until(&mut session, finished);
+        assert!(
+            session
+                .transcript()
+                .last_answer()
+                .unwrap()
+                .contains("acceptWithExecpolicyAmendment"),
+            "the remembered rule reached Codex"
+        );
+        let tool = session
+            .transcript()
+            .tool(&approval.tool_use_id.clone().unwrap())
+            .unwrap();
+        assert_eq!(tool.state(false), ToolState::Succeeded);
+
+        session.prompt("edit the answer", Vec::new()).unwrap();
+        pump_until(&mut session, |session| {
+            session.activity() == Activity::NeedsYou
+        });
+        let approval = session.transcript().approvals()[0].clone();
+        assert_eq!(approval.tool_name, crate::agent_view::present::PATCH_TOOL);
+        assert_eq!(
+            crate::agent_view::present::patch_paths(&approval.input).len(),
+            2
+        );
+        // Codex takes no reason with a refusal; the note follows as input.
+        assert!(session.deny(
+            &approval.request_id,
+            Some("not now"),
+            DecidedBy::Person,
+            false
+        ));
+        pump_until(&mut session, finished);
+        assert!(
+            session
+                .transcript()
+                .last_answer()
+                .unwrap()
+                .ends_with("You said: not now")
+        );
+        let tool = session
+            .transcript()
+            .tool(&approval.tool_use_id.clone().unwrap())
+            .unwrap();
+        assert_eq!(tool.state(false), ToolState::Denied);
+        let Some(Item::TurnEnd(end)) = session.transcript().items().last() else {
+            panic!()
+        };
+        assert!(end.files_changed.is_empty());
+
+        session.prompt("edit it after all", Vec::new()).unwrap();
+        pump_until(&mut session, |session| {
+            session.activity() == Activity::NeedsYou
+        });
+        let request = session.transcript().approvals()[0].request_id.clone();
+        assert!(session.allow(&request, false, DecidedBy::Person));
+        pump_until(&mut session, finished);
+        let Some(Item::TurnEnd(end)) = session.transcript().items().last() else {
+            panic!()
+        };
+        assert_eq!(end.files_changed.len(), 2);
+    }
+
+    #[test]
+    fn a_person_denying_a_codex_change_stops_the_turn() {
+        let Some(program) = fake_codex() else {
+            return;
+        };
+        let mut session = start_codex(program, None);
+        session.prompt("edit the answer", Vec::new()).unwrap();
+        pump_until(&mut session, |session| {
+            session.activity() == Activity::NeedsYou
+        });
+        let request = session.transcript().approvals()[0].request_id.clone();
+        assert!(session.deny(&request, None, DecidedBy::Person, true));
+        pump_until(&mut session, |session| !session.transcript().turn_active());
+        assert_eq!(session.activity(), Activity::Stopped);
+    }
+
+    #[test]
+    fn codex_questions_plans_and_reasoning_reach_the_transcript() {
+        let Some(program) = fake_codex() else {
+            return;
+        };
+        let mut session = start_codex(program, None);
+        session.prompt("ask me something", Vec::new()).unwrap();
+        pump_until(&mut session, |session| {
+            session.activity() == Activity::NeedsYou
+        });
+        let approval = session.transcript().approvals()[0].clone();
+        assert_eq!(approval.tool_name, "AskUserQuestion");
+        assert!(session.answer_question(
+            &approval.request_id,
+            &[QuestionAnswer {
+                question: "Which approval style should new sessions use?".into(),
+                answer: "Auto".into(),
+            }]
+        ));
+        pump_until(&mut session, finished);
+        assert!(
+            session
+                .transcript()
+                .last_answer()
+                .unwrap()
+                .contains("**Auto**")
+        );
+
+        session.prompt("keep a todo list", Vec::new()).unwrap();
+        pump_until(&mut session, finished);
+        let todo = session
+            .transcript()
+            .items()
+            .iter()
+            .find_map(|item| match item {
+                Item::Tool(tool) if tool.name == "TodoWrite" => Some(tool),
+                _ => None,
+            })
+            .unwrap();
+        let steps = crate::agent_view::present::todos(todo).unwrap();
+        assert_eq!(steps.len(), 3);
+
+        session.prompt("edit", Vec::new()).unwrap();
+        pump_until(&mut session, |session| {
+            session.activity() == Activity::NeedsYou
+        });
+        assert!(session.transcript().items().iter().any(|item| matches!(
+            item,
+            Item::Thinking { text, .. } if text == "The answer is off by one."
+        )));
+    }
+
+    #[test]
+    fn codex_takes_the_mode_model_and_skill_with_each_message() {
+        let Some(program) = fake_codex() else {
+            return;
+        };
+        let mut session = start_codex(program, None);
+        let answer = |session: &mut AgentSession, prompt: &str| {
+            session.prompt(prompt, Vec::new()).unwrap();
+            pump_until(session, finished);
+            session.transcript().last_answer().unwrap().to_owned()
+        };
+        assert_eq!(
+            answer(&mut session, "settings"),
+            "sandbox readOnly, approval on-request, model gpt-fake-5, skills none"
+        );
+        session.set_mode("auto");
+        session.set_model("gpt-fake-mini");
+        assert_eq!(
+            answer(&mut session, "settings"),
+            "sandbox workspaceWrite, approval on-request, model gpt-fake-mini, skills none"
+        );
+        // Back to the default: the model the thread opened with.
+        session.set_model("default");
+        pump_until(&mut session, |session| {
+            session
+                .transcript()
+                .handshake()
+                .is_some_and(|handshake| handshake.commands.len() > 2)
+        });
+        assert_eq!(
+            answer(&mut session, "/deploy settings"),
+            "sandbox workspaceWrite, approval on-request, model gpt-fake-5, skills deploy"
+        );
+        // Full access needs the opt-in.
+        session.set_mode("full-access");
+        assert_eq!(session.transcript().mode(), "auto");
+        session.set_bypass_allowed(true);
+        session.set_mode("full-access");
+        assert!(session.unrestricted());
+        assert_eq!(
+            answer(&mut session, "settings"),
+            "sandbox dangerFullAccess, approval never, model gpt-fake-5, skills none"
+        );
+        session.set_bypass_allowed(false);
+        assert_eq!(session.transcript().mode(), "read-only");
+    }
+
+    #[test]
+    fn a_session_never_starts_unrestricted_without_the_opt_in() {
+        let Some(program) = fake_codex() else {
+            return;
+        };
+        let mut session = AgentSession::start(
+            program,
+            StartOptions {
+                cwd: std::env::temp_dir(),
+                agent: AgentKind::Codex,
+                mode: "full-access".into(),
+                model: Some("default".into()),
+                resume: None,
+                allow_bypass: false,
+            },
+            Arc::new(|| {}),
+        )
+        .unwrap();
+        assert_eq!(session.transcript().mode(), "read-only");
+        session.prompt("settings", Vec::new()).unwrap();
+        pump_until(&mut session, finished);
+        assert_eq!(
+            session.transcript().last_answer(),
+            Some("sandbox readOnly, approval on-request, model gpt-fake-5, skills none")
+        );
+    }
+
+    #[test]
+    fn codex_compacts_reviews_and_refuses_terminal_commands() {
+        let Some(program) = fake_codex() else {
+            return;
+        };
+        let mut session = start_codex(program, None);
+        session.prompt("/compact", Vec::new()).unwrap();
+        pump_until(&mut session, finished);
+        let Some(Item::TurnEnd(end)) = session.transcript().items().last() else {
+            panic!()
+        };
+        assert_eq!(
+            end.outcome.error.as_deref(),
+            Some("There is nothing to compact yet")
+        );
+
+        session
+            .prompt("/review focus on errors", Vec::new())
+            .unwrap();
+        pump_until(&mut session, |session| {
+            session.activity() == Activity::Finished { success: true }
+        });
+        assert_eq!(
+            session.transcript().last_answer(),
+            Some("Reviewed focus on errors: looks good.")
+        );
+        session.prompt("/compact", Vec::new()).unwrap();
+        pump_until(&mut session, |session| {
+            session.activity() == Activity::Finished { success: true }
+        });
+        assert!(!session.transcript().compacting());
+
+        // A command Codex runs only in its terminal never reaches the model.
+        let answers = session.transcript().items().len();
+        session.prompt("/status", Vec::new()).unwrap();
+        assert_eq!(session.activity(), Activity::Finished { success: true });
+        assert_eq!(session.transcript().items().len(), answers + 2);
+    }
+
+    #[test]
+    fn codex_turns_stop_and_a_closed_codex_continues_its_thread() {
+        let Some(mut program) = fake_codex() else {
+            return;
+        };
+        program.env = vec![("FAKE_CODEX_DELAY".into(), "0.02".into())];
+        let mut session = start_codex(program, None);
+        session.prompt("go slow", Vec::new()).unwrap();
+        pump_until(&mut session, |session| {
+            session
+                .transcript()
+                .items()
+                .iter()
+                .any(|item| matches!(item, Item::Text { text, .. } if !text.is_empty()))
+        });
+        session.interrupt();
+        pump_until(&mut session, |session| !session.transcript().turn_active());
+        assert_eq!(session.activity(), Activity::Stopped);
+        let thread = session.conversation_id().unwrap().to_owned();
+
+        session.close();
+        pump_until(&mut session, |session| {
+            session.activity() == Activity::Exited
+        });
+        session.prompt("hello again", Vec::new()).unwrap();
+        pump_until(&mut session, finished);
+        assert_eq!(session.conversation_id(), Some(thread.as_str()));
+    }
+
+    #[test]
+    fn a_codex_thread_that_cannot_continue_starts_anew_and_says_so() {
+        let Some(program) = fake_codex() else {
+            return;
+        };
+        let mut session = start_codex(program, Some(("missing".into(), "Gone".into())));
+        session.prompt("hello", Vec::new()).unwrap();
+        pump_until(&mut session, finished);
+        assert_eq!(session.activity(), Activity::Finished { success: true });
+        assert_ne!(session.conversation_id(), Some("missing"));
+        assert!(session.transcript().items().iter().any(|item| matches!(
+            item,
+            Item::Notice(notice) if notice.text.starts_with("Codex could not continue")
+        )));
+    }
+
+    #[test]
+    fn a_signed_out_codex_is_explained_before_the_first_message() {
+        let Some(mut program) = fake_codex() else {
+            return;
+        };
+        program
+            .env
+            .push(("FAKE_CODEX_SIGNED_OUT".into(), "1".into()));
+        let mut session = start_codex(program, None);
+        pump_until(&mut session, |session| {
+            session
+                .transcript()
+                .items()
+                .iter()
+                .any(|item| matches!(item, Item::Notice(_)))
+        });
+        let Some(Item::Notice(notice)) = session.transcript().items().first() else {
+            panic!()
+        };
+        assert!(notice.text.starts_with("Codex is not signed in"));
     }
 
     #[test]

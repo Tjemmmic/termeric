@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use super::event::{
     AgentEvent, ApprovalRequest, BlockStart, ContentBlock, ContextUsage, ExitReport, Handshake,
-    PermissionMode, Retry, SessionInfo, StreamDelta, Thread, ToolResult, TurnOutcome,
+    Retry, SessionInfo, StreamDelta, Thread, ToolResult, TurnOutcome,
 };
 
 /// Longest tool result text kept for display.
@@ -282,7 +282,10 @@ pub struct Transcript {
     suggestions: HashMap<String, Suggestion>,
     handshake: Option<Handshake>,
     session: Option<SessionInfo>,
-    mode: PermissionMode,
+    /// The agent's name, for notices about it.
+    agent: String,
+    /// The id of the mode the agent runs in.
+    mode: String,
     context: Option<ContextUsage>,
     retry: Option<(Retry, Instant)>,
     compacting: bool,
@@ -301,7 +304,8 @@ struct Turn {
 }
 
 impl Transcript {
-    pub fn new(mode: PermissionMode) -> Self {
+    /// A conversation with the agent named `agent`, starting in `mode`.
+    pub fn new(agent: &str, mode: impl Into<String>) -> Self {
         Self {
             items: Vec::new(),
             live: None,
@@ -309,7 +313,8 @@ impl Transcript {
             suggestions: HashMap::new(),
             handshake: None,
             session: None,
-            mode,
+            agent: agent.to_owned(),
+            mode: mode.into(),
             context: None,
             retry: None,
             compacting: false,
@@ -370,8 +375,9 @@ impl Transcript {
         self.session.as_ref()
     }
 
-    pub fn mode(&self) -> PermissionMode {
-        self.mode
+    /// The id of the mode the agent runs in.
+    pub fn mode(&self) -> &str {
+        &self.mode
     }
 
     pub fn context(&self) -> Option<ContextUsage> {
@@ -469,9 +475,9 @@ impl Transcript {
     }
 
     /// Optimistically shows a mode the person chose; the agent confirms it.
-    pub fn set_mode(&mut self, mode: PermissionMode) {
+    pub fn set_mode(&mut self, mode: &str) {
         if self.mode != mode {
-            self.mode = mode;
+            self.mode = mode.to_owned();
             self.changed();
         }
     }
@@ -511,14 +517,14 @@ impl Transcript {
     pub fn apply(&mut self, event: AgentEvent) {
         match event {
             AgentEvent::Ready(handshake) => {
-                if let Some(mode) = handshake.permission_mode {
-                    self.mode = mode;
+                if let Some(mode) = &handshake.permission_mode {
+                    self.mode.clone_from(mode);
                 }
                 self.handshake = Some(handshake);
             }
             AgentEvent::SessionStarted(info) => {
-                if let Some(mode) = info.permission_mode {
-                    self.mode = mode;
+                if let Some(mode) = &info.permission_mode {
+                    self.mode.clone_from(mode);
                 }
                 self.session = Some(info);
             }
@@ -606,9 +612,16 @@ impl Transcript {
                 self.items.push(Item::Notice(Notice {
                     kind: NoticeKind::Error,
                     text: format!(
-                        "Claude Code refused to connect ({error}). This version may not \
-                         support the agent view; open it in a terminal instead."
+                        "{} refused to connect ({error}). This version may not \
+                         support the agent view; open it in a terminal instead.",
+                        self.agent
                     ),
+                }));
+            }
+            AgentEvent::Warning(text) => {
+                self.items.push(Item::Notice(Notice {
+                    kind: NoticeKind::Warning,
+                    text,
                 }));
             }
             AgentEvent::RequestFailed { error, .. } => {
@@ -815,10 +828,11 @@ impl Transcript {
     }
 
     fn finish_turn(&mut self, outcome: TurnOutcome) {
-        let (first_item, interrupted) =
-            self.turn.take().map_or((self.items.len(), false), |turn| {
-                (turn.first_item, turn.interrupted)
-            });
+        let (first_item, stopped) = self.turn.take().map_or((self.items.len(), false), |turn| {
+            (turn.first_item, turn.interrupted)
+        });
+        // Stopped by the person, or by the agent after a refusal ended it.
+        let interrupted = stopped || outcome.interrupted;
         self.settle_streaming(first_item);
         self.approvals.clear();
         self.suggestions.clear();
@@ -855,7 +869,7 @@ impl Transcript {
         self.retry = None;
         self.compacting = false;
         if report.status != "closed" {
-            let mut text = format!("Claude Code stopped ({})", report.status);
+            let mut text = format!("{} stopped ({})", self.agent, report.status);
             if let Some(reason) = last_meaningful_line(&report.stderr_tail) {
                 text.push_str(": ");
                 text.push_str(reason);
@@ -893,12 +907,14 @@ fn bounded_result(mut result: ToolResult) -> ToolResult {
     result
 }
 
-/// Tools that change files, and the input field naming the file.
-pub fn edited_path(tool: &ToolCall) -> Option<&str> {
+/// The files a tool call changes.
+pub fn edited_paths(tool: &ToolCall) -> Vec<&str> {
+    let field = |key: &str| tool.input.get(key).and_then(Value::as_str);
     match tool.name.as_str() {
-        "Edit" | "MultiEdit" | "Write" => tool.input.get("file_path")?.as_str(),
-        "NotebookEdit" => tool.input.get("notebook_path")?.as_str(),
-        _ => None,
+        "Edit" | "MultiEdit" | "Write" => field("file_path").into_iter().collect(),
+        "NotebookEdit" => field("notebook_path").into_iter().collect(),
+        super::present::PATCH_TOOL => super::present::patch_paths(&tool.input),
+        _ => Vec::new(),
     }
 }
 
@@ -906,11 +922,13 @@ fn changed_files(items: &[Item]) -> Vec<String> {
     let mut files: Vec<String> = Vec::new();
     for item in items {
         let Item::Tool(tool) = item else { continue };
-        let succeeded = tool.result.as_ref().is_some_and(|result| !result.is_error);
-        if let Some(path) = edited_path(tool).filter(|_| succeeded)
-            && !files.iter().any(|file| file == path)
-        {
-            files.push(path.to_owned());
+        if !tool.result.as_ref().is_some_and(|result| !result.is_error) {
+            continue;
+        }
+        for path in edited_paths(tool) {
+            if !files.iter().any(|file| file == path) {
+                files.push(path.to_owned());
+            }
         }
     }
     files
@@ -955,7 +973,8 @@ mod tests {
                 description: String::new(),
             }],
             commands: Vec::new(),
-            permission_mode: Some(PermissionMode::AskBeforeEdits),
+            modes: Vec::new(),
+            permission_mode: Some("default".into()),
         }));
     }
 
@@ -1012,7 +1031,7 @@ mod tests {
 
     #[test]
     fn activity_follows_the_handshake_turns_and_approvals() {
-        let mut transcript = Transcript::new(PermissionMode::AskBeforeEdits);
+        let mut transcript = Transcript::new("Claude Code", "default");
         assert_eq!(transcript.activity(), Activity::Starting);
         ready(&mut transcript);
         assert_eq!(transcript.activity(), Activity::Idle);
@@ -1053,7 +1072,7 @@ mod tests {
 
     #[test]
     fn streamed_text_is_replaced_by_the_complete_message() {
-        let mut transcript = Transcript::new(PermissionMode::AskBeforeEdits);
+        let mut transcript = Transcript::new("Claude Code", "default");
         transcript.push_user("hi".into(), Vec::new());
         stream(
             &mut transcript,
@@ -1110,7 +1129,7 @@ mod tests {
 
     #[test]
     fn claude_splits_one_message_into_several_complete_messages() {
-        let mut transcript = Transcript::new(PermissionMode::AskBeforeEdits);
+        let mut transcript = Transcript::new("Claude Code", "default");
         transcript.push_user("hi".into(), Vec::new());
         stream(
             &mut transcript,
@@ -1177,7 +1196,7 @@ mod tests {
 
     #[test]
     fn approvals_attach_to_their_tool_call_and_record_the_answer() {
-        let mut transcript = Transcript::new(PermissionMode::AskBeforeEdits);
+        let mut transcript = Transcript::new("Claude Code", "default");
         transcript.push_user("test it".into(), Vec::new());
         // The request can arrive before the tool call is known.
         transcript.apply(AgentEvent::ApprovalRequested(approval("r1", "t1")));
@@ -1222,7 +1241,7 @@ mod tests {
 
     #[test]
     fn suggestions_last_only_while_their_request_is_pending() {
-        let mut transcript = Transcript::new(PermissionMode::AskBeforeEdits);
+        let mut transcript = Transcript::new("Claude Code", "default");
         transcript.push_user("go".into(), Vec::new());
         let suggestion = Suggestion {
             allow: true,
@@ -1247,7 +1266,7 @@ mod tests {
 
     #[test]
     fn withdrawn_approvals_stop_their_tool_call() {
-        let mut transcript = Transcript::new(PermissionMode::AskBeforeEdits);
+        let mut transcript = Transcript::new("Claude Code", "default");
         transcript.push_user("go".into(), Vec::new());
         transcript.apply(AgentEvent::ApprovalRequested(approval("r1", "t1")));
         transcript.apply(AgentEvent::ApprovalWithdrawn {
@@ -1262,7 +1281,7 @@ mod tests {
 
     #[test]
     fn a_turn_end_lists_changed_files_and_settles_everything_open() {
-        let mut transcript = Transcript::new(PermissionMode::AskBeforeEdits);
+        let mut transcript = Transcript::new("Claude Code", "default");
         transcript.push_user("fix".into(), Vec::new());
         transcript.mark_interrupting();
         assert!(transcript.interrupting());
@@ -1312,7 +1331,7 @@ mod tests {
 
     #[test]
     fn sub_agent_work_is_summarized_on_its_parent_call() {
-        let mut transcript = Transcript::new(PermissionMode::AskBeforeEdits);
+        let mut transcript = Transcript::new("Claude Code", "default");
         transcript.push_user("research".into(), Vec::new());
         message(
             &mut transcript,
@@ -1361,7 +1380,7 @@ mod tests {
 
     #[test]
     fn an_unexpected_exit_is_explained_and_a_requested_close_is_quiet() {
-        let mut transcript = Transcript::new(PermissionMode::AskBeforeEdits);
+        let mut transcript = Transcript::new("Claude Code", "default");
         transcript.push_user("hi".into(), Vec::new());
         transcript.apply(AgentEvent::Exited(ExitReport {
             success: false,
@@ -1378,7 +1397,7 @@ mod tests {
             notice.text,
             "Claude Code stopped (exit status: 1): Error: not logged in"
         );
-        let mut closed = Transcript::new(PermissionMode::AskBeforeEdits);
+        let mut closed = Transcript::new("Claude Code", "default");
         closed.apply(AgentEvent::Exited(ExitReport {
             success: false,
             status: "closed".into(),
@@ -1415,13 +1434,13 @@ mod tests {
 
     #[test]
     fn the_session_id_follows_the_latest_turn() {
-        let mut transcript = Transcript::new(PermissionMode::AskBeforeEdits);
+        let mut transcript = Transcript::new("Claude Code", "default");
         transcript.apply(AgentEvent::SessionStarted(SessionInfo {
             session_id: "a".into(),
-            permission_mode: Some(PermissionMode::PlanOnly),
+            permission_mode: Some("plan".into()),
             ..SessionInfo::default()
         }));
-        assert_eq!(transcript.mode(), PermissionMode::PlanOnly);
+        assert_eq!(transcript.mode(), "plan");
         transcript.push_user("hi".into(), Vec::new());
         transcript.apply(AgentEvent::TurnFinished(TurnOutcome {
             success: true,

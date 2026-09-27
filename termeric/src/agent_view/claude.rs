@@ -17,18 +17,20 @@ use serde_json::{Map, Value, json};
 
 use super::event::{
     AgentCommand, AgentEvent, ApprovalDecision, ApprovalRequest, AssistantMessage, BlockStart,
-    ContentBlock, ContextUsage, Handshake, ModelChoice, PermissionMode, RememberOption, Retry,
+    ContentBlock, ContextUsage, Handshake, ModeChoice, ModelChoice, RememberOption, Retry,
     SessionInfo, SlashCommand, StreamDelta, Thread, ToolResult, TurnOutcome,
 };
+use super::protocol::{Exchange, Protocol, line, preview};
 
 /// The oldest Claude Code release whose protocol the agent view was built
 /// against.
 pub const MINIMUM_VERSION: (u32, u32, u32) = (2, 1, 0);
 
 /// How the agent is started.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LaunchOptions {
-    pub mode: PermissionMode,
+    /// The id of the mode to start in, one of [`modes`].
+    pub mode: String,
     /// A model value from the handshake; `None` keeps Claude's default.
     pub model: Option<String>,
     /// Continue an earlier conversation by its session id.
@@ -36,6 +38,17 @@ pub struct LaunchOptions {
     /// Let the session switch to the mode that skips every check, which
     /// Claude Code refuses unless launched with this allowance.
     pub allow_bypass: bool,
+}
+
+impl Default for LaunchOptions {
+    fn default() -> Self {
+        Self {
+            mode: ASK_MODE.to_owned(),
+            model: None,
+            resume: None,
+            allow_bypass: false,
+        }
+    }
 }
 
 /// Arguments for a headless Claude Code process speaking this protocol.
@@ -51,7 +64,7 @@ pub fn launch_args(options: &LaunchOptions) -> Vec<String> {
         "--permission-prompt-tool",
         "stdio",
         "--permission-mode",
-        mode_name(options.mode),
+        options.mode.as_str(),
     ]
     .into_iter()
     .map(String::from)
@@ -109,7 +122,7 @@ impl ClaudeCodec {
     }
 
     /// One line of protocol input for `command`.
-    pub fn encode(&mut self, command: &AgentCommand) -> String {
+    pub fn encode_command(&mut self, command: &AgentCommand) -> String {
         match command {
             AgentCommand::Prompt(text) => line(&json!({
                 "type": "user",
@@ -156,7 +169,7 @@ impl ClaudeCodec {
             }
             AgentCommand::SetMode(mode) => self.control_request(
                 RequestKind::SetMode,
-                json!({ "subtype": "set_permission_mode", "mode": mode_name(*mode) }),
+                json!({ "subtype": "set_permission_mode", "mode": mode }),
             ),
             AgentCommand::SetModel(model) => self.control_request(
                 RequestKind::SetModel,
@@ -184,8 +197,8 @@ impl ClaudeCodec {
 
     /// The events one output line carries, plus any reply the agent must
     /// receive immediately (a refusal of a request this host cannot serve).
-    pub fn decode(&mut self, text: &str) -> Decoded {
-        let mut decoded = Decoded::default();
+    pub fn decode_line(&mut self, text: &str) -> Exchange {
+        let mut decoded = Exchange::default();
         let Ok(Value::Object(message)) = serde_json::from_str::<Value>(text) else {
             decoded.events.push(AgentEvent::Unrecognized(preview(text)));
             return decoded;
@@ -254,7 +267,7 @@ impl ClaudeCodec {
         }))
     }
 
-    fn decode_control_request(&mut self, message: &Map<String, Value>, decoded: &mut Decoded) {
+    fn decode_control_request(&mut self, message: &Map<String, Value>, decoded: &mut Exchange) {
         let Some(request_id) = str_field(message, "request_id") else {
             return;
         };
@@ -265,13 +278,13 @@ impl ClaudeCodec {
                     decoded.events.push(AgentEvent::ApprovalRequested(approval));
                 } else {
                     decoded
-                        .replies
+                        .lines
                         .push(Self::refuse(request_id, "malformed permission request"));
                 }
             }
             other => {
                 let subtype = other.unwrap_or("unknown");
-                decoded.replies.push(Self::refuse(
+                decoded.lines.push(Self::refuse(
                     request_id,
                     &format!("Termeric does not handle {subtype} requests"),
                 ));
@@ -318,25 +331,40 @@ impl ClaudeCodec {
     }
 }
 
-/// What one output line means for the panel.
-#[derive(Debug, Default, PartialEq)]
-pub struct Decoded {
-    pub events: Vec<AgentEvent>,
-    /// Lines to send back right away.
-    pub replies: Vec<String>,
-}
+impl Protocol for ClaudeCodec {
+    fn start(&mut self) -> Vec<String> {
+        vec![self.initialize()]
+    }
 
-fn line(value: &Value) -> String {
-    let mut text = value.to_string();
-    text.push('\n');
-    text
-}
+    fn encode(&mut self, command: &AgentCommand) -> Exchange {
+        Exchange::send(vec![self.encode_command(command)])
+    }
 
-fn preview(text: &str) -> String {
-    const LIMIT: usize = 200;
-    match text.char_indices().nth(LIMIT) {
-        Some((end, _)) => format!("{}…", &text[..end]),
-        None => text.to_owned(),
+    fn decode(&mut self, line: &str) -> Exchange {
+        let mut decoded = self.decode_line(line);
+        let mut warnings = Vec::new();
+        for event in &decoded.events {
+            match event {
+                AgentEvent::SessionStarted(info) => {
+                    if let Some(version) = parse_version(&info.version)
+                        && version < MINIMUM_VERSION
+                    {
+                        warnings.push(AgentEvent::Warning(format!(
+                            "Claude Code {} is older than the agent view supports; \
+                             update it if anything looks wrong",
+                            info.version
+                        )));
+                    }
+                }
+                // Claude Code reports how full the context is only when asked.
+                AgentEvent::TurnFinished(_) => decoded
+                    .lines
+                    .push(self.encode_command(&AgentCommand::QueryContextUsage)),
+                _ => {}
+            }
+        }
+        decoded.events.extend(warnings);
+        decoded
     }
 }
 
@@ -360,33 +388,63 @@ fn thread_of(message: &Map<String, Value>) -> Thread {
     }
 }
 
-fn mode_name(mode: PermissionMode) -> &'static str {
-    match mode {
-        PermissionMode::AskBeforeEdits => "default",
-        PermissionMode::EditWithoutAsking => "acceptEdits",
-        PermissionMode::PlanOnly => "plan",
-        PermissionMode::BypassPermissions => "bypassPermissions",
-        PermissionMode::DontAsk => "dontAsk",
-        PermissionMode::Auto => "auto",
-    }
+/// The mode Claude Code asks in, the one it starts in by default.
+pub const ASK_MODE: &str = "default";
+
+/// Claude Code's permission modes, which it does not list itself.
+pub fn modes() -> Vec<ModeChoice> {
+    vec![
+        ModeChoice::new(
+            ASK_MODE,
+            "Ask before edits",
+            "Approve each edit and command",
+        ),
+        ModeChoice::new(
+            "acceptEdits",
+            "Edit without asking",
+            "Edits apply at once; commands still ask",
+        ),
+        ModeChoice::new(
+            "plan",
+            "Plan only",
+            "Read and plan, then ask before changing anything",
+        )
+        .plans(),
+        ModeChoice::new(
+            "auto",
+            "Auto",
+            "A safety classifier approves or blocks each action",
+        ),
+        ModeChoice::new(
+            "dontAsk",
+            "Deny unless allowed",
+            "Only actions already allowed run; the rest are refused",
+        ),
+        ModeChoice::new(
+            "bypassPermissions",
+            "Bypass permissions",
+            "Everything runs without asking. Use only in a sandbox",
+        )
+        .unrestricted(),
+    ]
 }
 
-fn parse_mode(name: &str) -> Option<PermissionMode> {
-    Some(match name {
+/// A mode as Claude Code reports it, by the id [`modes`] uses.
+fn parse_mode(name: &str) -> Option<String> {
+    match name {
         // Claude Code 2.1.283 renamed `default` to `manual`.
-        "default" | "manual" => PermissionMode::AskBeforeEdits,
-        "acceptEdits" => PermissionMode::EditWithoutAsking,
-        "plan" => PermissionMode::PlanOnly,
-        "bypassPermissions" => PermissionMode::BypassPermissions,
-        "dontAsk" => PermissionMode::DontAsk,
-        "auto" => PermissionMode::Auto,
-        _ => return None,
-    })
+        "manual" => Some(ASK_MODE.to_owned()),
+        name if modes().iter().any(|mode| mode.id == name) => Some(name.to_owned()),
+        _ => None,
+    }
 }
 
 fn handshake(body: Option<&Map<String, Value>>) -> Handshake {
     let Some(body) = body else {
-        return Handshake::default();
+        return Handshake {
+            modes: modes(),
+            ..Handshake::default()
+        };
     };
     let objects = |key: &str| {
         body.get(key)
@@ -417,6 +475,7 @@ fn handshake(body: Option<&Map<String, Value>>) -> Handshake {
     Handshake {
         models,
         commands,
+        modes: modes(),
         permission_mode: str_field(body, "current_permission_mode").and_then(parse_mode),
     }
 }
@@ -653,6 +712,8 @@ fn turn_outcome(message: &Map<String, Value>) -> TurnOutcome {
             .get("permission_denials")
             .and_then(Value::as_array)
             .map_or(0, Vec::len),
+        // Claude Code reports a stopped turn only as its error, if at all.
+        interrupted: false,
     }
 }
 
@@ -748,13 +809,13 @@ fn rule_subject(rule: &Map<String, Value>) -> Option<String> {
 mod tests {
     use super::*;
 
-    fn decode(codec: &mut ClaudeCodec, value: Value) -> Decoded {
-        codec.decode(&value.to_string())
+    fn decode(codec: &mut ClaudeCodec, value: Value) -> Exchange {
+        codec.decode_line(&value.to_string())
     }
 
     fn only_event(codec: &mut ClaudeCodec, value: Value) -> AgentEvent {
         let mut decoded = decode(codec, value);
-        assert!(decoded.replies.is_empty(), "{:?}", decoded.replies);
+        assert!(decoded.lines.is_empty(), "{:?}", decoded.lines);
         assert_eq!(decoded.events.len(), 1, "{:?}", decoded.events);
         decoded.events.remove(0)
     }
@@ -767,7 +828,7 @@ mod tests {
     #[test]
     fn launch_arguments_select_stdio_permissions_mode_model_and_resume() {
         let args = launch_args(&LaunchOptions {
-            mode: PermissionMode::PlanOnly,
+            mode: "plan".into(),
             model: Some("sonnet".into()),
             resume: Some("abc".into()),
             allow_bypass: false,
@@ -824,10 +885,7 @@ mod tests {
         assert_eq!(handshake.models[0].display_name, "Sonnet 5");
         assert_eq!(handshake.models[1].display_name, "haiku");
         assert_eq!(handshake.commands[0].name, "compact");
-        assert_eq!(
-            handshake.permission_mode,
-            Some(PermissionMode::EditWithoutAsking)
-        );
+        assert_eq!(handshake.permission_mode, Some("acceptEdits".into()));
         // A reply is consumed once; a repeat or an unknown id is ignored.
         let repeat = decode(
             &mut codec,
@@ -839,10 +897,10 @@ mod tests {
     #[test]
     fn prompts_and_answers_encode_as_the_sdk_does() {
         let mut codec = ClaudeCodec::new();
-        let prompt = parse(&codec.encode(&AgentCommand::Prompt("hi".into())));
+        let prompt = parse(&codec.encode_command(&AgentCommand::Prompt("hi".into())));
         assert_eq!(prompt["type"], "user");
         assert_eq!(prompt["message"]["content"][0]["text"], "hi");
-        let allow = parse(&codec.encode(&AgentCommand::Answer {
+        let allow = parse(&codec.encode_command(&AgentCommand::Answer {
             request_id: "r1".into(),
             tool_use_id: Some("t1".into()),
             decision: ApprovalDecision::Allow {
@@ -858,7 +916,7 @@ mod tests {
         );
         assert_eq!(allow["response"]["response"]["toolUseID"], "t1");
         assert!(allow["response"]["response"]["updatedPermissions"].is_array());
-        let deny = parse(&codec.encode(&AgentCommand::Answer {
+        let deny = parse(&codec.encode_command(&AgentCommand::Answer {
             request_id: "r2".into(),
             tool_use_id: None,
             decision: ApprovalDecision::Deny {
@@ -868,14 +926,14 @@ mod tests {
         }));
         assert_eq!(deny["response"]["response"]["behavior"], "deny");
         assert_eq!(deny["response"]["response"]["interrupt"], true);
-        let mode = parse(&codec.encode(&AgentCommand::SetMode(PermissionMode::PlanOnly)));
+        let mode = parse(&codec.encode_command(&AgentCommand::SetMode("plan".into())));
         assert_eq!(mode["request"]["mode"], "plan");
     }
 
     #[test]
     fn failed_control_requests_are_reported() {
         let mut codec = ClaudeCodec::new();
-        let request = parse(&codec.encode(&AgentCommand::SetModel("nope".into())));
+        let request = parse(&codec.encode_command(&AgentCommand::SetModel("nope".into())));
         let id = request["request_id"].as_str().unwrap().to_owned();
         let event = only_event(
             &mut codec,
@@ -904,7 +962,7 @@ mod tests {
             AgentEvent::HandshakeFailed("not supported".into())
         );
         // A refused background query is not the person's concern.
-        let request = parse(&codec.encode(&AgentCommand::QueryContextUsage));
+        let request = parse(&codec.encode_command(&AgentCommand::QueryContextUsage));
         let id = request["request_id"].as_str().unwrap().to_owned();
         assert!(decode(&mut codec, failure(&id)).events.is_empty());
     }
@@ -912,7 +970,7 @@ mod tests {
     #[test]
     fn context_usage_replies_become_usage_events() {
         let mut codec = ClaudeCodec::new();
-        let request = parse(&codec.encode(&AgentCommand::QueryContextUsage));
+        let request = parse(&codec.encode_command(&AgentCommand::QueryContextUsage));
         let id = request["request_id"].as_str().unwrap().to_owned();
         let event = only_event(
             &mut codec,
@@ -1116,7 +1174,7 @@ mod tests {
                 session_id: "s1".into(),
                 model: "claude-sonnet-5".into(),
                 cwd: "/w".into(),
-                permission_mode: Some(PermissionMode::PlanOnly),
+                permission_mode: Some("plan".into()),
                 version: "2.1.282".into(),
             })
         );
@@ -1127,7 +1185,7 @@ mod tests {
             )
             .events,
             vec![
-                AgentEvent::ModeChanged(PermissionMode::EditWithoutAsking),
+                AgentEvent::ModeChanged("acceptEdits".into()),
                 AgentEvent::Compacting(false)
             ]
         );
@@ -1283,14 +1341,14 @@ mod tests {
             json!({"type": "control_request", "request_id": "r9", "request": {"subtype": "elicitation"}}),
         );
         assert!(decoded.events.is_empty());
-        let reply = parse(&decoded.replies[0]);
+        let reply = parse(&decoded.lines[0]);
         assert_eq!(reply["response"]["subtype"], "error");
         assert_eq!(reply["response"]["request_id"], "r9");
         let malformed = decode(
             &mut codec,
             json!({"type": "control_request", "request_id": "r10", "request": {"subtype": "can_use_tool"}}),
         );
-        assert_eq!(malformed.replies.len(), 1);
+        assert_eq!(malformed.lines.len(), 1);
     }
 
     #[test]
@@ -1327,7 +1385,7 @@ mod tests {
     }
 
     fn only_event_raw(codec: &mut ClaudeCodec, text: &str) -> AgentEvent {
-        let mut decoded = codec.decode(text);
+        let mut decoded = codec.decode_line(text);
         assert_eq!(decoded.events.len(), 1);
         decoded.events.remove(0)
     }

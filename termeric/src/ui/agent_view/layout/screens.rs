@@ -98,7 +98,14 @@ impl Builder<'_, '_> {
         }
         if !input.past.is_empty() {
             any = true;
-            y = self.section_title(&mut region, "Earlier", x, y, width, false);
+            y = self.section_title(
+                &mut region,
+                "Earlier Claude Code conversations",
+                x,
+                y,
+                width,
+                false,
+            );
             for past in input.past {
                 let target = Target::ResumePast(past.id.clone());
                 y += self.list_row(
@@ -118,7 +125,7 @@ impl Builder<'_, '_> {
         }
         if !any {
             let text =
-                "No agent sessions yet. Start one to have Claude work beside your terminals.";
+                "No agent sessions yet. Start one to have an agent work beside your terminals.";
             y += self.m.px(16.0);
             y += self.read_paragraph(
                 &mut region,
@@ -444,36 +451,42 @@ impl Builder<'_, '_> {
         let mut y = self.m.pad;
 
         y = self.field_label(&mut region, "Agent", x, y, width);
-        let status = match info.availability {
-            AgentAvailability::Ready => "Ready",
-            AgentAvailability::Looking => "Looking for Claude Code…",
-            AgentAvailability::NotInstalled => {
-                "Not installed. Install Claude Code, then try again."
+        for (index, (agent, availability)) in info.agents.iter().enumerate() {
+            if index > 0 {
+                y += self.m.px(8.0);
             }
-        };
-        y += self.option_card(
-            &mut region,
-            x,
-            y,
-            width,
-            "Claude Code",
-            status,
-            true,
-            info.availability == AgentAvailability::NotInstalled,
-            None,
-        );
-        y += self.m.px(8.0);
-        y += self.option_card(
-            &mut region,
-            x,
-            y,
-            width,
-            "Codex",
-            "Not available in the agent view yet. Run it in a terminal.",
-            false,
-            true,
-            None,
-        );
+            let name = agent.name();
+            let status = match availability {
+                AgentAvailability::Ready => "Ready".to_owned(),
+                AgentAvailability::Looking => format!("Looking for {name}…"),
+                AgentAvailability::NotInstalled => {
+                    format!("Not installed. Install {name}, then try again.")
+                }
+                AgentAvailability::Disabled => {
+                    "Turned off in the agent settings (Settings, Agents)".to_owned()
+                }
+            };
+            let unavailable = matches!(
+                availability,
+                AgentAvailability::NotInstalled | AgentAvailability::Disabled
+            );
+            let action = if unavailable {
+                CardAction::None
+            } else {
+                CardAction::Choose(Target::ChooseAgent(*agent))
+            };
+            y += self.option_card(
+                &mut region,
+                x,
+                y,
+                width,
+                name,
+                &status,
+                *agent == info.agent,
+                unavailable,
+                action,
+            );
+        }
         y += self.m.px(18.0);
 
         y = self.field_label(&mut region, "Folder", x, y, width);
@@ -487,7 +500,7 @@ impl Builder<'_, '_> {
             &info.cwd_source,
             false,
             false,
-            Some(Target::OpenMenu(MenuKind::Folder)),
+            CardAction::Menu(Target::OpenMenu(MenuKind::Folder)),
         );
         y += self.m.px(18.0);
 
@@ -512,7 +525,8 @@ impl Builder<'_, '_> {
             y += self.m.px(12.0);
         }
 
-        let link = "Open Claude in a terminal instead";
+        let link = format!("Open {} in a terminal instead", info.agent.short_name());
+        let link = link.as_str();
         let link_width = self.text_width(link, UiFace::SANS, self.m.small);
         let link_bounds = Bounds::new(
             (x + (width - link_width) / 2.0).round() - self.m.px(6.0),
@@ -582,11 +596,11 @@ impl Builder<'_, '_> {
         detail: &str,
         selected: bool,
         disabled: bool,
-        target: Option<Target>,
+        action: CardAction,
     ) -> f32 {
         let pad = self.m.px(12.0);
         let marker = self.m.px(16.0);
-        let menu = target.is_some();
+        let menu = matches!(action, CardAction::Menu(_));
         let text_x = x
             + pad
             + if menu {
@@ -645,7 +659,10 @@ impl Builder<'_, '_> {
             width,
             (pad * 2.0 + title_height + detail_height).round(),
         );
-        let hovered = target.as_ref().is_some_and(|target| self.hovered(target));
+        let hovered = match &action {
+            CardAction::Menu(target) | CardAction::Choose(target) => self.hovered(target),
+            CardAction::None => false,
+        };
         if selected {
             region.prims.push(Prim::Fill {
                 bounds,
@@ -714,9 +731,19 @@ impl Builder<'_, '_> {
         }
         super::merge(region, body);
         let spoken = format!("{title}. {detail}");
-        match target {
-            Some(target) => self.hit(region, bounds, target, HitRole::Button, spoken, true),
-            None => region.nodes.push(RegionNode::Text(TextNode {
+        match action {
+            CardAction::Menu(target) => {
+                self.hit(region, bounds, target, HitRole::Button, spoken, true)
+            }
+            CardAction::Choose(target) => self.hit(
+                region,
+                bounds,
+                target,
+                HitRole::Option { selected },
+                spoken,
+                true,
+            ),
+            CardAction::None => region.nodes.push(RegionNode::Text(TextNode {
                 bounds,
                 clip: None,
                 text: if selected {
@@ -729,6 +756,16 @@ impl Builder<'_, '_> {
         }
         bounds.height
     }
+}
+
+/// What a card does when pressed.
+enum CardAction {
+    /// Shown only, e.g. an agent that cannot start.
+    None,
+    /// Opens a menu of choices.
+    Menu(Target),
+    /// Chooses the card among its siblings.
+    Choose(Target),
 }
 
 fn with_accent(mut color: [f32; 4], alpha: f32) -> [f32; 4] {
@@ -746,6 +783,12 @@ pub fn session_summary(session: &AgentSession) -> String {
             .or_else(|| approval.input.get("file_path"))
             .and_then(|value| value.as_str())
             .map(|subject| present::relative(subject, session.cwd()));
+        if approval.tool_name == present::PATCH_TOOL {
+            return match present::patch_paths(&approval.input).as_slice() {
+                [path] => format!("Wants to change {}", present::relative(path, session.cwd())),
+                paths => format!("Wants to change {} files", paths.len()),
+            };
+        }
         return match (approval.tool_name.as_str(), subject) {
             ("Bash", Some(command)) => format!("Wants to run {command}"),
             ("AskUserQuestion", _) => "Asked you a question".to_owned(),

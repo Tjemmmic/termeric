@@ -3,9 +3,9 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::agent_view::event::{ApprovalRequest, PermissionMode};
+use crate::agent_view::event::{ApprovalRequest, ModeChoice};
 use crate::agent_view::markdown::{self, Block, Span, SpanStyle};
-use crate::agent_view::present::{self, DiffLineKind, Entry, TodoStatus, ToolKind};
+use crate::agent_view::present::{self, DiffLineKind, Entry, PATCH_TOOL, TodoStatus, ToolKind};
 use crate::agent_view::session::AgentSession;
 use crate::agent_view::transcript::{
     Activity, Attachment, DecidedBy, Item, Notice, NoticeKind, ToolCall, ToolState, TurnEnd,
@@ -48,7 +48,8 @@ impl Builder<'_, '_> {
 
         if items.is_empty() && session.activity() != Activity::Starting {
             let hint = format!(
-                "Ask Claude to change, explain, or run something in {}.",
+                "Ask {} to change, explain, or run something in {}.",
+                session.agent().short_name(),
                 self.short_path(session.cwd())
             );
             let height = self.read_paragraph(
@@ -873,7 +874,10 @@ impl Builder<'_, '_> {
                 Some(approval) => self.question_card(region, view, approval, x, y, width),
                 None => self.answered_question(region, tool, x, y, width),
             },
-            ToolKind::Plan => self.plan_card(region, tool, approval, x, y, width),
+            ToolKind::Plan => {
+                let modes = session.modes();
+                self.plan_card(region, tool, approval, &modes, x, y, width)
+            }
             ToolKind::SubAgent => self.sub_agent(region, session, view, tool, x, y, width),
             ToolKind::Read | ToolKind::Search | ToolKind::Web | ToolKind::Other => {
                 self.generic_tool(region, session, view, tool, approval.is_some(), x, y, width)
@@ -1035,6 +1039,7 @@ impl Builder<'_, '_> {
         )
     }
 
+    /// One card per file the call changes or proposes to change.
     #[allow(clippy::too_many_arguments)]
     fn edit_card(
         &mut self,
@@ -1047,16 +1052,57 @@ impl Builder<'_, '_> {
         y: f32,
         width: f32,
     ) -> f32 {
-        let Some(diff) = present::file_diff(tool, session.cwd()) else {
+        let diffs = present::file_diffs(tool, session.cwd());
+        if diffs.is_empty() {
             return self.generic_tool(region, session, view, tool, awaiting, x, y, width);
-        };
+        }
+        let mut height = 0.0;
+        for (index, diff) in diffs.iter().enumerate() {
+            if index > 0 {
+                height += self.m.px(6.0);
+            }
+            let key = match index {
+                0 => ExpandKey::Tool(tool.id.clone()),
+                _ => ExpandKey::Tool(format!("{}#{index}", tool.id)),
+            };
+            height += self.file_card(
+                region,
+                view,
+                tool,
+                diff,
+                key,
+                index == 0,
+                awaiting,
+                x,
+                y + height,
+                width,
+            );
+        }
+        height
+    }
+
+    /// A file's diff under a header; `first` carries the call's error.
+    #[allow(clippy::too_many_arguments)]
+    fn file_card(
+        &mut self,
+        region: &mut Region,
+        view: &ConversationView,
+        tool: &ToolCall,
+        diff: &present::FileDiff,
+        key: ExpandKey,
+        first: bool,
+        awaiting: bool,
+        x: f32,
+        y: f32,
+        width: f32,
+    ) -> f32 {
         let header_height = self.m.px(38.0);
-        let key = ExpandKey::Tool(tool.id.clone());
         let expanded = view.expanded(&key, diff.lines.len() <= COLLAPSE_DIFF_LINES || awaiting);
         let status = row_status(tool, awaiting);
         let mut body = Region::default();
         let mut cursor = y + header_height;
-        if matches!(status, RowStatus::Failed | RowStatus::Denied) && tool.result.is_some() {
+        if first && matches!(status, RowStatus::Failed | RowStatus::Denied) && tool.result.is_some()
+        {
             cursor += self.m.px(6.0);
             cursor += self.error_line(
                 &mut body,
@@ -1121,6 +1167,8 @@ impl Builder<'_, '_> {
         let status_width = self.status_width(status);
         let counts = if diff.created {
             format!("new · +{}", diff.added)
+        } else if diff.deleted {
+            format!("deleted · −{}", diff.removed)
         } else {
             format!("+{} −{}", diff.added, diff.removed)
         };
@@ -1156,7 +1204,7 @@ impl Builder<'_, '_> {
         }
         let counts_x = header_x.min(right + self.m.px(8.0));
         let added = format!("+{}", diff.added);
-        if diff.created {
+        if diff.created || diff.deleted {
             self.label(
                 region,
                 &counts,
@@ -1166,7 +1214,11 @@ impl Builder<'_, '_> {
                 counts_width + 2.0,
                 UiFace::MONO,
                 self.m.mono,
-                self.c.added_text,
+                if diff.created {
+                    self.c.added_text
+                } else {
+                    self.c.removed_text
+                },
             );
         } else {
             let added_width = self.label(
@@ -1210,7 +1262,11 @@ impl Builder<'_, '_> {
             size: self.m.px(14.0),
             color: self.c.text_muted,
         });
-        let verb = if diff.created { "Created" } else { "Edited" };
+        let verb = match (diff.created, diff.deleted) {
+            (true, _) => "Created",
+            (_, true) => "Deleted",
+            _ => "Edited",
+        };
         self.hit(
             region,
             Bounds::new(x, y, width, header_height),
@@ -1980,7 +2036,7 @@ impl Builder<'_, '_> {
         card.height
     }
 
-    /// Offers Claude Code's terminal for a command it does not run here.
+    /// Offers the agent's terminal for a command it does not run here.
     fn run_in_terminal(
         &mut self,
         region: &mut Region,
@@ -1990,7 +2046,10 @@ impl Builder<'_, '_> {
         width: f32,
     ) -> f32 {
         let top = y + self.m.px(6.0);
-        let note = format!("Claude Code runs /{name} only in its own terminal.");
+        let note = format!(
+            "{} runs /{name} only in its own terminal.",
+            self.input.agent().name()
+        );
         let text_height = self
             .paragraph(
                 region,
@@ -2091,9 +2150,10 @@ impl Builder<'_, '_> {
         let questions = present::questions(&approval.input);
         let mut body = Region::default();
         let mut cursor = y + pad;
+        let heading = format!("{} asks", self.input.agent().short_name());
         self.label(
             &mut body,
-            "Claude asks",
+            &heading,
             x + pad,
             cursor,
             self.m.small.line_px,
@@ -2305,9 +2365,10 @@ impl Builder<'_, '_> {
         let answers = present::recorded_answers(tool);
         let mut body = Region::default();
         let mut cursor = y + self.m.px(10.0);
+        let heading = format!("{} asked", self.input.agent().short_name());
         self.label(
             &mut body,
-            "Claude asked",
+            &heading,
             x + pad,
             cursor,
             self.m.small.line_px,
@@ -2393,6 +2454,7 @@ impl Builder<'_, '_> {
         region: &mut Region,
         tool: &ToolCall,
         approval: Option<&ApprovalRequest>,
+        modes: &[ModeChoice],
         x: f32,
         y: f32,
         width: f32,
@@ -2405,10 +2467,11 @@ impl Builder<'_, '_> {
         match present::plan_text(&tool.input) {
             Some(plan) => cursor += self.markdown(&mut body, plan, x + pad, cursor, inner),
             None => {
+                let finished = format!("{} finished planning.", self.input.agent().short_name());
                 cursor += self.read_paragraph(
                     &mut body,
                     &[(
-                        "Claude finished planning.",
+                        &finished,
                         SpanPaint {
                             face: UiFace::SANS,
                             color: self.c.text_secondary,
@@ -2426,29 +2489,38 @@ impl Builder<'_, '_> {
         match approval {
             Some(approval) => {
                 let request_id = approval.request_id.clone();
-                let buttons = vec![
-                    (
-                        "Start, ask before edits".to_owned(),
-                        ButtonKind::Primary,
-                        Target::ApprovePlan {
-                            request_id: request_id.clone(),
-                            mode: PermissionMode::AskBeforeEdits,
-                        },
-                    ),
-                    (
-                        "Start, edit without asking".to_owned(),
-                        ButtonKind::Secondary,
-                        Target::ApprovePlan {
-                            request_id: request_id.clone(),
-                            mode: PermissionMode::EditWithoutAsking,
-                        },
-                    ),
-                    (
-                        "Keep planning".to_owned(),
-                        ButtonKind::Ghost,
-                        Target::KeepPlanning { request_id },
-                    ),
-                ];
+                // Work starts in one of the agent's first two ordinary modes,
+                // such as asking before edits or editing without asking.
+                let mut buttons: Vec<(String, ButtonKind, Target)> = modes
+                    .iter()
+                    .filter(|mode| !mode.plans && !mode.unrestricted)
+                    .take(2)
+                    .enumerate()
+                    .map(|(index, mode)| {
+                        let mut label = mode.label.chars();
+                        let label = label
+                            .next()
+                            .map(|first| first.to_lowercase().chain(label).collect::<String>())
+                            .unwrap_or_default();
+                        (
+                            format!("Start, {label}"),
+                            if index == 0 {
+                                ButtonKind::Primary
+                            } else {
+                                ButtonKind::Secondary
+                            },
+                            Target::ApprovePlan {
+                                request_id: request_id.clone(),
+                                mode: mode.id.clone(),
+                            },
+                        )
+                    })
+                    .collect();
+                buttons.push((
+                    "Keep planning".to_owned(),
+                    ButtonKind::Ghost,
+                    Target::KeepPlanning { request_id },
+                ));
                 cursor = self.button_rows(&mut body, &buttons, x + pad, cursor, inner);
                 cursor += pad;
             }
@@ -2741,18 +2813,25 @@ impl Builder<'_, '_> {
     ) -> f32 {
         let transcript = session.transcript();
         let text = if session.activity() == Activity::Starting && session.is_running() {
-            Some("Starting Claude Code…".to_owned())
+            Some(format!("Starting {}…", session.agent().name()))
         } else if transcript.turn_active() && transcript.approvals().is_empty() {
             Some(if transcript.interrupting() {
                 "Stopping…".to_owned()
             } else if transcript.compacting() {
                 "Compacting the conversation…".to_owned()
             } else if let Some((retry, since)) = transcript.retry() {
-                let remaining = retry.delay.saturating_sub(since.elapsed()).as_secs() + 1;
-                format!(
-                    "{} Retrying in {remaining}s (attempt {} of {})",
-                    retry.error, retry.attempt, retry.max_attempts
-                )
+                // An agent may not say how long it waits or how often it tries.
+                let wait = retry.delay.saturating_sub(since.elapsed());
+                let when = if retry.delay.is_zero() {
+                    "Retrying".to_owned()
+                } else {
+                    format!("Retrying in {}s", wait.as_secs() + 1)
+                };
+                let attempt = match retry.max_attempts {
+                    0 => format!("attempt {}", retry.attempt),
+                    max => format!("attempt {} of {max}", retry.attempt),
+                };
+                format!("{} {when} ({attempt})", retry.error)
             } else {
                 let elapsed = transcript.turn_elapsed().map(duration).unwrap_or_default();
                 format!("Working · {elapsed}")
@@ -2880,6 +2959,12 @@ fn approval_title(approval: &ApprovalRequest, cwd: &Path) -> String {
         },
         "WebFetch" => "Fetch this page?".to_owned(),
         "WebSearch" => "Search the web?".to_owned(),
+        PATCH_TOOL => match present::patch_paths(&approval.input).as_slice() {
+            [] => "Make these changes?".to_owned(),
+            [path] => format!("Change {}?", present::relative(path, cwd)),
+            paths => format!("Change {} files?", paths.len()),
+        },
+        "Permissions" => "Grant these permissions?".to_owned(),
         _ => match &approval.title {
             Some(title) => title.clone(),
             None => format!("Allow {}?", present::summarize_name(&approval.tool_name)),
@@ -2942,6 +3027,6 @@ fn unlisted_command<'a>(session: &AgentSession, index: usize, text: &'a str) -> 
         .iter()
         .any(|item| matches!(item, Item::User { .. }));
     let listed = &session.transcript().handshake()?.commands;
-    let name = crate::ui::agent_view::commands::invoked_name(text)?;
+    let name = crate::agent_view::event::invoked_name(text)?;
     (latest && !listed.iter().any(|command| command.name == name)).then_some(name)
 }

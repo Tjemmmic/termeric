@@ -15,7 +15,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::agent_view::event::{FALLBACK_MODELS, ModelChoice, PermissionMode, model_name};
+use crate::agent_view::agent::AgentKind;
+use crate::agent_view::event::{ModeChoice, ModelChoice, model_name, selectable_modes};
 use crate::agent_view::session::AgentSession;
 use crate::agent_view::transcript::Activity;
 use crate::ui::text_layout::{
@@ -88,16 +89,23 @@ pub struct NewSessionInfo {
     pub cwd_source: String,
     /// Other directories to offer, from open terminals.
     pub cwd_choices: Vec<PathBuf>,
+    /// The agent chosen to start.
+    pub agent: AgentKind,
+    /// Whether the chosen agent can start.
     pub availability: AgentAvailability,
+    /// Every agent the panel drives, and whether each can start.
+    pub agents: Vec<(AgentKind, AgentAvailability)>,
 }
 
-/// Whether Claude Code can start.
+/// Whether an agent can start.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AgentAvailability {
     Ready,
     NotInstalled,
     /// Still asking the login shell where programs are.
     Looking,
+    /// Turned off in the agent settings.
+    Disabled,
 }
 
 /// A message the supervisor asked to send, waiting for the person in the
@@ -137,6 +145,11 @@ impl Input<'_> {
     /// ahead of its first message belongs to the new-session page.
     fn active(&self) -> Option<&AgentSession> {
         self.tab_session().filter(|session| !session.is_blank())
+    }
+
+    /// The agent the panel speaks of.
+    fn agent(&self) -> AgentKind {
+        self.state.agent(self.sessions)
     }
 
     /// The tab's session, including one started ahead of its first message.
@@ -1005,7 +1018,8 @@ impl Builder<'_, '_> {
                     color: self.c.text_muted,
                 });
                 let meta = format!(
-                    "Claude Code · {} · {} · {}",
+                    "{} · {} · {} · {}",
+                    session.agent().name(),
                     self.short_path(session.cwd()),
                     session.model_label(),
                     activity.label()
@@ -1516,7 +1530,7 @@ impl Builder<'_, '_> {
                 self.placeholder(conversation.and_then(|view| view.placeholder), working);
             self.label(
                 region,
-                placeholder,
+                &placeholder,
                 text_origin[0],
                 text_origin[1],
                 font.line_px,
@@ -1588,37 +1602,35 @@ impl Builder<'_, '_> {
             Bounds::new(inner_x, box_top, inner_width, box_height - toolbar_height),
             Target::Composer,
             HitRole::TextInput,
-            "Message Claude",
+            format!("Message {}", self.input.agent().short_name()),
             true,
         );
 
         // Toolbar.
         let toolbar_y = box_bounds.bottom() - toolbar_height + self.m.px(2.0);
         let mut x = inner_x + self.m.px(6.0);
-        let (mode, model_label) = match (state.screen, session) {
-            (Screen::Conversation, Some(session)) => {
-                (session.transcript().mode(), session.model_label())
-            }
-            _ => (
-                state.new_session.mode,
-                model_name(
-                    &offered_models(self.input),
-                    state.new_session.model.as_deref().unwrap_or("default"),
-                ),
+        let model_label = match (state.screen, session) {
+            (Screen::Conversation, Some(session)) => session.model_label(),
+            _ => model_name(
+                &offered_models(self.input),
+                state.new_session.model.as_deref().unwrap_or("default"),
             ),
         };
-        let mode_icon = match mode {
-            PermissionMode::PlanOnly => Icon::Plan,
-            mode if mode.skips_every_check() => Icon::Warning,
+        let (modes, current) = mode_state(self.input);
+        let choice = modes.iter().find(|mode| mode.id == current);
+        let mode_icon = match choice {
+            Some(mode) if mode.plans => Icon::Plan,
+            Some(mode) if mode.unrestricted => Icon::Warning,
             _ => Icon::Shield,
         };
-        let mode_name = format!("Permissions: {}", mode.label());
+        let mode_label = choice.map_or(current.as_str(), |mode| mode.label.as_str());
+        let mode_name = format!("Permissions: {mode_label}");
         let model_name = format!("Model: {model_label}");
         let width = self.chip(
             region,
             x,
             toolbar_y,
-            mode.label(),
+            mode_label,
             Some(mode_icon),
             Some(Icon::ChevronDown),
             false,
@@ -1746,14 +1758,15 @@ impl Builder<'_, '_> {
         top
     }
 
-    fn placeholder(&self, hint: Option<&'static str>, working: bool) -> &'static str {
+    fn placeholder(&self, hint: Option<&'static str>, working: bool) -> String {
         if let Some(hint) = hint {
-            return hint;
+            return hint.to_owned();
         }
+        let agent = self.input.agent().short_name();
         match self.input.state.screen {
-            Screen::NewSession => "What should Claude work on?",
-            _ if working => "Queue a message for when Claude finishes…",
-            _ => "Ask Claude to change something…",
+            Screen::NewSession => format!("What should {agent} work on?"),
+            _ if working => format!("Queue a message for when {agent} finishes…"),
+            _ => format!("Ask {agent} to change something…"),
         }
     }
 
@@ -1821,17 +1834,14 @@ pub fn menu_items(input: &Input<'_>, kind: MenuKind) -> Vec<MenuItem> {
     let session = input.active();
     match kind {
         MenuKind::Mode => {
-            let current = match (input.state.screen, session) {
-                (Screen::Conversation, Some(session)) => session.transcript().mode(),
-                _ => input.state.new_session.mode,
-            };
-            PermissionMode::selectable(input.allow_bypass)
+            let (modes, current) = mode_state(input);
+            selectable_modes(&modes, input.allow_bypass)
                 .into_iter()
                 .map(|mode| MenuItem {
-                    text: mode.label().to_owned(),
-                    detail: mode.description().to_owned(),
-                    action: MenuAction::SetMode(mode),
-                    checked: mode == current,
+                    text: mode.label.clone(),
+                    detail: mode.description.clone(),
+                    action: MenuAction::SetMode(mode.id.clone()),
+                    checked: mode.id == current,
                 })
                 .collect()
         }
@@ -1856,10 +1866,14 @@ pub fn menu_items(input: &Input<'_>, kind: MenuKind) -> Vec<MenuItem> {
                 .collect()
         }
         MenuKind::More => {
+            let agent = input.agent();
             let mut items = vec![
                 MenuItem {
                     text: "Open in a terminal".into(),
-                    detail: "Continue this conversation in Claude Code's own interface".into(),
+                    detail: format!(
+                        "Continue this conversation in {}'s own interface",
+                        agent.name()
+                    ),
                     action: MenuAction::OpenInTerminal,
                     checked: false,
                 },
@@ -1873,9 +1887,19 @@ pub fn menu_items(input: &Input<'_>, kind: MenuKind) -> Vec<MenuItem> {
             if session.is_some() {
                 items.push(MenuItem {
                     text: "End session".into(),
-                    detail: "Stop Claude Code and remove this session; continue it later from \
-                             New session"
-                        .into(),
+                    detail: if agent.lists_history() {
+                        format!(
+                            "Stop {} and remove this session; continue it later from New session",
+                            agent.name()
+                        )
+                    } else {
+                        format!(
+                            "Stop {} and remove this session; continue it later in {}'s own \
+                             interface",
+                            agent.name(),
+                            agent.name()
+                        )
+                    },
                     action: MenuAction::EndSession,
                     checked: false,
                 });
@@ -1909,9 +1933,34 @@ pub fn menu_items(input: &Input<'_>, kind: MenuKind) -> Vec<MenuItem> {
     }
 }
 
+/// The modes the shown agent offers and the id of the one it runs in: the
+/// conversation's, or on the new-session page the one chosen for the agent
+/// about to start.
+fn mode_state(input: &Input) -> (Vec<ModeChoice>, String) {
+    match (input.state.screen, input.active()) {
+        (Screen::Conversation, Some(session)) => {
+            (session.modes(), session.transcript().mode().to_owned())
+        }
+        _ => {
+            let form = &input.state.new_session;
+            let modes = input
+                .tab_session()
+                .filter(|session| session.agent() == form.agent)
+                .map_or_else(|| form.agent.modes(), |session| session.modes());
+            let current = form
+                .mode
+                .clone()
+                .unwrap_or_else(|| form.agent.default_mode().to_owned());
+            (modes, current)
+        }
+    }
+}
+
 /// The models the agent offers: the shown session's, else any running
-/// session's (they share an account), else a fallback list until one starts.
+/// session's of the same agent (they share an account), else a fallback
+/// list until one starts.
 fn offered_models(input: &Input) -> Vec<ModelChoice> {
+    let agent = input.agent();
     let shown = match input.state.screen {
         Screen::Sessions => None,
         _ => input.tab_session(),
@@ -1919,19 +1968,11 @@ fn offered_models(input: &Input) -> Vec<ModelChoice> {
     let reported = shown
         .into_iter()
         .chain(input.sessions.iter().copied())
+        .filter(|session| session.agent() == agent)
         .find_map(|session| session.transcript().handshake())
         .map(|handshake| handshake.models.clone())
         .filter(|models| !models.is_empty());
-    reported.unwrap_or_else(|| {
-        FALLBACK_MODELS
-            .into_iter()
-            .map(|value| ModelChoice {
-                value: value.to_owned(),
-                display_name: model_name(&[], value),
-                description: String::new(),
-            })
-            .collect()
-    })
+    reported.unwrap_or_else(|| agent.fallback_models())
 }
 
 impl Builder<'_, '_> {

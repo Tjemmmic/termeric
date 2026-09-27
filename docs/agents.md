@@ -14,10 +14,10 @@ out of the box, and any other can be added with a few lines of configuration:
 Only agents whose program is installed on `PATH` are offered. Each one can be
 turned off on the **Agents** page of Settings.
 
-Claude Code can also work in the experimental [agent view](agent-view.md), a
-panel docked beside the terminals where Termeric drives it without its
-terminal interface and shows approvals, questions, plans, and diffs as native
-controls.
+Claude Code and Codex can also work in the experimental
+[agent view](agent-view.md), a panel docked beside the terminals where
+Termeric drives them without their terminal interfaces and shows approvals,
+questions, plans, and diffs as native controls.
 
 ## Starting an agent
 
@@ -268,8 +268,8 @@ mode = "assist"            # "watch", "assist", or "auto"
 max_sends_per_minute = 6   # 1 to 60
 ```
 
-The supervisor runs Claude Code, the agent the agent view drives today;
-Codex can supervise again once the agent view drives Codex.
+The supervisor runs Claude Code; Codex, which the agent view now drives, can
+supervise once its launch carries the supervisor's server and instructions.
 
 The supervisor's MCP server, named `termeric_supervisor` so it never replaces
 a `termeric` server you registered, carries a random token that identifies it
@@ -398,7 +398,8 @@ split around, collapsed, or moved to another tab or window.
 - Real Claude Code has been run once, in a contained test: detection, status
   hooks, answering and declining a request, interrupting, `termeric mcp`, and
   a supervisor reporting on a worker. Codex, and Codex as a supervisor, have
-  been exercised with fake programs only.
+  been exercised with fake programs, and real Codex only up to its handshake,
+  without a turn.
 - Status comes only from agents with hooks set up: Claude Code and Codex.
   Other agents are recognized, but their state is not known.
 - Agents in [live-domain](live-domains.md) terminals cannot report status.

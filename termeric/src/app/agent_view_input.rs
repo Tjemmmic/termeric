@@ -24,8 +24,8 @@ const DOUBLE_CLICK_DISTANCE: f32 = 4.0;
 const WHEEL_LINE: f32 = 48.0;
 
 /// Where to leave the composer after a denial, with a matching hint.
-const DENIED_HINT: &str = "Tell Claude what to do instead…";
-const PLAN_HINT: &str = "Tell Claude what to change in the plan…";
+const DENIED_HINT: &str = "Say what to do instead…";
+const PLAN_HINT: &str = "Say what to change in the plan…";
 const ANSWER_HINT: &str = "Type your answer…";
 
 impl App {
@@ -132,7 +132,7 @@ impl App {
             Target::SubmitAnswers { request_id } => self.submit_agent_answers(&request_id),
             Target::ApprovePlan { request_id, mode } => {
                 if let Some(session) = self.agent_view.active_session_mut() {
-                    session.approve_plan(&request_id, mode);
+                    session.approve_plan(&request_id, &mode);
                 }
                 self.focus_agent_composer();
             }
@@ -228,6 +228,12 @@ impl App {
                     self.take_over_from_supervisor();
                 }
             }
+            Target::ChooseAgent(agent) => {
+                // The session started ahead for the other agent ends on the
+                // next frame, and one for this agent starts.
+                self.agent_view.state.new_session.choose_agent(agent);
+                self.agent_view.state.menu = None;
+            }
             Target::StartSession => {
                 self.start_agent_session(None);
             }
@@ -238,28 +244,46 @@ impl App {
     fn apply_agent_view_menu(&mut self, action: MenuAction) {
         let screen = self.agent_view.state.screen;
         match action {
-            MenuAction::SetMode(mode) => match (screen, self.agent_view.active_session_mut()) {
-                (Screen::Conversation, Some(session)) => session.set_mode(mode),
-                _ if mode.skips_every_check()
-                    && !self.config.agent_view.allow_bypass_permissions => {}
-                (_, session) => {
-                    // A session started ahead of the first message follows
-                    // the form.
-                    if let Some(session) = session.filter(|session| session.is_blank()) {
-                        session.set_mode(mode);
+            MenuAction::SetMode(mode) => {
+                let allow_unrestricted = self.config.agent_view.allow_bypass_permissions;
+                let form_agent = self.agent_view.state.new_session.agent;
+                match (screen, self.agent_view.active_session_mut()) {
+                    (Screen::Conversation, Some(session)) => session.set_mode(&mode),
+                    (_, session) => {
+                        // Only a session started ahead for the chosen agent
+                        // follows the form.
+                        let session = session
+                            .filter(|session| session.is_blank() && session.agent() == form_agent);
+                        let modes = session
+                            .as_ref()
+                            .map_or_else(|| form_agent.modes(), |session| session.modes());
+                        let unrestricted = modes
+                            .iter()
+                            .any(|choice| choice.id == mode && choice.unrestricted);
+                        if unrestricted && !allow_unrestricted {
+                            return;
+                        }
+                        if let Some(session) = session {
+                            session.set_mode(&mode);
+                        }
+                        self.agent_view.state.new_session.mode = Some(mode);
                     }
-                    self.agent_view.state.new_session.mode = mode;
                 }
-            },
-            MenuAction::SetModel(model) => match (screen, self.agent_view.active_session_mut()) {
-                (Screen::Conversation, Some(session)) => session.set_model(&model),
-                (_, session) => {
-                    if let Some(session) = session.filter(|session| session.is_blank()) {
-                        session.set_model(&model);
+            }
+            MenuAction::SetModel(model) => {
+                let form_agent = self.agent_view.state.new_session.agent;
+                match (screen, self.agent_view.active_session_mut()) {
+                    (Screen::Conversation, Some(session)) => session.set_model(&model),
+                    (_, session) => {
+                        if let Some(session) = session
+                            .filter(|session| session.is_blank() && session.agent() == form_agent)
+                        {
+                            session.set_model(&model);
+                        }
+                        self.agent_view.state.new_session.model = Some(model);
                     }
-                    self.agent_view.state.new_session.model = Some(model);
                 }
-            },
+            }
             MenuAction::SetFolder(path) => self.agent_view.state.new_session.cwd = Some(path),
             MenuAction::EndSession => {
                 if let Some(id) = self.agent_view.state.active {
@@ -506,7 +530,9 @@ impl App {
                     }
                     part
                 }
-                Item::Text { text, .. } if !text.trim().is_empty() => format!("**Claude:** {text}"),
+                Item::Text { text, .. } if !text.trim().is_empty() => {
+                    format!("**{}:** {text}", session.agent().short_name())
+                }
                 Item::Tool(tool) => {
                     let summary = present::summarize(tool, session.cwd());
                     format!("_{} {}_", summary.verb, summary.subject).replace("_ _", "")

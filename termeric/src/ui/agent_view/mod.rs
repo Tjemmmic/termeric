@@ -15,7 +15,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use crate::agent_view::event::PermissionMode;
+use crate::agent_view::agent::AgentKind;
 use crate::agent_view::session::SessionId;
 use crate::agent_view::transcript::Attachment;
 use crate::ui::text_area::TextArea;
@@ -309,9 +309,30 @@ pub struct NewSessionForm {
     pub composer: TextArea,
     /// `None` uses the focused terminal's directory.
     pub cwd: Option<PathBuf>,
-    pub mode: PermissionMode,
+    /// The agent to start.
+    pub agent: AgentKind,
+    /// The id of the mode to start in; `None` is the agent's default.
+    pub mode: Option<String>,
     pub model: Option<String>,
     pub scroll: Scroll,
+}
+
+impl NewSessionForm {
+    /// Switches to another agent; the mode and model were that agent's.
+    pub fn choose_agent(&mut self, agent: AgentKind) {
+        if self.agent != agent {
+            self.agent = agent;
+            self.mode = None;
+            self.model = None;
+        }
+    }
+
+    /// The id of the mode the agent will start in.
+    pub fn mode_id(&self) -> String {
+        self.mode
+            .clone()
+            .unwrap_or_else(|| self.agent.default_mode().to_owned())
+    }
 }
 
 impl Default for NewSessionForm {
@@ -319,7 +340,8 @@ impl Default for NewSessionForm {
         Self {
             composer: TextArea::new(),
             cwd: None,
-            mode: PermissionMode::AskBeforeEdits,
+            agent: AgentKind::default(),
+            mode: None,
             model: None,
             scroll: Scroll::default(),
         }
@@ -399,6 +421,19 @@ impl Default for AgentViewState {
 }
 
 impl AgentViewState {
+    /// The agent the panel speaks of: the shown conversation's, else the
+    /// one chosen on the new-session page.
+    pub fn agent(&self, sessions: &[&crate::agent_view::session::AgentSession]) -> AgentKind {
+        let shown = match self.screen {
+            Screen::Conversation => self
+                .active
+                .and_then(|id| sessions.iter().find(|session| session.id() == id))
+                .filter(|session| !session.is_blank()),
+            _ => None,
+        };
+        shown.map_or(self.new_session.agent, |session| session.agent())
+    }
+
     pub fn is_open(&self) -> bool {
         self.open
     }

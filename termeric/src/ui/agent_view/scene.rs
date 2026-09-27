@@ -7,7 +7,6 @@
 
 use std::sync::Arc;
 
-use crate::agent_view::event::PermissionMode;
 use crate::agent_view::session::SessionId;
 use crate::ui::text_layout::{TextLayout, TextMeasure, TextSize, TextSpan, UiFace};
 
@@ -189,7 +188,8 @@ pub enum MenuKind {
 /// An action a menu item performs.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum MenuAction {
-    SetMode(PermissionMode),
+    /// Switch to the mode with this id.
+    SetMode(String),
     SetModel(String),
     SetFolder(std::path::PathBuf),
     EndSession,
@@ -236,7 +236,8 @@ pub enum Target {
     },
     ApprovePlan {
         request_id: String,
-        mode: PermissionMode,
+        /// The id of the mode to work in once the plan is approved.
+        mode: String,
     },
     KeepPlanning {
         request_id: String,
@@ -273,6 +274,8 @@ pub enum Target {
     OpenTerminalAgent(crate::tabs::TerminalIdentity),
     ToggleSupervisor,
     // New session.
+    /// Choose the agent to start.
+    ChooseAgent(crate::agent_view::agent::AgentKind),
     StartSession,
 }
 

@@ -9,8 +9,11 @@
 //! agent view is experimental: removing it leaves terminal agents untouched.
 //!
 //! Layers, each usable without the next:
+//! - [`agent`]: the agents the view drives, and what it knows of each.
 //! - [`event`]: agent-neutral events and commands.
+//! - [`protocol`]: what every agent's wire protocol provides to a session.
 //! - [`claude`]: Claude Code's stream-json protocol, mapped onto those events.
+//! - [`codex`]: Codex's app-server protocol, mapped onto the same events.
 //! - [`process`]: owning the agent process and its pipes.
 //! - [`transcript`]: the conversation the panel shows.
 //! - [`markdown`]: the Markdown agents write, as styled blocks.
@@ -18,11 +21,14 @@
 //! - [`session`]: one conversation: process, protocol, and transcript.
 //! - [`history`]: earlier conversations Claude Code logged, to continue.
 
+pub mod agent;
 pub mod claude;
+pub mod codex;
 pub mod event;
 pub mod history;
 pub mod markdown;
 pub mod present;
 pub mod process;
+pub mod protocol;
 pub mod session;
 pub mod transcript;

@@ -5,70 +5,52 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-/// How much the agent may do before it asks.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum PermissionMode {
-    /// Ask before editing files or running commands.
-    #[default]
-    AskBeforeEdits,
-    /// Edit files without asking; still ask before other actions.
-    EditWithoutAsking,
-    /// Read and plan only, then ask to start.
-    PlanOnly,
-    /// Never ask. Offered only when the person opted in.
-    BypassPermissions,
-    /// Refuse anything not already allowed, without asking.
-    DontAsk,
-    /// A safety classifier approves or blocks each action.
-    Auto,
+/// One way an agent can run, as the agent itself names it: how much it may
+/// do before it asks.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ModeChoice {
+    /// The agent's own id for the mode, e.g. `acceptEdits` or `read-only`.
+    pub id: String,
+    pub label: String,
+    pub description: String,
+    /// Runs every action without asking. Offered only after the person
+    /// opts in to such modes.
+    pub unrestricted: bool,
+    /// Reads and plans without changing anything.
+    pub plans: bool,
 }
 
-impl PermissionMode {
-    /// The modes a person can choose, in menu order. The mode that skips
-    /// every check is offered only when the person opted in to it.
-    pub fn selectable(allow_bypass: bool) -> Vec<PermissionMode> {
-        let mut modes = vec![
-            PermissionMode::AskBeforeEdits,
-            PermissionMode::EditWithoutAsking,
-            PermissionMode::PlanOnly,
-            PermissionMode::Auto,
-            PermissionMode::DontAsk,
-        ];
-        if allow_bypass {
-            modes.push(PermissionMode::BypassPermissions);
-        }
-        modes
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            PermissionMode::AskBeforeEdits => "Ask before edits",
-            PermissionMode::EditWithoutAsking => "Edit without asking",
-            PermissionMode::PlanOnly => "Plan only",
-            PermissionMode::BypassPermissions => "Bypass permissions",
-            PermissionMode::DontAsk => "Deny unless allowed",
-            PermissionMode::Auto => "Auto",
+impl ModeChoice {
+    pub fn new(id: &str, label: &str, description: &str) -> Self {
+        Self {
+            id: id.to_owned(),
+            label: label.to_owned(),
+            description: description.to_owned(),
+            unrestricted: false,
+            plans: false,
         }
     }
 
-    /// What choosing the mode means, for menus.
-    pub fn description(self) -> &'static str {
-        match self {
-            PermissionMode::AskBeforeEdits => "Approve each edit and command",
-            PermissionMode::EditWithoutAsking => "Edits apply at once; commands still ask",
-            PermissionMode::PlanOnly => "Read and plan, then ask before changing anything",
-            PermissionMode::Auto => "A safety classifier approves or blocks each action",
-            PermissionMode::DontAsk => "Only actions already allowed run; the rest are refused",
-            PermissionMode::BypassPermissions => {
-                "Everything runs without asking. Use only in a sandbox"
-            }
-        }
+    /// Marks the mode as running every action without asking.
+    pub fn unrestricted(mut self) -> Self {
+        self.unrestricted = true;
+        self
     }
 
-    /// Whether the mode lets actions run with no check at all.
-    pub fn skips_every_check(self) -> bool {
-        self == PermissionMode::BypassPermissions
+    /// Marks the mode as planning only.
+    pub fn plans(mut self) -> Self {
+        self.plans = true;
+        self
     }
+}
+
+/// The modes a person may choose, in the agent's order: unrestricted ones
+/// only after they opted in.
+pub fn selectable_modes(modes: &[ModeChoice], allow_unrestricted: bool) -> Vec<&ModeChoice> {
+    modes
+        .iter()
+        .filter(|mode| allow_unrestricted || !mode.unrestricted)
+        .collect()
 }
 
 /// Whose conversation an event belongs to.
@@ -119,12 +101,28 @@ pub struct SlashCommand {
     pub argument_hint: String,
 }
 
+/// The command a message invokes, if it starts with one. Paths such as
+/// `/etc/hosts` are not commands.
+pub fn invoked_name(message: &str) -> Option<&str> {
+    let rest = message.trim_start().strip_prefix('/')?;
+    let name = rest.split(char::is_whitespace).next()?;
+    let mut characters = name.chars();
+    let first = characters.next()?;
+    let starts_well = first.is_ascii_alphanumeric() || first == '_';
+    let rest_valid = characters
+        .all(|character| character.is_ascii_alphanumeric() || matches!(character, ':' | '_' | '-'));
+    (starts_well && rest_valid).then_some(name)
+}
+
 /// What the agent reported when it accepted the connection.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Handshake {
     pub models: Vec<ModelChoice>,
     pub commands: Vec<SlashCommand>,
-    pub permission_mode: Option<PermissionMode>,
+    /// The modes the agent offers; empty when it names none.
+    pub modes: Vec<ModeChoice>,
+    /// The id of the mode it runs in.
+    pub permission_mode: Option<String>,
 }
 
 /// The conversation the agent is running, reported when a turn starts.
@@ -134,7 +132,7 @@ pub struct SessionInfo {
     pub session_id: String,
     pub model: String,
     pub cwd: String,
-    pub permission_mode: Option<PermissionMode>,
+    pub permission_mode: Option<String>,
     pub version: String,
 }
 
@@ -225,6 +223,9 @@ pub struct TurnOutcome {
     pub session_id: Option<String>,
     /// Tool calls the agent was refused during the turn.
     pub denials: usize,
+    /// The agent says the turn was stopped before it finished, as when a
+    /// refusal ended it.
+    pub interrupted: bool,
 }
 
 /// The agent is waiting to retry a failed request.
@@ -285,13 +286,15 @@ pub enum AgentEvent {
     ApprovalWithdrawn {
         request_id: String,
     },
-    ModeChanged(PermissionMode),
+    ModeChanged(String),
     Compacting(bool),
     Retrying(Retry),
     ContextUsage(ContextUsage),
     TurnFinished(TurnOutcome),
     /// The agent refused the connection, so it cannot be driven.
     HandshakeFailed(String),
+    /// Something the person should know that does not stop the agent.
+    Warning(String),
     /// A request the panel made was refused.
     RequestFailed {
         request_id: String,
@@ -301,6 +304,9 @@ pub enum AgentEvent {
     Unrecognized(String),
     Exited(ExitReport),
 }
+
+/// What the agent hears when the person declines without saying why.
+pub const DECLINED_MESSAGE: &str = "The person declined this action.";
 
 /// A person's answer to an [`ApprovalRequest`].
 #[derive(Clone, Debug, PartialEq)]
@@ -330,7 +336,8 @@ pub enum AgentCommand {
         decision: ApprovalDecision,
     },
     Interrupt,
-    SetMode(PermissionMode),
+    /// Switch to the mode with this id.
+    SetMode(String),
     SetModel(String),
     QueryContextUsage,
 }

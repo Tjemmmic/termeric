@@ -1,15 +1,23 @@
 //! How tool calls read in the panel: one-line summaries, grouping of quiet
 //! exploration, diffs, to-do lists, questions, and plans.
 //!
-//! Everything here interprets tool input and results as Claude Code writes
-//! them. Unknown tools and unexpected shapes fall back to the tool's name, so
-//! a new tool shows plainly instead of disappearing.
+//! Tool names and input shapes are Claude Code's, the first agent the panel
+//! drove; other agents' protocols translate their tool calls into the same
+//! vocabulary, adding [`PATCH_TOOL`] for changes to several files at once.
+//! Unknown tools and unexpected shapes fall back to the tool's name, so a new
+//! tool shows plainly instead of disappearing.
 
 use std::path::Path;
 
 use serde_json::Value;
 
 use super::transcript::{Item, ToolCall};
+
+/// A change to one or more files, as unified diffs: input
+/// `{"changes": [{"path", "kind": {"type": "add" | "delete" | "update"}, "diff"}]}`.
+/// An update's diff is its hunks; an addition's or deletion's is the whole
+/// file.
+pub const PATCH_TOOL: &str = "Patch";
 
 /// What kind of action a tool call is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,7 +38,7 @@ pub fn kind(name: &str) -> ToolKind {
     match name {
         "Read" | "NotebookRead" | "LS" => ToolKind::Read,
         "Grep" | "Glob" | "ToolSearch" => ToolKind::Search,
-        "Edit" | "MultiEdit" | "Write" | "NotebookEdit" => ToolKind::Edit,
+        "Edit" | "MultiEdit" | "Write" | "NotebookEdit" | PATCH_TOOL => ToolKind::Edit,
         "Bash" | "BashOutput" | "KillShell" | "KillBash" => ToolKind::Command,
         "WebFetch" | "WebSearch" => ToolKind::Web,
         "Task" | "Agent" => ToolKind::SubAgent,
@@ -108,6 +116,27 @@ pub fn summarize(tool: &ToolCall, cwd: &Path) -> Summary {
         "Edit" | "MultiEdit" => summary("Edited", path("file_path"), true, None),
         "Write" => summary("Wrote", path("file_path"), true, None),
         "NotebookEdit" => summary("Edited", path("notebook_path"), true, None),
+        PATCH_TOOL => {
+            let changes = patch_changes(input);
+            match changes.as_slice() {
+                [(path, kind, _)] => summary(
+                    match *kind {
+                        "add" => "Created",
+                        "delete" => "Deleted",
+                        _ => "Edited",
+                    },
+                    Some(relative(path, cwd)),
+                    true,
+                    None,
+                ),
+                changes => summary(
+                    "Edited",
+                    Some(format!("{} files", changes.len())),
+                    false,
+                    None,
+                ),
+            }
+        }
         "Bash" => summary(
             "Ran",
             field(input, "command").map(first_line),
@@ -258,12 +287,153 @@ pub struct FileDiff {
     pub lines: Vec<DiffLine>,
     /// A new file.
     pub created: bool,
+    /// A removed file.
+    pub deleted: bool,
 }
 
 /// Lines shown for a new file before the rest is summarized.
 const MAX_CREATED_LINES: usize = 400;
 /// Longest edit compared line by line; longer ones show whole blocks.
 const MAX_COMPARED_LINES: usize = 600;
+
+/// Each change of a patch: its path, kind (`add`, `delete`, or `update`),
+/// and diff.
+fn patch_changes(input: &Value) -> Vec<(&str, &str, &str)> {
+    input
+        .get("changes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|change| {
+            Some((
+                field(change, "path")?,
+                change
+                    .get("kind")
+                    .and_then(|kind| field(kind, "type"))
+                    .unwrap_or("update"),
+                field(change, "diff").unwrap_or_default(),
+            ))
+        })
+        .collect()
+}
+
+/// The files a patch changes.
+pub fn patch_paths(input: &Value) -> Vec<&str> {
+    patch_changes(input)
+        .into_iter()
+        .map(|(path, _, _)| path)
+        .collect()
+}
+
+/// The diffs for a call that changes files: one per file.
+pub fn file_diffs(tool: &ToolCall, cwd: &Path) -> Vec<FileDiff> {
+    if tool.name != PATCH_TOOL {
+        return file_diff(tool, cwd).into_iter().collect();
+    }
+    patch_changes(&tool.input)
+        .into_iter()
+        .map(|(path, kind, diff)| {
+            let path = relative(path, cwd);
+            match kind {
+                "add" => whole_file(path, diff, DiffLineKind::Added),
+                "delete" => whole_file(path, diff, DiffLineKind::Removed),
+                _ => counted(path, unified_lines(diff), false),
+            }
+        })
+        .collect()
+}
+
+/// A file added or deleted whole, shortened past its first lines.
+fn whole_file(path: String, content: &str, kind: DiffLineKind) -> FileDiff {
+    let mut lines: Vec<DiffLine> = content
+        .lines()
+        .take(MAX_CREATED_LINES)
+        .enumerate()
+        .map(|(index, line)| DiffLine {
+            kind,
+            number: Some(index as u32 + 1),
+            text: line.to_owned(),
+        })
+        .collect();
+    let total = content.lines().count();
+    if total > MAX_CREATED_LINES {
+        lines.push(DiffLine {
+            kind: DiffLineKind::Gap,
+            number: None,
+            text: format!("{} more lines", total - MAX_CREATED_LINES),
+        });
+    }
+    let created = kind == DiffLineKind::Added;
+    let mut diff = counted(path, lines, created);
+    diff.deleted = !created;
+    if created {
+        diff.added = total;
+    } else {
+        diff.removed = total;
+    }
+    diff
+}
+
+/// Lines of a unified diff's hunks, numbered from their `@@` headers.
+/// File headers (`---`, `+++`) are skipped.
+fn unified_lines(diff: &str) -> Vec<DiffLine> {
+    let mut lines = Vec::new();
+    let (mut old, mut new) = (1u32, 1u32);
+    let mut hunks = 0;
+    for line in diff.lines() {
+        if line.starts_with("--- ") || line.starts_with("+++ ") {
+            continue;
+        }
+        if let Some(header) = line.strip_prefix("@@") {
+            let start = |sign: char| {
+                header
+                    .split_whitespace()
+                    .find_map(|range| range.strip_prefix(sign))
+                    .and_then(|range| range.split(',').next())
+                    .and_then(|start| start.parse::<u32>().ok())
+                    .unwrap_or(1)
+            };
+            (old, new) = (start('-'), start('+'));
+            if hunks > 0 {
+                lines.push(DiffLine {
+                    kind: DiffLineKind::Gap,
+                    number: None,
+                    text: String::new(),
+                });
+            }
+            hunks += 1;
+            continue;
+        }
+        let (kind, text) = match line.chars().next() {
+            Some('+') => (DiffLineKind::Added, &line[1..]),
+            Some('-') => (DiffLineKind::Removed, &line[1..]),
+            Some(' ') => (DiffLineKind::Context, &line[1..]),
+            // "\ No newline at end of file" and anything unexpected.
+            _ => continue,
+        };
+        let number = match kind {
+            DiffLineKind::Removed => {
+                old += 1;
+                old - 1
+            }
+            DiffLineKind::Added => {
+                new += 1;
+                new - 1
+            }
+            _ => {
+                old += 1;
+                new += 1;
+                new - 1
+            }
+        };
+        lines.push(DiffLine {
+            kind,
+            number: Some(number),
+            text: text.to_owned(),
+        });
+    }
+    lines
+}
 
 /// The diff for an edit, from the agent's own patch when it reported one,
 /// otherwise from the proposed input (as when asking for approval).
@@ -356,6 +526,7 @@ fn counted(path: String, lines: Vec<DiffLine>, created: bool) -> FileDiff {
         removed,
         lines,
         created,
+        deleted: false,
     }
 }
 
@@ -602,6 +773,7 @@ pub fn approval_text(approval: &crate::agent_view::event::ApprovalRequest, cwd: 
 /// within `max_bytes`, and whether older parts were left out. Pending
 /// approvals come last with their ids, so a reader can answer them.
 pub fn conversation_text(
+    agent: &str,
     items: &[Item],
     approvals: &[crate::agent_view::event::ApprovalRequest],
     cwd: &Path,
@@ -626,7 +798,7 @@ pub fn conversation_text(
                 Some(part)
             }
             Item::Text { text, .. } if !text.trim().is_empty() => {
-                Some(format!("Claude: {}", cut(text)))
+                Some(format!("{agent}: {}", cut(text)))
             }
             Item::Tool(tool) => {
                 let summary = summarize(tool, cwd);
@@ -694,6 +866,66 @@ mod tests {
     use super::*;
     use crate::agent_view::event::ToolResult;
     use serde_json::json;
+
+    #[test]
+    fn patches_show_one_diff_per_file_numbered_from_their_hunks() {
+        let patch = tool(
+            PATCH_TOOL,
+            json!({"changes": [
+                {"path": "/w/src/lib.rs", "kind": {"type": "update", "move_path": null},
+                 "diff": "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -10,3 +10,3 @@ fn answer\n fn answer() {\n-    41\n+    42\n@@ -40,2 +40,3 @@\n a\n+b\n c\n\\ No newline at end of file\n"},
+                {"path": "/w/NEW.md", "kind": {"type": "add"}, "diff": "one\ntwo\n"},
+                {"path": "/w/old.txt", "kind": {"type": "delete"}, "diff": "gone\n"},
+            ]}),
+        );
+        let diffs = file_diffs(&patch, Path::new("/w"));
+        assert_eq!(diffs.len(), 3);
+        let update = &diffs[0];
+        assert_eq!(update.path, "src/lib.rs");
+        assert_eq!((update.added, update.removed), (2, 1));
+        let numbered: Vec<(DiffLineKind, Option<u32>)> = update
+            .lines
+            .iter()
+            .map(|line| (line.kind, line.number))
+            .collect();
+        assert_eq!(
+            numbered,
+            [
+                (DiffLineKind::Context, Some(10)),
+                (DiffLineKind::Removed, Some(11)),
+                (DiffLineKind::Added, Some(11)),
+                (DiffLineKind::Gap, None),
+                (DiffLineKind::Context, Some(40)),
+                (DiffLineKind::Added, Some(41)),
+                (DiffLineKind::Context, Some(42)),
+            ]
+        );
+        assert!(diffs[1].created && diffs[1].added == 2);
+        assert!(diffs[2].deleted && diffs[2].removed == 1);
+        assert_eq!(kind(PATCH_TOOL), ToolKind::Edit);
+        let summary = summarize(&patch, Path::new("/w"));
+        assert_eq!(
+            (summary.verb.as_str(), summary.subject.as_str()),
+            ("Edited", "3 files")
+        );
+        let single = tool(
+            PATCH_TOOL,
+            json!({"changes": [{"path": "/w/NEW.md", "kind": {"type": "add"}, "diff": "x"}]}),
+        );
+        let summary = summarize(&single, Path::new("/w"));
+        assert_eq!(
+            (summary.verb.as_str(), summary.subject.as_str()),
+            ("Created", "NEW.md")
+        );
+        assert_eq!(
+            patch_paths(&patch.input),
+            ["/w/src/lib.rs", "/w/NEW.md", "/w/old.txt"]
+        );
+        // Other tools keep their single diff.
+        assert!(
+            file_diffs(&tool("Read", json!({"file_path": "/w/a"})), Path::new("/w")).is_empty()
+        );
+    }
 
     fn tool(name: &str, input: Value) -> ToolCall {
         ToolCall {
@@ -888,26 +1120,29 @@ mod tests {
             remember: None,
             from_sub_agent: false,
         }];
-        let (text, truncated) = conversation_text(&items, &approvals, Path::new("/w"), 10_000);
+        let (text, truncated) =
+            conversation_text("Claude", &items, &approvals, Path::new("/w"), 10_000);
         assert!(!truncated);
         assert_eq!(
             text,
             "Person: old question\nTool: Ran cargo test (done)\nClaude: All green.\n\
              Waiting for approval req-1: Bash rm -rf target (Clean the build)"
         );
-        let (short, truncated) = conversation_text(&items, &approvals, Path::new("/w"), 90);
+        let (short, truncated) =
+            conversation_text("Claude", &items, &approvals, Path::new("/w"), 90);
         assert!(truncated);
         assert!(!short.contains("old question"));
         assert!(short.ends_with("(Clean the build)"));
         // A newest part longer than everything allowed keeps its start.
-        let (tiny, truncated) = conversation_text(&items, &approvals, Path::new("/w"), 40);
+        let (tiny, truncated) =
+            conversation_text("Claude", &items, &approvals, Path::new("/w"), 40);
         assert!(truncated);
         assert!(tiny.starts_with("Waiting for approval req-1: "));
         assert!(tiny.len() <= 40 && tiny.ends_with('…'));
         // A huge command is cut like any message.
         let mut huge = approvals.clone();
         huge[0].input = json!({"command": "é".repeat(100_000)});
-        let (text, _) = conversation_text(&items, &huge, Path::new("/w"), 1_000_000);
+        let (text, _) = conversation_text("Claude", &items, &huge, Path::new("/w"), 1_000_000);
         assert!(text.len() < 20_000);
     }
 
