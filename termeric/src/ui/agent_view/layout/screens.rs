@@ -96,18 +96,15 @@ impl Builder<'_, '_> {
             }
             y += self.m.px(8.0);
         }
-        if !input.past.is_empty() {
+        if let Some(first) = input.past.first() {
             any = true;
-            y = self.section_title(
-                &mut region,
-                "Earlier Claude Code conversations",
-                x,
-                y,
-                width,
-                false,
-            );
+            let heading = format!("Earlier {} conversations", first.agent.name());
+            y = self.section_title(&mut region, &heading, x, y, width, false);
             for past in input.past {
-                let target = Target::ResumePast(past.id.clone());
+                let target = Target::ResumePast {
+                    agent: past.agent,
+                    id: past.id.clone(),
+                };
                 y += self.list_row(
                     &mut region,
                     target,
@@ -508,7 +505,10 @@ impl Builder<'_, '_> {
         if !recent.is_empty() {
             y = self.field_label(&mut region, "Continue a conversation", x, y, width);
             for past in recent {
-                let target = Target::ResumePast(past.id.clone());
+                let target = Target::ResumePast {
+                    agent: past.agent,
+                    id: past.id.clone(),
+                };
                 y += self.list_row(
                     &mut region,
                     target,

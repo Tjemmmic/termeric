@@ -107,12 +107,6 @@ impl AgentKind {
             .collect()
     }
 
-    /// Whether Termeric can list the agent's earlier conversations to
-    /// continue.
-    pub fn lists_history(self) -> bool {
-        matches!(self, AgentKind::ClaudeCode)
-    }
-
     /// Arguments that continue conversation `id` in the agent's own
     /// terminal interface.
     pub fn resume_args(self, id: &str) -> Vec<String> {

@@ -704,4 +704,64 @@ mod tests {
         app.new_agent_session_page();
         assert_eq!(app.agent_view.state.new_session.agent, AgentKind::Codex);
     }
+
+    #[test]
+    fn earlier_codex_conversations_are_offered_and_continued_with_codex() {
+        if crate::agents::find_executable("python3").is_none() {
+            return;
+        }
+        let fake = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/agent_view/fake_codex.py");
+        let mut config = Config::default();
+        config.agents.insert(
+            "codex".into(),
+            crate::agents::AgentConfig {
+                program: Some(fake.display().to_string()),
+                env: [("FAKE_CODEX_DELAY".to_owned(), "0".to_owned())].into(),
+                ..Default::default()
+            },
+        );
+        let mut app = two_tabs(config);
+        app.open_agent_view(true);
+        app.agent_view
+            .state
+            .new_session
+            .choose_agent(AgentKind::Codex);
+        app.ensure_agent_view_warm_session();
+        let cwd = app.agent_view_new_session_info().cwd;
+        let deadline = Instant::now() + std::time::Duration::from_secs(10);
+        let past = loop {
+            app.process_agent_view_events();
+            let past = app.agent_view_past(AgentKind::Codex, &cwd, false);
+            if !past.is_empty() {
+                break past;
+            }
+            assert!(Instant::now() < deadline, "Codex never listed its threads");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        assert_eq!(past[0].agent, AgentKind::Codex);
+        assert_eq!(past[0].title, "Fix the flaky test");
+        // Claude Code's logs say nothing about Codex's conversations.
+        assert!(
+            app.agent_view_past(AgentKind::ClaudeCode, &cwd, false)
+                .iter()
+                .all(|past| past.id != "earlier-named")
+        );
+
+        app.activate_agent_view_target(crate::ui::agent_view::scene::Target::ResumePast {
+            agent: AgentKind::Codex,
+            id: "earlier-named".into(),
+        });
+        let id = app.agent_view.state.active.unwrap();
+        let session = app.agent_view.session(id).unwrap();
+        assert_eq!(session.agent(), AgentKind::Codex);
+        assert_eq!(session.conversation_id(), Some("earlier-named"));
+        assert_eq!(session.title(), "Fix the flaky test");
+        // An open conversation is listed with the sessions, not as earlier.
+        assert!(
+            app.agent_view_past(AgentKind::Codex, &cwd, false)
+                .iter()
+                .all(|past| past.id != "earlier-named")
+        );
+    }
 }

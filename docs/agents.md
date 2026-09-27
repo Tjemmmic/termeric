@@ -401,8 +401,8 @@ split around, collapsed, or moved to another tab or window.
 - Real Claude Code has been run once, in a contained test: detection, status
   hooks, answering and declining a request, interrupting, `termeric mcp`, and
   a supervisor reporting on a worker. Codex, and Codex as a supervisor, have
-  been exercised with fake programs, and real Codex only up to its handshake,
-  without a turn.
+  been exercised with fake programs; real Codex has been run by hand in the
+  agent view.
 - Status comes only from agents with hooks set up: Claude Code and Codex.
   Other agents are recognized, but their state is not known.
 - Agents in [live-domain](live-domains.md) terminals cannot report status.

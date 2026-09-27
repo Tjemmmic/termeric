@@ -23,8 +23,9 @@ use serde_json::{Map, Value, json};
 
 use super::event::{
     AgentCommand, AgentEvent, ApprovalDecision, ApprovalRequest, BlockStart, ContentBlock,
-    ContextUsage, DECLINED_MESSAGE, Handshake, ModeChoice, ModelChoice, RememberOption, Retry,
-    SessionInfo, SlashCommand, StreamDelta, Thread, ToolResult, TurnOutcome, invoked_name,
+    ContextUsage, DECLINED_MESSAGE, EarlierConversation, Handshake, ModeChoice, ModelChoice,
+    RememberOption, Retry, SessionInfo, SlashCommand, StreamDelta, Thread, ToolResult, TurnOutcome,
+    invoked_name,
 };
 use super::present::PATCH_TOOL;
 use super::protocol::{Exchange, Protocol, line, preview};
@@ -99,6 +100,15 @@ pub struct Setup {
     pub resume: Option<String>,
 }
 
+/// Earlier threads listed for the folder, newest first.
+const EARLIER_LIMIT: u32 = 20;
+/// Longest title kept for an earlier thread.
+const TITLE_CHARS: usize = 80;
+/// Where the threads a person can continue come from: Codex's terminal
+/// interface, its editor extension, and app servers like this one. Scripted
+/// `codex exec` runs and sub-agents are left out.
+const PERSON_SOURCES: [&str; 3] = ["cli", "vscode", "appServer"];
+
 /// Commands Codex runs through the protocol rather than as a message.
 const COMPACT: &str = "compact";
 const REVIEW: &str = "review";
@@ -110,6 +120,8 @@ enum Request {
     Account,
     Models,
     Skills,
+    /// Earlier threads in the folder.
+    Threads,
     ThreadStart,
     ThreadResume,
     /// A turn: a message, a review, or compaction.
@@ -473,6 +485,15 @@ impl CodexCodec {
                 exchange
                     .lines
                     .push(self.request(Request::Skills, "skills/list", skills));
+                let threads = json!({
+                    "cwd": self.cwd,
+                    "limit": EARLIER_LIMIT,
+                    "sortKey": "updated_at",
+                    "sourceKinds": PERSON_SOURCES,
+                });
+                exchange
+                    .lines
+                    .push(self.request(Request::Threads, "thread/list", threads));
                 // Accepted: the person may write while the lists load.
                 exchange.events.push(AgentEvent::Ready(self.handshake()));
             }
@@ -501,6 +522,16 @@ impl CodexCodec {
                 }
                 self.skills = Some(skills(result));
                 exchange.events.push(AgentEvent::Ready(self.handshake()));
+            }
+            (Request::Threads, error) => {
+                if let Some(error) = error {
+                    log::debug!("agent view: Codex threads unavailable: {error}");
+                }
+                exchange
+                    .events
+                    .push(AgentEvent::EarlierConversations(earlier(
+                        result.and_then(|result| result.get("data")),
+                    )));
             }
             (kind @ (Request::ThreadStart | Request::ThreadResume), None) => {
                 let result = result.cloned().unwrap_or(Value::Null);
@@ -1285,6 +1316,39 @@ fn models(listed: Option<&Value>) -> Vec<ModelChoice> {
     models
 }
 
+/// Threads a person can continue, titled by their name or first message.
+fn earlier(listed: Option<&Value>) -> Vec<EarlierConversation> {
+    listed
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|thread| {
+            let id = text(thread, "id")?;
+            let named = text(thread, "name").filter(|name| !name.trim().is_empty());
+            let title = named.or_else(|| {
+                text(thread, "preview")?
+                    .lines()
+                    .map(str::trim)
+                    .find(|line| !line.is_empty())
+                    .map(str::to_owned)
+            })?;
+            let title = match title.char_indices().nth(TITLE_CHARS) {
+                Some((end, _)) => format!("{}…", title[..end].trim_end()),
+                None => title.trim().to_owned(),
+            };
+            let seconds = thread
+                .get("updatedAt")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            Some(EarlierConversation {
+                id,
+                title,
+                modified: std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(seconds),
+            })
+        })
+        .collect()
+}
+
 fn skills(result: Option<&Value>) -> Vec<Skill> {
     result
         .and_then(|result| result.get("data"))
@@ -1440,7 +1504,19 @@ mod tests {
             .collect();
         assert_eq!(
             methods,
-            ["initialized", "account/read", "model/list", "skills/list"]
+            [
+                "initialized",
+                "account/read",
+                "model/list",
+                "skills/list",
+                "thread/list"
+            ]
+        );
+        let threads = parse(&exchange.lines[4]);
+        assert_eq!(threads["params"]["cwd"], "/w");
+        assert_eq!(
+            threads["params"]["sourceKinds"],
+            json!(["cli", "vscode", "appServer"])
         );
         let [AgentEvent::Ready(handshake)] = exchange.events.as_slice() else {
             panic!("{:?}", exchange.events)
@@ -1739,6 +1815,31 @@ mod tests {
         assert_eq!(steer["method"], "turn/steer");
         assert_eq!(steer["params"]["expectedTurnId"], "u1");
         assert_eq!(steer["params"]["input"][0]["text"], "use a constant");
+    }
+
+    #[test]
+    fn earlier_threads_are_titled_by_name_else_their_first_line() {
+        let long = "x".repeat(200);
+        let listed = json!([
+            { "id": "a", "name": "Named", "preview": "ignored", "updatedAt": 60 },
+            { "id": "b", "name": " ", "preview": "\n  First line \nsecond", "updatedAt": 30 },
+            { "id": "c", "name": null, "preview": "" },
+            { "id": "d", "preview": long },
+            { "name": "No id" },
+        ]);
+        let earlier = earlier(Some(&listed));
+        let titles: Vec<&str> = earlier.iter().map(|past| past.title.as_str()).collect();
+        assert_eq!(titles[..2], ["Named", "First line"]);
+        assert_eq!(
+            earlier.len(),
+            3,
+            "untitled and unidentified threads are left out"
+        );
+        assert_eq!(earlier[2].title.chars().count(), TITLE_CHARS + 1);
+        assert_eq!(
+            earlier[0].modified,
+            std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(60)
+        );
     }
 
     #[test]

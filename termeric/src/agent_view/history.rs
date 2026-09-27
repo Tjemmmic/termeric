@@ -13,21 +13,14 @@ use std::time::{Duration, SystemTime};
 
 use serde_json::Value;
 
+use super::event::EarlierConversation;
+
 /// How much of a log's start is searched for its first prompt.
 const HEAD_BYTES: u64 = 256 * 1024;
 /// How much of a log's end is searched for a title.
 const TAIL_BYTES: u64 = 64 * 1024;
 /// Longest title kept.
 const TITLE_CHARS: usize = 80;
-
-/// An earlier conversation.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PastConversation {
-    /// Claude Code's session id, accepted by `--resume`.
-    pub id: String,
-    pub title: String,
-    pub modified: SystemTime,
-}
 
 /// Claude Code's own directory, honoring `CLAUDE_CONFIG_DIR`.
 fn claude_dir() -> Option<PathBuf> {
@@ -52,7 +45,7 @@ pub fn project_folder_name(cwd: &Path) -> String {
 }
 
 /// The most recent conversations started in `cwd`, newest first.
-pub fn past_conversations(cwd: &Path, limit: usize) -> Vec<PastConversation> {
+pub fn past_conversations(cwd: &Path, limit: usize) -> Vec<EarlierConversation> {
     match claude_dir() {
         Some(dir) => {
             past_conversations_in(&dir.join("projects").join(project_folder_name(cwd)), limit)
@@ -61,7 +54,7 @@ pub fn past_conversations(cwd: &Path, limit: usize) -> Vec<PastConversation> {
     }
 }
 
-fn past_conversations_in(folder: &Path, limit: usize) -> Vec<PastConversation> {
+fn past_conversations_in(folder: &Path, limit: usize) -> Vec<EarlierConversation> {
     let Ok(entries) = std::fs::read_dir(folder) else {
         return Vec::new();
     };
@@ -89,7 +82,7 @@ fn past_conversations_in(folder: &Path, limit: usize) -> Vec<PastConversation> {
                 return None;
             }
             let title = title_of(&path)?;
-            Some(PastConversation {
+            Some(EarlierConversation {
                 id,
                 title,
                 modified,

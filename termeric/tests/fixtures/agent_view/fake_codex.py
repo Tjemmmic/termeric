@@ -17,7 +17,9 @@ in the message:
   overrides answer with the `-c` configuration keys it was started with
   (other)   answer with a short Markdown reply
 
-`/compact` and `/review` arrive as their own requests. `-c key=value`
+`thread/list` offers two earlier threads in any folder, `earlier-named` and
+`earlier-preview`, which can be continued. `/compact` and `/review` arrive as
+their own requests. `-c key=value`
 overrides may come before `app-server`. Setting FAKE_CODEX_SIGNED_OUT reports
 no account.
 """
@@ -371,6 +373,18 @@ def handle(message):
              "scope": "repo", "enabled": True},
             {"name": "off", "description": "Disabled", "path": "/skills/off/SKILL.md",
              "scope": "repo", "enabled": False}]}]}})
+    elif method == "thread/list":
+        kinds = params.get("sourceKinds") or []
+        threads_listed = [
+            {"id": "earlier-named", "name": "Fix the flaky test", "preview": "the test fails",
+             "cwd": params.get("cwd"), "updatedAt": 1790000000, "source": "cli"},
+            {"id": "earlier-preview", "name": None, "preview": "\n  Tidy the README\nmore",
+             "cwd": params.get("cwd"), "updatedAt": 1789000000, "source": "vscode"},
+            {"id": "scripted", "name": "Nightly", "preview": "", "cwd": params.get("cwd"),
+             "updatedAt": 1791000000, "source": "exec"},
+        ]
+        send({"id": request_id, "result": {"nextCursor": None, "data": [
+            thread for thread in threads_listed if thread["source"] in kinds]}})
     elif method in ("thread/start", "thread/resume"):
         thread_id = params.get("threadId") if method == "thread/resume" else str(uuid.uuid4())
         if method == "thread/resume" and thread_id == "missing":

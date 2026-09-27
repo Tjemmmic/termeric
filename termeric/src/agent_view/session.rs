@@ -9,7 +9,8 @@ use serde_json::{Map, Value};
 
 use super::agent::{AgentKind, Launch};
 use super::event::{
-    AgentCommand, AgentEvent, ApprovalDecision, DECLINED_MESSAGE, ModeChoice, model_name,
+    AgentCommand, AgentEvent, ApprovalDecision, DECLINED_MESSAGE, EarlierConversation, ModeChoice,
+    model_name,
 };
 use super::process::{AgentProcess, LaunchSpec, Lookup, ProcessOutput, SendError, Waker};
 use super::protocol::{Exchange, Protocol};
@@ -140,6 +141,10 @@ pub struct AgentSession {
     mode_after_plan: Option<(String, String)>,
     /// Messages written while a turn ran, sent in order as turns end.
     queued: VecDeque<(String, Vec<Attachment>)>,
+    /// The agent's earlier conversations in this folder, when it lists them.
+    earlier: Option<Vec<EarlierConversation>>,
+    /// Something shown outside the conversation changed since the last pump.
+    updated: bool,
     waker: Waker,
     last_change: Instant,
 }
@@ -201,6 +206,8 @@ impl AgentSession {
             handshake_deadline: None,
             mode_after_plan: None,
             queued: VecDeque::new(),
+            earlier: None,
+            updated: false,
             waker,
             last_change: Instant::now(),
         };
@@ -278,6 +285,8 @@ impl AgentSession {
             handshake_deadline: None,
             mode_after_plan: None,
             queued: VecDeque::new(),
+            earlier: None,
+            updated: false,
             waker: std::sync::Arc::new(|| {}),
             last_change: Instant::now(),
         }
@@ -336,6 +345,13 @@ impl AgentSession {
             .as_ref()
             .filter(|_| !self.closing)
             .map(AgentProcess::process_id)
+    }
+
+    /// The agent's earlier conversations in this session's folder, newest
+    /// first, once it has listed them. Agents that keep no such list, like
+    /// Claude Code whose logs Termeric reads instead, never report one.
+    pub fn earlier_conversations(&self) -> Option<&[EarlierConversation]> {
+        self.earlier.as_deref()
     }
 
     /// Whether the conversation was handed to a terminal.
@@ -413,7 +429,7 @@ impl AgentSession {
         self.flush_backlog();
         self.check_handshake();
         self.send_next_queued();
-        let changed = self.transcript.generation() != before;
+        let changed = self.transcript.generation() != before || std::mem::take(&mut self.updated);
         if changed {
             self.last_change = Instant::now();
         }
@@ -435,6 +451,12 @@ impl AgentSession {
         }
         let mut refused = false;
         for event in exchange.events {
+            // Not part of the conversation: the session keeps them.
+            if let AgentEvent::EarlierConversations(earlier) = event {
+                self.earlier = Some(earlier);
+                self.updated = true;
+                continue;
+            }
             match &event {
                 AgentEvent::Ready(_) => self.handshake_deadline = None,
                 AgentEvent::HandshakeFailed(_) => refused = true,
@@ -1357,6 +1379,40 @@ mod tests {
             panic!()
         };
         assert_eq!(end.files_changed.len(), 2);
+    }
+
+    #[test]
+    fn codex_lists_the_folders_earlier_threads_and_continues_one() {
+        let Some(program) = fake_codex() else {
+            return;
+        };
+        let mut session = start_codex(program.clone(), None);
+        pump_until(&mut session, |session| {
+            session.earlier_conversations().is_some()
+        });
+        let earlier: Vec<(&str, &str)> = session
+            .earlier_conversations()
+            .unwrap()
+            .iter()
+            .map(|past| (past.id.as_str(), past.title.as_str()))
+            .collect();
+        // Scripted `codex exec` runs are not offered.
+        assert_eq!(
+            earlier,
+            [
+                ("earlier-named", "Fix the flaky test"),
+                ("earlier-preview", "Tidy the README")
+            ]
+        );
+
+        let mut continued = start_codex(
+            program,
+            Some(("earlier-named".into(), "Fix the flaky test".into())),
+        );
+        assert_eq!(continued.title(), "Fix the flaky test");
+        continued.prompt("hello", Vec::new()).unwrap();
+        pump_until(&mut continued, finished);
+        assert_eq!(continued.conversation_id(), Some("earlier-named"));
     }
 
     #[test]

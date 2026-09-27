@@ -66,8 +66,9 @@ The **New session** page shows:
   tab's conversation starts with the same agent;
 - the folder: the focused terminal's working directory, or another open
   terminal's from the folder menu;
-- for Claude Code, earlier conversations in that folder, from its own logs,
-  to continue;
+- the chosen agent's earlier conversations in that folder, to continue:
+  Claude Code's from its own logs, Codex's as its app server lists them
+  once the session started ahead of the first message connects;
 - **Open Claude in a terminal instead** (or Codex), which starts it in a new
   tab.
 
@@ -213,8 +214,8 @@ conversation fills.
 The clock button, or the title in the header, opens **Agents**: this window's
 sessions, in every tab, grouped into *Needs you*, *Working*, and *Recent*
 (choosing one goes to its tab); agents running in
-terminals; earlier Claude Code conversations to continue; and the supervisor,
-when one runs. **Show Agents** in the command palette lists agent view sessions too.
+terminals; the tab's agent's earlier conversations to continue; and the
+supervisor, when one runs. **Show Agents** in the command palette lists agent view sessions too.
 
 A session that needs you while you cannot see it sends a desktop
 notification, following `agent_status.notify`.
@@ -222,9 +223,8 @@ notification, following `agent_status.notify`.
 The **⋯** menu offers **Open in a terminal**, which ends the session here and
 continues the same conversation in a new tab; **Copy conversation**; **End
 session**, which stops the agent and removes the session from the panel
-(the agent keeps the conversation: Claude Code's new-session page offers it
-again under earlier conversations, and `codex resume` continues a Codex one);
-and **Hide panel**. **Open in a terminal** runs `claude --resume <id>` or
+(the agent keeps the conversation, and the new-session page offers it again
+under earlier conversations); and **Hide panel**. **Open in a terminal** runs `claude --resume <id>` or
 `codex resume <id>`.
 
 A conversation opened in a terminal stays readable in the panel but takes no
@@ -299,7 +299,10 @@ against Claude Code 2.1.278 to 2.1.282 and warns about releases before 2.1.
 
 Termeric runs `codex app-server`, which speaks JSON-RPC over its pipes, one
 message per line. After `initialize`, Termeric reads the account (to say
-when Codex is not signed in), `model/list`, and `skills/list`. The first
+when Codex is not signed in), `model/list`, `skills/list`, and `thread/list`
+for the folder's earlier threads started from Codex's terminal interface,
+its editor extension, or an app server (scripted `codex exec` runs are left
+out); each is titled by its name, else its first message. The first
 message starts a thread (`thread/start`, or `thread/resume` to continue one)
 with the mode's approval policy and sandbox; each message is a `turn/start`
 carrying the mode's sandbox policy and the chosen model. Streamed items
@@ -337,7 +340,7 @@ The code is split so each layer can be tested without the next:
 | `agent_view/transcript.rs` | The conversation model the panel shows |
 | `agent_view/present.rs` | Tool summaries, grouping, diffs, and conversation text |
 | `agent_view/markdown.rs` | Markdown as styled blocks |
-| `agent_view/history.rs` | Earlier conversations from Claude Code's logs |
+| `agent_view/history.rs` | Earlier conversations from Claude Code's logs (Codex lists its own) |
 | `ui/agent_view/` | Panel state, colors, and the scene: primitives, hit targets, and accessibility nodes built once per change |
 | `renderer/agent_view.rs` | Drawing a scene |
 | `app/agent_view*.rs` | Sessions in a window, input, actions, and control requests |
@@ -378,8 +381,6 @@ program = "/path/to/termeric/termeric/tests/fixtures/agent_view/fake_codex.py"
 ## Limits
 
 - Claude Code and Codex only; Gemini CLI and OpenCode run in terminals.
-- Earlier conversations are listed only for Claude Code; a Codex
-  conversation is continued with `codex resume` in a terminal.
 - Codex shows a command's output when the command ends, not while it runs,
   and does not show Codex's plan-mode proposals.
 - No image attachments or file mentions.

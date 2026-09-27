@@ -1,7 +1,7 @@
 //! What an agent reports and what the panel asks of it, independent of any
 //! one agent's wire protocol.
 
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use serde_json::Value;
 
@@ -112,6 +112,15 @@ pub fn invoked_name(message: &str) -> Option<&str> {
     let rest_valid = characters
         .all(|character| character.is_ascii_alphanumeric() || matches!(character, ':' | '_' | '-'));
     (starts_well && rest_valid).then_some(name)
+}
+
+/// An earlier conversation in a folder, which the agent can continue.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EarlierConversation {
+    /// The agent's own id for it, accepted when continuing it.
+    pub id: String,
+    pub title: String,
+    pub modified: SystemTime,
 }
 
 /// What the agent reported when it accepted the connection.
@@ -295,6 +304,9 @@ pub enum AgentEvent {
     HandshakeFailed(String),
     /// Something the person should know that does not stop the agent.
     Warning(String),
+    /// The agent's earlier conversations in the session's folder, newest
+    /// first.
+    EarlierConversations(Vec<EarlierConversation>),
     /// A request the panel made was refused.
     RequestFailed {
         request_id: String,

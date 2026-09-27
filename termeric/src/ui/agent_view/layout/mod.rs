@@ -49,6 +49,7 @@ pub struct TerminalAgentRow {
 /// An earlier conversation that can be continued.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PastSession {
+    pub agent: AgentKind,
     pub id: String,
     pub title: String,
     pub when: String,
@@ -1887,19 +1888,10 @@ pub fn menu_items(input: &Input<'_>, kind: MenuKind) -> Vec<MenuItem> {
             if session.is_some() {
                 items.push(MenuItem {
                     text: "End session".into(),
-                    detail: if agent.lists_history() {
-                        format!(
-                            "Stop {} and remove this session; continue it later from New session",
-                            agent.name()
-                        )
-                    } else {
-                        format!(
-                            "Stop {} and remove this session; continue it later in {}'s own \
-                             interface",
-                            agent.name(),
-                            agent.name()
-                        )
-                    },
+                    detail: format!(
+                        "Stop {} and remove this session; continue it later from New session",
+                        agent.name()
+                    ),
                     action: MenuAction::EndSession,
                     checked: false,
                 });

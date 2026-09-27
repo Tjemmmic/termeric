@@ -618,6 +618,8 @@ impl Transcript {
                     ),
                 }));
             }
+            // Not part of the conversation; the session keeps them.
+            AgentEvent::EarlierConversations(_) => return,
             AgentEvent::Warning(text) => {
                 self.items.push(Item::Notice(Notice {
                     kind: NoticeKind::Warning,

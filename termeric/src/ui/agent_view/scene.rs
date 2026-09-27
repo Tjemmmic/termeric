@@ -270,7 +270,11 @@ pub enum Target {
     DismissMenu,
     // Sessions.
     OpenSession(SessionId),
-    ResumePast(String),
+    /// Continue an earlier conversation of `agent` by its id.
+    ResumePast {
+        agent: crate::agent_view::agent::AgentKind,
+        id: String,
+    },
     OpenTerminalAgent(crate::tabs::TerminalIdentity),
     ToggleSupervisor,
     // New session.

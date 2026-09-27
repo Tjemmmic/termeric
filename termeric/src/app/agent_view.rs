@@ -13,7 +13,8 @@ use std::time::{Instant, SystemTime};
 
 use super::*;
 use crate::agent_view::agent::AgentKind;
-use crate::agent_view::history::{self, PastConversation};
+use crate::agent_view::event::EarlierConversation;
+use crate::agent_view::history;
 use crate::agent_view::session::{AgentProgram, AgentSession, SessionId, StartOptions};
 use crate::agent_view::transcript::{Activity, DecidedBy};
 use crate::ui::agent_view::colors::Colors;
@@ -37,8 +38,9 @@ pub(super) struct AgentViewWindow {
     /// The last scene drawn, for hit testing and accessibility.
     pub scene: Option<Arc<Scene>>,
     colors: Option<(u64, Colors)>,
-    /// Earlier conversations for a folder, loaded when a page needs them.
-    pub past: Option<(PathBuf, Vec<PastConversation>)>,
+    /// Earlier Claude Code conversations for a folder, read from its logs
+    /// when a page needs them.
+    pub past: Option<(PathBuf, Vec<EarlierConversation>)>,
     /// Whether each agent's executable was found, by program name. A
     /// program is missing while the search for it runs.
     installed: std::collections::HashMap<String, bool>,
@@ -64,6 +66,15 @@ pub(super) struct AgentViewWindow {
     /// An agent and folder where starting ahead of the first message
     /// failed, so it is not retried every frame.
     pub warm_failed: Option<(AgentKind, PathBuf)>,
+}
+
+/// An earlier conversation to continue.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Resume {
+    pub agent: AgentKind,
+    /// The agent's own id for the conversation.
+    pub id: String,
+    pub title: String,
 }
 
 /// What the supervisor already heard about one session.
@@ -284,20 +295,48 @@ impl App {
         }
     }
 
-    /// Earlier conversations for `cwd`, read once per folder.
-    fn agent_view_past(&mut self, cwd: &std::path::Path, refresh: bool) -> Vec<PastSession> {
-        let stale = refresh
-            || self
-                .agent_view
-                .past
-                .as_ref()
-                .is_none_or(|(folder, _)| folder != cwd);
-        if stale {
-            self.agent_view.past = Some((
-                cwd.to_path_buf(),
-                history::past_conversations(cwd, PAST_LIMIT),
-            ));
-        }
+    /// `agent`'s earlier conversations in `cwd`. An agent that lists its
+    /// own does so when a session connects, so they come from its latest
+    /// session in that folder; Claude Code's are read from its logs, once
+    /// per folder.
+    pub(super) fn agent_view_past(
+        &mut self,
+        agent: AgentKind,
+        cwd: &std::path::Path,
+        refresh: bool,
+    ) -> Vec<PastSession> {
+        let listed = self
+            .agent_view
+            .sessions
+            .iter()
+            .rev()
+            .filter(|session| session.agent() == agent && session.cwd() == cwd)
+            .find_map(AgentSession::earlier_conversations)
+            .map(<[EarlierConversation]>::to_vec);
+        let earlier = match (listed, agent) {
+            (Some(listed), _) => listed,
+            (None, AgentKind::ClaudeCode) => {
+                let stale = refresh
+                    || self
+                        .agent_view
+                        .past
+                        .as_ref()
+                        .is_none_or(|(folder, _)| folder != cwd);
+                if stale {
+                    self.agent_view.past = Some((
+                        cwd.to_path_buf(),
+                        history::past_conversations(cwd, PAST_LIMIT),
+                    ));
+                }
+                self.agent_view
+                    .past
+                    .as_ref()
+                    .map(|(_, past)| past.clone())
+                    .unwrap_or_default()
+            }
+            // Listed once a session in this folder connects.
+            (None, AgentKind::Codex) => Vec::new(),
+        };
         let now = SystemTime::now();
         // Conversations open here are listed with the sessions instead.
         let open: HashSet<String> = self
@@ -307,25 +346,37 @@ impl App {
             .filter(|session| !session.handed_off())
             .filter_map(|session| session.conversation_id().map(str::to_owned))
             .collect();
-        self.agent_view
-            .past
-            .as_ref()
-            .map(|(_, past)| {
-                past.iter()
-                    .filter(|past| !open.contains(&past.id))
-                    .map(|past| PastSession {
-                        id: past.id.clone(),
-                        title: past.title.clone(),
-                        when: history::ago(past.modified, now),
-                    })
-                    .collect()
+        earlier
+            .into_iter()
+            .filter(|past| !open.contains(&past.id))
+            .take(PAST_LIMIT)
+            .map(|past| PastSession {
+                agent,
+                when: history::ago(past.modified, now),
+                id: past.id,
+                title: past.title,
             })
-            .unwrap_or_default()
+            .collect()
+    }
+
+    /// The title of an earlier conversation the panel listed.
+    pub(super) fn agent_view_past_title(&self, id: &str) -> Option<String> {
+        let cached = self.agent_view.past.iter().flat_map(|(_, past)| past);
+        let listed = self
+            .agent_view
+            .sessions
+            .iter()
+            .filter_map(AgentSession::earlier_conversations)
+            .flatten();
+        cached
+            .chain(listed)
+            .find(|past| past.id == id)
+            .map(|past| past.title.clone())
     }
 
     /// Starts a session from the new-session page, or continues an earlier
-    /// Claude Code conversation. Returns whether it started.
-    pub(super) fn start_agent_session(&mut self, resume: Option<(String, String)>) -> bool {
+    /// conversation. Returns whether it started.
+    pub(super) fn start_agent_session(&mut self, resume: Option<Resume>) -> bool {
         self.bind_agent_view_to_active_tab();
         let info = self.agent_view_new_session_info();
         let prompt = self
@@ -336,12 +387,7 @@ impl App {
             .text()
             .trim()
             .to_owned();
-        // Earlier conversations are Claude Code's; see `lists_history`.
-        let agent = if resume.is_some() {
-            AgentKind::ClaudeCode
-        } else {
-            info.agent
-        };
+        let agent = resume.as_ref().map_or(info.agent, |resume| resume.agent);
         // A session already started for this agent and folder takes the
         // message.
         if let Some(id) = self.agent_view.state.active
@@ -376,7 +422,7 @@ impl App {
             cwd: info.cwd.clone(),
             mode,
             model,
-            resume,
+            resume: resume.map(|resume| (resume.id, resume.title)),
             allow_bypass: self.config.agent_view.allow_bypass_permissions,
         };
         let program = self.agent_view_program(agent);
@@ -765,14 +811,15 @@ impl App {
                     ),
                     _ => new_session.cwd.clone(),
                 };
-                // Earlier conversations are Claude Code's: a page starting
-                // another agent does not offer them.
-                let screen = self.agent_view.state.screen;
-                if screen == Screen::Sessions || new_session.agent.lists_history() {
-                    self.agent_view_past(&cwd, false)
-                } else {
-                    Vec::new()
-                }
+                // The tab's conversation's agent, else the one chosen to start.
+                let agent = self
+                    .agent_view
+                    .state
+                    .active
+                    .and_then(|id| self.agent_view.session(id))
+                    .filter(|session| !session.is_blank())
+                    .map_or(new_session.agent, AgentSession::agent);
+                self.agent_view_past(agent, &cwd, false)
             }
             Screen::Conversation => Vec::new(),
         };

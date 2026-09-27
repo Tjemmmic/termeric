@@ -210,11 +210,11 @@ impl App {
                 }
             }
             Target::OpenSession(id) => self.show_agent_session(id),
-            Target::ResumePast(id) => {
+            Target::ResumePast { agent, id } => {
                 let title = self
                     .agent_view_past_title(&id)
                     .unwrap_or_else(|| "Earlier conversation".to_owned());
-                self.start_agent_session(Some((id, title)));
+                self.start_agent_session(Some(super::agent_view::Resume { agent, id, title }));
             }
             Target::OpenTerminalAgent(identity) => {
                 if !self.activate_notification_origin(identity) {
@@ -308,16 +308,6 @@ impl App {
         present::questions(&approval.input)
             .into_iter()
             .nth(question)
-    }
-
-    fn agent_view_past_title(&self, id: &str) -> Option<String> {
-        self.agent_view
-            .past
-            .as_ref()?
-            .1
-            .iter()
-            .find(|past| past.id == id)
-            .map(|past| past.title.clone())
     }
 
     /// Answers a question once every part has a choice or typed answer.
