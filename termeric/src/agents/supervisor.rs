@@ -172,8 +172,8 @@ pub struct SupervisorServer<'a> {
 }
 
 /// Arguments that start `agent_id` as a supervisor whose MCP server runs
-/// `termeric mcp --process PID --supervisor TOKEN`. Claude Code runs in the
-/// agent view, which sends [`KICKOFF`] as its first message.
+/// `termeric mcp --process PID --supervisor TOKEN`, placed before the agent
+/// view's own. The agent view sends [`KICKOFF`] as the first message.
 pub fn launch_args(
     agent_id: &str,
     server: &SupervisorServer,
@@ -236,7 +236,11 @@ pub fn launch_args(
                 launch.push("-c".into());
                 launch.push(format!("mcp_servers.{SERVER_NAME}.env={{ {table} }}"));
             }
-            launch.push(format!("{instructions}\n\n{KICKOFF}"));
+            launch.push("-c".into());
+            launch.push(format!(
+                "developer_instructions={}",
+                toml_string(instructions)
+            ));
             Some(launch)
         }
         _ => None,
@@ -728,8 +732,13 @@ mod tests {
             overrides["env"]["XDG_RUNTIME_DIR"].as_str(),
             Some("/run/user/1000")
         );
-        let prompt = codex.last().unwrap();
-        assert!(prompt.starts_with("RULES") && prompt.ends_with(KICKOFF));
+        // Instructions, not a first message: the agent view sends that.
+        let instructions = codex.last().unwrap();
+        assert_eq!(
+            instructions.parse::<toml::Table>().unwrap()["developer_instructions"].as_str(),
+            Some("RULES")
+        );
+        assert_eq!(codex.len() % 2, 0, "every argument is an override");
 
         let without_runtime = SupervisorServer {
             runtime_directory: None,

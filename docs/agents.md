@@ -203,7 +203,7 @@ once when it starts.
 A supervisor is an agent that watches the other agents in its window and
 answers them for you, as far as you allow. It is a conversation in the
 [agent view](agent-view.md): **Start Supervisor** opens a tab named
-**Supervisor**, filled by a Claude Code conversation that has the
+**Supervisor**, filled by a Claude Code or Codex conversation that has the
 [MCP tools](#letting-an-agent-direct-the-others) already connected, its
 instructions, and your rules. It first summarizes what each agent is doing.
 **Start Supervisor** while one runs goes to its tab.
@@ -263,13 +263,16 @@ own approvals.
 
 ```toml
 [supervisor]
-agent = "claude-code"      # the agent view drives Claude Code for now
+agent = "claude-code"      # or "codex"
 mode = "assist"            # "watch", "assist", or "auto"
 max_sends_per_minute = 6   # 1 to 60
 ```
 
-The supervisor runs Claude Code; Codex, which the agent view now drives, can
-supervise once its launch carries the supervisor's server and instructions.
+Claude Code receives the server with `--mcp-config`, its tools with
+`--allowedTools`, and the instructions with `--append-system-prompt`. Codex
+receives all three as `-c` configuration overrides on its app server: the
+server under `mcp_servers.termeric_supervisor`, with its tools approved in
+advance, and the instructions as `developer_instructions`.
 
 The supervisor's MCP server, named `termeric_supervisor` so it never replaces
 a `termeric` server you registered, carries a random token that identifies it

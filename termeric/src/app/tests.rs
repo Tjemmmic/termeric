@@ -14204,3 +14204,73 @@ fn detected_url_cache_joins_soft_wrapped_visible_rows() {
     assert!(cache.url_at(0, 2).is_none());
     assert!(cache.url_at(3, 1).is_none());
 }
+
+#[cfg(unix)]
+#[test]
+fn codex_supervises_as_an_agent_view_conversation() {
+    use crate::agent_view::agent::AgentKind;
+    use crate::agent_view::transcript::{Activity, Item};
+    use crate::agents::supervisor::SupervisorMode;
+
+    if crate::agents::find_executable("python3").is_none() {
+        return;
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let fake_codex = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/agent_view/fake_codex.py");
+    let mut config = Config::default();
+    config.agents.insert(
+        "codex".into(),
+        crate::agents::AgentConfig {
+            program: Some(fake_codex.display().to_string()),
+            env: std::collections::BTreeMap::from([("FAKE_CODEX_DELAY".into(), "0".into())]),
+            ..Default::default()
+        },
+    );
+    config.supervisor.agent = "codex".into();
+    config.supervisor.mode = SupervisorMode::Watch;
+    let mut app = App::new_headless(config).unwrap();
+    app.supervisor_rules_path = temp.path().join("supervisor.md");
+    let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+    tabs.new_tab().unwrap();
+    app.tabs = Some(tabs);
+
+    app.start_supervisor();
+    if app.info_overlay.is_awaiting_current() {
+        let request = app.info_overlay.request_id();
+        app.apply_info_overlay_action(crate::ui::info_overlay::InfoOverlayAction::Dismiss {
+            request_id: request,
+        });
+    }
+    assert!(app.supervisor_running());
+    let supervisor = app.supervisor_session().unwrap();
+    let session = app.agent_view.session(supervisor).unwrap();
+    assert_eq!(session.agent(), AgentKind::Codex);
+    // Codex takes its server and instructions as configuration overrides.
+    let args = session.program_args().join(" ");
+    assert!(args.contains("mcp_servers.termeric_supervisor.command="));
+    assert!(args.contains("developer_instructions="));
+    assert!(args.contains("watch mode"));
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        app.process_agent_view_events();
+        let session = app.agent_view.session(supervisor).unwrap();
+        if session.activity() == (Activity::Finished { success: true }) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{:#?}",
+            session.transcript().items()
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let transcript = app.agent_view.session(supervisor).unwrap().transcript();
+    assert!(transcript.items().iter().any(|item| matches!(
+        item,
+        Item::User { text, .. } if text.starts_with("Call list_agents")
+    )));
+    app.stop_supervisor();
+    assert!(!app.supervisor_running());
+}

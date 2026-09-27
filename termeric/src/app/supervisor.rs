@@ -185,20 +185,20 @@ impl App {
 
     fn launch_supervisor(&mut self) -> Result<(), String> {
         let config = self.config.supervisor.clone();
-        // The agent view drives Claude Code; other agents supervise once it
-        // drives them too.
-        if config.agent != "claude-code" {
-            return Err(
-                "The supervisor runs in the agent view, which drives Claude Code for now; choose Claude Code as the supervisor in Settings"
-                    .into(),
-            );
-        }
+        // The supervisor is an agent view conversation, so it is an agent
+        // the agent view drives.
+        let Some(kind) = crate::agent_view::agent::AgentKind::from_catalog_id(&config.agent) else {
+            return Err(format!(
+                "The agent view cannot run {} as the supervisor",
+                config.agent
+            ));
+        };
         let agent = self
             .agents
             .get(&config.agent)
             .filter(|agent| agent.enabled)
             .cloned()
-            .ok_or("The supervisor runs Claude Code, which is turned off")?;
+            .ok_or_else(|| format!("The supervisor runs {}, which is turned off", kind.name()))?;
         let rules = self
             .ensure_rules_file()
             .map_err(|error| format!("Could not read the supervisor rules: {error:#}"))?;
@@ -219,7 +219,7 @@ impl App {
             &supervisor::instructions(config.mode, &rules),
         )
         .ok_or_else(|| format!("{} cannot be a supervisor", agent.name))?;
-        let base = self.agent_view_program(crate::agent_view::agent::AgentKind::ClaudeCode);
+        let base = self.agent_view_program(kind);
         let program = AgentProgram {
             program: base.program,
             args: base.args.into_iter().chain(extra).collect(),
@@ -228,8 +228,8 @@ impl App {
         let (cwd, _) = self.agent_view_default_cwd();
         let options = StartOptions {
             cwd: cwd.clone(),
-            agent: crate::agent_view::agent::AgentKind::ClaudeCode,
-            mode: crate::agent_view::claude::ASK_MODE.into(),
+            agent: kind,
+            mode: kind.default_mode().into(),
             model: None,
             resume: None,
             allow_bypass: false,
