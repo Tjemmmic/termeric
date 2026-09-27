@@ -13505,6 +13505,7 @@ fn cli_launch_plan_creates_ordered_shell_and_arbitrary_command_tabs() {
     app.launch = crate::cli::WindowLaunch {
         domain: None,
         domain_snapshot: None,
+        adopts_tab: false,
         force_new: true,
         workspace: None,
         tabs: vec![

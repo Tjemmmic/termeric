@@ -759,6 +759,7 @@ impl App {
                     return;
                 }
                 if button == MouseButton::Left {
+                    self.tab_dropped_outside = self.tab_released_outside(position);
                     self.finish_native_pointer_gesture();
                 }
                 // Primary-gesture cleanup finishes native selection while

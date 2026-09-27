@@ -87,6 +87,11 @@ impl App {
         }
         grab.moving = true;
         let grab = *grab;
+        // Outside the window the tab is on its way to another window, or
+        // to a window of its own; its place here stays as it was.
+        if self.outside_window(position) {
+            return;
+        }
         let Some(active) = self.tabs.as_ref().map(TabManager::active_index) else {
             return;
         };
@@ -129,6 +134,62 @@ impl App {
                 self.start_tab_slide(tab_id, old - new, now);
             }
         }
+    }
+
+    /// Whether `position` lies outside this window.
+    fn outside_window(&self, position: (f64, f64)) -> bool {
+        self.window.as_ref().is_some_and(|window| {
+            let size = window.inner_size();
+            position.0 < 0.0
+                || position.1 < 0.0
+                || position.0 >= f64::from(size.width)
+                || position.1 >= f64::from(size.height)
+        })
+    }
+
+    /// The dragged tab, when it is released outside this window: the process
+    /// then moves it to the window the pointer enters next, or tears it off
+    /// into a window of its own. Live-domain tabs keep their daemon-owned
+    /// place.
+    pub(super) fn tab_released_outside(&self, position: (f64, f64)) -> Option<usize> {
+        let drag = self.tab_dragging.as_ref()?;
+        drag.grab.filter(|grab| grab.moving)?;
+        (drag.live.is_none() && self.outside_window(position)).then_some(drag.tab_id)
+    }
+
+    /// Where a tab dropped at `position` in this window goes: before the
+    /// first tab whose middle is past the pointer when it is over the tab
+    /// bar, else at the end; a pinned tab stays among the pinned ones and
+    /// any other after them.
+    pub(super) fn tab_drop_index(&self, position: (f64, f64), pinned: bool) -> usize {
+        let pinned_count = self.tabs.as_ref().map_or(0, |tabs| {
+            tabs.iter().take_while(|(_, tab)| tab.pinned).count()
+        });
+        let index = self.tab_drop_slot(position);
+        if pinned {
+            index.min(pinned_count)
+        } else {
+            index.max(pinned_count)
+        }
+    }
+
+    fn tab_drop_slot(&self, position: (f64, f64)) -> usize {
+        let count = self.tabs.as_ref().map_or(0, |tabs| tabs.iter().count());
+        let Some(renderer) = self.renderer.as_ref() else {
+            return count;
+        };
+        let over_bar = if renderer.tab_bar_is_vertical() {
+            (position.0 as f32) < renderer.tab_bar_width()
+        } else {
+            (position.1 as f32) < renderer.tab_bar_height()
+        };
+        if !over_bar {
+            return count;
+        }
+        let Some((spans, along)) = self.tab_bar_geometry(position) else {
+            return count;
+        };
+        insertion_index(&spans, along).unwrap_or(count)
     }
 
     /// Slides a released tab from where it was drawn into its slot.
@@ -343,9 +404,36 @@ fn slot_under(spans: &[TabSpan], position: f32) -> Option<usize> {
         .map(|(index, _, _)| *index)
 }
 
+/// Where a tab dropped at `position` along the bar goes among the visible
+/// slots: before the first whose middle is past it, or after the last.
+fn insertion_index(spans: &[TabSpan], position: f32) -> Option<usize> {
+    spans
+        .iter()
+        .find(|(_, start, length)| position < start + length / 2.0)
+        .map(|(index, _, _)| *index)
+        .or_else(|| spans.last().map(|(index, _, _)| index + 1))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_window_opened_for_a_torn_off_tab_starts_empty() {
+        let mut app = App::new_headless(crate::config::Config::default()).unwrap();
+        app.launch.adopts_tab = true;
+        app.init_tabs().unwrap();
+        assert!(app.tabs.as_ref().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_dropped_tab_goes_before_the_first_tab_whose_middle_is_past_it() {
+        let spans = [(3, 10.0, 100.0), (4, 110.0, 100.0)];
+        assert_eq!(insertion_index(&spans, 20.0), Some(3));
+        assert_eq!(insertion_index(&spans, 70.0), Some(4));
+        assert_eq!(insertion_index(&spans, 170.0), Some(5));
+        assert_eq!(insertion_index(&[], 5.0), None);
+    }
 
     #[test]
     fn the_dragged_tab_takes_the_slot_its_center_is_over() {

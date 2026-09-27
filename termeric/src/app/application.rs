@@ -30,6 +30,9 @@ pub struct Application {
     control_launches: crate::control::launches::LaunchLedger,
     pending_domain_controls: Vec<PendingDomainControl>,
     pending: Vec<App>,
+    /// A tab dragged out of its window and released, waiting for the window
+    /// the pointer enters next to claim it.
+    tab_drop: Option<PendingTabDrop>,
     /// Most recent process-wide desktop preferences, applied to existing and
     /// newly created windows without persisting native state into config.
     system_accessibility: super::system_accessibility::SystemAccessibilityPreferences,
@@ -38,6 +41,21 @@ pub struct Application {
     /// visible. Winit's handler API cannot return this error directly.
     fatal_startup_error: Option<String>,
 }
+
+/// A tab released outside its window. On Wayland no window knows where the
+/// others are, and the source window holds the pointer until the release;
+/// the window the pointer enters right after the release is where it was
+/// dropped. When none claims it in time, it was dropped outside Termeric
+/// and becomes a window of its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PendingTabDrop {
+    source: WindowId,
+    tab_id: usize,
+    deadline: Instant,
+}
+
+/// How long after a release another window may claim the dropped tab.
+const TAB_DROP_CLAIM: std::time::Duration = std::time::Duration::from_millis(400);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CreatedWindow {
@@ -321,6 +339,7 @@ impl Application {
             control_launches: crate::control::launches::LaunchLedger::default(),
             pending_domain_controls: Vec::new(),
             pending,
+            tab_drop: None,
             system_accessibility:
                 super::system_accessibility::SystemAccessibilityPreferences::default(),
             system_accessibility_monitor_started: false,
@@ -344,6 +363,9 @@ impl Application {
                     .as_ref()
                     .and_then(crate::tabs::TabManager::active_tab_id)
                     .and_then(|tab_id| u64::try_from(tab_id).ok())
+                    // A window opened for a torn-off tab is empty until the
+                    // tab moves in, right after this.
+                    .or(window.launch.adopts_tab.then_some(0))
             {
                 let control_id = self.next_control_window_id;
                 window.control_window_id = control_id;
@@ -4198,6 +4220,119 @@ impl Application {
         Ok(id)
     }
 
+    /// Moves a dropped tab into window `destination`, where the pointer is
+    /// at `position`.
+    fn drop_tab_into(
+        &mut self,
+        drop: PendingTabDrop,
+        destination_id: WindowId,
+        position: (f64, f64),
+    ) {
+        let Some(pinned) = self
+            .windows
+            .get(&drop.source)
+            .and_then(|source| source.tabs.as_ref()?.tab_by_id(drop.tab_id))
+            .map(|tab| tab.pinned)
+        else {
+            return;
+        };
+        let Some(mut destination) = self
+            .windows
+            .remove(&destination_id)
+            .filter(|window| !window.should_exit)
+        else {
+            return;
+        };
+        let index = destination.tab_drop_index(position, pinned);
+        let result = self
+            .windows
+            .get_mut(&drop.source)
+            .ok_or_else(|| "The tab's window closed".to_string())
+            .and_then(|source| {
+                Self::transfer_control_tab(source, &mut destination, drop.tab_id as u64, index)
+            });
+        match result {
+            Ok(_) => {
+                if let Some(window) = &destination.window {
+                    window.focus_window();
+                }
+            }
+            Err(error) => destination
+                .toasts
+                .warning(format!("Tab was not moved: {error}")),
+        }
+        self.windows.insert(destination_id, destination);
+    }
+
+    /// Opens a window of its own for a tab dropped outside every Termeric
+    /// window. A window's only tab stays: it already has a window.
+    fn tear_off_tab(&mut self, drop: PendingTabDrop, event_loop: &ActiveEventLoop) {
+        let Some(source) = self
+            .windows
+            .get(&drop.source)
+            .filter(|window| !window.should_exit)
+        else {
+            return;
+        };
+        let alone = source
+            .tabs
+            .as_ref()
+            .is_none_or(|tabs| tabs.iter().count() <= 1);
+        if alone {
+            return;
+        }
+        let config = source.config.clone();
+        let launch = WindowLaunch {
+            force_new: true,
+            adopts_tab: true,
+            ..WindowLaunch::default()
+        };
+        let result_index = self.pending.len();
+        if let Err(error) = self.queue_window(config, launch) {
+            log::error!("Could not prepare a window for the torn-off tab: {error:#}");
+            return;
+        }
+        // The window exists before the tab leaves its old one, so a window
+        // that cannot open loses nothing.
+        let created = self
+            .create_pending_windows(event_loop)
+            .into_iter()
+            .nth(result_index);
+        let Some(Ok(created)) = created else {
+            if let Some(source) = self.windows.get_mut(&drop.source) {
+                source
+                    .toasts
+                    .warning("Tab was not moved: a new window could not open");
+            }
+            return;
+        };
+        let Some(destination_id) = self
+            .control_window_ids
+            .iter()
+            .find_map(|(native, id)| (*id == created.window_id).then_some(*native))
+        else {
+            return;
+        };
+        let Some(mut destination) = self.windows.remove(&destination_id) else {
+            return;
+        };
+        let result = self
+            .windows
+            .get_mut(&drop.source)
+            .ok_or_else(|| "The tab's window closed".to_string())
+            .and_then(|source| {
+                Self::transfer_control_tab(source, &mut destination, drop.tab_id as u64, 0)
+            });
+        if let Err(error) = result {
+            // Nothing moved in: the empty window has no reason to stay.
+            destination.should_exit = true;
+            if let Some(source) = self.windows.get_mut(&drop.source) {
+                source.toasts.warning(format!("Tab was not moved: {error}"));
+            }
+        }
+        self.windows.insert(destination_id, destination);
+    }
+
     fn fulfill_tab_window_move(&mut self, source_id: WindowId) {
         let Some(destination_id) = self.next_live_window(source_id) else {
             if let Some(source) = self.windows.get_mut(&source_id) {
@@ -4362,12 +4497,30 @@ impl ApplicationHandler<AppEvent> for Application {
         let mut requested_window_launch = None;
         let mut move_pane_to_next_window = false;
         let mut move_tab_to_next_window = false;
+        let mut dropped_outside = None;
+        // The first pointer position another window hears after a release
+        // outside the source is where the tab was dropped.
+        if let WindowEvent::CursorMoved { position, .. } = &event
+            && let Some(drop) = self.tab_drop
+            && drop.source != window_id
+        {
+            self.tab_drop = None;
+            self.drop_tab_into(drop, window_id, (position.x, position.y));
+        }
         if let Some(window) = self.windows.get_mut(&window_id) {
             ApplicationHandler::window_event(window, event_loop, window_id, event);
             create_window = std::mem::take(&mut window.request_new_window);
             requested_window_launch = window.requested_window_launch.take();
             move_pane_to_next_window = std::mem::take(&mut window.request_move_pane_to_next_window);
             move_tab_to_next_window = std::mem::take(&mut window.request_move_tab_to_next_window);
+            dropped_outside = window.tab_dropped_outside.take();
+        }
+        if let Some(tab_id) = dropped_outside {
+            self.tab_drop = Some(PendingTabDrop {
+                source: window_id,
+                tab_id,
+                deadline: Instant::now() + TAB_DROP_CLAIM,
+            });
         }
         if move_pane_to_next_window {
             self.fulfill_pane_window_move(window_id);
@@ -4619,6 +4772,14 @@ impl ApplicationHandler<AppEvent> for Application {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let now = Instant::now();
         let mut deadline = None;
+        if let Some(drop) = self.tab_drop {
+            if now >= drop.deadline {
+                self.tab_drop = None;
+                self.tear_off_tab(drop, event_loop);
+            } else {
+                deadline = Some(drop.deadline);
+            }
+        }
         for window in self.windows.values_mut() {
             window.poll_idle_sources(now);
             if window.process_pty_events() {
@@ -4779,6 +4940,57 @@ mod tests {
         }
     }
     use super::*;
+
+    #[test]
+    fn a_tab_dropped_on_another_window_moves_there_after_its_pinned_tabs() {
+        let window = || {
+            let mut app = App::new_headless(Config::default()).unwrap();
+            let mut tabs =
+                crate::tabs::TabManager::new(80, 24, Config::default().shell, 1_000, 1024 * 1024);
+            tabs.new_tab().unwrap();
+            tabs.new_tab().unwrap();
+            app.tabs = Some(tabs);
+            app
+        };
+        let mut application =
+            Application::from_config(Config::default(), None, LaunchPlan::default()).unwrap();
+        application.pending.clear();
+        let (source_id, destination_id) = (WindowId::dummy(), WindowId::from(1u64));
+        let source = window();
+        let dragged = source.tabs.as_ref().unwrap().iter().nth(1).unwrap().1.id;
+        let mut destination = window();
+        destination.tabs.as_mut().unwrap().all_tabs_mut()[0].pinned = true;
+        application.windows.insert(source_id, source);
+        application.windows.insert(destination_id, destination);
+        let drop = PendingTabDrop {
+            source: source_id,
+            tab_id: dragged,
+            deadline: Instant::now() + TAB_DROP_CLAIM,
+        };
+        // Without a tab bar under the pointer, it goes to the end.
+        application.drop_tab_into(drop, destination_id, (10.0, 400.0));
+        let source_tabs = application.windows[&source_id].tabs.as_ref().unwrap();
+        assert_eq!(source_tabs.count(), 1);
+        let destination_tabs = application.windows[&destination_id].tabs.as_ref().unwrap();
+        assert_eq!(destination_tabs.count(), 3);
+        assert_eq!(
+            destination_tabs.active_index(),
+            2,
+            "the dropped tab is shown"
+        );
+        assert!(!destination_tabs.active_tab().unwrap().pinned);
+
+        // A tab that is gone by the time a window claims it moves nowhere.
+        application.drop_tab_into(drop, destination_id, (10.0, 400.0));
+        assert_eq!(
+            application.windows[&destination_id]
+                .tabs
+                .as_ref()
+                .unwrap()
+                .count(),
+            3
+        );
+    }
 
     #[test]
     fn a_joining_launch_opens_its_tabs_in_a_new_window_on_this_display() {

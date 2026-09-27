@@ -29,6 +29,9 @@ pub struct WindowLaunch {
     pub renderer_backend: Option<crate::config::RendererBackend>,
     /// Launch the process-owned drop-down window, or toggle the existing one.
     pub quick_access: bool,
+    /// Open with no tabs of its own, for a tab torn off another window of
+    /// this process, which moves in as soon as the window exists.
+    pub adopts_tab: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,7 +110,8 @@ impl LaunchPlan {
             || window.app_id.is_some()
             || window.pixel_size.is_some()
             || window.renderer_backend.is_some()
-            || window.quick_access;
+            || window.quick_access
+            || window.adopts_tab;
         if standalone {
             return None;
         }
@@ -163,6 +167,7 @@ impl Default for WindowLaunch {
             pixel_size: None,
             renderer_backend: None,
             quick_access: false,
+            adopts_tab: false,
         }
     }
 }

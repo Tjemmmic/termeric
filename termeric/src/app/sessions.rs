@@ -30,6 +30,11 @@ impl App {
         tabs.set_kitty_file_transmission(self.config.security.allow_kitty_file_transfers);
         tabs.set_xterm_keyboard_type(self.config.keyboard.xterm_type.terminal_type(), true);
         self.tabs = Some(tabs);
+        if self.launch.adopts_tab {
+            // The torn-off tab moves in once the window exists.
+            self.dispatch_plugin_hook(crate::plugin::Hook::AppReady);
+            return Ok(());
+        }
 
         let explicit_launch = self.launch != crate::cli::WindowLaunch::default();
         let mut restored = false;

@@ -54,6 +54,26 @@ When all tabs do not fit, bounded previous/next controls reserve fixed rows and
 the viewport automatically follows the active tab or F6 keyboard focus. Hidden
 tabs remain reachable without shrinking labels into unusable slivers.
 
+## Dragging tabs between windows
+
+Drag a tab out of its window and release it over another Termeric window to
+move it there: over that window's tab bar it goes before the first tab whose
+middle is past the pointer, elsewhere to the end (a pinned tab stays among the
+pinned tabs, others after them). Release it where no Termeric window is, such
+as the desktop, and it opens in a window of its own; a window's only tab stays
+put, since it already has a window. The tab keeps its place in its old window
+while the pointer is outside it.
+
+Windows must share a process, which new windows do by default
+([joining the running Termeric](command-line.md#joining-the-running-termeric)).
+On Wayland no window knows where the others are, and the source window holds
+the pointer until the release, so the drop target is the window the pointer
+enters within 400 ms of the release; if none does, the tab tears off. The torn-
+off window opens empty and adopts the tab, so a window that cannot open loses
+nothing. Live-domain tabs keep their daemon-owned place.
+
+## Overflow while dragging
+
 While dragging a tab, hold over a visible Previous/Next overflow control to
 move that same tab toward hidden tabs. The first move waits 400 ms; subsequent
 moves wait 200 ms each, even without pointer motion. Top and left layouts use

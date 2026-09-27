@@ -1031,6 +1031,9 @@ pub struct App {
     /// Set by the cross-window tab command and drained atomically by the
     /// process-level controller after the originating window event.
     request_move_tab_to_next_window: bool,
+    /// A dragged tab released outside this window, for the process to place
+    /// in the window the pointer enters next, or in a new one.
+    tab_dropped_outside: Option<usize>,
     /// Explicit launch requested by an in-app workflow such as domain attach.
     requested_window_launch: Option<crate::cli::WindowLaunch>,
     /// Only the sole default startup window may consume automatic restore.
@@ -1409,6 +1412,7 @@ impl App {
             request_new_window: false,
             request_move_pane_to_next_window: false,
             request_move_tab_to_next_window: false,
+            tab_dropped_outside: None,
             requested_window_launch: None,
             allow_auto_restore: true,
             allow_workspace_fallback: false,
