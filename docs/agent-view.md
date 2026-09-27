@@ -187,8 +187,10 @@ The permission chip switches between the agent's modes. Claude Code's:
 - **Bypass permissions** runs everything without asking. It is offered only
   after you turn on **Allow Bypass Permissions** on the Settings **Agents**
   page (`[agent_view] allow_bypass_permissions = true`), which starts Claude
-  Code with `--allow-dangerously-skip-permissions`. Use it only in a sandbox.
-  Turning the setting off returns any session in that mode to asking.
+  Code with `--allow-dangerously-skip-permissions`. A session started before
+  the setting was on restarts with that allowance when you choose the mode,
+  continuing its conversation; during a turn, it restarts once the turn
+  ends. Turning the setting off returns any session in that mode to asking.
 
 Codex's, which pair an approval policy with a sandbox:
 
@@ -198,7 +200,13 @@ Codex's, which pair an approval policy with a sandbox:
   the folder, and asks before leaving it or using the network;
 - **Full access** (`never`, no sandbox) runs everything without asking. Like
   **Bypass permissions**, it needs **Allow Bypass Permissions**; turning the
-  setting off returns the session to asking. Use it only in a sandbox.
+  setting off returns the session to asking.
+
+Nothing requires a sandbox for these two modes, but they run every command
+and edit without asking, so they suit a container, a virtual machine, or a
+throwaway checkout. Like every setting, **Allow Bypass Permissions** applies
+at once to the window it is changed in; **Save** keeps it for new windows
+and later starts.
 
 A session never starts in a mode that skips every check without that
 setting, whoever asked for it. Codex takes a mode or model change with the

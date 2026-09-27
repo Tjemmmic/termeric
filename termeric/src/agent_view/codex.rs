@@ -50,7 +50,7 @@ pub fn modes() -> Vec<ModeChoice> {
         ModeChoice::new(
             "full-access",
             "Full access",
-            "Everything runs without asking and without a sandbox. Use only in a sandbox",
+            "Everything runs without asking or a sandbox; best where nothing can be harmed",
         )
         .unrestricted(),
     ]

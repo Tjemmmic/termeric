@@ -132,6 +132,12 @@ pub struct AgentSession {
     resumed: Option<String>,
     /// The person opted in to the mode that skips every check.
     allow_bypass: bool,
+    /// The running process was started with that opt-in, so it may switch
+    /// to such a mode without restarting.
+    launched_with_bypass: bool,
+    /// An unrestricted mode chosen during a turn, which needs a restart
+    /// that waits for the turn to end.
+    mode_after_turn: Option<String>,
     /// The protocol of the latest process.
     protocol: Option<Box<dyn Protocol>>,
     transcript: Transcript,
@@ -201,6 +207,8 @@ impl AgentSession {
             handed_off: false,
             resumed: resume.clone(),
             allow_bypass: options.allow_bypass,
+            launched_with_bypass: false,
+            mode_after_turn: None,
             protocol: None,
             transcript,
             backlog: VecDeque::new(),
@@ -251,6 +259,7 @@ impl AgentSession {
             })?;
         self.backlog.clear();
         self.process = Some(process);
+        self.launched_with_bypass = self.allow_bypass;
         let protocol = self.protocol.insert(protocol);
         for line in protocol.start() {
             self.send_line(line);
@@ -280,6 +289,8 @@ impl AgentSession {
             handed_off: false,
             resumed: None,
             allow_bypass: false,
+            launched_with_bypass: false,
+            mode_after_turn: None,
             protocol: None,
             transcript,
             backlog: VecDeque::new(),
@@ -482,6 +493,12 @@ impl AgentSession {
         }
         if refused {
             self.close();
+            return;
+        }
+        if !self.transcript.turn_active()
+            && let Some(mode) = self.mode_after_turn.take()
+        {
+            self.set_mode(&mode);
         }
     }
 
@@ -798,6 +815,30 @@ impl AgentSession {
         if unrestricted && !self.allow_bypass {
             return;
         }
+        self.mode_after_turn = None;
+        let restart = unrestricted
+            && self.agent.unrestricted_needs_launch_allowance()
+            && self.is_running()
+            && !self.launched_with_bypass;
+        if restart {
+            if self.transcript.turn_active() {
+                self.mode_after_turn = Some(mode.to_owned());
+                self.transcript.push_notice(
+                    NoticeKind::Info,
+                    format!(
+                        "{} restarts in this mode once the turn ends",
+                        self.agent.name()
+                    ),
+                );
+                return;
+            }
+            // Started without the allowance: restart with it, continuing
+            // the conversation in the new mode.
+            self.transcript.set_mode(mode);
+            self.close();
+            self.relaunch_on_exit = true;
+            return;
+        }
         if self.is_running() {
             self.command(&AgentCommand::SetMode(mode.to_owned()));
         }
@@ -1110,6 +1151,45 @@ mod tests {
         });
         assert_eq!(session.queued().count(), 0);
         assert_eq!(session.transcript().first_prompt(), Some("after closing"));
+    }
+
+    #[test]
+    fn claude_restarts_to_bypass_when_the_opt_in_came_after_it_started() {
+        let Some(mut program) = fake() else {
+            return;
+        };
+        program.env = vec![("FAKE_CLAUDE_DELAY".into(), "0.02".into())];
+        let mut session = start(program);
+        session.prompt("hello", Vec::new()).unwrap();
+        pump_until(&mut session, |session| {
+            session.activity() == Activity::Finished { success: true }
+        });
+        let conversation = session.conversation_id().unwrap().to_owned();
+        session.set_bypass_allowed(true);
+
+        // Mid-turn, the restart waits for the turn to end.
+        session.prompt("go slow", Vec::new()).unwrap();
+        session.set_mode("bypassPermissions");
+        assert_eq!(session.transcript().mode(), "default");
+        session.interrupt();
+        pump_until(&mut session, |session| {
+            session.transcript().mode() == "bypassPermissions" && session.is_running()
+        });
+        pump_until(&mut session, |session| {
+            session.transcript().handshake().is_some()
+        });
+        session.prompt("and now", Vec::new()).unwrap();
+        pump_until(&mut session, |session| {
+            session.activity() == Activity::Finished { success: true }
+        });
+        let info = session.transcript().session().unwrap();
+        assert_eq!(info.permission_mode.as_deref(), Some("bypassPermissions"));
+        assert_eq!(session.conversation_id(), Some(conversation.as_str()));
+        // Refused switches would have left a warning.
+        assert!(!session.transcript().items().iter().any(|item| matches!(
+            item,
+            Item::Notice(notice) if notice.kind == NoticeKind::Warning
+        )));
     }
 
     #[test]

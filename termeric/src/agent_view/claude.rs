@@ -423,7 +423,7 @@ pub fn modes() -> Vec<ModeChoice> {
         ModeChoice::new(
             "bypassPermissions",
             "Bypass permissions",
-            "Everything runs without asking. Use only in a sandbox",
+            "Everything runs without asking; best where nothing can be harmed",
         )
         .unrestricted(),
     ]

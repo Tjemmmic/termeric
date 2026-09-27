@@ -41,6 +41,9 @@ for index, argument in enumerate(sys.argv):
     if argument == "--resume" and index + 1 < len(sys.argv):
         SESSION = sys.argv[index + 1]
 
+# Claude Code switches to bypassPermissions only when launched allowing it.
+ALLOW_BYPASS = "--allow-dangerously-skip-permissions" in sys.argv
+
 pending_input = []
 interrupted = False
 
@@ -109,6 +112,13 @@ def handle_control(message):
             "current_permission_mode": mode,
         }
     elif subtype == "set_permission_mode":
+        if request["mode"] == "bypassPermissions" and not ALLOW_BYPASS:
+            send({"type": "control_response", "response": {
+                "subtype": "error", "request_id": message["request_id"],
+                "error": "Cannot set permission mode to bypassPermissions because the session "
+                         "was not launched with --dangerously-skip-permissions",
+                "error_code": "bypass_not_launched"}})
+            return True
         mode = request["mode"]
         send({"type": "system", "subtype": "status", "status": None,
               "permissionMode": mode, "session_id": SESSION, "uuid": str(uuid.uuid4())})

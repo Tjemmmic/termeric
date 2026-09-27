@@ -91,6 +91,14 @@ impl AgentKind {
         }
     }
 
+    /// Whether the agent must be started allowing a mode that skips every
+    /// check before it can switch to one: Claude Code refuses
+    /// `bypassPermissions` unless launched with
+    /// `--allow-dangerously-skip-permissions`.
+    pub fn unrestricted_needs_launch_allowance(self) -> bool {
+        matches!(self, AgentKind::ClaudeCode)
+    }
+
     /// Models offered before the agent has listed its own.
     pub fn fallback_models(self) -> Vec<ModelChoice> {
         let values: &[&str] = match self {
