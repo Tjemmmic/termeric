@@ -29,6 +29,11 @@ pub struct Launch {
     pub mode: String,
     /// A model the agent offered; `None` keeps its own default.
     pub model: Option<String>,
+    /// A level of effort the agent offered; `None` keeps its own.
+    pub effort: Option<String>,
+    /// Allow everything the agent asks about, for agents that offer it
+    /// apart from their modes.
+    pub auto_approve: bool,
     /// Continue an earlier conversation by the agent's id for it.
     pub resume: Option<String>,
     /// The person opted in to modes that skip every check.
@@ -110,6 +115,28 @@ impl AgentKind {
         matches!(self, AgentKind::ClaudeCode)
     }
 
+    /// Whether the agent's own interface can approve everything it would
+    /// ask about as a switch of its own, beside its modes, as OpenCode's
+    /// auto-approve does. Other agents approve everything through a mode.
+    pub fn offers_auto_approve(self) -> bool {
+        matches!(self, AgentKind::OpenCode)
+    }
+
+    /// Arguments that delete conversation `id` from the agent's history, for
+    /// agents that keep a conversation as soon as it opens: the agent view
+    /// opens one ahead of the first message, and one never used is forgotten.
+    pub fn forget_args(self, id: &str) -> Option<Vec<String>> {
+        match self {
+            AgentKind::OpenCode => Some(vec![
+                "session".to_owned(),
+                "delete".to_owned(),
+                id.to_owned(),
+            ]),
+            // Claude Code and Codex keep nothing before the first message.
+            AgentKind::ClaudeCode | AgentKind::Codex => None,
+        }
+    }
+
     /// Models offered before the agent has listed its own.
     pub fn fallback_models(self) -> Vec<ModelChoice> {
         let values: &[&str] = match self {
@@ -169,6 +196,8 @@ impl AgentKind {
                     cwd: launch.cwd.clone(),
                     mode: launch.mode.clone(),
                     model: launch.model.clone().filter(|model| model != "default"),
+                    effort: launch.effort.clone(),
+                    auto_approve: launch.auto_approve,
                     resume: launch.resume.clone(),
                 })),
             ),

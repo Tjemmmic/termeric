@@ -314,6 +314,10 @@ pub struct NewSessionForm {
     /// The id of the mode to start in; `None` is the agent's default.
     pub mode: Option<String>,
     pub model: Option<String>,
+    /// The level of effort to start at; `None` is the agent's.
+    pub effort: Option<String>,
+    /// Allow everything the agent asks about, where it offers that.
+    pub auto_approve: bool,
     pub scroll: Scroll,
 }
 
@@ -324,6 +328,8 @@ impl NewSessionForm {
             self.agent = agent;
             self.mode = None;
             self.model = None;
+            self.effort = None;
+            self.auto_approve = false;
         }
     }
 
@@ -343,6 +349,8 @@ impl Default for NewSessionForm {
             agent: AgentKind::default(),
             mode: None,
             model: None,
+            effort: None,
+            auto_approve: false,
             scroll: Scroll::default(),
         }
     }

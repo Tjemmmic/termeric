@@ -181,6 +181,7 @@ pub enum ExpandKey {
 pub enum MenuKind {
     Mode,
     Model,
+    Effort,
     More,
     Folder,
 }
@@ -191,6 +192,10 @@ pub enum MenuAction {
     /// Switch to the mode with this id.
     SetMode(String),
     SetModel(String),
+    /// Run at the level of effort with this value.
+    SetEffort(String),
+    /// Allow everything the agent asks about without asking, or ask again.
+    SetAutoApprove(bool),
     SetFolder(std::path::PathBuf),
     EndSession,
     OpenInTerminal,

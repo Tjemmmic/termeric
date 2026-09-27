@@ -225,6 +225,8 @@ impl App {
             cwd: cwd.clone(),
             mode: form.mode_id(),
             model: form.model.clone().filter(|model| model != "default"),
+            effort: form.effort.clone(),
+            auto_approve: form.auto_approve,
             resume: None,
             allow_bypass: self.config.agent_view.allow_bypass_permissions,
         };

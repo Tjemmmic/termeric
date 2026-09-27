@@ -80,11 +80,12 @@ resets them to that agent's defaults. The agent starts as soon as the page
 opens, so its commands, your account's models, and its earlier conversations
 are listed before the first message. It follows the page's folder, including
 a `cd` in the terminal beside it, and closing the panel before a message ends
-it. Codex and OpenCode open their conversation only with the first message,
-so a session that never got one leaves nothing in their history. OpenCode
-lists its models and commands only once its conversation opens, so before
-the first message its model chip offers only *Default* and `/` lists
-nothing.
+it. Codex opens its conversation (a thread) only with the first message, so
+a session that never got one leaves nothing in Codex's history. OpenCode
+tells its models, modes, effort levels, and commands only for an open
+conversation, so it opens one as soon as it starts; if no message is sent,
+Termeric deletes that conversation with `opencode session delete` once
+OpenCode has exited, so it never appears in OpenCode's history.
 
 Termeric looks for `claude`, `codex`, and `opencode` on its own `PATH` and then on the
 `PATH` your login shell sets up, so a desktop-launched Termeric finds agents
@@ -229,14 +230,25 @@ approve them in the panel, set them to ask in `opencode.json`:
 { "permission": { "edit": "ask", "bash": "ask", "webfetch": "ask" } }
 ```
 
+**Auto-approve**, below OpenCode's modes, allows everything it asks about
+without asking, as OpenCode's own auto-approve does; things your OpenCode
+settings deny are never asked about, so they stay denied. It works with any
+of OpenCode's modes, and the chip then reads, for example, *Build ·
+Auto-approve* with a warning sign. Like **Bypass permissions**, it is offered
+only after **Allow Bypass Permissions** is on, and turning that setting off
+turns it off.
+
 A session never starts in a mode that skips every check without that
 setting, whoever asked for it. Codex takes a mode or model change with the
 next message, since it applies them per turn; OpenCode takes one at once.
 
 Some accounts cannot use Claude Code's **Auto**; its refusal then shows in the
 conversation. The model chip lists the models the agent offers for this
-account; *Default* keeps the model the agent's own settings choose. The ring
-beside the send button shows how much of the model's context the
+account; *Default* keeps the model the agent's own settings choose. OpenCode
+names the model it runs, so its chip shows that model rather than *Default*.
+When the model offers levels of effort, as many of OpenCode's do, an effort
+chip beside it chooses one; OpenCode names its own choice *Default*. The
+ring beside the send button shows how much of the model's context the
 conversation fills.
 
 ## Sessions
@@ -357,11 +369,16 @@ Termeric runs `opencode acp`, which speaks the Agent Client Protocol:
 JSON-RPC 2.0 over its pipes, one message per line. `initialize` tells
 OpenCode that Termeric reads and writes no files and runs no terminals for
 it, so OpenCode does both itself; `session/list` then lists the folder's
-earlier sessions. The first message opens a session (`session/new`, or
-`session/resume` to continue one, which replays nothing), which reports its
-settings: models, modes, and effort, as `configOptions`. When the chosen
-mode or model differs from the session's, `session/set_config_option`
-changes it first, and the message waits for the answer. Each message is a
+earlier sessions. A session opens at once (`session/new`, or
+`session/resume` to continue one, which replays nothing) and reports its
+settings, models, modes, and effort levels, as `configOptions`, then its
+commands. When the chosen mode, model, or effort differs from the session's,
+`session/set_config_option` changes it, the effort after the model, whose
+levels they are, and a message waits for the answers. A session no message
+reached is deleted with `opencode session delete <id>` after OpenCode exits,
+because ACP has no way to delete one. OpenCode's auto-approve belongs to its
+own interface, not to its server, so Termeric answers permission requests
+itself when it is on, choosing *Allow once*. Each message is a
 `session/prompt` that stays open for the turn while `session/update`
 notifications stream its text, reasoning, tool calls, commands, and context
 use; the prompt's answer ends the turn with its stop reason.
@@ -448,8 +465,10 @@ program = "/path/to/termeric/termeric/tests/fixtures/agent_view/fake_opencode.py
 
 - Claude Code, Codex, and OpenCode only; Gemini CLI runs in terminals. The
   supervisor runs Claude Code or Codex.
-- OpenCode's model list and `/` commands arrive with its first message, and
-  its effort setting is not offered.
+- An unused OpenCode conversation is deleted when its session ends,
+  including when Termeric quits, which waits up to five seconds for it. One
+  still opening at the moment its session ends, or left by a crash, is not,
+  and shows in OpenCode's history as *New session*.
 - Codex shows a command's output when the command ends, not while it runs,
   and does not show Codex's plan-mode proposals.
 - No image attachments or file mentions.

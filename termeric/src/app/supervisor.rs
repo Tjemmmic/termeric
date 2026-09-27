@@ -231,6 +231,8 @@ impl App {
             agent: kind,
             mode: kind.default_mode().into(),
             model: None,
+            effort: None,
+            auto_approve: false,
             resume: None,
             allow_bypass: false,
         };

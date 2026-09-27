@@ -784,3 +784,100 @@ fn the_new_session_page_chooses_among_the_agents_it_drives() {
         ]
     );
 }
+
+#[test]
+fn opencode_shows_its_model_effort_and_auto_approve() {
+    use crate::agent_view::event::{EffortChoice, ModeChoice};
+    use AgentAvailability::Ready;
+    let colors = colors();
+    let mut state = AgentViewState::default();
+    state.open();
+    state.new_session.choose_agent(AgentKind::OpenCode);
+    let mut transcript = Transcript::new("OpenCode", "build");
+    let effort = |value: &str, label: &str| EffortChoice {
+        value: value.into(),
+        label: label.into(),
+        description: String::new(),
+    };
+    transcript.apply(AgentEvent::Ready(Handshake {
+        models: vec![ModelChoice {
+            value: "zai/glm-5.2".into(),
+            display_name: "Z.AI/GLM-5.2".into(),
+            description: String::new(),
+        }],
+        modes: vec![
+            ModeChoice::new("build", "Build", ""),
+            ModeChoice::new("plan", "Plan", "").plans(),
+        ],
+        current_model: Some("zai/glm-5.2".into()),
+        efforts: vec![effort("high", "High"), effort("max", "Max")],
+        current_effort: Some("high".into()),
+        ..Handshake::default()
+    }));
+    let session =
+        AgentSession::detached_agent(AgentKind::OpenCode, PathBuf::from("/home/me"), transcript);
+    let sessions = [&session];
+    let agents = vec![(AgentKind::OpenCode, Ready)];
+    let input = new_session_input(&state, &sessions, &colors, agents.clone());
+    let scene = build(&input, &mut measure());
+    assert_unique_targets(&scene);
+    // The model the agent runs, not "Default".
+    assert_eq!(
+        scene
+            .hit_for(&Target::OpenMenu(MenuKind::Model))
+            .unwrap()
+            .label,
+        "Model: Z.AI/GLM-5.2"
+    );
+    assert_eq!(
+        scene
+            .hit_for(&Target::OpenMenu(MenuKind::Effort))
+            .unwrap()
+            .label,
+        "Effort: High"
+    );
+    let efforts: Vec<(MenuAction, bool)> = menu_items(&input, MenuKind::Effort)
+        .into_iter()
+        .map(|item| (item.action, item.checked))
+        .collect();
+    assert_eq!(
+        efforts,
+        [
+            (MenuAction::SetEffort("high".into()), true),
+            (MenuAction::SetEffort("max".into()), false),
+        ]
+    );
+    // Auto-approve waits for the opt-in, then sits beside the modes.
+    let modes = |input: &Input| -> Vec<MenuAction> {
+        menu_items(input, MenuKind::Mode)
+            .into_iter()
+            .map(|item| item.action)
+            .collect()
+    };
+    assert_eq!(
+        modes(&input),
+        [
+            MenuAction::SetMode("build".into()),
+            MenuAction::SetMode("plan".into())
+        ]
+    );
+    let opted_in = Input {
+        allow_bypass: true,
+        ..new_session_input(&state, &sessions, &colors, agents.clone())
+    };
+    assert_eq!(modes(&opted_in)[2], MenuAction::SetAutoApprove(true));
+    state.new_session.auto_approve = true;
+    let approving = Input {
+        allow_bypass: true,
+        ..new_session_input(&state, &sessions, &colors, agents)
+    };
+    let scene = build(&approving, &mut measure());
+    assert_eq!(
+        scene
+            .hit_for(&Target::OpenMenu(MenuKind::Mode))
+            .unwrap()
+            .label,
+        "Permissions: Build, approving everything"
+    );
+    assert_eq!(modes(&approving)[2], MenuAction::SetAutoApprove(false));
+}

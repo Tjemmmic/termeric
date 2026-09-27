@@ -122,8 +122,8 @@ impl ClaudeCodec {
     }
 
     /// One line of protocol input for `command`.
-    pub fn encode_command(&mut self, command: &AgentCommand) -> String {
-        match command {
+    pub fn encode_command(&mut self, command: &AgentCommand) -> Option<String> {
+        Some(match command {
             AgentCommand::Prompt(text) => line(&json!({
                 "type": "user",
                 "session_id": "",
@@ -179,7 +179,11 @@ impl ClaudeCodec {
                 RequestKind::ContextUsage,
                 json!({ "subtype": "get_context_usage" }),
             ),
-        }
+            // Claude Code takes neither over stream-json: its effort is set
+            // when it starts, and Bypass permissions is its mode for asking
+            // about nothing.
+            AgentCommand::SetEffort(_) | AgentCommand::SetAutoApprove(_) => return None,
+        })
     }
 
     /// A refusal for a control request this host does not handle, so the
@@ -337,7 +341,7 @@ impl Protocol for ClaudeCodec {
     }
 
     fn encode(&mut self, command: &AgentCommand) -> Exchange {
-        Exchange::send(vec![self.encode_command(command)])
+        Exchange::send(self.encode_command(command).into_iter().collect())
     }
 
     fn decode(&mut self, line: &str) -> Exchange {
@@ -359,7 +363,7 @@ impl Protocol for ClaudeCodec {
                 // Claude Code reports how full the context is only when asked.
                 AgentEvent::TurnFinished(_) => decoded
                     .lines
-                    .push(self.encode_command(&AgentCommand::QueryContextUsage)),
+                    .extend(self.encode_command(&AgentCommand::QueryContextUsage)),
                 _ => {}
             }
         }
@@ -477,6 +481,7 @@ fn handshake(body: Option<&Map<String, Value>>) -> Handshake {
         commands,
         modes: modes(),
         permission_mode: str_field(body, "current_permission_mode").and_then(parse_mode),
+        ..Handshake::default()
     }
 }
 
@@ -897,17 +902,25 @@ mod tests {
     #[test]
     fn prompts_and_answers_encode_as_the_sdk_does() {
         let mut codec = ClaudeCodec::new();
-        let prompt = parse(&codec.encode_command(&AgentCommand::Prompt("hi".into())));
+        let prompt = parse(
+            &codec
+                .encode_command(&AgentCommand::Prompt("hi".into()))
+                .unwrap(),
+        );
         assert_eq!(prompt["type"], "user");
         assert_eq!(prompt["message"]["content"][0]["text"], "hi");
-        let allow = parse(&codec.encode_command(&AgentCommand::Answer {
-            request_id: "r1".into(),
-            tool_use_id: Some("t1".into()),
-            decision: ApprovalDecision::Allow {
-                input: json!({"command": "ls"}),
-                remember: Some(json!([{"type": "addRules"}])),
-            },
-        }));
+        let allow = parse(
+            &codec
+                .encode_command(&AgentCommand::Answer {
+                    request_id: "r1".into(),
+                    tool_use_id: Some("t1".into()),
+                    decision: ApprovalDecision::Allow {
+                        input: json!({"command": "ls"}),
+                        remember: Some(json!([{"type": "addRules"}])),
+                    },
+                })
+                .unwrap(),
+        );
         assert_eq!(allow["response"]["request_id"], "r1");
         assert_eq!(allow["response"]["response"]["behavior"], "allow");
         assert_eq!(
@@ -916,24 +929,36 @@ mod tests {
         );
         assert_eq!(allow["response"]["response"]["toolUseID"], "t1");
         assert!(allow["response"]["response"]["updatedPermissions"].is_array());
-        let deny = parse(&codec.encode_command(&AgentCommand::Answer {
-            request_id: "r2".into(),
-            tool_use_id: None,
-            decision: ApprovalDecision::Deny {
-                message: "no".into(),
-                interrupt: true,
-            },
-        }));
+        let deny = parse(
+            &codec
+                .encode_command(&AgentCommand::Answer {
+                    request_id: "r2".into(),
+                    tool_use_id: None,
+                    decision: ApprovalDecision::Deny {
+                        message: "no".into(),
+                        interrupt: true,
+                    },
+                })
+                .unwrap(),
+        );
         assert_eq!(deny["response"]["response"]["behavior"], "deny");
         assert_eq!(deny["response"]["response"]["interrupt"], true);
-        let mode = parse(&codec.encode_command(&AgentCommand::SetMode("plan".into())));
+        let mode = parse(
+            &codec
+                .encode_command(&AgentCommand::SetMode("plan".into()))
+                .unwrap(),
+        );
         assert_eq!(mode["request"]["mode"], "plan");
     }
 
     #[test]
     fn failed_control_requests_are_reported() {
         let mut codec = ClaudeCodec::new();
-        let request = parse(&codec.encode_command(&AgentCommand::SetModel("nope".into())));
+        let request = parse(
+            &codec
+                .encode_command(&AgentCommand::SetModel("nope".into()))
+                .unwrap(),
+        );
         let id = request["request_id"].as_str().unwrap().to_owned();
         let event = only_event(
             &mut codec,
@@ -962,7 +987,11 @@ mod tests {
             AgentEvent::HandshakeFailed("not supported".into())
         );
         // A refused background query is not the person's concern.
-        let request = parse(&codec.encode_command(&AgentCommand::QueryContextUsage));
+        let request = parse(
+            &codec
+                .encode_command(&AgentCommand::QueryContextUsage)
+                .unwrap(),
+        );
         let id = request["request_id"].as_str().unwrap().to_owned();
         assert!(decode(&mut codec, failure(&id)).events.is_empty());
     }
@@ -970,7 +999,11 @@ mod tests {
     #[test]
     fn context_usage_replies_become_usage_events() {
         let mut codec = ClaudeCodec::new();
-        let request = parse(&codec.encode_command(&AgentCommand::QueryContextUsage));
+        let request = parse(
+            &codec
+                .encode_command(&AgentCommand::QueryContextUsage)
+                .unwrap(),
+        );
         let id = request["request_id"].as_str().unwrap().to_owned();
         let event = only_event(
             &mut codec,

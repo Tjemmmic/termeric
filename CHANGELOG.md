@@ -22,8 +22,9 @@ Versioning once public beta tags begin.
   Codex runs through its app server with its own modes (Ask before changes,
   Auto, and Full access behind the same opt-in), models, skills, `/compact`,
   and `/review`. OpenCode runs through the Agent Client Protocol (`opencode
-  acp`) with its own modes, models, and commands, and approvals answered with
-  its own options. The new-session page chooses the agent, and **Open Agents
+  acp`) with its own modes, models, effort levels, and commands, listed
+  before the first message, approvals answered with its own options, and its
+  auto-approve behind **Allow Bypass Permissions**. The new-session page chooses the agent, and **Open Agents
   In** opens any of them from **New Agent…**. See
   [agent view](docs/agent-view.md).
 

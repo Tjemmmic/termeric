@@ -649,6 +649,7 @@ impl CodexCodec {
             commands,
             modes: modes(),
             permission_mode: None,
+            ..Handshake::default()
         }
     }
 
@@ -1231,6 +1232,9 @@ impl Protocol for CodexCodec {
             }
             // Codex reports usage after every request on its own.
             AgentCommand::QueryContextUsage => Exchange::default(),
+            // Codex's modes already pair approvals with a sandbox, and its
+            // effort follows its settings.
+            AgentCommand::SetEffort(_) | AgentCommand::SetAutoApprove(_) => Exchange::default(),
         }
     }
 

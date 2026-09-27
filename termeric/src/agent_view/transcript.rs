@@ -980,6 +980,7 @@ mod tests {
             commands: Vec::new(),
             modes: Vec::new(),
             permission_mode: Some("default".into()),
+            ..Handshake::default()
         }));
     }
 

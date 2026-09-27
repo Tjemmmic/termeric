@@ -12,12 +12,14 @@ message:
   todo      update its to-do list
   slow      stream slowly, so the turn can be stopped
   signin    fail as a provider without credentials does
-  settings  answer with the mode and model the turn ran with
+  settings  answer with the mode, model, and effort the turn ran with
   (other)   think, then answer with a short Markdown reply
 
 `session/list` offers two earlier sessions in any folder, `ses_earlier_one`
-and `ses_earlier_two`, which can be continued; any other id cannot. The first
-argument must be `acp`.
+and `ses_earlier_two`, which can be continued; any other id cannot. A session
+opens on `session/new`; `zai/glm-4.7` offers levels of effort, as OpenCode's
+models with variants do. The first argument must be `acp`, or `session delete
+<id>`, which appends the id to the file FAKE_OPENCODE_FORGOTTEN names.
 """
 
 import json
@@ -36,6 +38,7 @@ state = {
     "session": None,
     "mode": "build",
     "model": "opencode/big-pickle",
+    "effort": "default",
     "next_id": 0,
     "cancelled": False,
 }
@@ -111,7 +114,7 @@ def ask(method, params):
 
 
 def options():
-    return [
+    found = [
         {"id": "model", "name": "Model", "category": "model", "type": "select",
          "currentValue": state["model"],
          "options": [
@@ -126,6 +129,12 @@ def options():
              {"value": "plan", "name": "plan", "description": "Plan mode. Disallows all edit tools."},
          ]},
     ]
+    if state["model"] == "zai/glm-4.7":
+        found.append({"id": "effort", "name": "Effort", "category": "thought_level",
+                      "type": "select", "currentValue": state["effort"],
+                      "options": [{"value": value, "name": value}
+                                  for value in ("low", "high", "default")]})
+    return found
 
 
 def commands():
@@ -168,7 +177,7 @@ def run_turn(text):
                       "message": "Authentication required: provider authentication required",
                       "data": {"providerId": "zai"}}
     if "settings" in words:
-        say(f"Mode {state['mode']}, model {state['model']}.")
+        say(f"Mode {state['mode']}, model {state['model']}, effort {state['effort']}.")
         return "end_turn", None
     if "edit" in words:
         path = os.path.join(os.getcwd(), "notes.txt")
@@ -285,9 +294,11 @@ def handle(message):
         else:
             error = {"code": -32602, "message": "Session not found"}
     elif method == "session/set_config_option":
-        key = {"mode": "mode", "model": "model"}.get(params.get("configId"))
+        key = {"mode": "mode", "model": "model", "effort": "effort"}.get(params.get("configId"))
         if key:
             state[key] = params.get("value")
+        if key == "model":
+            state["effort"] = "default"
         result = {"configOptions": options()}
     elif method == "session/prompt":
         state["cancelled"] = False
@@ -309,8 +320,14 @@ def handle(message):
 
 
 def main():
+    if sys.argv[1:3] == ["session", "delete"] and len(sys.argv) == 4:
+        forgotten = os.environ.get("FAKE_OPENCODE_FORGOTTEN")
+        if forgotten:
+            with open(forgotten, "a") as file:
+                file.write(sys.argv[3] + "\n")
+        return
     if sys.argv[1:2] != ["acp"]:
-        sys.stderr.write("usage: fake_opencode.py acp\n")
+        sys.stderr.write("usage: fake_opencode.py acp | session delete <id>\n")
         sys.exit(2)
     while True:
         message = set_aside.pop(0) if set_aside else read_message()

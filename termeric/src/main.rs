@@ -144,7 +144,13 @@ fn main() -> Result<std::process::ExitCode> {
 
     // Create and run the native windows.
     event_loop.run_app(&mut app)?;
-    if let Some(error) = app.take_fatal_startup_error() {
+    let fatal = app.take_fatal_startup_error();
+    // Closing the windows ends their agents; an agent that keeps a
+    // conversation as soon as it opens is told to forget one nothing was
+    // said in, which must not be cut short by exiting.
+    drop(app);
+    agent_view::session::wait_for_forgetting(std::time::Duration::from_secs(5));
+    if let Some(error) = fatal {
         anyhow::bail!(error);
     }
 

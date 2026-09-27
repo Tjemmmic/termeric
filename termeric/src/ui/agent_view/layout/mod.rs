@@ -16,7 +16,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::agent_view::agent::AgentKind;
-use crate::agent_view::event::{ModeChoice, ModelChoice, model_name, selectable_modes};
+use crate::agent_view::event::{
+    EffortChoice, Handshake, ModeChoice, ModelChoice, model_name, selectable_modes,
+};
 use crate::agent_view::session::AgentSession;
 use crate::agent_view::transcript::Activity;
 use crate::ui::text_layout::{
@@ -751,6 +753,25 @@ impl Builder<'_, '_> {
         self.hit(region, bounds, target, HitRole::Button, label, true);
     }
 
+    /// The width a pill takes to show all of `text`.
+    fn chip_width(&mut self, text: &str, icon: bool, trailing: bool) -> f32 {
+        let icon_size = self.m.px(13.0);
+        let leading = if icon {
+            icon_size + self.m.px(6.0)
+        } else {
+            0.0
+        };
+        let trailing = if trailing {
+            icon_size + self.m.px(4.0)
+        } else {
+            0.0
+        };
+        self.m.px(10.0) * 2.0
+            + leading
+            + self.text_width(text, UiFace::SANS, self.m.small)
+            + trailing
+    }
+
     /// A small pill. Returns its width.
     #[allow(clippy::too_many_arguments)]
     fn chip(
@@ -771,8 +792,8 @@ impl Builder<'_, '_> {
         let icon_size = self.m.px(13.0);
         let leading = icon.map_or(0.0, |_| icon_size + self.m.px(6.0));
         let trailing_width = trailing.map_or(0.0, |_| icon_size + self.m.px(4.0));
-        let text_width = self.text_width(text, UiFace::SANS, size);
-        let width = (padding * 2.0 + leading + text_width + trailing_width)
+        let width = self
+            .chip_width(text, icon.is_some(), trailing.is_some())
             .min(max_width)
             .ceil();
         let bounds = Bounds::new(x.round(), y.round(), width, self.m.chip);
@@ -1610,37 +1631,81 @@ impl Builder<'_, '_> {
         // Toolbar.
         let toolbar_y = box_bounds.bottom() - toolbar_height + self.m.px(2.0);
         let mut x = inner_x + self.m.px(6.0);
-        let model_label = match (state.screen, session) {
-            (Screen::Conversation, Some(session)) => session.model_label(),
-            _ => model_name(
-                &offered_models(self.input),
-                state.new_session.model.as_deref().unwrap_or("default"),
-            ),
-        };
+        let model_label = model_name(&offered_models(self.input), &current_model(self.input));
         let (modes, current) = mode_state(self.input);
         let choice = modes.iter().find(|mode| mode.id == current);
+        let approving = auto_approve(self.input);
         let mode_icon = match choice {
+            _ if approving => Icon::Warning,
             Some(mode) if mode.plans => Icon::Plan,
             Some(mode) if mode.unrestricted => Icon::Warning,
             _ => Icon::Shield,
         };
         let mode_label = choice.map_or(current.as_str(), |mode| mode.label.as_str());
-        let mode_name = format!("Permissions: {mode_label}");
+        let (mode_text, mode_name) = if approving {
+            (
+                format!("{mode_label} · Auto-approve"),
+                format!("Permissions: {mode_label}, approving everything"),
+            )
+        } else {
+            (mode_label.to_owned(), format!("Permissions: {mode_label}"))
+        };
         let model_name = format!("Model: {model_label}");
+        let efforts = offered_efforts(self.input);
+        let effort_label = (!efforts.is_empty()).then(|| {
+            let current = current_effort(self.input);
+            efforts
+                .iter()
+                .find(|effort| Some(&effort.value) == current.as_ref())
+                .map_or_else(
+                    || current.clone().unwrap_or_else(|| "Effort".to_owned()),
+                    |effort| effort.label.clone(),
+                )
+        });
+        // The chips share the row left of the send button and the context
+        // ring, whose label is at most "100%".
+        let send_size = self.m.control;
+        let ring = if session
+            .and_then(|session| session.transcript().context())
+            .is_some()
+        {
+            self.text_width("100%", UiFace::SANS, self.m.small) + self.m.px(28.0)
+        } else {
+            0.0
+        };
+        let chips_end = box_bounds.right() - self.m.px(14.0) - send_size - ring;
+        let gap = self.m.px(2.0);
+        let effort_width = effort_label.as_ref().map_or(0.0, |label| {
+            self.chip_width(label, false, true)
+                .min(inner_width / 5.0)
+                .ceil()
+        });
+        // Approving everything is said in full; the model's name gives way.
+        let mode_share = if efforts.is_empty() || approving {
+            2.0
+        } else {
+            3.0
+        };
         let width = self.chip(
             region,
             x,
             toolbar_y,
-            mode_label,
+            &mode_text,
             Some(mode_icon),
             Some(Icon::ChevronDown),
             false,
             false,
-            inner_width / 2.0,
+            inner_width / mode_share,
             Some((Target::OpenMenu(MenuKind::Mode), &mode_name)),
         );
-        x += width + self.m.px(2.0);
-        self.chip(
+        x += width + gap;
+        let effort_room = if effort_label.is_some() {
+            effort_width + gap
+        } else {
+            0.0
+        };
+        let model_room = (chips_end - x - effort_room).max(self.m.px(60.0));
+        let width = self.chip(
             region,
             x,
             toolbar_y,
@@ -1649,10 +1714,25 @@ impl Builder<'_, '_> {
             Some(Icon::ChevronDown),
             false,
             false,
-            inner_width / 3.0,
+            model_room,
             Some((Target::OpenMenu(MenuKind::Model), &model_name)),
         );
-        let send_size = self.m.control;
+        if let Some(effort_label) = effort_label {
+            x += width + gap;
+            let effort_name = format!("Effort: {effort_label}");
+            self.chip(
+                region,
+                x,
+                toolbar_y,
+                &effort_label,
+                None,
+                Some(Icon::ChevronDown),
+                false,
+                false,
+                effort_width,
+                Some((Target::OpenMenu(MenuKind::Effort), &effort_name)),
+            );
+        }
         let send = Bounds::new(
             box_bounds.right() - self.m.px(6.0) - send_size,
             toolbar_y - self.m.px(2.0),
@@ -1836,7 +1916,7 @@ pub fn menu_items(input: &Input<'_>, kind: MenuKind) -> Vec<MenuItem> {
     match kind {
         MenuKind::Mode => {
             let (modes, current) = mode_state(input);
-            selectable_modes(&modes, input.allow_bypass)
+            let mut items: Vec<MenuItem> = selectable_modes(&modes, input.allow_bypass)
                 .into_iter()
                 .map(|mode| MenuItem {
                     text: mode.label.clone(),
@@ -1844,18 +1924,27 @@ pub fn menu_items(input: &Input<'_>, kind: MenuKind) -> Vec<MenuItem> {
                     action: MenuAction::SetMode(mode.id.clone()),
                     checked: mode.id == current,
                 })
-                .collect()
+                .collect();
+            // Beside the modes, as the agent's own interface has it, and
+            // like a mode that skips every check, only after the opt-in.
+            let agent = input.agent();
+            if agent.offers_auto_approve() && input.allow_bypass {
+                let approving = auto_approve(input);
+                items.push(MenuItem {
+                    text: "Auto-approve".into(),
+                    detail: format!(
+                        "Allow everything {} asks about without asking, as its own \
+                         auto-approve does",
+                        agent.name()
+                    ),
+                    action: MenuAction::SetAutoApprove(!approving),
+                    checked: approving,
+                });
+            }
+            items
         }
         MenuKind::Model => {
-            let current = match (input.state.screen, session) {
-                (Screen::Conversation, Some(session)) => session.model().unwrap_or("default"),
-                _ => input
-                    .state
-                    .new_session
-                    .model
-                    .as_deref()
-                    .unwrap_or("default"),
-            };
+            let current = current_model(input);
             offered_models(input)
                 .into_iter()
                 .map(|model| MenuItem {
@@ -1863,6 +1952,18 @@ pub fn menu_items(input: &Input<'_>, kind: MenuKind) -> Vec<MenuItem> {
                     text: model.display_name,
                     detail: model.description,
                     action: MenuAction::SetModel(model.value),
+                })
+                .collect()
+        }
+        MenuKind::Effort => {
+            let current = current_effort(input);
+            offered_efforts(input)
+                .into_iter()
+                .map(|effort| MenuItem {
+                    checked: Some(&effort.value) == current.as_ref(),
+                    text: effort.label,
+                    detail: effort.description,
+                    action: MenuAction::SetEffort(effort.value),
                 })
                 .collect()
         }
@@ -1948,23 +2049,69 @@ fn mode_state(input: &Input) -> (Vec<ModeChoice>, String) {
     }
 }
 
-/// The models the agent offers: the shown session's, else any running
-/// session's of the same agent (they share an account), else a fallback
-/// list until one starts.
-fn offered_models(input: &Input) -> Vec<ModelChoice> {
+/// What the shown agent reported: the shown session's handshake, else any
+/// running session's of the same agent (they share an account).
+fn reported_handshake<'a>(input: &'a Input) -> Option<&'a Handshake> {
     let agent = input.agent();
     let shown = match input.state.screen {
         Screen::Sessions => None,
         _ => input.tab_session(),
     };
-    let reported = shown
+    shown
         .into_iter()
         .chain(input.sessions.iter().copied())
         .filter(|session| session.agent() == agent)
         .find_map(|session| session.transcript().handshake())
+}
+
+/// The models the agent offers, else a fallback list until it lists them.
+fn offered_models(input: &Input) -> Vec<ModelChoice> {
+    reported_handshake(input)
         .map(|handshake| handshake.models.clone())
-        .filter(|models| !models.is_empty());
-    reported.unwrap_or_else(|| agent.fallback_models())
+        .filter(|models| !models.is_empty())
+        .unwrap_or_else(|| input.agent().fallback_models())
+}
+
+/// The model shown and checked: the conversation's or the form's choice,
+/// else the one the agent says it runs.
+fn current_model(input: &Input) -> String {
+    let chosen = match (input.state.screen, input.active()) {
+        (Screen::Conversation, Some(session)) => session.model(),
+        _ => input.state.new_session.model.as_deref(),
+    };
+    chosen
+        .or_else(|| {
+            reported_handshake(input).and_then(|handshake| handshake.current_model.as_deref())
+        })
+        .unwrap_or("default")
+        .to_owned()
+}
+
+/// The levels of effort the current model offers; empty when it offers no
+/// choice.
+fn offered_efforts(input: &Input) -> Vec<EffortChoice> {
+    reported_handshake(input)
+        .map(|handshake| handshake.efforts.clone())
+        .unwrap_or_default()
+}
+
+/// The level of effort shown and checked, like [`current_model`].
+fn current_effort(input: &Input) -> Option<String> {
+    let chosen = match (input.state.screen, input.active()) {
+        (Screen::Conversation, Some(session)) => return session.effort().map(str::to_owned),
+        _ => input.state.new_session.effort.clone(),
+    };
+    chosen.or_else(|| {
+        reported_handshake(input).and_then(|handshake| handshake.current_effort.clone())
+    })
+}
+
+/// Whether everything the shown agent asks about is approved.
+fn auto_approve(input: &Input) -> bool {
+    match (input.state.screen, input.active()) {
+        (Screen::Conversation, Some(session)) => session.auto_approve(),
+        _ => input.state.new_session.auto_approve && input.allow_bypass,
+    }
 }
 
 impl Builder<'_, '_> {

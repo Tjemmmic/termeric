@@ -395,13 +395,15 @@ impl App {
         }
         let form = &self.agent_view.state.new_session;
         // A form set up for another agent says nothing about this one.
-        let (mode, model) = if agent == form.agent {
+        let (mode, model, effort, auto_approve) = if agent == form.agent {
             (
                 form.mode_id(),
                 form.model.clone().filter(|model| model != "default"),
+                form.effort.clone(),
+                form.auto_approve,
             )
         } else {
-            (agent.default_mode().to_owned(), None)
+            (agent.default_mode().to_owned(), None, None, false)
         };
         // A tab holds one conversation; another one gets a tab of its own.
         if self.agent_view_conversation().is_some() {
@@ -416,6 +418,8 @@ impl App {
             cwd: info.cwd.clone(),
             mode,
             model,
+            effort,
+            auto_approve,
             resume: resume.map(|resume| (resume.id, resume.title)),
             allow_bypass: self.config.agent_view.allow_bypass_permissions,
         };

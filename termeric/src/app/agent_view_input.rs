@@ -284,6 +284,38 @@ impl App {
                     }
                 }
             }
+            MenuAction::SetEffort(effort) => {
+                let form_agent = self.agent_view.state.new_session.agent;
+                match (screen, self.agent_view.active_session_mut()) {
+                    (Screen::Conversation, Some(session)) => session.set_effort(&effort),
+                    (_, session) => {
+                        if let Some(session) = session
+                            .filter(|session| session.is_blank() && session.agent() == form_agent)
+                        {
+                            session.set_effort(&effort);
+                        }
+                        self.agent_view.state.new_session.effort = Some(effort);
+                    }
+                }
+            }
+            MenuAction::SetAutoApprove(approve) => {
+                // Like a mode that skips every check, only after the opt-in.
+                if approve && !self.config.agent_view.allow_bypass_permissions {
+                    return;
+                }
+                let form_agent = self.agent_view.state.new_session.agent;
+                match (screen, self.agent_view.active_session_mut()) {
+                    (Screen::Conversation, Some(session)) => session.set_auto_approve(approve),
+                    (_, session) => {
+                        if let Some(session) = session
+                            .filter(|session| session.is_blank() && session.agent() == form_agent)
+                        {
+                            session.set_auto_approve(approve);
+                        }
+                        self.agent_view.state.new_session.auto_approve = approve;
+                    }
+                }
+            }
             MenuAction::SetFolder(path) => self.agent_view.state.new_session.cwd = Some(path),
             MenuAction::EndSession => {
                 if let Some(id) = self.agent_view.state.active {
@@ -1332,8 +1364,9 @@ pub(super) fn composer_chord(key: &Key, modifiers: winit::keyboard::ModifiersSta
 
 fn menu_kind_of(action: &MenuAction) -> MenuKind {
     match action {
-        MenuAction::SetMode(_) => MenuKind::Mode,
+        MenuAction::SetMode(_) | MenuAction::SetAutoApprove(_) => MenuKind::Mode,
         MenuAction::SetModel(_) => MenuKind::Model,
+        MenuAction::SetEffort(_) => MenuKind::Effort,
         MenuAction::SetFolder(_) => MenuKind::Folder,
         MenuAction::EndSession
         | MenuAction::OpenInTerminal

@@ -9,10 +9,12 @@
 //! the agent reads and writes files and runs commands itself, and one left
 //! unanswered could stall it.
 //!
-//! The session opens with the first message rather than with the process.
-//! Agents keep every session they open, so one opened ahead of its first
-//! message would leave an empty conversation in their history; the models and
-//! slash commands a session offers arrive once it opens. Tool calls are
+//! The session opens as soon as the agent accepts the connection, because
+//! the models, modes, effort levels, and slash commands an agent offers come
+//! with a session; a session nothing was said in is the host's to forget (see
+//! [`super::agent::AgentKind::forget_args`]). Permission requests can be
+//! answered here without asking, as an agent's own interface may do when told
+//! to approve everything. Tool calls are
 //! translated into the vocabulary the panel presents (see [`super::present`])
 //! from each call's kind, title, and input, so reads read as `Read`, commands
 //! as `Bash`, and edits as `Edit`, `Write`, or `Patch`.
@@ -25,9 +27,9 @@ use serde_json::{Map, Value, json};
 
 use super::event::{
     AgentCommand, AgentEvent, ApprovalDecision, ApprovalRequest, AssistantMessage, BlockStart,
-    ContentBlock, ContextUsage, DECLINED_MESSAGE, EarlierConversation, Handshake, ModeChoice,
-    ModelChoice, RememberOption, SessionInfo, SlashCommand, StreamDelta, Thread, ToolResult,
-    TurnOutcome,
+    ContentBlock, ContextUsage, DECLINED_MESSAGE, EarlierConversation, EffortChoice, Handshake,
+    ModeChoice, ModelChoice, RememberOption, SessionInfo, SlashCommand, StreamDelta, Thread,
+    ToolResult, TurnOutcome,
 };
 use super::present::PATCH_TOOL;
 use super::protocol::{Exchange, Protocol, line, preview};
@@ -51,6 +53,10 @@ pub struct Setup {
     pub mode: String,
     /// A model the agent offered; `None` keeps the one its settings choose.
     pub model: Option<String>,
+    /// A level of effort the model offered; `None` keeps the agent's.
+    pub effort: Option<String>,
+    /// Allow everything the agent asks about without asking the person.
+    pub auto_approve: bool,
     /// Continue an earlier session by its id.
     pub resume: Option<String>,
 }
@@ -225,13 +231,15 @@ pub struct AcpCodec {
     options: Vec<Value>,
     /// The session's modes, from agents that name them apart from settings.
     listed_modes: Option<Value>,
-    /// The model the session opened with, to go back to.
-    session_model: Option<String>,
-    /// A message named a model, which stays until another is named.
-    model_named: bool,
+    effort: Option<String>,
+    auto_approve: bool,
+    /// A model change is on its way, and the effort levels it offers are
+    /// the new model's: set the effort once it lands.
+    effort_after_model: bool,
     commands: Vec<SlashCommand>,
-    /// Setting changes the agent has not answered; a message waits for them.
-    configuring: usize,
+    /// Setting changes the agent has not answered, as (request id, setting
+    /// id, value) in the order sent; a message waits for them.
+    in_flight: Vec<(u64, String, String)>,
     /// A message waiting for the session to open or its settings to apply.
     waiting: Option<String>,
     /// A turn is running: its prompt has not been answered.
@@ -254,6 +262,8 @@ impl AcpCodec {
             cwd: setup.cwd.display().to_string(),
             mode: setup.mode,
             model: setup.model,
+            effort: setup.effort,
+            auto_approve: setup.auto_approve,
             resume: setup.resume,
             next_request: 0,
             pending: HashMap::new(),
@@ -265,10 +275,9 @@ impl AcpCodec {
             session: SessionState::None,
             options: Vec::new(),
             listed_modes: None,
-            session_model: None,
-            model_named: false,
+            effort_after_model: false,
             commands: Vec::new(),
-            configuring: 0,
+            in_flight: Vec::new(),
             waiting: None,
             prompting: false,
             turn_started: None,
@@ -323,26 +332,53 @@ impl AcpCodec {
         }
     }
 
-    /// Asks the session to run in the chosen mode and model where it runs
-    /// in others. A message waits until the agent answers.
+    /// The change that sets the session's `category` setting to `value`, as
+    /// (setting id, value), when the session offers that value and runs
+    /// another.
+    fn change(&self, category: &str, value: &str) -> Option<(String, String)> {
+        let option = self.option(category)?;
+        let id = text(option, "id").unwrap_or_default();
+        let offered = choices(option).iter().any(|(choice, ..)| choice == value);
+        // A change on its way counts as made.
+        let current = self
+            .in_flight
+            .iter()
+            .rev()
+            .find(|(_, setting, _)| *setting == id)
+            .map(|(_, _, value)| value.clone())
+            .or_else(|| text(option, "currentValue"));
+        (offered && current.as_deref() != Some(value)).then(|| (id, value.to_owned()))
+    }
+
+    /// Sends one setting change.
+    fn send_change(&mut self, method: &str, params: Value, setting: &str, value: &str) -> String {
+        let line = self.request(Request::Configure, method, params);
+        self.in_flight
+            .push((self.next_request, setting.to_owned(), value.to_owned()));
+        line
+    }
+
+    /// Asks the session to run in the chosen mode, model, and effort where it
+    /// runs in others. A message waits until the agent answers.
     fn configure(&mut self) -> Exchange {
         let mut exchange = Exchange::default();
         let Some(session) = self.session_id().map(str::to_owned) else {
             return exchange;
         };
         let mut changes = Vec::new();
-        if let Some(option) = self.option("mode") {
-            let current = text(option, "currentValue");
-            if current.as_deref() != Some(self.mode.as_str()) {
-                if choices(option)
-                    .iter()
-                    .any(|(value, ..)| *value == self.mode)
-                {
-                    changes.push((text(option, "id").unwrap_or_default(), self.mode.clone()));
-                } else if let Some(current) = current {
+        if self.option("mode").is_some() {
+            match self.change("mode", &self.mode) {
+                Some(change) => changes.push(change),
+                None => {
                     // A mode this session does not have: say which it runs in.
-                    self.mode.clone_from(&current);
-                    exchange.events.push(AgentEvent::ModeChanged(current));
+                    if let Some(current) = self
+                        .option("mode")
+                        .and_then(|option| text(option, "currentValue"))
+                        .filter(|current| *current != self.mode)
+                    {
+                        self.mode.clone_from(&current);
+                        exchange.events.push(AgentEvent::ModeChanged(current));
+                    }
                 }
             }
         } else if let Some(modes) = &self.listed_modes {
@@ -352,56 +388,70 @@ impl AcpCodec {
                 .into_iter()
                 .flatten()
                 .any(|mode| text(mode, "id").as_deref() == Some(self.mode.as_str()));
-            if offered && text(modes, "currentModeId").as_deref() != Some(self.mode.as_str()) {
+            let pending = self
+                .in_flight
+                .iter()
+                .rev()
+                .find(|(_, setting, _)| setting == "session/set_mode")
+                .map(|(_, _, value)| value.clone())
+                .or_else(|| text(modes, "currentModeId"));
+            if offered && pending.as_deref() != Some(self.mode.as_str()) {
                 let params = json!({ "sessionId": session, "modeId": self.mode });
-                self.configuring += 1;
-                exchange
-                    .lines
-                    .push(self.request(Request::Configure, "session/set_mode", params));
+                let mode = self.mode.clone();
+                let line = self.send_change("session/set_mode", params, "session/set_mode", &mode);
+                exchange.lines.push(line);
             }
         }
-        let wanted = match &self.model {
-            Some(model) => Some(model.clone()),
-            // Back to the session's own after naming another.
-            None if self.model_named => self.session_model.clone(),
-            None => None,
-        };
-        if let (Some(option), Some(model)) = (self.option("model"), wanted)
-            && text(option, "currentValue").as_deref() != Some(model.as_str())
-            && choices(option).iter().any(|(value, ..)| *value == model)
-        {
-            changes.push((text(option, "id").unwrap_or_default(), model));
-            self.model_named = true;
+        let model = self
+            .model
+            .as_deref()
+            .and_then(|model| self.change("model", model));
+        match model {
+            Some(change) => {
+                changes.push(change);
+                self.effort_after_model = self.effort.is_some();
+            }
+            None => changes.extend(
+                self.effort
+                    .as_deref()
+                    .and_then(|effort| self.change("thought_level", effort)),
+            ),
         }
         for (option, value) in changes {
             let params = json!({ "sessionId": session, "configId": option, "value": value });
-            self.configuring += 1;
-            exchange.lines.push(self.request(
-                Request::Configure,
-                "session/set_config_option",
-                params,
-            ));
+            let line = self.send_change("session/set_config_option", params, &option, &value);
+            exchange.lines.push(line);
         }
         exchange
     }
 
     fn handshake(&self) -> Handshake {
-        let mut models = vec![ModelChoice {
-            value: "default".to_owned(),
-            display_name: "Default".to_owned(),
-            description: format!("The model your {} settings choose", self.agent),
-        }];
-        if let Some(option) = self.option("model") {
-            models.extend(
-                choices(option)
-                    .into_iter()
-                    .map(|(value, name, description)| ModelChoice {
-                        value,
-                        display_name: name,
-                        description,
-                    }),
-            );
-        }
+        let current = |category: &str| {
+            self.option(category)
+                .and_then(|option| text(option, "currentValue"))
+        };
+        let models = self
+            .option("model")
+            .map(choices)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(value, name, description)| ModelChoice {
+                value,
+                display_name: name,
+                description,
+            })
+            .collect();
+        let efforts = self
+            .option("thought_level")
+            .map(choices)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(value, name, description)| EffortChoice {
+                value,
+                label: capitalized(&name),
+                description,
+            })
+            .collect();
         let modes = match (self.option("mode"), &self.listed_modes) {
             (Some(option), _) => choices(option)
                 .into_iter()
@@ -429,6 +479,9 @@ impl AcpCodec {
             commands: self.commands.clone(),
             modes,
             permission_mode: None,
+            current_model: current("model"),
+            efforts,
+            current_effort: current("thought_level"),
         }
     }
 
@@ -443,7 +496,7 @@ impl AcpCodec {
         if let Some(current) = self
             .option("mode")
             .and_then(|option| text(option, "currentValue"))
-            .filter(|current| *current != self.mode && self.configuring == 0)
+            .filter(|current| *current != self.mode && self.in_flight.is_empty())
         {
             self.mode.clone_from(&current);
             events.push(AgentEvent::ModeChanged(current));
@@ -454,10 +507,11 @@ impl AcpCodec {
     // ── Commands ─────────────────────────────────────────────────────────
 
     fn encode_prompt(&mut self, text: &str) -> Exchange {
-        if self.session_id().is_some() && self.configuring == 0 {
+        if self.session_id().is_some() && self.in_flight.is_empty() {
             return Exchange::send(vec![self.send_prompt(text)]);
         }
         self.waiting = Some(text.to_owned());
+        // A session that could not open is tried again for the message.
         if self.initialized && self.session == SessionState::None {
             return Exchange::send(vec![self.open_session()]);
         }
@@ -478,7 +532,7 @@ impl AcpCodec {
 
     /// Sends the waiting message once the session is open and settled.
     fn send_waiting(&mut self) -> Option<String> {
-        if self.session_id().is_none() || self.configuring > 0 {
+        if self.session_id().is_none() || !self.in_flight.is_empty() {
             return None;
         }
         let text = self.waiting.take()?;
@@ -636,11 +690,9 @@ impl AcpCodec {
                         self.agent
                     )));
                 }
-                // A continued conversation reopens at once, so it can be
-                // stopped and continued like one that never closed.
-                if self.resume.is_some() || self.waiting.is_some() {
-                    exchange.lines.push(self.open_session());
-                }
+                // The session opens at once, so what it offers is listed
+                // before the first message.
+                exchange.lines.push(self.open_session());
             }
             (Request::List, error) => match error {
                 Some((_, error)) => {
@@ -674,15 +726,15 @@ impl AcpCodec {
                 if let Some(options) = result.get("configOptions").and_then(Value::as_array) {
                     self.options.clone_from(options);
                 }
-                self.session_model = self
-                    .option("model")
-                    .and_then(|option| text(option, "currentValue"));
                 exchange.events.push(AgentEvent::Ready(self.handshake()));
                 exchange
                     .events
                     .push(AgentEvent::SessionStarted(SessionInfo {
                         session_id: session,
-                        model: self.session_model.clone().unwrap_or_default(),
+                        model: self
+                            .option("model")
+                            .and_then(|option| text(option, "currentValue"))
+                            .unwrap_or_default(),
                         cwd: self.cwd.clone(),
                         permission_mode: None,
                         version: self.version.clone(),
@@ -694,11 +746,17 @@ impl AcpCodec {
             }
             (Request::NewSession, Some((code, error))) => {
                 self.session = SessionState::None;
-                let error = self.explain(code, &error);
-                exchange.events.extend(self.fail_waiting(&format!(
-                    "{} could not start the conversation: {error}",
-                    self.agent
-                )));
+                let error = format!(
+                    "{} could not start the conversation: {}",
+                    self.agent,
+                    self.explain(code, &error)
+                );
+                // Refused ahead of any message, it is said at once; the
+                // first message tries again.
+                let failed = self
+                    .fail_waiting(&error)
+                    .unwrap_or(AgentEvent::Warning(error));
+                exchange.events.push(failed);
             }
             (Request::Resume, Some((_, error))) => {
                 self.resume = None;
@@ -708,12 +766,10 @@ impl AcpCodec {
                      starts a new one",
                     self.agent
                 )));
-                if self.waiting.is_some() {
-                    exchange.lines.push(self.open_session());
-                }
+                exchange.lines.push(self.open_session());
             }
             (Request::Configure, error) => {
-                self.configuring = self.configuring.saturating_sub(1);
+                self.in_flight.retain(|(request, ..)| *request != id);
                 match error {
                     Some((_, error)) => {
                         exchange.events.push(AgentEvent::Warning(format!(
@@ -733,6 +789,11 @@ impl AcpCodec {
                     None => exchange
                         .events
                         .extend(self.take_options(result.get("configOptions"))),
+                }
+                if self.in_flight.is_empty() && std::mem::take(&mut self.effort_after_model) {
+                    let configured = self.configure();
+                    exchange.events.extend(configured.events);
+                    exchange.lines.extend(configured.lines);
                 }
                 exchange.lines.extend(self.send_waiting());
             }
@@ -844,6 +905,16 @@ impl AcpCodec {
                     updates: Value::String(text(option, "optionId")?),
                 })
             });
+        let approved = self
+            .auto_approve
+            .then(|| {
+                let asked = Asked {
+                    id: id.clone(),
+                    options: options.clone(),
+                };
+                asked.option(&["allow_once", "allow_always"])
+            })
+            .flatten();
         let reported = params.get("toolCall").cloned().unwrap_or(Value::Null);
         let tool_id = text(&reported, "toolCallId");
         let mut state = tool_id
@@ -859,6 +930,17 @@ impl AcpCodec {
             // The call reads as it will be decided.
             events.push(tool_use(tool_id, &name, input.clone()));
             self.tools.insert(tool_id.clone(), state.clone());
+        }
+        // Approving everything, as the agent's own interface can: the call
+        // runs without a card.
+        if let Some(option) = approved {
+            return Exchange {
+                events,
+                lines: vec![reply(
+                    &id,
+                    json!({ "outcome": { "outcome": "selected", "optionId": option } }),
+                )],
+            };
         }
         events.push(AgentEvent::ApprovalRequested(ApprovalRequest {
             request_id: key.clone(),
@@ -1137,6 +1219,15 @@ impl Protocol for AcpCodec {
                 self.model = (model != "default").then(|| model.clone());
                 self.configure()
             }
+            AgentCommand::SetEffort(effort) => {
+                self.effort = Some(effort.clone());
+                self.configure()
+            }
+            // Questions already asked still wait for the person.
+            AgentCommand::SetAutoApprove(approve) => {
+                self.auto_approve = *approve;
+                Exchange::default()
+            }
             // The agent reports usage on its own.
             AgentCommand::QueryContextUsage => Exchange::default(),
         }
@@ -1234,16 +1325,22 @@ fn choices(option: &Value) -> Vec<(String, String, String)> {
 /// A mode as the panel offers it. Plan modes plan; a mode that runs every
 /// action without asking needs the person's opt-in.
 fn mode_choice(id: &str, name: &str, description: &str) -> ModeChoice {
-    let mut label = name.to_owned();
-    if let Some(first) = label.get(..1) {
-        label.replace_range(..1, &first.to_uppercase());
-    }
-    let mode = ModeChoice::new(id, &label, description);
+    let mode = ModeChoice::new(id, &capitalized(name), description);
     match id {
         "plan" => mode.plans(),
         "yolo" => mode.unrestricted(),
         _ => mode,
     }
+}
+
+/// `text` starting with a capital, as agents' lowercase names read in a
+/// menu: `build` as Build.
+fn capitalized(text: &str) -> String {
+    let mut characters = text.chars();
+    characters
+        .next()
+        .map(|first| first.to_uppercase().chain(characters).collect())
+        .unwrap_or_default()
 }
 
 /// One to-do as the panel reads it; a cancelled one counts as done.
@@ -1485,13 +1582,7 @@ mod tests {
     use crate::agent_view::transcript::{Item, Transcript};
 
     fn codec() -> AcpCodec {
-        AcpCodec::new(Setup {
-            agent: "OpenCode",
-            cwd: PathBuf::from("/w"),
-            mode: "build".to_owned(),
-            model: None,
-            resume: None,
-        })
+        AcpCodec::new(codec_setup())
     }
 
     fn parse(line: &str) -> Value {
@@ -1528,13 +1619,13 @@ mod tests {
     }
 
     fn options(mode: &str, model: &str) -> Value {
-        json!([
+        let mut options = json!([
             {
                 "id": "model", "name": "Model", "category": "model", "type": "select",
                 "currentValue": model,
                 "options": [
                     { "value": "opencode/big-pickle", "name": "OpenCode Zen/Big Pickle" },
-                    { "value": "zai/glm-4.7", "name": "Z.AI/GLM-4.7" },
+                    { "value": "zai/glm-5.2", "name": "Z.AI/GLM-5.2" },
                 ],
             },
             {
@@ -1545,28 +1636,46 @@ mod tests {
                     { "value": "plan", "name": "plan", "description": "Disallows all edit tools." },
                 ],
             },
-        ])
+        ]);
+        // Models with variants offer levels of effort.
+        if model == "zai/glm-5.2" {
+            options.as_array_mut().unwrap().push(json!({
+                "id": "effort", "name": "Effort", "category": "thought_level", "type": "select",
+                "currentValue": "high",
+                "options": [
+                    { "value": "high", "name": "high" },
+                    { "value": "max", "name": "max" },
+                    { "value": "default", "name": "default" },
+                ],
+            }));
+        }
+        options
     }
 
     /// Connects, sends "hello", and opens a session running a turn.
+    /// Connects, which opens a session at once, and sends "hello".
     fn with_turn(codec: &mut AcpCodec) -> u64 {
+        open(codec, options("build", "opencode/big-pickle"));
+        let prompt = parse(&codec.encode(&AgentCommand::Prompt("hello".into())).lines[0]);
+        assert_eq!(prompt["method"], "session/prompt");
+        prompt["id"].as_u64().unwrap()
+    }
+
+    /// Connects and answers the session it opens with `options`.
+    fn open(codec: &mut AcpCodec, options: Value) -> Exchange {
         codec.start();
-        decode(
+        let connected = decode(
             codec,
             json!({ "jsonrpc": "2.0", "id": 1, "result": initialized() }),
         );
-        let opened = codec.encode(&AgentCommand::Prompt("hello".into()));
-        let open = parse(&opened.lines[0]);
+        let open = parse(connected.lines.last().unwrap());
         assert_eq!(open["method"], "session/new");
-        let exchange = decode(
+        decode(
             codec,
             json!({ "jsonrpc": "2.0", "id": open["id"], "result": {
-                "sessionId": "ses_1", "configOptions": options("build", "opencode/big-pickle"),
+                "sessionId": "ses_1", "configOptions": options,
             }}),
-        );
-        let prompt = parse(exchange.lines.last().unwrap());
-        assert_eq!(prompt["method"], "session/prompt");
-        prompt["id"].as_u64().unwrap()
+        )
     }
 
     fn update(codec: &mut AcpCodec, update: Value) -> Vec<AgentEvent> {
@@ -1610,8 +1719,9 @@ mod tests {
             json!({ "jsonrpc": "2.0", "id": 1, "result": initialized() }),
         );
         assert!(matches!(exchange.events[0], AgentEvent::Ready(_)));
-        // No session opens until the first message.
-        assert_eq!(methods(&exchange), ["session/list"]);
+        // The session opens at once, so what it offers is listed before the
+        // first message.
+        assert_eq!(methods(&exchange), ["session/list", "session/new"]);
         let list = parse(&exchange.lines[0]);
         assert_eq!(list["params"]["cwd"], "/w");
         let exchange = decode(
@@ -1655,27 +1765,27 @@ mod tests {
     }
 
     #[test]
-    fn the_session_opens_with_the_first_message_in_the_chosen_mode_and_model() {
+    fn the_session_opens_at_once_in_the_chosen_mode_model_and_effort() {
         let mut codec = AcpCodec::new(Setup {
-            model: Some("zai/glm-4.7".into()),
+            model: Some("zai/glm-5.2".into()),
             mode: "plan".into(),
+            effort: Some("max".into()),
             ..codec_setup()
         });
         codec.start();
-        // Written before the agent answered: it waits for the handshake.
+        let exchange = decode(
+            &mut codec,
+            json!({ "jsonrpc": "2.0", "id": 1, "result": initialized() }),
+        );
+        let open = parse(&exchange.lines[1]);
+        assert_eq!(open["params"], json!({ "cwd": "/w", "mcpServers": [] }));
+        // Written before the session opened: it waits.
         assert!(
             codec
                 .encode(&AgentCommand::Prompt("hi".into()))
                 .lines
                 .is_empty()
         );
-        let exchange = decode(
-            &mut codec,
-            json!({ "jsonrpc": "2.0", "id": 1, "result": initialized() }),
-        );
-        assert_eq!(methods(&exchange), ["session/list", "session/new"]);
-        let open = parse(&exchange.lines[1]);
-        assert_eq!(open["params"], json!({ "cwd": "/w", "mcpServers": [] }));
         let exchange = decode(
             &mut codec,
             json!({ "jsonrpc": "2.0", "id": open["id"], "result": {
@@ -1694,23 +1804,26 @@ mod tests {
             _ => None,
         });
         let handshake = handshake.unwrap();
+        // The agent's own models, and the one it runs.
         let models: Vec<&str> = handshake
             .models
             .iter()
             .map(|model| model.value.as_str())
             .collect();
-        assert_eq!(models, ["default", "opencode/big-pickle", "zai/glm-4.7"]);
+        assert_eq!(models, ["opencode/big-pickle", "zai/glm-5.2"]);
         assert_eq!(
-            handshake.models[0].description,
-            "The model your OpenCode settings choose"
+            handshake.current_model.as_deref(),
+            Some("opencode/big-pickle")
         );
+        assert!(handshake.efforts.is_empty());
         let modes: Vec<(&str, &str, bool)> = handshake
             .modes
             .iter()
             .map(|mode| (mode.id.as_str(), mode.label.as_str(), mode.plans))
             .collect();
         assert_eq!(modes, [("build", "Build", false), ("plan", "Plan", true)]);
-        // The mode and model change first; the message waits for both.
+        // The mode and model change first; the effort waits for the model,
+        // whose levels it is, and the message for all three.
         assert_eq!(
             methods(&exchange),
             ["session/set_config_option", "session/set_config_option"]
@@ -1720,7 +1833,7 @@ mod tests {
             mode["params"],
             json!({ "sessionId": "ses_1", "configId": "mode", "value": "plan" })
         );
-        assert_eq!(model["params"]["value"], "zai/glm-4.7");
+        assert_eq!(model["params"]["value"], "zai/glm-5.2");
         let exchange = decode(
             &mut codec,
             json!({ "jsonrpc": "2.0", "id": mode["id"], "result": {
@@ -1731,8 +1844,35 @@ mod tests {
         let exchange = decode(
             &mut codec,
             json!({ "jsonrpc": "2.0", "id": model["id"], "result": {
-                "configOptions": options("plan", "zai/glm-4.7"),
+                "configOptions": options("plan", "zai/glm-5.2"),
             }}),
+        );
+        let handshake = exchange.events.iter().find_map(|event| match event {
+            AgentEvent::Ready(handshake) => Some(handshake.clone()),
+            _ => None,
+        });
+        let handshake = handshake.unwrap();
+        let efforts: Vec<(&str, &str)> = handshake
+            .efforts
+            .iter()
+            .map(|effort| (effort.value.as_str(), effort.label.as_str()))
+            .collect();
+        assert_eq!(
+            efforts,
+            [("high", "High"), ("max", "Max"), ("default", "Default")]
+        );
+        assert_eq!(handshake.current_effort.as_deref(), Some("high"));
+        assert_eq!(methods(&exchange), ["session/set_config_option"]);
+        let effort = parse(&exchange.lines[0]);
+        assert_eq!(
+            effort["params"],
+            json!({ "sessionId": "ses_1", "configId": "effort", "value": "max" })
+        );
+        let mut settled = options("plan", "zai/glm-5.2");
+        settled[2]["currentValue"] = json!("max");
+        let exchange = decode(
+            &mut codec,
+            json!({ "jsonrpc": "2.0", "id": effort["id"], "result": { "configOptions": settled } }),
         );
         let prompt = parse(&exchange.lines[0]);
         assert_eq!(prompt["method"], "session/prompt");
@@ -1740,10 +1880,16 @@ mod tests {
             prompt["params"],
             json!({ "sessionId": "ses_1", "prompt": [{ "type": "text", "text": "hi" }] })
         );
-        // Back to the default model: the one the session opened with.
-        let exchange = codec.encode(&AgentCommand::SetModel("default".into()));
-        let back = parse(&exchange.lines[0]);
-        assert_eq!(back["params"]["value"], "opencode/big-pickle");
+        // Settled, a change goes at once, and one already in effect sends
+        // nothing.
+        let exchange = codec.encode(&AgentCommand::SetEffort("high".into()));
+        assert_eq!(parse(&exchange.lines[0])["params"]["value"], "high");
+        assert!(
+            codec
+                .encode(&AgentCommand::SetModel("zai/glm-5.2".into()))
+                .lines
+                .is_empty()
+        );
     }
 
     fn codec_setup() -> Setup {
@@ -1752,6 +1898,8 @@ mod tests {
             cwd: PathBuf::from("/w"),
             mode: "build".to_owned(),
             model: None,
+            effort: None,
+            auto_approve: false,
             resume: None,
         }
     }
@@ -1762,24 +1910,15 @@ mod tests {
             mode: "docs".into(),
             ..codec_setup()
         });
-        codec.start();
-        decode(
-            &mut codec,
-            json!({ "jsonrpc": "2.0", "id": 1, "result": initialized() }),
-        );
-        let open = parse(&codec.encode(&AgentCommand::Prompt("hi".into())).lines[0]);
-        let exchange = decode(
-            &mut codec,
-            json!({ "jsonrpc": "2.0", "id": open["id"], "result": {
-                "sessionId": "ses_1", "configOptions": options("build", "opencode/big-pickle"),
-            }}),
-        );
+        let exchange = open(&mut codec, options("build", "opencode/big-pickle"));
         assert!(
             exchange
                 .events
                 .contains(&AgentEvent::ModeChanged("build".into()))
         );
-        assert_eq!(methods(&exchange), ["session/prompt"]);
+        assert!(exchange.lines.is_empty());
+        let prompt = codec.encode(&AgentCommand::Prompt("hi".into()));
+        assert_eq!(methods(&prompt), ["session/prompt"]);
     }
 
     #[test]
@@ -2269,6 +2408,56 @@ mod tests {
         assert!(
             matches!(&stopped.events[..], [AgentEvent::TurnFinished(outcome)] if outcome.success)
         );
+    }
+
+    #[test]
+    fn a_session_refused_ahead_of_a_message_is_said_and_tried_again() {
+        let mut codec = codec();
+        codec.start();
+        let exchange = decode(
+            &mut codec,
+            json!({ "jsonrpc": "2.0", "id": 1, "result": initialized() }),
+        );
+        let open = parse(&exchange.lines[1]);
+        let exchange = decode(
+            &mut codec,
+            json!({ "jsonrpc": "2.0", "id": open["id"], "error": {
+                "code": -32000, "message": "Authentication required",
+            }}),
+        );
+        assert!(matches!(
+            &exchange.events[..],
+            [AgentEvent::Warning(text)] if text.ends_with("Run `opencode auth login` in the terminal.")
+        ));
+        let retried = codec.encode(&AgentCommand::Prompt("hi".into()));
+        assert_eq!(methods(&retried), ["session/new"]);
+    }
+
+    #[test]
+    fn auto_approve_answers_permissions_without_asking() {
+        let mut codec = AcpCodec::new(Setup {
+            auto_approve: true,
+            ..codec_setup()
+        });
+        with_turn(&mut codec);
+        let exchange = permission(&mut codec, 4);
+        assert_eq!(
+            parse(&exchange.lines[0]),
+            json!({ "jsonrpc": "2.0", "id": 4, "result": { "outcome": { "outcome": "selected", "optionId": "once" } } })
+        );
+        // The call still shows; nothing asks.
+        assert!(
+            !exchange
+                .events
+                .iter()
+                .any(|event| matches!(event, AgentEvent::ApprovalRequested(_)))
+        );
+        assert_eq!(tool_uses(&exchange.events)[0].0, PATCH_TOOL);
+        // Turned off, the next request asks again.
+        codec.encode(&AgentCommand::SetAutoApprove(false));
+        let exchange = permission(&mut codec, 5);
+        assert!(exchange.lines.is_empty());
+        approval(&exchange);
     }
 
     #[test]

@@ -59,6 +59,12 @@ pub struct StartOptions {
     /// The id of the mode to start in, one of the agent's.
     pub mode: String,
     pub model: Option<String>,
+    /// A level of effort the agent offered; `None` keeps its own.
+    pub effort: Option<String>,
+    /// Allow everything the agent asks about, where it offers that apart
+    /// from its modes. Like a mode that skips every check, it needs
+    /// `allow_bypass`.
+    pub auto_approve: bool,
     /// Continue an earlier conversation: its agent session id and title.
     pub resume: Option<(String, String)>,
     /// The person opted in to the mode that skips every check.
@@ -118,7 +124,12 @@ pub struct AgentSession {
     title: Option<String>,
     cwd: PathBuf,
     program: AgentProgram,
+    /// Where the program was found when it last started.
+    program_path: Option<PathBuf>,
     model: Option<String>,
+    effort: Option<String>,
+    /// Allows everything the agent asks about without asking.
+    auto_approve: bool,
     process: Option<AgentProcess>,
     /// The process was asked to end and has not exited yet. It takes no
     /// more input.
@@ -200,7 +211,12 @@ impl AgentSession {
             title,
             cwd: options.cwd,
             program,
+            program_path: None,
             model: options.model,
+            effort: options.effort,
+            auto_approve: options.auto_approve
+                && options.allow_bypass
+                && options.agent.offers_auto_approve(),
             process: None,
             closing: false,
             relaunch_on_exit: false,
@@ -240,11 +256,14 @@ impl AgentSession {
             cwd: self.cwd.clone(),
             mode: self.transcript.mode().to_owned(),
             model: self.model.clone(),
+            effort: self.effort.clone(),
+            auto_approve: self.auto_approve,
             resume,
             allow_bypass: self.allow_bypass,
         });
         let mut args = self.program.args.clone();
         args.extend(protocol_args);
+        self.program_path = Some(program.clone());
         let spec = LaunchSpec {
             program,
             args,
@@ -272,9 +291,15 @@ impl AgentSession {
     /// exist, so nothing a test does can start a real agent.
     #[cfg(test)]
     pub fn detached(cwd: PathBuf, transcript: Transcript) -> Self {
+        Self::detached_agent(AgentKind::ClaudeCode, cwd, transcript)
+    }
+
+    /// Like [`AgentSession::detached`], for another agent.
+    #[cfg(test)]
+    pub fn detached_agent(agent: AgentKind, cwd: PathBuf, transcript: Transcript) -> Self {
         Self {
             id: SessionId::next(),
-            agent: AgentKind::ClaudeCode,
+            agent,
             title: None,
             cwd,
             program: AgentProgram {
@@ -282,7 +307,10 @@ impl AgentSession {
                 args: Vec::new(),
                 env: Vec::new(),
             },
+            program_path: None,
             model: None,
+            effort: None,
+            auto_approve: false,
             process: None,
             closing: false,
             relaunch_on_exit: false,
@@ -397,13 +425,30 @@ impl AgentSession {
             .map_or_else(|| "New session".to_owned(), str::to_owned)
     }
 
-    /// The model's display name, as the agent reported it.
+    /// The model's display name, as the agent reported it: the chosen one,
+    /// else the one the agent says it runs.
     pub fn model_label(&self) -> String {
-        let offered = self
-            .transcript
-            .handshake()
-            .map_or(&[][..], |handshake| &handshake.models);
-        model_name(offered, self.model.as_deref().unwrap_or("default"))
+        let handshake = self.transcript.handshake();
+        let offered = handshake.map_or(&[][..], |handshake| &handshake.models);
+        let current = handshake.and_then(|handshake| handshake.current_model.as_deref());
+        model_name(
+            offered,
+            self.model.as_deref().or(current).unwrap_or("default"),
+        )
+    }
+
+    /// The level of effort chosen, else the one the agent says it runs at.
+    pub fn effort(&self) -> Option<&str> {
+        self.effort.as_deref().or_else(|| {
+            self.transcript
+                .handshake()
+                .and_then(|handshake| handshake.current_effort.as_deref())
+        })
+    }
+
+    /// Whether everything the agent asks about is allowed without asking.
+    pub fn auto_approve(&self) -> bool {
+        self.auto_approve
     }
 
     /// Handles everything the agent wrote since the last pump. Returns
@@ -798,11 +843,14 @@ impl AgentSession {
             .unwrap_or_else(|| self.agent.modes())
     }
 
-    /// Whether the agent runs in a mode that asks about nothing.
+    /// Whether the agent asks about nothing: it runs in such a mode, or
+    /// everything it asks about is approved.
     pub fn unrestricted(&self) -> bool {
-        self.modes()
-            .iter()
-            .any(|mode| mode.unrestricted && mode.id == self.transcript.mode())
+        self.auto_approve
+            || self
+                .modes()
+                .iter()
+                .any(|mode| mode.unrestricted && mode.id == self.transcript.mode())
     }
 
     /// Switches to the mode with id `mode`. An unrestricted mode is refused
@@ -851,6 +899,9 @@ impl AgentSession {
     /// longer offers or accepts the mode.
     pub fn set_bypass_allowed(&mut self, allowed: bool) {
         self.allow_bypass = allowed;
+        if !allowed && self.auto_approve {
+            self.set_auto_approve(false);
+        }
         if !allowed && self.unrestricted() {
             let asking = self.agent.default_mode();
             if self.is_running() {
@@ -858,6 +909,29 @@ impl AgentSession {
             }
             self.transcript.set_mode(asking);
         }
+    }
+
+    /// Runs at the level of effort with this value.
+    pub fn set_effort(&mut self, value: &str) {
+        if self.is_running() {
+            self.command(&AgentCommand::SetEffort(value.to_owned()));
+        }
+        self.effort = Some(value.to_owned());
+        self.last_change = Instant::now();
+    }
+
+    /// Allows everything the agent asks about without asking, or asks
+    /// again. Refused unless the agent offers it and the person opted in to
+    /// skipping every check.
+    pub fn set_auto_approve(&mut self, approve: bool) {
+        if approve && !(self.allow_bypass && self.agent.offers_auto_approve()) {
+            return;
+        }
+        if self.is_running() {
+            self.command(&AgentCommand::SetAutoApprove(approve));
+        }
+        self.auto_approve = approve;
+        self.last_change = Instant::now();
     }
 
     pub fn set_model(&mut self, value: &str) {
@@ -893,7 +967,95 @@ impl AgentSession {
 
 impl Drop for AgentSession {
     fn drop(&mut self) {
-        self.close();
+        // A conversation opened ahead of a first message that never came is
+        // the agent view's own; the agent forgets it once it has exited, so
+        // it never lists an empty conversation. One handed to a terminal is
+        // the terminal's now.
+        let forget = (self.is_blank() && !self.handed_off)
+            .then(|| self.conversation_id())
+            .flatten()
+            .and_then(|id| self.agent.forget_args(id))
+            .zip(self.program_path.clone())
+            .map(|(forget_args, program)| {
+                let mut command = std::process::Command::new(program);
+                command
+                    .args(&self.program.args)
+                    .args(forget_args)
+                    .current_dir(&self.cwd)
+                    .envs(self.program.env.iter().map(|(name, value)| (name, value)))
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null());
+                for name in TERMINAL_ENVIRONMENT {
+                    command.env_remove(name);
+                }
+                command
+            });
+        let Some(command) = forget else {
+            self.close();
+            return;
+        };
+        let forgetting = Forgetting::start();
+        let forget = move || {
+            forget_now(command);
+            drop(forgetting);
+        };
+        match self.process.take() {
+            Some(process) => process.finish_then(forget),
+            None => {
+                let _ = std::thread::Builder::new()
+                    .name("agent-view-forget".into())
+                    .spawn(forget);
+            }
+        }
+    }
+}
+
+/// Unused conversations still being forgotten, counted so quitting can wait
+/// for them: their threads would otherwise end with the process.
+static FORGETTING: (std::sync::Mutex<usize>, std::sync::Condvar) =
+    (std::sync::Mutex::new(0), std::sync::Condvar::new());
+
+/// One conversation being forgotten, until dropped.
+struct Forgetting;
+
+impl Forgetting {
+    fn start() -> Self {
+        if let Ok(mut count) = FORGETTING.0.lock() {
+            *count += 1;
+        }
+        Forgetting
+    }
+}
+
+impl Drop for Forgetting {
+    fn drop(&mut self) {
+        if let Ok(mut count) = FORGETTING.0.lock() {
+            *count = count.saturating_sub(1);
+            FORGETTING.1.notify_all();
+        }
+    }
+}
+
+/// Waits, up to `limit`, for unused conversations of ended sessions to be
+/// forgotten. Called as Termeric quits, after its windows have closed.
+pub fn wait_for_forgetting(limit: Duration) {
+    let Ok(count) = FORGETTING.0.lock() else {
+        return;
+    };
+    let _ = FORGETTING
+        .1
+        .wait_timeout_while(count, limit, |count| *count > 0);
+}
+
+/// Runs the agent's command that forgets an unused conversation.
+fn forget_now(mut command: std::process::Command) {
+    match command.status() {
+        Ok(status) if status.success() => {}
+        Ok(status) => {
+            log::warn!("agent view: forgetting an unused conversation ended with {status}")
+        }
+        Err(error) => log::warn!("agent view: could not forget an unused conversation: {error}"),
     }
 }
 
@@ -922,6 +1084,8 @@ mod tests {
                 agent: AgentKind::ClaudeCode,
                 mode: "default".into(),
                 model: None,
+                effort: None,
+                auto_approve: false,
                 resume: None,
                 allow_bypass: false,
             },
@@ -956,6 +1120,8 @@ mod tests {
                 agent: AgentKind::ClaudeCode,
                 mode: "default".into(),
                 model: None,
+                effort: None,
+                auto_approve: false,
                 resume: None,
                 allow_bypass: false,
             },
@@ -1204,6 +1370,8 @@ mod tests {
                 agent: AgentKind::ClaudeCode,
                 mode: "default".into(),
                 model: None,
+                effort: None,
+                auto_approve: false,
                 resume: Some(("earlier-id".into(), "Earlier".into())),
                 allow_bypass: false,
             },
@@ -1298,6 +1466,8 @@ mod tests {
                 agent: AgentKind::Codex,
                 mode: "read-only".into(),
                 model: None,
+                effort: None,
+                auto_approve: false,
                 resume,
                 allow_bypass: false,
             },
@@ -1628,6 +1798,8 @@ mod tests {
                 agent: AgentKind::Codex,
                 mode: "full-access".into(),
                 model: Some("default".into()),
+                effort: None,
+                auto_approve: false,
                 resume: None,
                 allow_bypass: false,
             },
@@ -1799,6 +1971,8 @@ mod tests {
                 agent: AgentKind::OpenCode,
                 mode: "build".into(),
                 model: None,
+                effort: None,
+                auto_approve: false,
                 resume,
                 allow_bypass: false,
             },
@@ -1825,9 +1999,17 @@ mod tests {
         };
         let earlier: Vec<&str> = listed.iter().map(|past| past.id.as_str()).collect();
         assert_eq!(earlier, ["ses_earlier_one", "ses_earlier_two"]);
-        // Nothing is opened in OpenCode's history before the first message.
-        assert_eq!(session.conversation_id(), None);
-        assert_eq!(session.model_label(), "Default");
+        // The session opens at once, so its models, the one it runs, and its
+        // commands are known before the first message.
+        pump_until(&mut session, |session| {
+            session
+                .transcript()
+                .handshake()
+                .is_some_and(|handshake| !handshake.commands.is_empty())
+        });
+        assert_eq!(session.conversation_id(), Some("ses_fake_new"));
+        assert_eq!(session.model_label(), "OpenCode Zen/Big Pickle");
+        assert!(session.is_blank());
 
         session.prompt("hello there", Vec::new()).unwrap();
         pump_until(&mut session, |session| {
@@ -1858,7 +2040,7 @@ mod tests {
             .iter()
             .map(|model| model.value.as_str())
             .collect();
-        assert_eq!(models, ["default", "opencode/big-pickle", "zai/glm-4.7"]);
+        assert_eq!(models, ["opencode/big-pickle", "zai/glm-4.7"]);
         let commands: Vec<&str> = handshake
             .commands
             .iter()
@@ -1962,12 +2144,146 @@ mod tests {
         });
         session.set_mode("plan");
         session.set_model("zai/glm-4.7");
+        session.set_effort("high");
         session.prompt("settings?", Vec::new()).unwrap();
         pump_until(&mut session, finished);
         assert_eq!(
             session.transcript().last_answer(),
-            Some("Mode plan, model zai/glm-4.7.")
+            Some("Mode plan, model zai/glm-4.7, effort high.")
         );
+        let handshake = session.transcript().handshake().unwrap();
+        let efforts: Vec<&str> = handshake
+            .efforts
+            .iter()
+            .map(|effort| effort.label.as_str())
+            .collect();
+        assert_eq!(efforts, ["Low", "High", "Default"]);
+        assert_eq!(session.effort(), Some("high"));
+    }
+
+    /// Starts the fake OpenCode; with `forgotten`, conversations it is told
+    /// to forget are written there.
+    fn opencode_with(
+        program: AgentProgram,
+        forgotten: Option<&std::path::Path>,
+        auto_approve: bool,
+        allow_bypass: bool,
+        resume: Option<(String, String)>,
+    ) -> AgentSession {
+        let mut program = program;
+        if let Some(forgotten) = forgotten {
+            program.env.push((
+                "FAKE_OPENCODE_FORGOTTEN".into(),
+                forgotten.display().to_string(),
+            ));
+        }
+        AgentSession::start(
+            program,
+            StartOptions {
+                cwd: std::env::temp_dir(),
+                agent: AgentKind::OpenCode,
+                mode: "build".into(),
+                model: None,
+                effort: None,
+                auto_approve,
+                resume,
+                allow_bypass,
+            },
+            Arc::new(|| {}),
+        )
+        .unwrap()
+    }
+
+    fn forgotten_after(path: &std::path::Path, wait: Duration) -> String {
+        let started = Instant::now();
+        while started.elapsed() < wait {
+            if let Ok(text) = std::fs::read_to_string(path)
+                && !text.is_empty()
+            {
+                return text;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        std::fs::read_to_string(path).unwrap_or_default()
+    }
+
+    #[test]
+    fn an_opencode_session_nothing_was_said_in_is_forgotten() {
+        let Some(program) = fake_opencode() else {
+            return;
+        };
+        let directory = std::env::temp_dir().join(format!(
+            "termeric-forget-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let forgotten = directory.join("forgotten");
+
+        let mut blank = opencode_with(program.clone(), Some(&forgotten), false, false, None);
+        pump_until(&mut blank, |session| session.conversation_id().is_some());
+        drop(blank);
+        assert_eq!(
+            forgotten_after(&forgotten, Duration::from_secs(10)),
+            "ses_fake_new\n"
+        );
+
+        // A conversation something was said in, or an earlier one continued,
+        // stays in OpenCode's history.
+        std::fs::remove_file(&forgotten).unwrap();
+        let mut used = opencode_with(program.clone(), Some(&forgotten), false, false, None);
+        used.prompt("hello", Vec::new()).unwrap();
+        pump_until(&mut used, finished);
+        drop(used);
+        let program_for_hand_off = program.clone();
+        let mut continued = opencode_with(
+            program,
+            Some(&forgotten),
+            false,
+            false,
+            Some(("ses_earlier_one".into(), "Fix the tab bar".into())),
+        );
+        pump_until(&mut continued, |session| {
+            session.conversation_id().is_some()
+        });
+        drop(continued);
+        // One handed to a terminal is the terminal's.
+        let mut handed = opencode_with(program_for_hand_off, Some(&forgotten), false, false, None);
+        pump_until(&mut handed, |session| session.conversation_id().is_some());
+        handed.hand_off();
+        drop(handed);
+        assert_eq!(forgotten_after(&forgotten, Duration::from_millis(800)), "");
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn opencode_auto_approve_needs_the_opt_in_and_then_asks_about_nothing() {
+        let Some(program) = fake_opencode() else {
+            return;
+        };
+        let mut refused = opencode_with(program.clone(), None, true, false, None);
+        assert!(!refused.auto_approve());
+        refused.set_auto_approve(true);
+        assert!(!refused.auto_approve());
+
+        let mut session = opencode_with(program, None, true, true, None);
+        assert!(session.auto_approve() && session.unrestricted());
+        session.prompt("edit the notes", Vec::new()).unwrap();
+        pump_until(&mut session, finished);
+        assert!(
+            session
+                .transcript()
+                .last_answer()
+                .unwrap()
+                .contains("Edited notes.txt (once;")
+        );
+        // Withdrawing the opt-in asks again.
+        session.set_bypass_allowed(false);
+        assert!(!session.auto_approve());
+        session.prompt("edit again", Vec::new()).unwrap();
+        pump_until(&mut session, |session| {
+            session.activity() == Activity::NeedsYou
+        });
     }
 
     #[test]

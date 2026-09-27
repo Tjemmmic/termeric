@@ -71,6 +71,16 @@ pub struct ModelChoice {
     pub description: String,
 }
 
+/// One level of effort the model offers: how long it thinks before
+/// answering.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EffortChoice {
+    /// The value the agent accepts, e.g. `high`.
+    pub value: String,
+    pub label: String,
+    pub description: String,
+}
+
 /// Models offered before an agent has listed its own.
 pub const FALLBACK_MODELS: [&str; 4] = ["default", "sonnet", "opus", "haiku"];
 
@@ -132,6 +142,13 @@ pub struct Handshake {
     pub modes: Vec<ModeChoice>,
     /// The id of the mode it runs in.
     pub permission_mode: Option<String>,
+    /// The model it runs when none is chosen, when it names it.
+    pub current_model: Option<String>,
+    /// The levels of effort the current model offers; empty when it offers
+    /// no choice.
+    pub efforts: Vec<EffortChoice>,
+    /// The level it runs at.
+    pub current_effort: Option<String>,
 }
 
 /// The conversation the agent is running, reported when a turn starts.
@@ -351,6 +368,11 @@ pub enum AgentCommand {
     /// Switch to the mode with this id.
     SetMode(String),
     SetModel(String),
+    /// Run at the level of effort with this value.
+    SetEffort(String),
+    /// Allow everything the agent asks permission for without asking the
+    /// person, for agents whose own interface offers that.
+    SetAutoApprove(bool),
     QueryContextUsage,
 }
 

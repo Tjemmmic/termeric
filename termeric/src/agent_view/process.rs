@@ -223,6 +223,32 @@ impl AgentProcess {
     }
 }
 
+impl AgentProcess {
+    /// Ends the agent and runs `then` on a background thread once it has
+    /// exited, as reported by its output reader, which reaps it first.
+    pub fn finish_then(mut self, then: impl FnOnce() + Send + 'static) {
+        let (_, closed) = mpsc::sync_channel(0);
+        let output = std::mem::replace(&mut self.output, closed);
+        let exited = self.exited;
+        self.terminate();
+        drop(self);
+        let _ = thread::Builder::new()
+            .name("agent-view-finish".into())
+            .spawn(move || {
+                if !exited {
+                    // Draining also keeps the reader from blocking on a full
+                    // queue before it can report the exit.
+                    for output in output.iter() {
+                        if matches!(output, ProcessOutput::Exited(_)) {
+                            break;
+                        }
+                    }
+                }
+                then();
+            });
+    }
+}
+
 impl Drop for AgentProcess {
     fn drop(&mut self) {
         self.terminate();
