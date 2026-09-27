@@ -1314,6 +1314,7 @@ fn models(listed: Option<&Value>) -> Vec<ModelChoice> {
         value: "default".to_owned(),
         display_name: "Default".to_owned(),
         description: "The model your Codex settings choose".to_owned(),
+        group: None,
     }];
     models.extend(
         listed
@@ -1327,6 +1328,7 @@ fn models(listed: Option<&Value>) -> Vec<ModelChoice> {
                     display_name: text(model, "displayName").unwrap_or_else(|| value.clone()),
                     description: text(model, "description").unwrap_or_default(),
                     value,
+                    group: None,
                 })
             }),
     );

@@ -9,7 +9,7 @@ use crate::agent_view::present;
 use crate::agent_view::session::{AgentSession, QuestionAnswer};
 use crate::agent_view::transcript::{Attachment, DecidedBy, Item};
 use crate::ui::agent_view::commands;
-use crate::ui::agent_view::scene::{Bounds, MenuAction, MenuKind, Target};
+use crate::ui::agent_view::scene::{Bounds, HitRole, MenuAction, MenuKind, Target};
 use crate::ui::agent_view::{ComposerIntent, Focus, OpenMenu, Screen};
 use crate::ui::text_input::TextInputEdit;
 use crate::ui::text_layout::TextMeasure;
@@ -60,13 +60,11 @@ impl App {
                     .menu
                     .as_ref()
                     .is_some_and(|menu| menu.kind == kind);
-                self.agent_view.state.menu = (!open).then_some(OpenMenu {
-                    kind,
-                    anchor,
-                    highlighted: 0,
-                });
+                self.agent_view.state.menu = (!open).then(|| OpenMenu::new(kind, anchor));
             }
             Target::DismissMenu => self.agent_view.state.menu = None,
+            // The menu stays open; typing already goes to its search.
+            Target::MenuSearch => {}
             Target::Menu(action) => {
                 self.agent_view.state.menu = None;
                 self.apply_agent_view_menu(action);
@@ -586,7 +584,7 @@ impl App {
         let plain = modifiers.is_empty();
 
         if self.agent_view.state.menu.is_some() {
-            self.handle_agent_view_menu_key(key);
+            self.handle_agent_view_menu_key(key, text);
             self.request_agent_view_redraw();
             return true;
         }
@@ -728,29 +726,171 @@ impl App {
         }
     }
 
-    fn handle_agent_view_menu_key(&mut self, key: &Key) {
+    fn handle_agent_view_menu_key(&mut self, key: &Key, text: Option<&str>) {
         let Some(menu) = self.agent_view.state.menu.clone() else {
             return;
         };
         let items = self.agent_view_menu_actions(menu.kind);
+        // A long menu has a search field, and typing goes to it.
+        let searchable = self
+            .agent_view
+            .scene
+            .as_ref()
+            .is_some_and(|scene| scene.hit_for(&Target::MenuSearch).is_some());
+        let control = self.modifiers.control_key() || self.modifiers.alt_key();
+        let typed = text.filter(|text| {
+            searchable
+                && !control
+                && !text.is_empty()
+                && text.chars().all(|character| !character.is_control())
+        });
         match key {
+            Key::Named(NamedKey::Escape) if !menu.filter.is_empty() => {
+                self.set_agent_view_menu_filter(String::new());
+            }
             Key::Named(NamedKey::Escape) => self.agent_view.state.menu = None,
             Key::Named(NamedKey::ArrowDown | NamedKey::Tab) if !items.is_empty() => {
-                if let Some(open) = &mut self.agent_view.state.menu {
-                    open.highlighted = (open.highlighted + 1) % items.len();
-                }
+                let current = self.agent_view_menu_highlighted(&items);
+                self.highlight_agent_view_menu((current + 1) % items.len(), &items);
             }
             Key::Named(NamedKey::ArrowUp) if !items.is_empty() => {
-                if let Some(open) = &mut self.agent_view.state.menu {
-                    open.highlighted = (open.highlighted + items.len() - 1) % items.len();
+                let current = self.agent_view_menu_highlighted(&items);
+                self.highlight_agent_view_menu((current + items.len() - 1) % items.len(), &items);
+            }
+            Key::Named(NamedKey::Backspace) if searchable => {
+                let mut filter = menu.filter.clone();
+                filter.pop();
+                self.set_agent_view_menu_filter(filter);
+            }
+            Key::Named(NamedKey::Enter) => {
+                let current = self.agent_view_menu_highlighted(&items);
+                if let Some(action) = items.get(current).cloned() {
+                    self.activate_agent_view_target(Target::Menu(action));
                 }
             }
-            Key::Named(NamedKey::Enter | NamedKey::Space) => {
-                if let Some(action) = items.get(menu.highlighted).cloned() {
+            _ if typed.is_some() => {
+                let mut filter = menu.filter.clone();
+                filter.push_str(typed.unwrap_or_default());
+                self.set_agent_view_menu_filter(filter);
+            }
+            Key::Named(NamedKey::Space) => {
+                let current = self.agent_view_menu_highlighted(&items);
+                if let Some(action) = items.get(current).cloned() {
                     self.activate_agent_view_target(Target::Menu(action));
                 }
             }
             _ => {}
+        }
+    }
+
+    /// The highlighted menu item's index: until something moves it, the
+    /// checked item's, which the menu opens showing.
+    fn agent_view_menu_highlighted(&self, items: &[MenuAction]) -> usize {
+        let Some(menu) = &self.agent_view.state.menu else {
+            return 0;
+        };
+        if !menu.fresh {
+            return menu.highlighted.min(items.len().saturating_sub(1));
+        }
+        self.agent_view
+            .scene
+            .as_ref()
+            .and_then(|scene| {
+                scene
+                    .hits
+                    .iter()
+                    .filter(|hit| matches!(hit.target, Target::Menu(_)))
+                    .position(|hit| matches!(hit.role, HitRole::MenuItem { checked: true }))
+            })
+            .unwrap_or(0)
+    }
+
+    /// Keeps the menu's list where it is drawn now, no longer following the
+    /// item it opened on.
+    fn settle_agent_view_menu(&mut self, items: &[MenuAction]) {
+        let highlighted = self.agent_view_menu_highlighted(items);
+        let Some(scene) = self.agent_view.scene.as_ref() else {
+            return;
+        };
+        let (drawn, max) = scene.menu_viewport.map_or((0.0, 0.0), |viewport| {
+            (
+                scene.menu_scroll,
+                (scene.menu_height - viewport.height).max(0.0),
+            )
+        });
+        if let Some(menu) = &mut self.agent_view.state.menu
+            && menu.fresh
+        {
+            menu.fresh = false;
+            menu.highlighted = highlighted;
+            menu.scroll.jump_to(drawn, max);
+        }
+    }
+
+    /// Highlights item `index` and glides the list to show it.
+    fn highlight_agent_view_menu(&mut self, index: usize, items: &[MenuAction]) {
+        self.settle_agent_view_menu(items);
+        let Some(scene) = self.agent_view.scene.clone() else {
+            return;
+        };
+        let Some(menu) = &mut self.agent_view.state.menu else {
+            return;
+        };
+        menu.highlighted = index;
+        let (Some(viewport), Some(hit)) = (
+            scene.menu_viewport,
+            items
+                .get(index)
+                .and_then(|action| scene.hit_for(&Target::Menu(action.clone()))),
+        ) else {
+            return;
+        };
+        let max = (scene.menu_height - viewport.height).max(0.0);
+        // The row's place in the whole list, from where it is drawn.
+        let top = hit.bounds.y - viewport.y + scene.menu_scroll;
+        let bottom = top + hit.bounds.height;
+        // A row's margin keeps a little of what surrounds it in view, such
+        // as the heading of the group it starts.
+        let margin = hit.bounds.height;
+        let now = Instant::now();
+        let current = menu.scroll.offset(max, now);
+        if top - margin < current {
+            menu.scroll.glide_to(top - margin, max, now);
+        } else if bottom + margin > current + viewport.height {
+            menu.scroll
+                .glide_to(bottom + margin - viewport.height, max, now);
+        }
+    }
+
+    /// Scrolls an open menu's list by `pixels` when (`x`, `y`) is over it.
+    /// Returns whether it was.
+    pub(super) fn scroll_agent_view_menu(&mut self, x: f32, y: f32, pixels: f32) -> bool {
+        let Some(scene) = self.agent_view.scene.clone() else {
+            return false;
+        };
+        let (Some(menu), Some(viewport)) = (&self.agent_view.state.menu, scene.menu_viewport)
+        else {
+            return false;
+        };
+        if !viewport.contains(x, y) {
+            return false;
+        }
+        let items = self.agent_view_menu_actions(menu.kind);
+        self.settle_agent_view_menu(&items);
+        let max = (scene.menu_height - viewport.height).max(0.0);
+        if let Some(menu) = &mut self.agent_view.state.menu {
+            menu.scroll.scroll_by(pixels, max, Instant::now());
+        }
+        true
+    }
+
+    /// Narrows a long menu to what matches `filter`, from its top.
+    fn set_agent_view_menu_filter(&mut self, filter: String) {
+        if let Some(menu) = &mut self.agent_view.state.menu {
+            menu.filter = filter;
+            menu.fresh = false;
+            menu.highlighted = 0;
+            menu.scroll = crate::ui::agent_view::Scroll::at_start();
         }
     }
 
@@ -1294,6 +1434,10 @@ impl App {
             winit::event::MouseScrollDelta::PixelDelta(position) => -(position.y as f32),
         };
         if !pixels.is_finite() || pixels == 0.0 {
+            return true;
+        }
+        if self.scroll_agent_view_menu(x, y, pixels) {
+            self.request_agent_view_redraw();
             return true;
         }
         let max = (scene.feed_height - scene.feed_viewport.height).max(0.0);

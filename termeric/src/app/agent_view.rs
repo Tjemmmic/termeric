@@ -887,7 +887,13 @@ impl App {
         }
         let now = Instant::now();
         let state = &self.agent_view.state;
-        if state.animating(now) || state.sessions_scroll.animating(now) {
+        if state.animating(now)
+            || state.sessions_scroll.animating(now)
+            || state
+                .menu
+                .as_ref()
+                .is_some_and(|menu| menu.scroll.animating(now))
+        {
             return true;
         }
         let active = state.active.and_then(|id| self.agent_view.session(id));
@@ -1872,5 +1878,131 @@ mod tests {
         // The rail's width comes out of what the dock may take.
         assert_eq!(state.physical_width(1000.0 - 200.0, 1.0), 440.0);
         assert_eq!(state.physical_width(700.0 - 200.0, 1.0), 0.0);
+    }
+
+    /// Builds the panel's scene as a frame would, with fixed text measures.
+    fn build_test_scene(app: &mut App) {
+        let colors = Colors::from_theme(&crate::config::theme::Theme::default(), false);
+        let new_session = app.agent_view_new_session_info();
+        let scene = {
+            let sessions = app.agent_view.by_recency();
+            let input = layout::Input {
+                panel: crate::ui::agent_view::scene::Bounds::new(1000.0, 34.0, 440.0, 866.0),
+                scale: 1.0,
+                now: Instant::now() + std::time::Duration::from_secs(1),
+                colors: &colors,
+                state: &app.agent_view.state,
+                sessions: &sessions,
+                suggestions: Default::default(),
+                banner: None,
+                terminal_agents: &[],
+                past: &[],
+                supervisor: None,
+                new_session,
+                home: None,
+                allow_bypass: false,
+                supervisor_request: None,
+            };
+            layout::build(
+                &input,
+                &mut crate::ui::text_layout::FixedMeasure { advance: 7.0 },
+            )
+        };
+        app.agent_view.scene = Some(Arc::new(scene));
+    }
+
+    #[test]
+    fn a_long_menu_is_searched_by_typing_and_scrolled_by_keys_and_wheel() {
+        use crate::agent_view::agent::AgentKind;
+        use crate::agent_view::event::ModelChoice;
+        use crate::ui::agent_view::scene::{MenuKind, Target};
+        use winit::keyboard::{Key, NamedKey};
+        let mut app = App::new_headless(crate::config::Config::default()).unwrap();
+        let models: Vec<ModelChoice> = (0..30)
+            .map(|index| ModelChoice {
+                value: format!("model-{index}"),
+                display_name: if index == 3 {
+                    "Claude Opus 5".into()
+                } else {
+                    format!("Model {index}")
+                },
+                description: String::new(),
+                group: Some(if index < 15 { "GitHub Copilot" } else { "Z.AI" }.into()),
+            })
+            .collect();
+        let mut transcript = Transcript::new("OpenCode", "build");
+        transcript.apply(AgentEvent::Ready(Handshake {
+            current_model: Some("model-29".into()),
+            models,
+            ..Handshake::default()
+        }));
+        app.agent_view.sessions.push(AgentSession::detached_agent(
+            AgentKind::OpenCode,
+            PathBuf::from("/work"),
+            transcript,
+        ));
+        app.open_agent_view(true);
+        app.agent_view
+            .state
+            .new_session
+            .choose_agent(AgentKind::OpenCode);
+        let open = |app: &mut App| {
+            build_test_scene(app);
+            app.activate_agent_view_target(Target::OpenMenu(MenuKind::Model));
+            build_test_scene(app);
+        };
+        let key = |app: &mut App, key: Key, text: Option<&str>| {
+            assert!(app.handle_agent_view_key(&key, text));
+            build_test_scene(app);
+        };
+        let character = |text: &str| Key::Character(text.into());
+
+        // Typing narrows the menu, and Enter takes what is highlighted.
+        open(&mut app);
+        for letter in ["o", "p", "u", "s"] {
+            key(&mut app, character(letter), Some(letter));
+        }
+        assert_eq!(app.agent_view.state.menu.as_ref().unwrap().filter, "opus");
+        key(&mut app, Key::Named(NamedKey::Enter), None);
+        assert!(app.agent_view.state.menu.is_none());
+        assert_eq!(
+            app.agent_view.state.new_session.model.as_deref(),
+            Some("model-3")
+        );
+
+        // Escape clears a search before it closes the menu; Backspace edits it.
+        open(&mut app);
+        key(&mut app, character("z"), Some("z"));
+        key(&mut app, character("x"), Some("x"));
+        key(&mut app, Key::Named(NamedKey::Backspace), None);
+        assert_eq!(app.agent_view.state.menu.as_ref().unwrap().filter, "z");
+        key(&mut app, Key::Named(NamedKey::Escape), None);
+        let menu = app.agent_view.state.menu.as_ref().unwrap();
+        assert!(menu.filter.is_empty());
+        key(&mut app, Key::Named(NamedKey::Escape), None);
+        assert!(app.agent_view.state.menu.is_none());
+
+        // It opens on the checked model, far down; the wheel scrolls from
+        // there, and a key down from the last model wraps to the top.
+        app.agent_view.state.new_session.model = Some("model-29".into());
+        open(&mut app);
+        let scene = app.agent_view.scene.clone().unwrap();
+        let viewport = scene.menu_viewport.unwrap();
+        let opened_at = scene.menu_scroll;
+        assert!(opened_at > 0.0);
+        assert!(app.scroll_agent_view_menu(viewport.x + 10.0, viewport.y + 10.0, -60.0));
+        build_test_scene(&mut app);
+        let scrolled = app.agent_view.scene.as_ref().unwrap().menu_scroll;
+        assert!(
+            (scrolled - (opened_at - 60.0)).abs() < 1.0,
+            "{scrolled} {opened_at}"
+        );
+        assert!(!app.scroll_agent_view_menu(viewport.x + 10.0, viewport.y - 10.0, 60.0));
+        key(&mut app, Key::Named(NamedKey::ArrowDown), None);
+        let menu = app.agent_view.state.menu.as_ref().unwrap();
+        assert_eq!(menu.highlighted, 0);
+        let max = scene.menu_height - viewport.height;
+        let later = Instant::now() + std::time::Duration::from_secs(1);
+        assert_eq!(menu.scroll.offset(max, later), 0.0);
     }
 }

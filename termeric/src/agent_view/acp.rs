@@ -430,17 +430,7 @@ impl AcpCodec {
             self.option(category)
                 .and_then(|option| text(option, "currentValue"))
         };
-        let models = self
-            .option("model")
-            .map(choices)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(value, name, description)| ModelChoice {
-                value,
-                display_name: name,
-                description,
-            })
-            .collect();
+        let models = self.option("model").map(model_choices).unwrap_or_default();
         let efforts = self
             .option("thought_level")
             .map(choices)
@@ -1317,6 +1307,51 @@ fn choices(option: &Value) -> Vec<(String, String, String)> {
             |choice| match choice.get("options").and_then(Value::as_array) {
                 Some(group) => group.iter().filter_map(entry).collect::<Vec<_>>(),
                 None => entry(choice).into_iter().collect(),
+            },
+        )
+        .collect()
+}
+
+/// A model setting's choices with who provides each: the group an agent
+/// lists them in, else the provider its name leads with, as OpenCode names
+/// its models `Provider/Model`.
+fn model_choices(option: &Value) -> Vec<ModelChoice> {
+    let entry = |choice: &Value, group: Option<String>| {
+        let value = text(choice, "value")?;
+        let name = text(choice, "name").unwrap_or_else(|| value.clone());
+        let (group, display_name) = match group {
+            Some(group) => (Some(group), name),
+            None => match name.split_once('/') {
+                Some((provider, model))
+                    if !provider.trim().is_empty() && !model.trim().is_empty() =>
+                {
+                    (Some(provider.trim().to_owned()), model.trim().to_owned())
+                }
+                _ => (None, name),
+            },
+        };
+        Some(ModelChoice {
+            value,
+            display_name,
+            description: text(choice, "description").unwrap_or_default(),
+            group,
+        })
+    };
+    option
+        .get("options")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .flat_map(
+            |choice| match choice.get("options").and_then(Value::as_array) {
+                Some(listed) => {
+                    let group = text(choice, "name").or_else(|| text(choice, "group"));
+                    listed
+                        .iter()
+                        .filter_map(|model| entry(model, group.clone()))
+                        .collect::<Vec<_>>()
+                }
+                None => entry(choice, None).into_iter().collect(),
             },
         )
         .collect()
@@ -2550,5 +2585,38 @@ mod tests {
             }}),
         );
         assert!(exchange.events.is_empty());
+    }
+
+    #[test]
+    fn models_are_grouped_by_who_provides_them() {
+        let listed = model_choices(&json!({ "options": [
+            { "value": "github-copilot/claude-opus-5", "name": "GitHub Copilot/Claude Opus 5" },
+            { "value": "local", "name": "Local model" },
+            { "group": "anthropic", "name": "Anthropic", "options": [
+                { "value": "anthropic/sonnet", "name": "Sonnet 5" },
+            ]},
+        ]}));
+        let read: Vec<(&str, &str, Option<&str>)> = listed
+            .iter()
+            .map(|model| {
+                (
+                    model.value.as_str(),
+                    model.display_name.as_str(),
+                    model.group.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            read,
+            [
+                (
+                    "github-copilot/claude-opus-5",
+                    "Claude Opus 5",
+                    Some("GitHub Copilot")
+                ),
+                ("local", "Local model", None),
+                ("anthropic/sonnet", "Sonnet 5", Some("Anthropic")),
+            ]
+        );
     }
 }

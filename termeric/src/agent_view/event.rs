@@ -69,6 +69,9 @@ pub struct ModelChoice {
     pub value: String,
     pub display_name: String,
     pub description: String,
+    /// Who provides the model, e.g. `GitHub Copilot`, when the agent offers
+    /// models from several; its display name then leaves that out.
+    pub group: Option<String>,
 }
 
 /// One level of effort the model offers: how long it thinks before
@@ -397,6 +400,7 @@ mod tests {
             value: "haiku".into(),
             display_name: "Haiku 4.5 (recommended)".into(),
             description: String::new(),
+            group: None,
         }];
         assert_eq!(model_name(&offered, "haiku"), "Haiku 4.5");
         assert_eq!(model_name(&offered, "opus"), "Opus");

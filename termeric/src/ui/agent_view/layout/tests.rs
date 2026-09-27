@@ -344,17 +344,17 @@ fn an_open_menu_lists_its_choices_above_everything() {
             value: "sonnet".into(),
             display_name: "Sonnet 5".into(),
             description: "Everyday".into(),
+            group: None,
         }],
         ..Handshake::default()
     }));
     let session = AgentSession::detached(PathBuf::from("/w"), transcript);
     let mut state = open_on(&session);
     state.set_keyboard(true);
-    state.menu = Some(OpenMenu {
-        kind: MenuKind::Mode,
-        anchor: Bounds::new(1020.0, 820.0, 120.0, 26.0),
-        highlighted: 0,
-    });
+    state.menu = Some(OpenMenu::new(
+        MenuKind::Mode,
+        Bounds::new(1020.0, 820.0, 120.0, 26.0),
+    ));
     let scene = scene_for(&state, &[&session], PANEL);
     let modes: Vec<_> = scene
         .hits
@@ -527,6 +527,7 @@ fn the_model_chip_names_the_chosen_model() {
             value: "haiku".into(),
             display_name: "Haiku 4.5".into(),
             description: String::new(),
+            group: None,
         }],
         ..Handshake::default()
     }));
@@ -751,6 +752,7 @@ fn the_new_session_page_chooses_among_the_agents_it_drives() {
             value: "haiku".into(),
             display_name: "Haiku 4.5".into(),
             description: String::new(),
+            group: None,
         }],
         ..Handshake::default()
     }));
@@ -804,6 +806,7 @@ fn opencode_shows_its_model_effort_and_auto_approve() {
             value: "zai/glm-5.2".into(),
             display_name: "Z.AI/GLM-5.2".into(),
             description: String::new(),
+            group: None,
         }],
         modes: vec![
             ModeChoice::new("build", "Build", ""),
@@ -880,4 +883,132 @@ fn opencode_shows_its_model_effort_and_auto_approve() {
         "Permissions: Build, approving everything"
     );
     assert_eq!(modes(&approving)[2], MenuAction::SetAutoApprove(false));
+}
+
+/// An OpenCode session listing `count` models from three providers, running
+/// the last.
+fn opencode_with_models(count: usize) -> AgentSession {
+    let providers = ["GitHub Copilot", "OpenRouter", "Z.AI"];
+    let models: Vec<ModelChoice> = (0..count)
+        .map(|index| ModelChoice {
+            value: format!("model-{index}"),
+            display_name: if index == 3 {
+                "Claude Opus 5".into()
+            } else {
+                format!("Model {index}")
+            },
+            description: String::new(),
+            group: Some(providers[index * providers.len() / count].into()),
+        })
+        .collect();
+    let mut transcript = Transcript::new("OpenCode", "build");
+    transcript.apply(AgentEvent::Ready(Handshake {
+        current_model: Some(format!("model-{}", count - 1)),
+        models,
+        ..Handshake::default()
+    }));
+    AgentSession::detached_agent(AgentKind::OpenCode, PathBuf::from("/home/me"), transcript)
+}
+
+#[test]
+fn a_long_menu_is_searched_grouped_and_scrolled_within_the_panel() {
+    let session = opencode_with_models(30);
+    let mut state = AgentViewState::default();
+    state.open();
+    state.new_session.choose_agent(AgentKind::OpenCode);
+    let anchor = Bounds::new(1020.0, 860.0, 120.0, 26.0);
+    state.menu = Some(OpenMenu::new(MenuKind::Model, anchor));
+    let colors = colors();
+    let sessions = [&session];
+    let agents = vec![(AgentKind::OpenCode, AgentAvailability::Ready)];
+    let scene = build(
+        &new_session_input(&state, &sessions, &colors, agents.clone()),
+        &mut measure(),
+    );
+    assert_unique_targets(&scene);
+    assert!(scene.hit_for(&Target::MenuSearch).is_some());
+    let viewport = scene.menu_viewport.unwrap();
+    // Within the panel and no taller than a list may grow; the rest scrolls.
+    assert!(viewport.y >= PANEL.y && viewport.bottom() <= anchor.y);
+    assert!(viewport.height <= MENU_LIST_MAX);
+    assert!(scene.menu_height > viewport.height);
+    // It opens on the model in use, in view; the first ones are scrolled
+    // past and cannot be clicked.
+    let visible = |action: &str| {
+        scene
+            .hit_for(&Target::Menu(MenuAction::SetModel(action.into())))
+            .and_then(|hit| hit.visible_bounds())
+            .is_some()
+    };
+    assert!(visible("model-29"));
+    assert!(!visible("model-0"));
+    assert!(scene.menu_scroll > 0.0);
+    let headings: Vec<&str> = scene
+        .nodes
+        .iter()
+        .filter_map(|node| match node {
+            Node::Text(text) if text.heading => Some(text.text.as_str()),
+            _ => None,
+        })
+        .collect();
+    // Headings are read like the rest of the list: as far as it shows.
+    assert!(headings.contains(&"Z.AI"));
+    assert!(!headings.contains(&"GitHub Copilot"));
+
+    // Every word typed must match, the provider's name included.
+    state.menu.as_mut().unwrap().filter = "copilot OPUS".into();
+    state.menu.as_mut().unwrap().fresh = false;
+    let input = new_session_input(&state, &sessions, &colors, agents.clone());
+    let shown: Vec<MenuAction> = filtered_menu_items(&input, MenuKind::Model, "copilot OPUS")
+        .into_iter()
+        .map(|item| item.action)
+        .collect();
+    assert_eq!(shown, [MenuAction::SetModel("model-3".into())]);
+    let scene = build(&input, &mut measure());
+    assert_eq!(
+        scene
+            .hit_for(&Target::MenuSearch)
+            .map(|hit| hit.label.as_str()),
+        Some("Search models: copilot OPUS")
+    );
+    // A short list fits without scrolling.
+    assert_eq!(scene.menu_height, scene.menu_viewport.unwrap().height);
+
+    state.menu.as_mut().unwrap().filter = "nothing like this".into();
+    let scene = build(
+        &new_session_input(&state, &sessions, &colors, agents),
+        &mut measure(),
+    );
+    assert!(
+        scene
+            .hits
+            .iter()
+            .all(|hit| !matches!(hit.target, Target::Menu(_)))
+    );
+    assert!(scene.hit_for(&Target::MenuSearch).is_some());
+}
+
+#[test]
+fn a_short_menu_has_no_search() {
+    let session = opencode_with_models(4);
+    let mut state = AgentViewState::default();
+    state.open();
+    state.new_session.choose_agent(AgentKind::OpenCode);
+    state.menu = Some(OpenMenu::new(
+        MenuKind::Model,
+        Bounds::new(1020.0, 860.0, 120.0, 26.0),
+    ));
+    let colors = colors();
+    let sessions = [&session];
+    let scene = build(
+        &new_session_input(
+            &state,
+            &sessions,
+            &colors,
+            vec![(AgentKind::OpenCode, AgentAvailability::Ready)],
+        ),
+        &mut measure(),
+    );
+    assert!(scene.hit_for(&Target::MenuSearch).is_none());
+    assert_eq!(scene.menu_height, scene.menu_viewport.unwrap().height);
 }

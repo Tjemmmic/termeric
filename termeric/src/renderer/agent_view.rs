@@ -84,6 +84,7 @@ impl Renderer {
             return;
         };
         self.draw_layer(&scene.overlay, scene.background);
+        self.draw_layer(&scene.menu, scene.background);
     }
 
     fn draw_layer(&mut self, layer: &Layer, background: [f32; 4]) {

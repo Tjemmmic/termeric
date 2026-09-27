@@ -464,6 +464,7 @@ fn handshake(body: Option<&Map<String, Value>>) -> Handshake {
                 display_name: string_field(model, "displayName").unwrap_or_else(|| value.clone()),
                 description: string_field(model, "description").unwrap_or_default(),
                 value,
+                group: None,
             })
         })
         .collect();

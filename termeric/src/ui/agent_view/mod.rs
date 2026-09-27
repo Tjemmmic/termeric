@@ -91,6 +91,15 @@ impl Default for Scroll {
 }
 
 impl Scroll {
+    /// At the top, staying where it is put.
+    pub fn at_start() -> Self {
+        Self {
+            offset: 0.0,
+            follow: false,
+            animation: None,
+        }
+    }
+
     /// The offset to draw at `now`, within `0..=max`.
     pub fn offset(&self, max: f32, now: Instant) -> f32 {
         if self.follow && self.animation.is_none() {
@@ -368,8 +377,28 @@ pub enum Focus {
 pub struct OpenMenu {
     pub kind: MenuKind,
     pub anchor: Bounds,
-    /// The highlighted item, for keyboard use.
+    /// The highlighted item among those shown, for keyboard use.
     pub highlighted: usize,
+    /// Nothing was highlighted or scrolled yet: the menu shows the checked
+    /// item, highlighted and in view.
+    pub fresh: bool,
+    /// Typed to narrow a long menu.
+    pub filter: String,
+    /// How far a long menu's list is scrolled.
+    pub scroll: Scroll,
+}
+
+impl OpenMenu {
+    pub fn new(kind: MenuKind, anchor: Bounds) -> Self {
+        Self {
+            kind,
+            anchor,
+            highlighted: 0,
+            fresh: true,
+            filter: String::new(),
+            scroll: Scroll::at_start(),
+        }
+    }
 }
 
 /// The agent view panel's state in one window.

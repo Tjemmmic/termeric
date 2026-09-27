@@ -976,6 +976,7 @@ mod tests {
                 value: "sonnet".into(),
                 display_name: "Sonnet".into(),
                 description: String::new(),
+                group: None,
             }],
             commands: Vec::new(),
             modes: Vec::new(),

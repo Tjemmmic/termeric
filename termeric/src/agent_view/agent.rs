@@ -149,6 +149,7 @@ impl AgentKind {
                 value: (*value).to_owned(),
                 display_name: model_name(&[], value),
                 description: String::new(),
+                group: None,
             })
             .collect()
     }

@@ -246,6 +246,13 @@ Some accounts cannot use Claude Code's **Auto**; its refusal then shows in the
 conversation. The model chip lists the models the agent offers for this
 account; *Default* keeps the model the agent's own settings choose. OpenCode
 names the model it runs, so its chip shows that model rather than *Default*.
+OpenCode lists models from every provider you are signed in to; its menu
+groups them under each provider's name. A menu longer than eight choices
+opens on the checked one, scrolls with the wheel and the arrow keys, and has
+a search field: typing narrows it to the choices matching every word typed,
+in the choice, its provider, or its description (*copilot opus*), Backspace
+edits the search, Enter takes the highlighted choice, and Escape clears the
+search before it closes the menu.
 When the model offers levels of effort, as many of OpenCode's do, an effort
 chip beside it chooses one; OpenCode names its own choice *Default*. The
 ring beside the send button shows how much of the model's context the

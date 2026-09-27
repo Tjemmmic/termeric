@@ -2008,7 +2008,8 @@ mod tests {
                 .is_some_and(|handshake| !handshake.commands.is_empty())
         });
         assert_eq!(session.conversation_id(), Some("ses_fake_new"));
-        assert_eq!(session.model_label(), "OpenCode Zen/Big Pickle");
+        // Its provider heads the model menu, so the name leaves it out.
+        assert_eq!(session.model_label(), "Big Pickle");
         assert!(session.is_blank());
 
         session.prompt("hello there", Vec::new()).unwrap();

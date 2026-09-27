@@ -273,6 +273,8 @@ pub enum Target {
     // Menus.
     Menu(MenuAction),
     DismissMenu,
+    /// A long menu's search field; typing while the menu is open narrows it.
+    MenuSearch,
     // Sessions.
     OpenSession(SessionId),
     /// Continue an earlier conversation of `agent` by its id.
@@ -357,6 +359,14 @@ pub struct Scene {
     pub feed: Layer,
     /// Menus and floating controls, drawn above everything else.
     pub overlay: Layer,
+    /// An open menu's list, clipped to where it scrolls, drawn over its
+    /// menu.
+    pub menu: Layer,
+    /// Where an open menu's list scrolls.
+    pub menu_viewport: Option<Bounds>,
+    /// Height of the menu's list, and how far it is scrolled.
+    pub menu_height: f32,
+    pub menu_scroll: f32,
     pub hits: Vec<Hit>,
     pub nodes: Vec<Node>,
     pub feed_viewport: Bounds,

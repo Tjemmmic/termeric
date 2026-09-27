@@ -18,7 +18,8 @@ message:
 `session/list` offers two earlier sessions in any folder, `ses_earlier_one`
 and `ses_earlier_two`, which can be continued; any other id cannot. A session
 opens on `session/new`; `zai/glm-4.7` offers levels of effort, as OpenCode's
-models with variants do. The first argument must be `acp`, or `session delete
+models with variants do. FAKE_OPENCODE_MANY_MODELS lists some thirty models from
+three providers. The first argument must be `acp`, or `session delete
 <id>`, which appends the id to the file FAKE_OPENCODE_FORGOTTEN names.
 """
 
@@ -113,14 +114,34 @@ def ask(method, params):
         watch(message)
 
 
+def models():
+    listed = [
+        {"value": "opencode/big-pickle", "name": "OpenCode Zen/Big Pickle"},
+        {"value": "zai/glm-4.7", "name": "Z.AI/GLM-4.7"},
+    ]
+    # As an account signed in to several providers lists them.
+    if os.environ.get("FAKE_OPENCODE_MANY_MODELS"):
+        for provider, names in [
+            ("github-copilot", ["Claude Fable 5", "Claude Opus 5", "Claude Opus 5.5",
+                                "Claude Sonnet 5", "Claude Haiku 4.5", "Gemini 3.8 Flash",
+                                "GPT-5 Mini", "GPT-5.3 Codex", "GPT-5.5", "Grok Code Fast"]),
+            ("openrouter", ["DeepSeek V4", "Qwen 3.5 Coder", "Kimi K3", "Llama 5 70B",
+                            "Mistral Large 3", "GLM-5.3", "MiniMax M3"]),
+            ("zai", ["GLM-5.2", "GLM-5.2 Highspeed", "GLM-5.3", "GLM-5.3 Flash"]),
+        ]:
+            label = {"github-copilot": "GitHub Copilot", "openrouter": "OpenRouter",
+                     "zai": "Z.AI"}[provider]
+            for name in names:
+                listed.append({"value": f"{provider}/{name.lower().replace(' ', '-')}",
+                               "name": f"{label}/{name}"})
+    return listed
+
+
 def options():
     found = [
         {"id": "model", "name": "Model", "category": "model", "type": "select",
          "currentValue": state["model"],
-         "options": [
-             {"value": "opencode/big-pickle", "name": "OpenCode Zen/Big Pickle"},
-             {"value": "zai/glm-4.7", "name": "Z.AI/GLM-4.7"},
-         ]},
+         "options": models()},
         {"id": "mode", "name": "Session Mode", "category": "mode", "type": "select",
          "currentValue": state["mode"],
          "options": [
