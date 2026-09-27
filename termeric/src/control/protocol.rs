@@ -91,6 +91,10 @@ pub enum Request {
         display: String,
         /// The desktop's activation token, so the window takes focus.
         activation_token: Option<String>,
+        /// The launcher's build (its executable and when that file last
+        /// changed); a process running any other build refuses it, so a
+        /// rebuilt or different Termeric runs its own code.
+        build: String,
         tabs: Vec<JoinTab>,
     },
     LaunchWindow {
@@ -1052,6 +1056,7 @@ impl Request {
                 request_id,
                 display,
                 activation_token,
+                build,
                 tabs,
             } => {
                 if !valid_request_id(request_id) {
@@ -1065,12 +1070,13 @@ impl Request {
                         && !value.chars().any(unsafe_control_metadata_character)
                 };
                 if !identity(display)
+                    || !identity(build)
                     || activation_token
                         .as_deref()
                         .is_some_and(|token| !identity(token))
                 {
                     return Err(format!(
-                        "A joining launch's display and activation token must be printable UTF-8 of at most {MAX_JOIN_IDENTITY_BYTES} bytes"
+                        "A joining launch's display, build, and activation token must be printable UTF-8 of at most {MAX_JOIN_IDENTITY_BYTES} bytes"
                     ));
                 }
                 if tabs.is_empty() || tabs.len() > MAX_JOIN_TABS {
@@ -3232,6 +3238,7 @@ mod tests {
             request_id: "0123456789abcdef0123456789abcdef".into(),
             display: display.into(),
             activation_token: token.map(str::to_owned),
+            build: "/usr/bin/termeric@1790000000.5".into(),
             tabs,
         };
         assert!(
@@ -3248,6 +3255,11 @@ mod tests {
                 .validate()
                 .is_ok()
         );
+        let mut no_build = join("wayland:w", None, vec![tab(None, None, &[])]);
+        if let Request::JoinLaunch { build, .. } = &mut no_build {
+            build.clear();
+        }
+        assert!(no_build.validate().is_err());
         for refused in [
             join("", None, vec![tab(None, None, &[])]),
             join("wayland:\u{202e}", None, vec![tab(None, None, &[])]),

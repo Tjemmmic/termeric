@@ -1791,6 +1791,7 @@ pub(super) fn report_agent_event(process_id: u32, report: Request) -> anyhow::Re
 /// the next. Returns the process and window that opened it, or `None`.
 pub fn join_running(
     display: &str,
+    build: &str,
     activation_token: Option<String>,
     tabs: Vec<protocol::JoinTab>,
 ) -> anyhow::Result<Option<(u32, u64)>> {
@@ -1807,6 +1808,7 @@ pub fn join_running(
                 request_id: request_id.clone(),
                 display: display.to_owned(),
                 activation_token: activation_token.clone(),
+                build: build.to_owned(),
                 tabs: tabs.clone(),
             },
         );

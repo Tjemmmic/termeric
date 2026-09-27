@@ -2128,11 +2128,13 @@ impl Application {
                 request_id,
                 display,
                 activation_token,
+                build,
                 tabs,
             } => self.join_launch(
                 event_loop,
                 request_id,
                 display,
+                build,
                 activation_token.clone(),
                 tabs,
             ),
@@ -2975,9 +2977,15 @@ impl Application {
         event_loop: &ActiveEventLoop,
         request_id: &str,
         display: &str,
+        build: &str,
         activation_token: Option<String>,
         tabs: &[crate::control::protocol::JoinTab],
     ) -> std::result::Result<crate::control::protocol::Response, String> {
+        // Only the same build joins: a rebuilt or different Termeric runs
+        // its own code in a process of its own.
+        if crate::control::build_identity().as_deref() != Some(build) {
+            return Err("This Termeric is a different build".into());
+        }
         let result_index = self.prepare_join_launch(
             crate::control::display_identity().as_deref(),
             display,

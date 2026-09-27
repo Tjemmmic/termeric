@@ -26,8 +26,10 @@ idle at its prompt. Protocol v23 adds `read_conversation`,
 Current protocol v24 adds `join_launch`, which a new launch sends so its
 window opens in the running process
 ([joining](command-line.md#joining-the-running-termeric)): it carries the
-launcher's display identity (`wayland:NAME` or `x11:NAME`), which must match
-the process's own, an optional activation token, and 1 to 32 shell or command
+launcher's display identity (`wayland:NAME` or `x11:NAME`) and build identity
+(its canonical executable path and that file's modification time), which must
+both match the process's own as recorded at its startup, an optional
+activation token, and 1 to 32 shell or command
 tabs with absolute folders and single-line titles. Client and
 server must be rebuilt together; mismatched protocol versions fail rather than
 dropping the mode.

@@ -221,6 +221,30 @@ pub fn display_identity() -> Option<String> {
         .or_else(|| variable("DISPLAY").map(|display| format!("x11:{display}")))
 }
 
+/// This process's build: its executable and when that file last changed,
+/// as first asked. A process asks at startup, so a later rebuild of the
+/// same file reads as another build.
+pub fn build_identity() -> Option<String> {
+    static IDENTITY: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    IDENTITY
+        .get_or_init(|| {
+            let executable = std::env::current_exe().ok()?.canonicalize().ok()?;
+            let changed = std::fs::metadata(&executable)
+                .ok()?
+                .modified()
+                .ok()?
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()?;
+            Some(format!(
+                "{}@{}.{}",
+                executable.to_str()?,
+                changed.as_secs(),
+                changed.subsec_nanos()
+            ))
+        })
+        .clone()
+}
+
 /// Opens `plan`'s window in a running Termeric on this display, when the
 /// plan and settings allow: every window then shares one process, so tabs
 /// can move between them. Returns the process and window, or `None` when
@@ -237,9 +261,10 @@ pub fn join_running_launch(plan: &crate::cli::LaunchPlan) -> Option<(u32, u64)> 
             return None;
         }
         let display = display_identity()?;
+        let build = build_identity()?;
         let variable = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
         let token = variable("XDG_ACTIVATION_TOKEN").or_else(|| variable("DESKTOP_STARTUP_ID"));
-        match client::join_running(&display, token, tabs) {
+        match client::join_running(&display, &build, token, tabs) {
             Ok(joined) => joined,
             Err(error) => {
                 log::debug!("Could not look for a running Termeric: {error:#}");

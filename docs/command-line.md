@@ -17,8 +17,8 @@ apply to the current window or tab until the next delimiter.
 
 ### Joining the running Termeric
 
-When Termeric already runs on the same display, a plain launch opens its
-window there instead of starting another process, so every window shares one
+When the same Termeric build already runs on the same display, a plain launch
+opens its window there instead of starting another process, so every window shares one
 process and tabs move between them (**Move Tab to Next Window**). The
 launcher asks the running process over its [control socket](gui-control.md)
 (`join_launch`), passing the desktop's activation token so the new window
@@ -31,7 +31,11 @@ most a folder and a title each (`--working-directory`, `--title`,
 launch that asks for anything a running process cannot honor for one window
 (a workspace, domain, terminal or agent profile, split, application ID,
 geometry, renderer, several windows, or quick access) starts its own process,
-as does any launch when no process answers. The joined window uses the
+as does any launch when no process answers. Only the same build joins: the
+same executable file, unchanged since the running process started. A rebuilt
+binary (`cargo run --release` after a change) or a different one (a
+development build beside an installed Termeric) starts a process of its own
+and runs its own code. The joined window uses the
 running process's settings and environment, not the launcher's.
 
 `--separate-process` always starts a process of its own, and
