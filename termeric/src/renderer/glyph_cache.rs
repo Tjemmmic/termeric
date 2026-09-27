@@ -543,16 +543,33 @@ struct PlacedGlyph {
 /// Each glyph is rasterized at its final position: the whole-pixel part
 /// becomes the quad offset and only the remainder selects a subpixel bin, so a
 /// fractional position is never applied twice. With cell-grid placement every
-/// scalar is a cell, and a glyph keeps only its offset from the first glyph of
-/// its cell, so a cluster's leading glyph lands exactly on the cell origin.
+/// scalar starts a cell after the columns of the scalars before it (two for a
+/// wide character, such as kana), and a glyph keeps only its offset from the
+/// first glyph of its cell, so a cluster's leading glyph lands exactly on the
+/// cell origin.
 fn place_glyphs(
     text: &str,
     glyphs: &[cosmic_text::LayoutGlyph],
     placement: GlyphPlacement,
 ) -> Vec<PlacedGlyph> {
-    let cell_starts: Vec<usize> = match placement {
+    // Each scalar's byte offset and the cell it starts in.
+    let cell_starts: Vec<(usize, u32)> = match placement {
         GlyphPlacement::Shaped => Vec::new(),
-        GlyphPlacement::CellGrid => text.char_indices().map(|(start, _)| start).collect(),
+        GlyphPlacement::CellGrid => {
+            let mut cell = 0u32;
+            text.char_indices()
+                .map(|(start, character)| {
+                    let starts = (start, cell);
+                    // Narrow and zero-width scalars keep one cell each, as
+                    // they always have.
+                    let columns =
+                        termeric_core::unicode::grapheme_width(character.encode_utf8(&mut [0; 4]))
+                            .clamp(1, 2);
+                    cell += columns as u32;
+                    starts
+                })
+                .collect()
+        }
     };
     // The shaped x of the first glyph seen in the current cell.
     let mut cell_origin: Option<(u32, f32)> = None;
@@ -562,9 +579,10 @@ fn place_glyphs(
             let (cell, position) = match placement {
                 GlyphPlacement::Shaped => (0, glyph.x),
                 GlyphPlacement::CellGrid => {
-                    let cell = cell_starts
-                        .partition_point(|&start| start <= glyph.start)
-                        .saturating_sub(1) as u32;
+                    let index = cell_starts
+                        .partition_point(|&(start, _)| start <= glyph.start)
+                        .saturating_sub(1);
+                    let cell = cell_starts.get(index).map_or(0, |&(_, cell)| cell);
                     let origin_x = match cell_origin {
                         Some((origin_cell, origin_x)) if origin_cell == cell => origin_x,
                         _ => {
@@ -1330,14 +1348,20 @@ impl GlyphCache {
         })
         .unwrap_or_else(|| self.font_family.clone());
 
-        if let Some(glyph) = self.rasterize_char_with_family(c, family_for(&family), style) {
+        if let Some(glyph) =
+            self.rasterize_char_with_family(c, family_for(&family), style, Shaping::Basic)
+        {
             return Some(glyph);
         }
 
-        // Preserve cosmic-text's platform fallback as the final safety net
-        // when no configured family completely covers this scalar.
+        // cosmic-text's platform fallback is the final safety net when no
+        // configured family covers this scalar. It chooses a font by script
+        // (Noto Sans CJK for kana, for instance), which only advanced
+        // shaping does; basic shaping would try the generic family alone.
         for family in [Family::Monospace, Family::SansSerif] {
-            if let Some(glyph) = self.rasterize_char_with_family(c, family, style) {
+            if let Some(glyph) =
+                self.rasterize_char_with_family(c, family, style, Shaping::Advanced)
+            {
                 return Some(glyph);
             }
         }
@@ -1351,22 +1375,11 @@ impl GlyphCache {
         c: char,
         family: Family<'_>,
         style: FontStyle,
+        shaping: Shaping,
     ) -> Option<ResolvedChar> {
-        let mut buffer = Buffer::new(&mut self.font_system, self.metrics);
         let attrs = font_attrs(family, style, self.font_weight, self.bold_font_weight);
-        buffer.set_text(
-            &c.to_string(),
-            &attrs,
-            Shaping::Basic,
-            None, // No alignment needed for single chars
-        );
-        buffer.shape_until_scroll(&mut self.font_system, false);
-
-        let (cache_key, font_id) = buffer
-            .layout_runs()
-            .flat_map(|run| run.glyphs.iter())
-            .find(|glyph| glyph.glyph_id != 0)
-            .map(|glyph| (glyph.physical((0.0, 0.0), 1.0).cache_key, glyph.font_id))?;
+        let (cache_key, font_id) =
+            char_glyph(&mut self.font_system, self.metrics, c, &attrs, shaping)?;
 
         let shaped_key = ShapedGlyphKey { cache_key, style };
         if let Some(entry) = self.shaped_entries.get(&shaped_key).copied() {
@@ -2956,6 +2969,26 @@ fn diagnose_font_coverage(
     })
 }
 
+/// The glyph that draws `c` in the family `attrs` name: with basic shaping
+/// from that family alone, with advanced shaping also from the platform's
+/// fallback fonts for its script. `None` when no font has one.
+fn char_glyph(
+    font_system: &mut FontSystem,
+    metrics: Metrics,
+    c: char,
+    attrs: &Attrs<'_>,
+    shaping: Shaping,
+) -> Option<(CacheKey, cosmic_text::fontdb::ID)> {
+    let mut buffer = Buffer::new(font_system, metrics);
+    buffer.set_text(&c.to_string(), attrs, shaping, None);
+    buffer.shape_until_scroll(font_system, false);
+    buffer
+        .layout_runs()
+        .flat_map(|run| run.glyphs.iter())
+        .find(|glyph| glyph.glyph_id != 0)
+        .map(|glyph| (glyph.physical((0.0, 0.0), 1.0).cache_key, glyph.font_id))
+}
+
 fn platform_fallback_route(
     font_system: &mut FontSystem,
     metrics: Metrics,
@@ -3953,6 +3986,34 @@ mod tests {
     }
 
     #[test]
+    fn a_character_no_configured_font_has_falls_back_by_script() {
+        let sources = [
+            cosmic_text::fontdb::Source::Binary(Arc::new(deterministic_test_font_data_named(
+                "FiraMono-Medium.ttf",
+            ))),
+            cosmic_text::fontdb::Source::Binary(Arc::new(deterministic_test_font_data_named(
+                "NotoSansArabic.ttf",
+            ))),
+        ];
+        let mut font_system = FontSystem::new_with_fonts(sources);
+        let metrics = Metrics::new(14.0, 16.8);
+        let attrs = Attrs::new().family(Family::Name("Fira Mono"));
+        let arabic = |font_system: &mut FontSystem, shaping| {
+            char_glyph(font_system, metrics, 'ش', &attrs, shaping)
+        };
+        // Basic shaping looks only at the named family, as the wide-cell
+        // path once did for its last resort, which drew kana as boxes.
+        assert!(arabic(&mut font_system, Shaping::Basic).is_none());
+        let (_, font) = arabic(&mut font_system, Shaping::Advanced).expect("a fallback font");
+        let face = font_system.db().face(font).unwrap();
+        assert!(
+            face.families
+                .iter()
+                .any(|(name, _)| name == "Noto Sans Arabic")
+        );
+    }
+
+    #[test]
     fn coverage_report_names_platform_fallback_and_missing_results() {
         let sources = [
             cosmic_text::fontdb::Source::Binary(Arc::new(deterministic_test_font_data_named(
@@ -4458,6 +4519,18 @@ mod tests {
             TextFace::Terminal,
         );
         assert_ne!(default_key, custom_key);
+    }
+
+    #[test]
+    fn cell_grid_placement_gives_wide_characters_two_cells() {
+        // Whatever font draws the kana, it starts one cell after `a` and
+        // takes two, so `b` starts in the fourth cell.
+        let glyphs = fira_mono_layout("aかb");
+        let cells: Vec<u32> = place_glyphs("aかb", &glyphs, GlyphPlacement::CellGrid)
+            .iter()
+            .map(|glyph| glyph.cell)
+            .collect();
+        assert_eq!(cells, [0, 1, 3]);
     }
 
     fn fira_mono_layout(text: &str) -> Vec<cosmic_text::LayoutGlyph> {
