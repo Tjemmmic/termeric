@@ -8,6 +8,9 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaunchPlan {
     pub windows: Vec<WindowLaunch>,
+    /// Start a process of its own even when a running Termeric could open
+    /// the window.
+    pub separate_process: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,7 +81,73 @@ impl Default for LaunchPlan {
     fn default() -> Self {
         Self {
             windows: vec![WindowLaunch::default()],
+            separate_process: false,
         }
+    }
+}
+
+impl LaunchPlan {
+    /// The tabs to ask a running Termeric to open, when this launch is one
+    /// it can open: a single window of shell or command tabs, each with at
+    /// most a folder and a title. Anything a running process cannot honor
+    /// for one window (a workspace, domain, profile, identity, size,
+    /// renderer, environment, or splits) keeps a process of its own. A tab
+    /// without a folder opens in `current_dir`, where this launch started.
+    pub fn join_tabs(
+        &self,
+        current_dir: Option<&std::path::Path>,
+    ) -> Option<Vec<crate::control::protocol::JoinTab>> {
+        let [window] = self.windows.as_slice() else {
+            return None;
+        };
+        let standalone = self.separate_process
+            || window.workspace.is_some()
+            || window.domain.is_some()
+            || window.domain_snapshot.is_some()
+            || window.app_id.is_some()
+            || window.pixel_size.is_some()
+            || window.renderer_backend.is_some()
+            || window.quick_access;
+        if standalone {
+            return None;
+        }
+        window
+            .tabs
+            .iter()
+            .map(|tab| {
+                if !tab.environment.is_empty()
+                    || tab.environment_policy != Default::default()
+                    || !tab.splits.is_empty()
+                {
+                    return None;
+                }
+                let (program, args) = match &tab.target {
+                    LaunchTarget::Shell => (None, Vec::new()),
+                    LaunchTarget::Command { program, args } => {
+                        (Some(program.clone()), args.clone())
+                    }
+                    LaunchTarget::TerminalProfile { .. } | LaunchTarget::Plugin { .. } => {
+                        return None;
+                    }
+                };
+                // Relative folders are the launcher's, not the running
+                // process's.
+                let working_directory = match (tab.working_directory.as_deref(), current_dir) {
+                    (Some(directory), Some(base)) if directory.is_relative() => {
+                        Some(base.join(directory))
+                    }
+                    (Some(directory), _) => Some(directory.to_path_buf()),
+                    (None, base) => base.map(std::path::Path::to_path_buf),
+                }
+                .and_then(|directory| directory.to_str().map(str::to_owned));
+                Some(crate::control::protocol::JoinTab {
+                    working_directory,
+                    title: tab.title.clone(),
+                    program,
+                    args,
+                })
+            })
+            .collect()
     }
 }
 
@@ -221,6 +290,7 @@ fn parse_collected(
             // A leading --new-window is a desktop-launch compatibility flag:
             // this invocation already creates a native window. Later uses
             // delimit additional window groups in the same process.
+            "--separate-process" => plan.separate_process = true,
             "--new-window" if index == 0 => current_window(&mut plan).force_new = true,
             "--new-window" => plan.windows.push(WindowLaunch::default()),
             "--quick-access" => {
@@ -473,6 +543,7 @@ fn help_text() -> String {
 Usage: termeric [WINDOW/TAB OPTIONS] [-- COMMAND ARG...]\n\n\
 Window grouping:\n  \
   --new-window                 Start another independent native window\n  \
+  --separate-process           Start a process of its own, even when Termeric runs\n  \
   --quick-access               Toggle or launch one top-edge drop-down window\n  \
   --tab                        Start another tab in the current window\n  \
   --split horizontal|vertical  Split the current shell tab after launch\n\n\
@@ -1707,6 +1778,7 @@ fn parse_domain(
             }
             return Ok(ParseOutcome::Run(LaunchPlan {
                 windows: vec![window],
+                separate_process: false,
             }));
         }
         "relay" => {
@@ -3153,6 +3225,61 @@ mod tests {
         ] {
             assert!(parse(arguments.into_iter().map(OsString::from)).is_err());
         }
+    }
+
+    #[test]
+    fn plain_launches_join_a_running_termeric_and_others_keep_their_own() {
+        let cwd = std::path::Path::new("/home/me/project");
+        let tabs = |arguments: &[&str]| run(arguments).join_tabs(Some(cwd));
+        let plain = tabs(&[]).unwrap();
+        assert_eq!(plain.len(), 1);
+        assert_eq!(
+            plain[0].working_directory.as_deref(),
+            Some("/home/me/project")
+        );
+        assert_eq!(
+            (plain[0].program.as_deref(), plain[0].args.len()),
+            (None, 0)
+        );
+        let desktop = tabs(&["--new-window"]).unwrap();
+        assert_eq!(desktop.len(), 1);
+        let rich = tabs(&[
+            "--working-directory",
+            "/srv",
+            "--title",
+            "Build",
+            "--tab",
+            "--",
+            "make",
+            "-j8",
+        ])
+        .unwrap();
+        assert_eq!(rich[0].working_directory.as_deref(), Some("/srv"));
+        let relative = tabs(&["--working-directory", "src"]).unwrap();
+        assert_eq!(
+            relative[0].working_directory.as_deref(),
+            Some("/home/me/project/src")
+        );
+        assert_eq!(rich[0].title.as_deref(), Some("Build"));
+        assert_eq!(rich[1].program.as_deref(), Some("make"));
+        assert_eq!(rich[1].args, ["-j8"]);
+        for standalone in [
+            &["--separate-process"][..],
+            &["--new-window", "--new-window"],
+            &["--workspace", "main"],
+            &["--split", "vertical"],
+            &["--app-id", "work"],
+            &["--geometry", "800x600"],
+            &["--renderer", "software"],
+            &["--terminal-profile", "ssh"],
+            &["--profile", "codex:review"],
+        ] {
+            assert!(
+                tabs(standalone).is_none(),
+                "{standalone:?} should keep its own process"
+            );
+        }
+        assert!(run(&["--separate-process"]).separate_process);
     }
 
     #[test]

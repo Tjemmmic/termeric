@@ -91,7 +91,12 @@ impl ApplicationHandler<AppEvent> for App {
                 app_id,
                 app_id,
             );
-            if let Some(token) = event_loop.read_token_from_env() {
+            // A window opened for a launch that joined this process takes
+            // that launch's token; the first window takes this process's.
+            if let Some(token) = self.activation_token.take() {
+                window_attrs = window_attrs
+                    .with_activation_token(winit::window::ActivationToken::from_raw(token));
+            } else if let Some(token) = event_loop.read_token_from_env() {
                 window_attrs = window_attrs.with_activation_token(token);
                 winit::platform::startup_notify::reset_activation_token_env();
             }
@@ -2135,6 +2140,7 @@ impl ApplicationHandler<AppEvent> for App {
                         }
                     }
                     crate::control::protocol::Request::CreateWindow { .. }
+                    | crate::control::protocol::Request::JoinLaunch { .. }
                     | crate::control::protocol::Request::LaunchWindow { .. }
                     | crate::control::protocol::Request::CreateTab { .. }
                     | crate::control::protocol::Request::LaunchTab { .. }

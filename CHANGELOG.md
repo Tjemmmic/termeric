@@ -25,6 +25,16 @@ Versioning once public beta tags begin.
   In** opens either one from **New Agent…**. See
   [agent view](docs/agent-view.md).
 
+- A new Termeric window joins the running Termeric on the same display
+  instead of starting another process, so tabs can move between any of your
+  windows with **Move Tab to Next Window**. It opens in the launcher's folder
+  and takes focus. `--separate-process` or `[window] share_process = false`
+  keeps a process of its own. GUI control protocol v24 adds `join_launch`.
+
+- Dragging a tab now shows it following the pointer, with the tabs it
+  passes sliding aside, and a neighbor's close button no longer stalls the
+  drag.
+
 - **Clear Scrollback** and **Reset Terminal** are in the command palette.
   Neither had an entry or a default shortcut before.
 

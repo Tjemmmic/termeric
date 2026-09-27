@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::collections::HashSet;
 use std::io::{Read, Write};
 
-pub const PROTOCOL_VERSION: u32 = 23;
+pub const PROTOCOL_VERSION: u32 = 24;
 pub const JSON_SCHEMA_VERSION: u32 = 3;
 pub const MAX_FRAME_BYTES: usize = 256 * 1024;
 pub const MAX_WINDOWS: usize = 32;
@@ -26,6 +26,10 @@ pub const MAX_CONTROL_LAUNCH_ARGS: usize = 128;
 pub const MAX_CONTROL_LAUNCH_ARGV_BYTES: usize = 16 * 1024;
 pub const MAX_CONTROL_LAUNCH_CWD_BYTES: usize = 4 * 1024;
 pub const MAX_CONTROL_LAUNCH_TITLE_BYTES: usize = 256;
+/// Tabs a joining launch may open in its new window.
+pub const MAX_JOIN_TABS: usize = 32;
+/// Longest display name or activation token a joining launch may carry.
+pub const MAX_JOIN_IDENTITY_BYTES: usize = 1024;
 pub const MAX_CONTROL_LAUNCH_ENVIRONMENT_ENTRIES: usize = 64;
 pub const MAX_CONTROL_LAUNCH_ENVIRONMENT_NAME_BYTES: usize = 128;
 pub const MAX_CONTROL_LAUNCH_ENVIRONMENT_VALUE_BYTES: usize = 8 * 1024;
@@ -77,6 +81,17 @@ pub enum Request {
     CreateWindow {
         request_id: String,
         source_window: u64,
+    },
+    /// Open the window a new launch asked for in this running process, so
+    /// every window shares one process and tabs can move between them.
+    JoinLaunch {
+        request_id: String,
+        /// The display the launch runs on (`WAYLAND_DISPLAY`, else
+        /// `DISPLAY`); a process on another display refuses it.
+        display: String,
+        /// The desktop's activation token, so the window takes focus.
+        activation_token: Option<String>,
+        tabs: Vec<JoinTab>,
     },
     LaunchWindow {
         request_id: String,
@@ -381,6 +396,17 @@ impl std::fmt::Debug for EnvironmentVariable {
             .field("value", &"[redacted]")
             .finish()
     }
+}
+
+/// One tab of a joining launch: a shell, or a command, in a folder.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JoinTab {
+    pub working_directory: Option<String>,
+    pub title: Option<String>,
+    /// A command to run instead of the shell.
+    pub program: Option<String>,
+    pub args: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1022,6 +1048,57 @@ impl Request {
                 }
                 Ok(())
             }
+            Self::JoinLaunch {
+                request_id,
+                display,
+                activation_token,
+                tabs,
+            } => {
+                if !valid_request_id(request_id) {
+                    return Err(
+                        "GUI control request ID must be exactly 32 lowercase hex digits".into(),
+                    );
+                }
+                let identity = |value: &str| {
+                    !value.is_empty()
+                        && value.len() <= MAX_JOIN_IDENTITY_BYTES
+                        && !value.chars().any(unsafe_control_metadata_character)
+                };
+                if !identity(display)
+                    || activation_token
+                        .as_deref()
+                        .is_some_and(|token| !identity(token))
+                {
+                    return Err(format!(
+                        "A joining launch's display and activation token must be printable UTF-8 of at most {MAX_JOIN_IDENTITY_BYTES} bytes"
+                    ));
+                }
+                if tabs.is_empty() || tabs.len() > MAX_JOIN_TABS {
+                    return Err(format!(
+                        "A joining launch opens between 1 and {MAX_JOIN_TABS} tabs"
+                    ));
+                }
+                for tab in tabs {
+                    match &tab.program {
+                        Some(program) => validate_control_launch(
+                            program,
+                            &tab.args,
+                            tab.working_directory.as_deref(),
+                            tab.title.as_deref(),
+                            &[],
+                            &termeric_core::pty::EnvironmentPolicy::default(),
+                        )?,
+                        None if !tab.args.is_empty() => {
+                            return Err("A joining launch's shell tab takes no arguments".into());
+                        }
+                        None => validate_launch_place(
+                            tab.working_directory.as_deref(),
+                            tab.title.as_deref(),
+                        )?,
+                    }
+                }
+                Ok(())
+            }
             Self::CreateTab {
                 request_id,
                 window_id,
@@ -1245,6 +1322,7 @@ impl Request {
             | Self::ReadConversation { .. }
             | Self::AgentEvent { .. } => None,
             Self::CreateWindow { request_id, .. }
+            | Self::JoinLaunch { request_id, .. }
             | Self::LaunchWindow { request_id, .. }
             | Self::CreateTab { request_id, .. }
             | Self::LaunchTab { request_id, .. }
@@ -1347,6 +1425,17 @@ fn validate_control_launch(
             "GUI control launch program and arguments are limited to {MAX_CONTROL_LAUNCH_ARGV_BYTES} UTF-8 bytes"
         ));
     }
+    validate_launch_place(working_directory, title)?;
+    validate_control_launch_environment(environment, environment_policy)?;
+    Ok(())
+}
+
+/// A launch's folder and title: an absolute path and a single printable
+/// line, each within its limit.
+fn validate_launch_place(
+    working_directory: Option<&str>,
+    title: Option<&str>,
+) -> Result<(), String> {
     if let Some(directory) = working_directory
         && (directory.is_empty()
             || directory.len() > MAX_CONTROL_LAUNCH_CWD_BYTES
@@ -1366,7 +1455,6 @@ fn validate_control_launch(
             "GUI control launch title must be nonempty UTF-8 of at most {MAX_CONTROL_LAUNCH_TITLE_BYTES} bytes without control or bidirectional formatting text"
         ));
     }
-    validate_control_launch_environment(environment, environment_policy)?;
     Ok(())
 }
 
@@ -3130,5 +3218,51 @@ mod tests {
             truncated: false,
         });
         assert!(inventory.validate().is_err());
+    }
+
+    #[test]
+    fn joining_launches_are_validated_before_any_window_opens() {
+        let tab = |working_directory: Option<&str>, program: Option<&str>, args: &[&str]| JoinTab {
+            working_directory: working_directory.map(str::to_owned),
+            title: None,
+            program: program.map(str::to_owned),
+            args: args.iter().map(|arg| (*arg).to_owned()).collect(),
+        };
+        let join = |display: &str, token: Option<&str>, tabs: Vec<JoinTab>| Request::JoinLaunch {
+            request_id: "0123456789abcdef0123456789abcdef".into(),
+            display: display.into(),
+            activation_token: token.map(str::to_owned),
+            tabs,
+        };
+        assert!(
+            join(
+                "wayland:wayland-0",
+                Some("abc"),
+                vec![tab(Some("/tmp"), None, &[])]
+            )
+            .validate()
+            .is_ok()
+        );
+        assert!(
+            join("x11::1", None, vec![tab(None, Some("make"), &["-j8"])])
+                .validate()
+                .is_ok()
+        );
+        for refused in [
+            join("", None, vec![tab(None, None, &[])]),
+            join("wayland:\u{202e}", None, vec![tab(None, None, &[])]),
+            join("wayland:w", Some(""), vec![tab(None, None, &[])]),
+            join("wayland:w", None, Vec::new()),
+            join(
+                "wayland:w",
+                None,
+                vec![tab(None, None, &[]); MAX_JOIN_TABS + 1],
+            ),
+            join("wayland:w", None, vec![tab(Some("relative"), None, &[])]),
+            join("wayland:w", None, vec![tab(None, None, &["stray"])]),
+            join("wayland:w", None, vec![tab(None, Some(""), &[])]),
+        ] {
+            assert!(refused.validate().is_err(), "{refused:?}");
+        }
     }
 }

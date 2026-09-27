@@ -39,6 +39,10 @@ semantic bounds. See [tab-bar placement](tab-bar.md) for the rail sizing and
 terminal-geometry contract.
 
 Move Tab to Next Window follows native-window creation order with wraparound.
+It moves between windows of one process; a new launch
+[joins the running Termeric](command-line.md#joining-the-running-termeric) by
+default, so windows opened from the desktop, a launcher, or a shell all
+qualify.
 The complete tab owner moves: a single terminal or nested pane tree, every live
 PTY and reader, titles, pin state, launch/plugin identity, transcript and
 Harvest state. The destination assigns a fresh window-local tab ID, inserts a

@@ -55,7 +55,13 @@ fn main() -> Result<std::process::ExitCode> {
     #[cfg(unix)]
     let mut _quick_access_guard = None;
     let launch = match outcome {
-        cli::ParseOutcome::Run(launch) => launch,
+        cli::ParseOutcome::Run(launch) => {
+            if let Some((process_id, window_id)) = control::join_running_launch(&launch) {
+                log::info!("Opened window {window_id} in the running Termeric ({process_id})");
+                return Ok(std::process::ExitCode::SUCCESS);
+            }
+            launch
+        }
         cli::ParseOutcome::AgentEvent(_) => {
             unreachable!("agent hooks return before logging starts")
         }

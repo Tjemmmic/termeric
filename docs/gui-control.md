@@ -20,9 +20,15 @@ agent hooks. Protocol v20 adds `list_agents` and `submit_to_agent` for
 [`termeric mcp`](agents.md#letting-an-agent-direct-the-others). Protocol v21
 adds the [supervisor](agents.md#the-supervisor) token to both. Protocol v22
 adds the `stopped` agent event, for a turn that was interrupted or an agent
-idle at its prompt. Current protocol v23 adds `read_conversation`,
+idle at its prompt. Protocol v23 adds `read_conversation`,
 `answer_approval`, and `submit_to_session` for sessions in the
-[agent view](agent-view.md), and lists those sessions in `list_agents`. Client and
+[agent view](agent-view.md), and lists those sessions in `list_agents`.
+Current protocol v24 adds `join_launch`, which a new launch sends so its
+window opens in the running process
+([joining](command-line.md#joining-the-running-termeric)): it carries the
+launcher's display identity (`wayland:NAME` or `x11:NAME`), which must match
+the process's own, an optional activation token, and 1 to 32 shell or command
+tabs with absolute folders and single-line titles. Client and
 server must be rebuilt together; mismatched protocol versions fail rather than
 dropping the mode.
 
@@ -537,7 +543,7 @@ connected peer's operating-system user in addition to token authentication.
 Token files are opened without following symlinks and validated by owner, type,
 permissions, and exact size before their fixed-size contents are read.
 
-Protocol version 23 accepts exactly `inventory`, `launch_status`, `agent_event`, `list_agents`, `submit_to_agent`, `read_conversation`, `answer_approval`, `submit_to_session`, ID-targeted `read_text`,
+Protocol version 24 accepts exactly `inventory`, `join_launch`, `launch_status`, `agent_event`, `list_agents`, `submit_to_agent`, `read_conversation`, `answer_approval`, `submit_to_session`, ID-targeted `read_text`,
 `send_text`, `create_window`, `launch_window`, `create_tab`, `launch_tab`,
 `split_pane`, `focus_window`, `select_tab`, `focus_pane`,
 `close_window`, `close_tab`, `close_pane`, `move_tab`, `move_pane`,

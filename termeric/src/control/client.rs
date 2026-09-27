@@ -1785,6 +1785,61 @@ pub(super) fn report_agent_event(process_id: u32, report: Request) -> anyhow::Re
     }
 }
 
+/// Asks a running Termeric on `display` to open a window of `tabs`, so the
+/// new window shares its process. Processes are asked in turn; one that
+/// refuses (another display, too many windows, an older protocol) passes to
+/// the next. Returns the process and window that opened it, or `None`.
+pub fn join_running(
+    display: &str,
+    activation_token: Option<String>,
+    tabs: Vec<protocol::JoinTab>,
+) -> anyhow::Result<Option<(u32, u64)>> {
+    let mut endpoints = ControlPaths::discover_all()?;
+    endpoints.sort_by_key(|endpoint| endpoint.process_id);
+    for endpoint in endpoints {
+        if !process_is_alive(endpoint.process_id) {
+            continue;
+        }
+        let request_id = generate_request_id()?;
+        let frame = request(
+            &endpoint,
+            Request::JoinLaunch {
+                request_id: request_id.clone(),
+                display: display.to_owned(),
+                activation_token: activation_token.clone(),
+                tabs: tabs.clone(),
+            },
+        );
+        match frame {
+            Ok(ServerFrame::WindowCreated {
+                version,
+                process_id,
+                request_id: returned,
+                window_id,
+            }) if version == protocol::PROTOCOL_VERSION
+                && process_id == endpoint.process_id
+                && returned == request_id
+                && window_id != 0 =>
+            {
+                return Ok(Some((process_id, window_id)));
+            }
+            Ok(ServerFrame::Error { message, .. }) => log::debug!(
+                "Termeric {} did not open the window: {message}",
+                endpoint.process_id
+            ),
+            Ok(frame) => log::debug!(
+                "Termeric {} answered a joining launch with {frame:?}",
+                endpoint.process_id
+            ),
+            Err(error) => log::debug!(
+                "Termeric {} did not answer a joining launch: {error:#}",
+                endpoint.process_id
+            ),
+        }
+    }
+    Ok(None)
+}
+
 fn request(endpoint: &ControlPaths, request: Request) -> anyhow::Result<ServerFrame> {
     request_within(endpoint, request, IO_TIMEOUT)
 }

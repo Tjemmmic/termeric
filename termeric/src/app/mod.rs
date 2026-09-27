@@ -1018,6 +1018,9 @@ impl NativeFrameStatsProbe {
 pub struct App {
     /// Window-local startup controls parsed before the event loop starts.
     launch: crate::cli::WindowLaunch,
+    /// The desktop's activation token for a window opened for a launch
+    /// that joined this process, so it takes focus.
+    activation_token: Option<String>,
     /// True when the process-level application owns event-loop exit policy.
     managed_window: bool,
     /// Set by the New Window command and drained by the process controller.
@@ -1401,6 +1404,7 @@ impl App {
 
         let result: Result<Self> = Ok(Self {
             launch: crate::cli::WindowLaunch::default(),
+            activation_token: None,
             managed_window: false,
             request_new_window: false,
             request_move_pane_to_next_window: false,

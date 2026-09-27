@@ -15,6 +15,29 @@ group; a leading `--new-window` is accepted as a fresh one-window desktop-launch
 compatibility flag and suppresses automatic restore. `--tab` starts another tab in the current window. Options
 apply to the current window or tab until the next delimiter.
 
+### Joining the running Termeric
+
+When Termeric already runs on the same display, a plain launch opens its
+window there instead of starting another process, so every window shares one
+process and tabs move between them (**Move Tab to Next Window**). The
+launcher asks the running process over its [control socket](gui-control.md)
+(`join_launch`), passing the desktop's activation token so the new window
+takes focus, and exits once the window is open. A tab without
+`--working-directory` opens in the launcher's own directory.
+
+A launch joins only when it is one window of shell or command tabs with at
+most a folder and a title each (`--working-directory`, `--title`,
+`--command`, `-- COMMAND ARG…`, `--tab`, and a leading `--new-window`). A
+launch that asks for anything a running process cannot honor for one window
+(a workspace, domain, terminal or agent profile, split, application ID,
+geometry, renderer, several windows, or quick access) starts its own process,
+as does any launch when no process answers. The joined window uses the
+running process's settings and environment, not the launcher's.
+
+`--separate-process` always starts a process of its own, and
+`[window].share_process = false` turns joining off. A separate process keeps
+its own windows: tabs cannot move between processes.
+
 ```bash
 # Two shell tabs in one window, then an independent workspace window
 termeric --working-directory ~/src --tab --working-directory /tmp \
@@ -52,6 +75,7 @@ Wayland compositor caveat are defined in [quick-access.md](quick-access.md).
 | Option | Meaning |
 |---|---|
 | `--new-window` | Begin another native-window group (or explicitly request the implicit first window when leading). |
+| `--separate-process` | Start a process of its own even when a running Termeric could open the window. |
 | `--quick-access` | Toggle the existing dedicated drop-down terminal, or launch exactly one frameless monitor-relative always-on-top window. |
 | `--tab` | Begin another tab in the current window. |
 | `--split horizontal\|vertical` | Add a shell pane by sequentially splitting the focused pane after its tab launches. |

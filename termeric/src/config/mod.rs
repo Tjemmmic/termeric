@@ -1251,6 +1251,9 @@ pub struct WindowConfig {
     pub level: WindowLevelConfig,
     /// Horizontal top tabs or a vertical left tab rail.
     pub tab_bar_position: TabBarPosition,
+    /// Open a new window in the running Termeric on this display, so every
+    /// window shares one process and tabs can move between them.
+    pub share_process: bool,
     /// Optional bounded static background for the terminal content viewport.
     pub background_image: BackgroundImageConfig,
 }
@@ -1265,6 +1268,7 @@ impl Default for WindowConfig {
             decorations: true,
             level: WindowLevelConfig::Normal,
             tab_bar_position: TabBarPosition::Top,
+            share_process: true,
             background_image: BackgroundImageConfig::default(),
         }
     }

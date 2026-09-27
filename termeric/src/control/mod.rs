@@ -211,6 +211,49 @@ pub fn toggle_existing_quick_access() -> anyhow::Result<Option<String>> {
     }
 }
 
+/// The display this process draws on: its Wayland socket, else its X11
+/// display. Windows of one process share one display connection, so a
+/// launch may join only a process with the same identity.
+pub fn display_identity() -> Option<String> {
+    let variable = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
+    variable("WAYLAND_DISPLAY")
+        .map(|display| format!("wayland:{display}"))
+        .or_else(|| variable("DISPLAY").map(|display| format!("x11:{display}")))
+}
+
+/// Opens `plan`'s window in a running Termeric on this display, when the
+/// plan and settings allow: every window then shares one process, so tabs
+/// can move between them. Returns the process and window, or `None` when
+/// this launch should start a process of its own. Any failure to reach a
+/// running process falls back to that.
+pub fn join_running_launch(plan: &crate::cli::LaunchPlan) -> Option<(u32, u64)> {
+    #[cfg(unix)]
+    {
+        let current_dir = std::env::current_dir().ok();
+        let tabs = plan.join_tabs(current_dir.as_deref())?;
+        // A configuration that does not load reports itself at startup.
+        let config = crate::config::Config::load_or_default().ok()?;
+        if !config.window.share_process {
+            return None;
+        }
+        let display = display_identity()?;
+        let variable = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
+        let token = variable("XDG_ACTIVATION_TOKEN").or_else(|| variable("DESKTOP_STARTUP_ID"));
+        match client::join_running(&display, token, tabs) {
+            Ok(joined) => joined,
+            Err(error) => {
+                log::debug!("Could not look for a running Termeric: {error:#}");
+                None
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = plan;
+        None
+    }
+}
+
 /// Running GUI process IDs.
 pub fn running_processes() -> anyhow::Result<Vec<u32>> {
     #[cfg(unix)]

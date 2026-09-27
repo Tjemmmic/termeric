@@ -2102,6 +2102,18 @@ impl Application {
                 request_id,
                 source_window,
             } => self.create_control_window(event_loop, request_id, *source_window),
+            Request::JoinLaunch {
+                request_id,
+                display,
+                activation_token,
+                tabs,
+            } => self.join_launch(
+                event_loop,
+                request_id,
+                display,
+                activation_token.clone(),
+                tabs,
+            ),
             Request::LaunchWindow {
                 request_id,
                 source_window,
@@ -2932,6 +2944,93 @@ impl Application {
             request_id: request_id.to_string(),
             window_id,
         })
+    }
+
+    /// Opens the window a new launch asked for, so it shares this process
+    /// with the windows already open.
+    fn join_launch(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        request_id: &str,
+        display: &str,
+        activation_token: Option<String>,
+        tabs: &[crate::control::protocol::JoinTab],
+    ) -> std::result::Result<crate::control::protocol::Response, String> {
+        let result_index = self.prepare_join_launch(
+            crate::control::display_identity().as_deref(),
+            display,
+            activation_token,
+            tabs,
+        )?;
+        let creation = self
+            .create_pending_windows(event_loop)
+            .into_iter()
+            .nth(result_index)
+            .ok_or_else(|| "New window creation produced no result".to_string())?;
+        let window_id = creation?.window_id;
+        Ok(crate::control::protocol::Response::WindowCreated {
+            process_id: std::process::id(),
+            request_id: request_id.to_string(),
+            window_id,
+        })
+    }
+
+    /// Queues the window a joining launch asked for, when it runs on this
+    /// process's display (`own_display`). Returns its place among the
+    /// windows waiting to be created.
+    fn prepare_join_launch(
+        &mut self,
+        own_display: Option<&str>,
+        display: &str,
+        activation_token: Option<String>,
+        tabs: &[crate::control::protocol::JoinTab],
+    ) -> std::result::Result<usize, String> {
+        // Windows of one process share its display connection.
+        if own_display != Some(display) {
+            return Err("This Termeric runs on another display".into());
+        }
+        let total_tabs = process_tab_count(&self.windows);
+        validate_control_window_creation_capacity(
+            self.windows.len(),
+            self.pending.len(),
+            total_tabs,
+        )?;
+        // Settings are the process's, as for any window it opens.
+        let config = self
+            .window_order
+            .iter()
+            .find_map(|native_id| self.windows.get(native_id))
+            .map(|window| window.config.clone())
+            .ok_or("This Termeric has no open window to join")?;
+        let mut launch = WindowLaunch {
+            force_new: true,
+            tabs: tabs
+                .iter()
+                .map(|tab| crate::cli::TabLaunch {
+                    working_directory: tab.working_directory.as_ref().map(Into::into),
+                    title: tab.title.clone(),
+                    target: match &tab.program {
+                        Some(program) => crate::cli::LaunchTarget::Command {
+                            program: program.clone(),
+                            args: tab.args.clone(),
+                        },
+                        None => crate::cli::LaunchTarget::Shell,
+                    },
+                    ..crate::cli::TabLaunch::default()
+                })
+                .collect(),
+            ..WindowLaunch::default()
+        };
+        if launch.tabs.is_empty() {
+            launch.tabs.push(crate::cli::TabLaunch::default());
+        }
+        let result_index = self.pending.len();
+        self.queue_window(config, launch)
+            .map_err(|error| format!("Could not prepare a new window: {error:#}"))?;
+        if let Some(window) = self.pending.last_mut() {
+            window.activation_token = activation_token;
+        }
+        Ok(result_index)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -4217,7 +4316,12 @@ fn expand_auto_restore_plan(
     state: &super::state::AppState,
     launch: LaunchPlan,
 ) -> LaunchPlan {
-    if launch != LaunchPlan::default() || !config.session.enabled || !config.session.auto_restore {
+    // Only the windows asked for matter; starting a process of its own
+    // still restores.
+    if launch.windows != LaunchPlan::default().windows
+        || !config.session.enabled
+        || !config.session.auto_restore
+    {
         return launch;
     }
     let ids = state.restore_workspace_ids();
@@ -4232,6 +4336,7 @@ fn expand_auto_restore_plan(
                 ..WindowLaunch::default()
             })
             .collect(),
+        separate_process: launch.separate_process,
     }
 }
 
@@ -4676,6 +4781,93 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_joining_launch_opens_its_tabs_in_a_new_window_on_this_display() {
+        use crate::control::protocol::JoinTab;
+        let mut application =
+            Application::from_config(Config::default(), None, LaunchPlan::default()).unwrap();
+        application.pending.clear();
+        let tabs = [
+            JoinTab {
+                working_directory: Some("/tmp".into()),
+                title: Some("Logs".into()),
+                program: None,
+                args: Vec::new(),
+            },
+            JoinTab {
+                working_directory: None,
+                title: None,
+                program: Some("htop".into()),
+                args: vec!["-d".into(), "10".into()],
+            },
+        ];
+        // Nothing to join yet.
+        assert!(
+            application
+                .prepare_join_launch(Some("wayland:w-1"), "wayland:w-1", None, &tabs)
+                .unwrap_err()
+                .contains("no open window")
+        );
+        let native_id = WindowId::dummy();
+        let mut open = App::new_headless(Config::default()).unwrap();
+        open.config.window.opacity = 0.9;
+        application.windows.insert(native_id, open);
+        application.window_order.push(native_id);
+
+        assert_eq!(
+            application.prepare_join_launch(Some("wayland:w-1"), "wayland:w-0", None, &tabs),
+            Err("This Termeric runs on another display".into())
+        );
+        let index = application
+            .prepare_join_launch(
+                Some("wayland:w-1"),
+                "wayland:w-1",
+                Some("token".into()),
+                &tabs,
+            )
+            .unwrap();
+        let window = &application.pending[index];
+        assert_eq!(window.activation_token.as_deref(), Some("token"));
+        assert!(
+            !window.allow_auto_restore,
+            "a joined window restores nothing"
+        );
+        assert_eq!(
+            window.config.window.opacity, 0.9,
+            "the process's settings apply"
+        );
+        let launched: Vec<_> = window
+            .launch
+            .tabs
+            .iter()
+            .map(|tab| {
+                (
+                    tab.working_directory.clone(),
+                    tab.title.clone(),
+                    tab.target.clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            launched,
+            [
+                (
+                    Some("/tmp".into()),
+                    Some("Logs".into()),
+                    crate::cli::LaunchTarget::Shell
+                ),
+                (
+                    None,
+                    None,
+                    crate::cli::LaunchTarget::Command {
+                        program: "htop".into(),
+                        args: vec!["-d".into(), "10".into()],
+                    }
+                ),
+            ]
+        );
+    }
+
+    #[test]
     fn native_window_focus_policy_is_truthful_and_non_restoring() {
         assert_eq!(
             native_window_focus_disposition(7, true, true, Some(false), Some(true)).unwrap(),
@@ -4708,6 +4900,7 @@ mod tests {
                 quick_access: true,
                 ..WindowLaunch::default()
             }],
+            separate_process: false,
         };
         let application = Application::from_config(Config::default(), None, launch).unwrap();
         assert_eq!(application.pending.len(), 1);
@@ -6131,6 +6324,7 @@ mod tests {
     fn explicit_multi_window_plan_disables_implicit_restore_for_every_window() {
         let plan = LaunchPlan {
             windows: vec![WindowLaunch::default(), WindowLaunch::default()],
+            separate_process: false,
         };
         let application = Application::from_config(Config::default(), None, plan).unwrap();
         assert_eq!(application.pending.len(), 2);
@@ -6146,6 +6340,7 @@ mod tests {
     fn plugin_process_inventory_is_ordered_bounded_and_excludes_closing_windows() {
         let plan = LaunchPlan {
             windows: vec![WindowLaunch::default(); super::super::PLUGIN_PROCESS_MAX_WINDOWS + 2],
+            separate_process: false,
         };
         let mut application = Application::from_config(Config::default(), None, plan).unwrap();
         application.pending[1].should_exit = true;
@@ -7507,6 +7702,7 @@ mod tests {
             None,
             LaunchPlan {
                 windows: vec![launch],
+                separate_process: false,
             },
         )
         .unwrap();
