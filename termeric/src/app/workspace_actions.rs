@@ -4235,6 +4235,7 @@ mod workspace_control_tests {
             assert!(app.tabs.as_mut().unwrap().move_active_to(0));
             app.tab_dragging = Some(TabDrag {
                 tab_id: dragged_id,
+                grab: None,
                 live: Some(LiveDomainTabDrag {
                     domain_id: snapshot.id.clone(),
                     remote_tab_id: 20,

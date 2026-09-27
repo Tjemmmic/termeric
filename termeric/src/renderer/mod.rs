@@ -668,6 +668,7 @@ pub struct Renderer {
     // Tab bar hover state for icon animations
     tab_bar_hover: Option<TabBarClick>,
     tab_bar_hover_progress: f32,
+    tab_drag: TabDragVisual,
     tab_bar_keyboard_focus: Option<TabBarClick>,
     tab_bar_viewport_anchor: tab_bar::TabBarViewportAnchor,
     tab_bar_position: TabBarPosition,
@@ -906,6 +907,7 @@ impl Renderer {
             opacity: 1.0,
             tab_bar_hover: None,
             tab_bar_hover_progress: 0.0,
+            tab_drag: TabDragVisual::default(),
             tab_bar_keyboard_focus: None,
             tab_bar_viewport_anchor: tab_bar::TabBarViewportAnchor::default(),
             tab_bar_position: TabBarPosition::Top,
@@ -1178,6 +1180,11 @@ impl Renderer {
     pub fn set_tab_bar_hover(&mut self, hover: Option<TabBarClick>, progress: f32) {
         self.tab_bar_hover = hover;
         self.tab_bar_hover_progress = progress;
+    }
+
+    /// The tab being dragged and the tabs sliding into place.
+    pub fn set_tab_drag(&mut self, visual: TabDragVisual) {
+        self.tab_drag = visual;
     }
 
     pub fn set_tab_bar_keyboard_focus(&mut self, focus: Option<TabBarClick>) {

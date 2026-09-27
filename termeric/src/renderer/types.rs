@@ -20,6 +20,20 @@ pub struct TextBlinkPhases {
     pub rapid_visible: bool,
 }
 
+/// A visible tab's index and its slot's start and length along the tab bar.
+pub type TabSpan = (usize, f32, f32);
+
+/// A tab being dragged along the tab bar, and tabs sliding into new slots.
+/// Positions run along the bar: x for the top bar, y for the side rail.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TabDragVisual {
+    /// The dragged tab's index and its leading edge, which follows the
+    /// pointer. It is drawn over the others.
+    pub dragged: Option<(usize, f32)>,
+    /// Tabs drawn this far from their slots while they slide into them.
+    pub sliding: Vec<(usize, f32)>,
+}
+
 /// Platform input-method composition displayed at the focused text cursor.
 /// The text remains local UI state and is not terminal output.
 #[derive(Clone, Debug, PartialEq)]

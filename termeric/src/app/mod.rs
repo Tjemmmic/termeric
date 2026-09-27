@@ -736,6 +736,30 @@ struct TerminalMouseCapture {
 struct TabDrag {
     tab_id: usize,
     live: Option<LiveDomainTabDrag>,
+    /// Where the pointer holds the tab, once pressed on it.
+    grab: Option<TabGrab>,
+}
+
+/// Where the pointer holds a dragged tab, as positions along the tab bar
+/// (x for the top bar, y for the side rail).
+#[derive(Debug, Clone, Copy)]
+struct TabGrab {
+    pressed_at: f32,
+    /// From the tab's leading edge to the pointer.
+    offset: f32,
+    pointer: f32,
+    /// The pointer moved far enough for a drag rather than a click.
+    moving: bool,
+}
+
+/// A tab sliding into its slot after the dragged tab passed it, or the
+/// dragged tab after its release.
+#[derive(Debug, Clone, Copy)]
+struct TabSlide {
+    tab_id: usize,
+    /// Its distance from the slot when the slide began.
+    from: f32,
+    started: Instant,
 }
 
 #[derive(Debug, Clone)]
@@ -1145,6 +1169,7 @@ pub struct App {
     divider_dragging: Option<DividerDrag>,
     /// Drag source for direct tab-bar reordering.
     tab_dragging: Option<TabDrag>,
+    tab_slides: Vec<TabSlide>,
     tab_drag_scroll: Option<tab_drag::OverflowDwell>,
     /// Inline tab rename capture, committed by Enter and cancelled by Escape.
     tab_rename: Option<TabRenameState>,
@@ -1451,6 +1476,7 @@ impl App {
             scrollbar_dragging: None,
             divider_dragging: None,
             tab_dragging: None,
+            tab_slides: Vec::new(),
             tab_drag_scroll: None,
             tab_rename: None,
             broadcast: BroadcastState::Inactive,
@@ -2195,9 +2221,11 @@ impl App {
             self.settings_panel.is_visible() && self.config_has_unsaved_changes();
         let agents_panel_info = (!self.agents_panel.is_closed()).then(|| self.agents_panel_info());
 
+        let tab_drag = self.tab_drag_visual(Instant::now());
         let Some(renderer) = &mut self.renderer else {
             return false;
         };
+        renderer.set_tab_drag(tab_drag);
         renderer.set_tab_bar_keyboard_focus(chrome_focus_target);
         let Some(tabs) = &self.tabs else { return false };
         let Some(tab) = tabs.active_tab() else {
@@ -3127,6 +3155,7 @@ impl App {
                 .as_ref()
                 .is_some_and(TabManager::has_active_animation)
                 || self.cursor_position_animation_active()
+                || !self.tab_slides.is_empty()
                 || self
                     .copy_flash_start
                     .is_some_and(|start| start.elapsed().as_secs_f32() < 0.15)

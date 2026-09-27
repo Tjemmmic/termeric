@@ -561,9 +561,22 @@ impl Renderer {
         self.rect_pipeline
             .push_rect(0.0, 0.0, window_width, tab_bar_height, self.ui.tab_bar_bg);
         let layout = self.tab_bar_layout(tabs, window_width);
-        for slot in &layout.tabs {
-            let surface = chrome.horizontal_surface(slot, tab_bar_height);
-            self.build_tab_item(&tabs[slot.index], slot.index, surface, AccentEdge::Bottom);
+        let spans: Vec<TabSpan> = layout
+            .tabs
+            .iter()
+            .map(|slot| (slot.index, slot.x, slot.width))
+            .collect();
+        for (index, start, length) in self.tab_drag_placement(&spans) {
+            let slot = TabSlot {
+                index,
+                x: start,
+                width: length,
+            };
+            let surface = chrome.horizontal_surface(&slot, tab_bar_height);
+            if self.is_dragged_tab(index) {
+                self.lift_dragged_tab(surface);
+            }
+            self.build_tab_item(&tabs[index], index, surface, AccentEdge::Bottom);
         }
         let separator = chrome.px(1.0);
         self.rect_pipeline.push_rect(
@@ -1022,9 +1035,22 @@ impl Renderer {
         );
 
         let layout = self.vertical_tab_bar_layout(tabs, window_height);
-        for slot in &layout.tabs {
-            let surface = chrome.vertical_surface(slot, rail_width);
-            self.build_tab_item(&tabs[slot.index], slot.index, surface, AccentEdge::Left);
+        let spans: Vec<TabSpan> = layout
+            .tabs
+            .iter()
+            .map(|slot| (slot.index, slot.y, slot.height))
+            .collect();
+        for (index, start, length) in self.tab_drag_placement(&spans) {
+            let slot = VerticalTabSlot {
+                index,
+                y: start,
+                height: length,
+            };
+            let surface = chrome.vertical_surface(&slot, rail_width);
+            if self.is_dragged_tab(index) {
+                self.lift_dragged_tab(surface);
+            }
+            self.build_tab_item(&tabs[index], index, surface, AccentEdge::Left);
         }
         for target in [
             TabBarClick::PreviousTab,
@@ -1169,6 +1195,62 @@ impl Renderer {
 }
 
 impl Renderer {
+    /// Where to draw each visible tab (index, start, and length along the
+    /// bar) in drawing order: sliding tabs offset from their slots, and the
+    /// dragged tab last, following the pointer within the strip.
+    fn tab_drag_placement(&self, spans: &[TabSpan]) -> Vec<TabSpan> {
+        place_tabs(spans, &self.tab_drag)
+    }
+
+    fn is_dragged_tab(&self, index: usize) -> bool {
+        self.tab_drag
+            .dragged
+            .is_some_and(|(dragged, _)| dragged == index)
+    }
+
+    /// Puts the dragged tab on a layer of its own over an opaque backing,
+    /// so the tab it passes over never shows through it.
+    fn lift_dragged_tab(&mut self, surface: Rect) {
+        self.rect_pipeline.mark_layer();
+        self.text_pipeline.mark_layer();
+        let chrome = self.tab_chrome();
+        self.rect_pipeline.push_rounded_rect(
+            surface.0,
+            surface.1,
+            surface.2,
+            surface.3,
+            self.ui.tab_bar_bg,
+            chrome.corner_radius(),
+        );
+    }
+
+    /// Whether tabs run down the side rail rather than along the top.
+    pub fn tab_bar_is_vertical(&self) -> bool {
+        self.tab_bar_position == crate::config::TabBarPosition::Left
+    }
+
+    /// The visible tabs' slots as (index, start, length) along the bar.
+    pub fn tab_slot_spans(
+        &self,
+        tabs: &[TabInfo],
+        window_width: f32,
+        window_height: f32,
+    ) -> Vec<TabSpan> {
+        if self.tab_bar_is_vertical() {
+            return self
+                .vertical_tab_bar_layout(tabs, window_height)
+                .tabs
+                .iter()
+                .map(|slot| (slot.index, slot.y, slot.height))
+                .collect();
+        }
+        self.tab_bar_layout(tabs, window_width)
+            .tabs
+            .iter()
+            .map(|slot| (slot.index, slot.x, slot.width))
+            .collect()
+    }
+
     fn tab_bar_layout(&self, tabs: &[TabInfo], window_width: f32) -> TabBarLayout {
         let anchor = self.tab_bar_viewport_anchor.resolve(tabs);
         tab_bar_layout(
@@ -1188,6 +1270,36 @@ impl Renderer {
         let anchor = self.tab_bar_viewport_anchor.resolve(tabs);
         vertical_tab_bar_layout(tabs, window_height, self.tab_bar_height(), anchor)
     }
+}
+
+/// Where to draw each visible tab (index, start, and length along the bar)
+/// in drawing order: sliding tabs offset from their slots, and the dragged
+/// tab last, at the pointer but within the strip. Whole pixels throughout.
+fn place_tabs(spans: &[TabSpan], drag: &TabDragVisual) -> Vec<TabSpan> {
+    let dragged = drag.dragged;
+    let mut placed: Vec<TabSpan> = spans
+        .iter()
+        .filter(|(index, _, _)| dragged.is_none_or(|(dragged, _)| dragged != *index))
+        .map(|&(index, start, length)| {
+            let offset = drag
+                .sliding
+                .iter()
+                .find(|(sliding, _)| *sliding == index)
+                .map_or(0.0, |(_, offset)| *offset);
+            (index, (start + offset).round(), length)
+        })
+        .collect();
+    if let Some((index, leading)) = dragged
+        && let Some(&(_, _, length)) = spans.iter().find(|(slot, _, _)| *slot == index)
+    {
+        let first = spans.first().map_or(0.0, |(_, start, _)| *start);
+        let end = spans
+            .last()
+            .map_or(0.0, |(_, start, length)| start + length);
+        let start = leading.min(end - length).max(first).round();
+        placed.push((index, start, length));
+    }
+    placed
 }
 
 fn tab_animation_multiplier(tab: &TabInfo) -> f32 {
@@ -1532,6 +1644,31 @@ mod tests {
                 assert!(close.1 >= surface.1 && close.1 + close.3 <= surface.1 + surface.3);
             }
         }
+    }
+
+    #[test]
+    fn a_dragged_tab_is_drawn_last_at_the_pointer_within_the_strip() {
+        let spans = [(0, 10.0, 100.0), (1, 110.0, 100.0), (2, 210.0, 100.0)];
+        let drag = TabDragVisual {
+            dragged: Some((1, 147.4)),
+            sliding: vec![(2, -60.6)],
+        };
+        assert_eq!(
+            place_tabs(&spans, &drag),
+            [(0, 10.0, 100.0), (2, 149.0, 100.0), (1, 147.0, 100.0)]
+        );
+        // Dragged past either end, it stops at the strip's edge.
+        let far = TabDragVisual {
+            dragged: Some((0, 900.0)),
+            sliding: Vec::new(),
+        };
+        assert_eq!(place_tabs(&spans, &far).last(), Some(&(0, 210.0, 100.0)));
+        let before = TabDragVisual {
+            dragged: Some((2, -500.0)),
+            sliding: Vec::new(),
+        };
+        assert_eq!(place_tabs(&spans, &before).last(), Some(&(2, 10.0, 100.0)));
+        assert_eq!(place_tabs(&spans, &TabDragVisual::default()), spans);
     }
 
     #[test]

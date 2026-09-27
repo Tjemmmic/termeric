@@ -2091,6 +2091,7 @@ fn overflow_drag_fixture() -> App {
     tabs.switch_to(0);
     app.tab_dragging = Some(TabDrag {
         tab_id: tabs.active_tab_id().unwrap(),
+        grab: None,
         live: None,
     });
     app
@@ -3076,6 +3077,7 @@ fn geometry_changes_finish_all_native_gestures_without_a_button_release() {
         });
         app.tab_dragging = Some(TabDrag {
             tab_id: 42,
+            grab: None,
             live: None,
         });
         app.divider_dragging = Some(DividerDrag {
@@ -3190,6 +3192,7 @@ fn modal_interruption_finishes_native_gestures_before_pointer_motion() {
         });
         app.tab_dragging = Some(TabDrag {
             tab_id: 42,
+            grab: None,
             live: None,
         });
         app.divider_dragging = Some(DividerDrag {
@@ -3220,6 +3223,7 @@ fn native_modal_cleanup_preserves_unobscured_drag_and_protocol_button() {
     app.mouse_pressed = true;
     app.tab_dragging = Some(TabDrag {
         tab_id: 42,
+        grab: None,
         live: None,
     });
     let capture = TerminalMouseCapture {
@@ -3270,6 +3274,7 @@ fn losing_window_focus_finishes_native_pointer_gestures_without_a_release_event(
     });
     app.tab_dragging = Some(TabDrag {
         tab_id: 42,
+        grab: None,
         live: None,
     });
     app.mouse_state.handle_press(
@@ -3289,6 +3294,7 @@ fn losing_window_focus_finishes_native_pointer_gestures_without_a_release_event(
     app.mouse_pressed = true;
     app.tab_dragging = Some(TabDrag {
         tab_id: 42,
+        grab: None,
         live: None,
     });
     app.handle_window_focus_change(false);
@@ -3333,6 +3339,7 @@ fn finishing_native_drags_extracts_exact_live_domain_controls_once() {
     });
     app.tab_dragging = Some(TabDrag {
         tab_id: ids[2],
+        grab: None,
         live: Some(LiveDomainTabDrag {
             domain_id: "a".into(),
             remote_tab_id: 20,
@@ -3357,6 +3364,7 @@ fn finishing_native_drags_extracts_exact_live_domain_controls_once() {
     assert!(app.take_native_drag_controls().is_empty());
     app.tab_dragging = Some(TabDrag {
         tab_id: ids[2],
+        grab: None,
         live: Some(LiveDomainTabDrag {
             domain_id: "a".into(),
             remote_tab_id: 20,
@@ -3366,6 +3374,7 @@ fn finishing_native_drags_extracts_exact_live_domain_controls_once() {
     assert!(app.take_native_drag_controls().is_empty());
     app.tab_dragging = Some(TabDrag {
         tab_id: usize::MAX,
+        grab: None,
         live: Some(LiveDomainTabDrag {
             domain_id: "a".into(),
             remote_tab_id: 20,

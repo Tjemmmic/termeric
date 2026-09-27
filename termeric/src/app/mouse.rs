@@ -197,6 +197,9 @@ impl App {
         self.scrollbar_dragging = None;
         let divider_drag = self.divider_dragging.take();
         let tab_drag = self.tab_dragging.take();
+        if let Some(drag) = &tab_drag {
+            self.settle_dragged_tab(drag, Instant::now());
+        }
         self.tab_drag_scroll = None;
         let mut controls = Vec::new();
         if let Some(drag) = divider_drag {
@@ -221,6 +224,7 @@ impl App {
         }
         if let Some(TabDrag {
             tab_id,
+            grab: _,
             live:
                 Some(LiveDomainTabDrag {
                     domain_id,
@@ -545,9 +549,11 @@ impl App {
                                                 TabDrag {
                                                     tab_id: tab.id,
                                                     live,
+                                                    grab: None,
                                                 }
                                             });
                                         }
+                                        self.begin_tab_grab();
                                         let live_drag_blocked = self
                                             .tab_dragging
                                             .as_ref()
@@ -822,9 +828,7 @@ impl App {
                 self.tab_bar_hover = new_hover;
                 self.tab_bar_hover_progress = 0.0;
             }
-            if let Some(crate::renderer::TabBarClick::Tab(target)) = new_hover {
-                self.apply_tab_drag_target(target);
-            }
+            self.drag_tab_to_pointer(position);
         }
 
         // Handle scrollbar dragging
