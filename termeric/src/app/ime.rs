@@ -402,23 +402,10 @@ impl App {
                 + cursor_column.saturating_sub(self.info_overlay.horizontal_offset()) as f32
                     * layout.char_scale;
             let y = row.y;
-            if let Some(window) = &self.window {
-                window.set_ime_cursor_area(
-                    winit::dpi::PhysicalPosition::new(x.round() as i32, y.round() as i32),
-                    winit::dpi::PhysicalSize::new(
-                        layout.char_scale.ceil().max(1.0) as u32,
-                        layout.line_height.ceil().max(1.0) as u32,
-                    ),
-                );
-            }
-            let preedit = self.ime.preedit()?;
-            return Some(crate::renderer::ImePreeditRenderInfo {
-                text: preedit.text.clone(),
-                cursor: preedit.cursor,
-                x,
-                y,
-                max_width: (row.x + row.width - x).max(layout.char_scale),
-            });
+            return self.ime_target(
+                [x, y, layout.char_scale, layout.line_height],
+                (row.x + row.width - x).max(layout.char_scale),
+            );
         }
         if self.domain_picker.is_active()
             || self.command_palette.is_active()
@@ -465,50 +452,23 @@ impl App {
                     renderer.cell_height(),
                 )
             }?;
-            if let Some(window) = &self.window {
-                window.set_ime_cursor_area(
-                    winit::dpi::PhysicalPosition::new(
-                        view.cursor_x.round() as i32,
-                        view.text_y.round() as i32,
-                    ),
-                    winit::dpi::PhysicalSize::new(
-                        renderer.cell_width().ceil().max(1.0) as u32,
-                        renderer.cell_height().ceil().max(1.0) as u32,
-                    ),
-                );
-            }
-            let preedit = self.ime.preedit()?;
-            return Some(crate::renderer::ImePreeditRenderInfo {
-                text: preedit.text.clone(),
-                cursor: preedit.cursor,
-                x: view.cursor_x,
-                y: view.text_y,
-                max_width: view.right - view.cursor_x,
-            });
+            return self.ime_target(
+                [
+                    view.cursor_x,
+                    view.text_y,
+                    renderer.cell_width(),
+                    renderer.cell_height(),
+                ],
+                view.right - view.cursor_x,
+            );
         }
         if self.agent_view_owns_ime_text() {
             let scene = self.agent_view.scene.as_ref()?;
             let caret = scene.caret?.bounds;
-            if let Some(window) = &self.window {
-                window.set_ime_cursor_area(
-                    winit::dpi::PhysicalPosition::new(
-                        caret.x.round() as i32,
-                        caret.y.round() as i32,
-                    ),
-                    winit::dpi::PhysicalSize::new(
-                        caret.width.ceil().max(1.0) as u32,
-                        caret.height.ceil().max(1.0) as u32,
-                    ),
-                );
-            }
-            let preedit = self.ime.preedit()?;
-            return Some(crate::renderer::ImePreeditRenderInfo {
-                text: preedit.text.clone(),
-                cursor: preedit.cursor,
-                x: caret.x,
-                y: caret.y,
-                max_width: (scene.panel.right() - caret.x).max(renderer.cell_width()),
-            });
+            return self.ime_target(
+                [caret.x, caret.y, caret.width, caret.height],
+                (scene.panel.right() - caret.x).max(renderer.cell_width()),
+            );
         }
         if self.search_owns_ime_text() {
             let info = self.search.build_info(self.search_cursor_pos);
@@ -516,26 +476,15 @@ impl App {
             // A collapsed query has no visible caret; do not fall back to a
             // terminal position or overlap the neighboring search controls.
             let view = self.search_ime_viewport(&layout, renderer.cell_width())?;
-            if let Some(window) = &self.window {
-                window.set_ime_cursor_area(
-                    winit::dpi::PhysicalPosition::new(
-                        view.cursor_x.round() as i32,
-                        view.text_y.round() as i32,
-                    ),
-                    winit::dpi::PhysicalSize::new(
-                        renderer.cell_width().ceil().max(1.0) as u32,
-                        renderer.cell_height().ceil().max(1.0) as u32,
-                    ),
-                );
-            }
-            let preedit = self.ime.preedit()?;
-            return Some(crate::renderer::ImePreeditRenderInfo {
-                text: preedit.text.clone(),
-                cursor: preedit.cursor,
-                x: view.cursor_x,
-                y: view.text_y,
-                max_width: view.right - view.cursor_x,
-            });
+            return self.ime_target(
+                [
+                    view.cursor_x,
+                    view.text_y,
+                    renderer.cell_width(),
+                    renderer.cell_height(),
+                ],
+                view.right - view.cursor_x,
+            );
         }
         let terminal = self.active_terminal()?;
         let cursor = terminal.grid().cursor();
@@ -563,25 +512,46 @@ impl App {
         };
         let x = origin_x + cursor.col as f32 * renderer.cell_width();
         let y = origin_y + cursor.row as f32 * renderer.cell_height();
+        self.ime_target(
+            [x, y, renderer.cell_width(), renderer.cell_height()],
+            max_width,
+        )
+    }
 
+    /// The preedit to draw for text composed at `caret` (x, y, width, and
+    /// height in window pixels), with `max_width` to fit in, after telling
+    /// the input method where the text is. While composing, that is the
+    /// preedit box Termeric draws, so the input method's candidate window
+    /// opens beside the text being composed rather than over it.
+    fn ime_target(
+        &self,
+        caret: [f32; 4],
+        max_width: f32,
+    ) -> Option<crate::renderer::ImePreeditRenderInfo> {
+        let info = self
+            .ime
+            .preedit()
+            .map(|preedit| crate::renderer::ImePreeditRenderInfo {
+                text: preedit.text.clone(),
+                cursor: preedit.cursor,
+                x: caret[0],
+                y: caret[1],
+                max_width,
+            });
+        let [x, y, width, height] = match (&info, &self.renderer) {
+            (Some(info), Some(renderer)) => renderer.ime_preedit_bounds(info),
+            _ => caret,
+        };
         if let Some(window) = &self.window {
             window.set_ime_cursor_area(
                 winit::dpi::PhysicalPosition::new(x.round() as i32, y.round() as i32),
                 winit::dpi::PhysicalSize::new(
-                    renderer.cell_width().ceil().max(1.0) as u32,
-                    renderer.cell_height().ceil().max(1.0) as u32,
+                    width.ceil().max(1.0) as u32,
+                    height.ceil().max(1.0) as u32,
                 ),
             );
         }
-
-        let preedit = self.ime.preedit()?;
-        Some(crate::renderer::ImePreeditRenderInfo {
-            text: preedit.text.clone(),
-            cursor: preedit.cursor,
-            x,
-            y,
-            max_width,
-        })
+        info
     }
 }
 
