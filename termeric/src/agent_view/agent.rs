@@ -3,6 +3,7 @@
 
 use std::path::PathBuf;
 
+use super::acp::{self, AcpCodec};
 use super::claude::{self, ClaudeCodec};
 use super::codex::{self, CodexCodec};
 use super::event::{ModeChoice, ModelChoice, model_name};
@@ -16,6 +17,8 @@ pub enum AgentKind {
     ClaudeCode,
     /// Codex over its app-server protocol.
     Codex,
+    /// OpenCode over the Agent Client Protocol.
+    OpenCode,
 }
 
 /// How one agent process starts.
@@ -34,13 +37,14 @@ pub struct Launch {
 
 impl AgentKind {
     /// Every agent the agent view can drive, in the order it offers them.
-    pub const ALL: [AgentKind; 2] = [AgentKind::ClaudeCode, AgentKind::Codex];
+    pub const ALL: [AgentKind; 3] = [AgentKind::ClaudeCode, AgentKind::Codex, AgentKind::OpenCode];
 
     /// Its id in the agent catalog, `[agents.<id>]`.
     pub fn catalog_id(self) -> &'static str {
         match self {
             AgentKind::ClaudeCode => "claude-code",
             AgentKind::Codex => "codex",
+            AgentKind::OpenCode => "opencode",
         }
     }
 
@@ -55,6 +59,7 @@ impl AgentKind {
         match self {
             AgentKind::ClaudeCode => "Claude Code",
             AgentKind::Codex => "Codex",
+            AgentKind::OpenCode => "OpenCode",
         }
     }
 
@@ -63,6 +68,7 @@ impl AgentKind {
         match self {
             AgentKind::ClaudeCode => "Claude",
             AgentKind::Codex => "Codex",
+            AgentKind::OpenCode => "OpenCode",
         }
     }
 
@@ -71,6 +77,7 @@ impl AgentKind {
         match self {
             AgentKind::ClaudeCode => "claude",
             AgentKind::Codex => "codex",
+            AgentKind::OpenCode => "opencode",
         }
     }
 
@@ -79,6 +86,7 @@ impl AgentKind {
         match self {
             AgentKind::ClaudeCode => claude::modes(),
             AgentKind::Codex => codex::modes(),
+            AgentKind::OpenCode => opencode_modes(),
         }
     }
 
@@ -88,6 +96,9 @@ impl AgentKind {
         match self {
             AgentKind::ClaudeCode => claude::ASK_MODE,
             AgentKind::Codex => codex::ASK_MODE,
+            // OpenCode asks only where its own permission settings say to,
+            // in any mode.
+            AgentKind::OpenCode => OPENCODE_BUILD_MODE,
         }
     }
 
@@ -103,7 +114,7 @@ impl AgentKind {
     pub fn fallback_models(self) -> Vec<ModelChoice> {
         let values: &[&str] = match self {
             AgentKind::ClaudeCode => &super::event::FALLBACK_MODELS,
-            AgentKind::Codex => &["default"],
+            AgentKind::Codex | AgentKind::OpenCode => &["default"],
         };
         values
             .iter()
@@ -121,6 +132,7 @@ impl AgentKind {
         match self {
             AgentKind::ClaudeCode => vec!["--resume".to_owned(), id.to_owned()],
             AgentKind::Codex => vec!["resume".to_owned(), id.to_owned()],
+            AgentKind::OpenCode => vec!["--session".to_owned(), id.to_owned()],
         }
     }
 
@@ -150,6 +162,32 @@ impl AgentKind {
                     resume: launch.resume.clone(),
                 })),
             ),
+            AgentKind::OpenCode => (
+                vec!["acp".to_owned()],
+                Box::new(AcpCodec::new(acp::Setup {
+                    agent: self.name(),
+                    cwd: launch.cwd.clone(),
+                    mode: launch.mode.clone(),
+                    model: launch.model.clone().filter(|model| model != "default"),
+                    resume: launch.resume.clone(),
+                })),
+            ),
         }
     }
+}
+
+/// OpenCode's mode that works on the task: its default agent.
+const OPENCODE_BUILD_MODE: &str = "build";
+
+/// OpenCode's built-in modes, until a session lists its own, which include
+/// any agents the person configured.
+fn opencode_modes() -> Vec<ModeChoice> {
+    vec![
+        ModeChoice::new(
+            OPENCODE_BUILD_MODE,
+            "Build",
+            "Works on the task, asking where your OpenCode permission settings say to",
+        ),
+        ModeChoice::new("plan", "Plan", "Reads and plans without editing anything").plans(),
+    ]
 }

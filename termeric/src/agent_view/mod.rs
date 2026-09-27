@@ -14,13 +14,16 @@
 //! - [`protocol`]: what every agent's wire protocol provides to a session.
 //! - [`claude`]: Claude Code's stream-json protocol, mapped onto those events.
 //! - [`codex`]: Codex's app-server protocol, mapped onto the same events.
+//! - [`acp`]: the Agent Client Protocol, which OpenCode speaks, likewise.
 //! - [`process`]: owning the agent process and its pipes.
 //! - [`transcript`]: the conversation the panel shows.
 //! - [`markdown`]: the Markdown agents write, as styled blocks.
 //! - [`present`]: how tool calls read: summaries, grouping, and diffs.
 //! - [`session`]: one conversation: process, protocol, and transcript.
-//! - [`history`]: earlier conversations Claude Code logged, to continue.
+//! - [`history`]: earlier conversations Claude Code logged, to continue;
+//!   the other agents list their own.
 
+pub mod acp;
 pub mod agent;
 pub mod claude;
 pub mod codex;

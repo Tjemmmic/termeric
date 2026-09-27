@@ -334,7 +334,7 @@ impl App {
                     .unwrap_or_default()
             }
             // Listed once a session in this folder connects.
-            (None, AgentKind::Codex) => Vec::new(),
+            (None, AgentKind::Codex | AgentKind::OpenCode) => Vec::new(),
         };
         let now = SystemTime::now();
         // Conversations open here are listed with the sessions instead.

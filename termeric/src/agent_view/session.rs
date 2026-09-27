@@ -1770,4 +1770,226 @@ mod tests {
             notice.text
         );
     }
+
+    fn fake_opencode() -> Option<AgentProgram> {
+        let python = crate::agents::find_executable("python3")?;
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/agent_view/fake_opencode.py");
+        Some(AgentProgram {
+            program: python.display().to_string(),
+            args: vec![script.display().to_string()],
+            env: vec![("FAKE_OPENCODE_DELAY".into(), "0".into())],
+        })
+    }
+
+    fn turn_ends(session: &AgentSession) -> usize {
+        session
+            .transcript()
+            .items()
+            .iter()
+            .filter(|item| matches!(item, Item::TurnEnd(_)))
+            .count()
+    }
+
+    fn start_opencode(program: AgentProgram, resume: Option<(String, String)>) -> AgentSession {
+        AgentSession::start(
+            program,
+            StartOptions {
+                cwd: std::env::temp_dir(),
+                agent: AgentKind::OpenCode,
+                mode: "build".into(),
+                model: None,
+                resume,
+                allow_bypass: false,
+            },
+            Arc::new(|| {}),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn an_opencode_conversation_runs_over_acp() {
+        let Some(program) = fake_opencode() else {
+            eprintln!("skipping: python3 is unavailable");
+            return;
+        };
+        let mut session = start_opencode(program, None);
+        let started = Instant::now();
+        let listed = loop {
+            session.pump();
+            if let Some(listed) = session.take_earlier_conversations() {
+                break listed;
+            }
+            assert!(started.elapsed() < Duration::from_secs(20));
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        let earlier: Vec<&str> = listed.iter().map(|past| past.id.as_str()).collect();
+        assert_eq!(earlier, ["ses_earlier_one", "ses_earlier_two"]);
+        // Nothing is opened in OpenCode's history before the first message.
+        assert_eq!(session.conversation_id(), None);
+        assert_eq!(session.model_label(), "Default");
+
+        session.prompt("hello there", Vec::new()).unwrap();
+        pump_until(&mut session, |session| {
+            session.activity() == Activity::Finished { success: true }
+        });
+        assert!(
+            session
+                .transcript()
+                .last_answer()
+                .unwrap()
+                .contains("**bold**")
+        );
+        assert_eq!(session.conversation_id(), Some("ses_fake_new"));
+        let items = session.transcript().items();
+        assert!(items.iter().any(|item| matches!(
+            item,
+            Item::Thinking { text, .. } if text == "The person said hello."
+        )));
+        assert!(items.iter().any(|item| matches!(
+            item,
+            Item::Tool(tool) if tool.name == "Read" && tool.state(false) == ToolState::Succeeded
+        )));
+        let context = session.transcript().context().unwrap();
+        assert_eq!((context.used_tokens, context.max_tokens), (64_000, 256_000));
+        let handshake = session.transcript().handshake().unwrap();
+        let models: Vec<&str> = handshake
+            .models
+            .iter()
+            .map(|model| model.value.as_str())
+            .collect();
+        assert_eq!(models, ["default", "opencode/big-pickle", "zai/glm-4.7"]);
+        let commands: Vec<&str> = handshake
+            .commands
+            .iter()
+            .map(|command| command.name.as_str())
+            .collect();
+        assert_eq!(commands, ["init", "review"]);
+
+        session.prompt("todo please", Vec::new()).unwrap();
+        pump_until(&mut session, |session| turn_ends(session) == 2);
+        let todos = session
+            .transcript()
+            .items()
+            .iter()
+            .find_map(|item| match item {
+                Item::Tool(tool) if tool.name == "TodoWrite" => {
+                    crate::agent_view::present::todos(tool)
+                }
+                _ => None,
+            });
+        assert_eq!(todos.map(|todos| todos.len()), Some(2));
+
+        session.prompt("signin", Vec::new()).unwrap();
+        pump_until(&mut session, |session| {
+            session.activity() == Activity::Finished { success: false }
+        });
+        let Some(Item::TurnEnd(end)) = session.transcript().items().last() else {
+            panic!()
+        };
+        assert!(
+            end.outcome
+                .error
+                .as_deref()
+                .unwrap()
+                .ends_with("Run `opencode auth login` in the terminal.")
+        );
+    }
+
+    #[test]
+    fn opencode_edits_are_approved_and_its_file_writes_left_to_it() {
+        let Some(program) = fake_opencode() else {
+            return;
+        };
+        let mut session = start_opencode(program, None);
+        session.prompt("edit the notes", Vec::new()).unwrap();
+        pump_until(&mut session, |session| {
+            session.activity() == Activity::NeedsYou
+        });
+        let approval = session.transcript().approvals()[0].clone();
+        assert_eq!(approval.tool_name, "Edit");
+        assert_eq!(approval.input["old_string"], "old line");
+        assert_eq!(approval.remember.as_ref().unwrap().label, "Always allow");
+        assert!(session.allow(&approval.request_id, true, DecidedBy::Person));
+        pump_until(&mut session, finished);
+        // Termeric refuses the agent's own file write, so OpenCode applies it.
+        assert!(
+            session
+                .transcript()
+                .last_answer()
+                .unwrap()
+                .contains("always; client write refused")
+        );
+
+        session.prompt("edit again", Vec::new()).unwrap();
+        pump_until(&mut session, |session| {
+            session.activity() == Activity::NeedsYou
+        });
+        let request = session.transcript().approvals()[0].request_id.clone();
+        assert!(session.deny(&request, None, DecidedBy::Person, false));
+        pump_until(&mut session, |session| turn_ends(session) == 2);
+        assert_eq!(
+            session.transcript().last_answer(),
+            Some("I left the file alone.")
+        );
+    }
+
+    #[test]
+    fn stopping_opencode_while_it_asks_cancels_the_turn() {
+        let Some(program) = fake_opencode() else {
+            return;
+        };
+        let mut session = start_opencode(program, None);
+        session.prompt("run the tests", Vec::new()).unwrap();
+        pump_until(&mut session, |session| {
+            session.activity() == Activity::NeedsYou
+        });
+        assert_eq!(session.transcript().approvals()[0].tool_name, "Bash");
+        session.interrupt();
+        pump_until(&mut session, |session| !session.transcript().turn_active());
+        assert_eq!(session.activity(), Activity::Stopped);
+        assert!(session.transcript().approvals().is_empty());
+    }
+
+    #[test]
+    fn opencode_runs_in_the_mode_and_model_chosen_before_its_session_opens() {
+        let Some(program) = fake_opencode() else {
+            return;
+        };
+        let mut session = start_opencode(program, None);
+        pump_until(&mut session, |session| {
+            session.transcript().handshake().is_some()
+        });
+        session.set_mode("plan");
+        session.set_model("zai/glm-4.7");
+        session.prompt("settings?", Vec::new()).unwrap();
+        pump_until(&mut session, finished);
+        assert_eq!(
+            session.transcript().last_answer(),
+            Some("Mode plan, model zai/glm-4.7.")
+        );
+    }
+
+    #[test]
+    fn opencode_continues_an_earlier_session_or_starts_anew_and_says_so() {
+        let Some(program) = fake_opencode() else {
+            return;
+        };
+        let mut continued = start_opencode(
+            program.clone(),
+            Some(("ses_earlier_one".into(), "Fix the tab bar".into())),
+        );
+        continued.prompt("hello", Vec::new()).unwrap();
+        pump_until(&mut continued, finished);
+        assert_eq!(continued.conversation_id(), Some("ses_earlier_one"));
+
+        let mut session = start_opencode(program, Some(("ses_missing".into(), "Gone".into())));
+        session.prompt("hello", Vec::new()).unwrap();
+        pump_until(&mut session, finished);
+        assert_eq!(session.conversation_id(), Some("ses_fake_new"));
+        assert!(session.transcript().items().iter().any(|item| matches!(
+            item,
+            Item::Notice(notice) if notice.text.starts_with("OpenCode could not continue")
+        )));
+    }
 }

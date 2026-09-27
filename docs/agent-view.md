@@ -8,12 +8,13 @@ controls: buttons to allow or deny, choices to pick, diffs to read.
 
 It is **experimental**. It sits beside the [terminal integration](agents.md),
 which keeps working unchanged, and it can be removed without touching
-terminals. It drives two agents, each through its own protocol:
+terminals. It drives three agents, each through its own protocol:
 
 - **Claude Code**, over its stream-json protocol;
-- **Codex**, over its app server (`codex app-server`).
+- **Codex**, over its app server (`codex app-server`);
+- **OpenCode**, over the Agent Client Protocol (`opencode acp`).
 
-Gemini CLI and OpenCode still run in terminals.
+Gemini CLI still runs in terminals.
 
 ## Opening it
 
@@ -38,7 +39,7 @@ agent in a terminal: working, needs you, or done and failed until you look.
 
 **Open Agents In** on the Settings **Agents** page
 (`[agent_view] open_agents_in`) makes **New Agent…** and **Resume Agent
-Conversation…** open Claude Code and Codex in a new tab's agent view,
+Conversation…** open Claude Code, Codex, and OpenCode in a new tab's agent view,
 beside its terminal (`split`) or filling it (`full`), instead of in a
 terminal (`terminal`, the default). Other agents still open in terminals,
 and a launch that names an agent profile opens in a terminal, because
@@ -60,18 +61,18 @@ working, except the chords the message box edits with.
 
 The **New session** page shows:
 
-- the agent to start, Claude Code or Codex, and whether each was found. An
+- the agent to start, Claude Code, Codex, or OpenCode, and whether each was found. An
   agent that is not installed, or is turned off on the Settings **Agents**
   page, is listed with the reason and cannot be chosen. A new session from a
   tab's conversation starts with the same agent;
 - the folder: the focused terminal's working directory, or another open
   terminal's from the folder menu;
 - the chosen agent's earlier conversations in that folder, to continue:
-  Claude Code's from its own logs, Codex's as its app server lists them
+  Claude Code's from its own logs, Codex's and OpenCode's as they list them
   once the session started ahead of the first message connects. The window
-  keeps each folder's Codex list, so it stays while you navigate;
-- **Open Claude in a terminal instead** (or Codex), which starts it in a new
-  tab.
+  keeps each folder's list, so it stays while you navigate;
+- **Open Claude in a terminal instead** (or Codex, or OpenCode), which starts
+  it in a new tab.
 
 Type what the agent should work on and press Enter. The permission and model
 chips under the message apply to the new session; choosing another agent
@@ -79,15 +80,17 @@ resets them to that agent's defaults. The agent starts as soon as the page
 opens, so its commands, your account's models, and its earlier conversations
 are listed before the first message. It follows the page's folder, including
 a `cd` in the terminal beside it, and closing the panel before a message ends
-it. Codex opens
-its conversation (a thread) only with the first message, so a session that
-never got one leaves nothing in Codex's history.
+it. Codex and OpenCode open their conversation only with the first message,
+so a session that never got one leaves nothing in their history. OpenCode
+lists its models and commands only once its conversation opens, so before
+the first message its model chip offers only *Default* and `/` lists
+nothing.
 
-Termeric looks for `claude` and `codex` on its own `PATH` and then on the
+Termeric looks for `claude`, `codex`, and `opencode` on its own `PATH` and then on the
 `PATH` your login shell sets up, so a desktop-launched Termeric finds agents
 installed through a shell profile. The login shell is asked once, in the
 background; until it answers, the page shows *Looking for Claude Code…*.
-`[agents.claude-code]` and `[agents.codex]` in the configuration set each
+`[agents.claude-code]`, `[agents.codex]`, and `[agents.opencode]` in the configuration set each
 program and environment; their arguments apply only to terminal launches,
 because the agent view needs its own.
 
@@ -101,7 +104,8 @@ because the agent view needs its own.
 - **Edits** show a diff card with added and removed line counts. Once an edit
   is made, the diff comes from Claude Code's own patch, with line numbers.
   Codex's patches show one card per file, numbered from its hunks, with new
-  and deleted files marked.
+  and deleted files marked. OpenCode's edits show the replacement it asked
+  to make, its patches one card per file.
 - **Commands** show a card with the command, its status, and the end of its
   output, which expands.
 - **Sub-agents** show their task, how many steps they took, and their latest
@@ -127,13 +131,16 @@ When the agent needs permission, a card asks for it under the tool call:
   cargo test commands* when it proposes a command prefix to allow (saved to
   Codex's own rules), otherwise *Allow this command for the rest of the
   session*, and for patches *Allow edits to these files for the rest of the
-  session*.
+  session*. OpenCode offers *Always allow*, which it keeps for the rest of
+  the session.
 - **Deny** refuses and ends the turn; the message box then asks what the
   agent should do instead.
 
 A denial with a reason, from the supervisor or `answer_approval`, lets the
 agent continue its turn. Claude Code reads the reason with the refusal;
 Codex takes none, so the reason follows as a note to the running turn.
+OpenCode takes none either and has no way to add one, so the conversation
+says to give the reason in the next message.
 
 A **question** the agent asks shows its options as choices; **Other** lets
 you type an answer in the message box. **Skip** declines to answer.
@@ -163,6 +170,8 @@ a session has started:
   conversation), `/review` (reviews uncommitted changes, or what you write
   after it), and your Codex skills, which go to Codex with the message. Its
   other commands, such as `/status`, work only in its terminal.
+- OpenCode sends its own list once its conversation opens: commands such as
+  `/init` and `/review`, and your own commands and skills.
 
 Sending a command the agent runs only in its terminal shows **Open in a
 terminal**, which continues the conversation in the agent's terminal
@@ -210,9 +219,19 @@ throwaway checkout. Like every setting, **Allow Bypass Permissions** applies
 at once to the window it is changed in; **Save** keeps it for new windows
 and later starts.
 
+OpenCode's modes are its agents: **Build**, its default, works on the task,
+and **Plan** reads and plans without editing; agents you configured in
+OpenCode are listed too. OpenCode asks only where its own `permission`
+settings say to. By default it edits and runs commands without asking, so to
+approve them in the panel, set them to ask in `opencode.json`:
+
+```json
+{ "permission": { "edit": "ask", "bash": "ask", "webfetch": "ask" } }
+```
+
 A session never starts in a mode that skips every check without that
 setting, whoever asked for it. Codex takes a mode or model change with the
-next message, since it applies them per turn.
+next message, since it applies them per turn; OpenCode takes one at once.
 
 Some accounts cannot use Claude Code's **Auto**; its refusal then shows in the
 conversation. The model chip lists the models the agent offers for this
@@ -235,15 +254,15 @@ The **⋯** menu offers **Open in a terminal**, which ends the session here and
 continues the same conversation in a new tab; **Copy conversation**; **End
 session**, which stops the agent and removes the session from the panel
 (the agent keeps the conversation, and the new-session page offers it again
-under earlier conversations); and **Hide panel**. **Open in a terminal** runs `claude --resume <id>` or
-`codex resume <id>`.
+under earlier conversations); and **Hide panel**. **Open in a terminal** runs `claude --resume <id>`,
+`codex resume <id>`, or `opencode --session <id>`.
 
 A conversation opened in a terminal stays readable in the panel but takes no
 more messages there, because two agent processes must never write one
 conversation. Once the terminal is done with a Claude Code conversation,
 continue it from the new-session page. A message sent while a session is
-still closing waits and goes once the agent has restarted; Codex continues
-the same thread.
+still closing waits and goes once the agent has restarted; Codex and
+OpenCode continue the same conversation.
 
 Sessions belong to their tab and end with it, or with its window. The agents
 keep every conversation in their logs, so any of them can be continued later.
@@ -332,7 +351,35 @@ ignored except for their requests. Turns are stopped with `turn/interrupt`,
 and a note written after declining reaches the running turn through
 `turn/steer`. The agent view was built against Codex 0.157.
 
-### Both
+### OpenCode
+
+Termeric runs `opencode acp`, which speaks the Agent Client Protocol:
+JSON-RPC 2.0 over its pipes, one message per line. `initialize` tells
+OpenCode that Termeric reads and writes no files and runs no terminals for
+it, so OpenCode does both itself; `session/list` then lists the folder's
+earlier sessions. The first message opens a session (`session/new`, or
+`session/resume` to continue one, which replays nothing), which reports its
+settings: models, modes, and effort, as `configOptions`. When the chosen
+mode or model differs from the session's, `session/set_config_option`
+changes it first, and the message waits for the answer. Each message is a
+`session/prompt` that stays open for the turn while `session/update`
+notifications stream its text, reasoning, tool calls, commands, and context
+use; the prompt's answer ends the turn with its stop reason.
+
+Tool calls report a kind, a title, and the tool's input, and each update
+carries only what changed; Termeric keeps each call whole and reads it as
+`Read`, `Bash`, `Grep`, `Edit`, `Write`, `Patch`, `WebFetch`, `Agent`, or
+`TodoWrite` from those, and anything else, such as an MCP tool, by its title.
+Permission requests become approval cards answered with the option chosen;
+OpenCode still asks to write an edited file through Termeric after one is
+allowed, and Termeric refuses as ACP expects, so OpenCode applies the edit
+itself. Every other request is refused with an error rather than left
+waiting. Stop sends `session/cancel` and withdraws the questions it asked.
+When OpenCode needs you to sign in, the error says how, as OpenCode
+describes it (`opencode auth login`). The agent view was built against
+OpenCode 1.18.
+
+### All three
 
 Each agent runs in its own process group, which closing a session ends
 completely; commands it leaves running when it exits end with it. It
@@ -348,12 +395,13 @@ The code is split so each layer can be tested without the next:
 | `agent_view/protocol.rs` | What every protocol provides to a session |
 | `agent_view/claude.rs` | Claude Code's stream-json protocol, both directions |
 | `agent_view/codex.rs` | Codex's app-server protocol, both directions |
+| `agent_view/acp.rs` | The Agent Client Protocol, which OpenCode speaks, both directions |
 | `agent_view/process.rs` | The process, its pipes, and bounded line reading |
 | `agent_view/session.rs` | One conversation: process, protocol, and transcript |
 | `agent_view/transcript.rs` | The conversation model the panel shows |
 | `agent_view/present.rs` | Tool summaries, grouping, diffs, and conversation text |
 | `agent_view/markdown.rs` | Markdown as styled blocks |
-| `agent_view/history.rs` | Earlier conversations from Claude Code's logs (Codex lists its own) |
+| `agent_view/history.rs` | Earlier conversations from Claude Code's logs (the others list their own) |
 | `ui/agent_view/` | Panel state, colors, and the scene: primitives, hit targets, and accessibility nodes built once per change |
 | `renderer/agent_view.rs` | Drawing a scene |
 | `app/agent_view*.rs` | Sessions in a window, input, actions, and control requests |
@@ -375,11 +423,13 @@ text is exposed for what is on screen.
 
 ## Testing
 
-`termeric/tests/fixtures/agent_view/fake_claude.py` and `fake_codex.py`
-speak each agent's protocol without an account or any usage. Words in each
-prompt choose what they do: `edit`, `run`, `ask`, `todo`, `slow`, `fail`, or
-`crash` for both; `plan` and `agent` for Claude Code; `settings` for Codex,
-which answers with the mode and model its turn ran with. Session tests run
+`termeric/tests/fixtures/agent_view/fake_claude.py`, `fake_codex.py`, and
+`fake_opencode.py` speak each agent's protocol without an account or any
+usage. Words in each prompt choose what they do: `edit`, `run`, `todo`, and
+`slow` for all three; `ask`, `fail`, and `crash` for Claude Code and Codex;
+`plan` and `agent` for Claude Code; `settings` for Codex and OpenCode, which
+answer with the mode and model their turn ran with; and `signin` for
+OpenCode, which fails as a provider without credentials does. Session tests run
 whole conversations through them, and they can stand in for the real agents
 in the GUI:
 
@@ -389,17 +439,23 @@ program = "/path/to/termeric/termeric/tests/fixtures/agent_view/fake_claude.py"
 
 [agents.codex]
 program = "/path/to/termeric/termeric/tests/fixtures/agent_view/fake_codex.py"
+
+[agents.opencode]
+program = "/path/to/termeric/termeric/tests/fixtures/agent_view/fake_opencode.py"
 ```
 
 ## Limits
 
-- Claude Code and Codex only; Gemini CLI and OpenCode run in terminals.
+- Claude Code, Codex, and OpenCode only; Gemini CLI runs in terminals. The
+  supervisor runs Claude Code or Codex.
+- OpenCode's model list and `/` commands arrive with its first message, and
+  its effort setting is not offered.
 - Codex shows a command's output when the command ends, not while it runs,
   and does not show Codex's plan-mode proposals.
 - No image attachments or file mentions.
 - Sessions do not survive a restart of Termeric, though their conversations
   can be continued.
 - Accessibility exposes the visible part of the conversation.
-- Neither protocol is a stable contract (Claude Code's is undocumented, and
-  Codex marks its app server experimental); a release that changes one can
-  break the panel until Termeric follows.
+- Only ACP is a published protocol: Claude Code's is undocumented, and Codex
+  marks its app server experimental. A release that changes one can break the
+  panel until Termeric follows.

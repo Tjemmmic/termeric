@@ -9,7 +9,7 @@ Versioning once public beta tags begin.
 ### Added
 
 - The agent view (experimental). **Agent View** (Ctrl+Shift+A) opens a panel
-  beside the terminals where Claude Code or Codex works in a conversation
+  beside the terminals where Claude Code, Codex, or OpenCode works in a conversation
   instead of a terminal: streamed answers, edit diffs, command output, to-dos, and
   sub-agents, with approvals, questions, and plans answered by buttons. The
   message box queues follow-ups, attaches the terminal selection or the last
@@ -21,8 +21,10 @@ Versioning once public beta tags begin.
   protocol v23 (`read_conversation`, `answer_approval`, `send_to_session`).
   Codex runs through its app server with its own modes (Ask before changes,
   Auto, and Full access behind the same opt-in), models, skills, `/compact`,
-  and `/review`; the new-session page chooses the agent, and **Open Agents
-  In** opens either one from **New Agent…**. See
+  and `/review`. OpenCode runs through the Agent Client Protocol (`opencode
+  acp`) with its own modes, models, and commands, and approvals answered with
+  its own options. The new-session page chooses the agent, and **Open Agents
+  In** opens any of them from **New Agent…**. See
   [agent view](docs/agent-view.md).
 
 - A new Termeric window joins the running Termeric on the same display

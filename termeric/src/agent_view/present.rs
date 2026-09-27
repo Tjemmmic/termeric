@@ -13,10 +13,11 @@ use serde_json::Value;
 
 use super::transcript::{Item, ToolCall};
 
-/// A change to one or more files, as unified diffs: input
+/// A change to one or more files: input
 /// `{"changes": [{"path", "kind": {"type": "add" | "delete" | "update"}, "diff"}]}`.
 /// An update's diff is its hunks; an addition's or deletion's is the whole
-/// file.
+/// file. A change may carry the file's text before and after instead of a
+/// diff, as `"old_text"` and `"new_text"`.
 pub const PATCH_TOOL: &str = "Patch";
 
 /// What kind of action a tool call is.
@@ -119,13 +120,13 @@ pub fn summarize(tool: &ToolCall, cwd: &Path) -> Summary {
         PATCH_TOOL => {
             let changes = patch_changes(input);
             match changes.as_slice() {
-                [(path, kind, _)] => summary(
-                    match *kind {
+                [change] => summary(
+                    match change.kind {
                         "add" => "Created",
                         "delete" => "Deleted",
                         _ => "Edited",
                     },
-                    Some(relative(path, cwd)),
+                    Some(relative(change.path, cwd)),
                     true,
                     None,
                 ),
@@ -296,23 +297,43 @@ const MAX_CREATED_LINES: usize = 400;
 /// Longest edit compared line by line; longer ones show whole blocks.
 const MAX_COMPARED_LINES: usize = 600;
 
-/// Each change of a patch: its path, kind (`add`, `delete`, or `update`),
-/// and diff.
-fn patch_changes(input: &Value) -> Vec<(&str, &str, &str)> {
+/// One file a patch changes.
+struct PatchChange<'a> {
+    path: &'a str,
+    /// `add`, `delete`, or `update`.
+    kind: &'a str,
+    body: ChangeBody<'a>,
+}
+
+enum ChangeBody<'a> {
+    /// A unified diff's hunks, or the whole file when added or deleted.
+    Diff(&'a str),
+    /// The file's text before (empty when added) and after.
+    Texts { old: &'a str, new: &'a str },
+}
+
+fn patch_changes(input: &Value) -> Vec<PatchChange<'_>> {
     input
         .get("changes")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
         .filter_map(|change| {
-            Some((
-                field(change, "path")?,
-                change
+            let body = match field(change, "new_text") {
+                Some(new) => ChangeBody::Texts {
+                    old: field(change, "old_text").unwrap_or_default(),
+                    new,
+                },
+                None => ChangeBody::Diff(field(change, "diff").unwrap_or_default()),
+            };
+            Some(PatchChange {
+                path: field(change, "path")?,
+                kind: change
                     .get("kind")
                     .and_then(|kind| field(kind, "type"))
                     .unwrap_or("update"),
-                field(change, "diff").unwrap_or_default(),
-            ))
+                body,
+            })
         })
         .collect()
 }
@@ -321,7 +342,7 @@ fn patch_changes(input: &Value) -> Vec<(&str, &str, &str)> {
 pub fn patch_paths(input: &Value) -> Vec<&str> {
     patch_changes(input)
         .into_iter()
-        .map(|(path, _, _)| path)
+        .map(|change| change.path)
         .collect()
 }
 
@@ -332,12 +353,17 @@ pub fn file_diffs(tool: &ToolCall, cwd: &Path) -> Vec<FileDiff> {
     }
     patch_changes(&tool.input)
         .into_iter()
-        .map(|(path, kind, diff)| {
-            let path = relative(path, cwd);
-            match kind {
-                "add" => whole_file(path, diff, DiffLineKind::Added),
-                "delete" => whole_file(path, diff, DiffLineKind::Removed),
-                _ => counted(path, unified_lines(diff), false),
+        .map(|change| {
+            let path = relative(change.path, cwd);
+            match (change.kind, change.body) {
+                ("add", ChangeBody::Diff(content) | ChangeBody::Texts { new: content, .. }) => {
+                    whole_file(path, content, DiffLineKind::Added)
+                }
+                ("delete", ChangeBody::Diff(content) | ChangeBody::Texts { old: content, .. }) => {
+                    whole_file(path, content, DiffLineKind::Removed)
+                }
+                (_, ChangeBody::Diff(diff)) => counted(path, unified_lines(diff), false),
+                (_, ChangeBody::Texts { old, new }) => counted(path, compare(old, new), false),
             }
         })
         .collect()

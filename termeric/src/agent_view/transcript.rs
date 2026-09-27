@@ -728,8 +728,11 @@ impl Transcript {
             }
             ContentBlock::ToolUse { id, name, input } => {
                 if let Some(tool) = self.tool_mut(&id) {
-                    // A decided call keeps the input it ran with.
+                    // A decided call keeps the input it ran with. Until then
+                    // an agent may name the call more exactly as it learns
+                    // more, as when an edit turns out to write a new file.
                     if tool.decision.is_none() {
+                        tool.name = name;
                         tool.input = input;
                     }
                     tool.partial_input = String::new();
