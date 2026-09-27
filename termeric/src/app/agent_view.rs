@@ -41,6 +41,9 @@ pub(super) struct AgentViewWindow {
     /// Earlier Claude Code conversations for a folder, read from its logs
     /// when a page needs them.
     pub past: Option<(PathBuf, Vec<EarlierConversation>)>,
+    /// Earlier conversations agents listed themselves, by agent and folder:
+    /// the latest list any session there reported, kept after it ends.
+    listed: std::collections::HashMap<(AgentKind, PathBuf), Vec<EarlierConversation>>,
     /// Whether each agent's executable was found, by program name. A
     /// program is missing while the search for it runs.
     installed: std::collections::HashMap<String, bool>,
@@ -296,9 +299,8 @@ impl App {
     }
 
     /// `agent`'s earlier conversations in `cwd`. An agent that lists its
-    /// own does so when a session connects, so they come from its latest
-    /// session in that folder; Claude Code's are read from its logs, once
-    /// per folder.
+    /// own does so when a session there connects, and the window keeps the
+    /// latest list; Claude Code's are read from its logs, once per folder.
     pub(super) fn agent_view_past(
         &mut self,
         agent: AgentKind,
@@ -307,12 +309,9 @@ impl App {
     ) -> Vec<PastSession> {
         let listed = self
             .agent_view
-            .sessions
-            .iter()
-            .rev()
-            .filter(|session| session.agent() == agent && session.cwd() == cwd)
-            .find_map(AgentSession::earlier_conversations)
-            .map(<[EarlierConversation]>::to_vec);
+            .listed
+            .get(&(agent, cwd.to_path_buf()))
+            .cloned();
         let earlier = match (listed, agent) {
             (Some(listed), _) => listed,
             (None, AgentKind::ClaudeCode) => {
@@ -362,12 +361,7 @@ impl App {
     /// The title of an earlier conversation the panel listed.
     pub(super) fn agent_view_past_title(&self, id: &str) -> Option<String> {
         let cached = self.agent_view.past.iter().flat_map(|(_, past)| past);
-        let listed = self
-            .agent_view
-            .sessions
-            .iter()
-            .filter_map(AgentSession::earlier_conversations)
-            .flatten();
+        let listed = self.agent_view.listed.values().flatten();
         cached
             .chain(listed)
             .find(|past| past.id == id)
@@ -484,6 +478,10 @@ impl App {
         let mut changed = false;
         for session in &mut self.agent_view.sessions {
             changed |= session.pump();
+            if let Some(earlier) = session.take_earlier_conversations() {
+                let key = (session.agent(), session.cwd().to_path_buf());
+                self.agent_view.listed.insert(key, earlier);
+            }
         }
         if !changed {
             return;

@@ -741,6 +741,11 @@ mod tests {
         };
         assert_eq!(past[0].agent, AgentKind::Codex);
         assert_eq!(past[0].title, "Fix the flaky test");
+        // Hiding the panel ends the session started ahead; the list stays.
+        app.close_agent_view();
+        assert!(app.agent_view.sessions.is_empty());
+        assert_eq!(app.agent_view_past(AgentKind::Codex, &cwd, false), past);
+        app.open_agent_view(true);
         // Claude Code's logs say nothing about Codex's conversations.
         assert!(
             app.agent_view_past(AgentKind::ClaudeCode, &cwd, false)

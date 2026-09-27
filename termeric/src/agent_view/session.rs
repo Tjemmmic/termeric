@@ -141,7 +141,8 @@ pub struct AgentSession {
     mode_after_plan: Option<(String, String)>,
     /// Messages written while a turn ran, sent in order as turns end.
     queued: VecDeque<(String, Vec<Attachment>)>,
-    /// The agent's earlier conversations in this folder, when it lists them.
+    /// The agent's latest list of its earlier conversations in this
+    /// folder, until the window takes it.
     earlier: Option<Vec<EarlierConversation>>,
     /// Something shown outside the conversation changed since the last pump.
     updated: bool,
@@ -348,10 +349,11 @@ impl AgentSession {
     }
 
     /// The agent's earlier conversations in this session's folder, newest
-    /// first, once it has listed them. Agents that keep no such list, like
+    /// first, when it has listed them since the last call. The window keeps
+    /// them, so they outlive the session. Agents that keep no such list, like
     /// Claude Code whose logs Termeric reads instead, never report one.
-    pub fn earlier_conversations(&self) -> Option<&[EarlierConversation]> {
-        self.earlier.as_deref()
+    pub fn take_earlier_conversations(&mut self) -> Option<Vec<EarlierConversation>> {
+        self.earlier.take()
     }
 
     /// Whether the conversation was handed to a terminal.
@@ -1387,12 +1389,16 @@ mod tests {
             return;
         };
         let mut session = start_codex(program.clone(), None);
-        pump_until(&mut session, |session| {
-            session.earlier_conversations().is_some()
-        });
-        let earlier: Vec<(&str, &str)> = session
-            .earlier_conversations()
-            .unwrap()
+        let started = Instant::now();
+        let listed = loop {
+            session.pump();
+            if let Some(listed) = session.take_earlier_conversations() {
+                break listed;
+            }
+            assert!(started.elapsed() < Duration::from_secs(20));
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        let earlier: Vec<(&str, &str)> = listed
             .iter()
             .map(|past| (past.id.as_str(), past.title.as_str()))
             .collect();

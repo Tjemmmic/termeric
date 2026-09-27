@@ -67,8 +67,11 @@ def read_line(block):
     return line.decode()
 
 
-def read_message(block=True):
-    if pending_input:
+def read_message(block=True, fresh=False):
+    """The next message: one set aside earlier first, unless `fresh` asks
+    only for what has not been read yet (while a turn waits, so a message
+    set aside is not read again and again)."""
+    if pending_input and not fresh:
         return pending_input.pop(0)
     while True:
         line = read_line(block)
@@ -99,7 +102,7 @@ def handle_during_turn(message):
 
 def pump():
     while True:
-        message = read_message(block=False)
+        message = read_message(block=False, fresh=True)
         if message is None:
             return
         if not handle_during_turn(message):
@@ -112,7 +115,7 @@ def ask(method, params):
     request_id = state["next_id"]
     send({"id": request_id, "method": method, "params": params})
     while True:
-        message = read_message()
+        message = read_message(fresh=True)
         if message.get("id") == request_id and "method" not in message:
             notify("serverRequest/resolved", {"threadId": state["thread"], "requestId": request_id})
             return message.get("result", {})
@@ -281,8 +284,12 @@ def run_turn(params):
         else:
             entry["status"] = "declined"
             completed(entry)
-            time.sleep(DELAY * 5)
-            pump()
+            # A note the person wrote with the refusal follows it as a steer.
+            waited = time.time() + 0.5
+            while answer.get("decision") == "decline" and not state["notes"] \
+                    and time.time() < waited:
+                pump()
+                time.sleep(0.01)
             if state["interrupted"] or answer.get("decision") == "cancel":
                 finish("interrupted")
                 return

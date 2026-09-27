@@ -120,8 +120,11 @@ enum Request {
     Account,
     Models,
     Skills,
-    /// Earlier threads in the folder.
-    Threads,
+    /// Earlier threads in the folder: from Codex's index alone, which
+    /// answers at once, or reconciled with its logs, which takes seconds.
+    Threads {
+        indexed: bool,
+    },
     ThreadStart,
     ThreadResume,
     /// A turn: a message, a review, or compaction.
@@ -235,6 +238,19 @@ impl CodexCodec {
         self.next_request += 1;
         self.pending.insert(self.next_request, kind);
         line(&json!({ "id": self.next_request, "method": method, "params": params }))
+    }
+
+    /// Asks for the folder's earlier threads, from the index alone or
+    /// reconciled with Codex's logs.
+    fn list_threads(&mut self, indexed: bool) -> String {
+        let params = json!({
+            "cwd": self.cwd,
+            "limit": EARLIER_LIMIT,
+            "sortKey": "updated_at",
+            "sourceKinds": PERSON_SOURCES,
+            "useStateDbOnly": indexed,
+        });
+        self.request(Request::Threads { indexed }, "thread/list", params)
     }
 
     fn thread_id(&self) -> Option<&str> {
@@ -485,15 +501,7 @@ impl CodexCodec {
                 exchange
                     .lines
                     .push(self.request(Request::Skills, "skills/list", skills));
-                let threads = json!({
-                    "cwd": self.cwd,
-                    "limit": EARLIER_LIMIT,
-                    "sortKey": "updated_at",
-                    "sourceKinds": PERSON_SOURCES,
-                });
-                exchange
-                    .lines
-                    .push(self.request(Request::Threads, "thread/list", threads));
+                exchange.lines.push(self.list_threads(true));
                 // Accepted: the person may write while the lists load.
                 exchange.events.push(AgentEvent::Ready(self.handshake()));
             }
@@ -523,15 +531,20 @@ impl CodexCodec {
                 self.skills = Some(skills(result));
                 exchange.events.push(AgentEvent::Ready(self.handshake()));
             }
-            (Request::Threads, error) => {
-                if let Some(error) = error {
-                    log::debug!("agent view: Codex threads unavailable: {error}");
+            (Request::Threads { indexed }, error) => {
+                match error {
+                    Some(error) => log::debug!("agent view: Codex threads unavailable: {error}"),
+                    None => exchange
+                        .events
+                        .push(AgentEvent::EarlierConversations(earlier(
+                            result.and_then(|result| result.get("data")),
+                        ))),
                 }
-                exchange
-                    .events
-                    .push(AgentEvent::EarlierConversations(earlier(
-                        result.and_then(|result| result.get("data")),
-                    )));
+                // The index can miss threads its logs hold; the full list,
+                // seconds later, replaces the quick one.
+                if indexed {
+                    exchange.lines.push(self.list_threads(false));
+                }
             }
             (kind @ (Request::ThreadStart | Request::ThreadResume), None) => {
                 let result = result.cloned().unwrap_or(Value::Null);
@@ -1514,6 +1527,8 @@ mod tests {
         );
         let threads = parse(&exchange.lines[4]);
         assert_eq!(threads["params"]["cwd"], "/w");
+        // The index answers at once; the full list follows it.
+        assert_eq!(threads["params"]["useStateDbOnly"], true);
         assert_eq!(
             threads["params"]["sourceKinds"],
             json!(["cli", "vscode", "appServer"])
@@ -1815,6 +1830,42 @@ mod tests {
         assert_eq!(steer["method"], "turn/steer");
         assert_eq!(steer["params"]["expectedTurnId"], "u1");
         assert_eq!(steer["params"]["input"][0]["text"], "use a constant");
+    }
+
+    #[test]
+    fn the_quick_thread_list_is_followed_by_the_full_one() {
+        let mut listing = codec();
+        listing.start();
+        let exchange = decode(&mut listing, json!({ "id": 1, "result": {} }));
+        let quick = parse(&exchange.lines[4]);
+        let listed = json!({ "data": [{ "id": "t", "name": "Quick", "updatedAt": 1 }] });
+        let answered = decode(&mut listing, json!({ "id": quick["id"], "result": listed }));
+        assert!(matches!(
+            &answered.events[..],
+            [AgentEvent::EarlierConversations(earlier)] if earlier[0].title == "Quick"
+        ));
+        let full = parse(&answered.lines[0]);
+        assert_eq!(full["method"], "thread/list");
+        assert_eq!(full["params"]["useStateDbOnly"], false);
+        let listed = json!({ "data": [] });
+        let answered = decode(&mut listing, json!({ "id": full["id"], "result": listed }));
+        assert_eq!(
+            answered.events,
+            [AgentEvent::EarlierConversations(Vec::new())]
+        );
+        assert!(answered.lines.is_empty(), "the full list is the last");
+
+        // A Codex that refuses the quick list still gets asked for the full one.
+        let mut listing = codec();
+        listing.start();
+        let exchange = decode(&mut listing, json!({ "id": 1, "result": {} }));
+        let quick = parse(&exchange.lines[4]);
+        let refused = decode(
+            &mut listing,
+            json!({ "id": quick["id"], "error": { "code": -32602, "message": "unknown field" } }),
+        );
+        assert!(refused.events.is_empty());
+        assert_eq!(parse(&refused.lines[0])["params"]["useStateDbOnly"], false);
     }
 
     #[test]

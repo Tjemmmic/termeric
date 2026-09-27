@@ -68,7 +68,8 @@ The **New session** page shows:
   terminal's from the folder menu;
 - the chosen agent's earlier conversations in that folder, to continue:
   Claude Code's from its own logs, Codex's as its app server lists them
-  once the session started ahead of the first message connects;
+  once the session started ahead of the first message connects. The window
+  keeps each folder's Codex list, so it stays while you navigate;
 - **Open Claude in a terminal instead** (or Codex), which starts it in a new
   tab.
 
@@ -302,7 +303,9 @@ message per line. After `initialize`, Termeric reads the account (to say
 when Codex is not signed in), `model/list`, `skills/list`, and `thread/list`
 for the folder's earlier threads started from Codex's terminal interface,
 its editor extension, or an app server (scripted `codex exec` runs are left
-out); each is titled by its name, else its first message. The first
+out); each is titled by its name, else its first message. The list is asked
+of Codex's index first (`useStateDbOnly`, which answers at once) and then in
+full, reconciled with its logs, which takes seconds and replaces it. The first
 message starts a thread (`thread/start`, or `thread/resume` to continue one)
 with the mode's approval policy and sandbox; each message is a `turn/start`
 carrying the mode's sandbox policy and the chosen model. Streamed items
