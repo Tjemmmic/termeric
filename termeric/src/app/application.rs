@@ -4517,6 +4517,7 @@ impl ApplicationHandler<AppEvent> for Application {
         }
         if let Some(window) = self.windows.get_mut(&window_id) {
             ApplicationHandler::window_event(window, event_loop, window_id, event);
+            window.sync_tab_drag_pointer(event_loop);
             create_window = std::mem::take(&mut window.request_new_window);
             requested_window_launch = window.requested_window_launch.take();
             move_pane_to_next_window = std::mem::take(&mut window.request_move_pane_to_next_window);

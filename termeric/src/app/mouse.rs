@@ -874,8 +874,10 @@ impl App {
             return;
         }
 
-        // Set resize cursor when hovering over pane dividers
+        // Set resize cursor when hovering over pane dividers. A dragged tab
+        // owns the pointer's shape until it is released.
         if !self.pointer_panel_owns_input()
+            && self.tab_dragging.is_none()
             && let Some(tabs) = &self.tabs
         {
             if let Some(tab) = tabs.active_tab() {

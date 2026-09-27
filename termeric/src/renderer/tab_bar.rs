@@ -1211,6 +1211,7 @@ impl Renderer {
     /// Puts the dragged tab on a layer of its own over an opaque backing,
     /// so the tab it passes over never shows through it.
     fn lift_dragged_tab(&mut self, surface: Rect) {
+        self.dragged_tab_surface = Some(surface);
         self.rect_pipeline.mark_layer();
         self.text_pipeline.mark_layer();
         let chrome = self.tab_chrome();
@@ -1222,6 +1223,11 @@ impl Renderer {
             self.ui.tab_bar_bg,
             chrome.corner_radius(),
         );
+    }
+
+    /// The corner radius of a tab surface, in physical pixels.
+    pub(super) fn tab_chrome_corner_radius(&self) -> f32 {
+        self.tab_chrome().corner_radius()
     }
 
     /// Whether tabs run down the side rail rather than along the top.
@@ -1652,6 +1658,7 @@ mod tests {
         let drag = TabDragVisual {
             dragged: Some((1, 147.4)),
             sliding: vec![(2, -60.6)],
+            capture: false,
         };
         assert_eq!(
             place_tabs(&spans, &drag),
@@ -1661,11 +1668,13 @@ mod tests {
         let far = TabDragVisual {
             dragged: Some((0, 900.0)),
             sliding: Vec::new(),
+            capture: false,
         };
         assert_eq!(place_tabs(&spans, &far).last(), Some(&(0, 210.0, 100.0)));
         let before = TabDragVisual {
             dragged: Some((2, -500.0)),
             sliding: Vec::new(),
+            capture: false,
         };
         assert_eq!(place_tabs(&spans, &before).last(), Some(&(2, 10.0, 100.0)));
         assert_eq!(place_tabs(&spans, &TabDragVisual::default()), spans);

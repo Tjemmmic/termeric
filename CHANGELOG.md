@@ -36,7 +36,8 @@ Versioning once public beta tags begin.
   drag.
 
 - Drag a tab onto another Termeric window to move it there, or onto the
-  desktop to give it a window of its own.
+  desktop to give it a window of its own. Outside its window the pointer
+  carries a picture of the tab.
 
 - **Clear Scrollback** and **Reset Terminal** are in the command palette.
   Neither had an entry or a default shortcut before.

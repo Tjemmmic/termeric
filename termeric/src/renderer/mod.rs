@@ -20,6 +20,7 @@ mod text;
 
 mod buffer;
 mod cursor;
+mod drag_picture;
 pub(crate) mod draw;
 mod git;
 mod harvest;
@@ -669,6 +670,12 @@ pub struct Renderer {
     tab_bar_hover: Option<TabBarClick>,
     tab_bar_hover_progress: f32,
     tab_drag: TabDragVisual,
+    /// Where this frame drew the dragged tab, lifted over the others.
+    dragged_tab_surface: Option<(f32, f32, f32, f32)>,
+    /// The dragged tab copied from the last frame that asked for it.
+    dragged_tab_picture: Option<DraggedTabPicture>,
+    /// The surface can be copied from, so the dragged tab can be pictured.
+    surface_readable: bool,
     tab_bar_keyboard_focus: Option<TabBarClick>,
     tab_bar_viewport_anchor: tab_bar::TabBarViewportAnchor,
     tab_bar_position: TabBarPosition,
@@ -822,8 +829,15 @@ impl Renderer {
                 })?
             };
 
+        // Reading frames back lets a dragged tab leave the window as a
+        // picture; without it the pointer only changes shape.
+        let surface_readable = surface_caps.usages.contains(TextureUsages::COPY_SRC);
         let config = SurfaceConfiguration {
-            usage: TextureUsages::RENDER_ATTACHMENT,
+            usage: if surface_readable {
+                TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC
+            } else {
+                TextureUsages::RENDER_ATTACHMENT
+            },
             format: formats.surface,
             width: size.width,
             height: size.height,
@@ -908,6 +922,9 @@ impl Renderer {
             tab_bar_hover: None,
             tab_bar_hover_progress: 0.0,
             tab_drag: TabDragVisual::default(),
+            dragged_tab_surface: None,
+            dragged_tab_picture: None,
+            surface_readable,
             tab_bar_keyboard_focus: None,
             tab_bar_viewport_anchor: tab_bar::TabBarViewportAnchor::default(),
             tab_bar_position: TabBarPosition::Top,
@@ -1370,6 +1387,7 @@ impl Renderer {
 
         self.glyph_cache.begin_frame();
         self.terminal_row_cache.begin_frame();
+        self.dragged_tab_surface = None;
         // Build render data from grid and tabs (inserts layer boundaries)
         self.build_render_data(
             grid,
@@ -1479,7 +1497,8 @@ impl Renderer {
             }
         }
 
-        self.queue.submit(std::iter::once(encoder.finish()));
+        let tab_copy = self.copy_dragged_tab(&mut encoder, &output.texture);
+        let submission = self.queue.submit(std::iter::once(encoder.finish()));
         // On Wayland this asks the compositor for a frame callback, and winit
         // holds the next redraw until it arrives. A window the compositor is
         // not showing, such as one on another workspace, then is not asked to
@@ -1487,6 +1506,9 @@ impl Renderer {
         // callback that never comes, stalling the whole event loop.
         self.window.pre_present_notify();
         output.present();
+        if let Some(copy) = tab_copy {
+            self.finish_dragged_tab_copy(copy, submission);
+        }
 
         Ok(())
     }

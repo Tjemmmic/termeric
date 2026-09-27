@@ -1034,6 +1034,8 @@ pub struct App {
     /// A dragged tab released outside this window, for the process to place
     /// in the window the pointer enters next, or in a new one.
     tab_dropped_outside: Option<usize>,
+    /// What the pointer shows for a dragged tab outside this window.
+    tab_drag_pointer: tab_drag::TabDragPointer,
     /// Explicit launch requested by an in-app workflow such as domain attach.
     requested_window_launch: Option<crate::cli::WindowLaunch>,
     /// Only the sole default startup window may consume automatic restore.
@@ -1413,6 +1415,7 @@ impl App {
             request_move_pane_to_next_window: false,
             request_move_tab_to_next_window: false,
             tab_dropped_outside: None,
+            tab_drag_pointer: tab_drag::TabDragPointer::default(),
             requested_window_launch: None,
             allow_auto_restore: true,
             allow_workspace_fallback: false,
@@ -2959,6 +2962,7 @@ impl App {
                 false
             }
         };
+        self.keep_dragged_tab_picture(presented);
         self.refresh_accessibility();
         presented
     }

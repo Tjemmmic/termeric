@@ -32,6 +32,20 @@ pub struct TabDragVisual {
     pub dragged: Option<(usize, f32)>,
     /// Tabs drawn this far from their slots while they slide into them.
     pub sliding: Vec<(usize, f32)>,
+    /// Copy the dragged tab out of this frame, for the pointer to carry
+    /// outside the window.
+    pub capture: bool,
+}
+
+/// A still picture of the dragged tab, copied from the frame that drew it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DraggedTabPicture {
+    /// Straight-alpha RGBA rows, `width` × `height` pixels.
+    pub rgba: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+    /// Where its top-left pixel was drawn in the window.
+    pub origin: (u32, u32),
 }
 
 /// Platform input-method composition displayed at the focused text cursor.

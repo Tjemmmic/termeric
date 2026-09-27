@@ -1,8 +1,12 @@
-//! Deadline-driven drag-through for the existing tab overflow controls.
+//! Dragging tabs: following the pointer along the bar, deadline-driven
+//! drag-through for the overflow controls, and the picture the pointer
+//! carries once a tab leaves its window.
 
 use super::*;
-use crate::renderer::{TabBarClick, TabSpan};
+use crate::renderer::{DraggedTabPicture, TabBarClick, TabSpan};
 use std::time::Duration;
+use winit::event_loop::ActiveEventLoop;
+use winit::window::{CursorIcon, CustomCursor, CustomCursorSource};
 
 const INITIAL_DWELL: Duration = Duration::from_millis(400);
 const REPEAT_DWELL: Duration = Duration::from_millis(200);
@@ -17,6 +21,68 @@ pub(super) struct OverflowDwell {
     tab_id: usize,
     control: TabBarClick,
     pub(super) deadline: Instant,
+}
+
+/// What the pointer shows while a dragged tab is outside its window.
+#[derive(Default)]
+pub(super) struct TabDragPointer {
+    /// The dragged tab's picture, by tab id.
+    picture: Option<(usize, TabPicture)>,
+    /// The tab the frame being drawn copies.
+    requested: Option<usize>,
+    /// What this window's pointer shows now.
+    shown: DragPointer,
+}
+
+enum TabPicture {
+    /// Pixels waiting for the event loop to make them a cursor.
+    Pixels(CustomCursorSource),
+    Cursor(CustomCursor),
+    /// The frame could not be copied, so there is no picture.
+    Unavailable,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum DragPointer {
+    /// The pointer's usual shapes: no tab is dragged outside the window.
+    #[default]
+    Usual,
+    /// A picture of the dragged tab, held where the tab was grabbed.
+    Picture,
+    /// A closed hand, when the tab could not be pictured.
+    Grabbing,
+    /// The tab cannot leave: a live-domain tab keeps its daemon-owned place.
+    NoDrop,
+}
+
+/// The pointer for a tab dragged `outside` the window: its picture when it
+/// has one, a closed hand when not, and no-drop for a tab that cannot leave.
+fn drag_pointer(outside: bool, live: bool, pictured: bool) -> DragPointer {
+    match (outside, live, pictured) {
+        (false, _, _) => DragPointer::Usual,
+        (true, true, _) => DragPointer::NoDrop,
+        (true, false, true) => DragPointer::Picture,
+        (true, false, false) => DragPointer::Grabbing,
+    }
+}
+
+/// A cursor of `picture`, held at the `pointer` position it was copied
+/// under, or at the nearest edge when the pointer was off the tab.
+fn picture_cursor(picture: DraggedTabPicture, pointer: (f64, f64)) -> Option<CustomCursorSource> {
+    let width = u16::try_from(picture.width).ok()?;
+    let height = u16::try_from(picture.height).ok()?;
+    let hotspot = |pointer: f64, origin: u32, length: u16| {
+        (pointer - f64::from(origin))
+            .floor()
+            .clamp(0.0, f64::from(length.saturating_sub(1))) as u16
+    };
+    let (x, y) = (
+        hotspot(pointer.0, picture.origin.0, width),
+        hotspot(pointer.1, picture.origin.1, height),
+    );
+    CustomCursor::from_rgba(picture.rgba, width, height, x, y)
+        .inspect_err(|error| log::warn!("Could not make the dragged tab a cursor: {error}"))
+        .ok()
 }
 
 impl App {
@@ -136,6 +202,87 @@ impl App {
         }
     }
 
+    /// Keeps the dragged tab's picture copied by the frame just drawn. A
+    /// frame that could not be copied leaves the tab without one; a frame
+    /// that was not presented asks again next time.
+    pub(super) fn keep_dragged_tab_picture(&mut self, presented: bool) {
+        let Some(tab_id) = self.tab_drag_pointer.requested.take() else {
+            return;
+        };
+        if !presented {
+            return;
+        }
+        let picture = self
+            .renderer
+            .as_mut()
+            .and_then(crate::renderer::Renderer::take_dragged_tab_picture)
+            .zip(self.last_cursor_pos)
+            .and_then(|(picture, pointer)| picture_cursor(picture, pointer))
+            .map_or(TabPicture::Unavailable, TabPicture::Pixels);
+        self.tab_drag_pointer.picture = Some((tab_id, picture));
+    }
+
+    /// Shows the dragged tab's picture as the pointer while the tab is
+    /// outside this window, and the usual pointer otherwise. The window
+    /// keeps the pointer through the drag, so its cursor is the one seen
+    /// over other windows and the desktop.
+    pub(super) fn sync_tab_drag_pointer(&mut self, event_loop: &ActiveEventLoop) {
+        let dragged = self.tab_dragging.as_ref().map(|drag| drag.tab_id);
+        if self
+            .tab_drag_pointer
+            .picture
+            .as_ref()
+            .is_some_and(|(tab_id, _)| Some(*tab_id) != dragged)
+        {
+            self.tab_drag_pointer.picture = None;
+        }
+        let pictured = self
+            .tab_drag_pointer
+            .picture
+            .as_ref()
+            .is_some_and(|(_, picture)| !matches!(picture, TabPicture::Unavailable));
+        let outside = self.tab_dragging.as_ref().is_some_and(|drag| {
+            drag.grab.is_some_and(|grab| grab.moving)
+                && self
+                    .last_cursor_pos
+                    .is_some_and(|position| self.outside_window(position))
+        });
+        let live = self
+            .tab_dragging
+            .as_ref()
+            .is_some_and(|drag| drag.live.is_some());
+        let wanted = drag_pointer(outside, live, pictured);
+        if wanted == self.tab_drag_pointer.shown {
+            return;
+        }
+        let Some(window) = &self.window else {
+            return;
+        };
+        match wanted {
+            DragPointer::Usual => window.set_cursor(CursorIcon::Default),
+            DragPointer::Grabbing => window.set_cursor(CursorIcon::Grabbing),
+            DragPointer::NoDrop => window.set_cursor(CursorIcon::NoDrop),
+            DragPointer::Picture => {
+                let Some((_, picture)) = &mut self.tab_drag_pointer.picture else {
+                    return;
+                };
+                if let TabPicture::Pixels(_) = picture
+                    && let TabPicture::Pixels(source) =
+                        std::mem::replace(picture, TabPicture::Unavailable)
+                {
+                    *picture = TabPicture::Cursor(event_loop.create_custom_cursor(source));
+                }
+                if let TabPicture::Cursor(cursor) = picture {
+                    window.set_cursor(cursor.clone());
+                }
+            }
+        }
+        self.tab_drag_pointer.shown = wanted;
+        if wanted == DragPointer::Usual {
+            self.refresh_terminal_pointer_cursor();
+        }
+    }
+
     /// Whether `position` lies outside this window.
     fn outside_window(&self, position: (f64, f64)) -> bool {
         self.window.as_ref().is_some_and(|window| {
@@ -245,6 +392,19 @@ impl App {
             let grab = drag.grab.filter(|grab| grab.moving)?;
             Some((index_of(drag.tab_id)?, grab.pointer - grab.offset))
         });
+        // A tab that can leave the window is pictured once, as it is first
+        // drawn under the pointer.
+        self.tab_drag_pointer.requested = self
+            .tab_dragging
+            .as_ref()
+            .filter(|drag| dragged.is_some() && drag.live.is_none())
+            .map(|drag| drag.tab_id)
+            .filter(|tab_id| {
+                self.tab_drag_pointer
+                    .picture
+                    .as_ref()
+                    .is_none_or(|(pictured, _)| pictured != tab_id)
+            });
         let sliding = self
             .tab_slides
             .iter()
@@ -256,7 +416,11 @@ impl App {
                 Some((index_of(slide.tab_id)?, slide.from * (1.0 - eased)))
             })
             .collect();
-        crate::renderer::TabDragVisual { dragged, sliding }
+        crate::renderer::TabDragVisual {
+            dragged,
+            sliding,
+            capture: self.tab_drag_pointer.requested.is_some(),
+        }
     }
 
     pub(super) fn apply_tab_drag_target(&mut self, target: usize) -> bool {
@@ -424,6 +588,89 @@ mod tests {
         app.launch.adopts_tab = true;
         app.init_tabs().unwrap();
         assert!(app.tabs.as_ref().unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_pointer_carries_the_tab_only_outside_the_window() {
+        assert_eq!(drag_pointer(false, false, true), DragPointer::Usual);
+        assert_eq!(drag_pointer(false, true, false), DragPointer::Usual);
+        assert_eq!(drag_pointer(true, false, true), DragPointer::Picture);
+        assert_eq!(drag_pointer(true, false, false), DragPointer::Grabbing);
+        assert_eq!(drag_pointer(true, true, true), DragPointer::NoDrop);
+    }
+
+    #[test]
+    fn the_picture_is_held_where_the_tab_was_grabbed() {
+        let picture = |origin| DraggedTabPicture {
+            rgba: vec![255; 100 * 30 * 4],
+            width: 100,
+            height: 30,
+            origin,
+        };
+        assert!(picture_cursor(picture((200, 4)), (240.7, 19.2)).is_some());
+        // Off the tab, the nearest edge holds it; a picture too large for a
+        // cursor gives none.
+        assert!(picture_cursor(picture((200, 4)), (10.0, 900.0)).is_some());
+        let huge = DraggedTabPicture {
+            rgba: vec![0; 4000 * 4],
+            width: 4000,
+            height: 1,
+            origin: (0, 0),
+        };
+        assert!(picture_cursor(huge, (0.0, 0.0)).is_none());
+    }
+
+    #[test]
+    fn a_dragged_tab_is_pictured_once() {
+        let mut app = App::new_headless(crate::config::Config::default()).unwrap();
+        let mut tabs = TabManager::new(
+            80,
+            24,
+            crate::config::ShellConfig::default(),
+            100,
+            1024 * 1024,
+        );
+        tabs.new_tab().unwrap();
+        tabs.new_tab().unwrap();
+        let tab_id = tabs.active_tab().unwrap().id;
+        app.tabs = Some(tabs);
+        let grab = TabGrab {
+            pressed_at: 150.0,
+            offset: 40.0,
+            pointer: 152.0,
+            moving: false,
+        };
+        app.tab_dragging = Some(TabDrag {
+            tab_id,
+            live: None,
+            grab: Some(grab),
+        });
+        let now = Instant::now();
+        // A press is not yet a drag.
+        assert!(!app.tab_drag_visual(now).capture);
+        app.tab_dragging.as_mut().unwrap().grab = Some(TabGrab {
+            moving: true,
+            ..grab
+        });
+        assert!(app.tab_drag_visual(now).capture);
+        // A frame that was not presented asks again.
+        app.keep_dragged_tab_picture(false);
+        assert!(app.tab_drag_visual(now).capture);
+        // A presented frame settles it, even without a picture to show.
+        app.keep_dragged_tab_picture(true);
+        assert!(matches!(
+            app.tab_drag_pointer.picture,
+            Some((pictured, TabPicture::Unavailable)) if pictured == tab_id
+        ));
+        assert!(!app.tab_drag_visual(now).capture);
+        // A live-domain tab cannot leave, so it is never pictured.
+        app.tab_drag_pointer.picture = None;
+        app.tab_dragging.as_mut().unwrap().live = Some(LiveDomainTabDrag {
+            domain_id: "domain".into(),
+            remote_tab_id: 1,
+            initial_index: 0,
+        });
+        assert!(!app.tab_drag_visual(now).capture);
     }
 
     #[test]

@@ -64,6 +64,14 @@ as the desktop, and it opens in a window of its own; a window's only tab stays
 put, since it already has a window. The tab keeps its place in its old window
 while the pointer is outside it.
 
+Outside its window the pointer carries a picture of the tab, held where you
+grabbed it, and turns back into the usual pointer when it returns or you
+release. The picture is copied from the frame that first drew the tab under
+the pointer, so it looks exactly like the tab. Where the display cannot be
+read back, or its pixels are wider than eight bits a channel, the pointer
+shows a closed hand instead. A live-domain tab shows the no-drop pointer,
+since it cannot leave.
+
 Windows must share a process, which new windows do by default
 ([joining the running Termeric](command-line.md#joining-the-running-termeric)).
 On Wayland no window knows where the others are, and the source window holds
