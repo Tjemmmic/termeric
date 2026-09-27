@@ -23,7 +23,7 @@ const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 const INSTRUCTIONS: &str = "Termeric is the terminal these agents run in. \
 list_agents shows every coding agent in Termeric with its state (working, needs_input, \
 finished, failed) and where it is: window_id, tab_id, and pane_id for an agent in a terminal, \
-or window_id and session_id for a Claude Code session in Termeric's agent view. \
+or window_id and session_id for a session in Termeric's agent view (Claude Code or Codex). \
 read_terminal reads a pane's recent screen and scrollback; read_conversation reads an agent \
 view session, ending with any approvals it waits for. send_to_agent gives an agent in a \
 terminal a prompt, as if typed and submitted; send_to_session gives an agent view session its \
@@ -327,7 +327,7 @@ fn tools() -> Value {
         {
             "name": "read_conversation",
             "title": "Read an agent view session",
-            "description": "The recent conversation of one agent view session, oldest first: the person's messages, Claude's answers, the tools it used, and last, each approval it waits for with its approval_id.",
+            "description": "The recent conversation of one agent view session, oldest first: the person's messages, the agent's answers, the tools it used, and last, each approval it waits for with its approval_id.",
             "inputSchema": session_schema(&[]),
             "annotations": {"readOnlyHint": true},
         },
