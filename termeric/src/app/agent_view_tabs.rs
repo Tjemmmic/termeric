@@ -194,16 +194,14 @@ impl App {
         self.request_agent_view_redraw();
     }
 
-    /// Starts a session ahead of the first message on a new-session page
-    /// that has the keyboard, so the agent's commands and models are ready.
-    /// A session started for another agent or folder ends first.
+    /// Starts a session ahead of the first message on an open new-session
+    /// page, so the agent's commands, models, and earlier conversations are
+    /// ready. It follows the page's agent and folder, including a `cd` in
+    /// the terminal beside it while the terminal has the keyboard: a
+    /// session started for another agent or folder ends first.
     pub(super) fn ensure_agent_view_warm_session(&mut self) {
         let state = &self.agent_view.state;
-        if !state.is_open()
-            || !state.has_keyboard()
-            || state.screen != Screen::NewSession
-            || state.tab.is_none()
-        {
+        if !state.is_open() || state.screen != Screen::NewSession || state.tab.is_none() {
             return;
         }
         let cwd = self.agent_view_new_session_info().cwd;
@@ -768,5 +766,40 @@ mod tests {
                 .iter()
                 .all(|past| past.id != "earlier-named")
         );
+    }
+
+    #[test]
+    fn the_session_started_ahead_follows_the_folder_while_the_terminal_types() {
+        if crate::agents::find_executable("python3").is_none() {
+            return;
+        }
+        let fake = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/agent_view/fake_claude.py");
+        let mut config = Config::default();
+        config.agents.insert(
+            "claude-code".into(),
+            crate::agents::AgentConfig {
+                program: Some(fake.display().to_string()),
+                env: [("FAKE_CLAUDE_DELAY".to_owned(), "0".to_owned())].into(),
+                ..Default::default()
+            },
+        );
+        let mut app = two_tabs(config);
+        // Open beside the terminal, which keeps the keyboard.
+        app.open_agent_view(false);
+        assert!(!app.agent_view.state.has_keyboard());
+        app.ensure_agent_view_warm_session();
+        let first = app
+            .agent_view
+            .state
+            .active
+            .expect("a session started ahead");
+        let folder = tempfile::tempdir().unwrap();
+        app.agent_view.state.new_session.cwd = Some(folder.path().to_path_buf());
+        app.ensure_agent_view_warm_session();
+        let second = app.agent_view.state.active.unwrap();
+        assert_ne!(first, second);
+        assert!(app.agent_view.session(first).is_none());
+        assert_eq!(app.agent_view.session(second).unwrap().cwd(), folder.path());
     }
 }

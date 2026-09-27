@@ -76,8 +76,10 @@ The **New session** page shows:
 Type what the agent should work on and press Enter. The permission and model
 chips under the message apply to the new session; choosing another agent
 resets them to that agent's defaults. The agent starts as soon as the page
-has the keyboard, so its commands and your account's models are listed before
-the first message; closing the panel before a message ends it. Codex opens
+opens, so its commands, your account's models, and its earlier conversations
+are listed before the first message. It follows the page's folder, including
+a `cd` in the terminal beside it, and closing the panel before a message ends
+it. Codex opens
 its conversation (a thread) only with the first message, so a session that
 never got one leaves nothing in Codex's history.
 
