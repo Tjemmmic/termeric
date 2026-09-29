@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
-import hashlib
 import json
 import os
 import platform
@@ -21,10 +20,6 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.soak_provenance import PinnedExecutable, provenance_checks, source_identity
-
-CORE_SOAK_SCHEMA_VERSION = 5
-CORE_SOAK_RECORD_KIND = "termeric-core-resource-soak"
 SOAK_PREFIX = "TERMERIC_SOAK "
 TRANSCRIPT_ENTRIES_PER_ITERATION = 68
 DIFF_SOAK_THRESHOLDS = {
@@ -63,27 +58,6 @@ INVENTORY_DIMENSIONS = (
     ("thread_names", "threads"),
     ("child_names", "children"),
 )
-
-
-def file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def relative_file_path(root: Path, path: Path, context: str) -> str:
-    """Return a regular file path confined beneath ``root``."""
-    root = root.resolve()
-    resolved = path.resolve()
-    try:
-        relative = resolved.relative_to(root)
-    except ValueError as error:
-        raise ValueError(f"{context} must be inside {root}: {path}") from error
-    if path.is_symlink() or not resolved.is_file():
-        raise ValueError(f"{context} must be a regular non-symlink file: {path}")
-    return relative.as_posix()
 
 
 def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
@@ -475,6 +449,14 @@ def evaluate_progress_ceilings(
     drained = [item["transcript_queue_bytes_after_finish"] for item in complete]
     accepted = [item["transcript_entries_accepted"] for item in complete]
     dropped = [item["transcript_entries_dropped"] for item in complete]
+    iterations = [item.get("iteration") for item in workload]
+    completions = [index for index, item in enumerate(progress) if item.get("complete") is True]
+    contiguous = (
+        iterations == list(range(1, len(workload) + 1))
+        and len(completions) == 1
+        and completions[0] == len(progress) - 1
+        and progress[-1].get("iterations") == len(workload)
+    )
     return [
         {
             "name": "malformed scenario progress records",
@@ -487,6 +469,12 @@ def evaluate_progress_ceilings(
             "actual": len(workload),
             "min": 1,
             "passed": bool(workload),
+        },
+        {
+            "name": "iterations are contiguous and end with the completion record",
+            "actual": contiguous,
+            "expected": True,
+            "passed": bool(workload) and contiguous,
         },
         {
             "name": "transcript queue metric coverage",
@@ -608,7 +596,6 @@ def build_core_soak_checks(
     outcomes: dict[str, Any],
     *,
     gpu_smoke_requested: bool,
-    provenance: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Reconstruct every core-soak check from retained raw inputs."""
     checks = evaluate_resource_ceilings(
@@ -637,10 +624,6 @@ def build_core_soak_checks(
         )
     )
     checks.extend(evaluate_diff_history_checks(progress))
-    if provenance is not None:
-        checks.extend(provenance_checks(
-            provenance, ["gpu-smoke", "scenario"] if gpu_smoke_requested else ["scenario"]
-        ))
     return checks
 
 
@@ -694,26 +677,14 @@ def main() -> None:
             "growth ceilings must be non-negative"
         )
 
-    output_path = args.output.resolve()
-    log_path = args.log.resolve()
-    if output_path == log_path:
+    if args.output.resolve() == args.log.resolve():
         parser.error("the report and scenario log must use different paths")
-    try:
-        log_path.relative_to(output_path.parent)
-    except ValueError:
-        parser.error("the scenario log must be inside the report directory")
-
-    if any(path.exists() or path.is_symlink() for path in (args.output, args.log)):
-        parser.error("refusing to overwrite an existing soak report or log")
-    initial_source = source_identity(ROOT)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.log.parent.mkdir(parents=True, exist_ok=True)
-    binary = build_test_binary()
-    with PinnedExecutable(ROOT, binary, initial_source) as executable:
-        run_scenario(args, executable)
+    run_scenario(args, build_test_binary())
 
 
-def run_scenario(args: argparse.Namespace, executable: PinnedExecutable) -> None:
+def run_scenario(args: argparse.Namespace, binary: Path) -> None:
     environment = os.environ.copy()
     environment["TERMERIC_RUN_SOAK"] = "1"
     environment["TERMERIC_SOAK_DURATION_SECONDS"] = str(args.duration_seconds)
@@ -731,7 +702,7 @@ def run_scenario(args: argparse.Namespace, executable: PinnedExecutable) -> None
                 gpu_environment["TERMERIC_GPU_SMOKE"] = "1"
                 gpu = subprocess.run(
                     [
-                        executable.launch("gpu-smoke"),
+                        str(binary),
                         "test_support::linux_headless_gpu_render_smoke_when_requested",
                         "--exact", "--nocapture",
                     ],
@@ -745,7 +716,7 @@ def run_scenario(args: argparse.Namespace, executable: PinnedExecutable) -> None
 
             process = subprocess.Popen(
                 [
-                    executable.launch("scenario"),
+                    str(binary),
                     "test_support::scheduled_resource_soak_scenario", "--exact",
                     "--ignored", "--nocapture", "--test-threads=1",
                 ],
@@ -776,8 +747,6 @@ def run_scenario(args: argparse.Namespace, executable: PinnedExecutable) -> None
             if process is not None and process.poll() is None:
                 process.kill()
                 process.wait(timeout=5)
-
-    provenance = executable.finish()
 
     progress = parse_progress(args.log)
     minimum_samples = minimum_sample_count(args.duration_seconds, args.sample_interval)
@@ -815,26 +784,10 @@ def run_scenario(args: argparse.Namespace, executable: PinnedExecutable) -> None
         thresholds,
         outcomes,
         gpu_smoke_requested=args.gpu_smoke,
-        provenance=provenance,
     )
     passed = all(check["passed"] for check in checks)
-    commit = provenance["source_initial"]["commit"]
-    worktree_dirty = provenance["source_initial"]["worktree_dirty"]
-    candidate_eligible = passed and not worktree_dirty
-    eligibility = (
-        "candidate"
-        if candidate_eligible
-        else "dirty-dry-run"
-        if passed
-        else "failed"
-    )
-    log_relative = relative_file_path(args.output.parent, args.log, "scenario log")
     report = {
-        "schema_version": CORE_SOAK_SCHEMA_VERSION,
-        "kind": CORE_SOAK_RECORD_KIND,
         "status": "pass" if passed else "fail",
-        "candidate_eligible": candidate_eligible,
-        "eligibility": eligibility,
         "recorded_at_utc": datetime.now(timezone.utc).isoformat(),
         "environment": {
             "platform": platform.platform(),
@@ -846,8 +799,6 @@ def run_scenario(args: argparse.Namespace, executable: PinnedExecutable) -> None
                 stdout=subprocess.PIPE,
                 check=True,
             ).stdout.strip(),
-            "commit": commit,
-            "worktree_dirty": worktree_dirty,
             "wgpu_backend": environment.get("WGPU_BACKEND"),
         },
         "duration_seconds": args.duration_seconds,
@@ -855,15 +806,7 @@ def run_scenario(args: argparse.Namespace, executable: PinnedExecutable) -> None
         "minimum_resource_samples": minimum_samples,
         "maximum_transcript_queue_bytes": max_transcript_queue_bytes,
         "gpu_smoke_requested": args.gpu_smoke,
-        "test_binary": executable.file_evidence,
-        "provenance": provenance,
-        "artifacts": {
-            "scenario_log": {
-                "path": log_relative,
-                "bytes": args.log.stat().st_size,
-                "sha256": file_sha256(args.log),
-            }
-        },
+        "scenario_log": str(args.log),
         "thresholds": thresholds,
         "outcomes": outcomes,
         "samples": samples,

@@ -94,10 +94,22 @@ def paste_private(gui, app, text):
             source.stderr.close()
 
 
+def geometry_transitions(records, owner, start):
+    """Distinct PTY sizes the owner went through from record index `start` on."""
+    sizes = []
+    for record in records[start:]:
+        if record.get("pid") == owner and record.get("event") in ("started", "winsize"):
+            size = tuple(int(record[key]) for key in ("rows", "cols", "pixel_width", "pixel_height"))
+            if not sizes or sizes[-1] != size:
+                sizes.append(size)
+    return sizes
+
+
 def run_settings_input_checks(gui, app, transcript, owner):
-    report = {"schema": 2, "backend": "wayland", "cases": [],
-              "coverage": "private Settings clipboard/Unicode/pointer/keyboard routing and font-size effect; not visual or native IME evidence"}
+    report = {"backend": "wayland", "cases": []}
     records = lambda: gui.read_records(transcript)
+    baseline = None
+    font_changes_before = app.log_count("Font size set to ")
     try:
         app.renderer_resize("wayland", *SURFACE)
         with native_keyboard_lifetime(gui, app, "wayland", duration_ms=120000):
@@ -108,6 +120,11 @@ def run_settings_input_checks(gui, app, transcript, owner):
                 gui.wait_until(begin, lambda: gui.pids_receiving_token(records(), begin.encode()) == {owner})
                 before = gui.input_streams(records())
                 geometry = gui.latest_terminal_geometry(records(), owner)
+                if baseline is None:
+                    baseline = geometry
+                elif geometry != baseline:
+                    raise gui.AcceptanceError(f"{name}: Settings case started from a different geometry")
+                start_index = len(records())
                 loss = app.log_count("Window focus changed: false")
                 log_offset = app.log_path.stat().st_size
                 app.wayland_chord(("ctrl",), "comma")
@@ -150,15 +167,18 @@ def run_settings_input_checks(gui, app, transcript, owner):
                         "larger": larger, "restored": gui.latest_terminal_geometry(records(), owner),
                         "actual_hex": {str(pid): data.hex() for pid, data in delta.items() if data},
                         "font_changes": observed_font_changes(app, log_offset),
-                        "unrelated_focus_losses": app.log_count("Window focus changed: false") - loss,
-                        "log_range": [log_offset, app.log_path.stat().st_size]}
+                        "unrelated_focus_losses": app.log_count("Window focus changed: false") - loss}
                 report["cases"].append(case)
                 verify_settings_delivery(delta, owner, fence)
                 if case["font_changes"] != expected_changes:
                     raise gui.AcceptanceError("Settings case applied an extra font-size change")
                 if case["unrelated_focus_losses"] != 0:
-                    raise gui.AcceptanceError("unrelated focus loss invalidated Settings evidence")
+                    raise gui.AcceptanceError("unrelated focus loss during a Settings case")
+                if geometry_transitions(records(), owner, start_index) not in ([larger, geometry], [geometry, larger, geometry]):
+                    raise gui.AcceptanceError(f"{name}: PTY went through intermediate sizes")
             report.pop("active_case")
+            if app.log_count("Font size set to ") - font_changes_before != 2 * len(CASES):
+                raise gui.AcceptanceError("font size changed outside the Settings cases")
     except Exception as error:
         report["error"] = str(error)
         raise

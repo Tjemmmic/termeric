@@ -55,17 +55,15 @@ WGPU_BACKEND=vulkan python3 scripts/run_soak.py \
   --duration-seconds 30 --gpu-smoke \
   --output target/soak/local.json \
   --log target/soak/local.log
-python3 scripts/validate_soak.py target/soak/local.json --source .
 ```
 
-The weekly `Extended checks` workflow runs it for ten minutes. For a release candidate, run at least that lane on the exact candidate and retain both files:
+The weekly `Extended checks` workflow runs it for ten minutes. To reproduce it locally:
 
 ```bash
 WGPU_BACKEND=vulkan python3 scripts/run_soak.py \
   --duration-seconds 600 --gpu-smoke \
   --output target/soak/release.json \
   --log target/soak/release.log
-python3 scripts/validate_soak.py target/soak/release.json --source .
 ```
 
 For an offscreen Mesa GL run on a host where the default GL enumeration exposes only a hardware adapter, explicitly select software rendering:
@@ -79,9 +77,7 @@ LIBGL_ALWAYS_SOFTWARE=true WGPU_BACKEND=gl python3 scripts/run_soak.py \
 
 This combination passed the offscreen smoke on llvmpipe on the current Arch host. `WGPU_BACKEND=gl` alone exposed only its Radeon adapter and failed the software-only test. Retain such failures; a later successful probe must not be spliced into an earlier failed record. No desktop window is created by this core/offscreen lane, and the environment selection is scoped to that command.
 
-The log must be inside the report directory because the schema records its confined relative path, exact byte length, and SHA-256 digest. The independent validator rejects missing or unknown fields, unsafe or symlinked paths, non-finite/type-confused values, altered log or binary contents, candidate identity drift, malformed samples/progress, non-reconciling inventories, and any stored summary or check that differs from a fresh reconstruction. CI runs this command after the ten-minute soak, even if the runner failed, before uploading the evidence bundle.
-
-A passing run from a dirty worktree is deliberately classified as a `dirty-dry-run` and the validator rejects it by default. Use `--allow-ineligible` only to inspect an internally consistent dirty or failed diagnostic record; that flag cannot turn it into candidate evidence.
+The runner writes the report and log, prints each check, and exits non-zero if any ceiling is breached. CI uploads both even when a ceiling fails.
 
 ## Displayed Wayland process soak
 
@@ -89,75 +85,55 @@ The native fixture continuously emits styled ASCII, CJK, combining marks, emoji-
 
 For every sample, the runner scans the bounded application process tree's `/proc/<pid>/fdinfo/<fd>` files. It follows the Linux kernel's [DRM client usage-statistics contract](https://docs.kernel.org/gpu/drm-usage-stats.html): `drm-client-id` plus `drm-pdev` prevent shared descriptors from being counted twice, `drm-total-<region>` records requested buffers, and `drm-resident-<region>` records instantiated backing storage. The deprecated AMDGPU `drm-memory-<region>` alias is accepted only as resident memory and never added to a simultaneous `drm-resident-*` value. Engine cycle counters are not memory. Drivers may omit these optional kernel fields, so each sample records a bounded explicit unavailable reason instead of inventing a zero.
 
-Run the 30-second change lane after building the application:
+Run a 30-second displayed soak after building the application:
 
 ```bash
 cargo build -p termeric --locked
 WGPU_BACKEND=gl python3 scripts/run_native_gui_soak.py \
   --duration-seconds 30 \
-  --require-clean \
   --binary target/debug/termeric \
   --artifacts target/native-gui-soak
-python3 scripts/validate_native_gui_soak.py \
-  target/native-gui-soak/results.json --source .
 ```
 
-The artifact destination must be new or empty; the runner refuses to delete or mix existing evidence. Use a distinct directory for every run.
+The artifact destination must be new or empty; the runner refuses to mix results from an earlier run. Use a distinct directory for every run.
 
 Ordinary software-rendered CI permits all GPU-memory samples to be explicitly unavailable. For a vendor-GPU run where the driver is expected to export DRM memory, require complete coverage and retain a separate bundle:
 
 ```bash
 WGPU_BACKEND=vulkan python3 scripts/run_native_gui_soak.py \
   --duration-seconds 600 \
-  --require-clean \
   --require-gpu-memory \
   --binary target/debug/termeric \
   --artifacts target/native-gui-soak-vendor
-python3 scripts/validate_native_gui_soak.py \
-  target/native-gui-soak-vendor/results.json --source .
 ```
 
 `--max-gpu-resident-mib` and `--max-gpu-resident-growth-mib` tighten the default 1024 MiB peak and 256 MiB first-to-last-quartile resident-memory rails. The required mode fails if any sample is unavailable or if availability changes during a run. A driver that exposes total but not resident memory still records the total exactly; resident peak/growth remain explicitly absent rather than being inferred.
 
 The weekly `Extended checks` workflow runs both the core scenario above and this displayed scenario for ten minutes. Native defaults allow 768 MiB peak RSS, 192 MiB first-to-last-quartile RSS growth, eight threads and sixteen file descriptors of growth, and eight concurrent direct children. The report also requires continuous PTY progress, enough resize/pane actions for the configured duration, zero runtime/GPU validation errors, a normal application exit, and complete child cleanup. Resize and pane-churn counts have independent minimums; one workload cannot compensate for the other in the aggregate action count. These are broad regression rails, not expected steady-state consumption targets.
 
-The schema-6 native report records UTC time, candidate commit, explicit worktree-dirty and eligibility state, a source-relative tested binary with byte length and SHA-256, backend/compositor/WGPU identity, every raw process sample, reconstructable exit/driver/cleanup/workload outcomes, resource-category summaries, per-client/per-region DRM memory snapshots and their derived summary, explicit thresholds, and individual results. Every regular file beside `results.json` is listed in an exact sorted manifest with byte length and SHA-256. The validator rejects extra, missing, altered, symlinked, special, or unsafe-path artifacts; it re-derives PTY progress and exact Kitty acknowledgements from the transcript, runtime errors from the application log, threshold formulas from the run parameters, and every summary/check from raw inputs. Run the pure regression and validator detectors with:
+The native report records UTC time, backend/compositor/WGPU identity, every raw process sample, exit/driver/cleanup/workload outcomes, resource summaries, DRM memory snapshots and their summary, thresholds, and each check. A missing application log fails the run rather than reading as an empty, error-free log. Run the regression detectors with:
 
 ```bash
-python3 -m unittest scripts.test_drm_memory \
-  scripts.test_run_native_gui_soak \
-  scripts.test_validate_native_gui_soak
+python3 -m unittest scripts.test_drm_memory scripts.test_run_native_gui_soak
 ```
-
-Pass `--require-clean` for candidate or CI evidence. The runner captures Git provenance before it creates artifacts and refuses to launch the compositor when that mode sees a dirty worktree. A report with a missing or true `environment.worktree_dirty` value is implementation evidence, not a clean-candidate record.
-
-The native manifest permits at most 512 files, 128 MiB per file, and 256 MiB in aggregate. Those limits cover current ten-minute software-renderer logs and driver caches while bounding validation work. A dirty or failed but internally consistent bundle can be inspected with `--allow-ineligible`; it remains ineligible. The report cannot hash itself, and CI does not include the tested binary inside the bundle, so detached signing and portable binary provenance remain future work.
 
 Defaults are intentionally broad host-independent safety rails: 512 MiB peak RSS, 128 MiB first-to-last RSS growth, four threads of growth, eight file descriptors of growth, no more than 16 concurrent direct children, at most 2 MiB of transcript backlog, no dropped transcript entries, complete queue drainage, no surviving observed children, successful scenario/GPU exit, a completion marker, and no recognized GPU validation/device-loss message. The first and last quartiles are compared by median so process startup and one noisy sample do not define the growth result. Tighten these budgets only with repeated artifacts from the same class of runner; do not hide a regression by raising them without an investigation.
 
-The schema-5 core runner JSON records UTC time, commit plus dirty-worktree disclosure, explicit pass/eligibility state, WGPU backend, a source-relative test-binary path with byte length and SHA-256, every raw sample, reconstructable terminal outcomes, scenario progress, resource-category summaries, explicit thresholds, and each pass/fail result. The companion log contains the Rust test output and optional headless GPU smoke and is itself sealed into the JSON. CI uploads both even when a ceiling fails. A dirty local report is implementation evidence, not an exact candidate record even when its commit field matches the candidate branch.
+The core runner JSON records UTC time, WGPU backend, pass/fail status, every raw sample, terminal outcomes, scenario progress (which must be contiguous and end with one completion record), resource summaries, thresholds, and each check. The companion log holds the Rust test output and the optional headless GPU smoke. CI uploads both even when a ceiling fails.
 
 ## Regression-detector tests
 
 The ceiling evaluator has deliberate flat, file-descriptor leak, RSS leak, thread leak, excessive transcript backlog, incomplete drain, dropped-entry, missing-queue-metric, malformed inventory, mismatched inventory, category classification, label-sanitization/cardinality, and category-summary fixtures. A synthetic multi-thread `/proc` tree separately proves that children of non-leader threads are included exactly once:
 
 ```bash
-python3 -m unittest scripts.test_run_soak scripts.test_validate_soak \
-  scripts.test_run_native_gui_soak scripts.test_validate_native_gui_soak \
-  scripts.test_soak_provenance
+python3 -m unittest scripts.test_run_soak scripts.test_run_native_gui_soak
 ```
 
-The validator tests deliberately alter samples, thresholds, outcomes, stored checks, summaries, binary/log bytes, paths, numeric types, and source identity. They establish fail-closed record handling; they are not performance runs.
-
-Launch-provenance fixtures additionally exercise the actual core/native report paths with private fake processes, source changes during build and run, clean-to-dirty transitions, rebuilds between GPU and scenario launches, replacement and restoration of executable paths, launch failure, timeout, interruption, and descriptor cleanup. A harmless real Python-interpreter fixture proves Linux executes the pinned bytes after pathname replacement without inheriting the runner's descriptor. Native-runner fixtures never start a compositor or GUI. CI's ordinary quality lane includes both validators and these fixtures; native acceptance remains a separate deferred lane.
+`scripts.test_run_soak` also drives the runner with a fake scenario to cover a clean pass, launch failure, interruption, timeout, a GPU-smoke timeout, and a transient `/proc` sample.
 
 The ten-minute headless and displayed soaks run in the weekly `Extended checks` workflow (`.github/workflows/extended.yml`), which can also be started by hand.
 
 These tests prove the evaluator rejects the relevant monotonic-growth shapes; they do not intentionally leak resources from the test runner process.
-
-### Evidence portability boundary
-
-The validator intentionally binds a report to the exact Git checkout and test binary that produced it. Validate before the build tree is cleaned and retain the JSON plus its scenario log. The ordinary CI upload does not include the often-large test executable, so a downloaded JSON/log pair preserves the recorded candidate identity and log integrity but cannot, by itself, re-prove the binary bytes on another host. Portable binary bundling or signed provenance is future work. The schema-6 displayed/native report uses its own manifest validator rather than `validate_soak.py`.
 
 ## Evidence and limitations
 

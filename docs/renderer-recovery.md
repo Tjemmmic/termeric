@@ -58,12 +58,8 @@ env -u WLR_RENDERER -u LIBGL_ALWAYS_SOFTWARE WGPU_BACKEND=gl \
   --scenario interaction --scenario fullscreen --start-sway \
   --skip-visual-checks --font-family 'Noto Sans Mono' \
   --force-surface-loss --force-surface-outdated --force-device-loss \
-  --require-clean --binary target/release/termeric \
+  --binary target/release/termeric \
   --artifacts /tmp/termeric-wayland-recovery-6ab38bf-release
-python3 scripts/gui_palette_evidence.py \
-  /tmp/termeric-wayland-recovery-6ab38bf-release/results.json
-python3 scripts/gui_settings_evidence.py \
-  /tmp/termeric-wayland-recovery-6ab38bf-release/results.json
 ```
 
 No user desktop or real provider was exercised. This does not establish X11, pixel-perfect visuals, native IME/Orca, physical device removal, or real-desktop policy. Xvfb and Openbox were unavailable on this host, so the X11 lane was not run or replaced by this Wayland result. The [operator prerequisites](operator-acceptance.md#arch-linux) now also include the default DejaVu primary-font package that was missing from the Arch command. Local `/tmp` bundles are not published or signed artifacts, and the GUI [provenance boundary](gui-acceptance.md) still applies.

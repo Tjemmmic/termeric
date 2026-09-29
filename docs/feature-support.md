@@ -30,7 +30,7 @@ Termeric is therefore a **Linux developer preview**, not a general beta or a cro
 
 Local source `7df2d38` now also passes private-Sway interaction with all three renderer-fault injections, two-window fullscreen isolation, and the software-GPU pixel/readback and unchanged visual-signature checks. These refresh the local technical evidence only: X11, hosted CI, vendor-GPU, and operator acceptance are not promoted. Exact environment, hashes, artifacts, and provenance limits are recorded in [the local GUI evidence](gui-acceptance.md#local-software-renderer-evidence-at-7df2d38).
 
-Native GUI CI now requests clean-candidate provenance: direct harness launches use one pinned executable, and observed source/binary drift or incomplete selected scenarios prevents a successful schema-4 result. Debug runs remain available without that guarantee. This strengthens evidence collection, not platform promotion; see [the provenance limits](gui-acceptance.md#clean-candidate-mode).
+The native GUI scenarios run in the weekly `Extended checks` workflow; see [GUI acceptance](gui-acceptance.md).
 
 An automated tab-placement scenario now checks top/left/top geometry across active/inactive tabs and split panes, original PTY retention, and F6 selection/new/close routing. Both native CI paths select it; X11 execution, hosted results, overflow, drag, IME, and visual acceptance are not inferred from that wiring. See [tab-placement acceptance](gui-acceptance.md#tab-placement-geometry-and-keyboard-lane).
 

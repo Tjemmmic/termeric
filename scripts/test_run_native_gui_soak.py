@@ -1,6 +1,4 @@
 import base64
-import hashlib
-import os
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -9,19 +7,15 @@ from tempfile import TemporaryDirectory
 from scripts.run_native_gui_soak import (
     AcceptanceError,
     MAX_DRIVER_ERROR_CHARACTERS,
-    NATIVE_SOAK_SCHEMA_VERSION,
     bounded_driver_error,
     bounded_process_tree_pids,
     build_native_soak_checks,
     evaluate_native_checks,
     fixture_arguments,
-    git_provenance,
     kitty_image_ack_count,
-    native_artifact_manifest,
     perform_until,
     prepare_artifact_directory,
     progress_count,
-    require_clean_candidate,
     runtime_error_count,
 )
 from scripts.drm_memory import aggregate_drm_fdinfos
@@ -46,9 +40,6 @@ def sample(index: int, *, rss_kib: float = 200_000, fds: int = 30) -> dict:
 
 
 class NativeGuiSoakTests(unittest.TestCase):
-    def test_report_schema_is_versioned_for_drm_memory(self) -> None:
-        self.assertEqual(NATIVE_SOAK_SCHEMA_VERSION, 6)
-
     def evaluate(self, samples: list[dict], **overrides: object) -> list[dict]:
         arguments = {
             "max_rss_kib": 500_000,
@@ -190,29 +181,6 @@ class NativeGuiSoakTests(unittest.TestCase):
         )
         self.assertEqual(runtime_error_count("ordinary warning\n"), 0)
 
-    def test_git_provenance_records_commit_and_dirty_state(self) -> None:
-        clean = mock.Mock(stdout="a" * 40 + "\n")
-        dirty = mock.Mock(stdout=" M scripts/run_native_gui_soak.py\n")
-        with mock.patch(
-            "scripts.run_native_gui_soak.subprocess.run",
-            side_effect=[clean, dirty],
-        ) as run:
-            self.assertEqual(
-                git_provenance(),
-                {"commit": "a" * 40, "worktree_dirty": True},
-            )
-        self.assertEqual(run.call_count, 2)
-        self.assertEqual(
-            run.call_args_list[1].args[0],
-            ["git", "status", "--porcelain=v1", "--untracked-files=all"],
-        )
-
-    def test_clean_candidate_mode_rejects_only_dirty_evidence(self) -> None:
-        require_clean_candidate({"worktree_dirty": False}, True)
-        require_clean_candidate({"worktree_dirty": True}, False)
-        with self.assertRaisesRegex(AcceptanceError, "dirty worktree"):
-            require_clean_candidate({"worktree_dirty": True}, True)
-
     def test_progress_and_fixture_contract(self) -> None:
         records = [
             {"event": "started"},
@@ -270,56 +238,17 @@ class NativeGuiSoakTests(unittest.TestCase):
         self.assertFalse(checks[-1]["passed"])
         self.assertEqual(checks[-1]["actual"], error)
 
-    def test_artifact_destination_must_be_empty_and_manifest_is_exact(self) -> None:
+
+
+
+
+    def test_artifact_destination_must_be_new_or_empty(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory) / "bundle"
             prepare_artifact_directory(root)
-            (root / "nested").mkdir()
-            artifact = root / "nested" / "log.txt"
-            artifact.write_text("evidence", encoding="utf-8")
-            self.assertEqual(
-                native_artifact_manifest(root),
-                [
-                    {
-                        "path": "nested/log.txt",
-                        "bytes": 8,
-                        "sha256": hashlib.sha256(b"evidence").hexdigest(),
-                    }
-                ],
-            )
+            (root / "stale.log").write_text("old run", encoding="utf-8")
             with self.assertRaisesRegex(AcceptanceError, "non-empty"):
                 prepare_artifact_directory(root)
-            symlink = root / "linked.log"
-            symlink.symlink_to(artifact)
-            with self.assertRaisesRegex(AcceptanceError, "symlink"):
-                native_artifact_manifest(root)
-            symlink.unlink()
-            if hasattr(os, "mkfifo"):
-                os.mkfifo(root / "special-pipe")
-                with self.assertRaisesRegex(AcceptanceError, "regular file"):
-                    native_artifact_manifest(root)
-
-    def test_artifact_manifest_enforces_file_count_and_byte_limits(self) -> None:
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "one").write_bytes(b"1234")
-            (root / "two").write_bytes(b"5678")
-            with mock.patch(
-                "scripts.run_native_gui_soak.MAX_NATIVE_SOAK_ARTIFACT_BYTES", 3
-            ):
-                with self.assertRaisesRegex(AcceptanceError, "byte limit"):
-                    native_artifact_manifest(root)
-            with mock.patch(
-                "scripts.run_native_gui_soak.MAX_NATIVE_SOAK_TOTAL_ARTIFACT_BYTES",
-                7,
-            ):
-                with self.assertRaisesRegex(AcceptanceError, "bundle exceeds"):
-                    native_artifact_manifest(root)
-            with mock.patch(
-                "scripts.run_native_gui_soak.MAX_NATIVE_SOAK_ARTIFACTS", 1
-            ):
-                with self.assertRaisesRegex(AcceptanceError, "too many"):
-                    native_artifact_manifest(root)
 
 
 if __name__ == "__main__":

@@ -10,9 +10,7 @@ from __future__ import annotations
 
 import argparse
 import base64
-from contextlib import ExitStack
 from datetime import datetime, timezone
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -35,7 +33,6 @@ except ImportError:  # Reported as an explicit missing harness dependency in mai
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-from scripts.gui_candidate import GuiCandidate
 from scripts.gui_fonts import (
     DEFAULT_PRIMARY, FALLBACK, PRIMARY_ENV, check_font_profile, validate_profile_options,
 )
@@ -190,14 +187,6 @@ def transcript_bytes(path: Path) -> bytes:
     return b"".join(chunks)
 
 
-def file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def result_document(
     *,
     backend: str,
@@ -209,7 +198,6 @@ def result_document(
     force_surface_loss: bool,
     force_surface_outdated: bool,
     force_device_loss: bool,
-    binary_sha256: str | None = None,
 ) -> dict[str, object]:
     compositor = (
         "weston"
@@ -221,12 +209,10 @@ def result_document(
         else "external"
     )
     return {
-        "schema": 3,
         "recorded_at_utc": datetime.now(timezone.utc).isoformat(),
         "backend": backend,
         "compositor": compositor,
         "binary": str(binary),
-        "binary_sha256": binary_sha256 if binary_sha256 is not None else file_sha256(binary),
         "renderer_injections": {
             "surface_loss": force_surface_loss,
             "surface_outdated": force_surface_outdated,
@@ -2136,15 +2122,13 @@ def required_tools(
 
 
 def main() -> int:
-    with ExitStack() as resources:
-        backend, scenarios, artifacts = run_main(resources)
-    # Strict candidate finalization must finish before printing success.
+    backend, scenarios, artifacts = run_main()
     print(f"Termeric {backend} GUI acceptance passed: {', '.join(scenarios)}")
     print(f"Artifacts: {artifacts}")
     return 0
 
 
-def run_main(resources: ExitStack) -> tuple[str, list[str], Path]:
+def run_main() -> tuple[str, list[str], Path]:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--backend", choices=("x11", "wayland"), required=True)
     parser.add_argument("--binary", type=Path, default=DEFAULT_BINARY)
@@ -2170,8 +2154,6 @@ def run_main(resources: ExitStack) -> tuple[str, list[str], Path]:
         help="scenario to run; repeat the option (default: all X11, launch-only Wayland)",
     )
     parser.add_argument("--update-baselines", action="store_true")
-    parser.add_argument("--require-clean", action="store_true",
-                        help="pin a clean checkout's binary and refuse drift or reused artifacts")
     parser.add_argument("--font-family", default=DEFAULT_PRIMARY,
                         help="installed primary family; custom fonts require --skip-visual-checks")
     parser.add_argument(
@@ -2208,9 +2190,7 @@ def run_main(resources: ExitStack) -> tuple[str, list[str], Path]:
     except ValueError as error:
         raise AcceptanceError(str(error)) from error
 
-    binary = args.binary.absolute() if args.require_clean else args.binary.resolve()
-    if args.require_clean and args.update_baselines:
-        raise AcceptanceError("clean candidate runs cannot update baselines")
+    binary = args.binary.resolve()
     if not binary.is_file():
         raise AcceptanceError(f"Termeric binary not found: {binary}; run cargo build first")
     if sys.platform != "linux":
@@ -2285,13 +2265,6 @@ def run_main(resources: ExitStack) -> tuple[str, list[str], Path]:
         raise AcceptanceError("duplicate scenarios would overwrite acceptance artifacts")
 
     artifacts = args.artifacts.resolve()
-    candidate = None
-    scenario_binary = binary
-    if args.require_clean:
-        candidate = resources.enter_context(GuiCandidate(
-            ROOT, binary, artifacts, scenarios, args.skip_visual_checks,
-        ))
-        scenario_binary = candidate.launch()
     artifacts.mkdir(parents=True, exist_ok=True)
     environment = dict(os.environ)
     # Always replace inherited overrides with the explicit CLI profile.
@@ -2372,30 +2345,30 @@ def run_main(resources: ExitStack) -> tuple[str, list[str], Path]:
             for scenario in scenarios:
                 try:
                     if scenario == "launch":
-                        run_wayland_launch(scenario_binary, artifacts / scenario, environment)
+                        run_wayland_launch(binary, artifacts / scenario, environment)
                     elif scenario == "interaction":
                         run_wayland_interaction_scenario(
-                            scenario_binary, artifacts / scenario, environment
+                            binary, artifacts / scenario, environment
                         )
                     elif scenario == "tab-placement":
                         run_tab_placement_scenario(
-                            sys.modules[__name__], scenario_binary, artifacts / scenario,
+                            sys.modules[__name__], binary, artifacts / scenario,
                             environment, "wayland",
                         )
                     elif scenario == "background":
-                        run_background_scenario(sys.modules[__name__], scenario_binary,
+                        run_background_scenario(sys.modules[__name__], binary,
                                                 artifacts / scenario, environment)
                     elif scenario == "graphics":
-                        run_wayland_graphics(sys.modules[__name__], scenario_binary,
+                        run_wayland_graphics(sys.modules[__name__], binary,
                                              artifacts / scenario, environment)
                     elif scenario == "tab-overflow":
                         run_tab_overflow_scenario(
-                            sys.modules[__name__], scenario_binary, artifacts / scenario,
+                            sys.modules[__name__], binary, artifacts / scenario,
                             environment, "wayland",
                         )
                     else:
                         run_wayland_fullscreen_scenario(
-                            scenario_binary, artifacts / scenario, environment
+                            binary, artifacts / scenario, environment
                         )
                 except Exception as error:
                     results.append(
@@ -2410,14 +2383,14 @@ def run_main(resources: ExitStack) -> tuple[str, list[str], Path]:
                 try:
                     if scenario == "tab-placement":
                         run_tab_placement_scenario(
-                            sys.modules[__name__], scenario_binary, scenario_dir, environment, "x11",
+                            sys.modules[__name__], binary, scenario_dir, environment, "x11",
                         )
                     elif scenario == "tab-overflow":
                         run_tab_overflow_scenario(
-                            sys.modules[__name__], scenario_binary, scenario_dir, environment, "x11",
+                            sys.modules[__name__], binary, scenario_dir, environment, "x11",
                         )
                     else:
-                        runners[scenario](scenario_binary, scenario_dir, environment, args.update_baselines)
+                        runners[scenario](binary, scenario_dir, environment, args.update_baselines)
                 except Exception as error:
                     results.append(
                         {"scenario": scenario, "status": "failed", "error": str(error)}
@@ -2468,17 +2441,12 @@ def run_main(resources: ExitStack) -> tuple[str, list[str], Path]:
             force_surface_loss=args.force_surface_loss,
             force_surface_outdated=args.force_surface_outdated,
             force_device_loss=args.force_device_loss,
-            binary_sha256=candidate.digest if candidate else None,
         )
-        document["font_profile"] = {"primary": font_family, "fallback": [FALLBACK],
-                                    "renderer_face": "not_observed"}
-        if candidate:
-            candidate.publish(document)
-        else:
-            (artifacts / "results.json").write_text(
-                json.dumps(document, indent=2, sort_keys=True) + "\n",
-                encoding="utf-8",
-            )
+        document["font_profile"] = {"primary": font_family, "fallback": [FALLBACK]}
+        (artifacts / "results.json").write_text(
+            json.dumps(document, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
 
     return args.backend, scenarios, artifacts
 

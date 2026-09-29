@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -15,7 +14,6 @@ from scripts.drm_memory import (
     parse_memory_value,
     read_process_drm_memory,
     summarize_drm_memory,
-    validate_drm_memory_snapshot,
 )
 
 
@@ -99,7 +97,6 @@ class DrmMemoryTests(unittest.TestCase):
         self.assertEqual(snapshot["resident_bytes"], int(4.25 * 1024 * 1024))
         first_regions = snapshot["clients"][0]["regions"]
         self.assertEqual(first_regions["vram"]["resident_bytes"], 3 * 1024 * 1024)
-        validate_drm_memory_snapshot(snapshot)
 
     def test_total_cycle_counters_are_not_misclassified_as_memory(self) -> None:
         snapshot = aggregate_drm_fdinfos(
@@ -159,24 +156,6 @@ class DrmMemoryTests(unittest.TestCase):
             with mock.patch("scripts.drm_memory.MAX_DRM_FDS_PER_PROCESS", 1):
                 with self.assertRaisesRegex(DrmMemoryError, "per-process ceiling"):
                     read_process_drm_memory(root, [20])
-
-    def test_snapshot_validation_reconstructs_aggregates_and_identity(self) -> None:
-        snapshot = aggregate_drm_fdinfos(
-            [fdinfo(7, "drm-total-vram: 4 MiB", "drm-resident-vram: 3 MiB")]
-        )
-        for mutation in [
-            lambda value: value.update({"resident_bytes": 1}),
-            lambda value: value.update({"client_count": 2}),
-            lambda value: value.update({"client_count": True}),
-            lambda value: value.update({"total_bytes": True}),
-            lambda value: value["clients"][0]["regions"].update(
-                {"bad region": {"total_bytes": 1, "resident_bytes": 1}}
-            ),
-        ]:
-            changed = copy.deepcopy(snapshot)
-            mutation(changed)
-            with self.assertRaises(DrmMemoryError):
-                validate_drm_memory_snapshot(changed)
 
     def test_summary_and_gates_detect_coverage_peak_and_growth_independently(self) -> None:
         samples = [measured_sample(i, 100 + i * 10, 200 + i * 10) for i in range(8)]

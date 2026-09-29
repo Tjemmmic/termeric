@@ -943,26 +943,19 @@ esac
         with self.assertRaises(gui_acceptance.AcceptanceError):
             gui_acceptance.sway_output_resize_command(0, 740)
 
-    def test_result_document_binds_recovery_flags_and_binary_digest(self) -> None:
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as directory:
-            binary = Path(directory) / "termeric"
-            binary.write_bytes(b"tested native binary")
-            document = gui_acceptance.result_document(
-                backend="wayland",
-                binary=binary,
-                scenarios=[{"scenario": "interaction", "status": "passed"}],
-                start_weston=False,
-                start_sway=True,
-                start_window_manager=False,
-                force_surface_loss=True,
-                force_surface_outdated=True,
-                force_device_loss=True,
-            )
-        self.assertEqual(document["schema"], 3)
+    def test_result_document_records_compositor_and_recovery_flags(self) -> None:
+        document = gui_acceptance.result_document(
+            backend="wayland",
+            binary=Path("/fixture/termeric"),
+            scenarios=[{"scenario": "interaction", "status": "passed"}],
+            start_weston=False,
+            start_sway=True,
+            start_window_manager=False,
+            force_surface_loss=True,
+            force_surface_outdated=True,
+            force_device_loss=True,
+        )
         self.assertEqual(document["compositor"], "sway")
-        self.assertEqual(len(document["binary_sha256"]), 64)
         self.assertEqual(
             document["renderer_injections"],
             {
@@ -972,6 +965,60 @@ esac
             },
         )
 
+
+@unittest.skipUnless(sys.platform == "linux", "native GUI acceptance is Linux-only")
+class GuiAcceptanceMainTests(unittest.TestCase):
+    """Drive main() with the compositor and scenarios mocked out."""
+
+    def invoke(self, scenario=None, extra=()):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            binary = root / "termeric"
+            binary.write_bytes(b"fixture binary")
+            binary.chmod(0o700)
+            artifacts = root / "artifacts"
+            argv = ["gui_acceptance.py", "--backend", "wayland", "--start-sway",
+                    "--scenario", "interaction", "--binary", str(binary),
+                    "--artifacts", str(artifacts), *extra]
+            with (
+                mock.patch.object(gui_acceptance, "Image", object()),
+                mock.patch.object(gui_acceptance, "ImageChops", object()),
+                mock.patch.object(gui_acceptance.shutil, "which", return_value="/fixture/tool"),
+                mock.patch.object(gui_acceptance, "run"),
+                mock.patch.object(gui_acceptance, "sway_environment", return_value=({}, None)),
+                mock.patch.object(gui_acceptance, "run_wayland_interaction_scenario",
+                                  side_effect=scenario) as run,
+                mock.patch.object(sys, "argv", argv),
+                mock.patch("sys.stdout"),
+            ):
+                try:
+                    outcome = gui_acceptance.main()
+                except gui_acceptance.AcceptanceError as error:
+                    outcome = error
+                results = artifacts / "results.json"
+                document = json.loads(results.read_text()) if results.exists() else None
+                return outcome, document, run
+
+    def test_passing_run_writes_results_and_returns_zero(self) -> None:
+        outcome, document, run = self.invoke()
+        self.assertEqual(outcome, 0)
+        run.assert_called_once()
+        self.assertEqual(document["scenarios"], [{"scenario": "interaction", "status": "passed"}])
+
+    def test_failing_scenario_is_recorded_and_raised(self) -> None:
+        def fail(*_arguments):
+            raise gui_acceptance.AcceptanceError("injected scenario failure")
+
+        outcome, document, _run = self.invoke(scenario=fail)
+        self.assertIsInstance(outcome, gui_acceptance.AcceptanceError)
+        self.assertEqual(document["scenarios"][0]["status"], "failed")
+        self.assertIn("injected scenario failure", document["scenarios"][0]["error"])
+
+    def test_duplicate_scenario_is_refused_before_running(self) -> None:
+        outcome, document, run = self.invoke(extra=("--scenario", "interaction"))
+        self.assertIsInstance(outcome, gui_acceptance.AcceptanceError)
+        self.assertIsNone(document)
+        run.assert_not_called()
 
 if __name__ == "__main__":
     unittest.main()

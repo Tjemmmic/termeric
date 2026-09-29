@@ -146,7 +146,7 @@ TERMERIC_GPU_SMOKE=1 cargo test -p termeric \
   linux_headless_gpu_render_smoke_when_requested -- --nocapture
 ```
 
-Native window and surface behavior runs in the dedicated Xvfb/Weston CI lane. All four native harness commands now request `--require-clean`, preserving direct executable identity through a parent-owned descriptor and rejecting observed source/binary drift before success publication. Private tests in `scripts.test_gui_candidate` cover main-path pass/failure records, source drift, replacement/deletion, absent results, descriptor cleanup, fresh-directory and baseline-update restrictions, exact scenario selection, and explicit visual skip policy. A local `/bin/true` versus `/bin/false` replacement fixture proves that execution stays on the pinned object while the artifact fails closed. Neither this mode nor its tests imply real desktop/provider acceptance. It drives the real application through X11 input, PTY transcripts, desktop spies, Vim/less/tmux fixtures, one-shot lost/outdated-surface and device-loss recovery, and a focused GPU visual signature. See [`gui-acceptance.md`](gui-acceptance.md) for exact local commands, artifacts, baseline updates, and the smaller desktop-policy matrix that remains manual. The three full-screen clients run with isolated home/configuration state and a bounded raw PTY-output recorder; each scenario must observe a matching alternate-screen entry and exit before it can pass.
+Native window and surface behavior runs in the dedicated Xvfb/Weston CI lane. Private tests in `scripts.test_gui_acceptance` drive `main()` with the compositor mocked to cover passing and failing runs and duplicate-scenario refusal. It drives the real application through X11 input, PTY transcripts, desktop spies, Vim/less/tmux fixtures, one-shot lost/outdated-surface and device-loss recovery, and a focused GPU visual signature. See [`gui-acceptance.md`](gui-acceptance.md) for exact local commands, artifacts, baseline updates, and the smaller desktop-policy matrix that remains manual. The three full-screen clients run with isolated home/configuration state and a bounded raw PTY-output recorder; each scenario must observe a matching alternate-screen entry and exit before it can pass.
 
 The private Wayland lane now separates Weston launch/lifecycle from Sway interaction. The Sway fixture uses virtual keyboard and compositor clipboard clients to prove typed input, keyboard copy mode, bracketed paste, split-pane focus/closure, exact PID routing, fullscreen geometry isolation, and native close without relying on a host input device. Its interaction run also injects lost and outdated surfaces plus device loss, changes/restores the Sway output after each surface error, and requires renderer recovery before the PTY assertions. Real desktop permission and presentation policy remains manual.
 
@@ -299,18 +299,14 @@ WGPU_BACKEND=vulkan python3 scripts/run_soak.py \
   --duration-seconds 30 --gpu-smoke \
   --output target/soak/local.json \
   --log target/soak/local.log
-python3 scripts/validate_soak.py target/soak/local.json --source .
 ```
 
-Run `python3 -m unittest scripts.test_run_soak scripts.test_validate_soak scripts.test_soak_provenance` to prove deliberate RSS, thread, fd, transcript-backlog, incomplete-drain, dropped-entry, missing-metric, malformed/mismatched inventory, bounded-label, category-summary, and serialized-record tampering fixtures fail or summarize exactly as required. Exact scenario boundaries, ceilings, artifact fields, and known blind spots are documented in [`resource-soak.md`](resource-soak.md).
-
-Core schema 5 and native schema 6 pin the measured executable through a Linux parent-owned descriptor and retain source state before build/setup, at launch, and after execution. Fake runner-path and pure validator tests reject drift, missing/malformed provenance, stale schema versions, incomplete launch lists, and false candidate promotion. Real private descriptor tests cover replacement, non-inheritance, unsafe file kinds, bounds, interruption, and cleanup; they do not launch the GUI or any provider-backed workflow.
+Run `python3 -m unittest scripts.test_run_soak` to prove deliberate RSS, thread, fd, transcript-backlog, incomplete-drain, dropped-entry, missing-metric, malformed/mismatched inventory, bounded-label, and category-summary fixtures fail or summarize exactly as required. Exact scenario boundaries, ceilings, artifact fields, and known blind spots are documented in [`resource-soak.md`](resource-soak.md).
 
 The separate `scripts/run_native_gui_soak.py` runner samples the displayed Wayland application while continuous PTY output, compositor resize, and exact split-pane churn exercise Winit/WGPU/native lifecycle state. It uses the same privacy-safe, reconciled per-sample inventories and summaries as the core runner. Its deliberate growth/progress/cleanup/runtime-error fixtures run with:
 
 ```bash
 python3 -m unittest scripts.test_run_native_gui_soak
-python3 -m unittest scripts.test_validate_native_gui_soak
 ```
 
 ## Serial profile lane

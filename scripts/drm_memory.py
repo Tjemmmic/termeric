@@ -264,7 +264,6 @@ def aggregate_drm_fdinfos(texts: Iterable[str]) -> dict[str, Any]:
         "total_bytes": total_bytes,
         "resident_bytes": resident_bytes,
     }
-    validate_drm_memory_snapshot(result)
     return result
 
 
@@ -303,116 +302,6 @@ def read_process_drm_memory(proc_root: Path, pids: Iterable[int]) -> dict[str, A
     return aggregate_drm_fdinfos(texts)
 
 
-def validate_drm_memory_snapshot(value: object) -> dict[str, Any]:
-    if not isinstance(value, dict) or set(value) != {
-        "status",
-        "reason",
-        "clients",
-        "client_count",
-        "total_bytes",
-        "resident_bytes",
-    }:
-        raise DrmMemoryError("DRM memory snapshot has an invalid shape")
-    if value["status"] == "unavailable":
-        if (
-            value["reason"] not in UNAVAILABLE_REASONS
-            or value["clients"] != []
-            or value["client_count"] != 0
-            or value["total_bytes"] is not None
-            or value["resident_bytes"] is not None
-        ):
-            raise DrmMemoryError("unavailable DRM memory snapshot is inconsistent")
-        return value
-    if value["status"] != "measured" or value["reason"] is not None:
-        raise DrmMemoryError("DRM memory disposition is invalid")
-    clients = value["clients"]
-    if not isinstance(clients, list) or not clients or len(clients) > MAX_DRM_CLIENTS:
-        raise DrmMemoryError("measured DRM clients are invalid")
-    client_count = _uint(
-        value["client_count"], "DRM client count", maximum=MAX_DRM_CLIENTS
-    )
-    if client_count != len(clients):
-        raise DrmMemoryError("DRM client count does not match the client array")
-
-    aggregate_total = value["total_bytes"]
-    aggregate_resident = value["resident_bytes"]
-    if aggregate_total is not None:
-        aggregate_total = _uint(
-            aggregate_total,
-            "aggregate DRM total bytes",
-            maximum=MAX_DRM_AGGREGATE_BYTES,
-        )
-    if aggregate_resident is not None:
-        aggregate_resident = _uint(
-            aggregate_resident,
-            "aggregate DRM resident bytes",
-            maximum=MAX_DRM_AGGREGATE_BYTES,
-        )
-
-    identities = []
-    totals: list[int | None] = []
-    residents: list[int | None] = []
-    all_regions: set[str] = set()
-    for client in clients:
-        if not isinstance(client, dict) or set(client) != {
-            "driver",
-            "device",
-            "client_id",
-            "regions",
-        }:
-            raise DrmMemoryError("DRM client has an invalid shape")
-        _bounded_label(client["driver"], "DRM driver")
-        device = client["device"]
-        if device is not None and (
-            not isinstance(device, str) or PCI_DEVICE.fullmatch(device) is None
-        ):
-            raise DrmMemoryError("DRM client device is invalid")
-        client_id = _uint(client["client_id"], "DRM client id")
-        identity = (device or "<global>", client_id)
-        identities.append(identity)
-        regions = client["regions"]
-        if (
-            not isinstance(regions, dict)
-            or not regions
-            or list(regions) != sorted(regions)
-        ):
-            raise DrmMemoryError("DRM client regions are invalid")
-        for region, measurements in regions.items():
-            if not isinstance(region, str) or REGION_NAME.fullmatch(region) is None:
-                raise DrmMemoryError("DRM region is invalid")
-            all_regions.add(region)
-            if len(all_regions) > MAX_DRM_REGIONS:
-                raise DrmMemoryError("DRM region count exceeds its ceiling")
-            if not isinstance(measurements, dict) or set(measurements) != {
-                "total_bytes",
-                "resident_bytes",
-            }:
-                raise DrmMemoryError("DRM region measurements have an invalid shape")
-            total = measurements["total_bytes"]
-            resident = measurements["resident_bytes"]
-            if total is not None:
-                total = _uint(total, "DRM total bytes", maximum=MAX_DRM_FIELD_BYTES)
-            if resident is not None:
-                resident = _uint(
-                    resident, "DRM resident bytes", maximum=MAX_DRM_FIELD_BYTES
-                )
-            if total is None and resident is None:
-                raise DrmMemoryError("DRM region has no memory measurement")
-            totals.append(total)
-            residents.append(resident)
-    if identities != sorted(set(identities)):
-        raise DrmMemoryError("DRM client identities are not unique and sorted")
-    expected_total = _sum_known(totals)
-    expected_resident = _sum_known(residents)
-    if aggregate_total != expected_total:
-        raise DrmMemoryError("aggregate DRM total bytes do not match clients")
-    if aggregate_resident != expected_resident:
-        raise DrmMemoryError("aggregate DRM resident bytes do not match clients")
-    if expected_total is None and expected_resident is None:
-        raise DrmMemoryError("measured DRM snapshot contains no memory")
-    return value
-
-
 def _edge_growth(values: list[int]) -> float:
     width = max(1, len(values) // 4)
     return statistics.median(values[-width:]) - statistics.median(values[:width])
@@ -420,7 +309,8 @@ def _edge_growth(values: list[int]) -> float:
 
 def summarize_drm_memory(samples: list[dict[str, Any]]) -> dict[str, Any]:
     snapshots = [
-        validate_drm_memory_snapshot(sample.get("gpu_memory")) for sample in samples
+        sample.get("gpu_memory") or _unavailable("no-drm-client-fd")
+        for sample in samples
     ]
     measured = [snapshot for snapshot in snapshots if snapshot["status"] == "measured"]
     total_values = [

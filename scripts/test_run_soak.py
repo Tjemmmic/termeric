@@ -1,12 +1,16 @@
+import contextlib
+import io
+import json
+import subprocess
+import sys
 import unittest
-import hashlib
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from scripts import run_soak
 from scripts.run_soak import (
     COLLAPSED_INVENTORY_LABEL,
-    CORE_SOAK_SCHEMA_VERSION,
     MAX_INVENTORY_LABELS,
     MAX_PROCESS_LABEL_CHARACTERS,
     bounded_process_label,
@@ -16,7 +20,6 @@ from scripts.run_soak import (
     evaluate_diff_history_checks,
     evaluate_progress_ceilings,
     evaluate_resource_ceilings,
-    file_sha256,
     inventory_coverage_check,
     minimum_sample_count,
     parse_progress,
@@ -54,9 +57,6 @@ class SoakCeilingTests(unittest.TestCase):
             with self.assertRaises(KeyError):
                 process_snapshot(12345, 0)
 
-    def test_report_schema_is_versioned_for_retained_diff_history(self):
-        self.assertEqual(CORE_SOAK_SCHEMA_VERSION, 5)
-
     def test_diff_history_requires_pressure_eviction_and_owned_capacity_bounds(self):
         valid = {"iteration": 1, "diff_completed": 80, "diff_evicted": 72,
                  "diff_retained": 8, "diff_history_peak_count": 64,
@@ -78,15 +78,6 @@ class SoakCeilingTests(unittest.TestCase):
         self.assertFalse(all(check["passed"] for check in evaluate_diff_history_checks([])))
         # Each record must reconcile against its predecessor, not just totals.
         self.assertFalse(all(check["passed"] for check in evaluate_diff_history_checks([valid, valid])))
-
-    def test_binary_digest_is_exact_and_content_bound(self):
-        with TemporaryDirectory() as directory:
-            binary = Path(directory) / "fixture"
-            binary.write_bytes(b"termeric-soak-fixture")
-            self.assertEqual(
-                file_sha256(binary),
-                hashlib.sha256(b"termeric-soak-fixture").hexdigest(),
-            )
 
     def evaluate(self, samples: list[dict]) -> list[dict]:
         return evaluate_resource_ceilings(
@@ -325,6 +316,113 @@ class SoakCeilingTests(unittest.TestCase):
             )
         }
         self.assertFalse(checks["scenario emitted completion marker"]["passed"])
+
+
+class CoreRunnerMainTests(unittest.TestCase):
+    """Drive run_soak.main() with the test binary and /proc sampling mocked."""
+
+    PROGRESS = [
+        {"iteration": 1, "scrollback_bytes": 1024, "image_bytes": 4096,
+         "transcript_queue_bytes": 2048, "transcript_queue_bytes_after_finish": 0,
+         "transcript_entries_accepted": 68, "transcript_entries_dropped": 0,
+         "diff_completed": 80, "diff_evicted": 72, "diff_retained": 8,
+         "diff_history_peak_count": 64, "diff_history_peak_bytes": 3_900_000},
+        {"complete": True, "iterations": 1},
+    ]
+
+    def invoke(self, mode="pass", *, gpu=False):
+        state = {"launches": []}
+        progress = self.PROGRESS
+
+        class FakeProcess:
+            pid = 12345
+            returncode = 0
+
+            def __init__(self, command, **kwargs):
+                self.polls = 0
+                state["launches"].append("scenario")
+                if mode == "launch-failure":
+                    raise OSError("injected launch failure")
+                for record in progress:
+                    kwargs["stdout"].write("TERMERIC_SOAK " + json.dumps(record) + "\n")
+                kwargs["stdout"].flush()
+
+            def poll(self):
+                self.polls += 1
+                if mode == "timeout":
+                    return self.returncode if state.get("killed") else None
+                return None if self.polls <= (3 if mode == "transient-sample" else 2) else 0
+
+            def kill(self):
+                state["killed"] = True
+                self.returncode = -9
+
+            def wait(self, **kwargs):
+                return self.returncode
+
+        def fake_command(command, **kwargs):
+            if command[1:2] != ["test_support::linux_headless_gpu_render_smoke_when_requested"]:
+                return subprocess.CompletedProcess(command, 0, stdout="fixture\n")
+            state["launches"].append("gpu-smoke")
+            if mode == "gpu-timeout":
+                raise subprocess.TimeoutExpired(command, 60)
+            return subprocess.CompletedProcess(command, 0, stdout="")
+
+        snapshots = (
+            KeyboardInterrupt() if mode == "interrupt"
+            else ([FileNotFoundError()] if mode == "transient-sample" else [])
+            + [sample(1), sample(2)]
+        )
+        with TemporaryDirectory() as temporary:
+            report_path = Path(temporary) / "results.json"
+            log_path = Path(temporary) / "scenario.log"
+            argv = ["run_soak.py", "--duration-seconds", "1", "--sample-interval", "0.5",
+                    "--output", str(report_path), "--log", str(log_path),
+                    *(["--gpu-smoke"] if gpu else [])]
+            with (
+                patch.object(run_soak, "build_test_binary", return_value=Path("/fixture/test-binary")),
+                patch.object(run_soak.subprocess, "Popen", FakeProcess),
+                patch.object(run_soak.subprocess, "run", side_effect=fake_command),
+                patch.object(run_soak, "process_snapshot", side_effect=snapshots),
+                patch.object(run_soak.time, "sleep"),
+                (patch.object(run_soak.time, "monotonic", side_effect=[0.0, 100.0])
+                 if mode == "timeout" else contextlib.nullcontext()),
+                patch.object(sys, "argv", argv),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                try:
+                    run_soak.main()
+                    exited = False
+                except SystemExit:
+                    exited = True
+            return json.loads(report_path.read_text()), state, exited
+
+    def test_clean_run_passes_and_writes_the_report(self):
+        report, state, exited = self.invoke(gpu=True)
+        self.assertFalse(exited)
+        self.assertEqual(report["status"], "pass")
+        self.assertEqual(state["launches"], ["gpu-smoke", "scenario"])
+
+    def test_launch_failure_interruption_and_timeout_fail_the_run(self):
+        for mode in ("launch-failure", "interrupt", "timeout"):
+            with self.subTest(mode=mode):
+                report, state, exited = self.invoke(mode)
+                self.assertTrue(exited)
+                self.assertEqual(report["status"], "fail")
+                if mode in {"interrupt", "timeout"}:
+                    self.assertTrue(state["killed"])
+
+    def test_gpu_timeout_does_not_launch_the_scenario(self):
+        report, state, exited = self.invoke("gpu-timeout", gpu=True)
+        self.assertTrue(exited)
+        self.assertEqual(report["status"], "fail")
+        self.assertEqual(state["launches"], ["gpu-smoke"])
+
+    def test_transient_proc_sample_does_not_kill_the_scenario(self):
+        report, state, exited = self.invoke("transient-sample")
+        self.assertFalse(exited)
+        self.assertEqual(report["status"], "pass")
+        self.assertNotIn("killed", state)
 
 
 if __name__ == "__main__":

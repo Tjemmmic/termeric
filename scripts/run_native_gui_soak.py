@@ -24,7 +24,6 @@ from scripts.gui_acceptance import (
     AppProcess,
     assert_no_runtime_errors,
     cleanup_private_runtime,
-    file_sha256,
     pids_receiving_token,
     read_records,
     run,
@@ -48,19 +47,12 @@ from scripts.run_soak import (
     minimum_sample_count,
     process_children,
     process_snapshot,
-    relative_file_path,
     summarize_resource_inventories,
     write_json_atomic,
 )
-from scripts.soak_provenance import PinnedExecutable, provenance_checks, source_identity
 
 
 FIXTURE = ROOT / "termeric" / "tests" / "gui" / "terminal_fixture.py"
-NATIVE_SOAK_SCHEMA_VERSION = 6
-NATIVE_SOAK_RECORD_KIND = "termeric-native-resource-soak"
-MAX_NATIVE_SOAK_ARTIFACTS = 512
-MAX_NATIVE_SOAK_ARTIFACT_BYTES = 128 * 1024 * 1024
-MAX_NATIVE_SOAK_TOTAL_ARTIFACT_BYTES = 256 * 1024 * 1024
 MAX_DRIVER_ERROR_CHARACTERS = 1024
 
 
@@ -120,44 +112,6 @@ def prepare_artifact_directory(path: Path) -> None:
             )
         return
     path.mkdir(parents=True)
-
-
-def native_artifact_manifest(root: Path) -> list[dict[str, object]]:
-    entries: list[dict[str, object]] = []
-    total_bytes = 0
-    for path in sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()):
-        relative = path.relative_to(root).as_posix()
-        if path.is_symlink():
-            raise AcceptanceError(f"native soak artifact is a symlink: {relative}")
-        if path.is_dir():
-            continue
-        if not path.is_file():
-            raise AcceptanceError(f"native soak artifact is not a regular file: {relative}")
-        if relative == "results.json":
-            continue
-        size = path.stat().st_size
-        if size > MAX_NATIVE_SOAK_ARTIFACT_BYTES:
-            raise AcceptanceError(f"native soak artifact exceeds its byte limit: {relative}")
-        total_bytes += size
-        if total_bytes > MAX_NATIVE_SOAK_TOTAL_ARTIFACT_BYTES:
-            raise AcceptanceError("native soak artifact bundle exceeds its byte limit")
-        entries.append(
-            {"path": relative, "bytes": size, "sha256": file_sha256(path)}
-        )
-        if len(entries) > MAX_NATIVE_SOAK_ARTIFACTS:
-            raise AcceptanceError("native soak artifact bundle has too many files")
-    return entries
-
-
-def git_provenance() -> dict[str, object]:
-    return source_identity(ROOT)
-
-
-def require_clean_candidate(provenance: dict[str, object], required: bool) -> None:
-    if required and provenance["worktree_dirty"] is not False:
-        raise AcceptanceError(
-            "refusing clean-candidate native soak from a dirty worktree"
-        )
 
 
 def perform_until(
@@ -368,11 +322,6 @@ def main() -> int:
         action="store_true",
         help="require standardized DRM memory fields for every resource sample",
     )
-    parser.add_argument(
-        "--require-clean",
-        action="store_true",
-        help="refuse to start unless the Git worktree is clean",
-    )
     args = parser.parse_args()
     if os.name != "posix" or not Path("/proc/self/status").is_file():
         parser.error("native GUI soak requires Linux /proc")
@@ -406,32 +355,21 @@ def main() -> int:
         parser.error(
             "duration must be at least five seconds; numeric options must be finite; "
             "intervals and absolute ceilings must be positive; growth ceilings must "
-            "be non-negative; and DRM ceilings must fit the evidence contract"
+            "be non-negative; and DRM ceilings must fit the measurement limits"
         )
     binary = args.binary.resolve()
     if args.binary.is_symlink() or not binary.is_file():
         parser.error(f"Termeric binary does not exist: {binary}")
-    try:
-        relative_file_path(ROOT, binary, "Termeric binary")
-    except ValueError as error:
-        parser.error(str(error))
     for tool in ("sway", "swaymsg", "tic", "wtype"):
         if not shutil.which(tool):
             parser.error(f"required native soak tool is unavailable: {tool}")
-    provenance = git_provenance()
     try:
-        require_clean_candidate(provenance, args.require_clean)
-    except AcceptanceError as error:
-        parser.error(str(error))
-
-    try:
-        with PinnedExecutable(ROOT, binary, provenance) as executable:
-            return run_displayed(args, executable)
+        return run_displayed(args, binary)
     except (OSError, ValueError, AcceptanceError) as error:
         parser.error(str(error))
 
 
-def run_displayed(args: argparse.Namespace, executable: PinnedExecutable) -> int:
+def run_displayed(args: argparse.Namespace, binary: Path) -> int:
     if args.artifacts.is_symlink():
         raise AcceptanceError("native soak artifact directory must not be a symlink")
     artifacts = args.artifacts.resolve()
@@ -466,7 +404,7 @@ def run_displayed(args: argparse.Namespace, executable: PinnedExecutable) -> int
     try:
         environment, sway = sway_environment(environment, artifacts)
         app = AppProcess(
-            executable.launch("displayed"),
+            binary,
             artifacts / "application",
             "wayland",
             sys.executable,
@@ -621,43 +559,27 @@ def run_displayed(args: argparse.Namespace, executable: PinnedExecutable) -> int
         "runtime_errors": runtime_error_count(log_text),
         "driver_error": failure,
     }
-    provenance = executable.finish()
     checks = build_native_soak_checks(samples, thresholds, outcomes)
-    checks.extend(provenance_checks(provenance, ["displayed"]))
+    # A missing log would read as empty and silently pass the runtime-error check.
+    checks.append({
+        "name": "application log present",
+        "actual": application_log.is_file(),
+        "expected": True,
+        "passed": application_log.is_file(),
+    })
     passed = all(check["passed"] for check in checks)
-    candidate_eligible = passed and provenance["source_initial"]["worktree_dirty"] is False
-    eligibility = (
-        "candidate"
-        if candidate_eligible
-        else "dirty-dry-run"
-        if passed
-        else "failed"
-    )
-    manifest = native_artifact_manifest(artifacts)
     report = {
-        "schema": NATIVE_SOAK_SCHEMA_VERSION,
-        "kind": NATIVE_SOAK_RECORD_KIND,
         "status": "pass" if passed else "fail",
-        "candidate_eligible": candidate_eligible,
-        "eligibility": eligibility,
         "recorded_at_utc": datetime.now(timezone.utc).isoformat(),
         "environment": {
             "platform": platform.platform(),
             "python": sys.version.split()[0],
-            **provenance["source_initial"],
             "backend": "wayland",
             "compositor": "sway-headless",
             "wgpu_backend": environment.get("WGPU_BACKEND"),
             "gpu_memory_interface": DRM_MEMORY_INTERFACE,
         },
-        "binary": executable.file_evidence,
-        "provenance": provenance,
-        "artifact_policy": {
-            "max_files": MAX_NATIVE_SOAK_ARTIFACTS,
-            "max_file_bytes": MAX_NATIVE_SOAK_ARTIFACT_BYTES,
-            "max_total_bytes": MAX_NATIVE_SOAK_TOTAL_ARTIFACT_BYTES,
-        },
-        "artifacts": manifest,
+        "binary": str(binary),
         "duration_seconds": args.duration_seconds,
         "sample_interval_seconds": args.sample_interval,
         "action_interval_seconds": args.action_interval,

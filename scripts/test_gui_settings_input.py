@@ -79,5 +79,16 @@ class SettingsInputTests(unittest.TestCase):
                 source.stderr.close.assert_called_once_with()
 
 
+    def test_geometry_transitions_ignore_other_panes_and_collapse_repeats(self):
+        def size(pid, rows, event="winsize"):
+            return {"pid": pid, "event": event, "rows": rows, "cols": rows * 2,
+                    "pixel_width": 800, "pixel_height": 600}
+        records = [size(7, 40, "started"), size(7, 40), size(9, 10), size(7, 36), size(7, 36), size(7, 40)]
+        self.assertEqual(settings.geometry_transitions(records, 7, 1),
+                         [(40, 80, 800, 600), (36, 72, 800, 600), (40, 80, 800, 600)])
+        self.assertEqual(settings.geometry_transitions(records, 7, 3),
+                         [(36, 72, 800, 600), (40, 80, 800, 600)])
+        self.assertEqual(settings.geometry_transitions(records, 9, 0), [(10, 20, 800, 600)])
+
 if __name__ == "__main__":
     unittest.main()

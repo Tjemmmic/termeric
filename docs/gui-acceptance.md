@@ -96,7 +96,7 @@ When running semantic checks on a host without DejaVu Sans Mono, an explicitly i
 ```bash
 WLR_RENDERER=pixman WGPU_BACKEND=gl LIBGL_ALWAYS_SOFTWARE=true \
 python3 scripts/gui_acceptance.py --backend wayland --start-sway \
-  --scenario fullscreen --binary target/release/termeric --require-clean \
+  --scenario fullscreen --binary target/release/termeric \
   --font-family 'Noto Sans Mono' --skip-visual-checks \
   --artifacts /tmp/termeric-fullscreen-noto
 ```
@@ -128,26 +128,6 @@ python3 scripts/check_gui_visual.py \
 An update must accompany an explanation of the intended visual change. The normal CI command omits `--update` and rejects changes beyond the perceptual budgets.
 
 ## Local reproduction
-
-### Clean-candidate mode
-
-CI now requires `--require-clean` on each GUI harness invocation. Add it to any of the local commands below after building from a clean checkout. This opt-in mode refuses dirty source, an existing artifact directory, baseline updates, and symlinked/out-of-checkout executable paths. Repeated scenarios are refused in both modes because they would overwrite their own diagnostic artifacts. Use a fresh ignored build subdirectory or an external temporary directory.
-
-A parent-owned Linux executable descriptor stays open across the scenario run; every direct application/CLI launch made by the harness receives its `/proc` descriptor path. Final source/path/descriptor observations must match the initial identities, and every selected scenario must have passed before the CLI prints success. A detected change yields a nonzero exit and retained failure evidence even if the functional scenarios themselves passed.
-
-Strict runs emit schema-6 `results.json` with a schema-3 embedded `candidate` object and a separate `provenance.json`: observed commit, exact requested scenarios, the `skip_visual_checks` option, initial/final executable identities, provenance checks, and `candidate_eligible`. The visual option records requested policy; it does not claim that every scenario performs pixel comparisons. Default debugging runs retain schema 3 and may use dirty source. A failure before any scenario result is available retains provenance without fabricating results.
-
-For Wayland `interaction`, candidate eligibility additionally requires the seventeen palette cases to be independently reconstructed from `interaction/pty-transcript.jsonl`. The verifier requires exactly the ordered case set, two started alternating owners, unique ordered begin/end markers, exact U+2603 insertion plus per-owner fences, zero reported unrelated focus losses, and restoration of the original owner. It does not trust the sidecar's expected bytes as the oracle. It then seals both that transcript (at most 8 MiB) and `interaction/palette-input.json` (at most 64 KiB) with lengths and SHA-256 digests in `candidate.interaction_palette`. Missing, changed-during-read, non-regular, symlinked, malformed, or inconsistent artifacts fail publication and retain a diagnostic in `interaction_palette_error`. The embedded palette proof and sidecar both use schema 3; schema-1 seven-case and schema-2 thirteen-case records remain historical and cannot satisfy the expanded pointer-edit contract.
-
-Re-check those two seals and the palette semantics offline:
-
-```bash
-python3 scripts/gui_palette_evidence.py /tmp/termeric-wayland/results.json
-```
-
-This command checks the palette evidence subset, not all GUI scenarios or the source/compiler provenance. Older schema-4 records lack this sealed contract and are rejected by this verifier; they remain historical evidence of their original checks rather than equivalent current palette acceptance. The palette-only verifier also accepts historical schema-5/schema-2 candidates; those records do not carry the required current Settings proof described below.
-
-This detects observed drift, not hostile same-user tampering, signed compiler provenance, or proof that an existing binary was freshly built from the named source. Build first. It pins direct harness invocations, not every independently spawned descendant, compositor, installed client, font, or driver. Scenario logs other than the two palette artifacts above are retained but not individually sealed by this mode. Historical schema-3 results, including the local `7df2d38` observations above, do not gain stronger provenance retroactively. Real-desktop and provider acceptance remain separate.
 
 Build first:
 
@@ -220,15 +200,7 @@ Missing applications are failures, never silent skips. A developer running a par
 
 The Wayland `interaction` scenario also includes eleven Settings-filter cases: clipboard insertion, multiline/oversize rejection, combining/ZWJ Backspace, and pointer placement across wide/combining text, plus Home/Delete, End/word deletion, and Ctrl+Left/Right word navigation and deletion. Each starts with a non-Size row selected so an ignored paste cannot pass through the default Size selection. The corrected query must select Size, produce a logged 14→15 font-size transition with fewer PTY rows/columns, and restore the exact original geometry at 14. Exact owner-scoped PTY fences reject leaked filter text/editing keys, and unrelated window focus loss fails the case. Clipboard sources run in foreground, serve one paste, and are reaped on success or failure. The scenario uses only the isolated fixture configuration and never saves user settings. The font-state oracle requires exactly one application diagnostic per size action, rejecting duplicates as well as additional size/geometry transitions. Each reported grid size must match the actual PTY. Settings font-size changes are validated before mutation and applied through the shared configuration path once; direct keyboard zoom retains its separate setter.
 
-Schema-2 `interaction/settings-input.json` records per-case geometry, delivery, and byte ranges into `interaction/termeric.log`. Clean Wayland interaction publication also requires an independent Settings verifier: exactly eleven ordered cases on the restored original PTY; unique begin/end markers; no input between markers except the exact owner fence; and a reconstructed native resize sequence that reduces rows/columns and restores the exact baseline. Claimed geometry must match the transcript. Each non-overlapping, line-aligned log range must contain exactly the matching 15→14 font applications and no focus loss. Extra font applications anywhere in the log are rejected. The ranges are runner-recorded observation boundaries, not independently timestamp-correlated proof of when a compositor delivered a key.
-
-The schema-1 proof in `candidate.interaction_settings` seals the sidecar (64 KiB maximum), shared PTY transcript (8 MiB), and application log (16 MiB), using the same bounded regular-file, no-symlink, identity-stability checks as palette evidence. Missing or inconsistent artifacts fail candidate publication and retain `interaction_settings_error`. Old unsealed schema-1 Settings sidecars cannot satisfy this contract. Re-check the Settings subset offline:
-
-```bash
-python3 scripts/gui_settings_evidence.py /tmp/termeric-wayland/results.json
-```
-
-The separate palette verifier still covers only its own seventeen cases. These checks detect inconsistent or changed evidence; they are not protection against a same-user attacker rewriting all artifacts and seals. Neither verifier proves all GUI scenarios, source/compiler provenance, IME-client, screen-reader, whole-panel pixels, or real-desktop clipboard acceptance.
+`interaction/settings-input.json` records each case's geometry and delivery. Every case must start from the same geometry, the PTY must go straight to the larger size and back with no intermediate sizes, and no font change may happen outside the cases.
 
 ## Standalone Wayland graphics clients
 
@@ -236,7 +208,7 @@ The `graphics` scenario runs the eight installed image clients listed above insi
 
 ```bash
 WGPU_BACKEND=gl python3 scripts/gui_acceptance.py \
-  --backend wayland --start-sway --require-clean --scenario graphics \
+  --backend wayland --start-sway --scenario graphics \
   --binary target/debug/termeric --artifacts /tmp/termeric-wayland-graphics
 ```
 
@@ -265,7 +237,7 @@ For an isolated Wayland reproduction after a clean build:
 ```bash
 WGPU_BACKEND=gl LIBGL_ALWAYS_SOFTWARE=true WLR_RENDERER=pixman \
 python3 scripts/gui_acceptance.py --backend wayland --start-sway \
-  --require-clean --scenario tab-placement \
+  --scenario tab-placement \
   --binary target/debug/termeric \
   --artifacts target/gui-acceptance/tab-placement-wayland
 ```
@@ -313,7 +285,7 @@ Run the bounded private-Sway screenshot scenario independently:
 ```bash
 env WGPU_BACKEND=gl LIBGL_ALWAYS_SOFTWARE=true WLR_RENDERER=pixman \
   python3 scripts/gui_acceptance.py --backend wayland --start-sway \
-  --require-clean --scenario background \
+  --scenario background \
   --force-surface-loss --force-surface-outdated --force-device-loss \
   --binary target/debug/termeric --artifacts target/gui-acceptance/background
 ```

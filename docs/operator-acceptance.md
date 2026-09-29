@@ -302,15 +302,11 @@ WGPU_BACKEND=vulkan python3 scripts/run_soak.py \
   --duration-seconds 30 --gpu-smoke \
   --output target/soak/local.json \
   --log target/soak/local.log
-python3 scripts/validate_soak.py target/soak/local.json --source .
 
 WGPU_BACKEND=gl python3 scripts/run_native_gui_soak.py \
   --duration-seconds 30 \
-  --require-clean \
   --binary target/debug/termeric \
   --artifacts target/native-gui-soak
-python3 scripts/validate_native_gui_soak.py \
-  target/native-gui-soak/results.json --source .
 ```
 
 For a candidate, repeat both soaks for 600 seconds. Keep the reports and logs:
@@ -320,18 +316,14 @@ WGPU_BACKEND=vulkan python3 scripts/run_soak.py \
   --duration-seconds 600 --gpu-smoke \
   --output target/soak/release.json \
   --log target/soak/release.log
-python3 scripts/validate_soak.py target/soak/release.json --source .
 
 WGPU_BACKEND=gl python3 scripts/run_native_gui_soak.py \
   --duration-seconds 600 \
-  --require-clean \
   --binary target/debug/termeric \
   --artifacts target/native-gui-soak-release
-python3 scripts/validate_native_gui_soak.py \
-  target/native-gui-soak-release/results.json --source .
 ```
 
-The pass criteria include peak and growth RSS, thread/file-descriptor/child growth, complete child cleanup, bounded and fully drained transcript queues, continuous PTY and graphics progress, pane routing, resize churn, normal exit, and absence of GPU validation/device-loss errors. Schema-3 core and schema-5 displayed reports seal their artifacts, independently reconstruct their checks, and reconcile every aggregate thread/descriptor/child count with privacy-safe categories and summarize category quartile growth and peaks, so a failed ceiling remains diagnosable without publishing raw paths or process arguments. The displayed report also records standardized process-attributed DRM total/resident memory or an explicit bounded unavailable reason for every sample. These artifacts address the local portion of issue #23; green pushed CI history and long real-desktop vendor-GPU observation remain separate evidence.
+The pass criteria include peak and growth RSS, thread/file-descriptor/child growth, complete child cleanup, bounded and fully drained transcript queues, continuous PTY and graphics progress, pane routing, resize churn, normal exit, and absence of GPU validation/device-loss errors. Both reports reconcile every aggregate thread/descriptor/child count with privacy-safe categories and summarize category quartile growth and peaks, so a failed ceiling remains diagnosable without publishing raw paths or process arguments. The displayed report also records standardized process-attributed DRM total/resident memory or an explicit bounded unavailable reason for every sample. These artifacts address the local portion of issue #23; green pushed CI history and long real-desktop vendor-GPU observation remain separate evidence.
 
 On a vendor-GPU host, repeat the displayed 600-second command with a new artifact directory and `--require-gpu-memory`. This makes missing or intermittent DRM fdinfo coverage fail rather than pass as optional software-runner evidence. Use `--max-gpu-resident-mib` and `--max-gpu-resident-growth-mib` only to apply a documented runner-class budget; retain the defaults until repeated artifacts justify a tighter ceiling.
 
