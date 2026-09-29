@@ -9,16 +9,13 @@ arch=('x86_64')
 url="https://github.com/Tjemmmic/termeric"
 license=('MIT' 'Unicode-3.0')
 depends=(
-  'brotli'
   'fontconfig'
   'gcc-libs'
   'glibc'
   'libx11'
   'libxkbcommon'
-  'openssl'
   'wayland'
   'zlib'
-  'zstd'
 )
 makedepends=('cargo' 'git' 'ncurses' 'pkgconf')
 optdepends=(
@@ -29,9 +26,9 @@ provides=('termeric')
 conflicts=('termeric')
 source=("${_pkgname}::git+${url}.git")
 sha256sums=('SKIP')
-# Cargo is configured to use rust-lld. Arch's global GCC LTO flags produce
-# bundled libgit2/libssh2 objects that rust-lld cannot consume, so keep Cargo's
-# own release optimization while disabling makepkg's cross-language LTO layer.
+# Current Rust links x86_64 Linux binaries with rust-lld. Arch's global GCC LTO
+# flags produce bundled libgit2 objects that rust-lld cannot consume, so keep
+# Cargo's own release optimization while disabling makepkg's cross-language LTO.
 options=('!debug' '!lto')
 
 pkgver() {

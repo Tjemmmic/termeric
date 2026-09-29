@@ -57,16 +57,13 @@ EXPECTED_FILES = {
 }
 METADATA_FILES = {".BUILDINFO", ".MTREE", ".PKGINFO"}
 REQUIRED_DEPENDENCIES = {
-    "brotli",
     "fontconfig",
     "gcc-libs",
     "glibc",
     "libx11",
     "libxkbcommon",
-    "openssl",
     "wayland",
     "zlib",
-    "zstd",
 }
 REQUIRED_LICENSES = {"MIT", "Unicode-3.0"}
 

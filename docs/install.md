@@ -4,12 +4,12 @@ Termeric currently targets modern Linux desktops with Vulkan or another WGPU bac
 
 ## Build and install from source
 
-Install a stable Rust toolchain (Rust 1.89 or newer) and the platform packages needed by Winit, Wayland/X11, fontconfig, Vulkan, OpenSSL, and libgit2. On Debian or Ubuntu:
+Install a stable Rust toolchain (Rust 1.89 or newer) and the platform packages needed by Winit, Wayland/X11, fontconfig, and Vulkan (libgit2 is built from source). On Debian or Ubuntu:
 
 ```bash
 sudo apt-get install build-essential pkg-config libfontconfig1-dev \
   libwayland-dev libxkbcommon-dev libxcb-shape0-dev libxcb-xfixes0-dev \
-  libssl-dev libvulkan-dev mesa-vulkan-drivers
+  libvulkan-dev mesa-vulkan-drivers
 cargo build --release --locked
 sudo install -Dm755 target/release/termeric /usr/local/bin/termeric
 sudo install -Dm644 assets/termeric.desktop \

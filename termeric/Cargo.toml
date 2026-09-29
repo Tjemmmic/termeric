@@ -37,7 +37,7 @@ sys-locale = "0.3"
 unicode-segmentation = "=1.13.3"
 unicode_names2 = "=4.0.0"
 
-# Image loading for window icon
+# Image decoding for the window icon, notification icons, and background images
 image = "0.25"
 flate2 = "1.1"
 tempfile = "3"
@@ -55,11 +55,14 @@ directories = "6.0"
 # Fuzzy matching for command palette
 sublime_fuzzy = "0.7"
 
-# Git integration
-git2 = "0.19"
+# Git integration. Termeric only reads and edits local repositories, so the
+# default HTTPS/SSH transports (and their OpenSSL/libssh2 dependency) are off.
+git2 = { version = "0.19", default-features = false }
 
 # Regular expressions for search
 regex = "1"
+
+# Content hashes for sessions, transcripts, and the live-domain protocol
 sha2 = "0.10"
 
 # Logging
@@ -68,16 +71,9 @@ env_logger.workspace = true
 
 # Error handling
 anyhow.workspace = true
-thiserror.workspace = true
-
-[target.'cfg(target_os = "macos")'.dependencies]
-# macOS-specific dependencies if needed
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
-
-[target.'cfg(target_os = "windows")'.dependencies]
-# Windows-specific dependencies if needed
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # XDG Desktop Portal accessibility preference monitoring.
@@ -86,10 +82,6 @@ freedesktop-icons = "0.4"
 # Bounded cancellation for the asynchronous notification-signal listener.
 async-channel = "2"
 futures-lite = "2"
-
-[dev-dependencies]
-# Testing dependencies
-tempfile = "3"
 
 [package.metadata.deb]
 maintainer = "Termeric Contributors <Tjemmmic@users.noreply.github.com>"

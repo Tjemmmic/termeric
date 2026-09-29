@@ -131,8 +131,8 @@ class ArchPackageCheckTests(unittest.TestCase):
 
     def test_metadata_rejects_missing_dependency_and_wrong_identity(self):
         fields = valid_metadata()
-        fields["depend"].remove("openssl")
-        with self.assertRaisesRegex(CheckError, "openssl"):
+        fields["depend"].remove("fontconfig")
+        with self.assertRaisesRegex(CheckError, "fontconfig"):
             validate_package_metadata(fields)
         fields = valid_metadata()
         fields["pkgname"] = ["wrong"]
