@@ -24,3 +24,7 @@ Thumbs.db
 
 # Local development
 .docs
+
+# Personal coding-agent instructions; the shared guide is AGENTS.md
+CLAUDE.md
+CLAUDE.local.md

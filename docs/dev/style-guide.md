@@ -108,4 +108,4 @@ Chrome geometry lands on whole physical pixels. Rendering, hit testing, keyboard
 ## 5. Accessibility
 
 - High-contrast mode raises built-in chrome text to at least 4.5:1 (`enforce_high_contrast` in `renderer/mod.rs`); new chrome colors must go through `UiPalette` so they get the same treatment.
-- Every interactive control needs keyboard access and an AccessKit node whose bounds come from the same geometry used to draw it. See [docs/accessibility-and-input.md](docs/accessibility-and-input.md).
+- Every interactive control needs keyboard access and an AccessKit node whose bounds come from the same geometry used to draw it. See [accessibility-and-input.md](../accessibility-and-input.md).

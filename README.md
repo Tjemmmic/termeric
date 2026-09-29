@@ -158,8 +158,8 @@ termeric-core/      Library crate — terminal emulation
 
 ## Documentation
 
-- [`CLAUDE.md`](CLAUDE.md) — architecture overview, critical patterns, module map (also read by coding agents; `AGENTS.md` links to it)
-- [`STYLE_GUIDE.md`](STYLE_GUIDE.md) — UI / theming style guide (read before touching user-facing code)
+- [`AGENTS.md`](AGENTS.md) — architecture overview, critical patterns, and module map for contributors and coding agents
+- [`docs/dev/style-guide.md`](docs/dev/style-guide.md) — UI and theme style guide (read before touching user-facing code)
 - [`CHANGELOG.md`](CHANGELOG.md) — release-facing changes and known limitations
 - [`docs/feature-support.md`](docs/feature-support.md) — authoritative capability status and release gates
 - [`docs/cldr-annotations.md`](docs/cldr-annotations.md) — pinned CLDR/Emoji inputs, deterministic generation, ranking, memory limits, and licensing
