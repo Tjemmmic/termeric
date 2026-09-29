@@ -158,9 +158,8 @@ termeric-core/      Library crate — terminal emulation
 
 ## Documentation
 
-- [`CLAUDE.md`](CLAUDE.md) — architecture overview, critical patterns, module map
+- [`CLAUDE.md`](CLAUDE.md) — architecture overview, critical patterns, module map (also read by coding agents; `AGENTS.md` links to it)
 - [`STYLE_GUIDE.md`](STYLE_GUIDE.md) — UI / theming style guide (read before touching user-facing code)
-- [`AGENTS.md`](AGENTS.md) — rules and conventions for AI agents working in this repo
 - [`CHANGELOG.md`](CHANGELOG.md) — release-facing changes and known limitations
 - [`docs/feature-support.md`](docs/feature-support.md) — authoritative capability status and release gates
 - [`docs/cldr-annotations.md`](docs/cldr-annotations.md) — pinned CLDR/Emoji inputs, deterministic generation, ranking, memory limits, and licensing

@@ -18,9 +18,9 @@ FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 
 
 def markdown_files() -> list[Path]:
-    files = [ROOT / "README.md", ROOT / "CHANGELOG.md", ROOT / "CLAUDE.md"]
-    files.extend(sorted((ROOT / "docs").glob("*.md")))
-    return [path for path in files if path.exists()]
+    # Root files include symlinks (AGENTS.md -> CLAUDE.md); check each target once.
+    root_files = [path for path in sorted(ROOT.glob("*.md")) if not path.is_symlink()]
+    return root_files + sorted((ROOT / "docs").glob("*.md"))
 
 
 def link_destination(raw_target: str) -> str:
