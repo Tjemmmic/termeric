@@ -264,7 +264,7 @@ Termeric may be tagged as a Linux beta only when all of these are true on the ex
 
 1. Every **Broken** default-path capability above is fixed, disabled, or explicitly removed from the UI/configuration.
 2. The VT support manifest and deterministic conformance/fuzz smoke from [#16](https://github.com/Tjemmmic/termeric/issues/16) pass.
-3. The candidate-bound [hermetic release preflight](release-preflight.md), headless GPU smoke, and the end-to-end Linux acceptance suite from [#17](https://github.com/Tjemmmic/termeric/issues/17) pass.
+3. The workspace quality checks, headless GPU smoke, and the end-to-end Linux acceptance suite from [#17](https://github.com/Tjemmmic/termeric/issues/17) pass.
 4. Performance, memory, idle-resource, and soak budgets from [#18](https://github.com/Tjemmmic/termeric/issues/18) through [#23](https://github.com/Tjemmmic/termeric/issues/23) have current results and no unresolved release-blocking regression.
 5. Terminfo/capability claims are truthful and verified as defined by [#25](https://github.com/Tjemmmic/termeric/issues/25).
 6. Bash/Zsh/Fish/Nushell/Elvish, desktop integrations, and consent-based authenticated plugin checks in [#26](https://github.com/Tjemmmic/termeric/issues/26) either pass or are accepted as named beta limitations.

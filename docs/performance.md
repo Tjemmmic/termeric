@@ -2,8 +2,6 @@
 
 Termeric has a versioned release benchmark program, not a blanket optimization claim. Compact byte-bounded scrollback, event-driven idle rendering, persistent GPU buffers, and incremental terminal-row rendering now have measured improvements. Git/transcript blocking work is isolated behind bounded workers; a separate resource-soak lane now measures process growth without conflating a short passing run with proof of multi-day stability.
 
-Cargo artifact disk use is measured separately from runtime memory. See [`build-footprint.md`](build-footprint.md) for the line-table development profile, opt-in full-debug profile, deterministic target-directory reporter, and explicit cleanup boundary.
-
 ## Run the suite
 
 From a release-capable Linux checkout, one command runs the core, interaction, renderer, PTY, tab/pane, memory, and displayed-idle workloads and writes a machine-readable artifact:
@@ -179,67 +177,7 @@ The separate [resource soak](resource-soak.md) checks persistent history peaks a
 
 ## Comparing other terminals
 
-[`scripts/compare_terminals.py`](../scripts/compare_terminals.py) records an opt-in, end-to-end X11 comparison against explicitly selected Termeric, Alacritty, kitty, WezTerm, Ghostty, and Konsole executables. It never installs a terminal, silently adds an available terminal, or treats an unavailable selection as a successful comparison. Run it on one otherwise-idle host and display session; an isolated Xvfb session is preferred:
-
-```bash
-cargo build --release --locked
-xvfb-run -a -s "-screen 0 1280x900x24" \
-  python3 scripts/compare_terminals.py \
-  --terminal termeric \
-  --terminal alacritty \
-  --terminal kitty \
-  --terminal wezterm \
-  --terminal ghostty \
-  --terminal konsole \
-  --output target/terminal-comparison/results.json
-```
-
-Only name terminals that are intentionally participating. The runner requires Linux `/proc`, X11, and `xdotool`; ranking additionally requires working Fontconfig `fc-list`/`fc-match` probes and a literal installed font family. It uses a fresh process and isolated XDG configuration per sample, requests the same font family, numeric size, grid, opacity, padding, retention controls, warmups, and byte stream, and records every executable and version plus its SHA-256 digest. The artifact records each adapter's font-size unit. Termeric configures points (96/72 logical pixels per point) like the other current adapters, but equal numeric inputs are still not silently treated as proof of equal physical glyph size. Runs recorded before this change used Termeric logical pixels. Actual initial/final PTY grids and native pixel geometry remain the comparison authority. Sample order rotates between terminals on each round so one participant does not always inherit the coldest or hottest slot. Adapters force fresh instances with the terminals' supported launch controls: kitty sessions are disabled, WezTerm uses `--always-new-process --no-auto-connect`, Ghostty disables GTK single-instance mode, and Konsole uses `--separate --builtin-profile`. No personal terminal configuration participates.
-
-Schema 3 adds a per-sample `font_environment` observation, collected in that participant's isolated XDG environment before starting the process/timer. It records the requested family's presence in the installed-family inventory, Fontconfig's resolved family aliases/file/face index, and the font file's SHA-256. `fc-match` alone is insufficient because it silently substitutes missing families. Missing tools, probe failures, unreadable files, malformed records, substitutions, or inconsistent face fingerprints block **all four rankings**, without discarding otherwise valid raw timing/resource samples. A bad later sample cannot be hidden behind the first good sample. Generic aliases or Fontconfig patterns are not proof of a literal installed family. Schema-1/2 samples lack this evidence and fail the current font-control gate; historical contract results below describe the runner version used then.
-
-The gate establishes a shared installed/Fontconfig-resolved face, **not proof that every terminal renderer chose that face**. Every sample explicitly marks its renderer face `not_observed`; the comparison reports renderer-face equivalence `not_verified`, even when other controls pass. Renderer-selected faces and fallback glyphs still need independent evidence before claiming a font-equivalent ranking. The pre-launch probes may warm font caches: new startup timings must not be treated as directly interchangeable with older runs lacking those probes. No package is installed or user font configuration changed by the runner.
-
-For pixel/grid calibration, `--termeric-font-size` overrides only Termeric's point size (8–72); the other adapters keep `--font-size` in their recorded units. `--termeric-line-height` sets Termeric's font-size multiplier (0.8–3.0). Both the report settings and Termeric's per-terminal controls retain the requested values. Without overrides, the historical common numeric size and Termeric line-height multiplier 1.0 are unchanged. There is no implicit DPI conversion or automatic claim that glyph metrics match.
-
-On the chosen isolated X11 display, this is a starting point based on the previously calibrated 100×30 / 901×601 geometry, now explicitly requesting the installed Noto Sans Mono family. That calibration used a 14.67 logical-pixel Termeric override, which is 11 points now that Termeric's size is in points:
-
-```bash
-python3 scripts/compare_terminals.py \
-  --terminal termeric --terminal kitty \
-  --font-family 'Noto Sans Mono' \
-  --font-size 11 --termeric-line-height 1.3 \
-  --window-width 901 --window-height 601 \
-  --samples 1 --warmups 0 \
-  --output target/terminal-comparison/calibration.json
-```
-
-These values are not a portable preset. Inspect the font observations and the actual initial/final grid and window pixels, retain unsuccessful calibration records, then collect full warmup/repeated samples with the chosen settings. Overrides never bypass the comparison contract. Even matching grid/window dimensions do not prove identical glyph rasterization, chrome/content layout, renderer backends, or allocator behavior; report those limits with any ranking. See [the calibrated evidence](#calibrated-resource-comparison-at-5e7d4b9).
-
-The runner also replaces inherited Wayland/toolkit display selectors and reexecutes itself once under a private `dbus-run-session` before every version probe and launch. The Wayland display and socket variables are deliberately present but empty: Winit 0.30 then selects `DISPLAY`, while libwayland cannot fall back to the default `wayland-0` socket. EGL is pinned to X11; kitty receives `linux_display_server x11`, WezTerm receives `enable_wayland = false`, Ghostty receives `GDK_BACKEND=x11`, and Konsole receives `QT_QPA_PLATFORM=xcb`. This remains necessary under `xvfb-run`: a Wayland desktop commonly exports both `DISPLAY` and `WAYLAND_DISPLAY`, and without explicit isolation a participant could open on the operator's real desktop, select the wrong WGPU platform, or hand work to an already-running desktop process and invalidate both isolation and process-tree accounting. The one private D-Bus daemon is outside each terminal's measured process tree.
-
-Those controls follow the projects' own command/configuration references: [Alacritty CLI](https://github.com/alacritty/alacritty/blob/master/extra/man/alacritty.1.scd), [kitty invocation](https://sw.kovidgoyal.net/kitty/invocation/), [WezTerm `start`](https://wezterm.org/cli/start.html), [Ghostty configuration](https://ghostty.org/docs/config), and [Konsole command-line options](https://docs.kde.org/trunk_kf6/en/konsole/konsole/command-line-options.html). Treat a changed or rejected flag in an installed version as an adapter failure, not permission to retry with the user's ordinary configuration.
-
-The shared child writes the same bounded styled ASCII/Unicode stream, requests the cursor position with CSI 6 n, records its actual PTY grid, and then remains idle. The artifact keeps four dimensions separate:
-
-- process launch to discovery of a visible window containing a unique OSC 2 title marker;
-- child byte-stream start through receipt of the cursor-position response;
-- terminal-owned process-tree RSS after the workload; and
-- terminal-owned process-tree CPU while idle.
-
-The common Python fixture is excluded from resource totals. PTY response time proves parser/PTY response, not compositor presentation. Startup includes child startup and OSC-title parsing. CPU is percent of one logical core, and RSS is a sum across the observed terminal process tree rather than the launcher PID alone.
-
-Schema **2** makes resource observations explicitly complete or unavailable. Every discovered terminal PID must yield unique, valid RSS/thread fields, readable descriptor counts, and matching Linux start-time identities before and after its observation. Missing RSS is not zero, and an unreadable process does not disappear from the aggregate. Failed discovery or any incomplete process observation leaves the tree totals `null`, with reasons and successfully read per-process diagnostics retained. The common fixture is still excluded from resource totals and retained separately for cleanup. Known PID/start-time identities also remain available to cleanup when later RSS or descriptor reads fail; metric ineligibility does not discard process-lifecycle bookkeeping.
-
-Idle CPU requires two complete observations of the same PID/start-time set and nondecreasing counters for every process. Membership changes, PID reuse, counter decreases, and incomplete observations produce an unavailable CPU row, not a zero-clamped delta or a subtraction across different process trees. A complete final RSS snapshot can remain usable even when the idle interval is not. Resource summaries retain missing samples as `null` and do not compute statistics from a cherry-picked subset. Each metric's comparison contract also requires explicit complete measurement status and finite, nonnegative values; usable startup/PTY timing rows are independent of resource-read failures.
-
-These checks cover the discovered trees at the two observation points, not an atomic `/proc` snapshot or CPU used by helpers born and exited entirely between them. RSS remains summed resident mappings, not proportional or private memory, and these observations do not measure peak allocation or GPU memory. Synthetic read/discovery denial, exit/reuse/churn/counter, partial-summary, and launch-path tests plus a live self-process read exercise this contract without launching an external terminal or provider. Older schema-1 resource totals lack this evidence and are not upgraded into schema-2 measurements.
-
-Comparison is fail closed per metric. Initial-grid drift blocks startup ranking; final-grid or retention drift blocks PTY ranking; native-window pixel drift additionally blocks RSS/idle-CPU ranking. Raw samples remain useful when a row is not comparable, but the JSON's `comparison_contract.metrics` says which rankings are permitted and why. Tune `--window-width` and `--window-height` if Termeric or Konsole do not reach the requested grid. Keep the complete JSON and per-run logs; do not combine these external end-to-end rows with Termeric's internal Rust or WGPU metrics.
-
-Equal *missing* pixel dimensions are not a match. Every sample must have positive integer width/height and no geometry-query errors before either resource metric can be ranked. Missing, null, boolean, fractional, nonpositive, or malformed dimensions block resource ranking, even when every terminal has the same bad values or other samples have matching valid dimensions. Only valid geometry enters the observed-pixel inventory. The X11 query has a five-second timeout, rejects missing/duplicate/invalid dimension fields, and retains query failures explicitly in `window_geometry.errors`; it does not discard otherwise valid timing or process-resource observations. Optional coordinates do not establish comparability. Startup and PTY timing eligibility remain governed by their separate contracts.
-
-Parser/contract and mocked launch-path regressions cover these failures without launching a real terminal. Re-evaluating the five retained schema-2 native reports at `49b3fab`, `d6d5261`, and `4081caa` (50 measured samples) leaves all their comparison contracts unchanged. Their actual pixel sizes still differ; this fix closes a false-positive path without promoting mismatched runs. The separate calibrated measurements below establish matching geometry locally.
+The results below were recorded with a cross-terminal comparison script that has since been removed; they are kept as history.
 
 ### Current local comparison evidence
 

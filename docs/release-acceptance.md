@@ -6,7 +6,7 @@ This file records candidate-specific evidence separately from unit-test evidence
 
 This is a non-candidate dry run recorded on 2026-09-02 from the dirty `improvements` working tree rooted at `8c127fc3483a`. A **provisional pass** means the named local evidence passes now; it cannot become a release pass until reproduced for an exact candidate SHA. A configured workflow without an accepted artifact remains **blocked**.
 
-The candidate-bound [hermetic preflight](release-preflight.md) now converts the provider-free portions of gates 1, 2, 3, 5, and 8 into one tamper-checked record. This historical dry run predates such a clean record, so its provisional and blocked dispositions remain unchanged until the first exact-candidate artifact is retained.
+This historical dry run's provisional and blocked dispositions remain unchanged until an exact candidate is re-checked.
 
 | Gate | Evidence mode | Current dry-run result |
 |---:|---|---|

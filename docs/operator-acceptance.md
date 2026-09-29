@@ -97,17 +97,7 @@ Keep each generated artifact directory intact. Review terminal transcripts and s
 
 These checks do not authenticate, contact an AI service, or consume AI tokens:
 
-For a clean committed candidate, prefer the fixed-command evidence runner:
-
-```bash
-cargo fetch --locked
-python3 scripts/release_preflight.py run \
-  --output target/release-preflight
-python3 scripts/release_preflight.py validate \
-  target/release-preflight/record.json
-```
-
-It records the complete gate logs and release-binary digest while removing provider opt-ins from child processes. See [`release-preflight.md`](release-preflight.md). The individual commands below remain useful for development diagnosis.
+Run the individual quality commands:
 
 ```bash
 cargo fmt --all -- --check

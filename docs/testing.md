@@ -75,10 +75,6 @@ The workspace suite checks `--env`, `--unset-env`, and `--clear-env` through CLI
 
 `cargo test -p termeric --test gui_launch_wait --locked` runs the actual CLI against private local fake GUI sockets with display variables removed. It checks running-to-exited progression, polling rate, exit codes 0/7/124/255/256, the unchanged one-shot query status, strict result identity/state/version, unknown records, disconnects, partial-response timeout, credential changes, and same-path socket replacement with unchanged credentials. Combined `launch-tab`/`launch-window --wait` fixtures additionally accept one fake launch request followed only by status queries. They check exact argv and environment forwarding, immediate/running completion, final-only JSON, generated/requested ID continuity, lost-ack recovery without retry, invalid options without endpoint contact, mismatched acknowledgements before polling, shared launch/status deadlines, endpoint changes between the two phases, malformed/unknown completion, and unchanged no-wait launch output. No requested program is executed by the fake endpoint; no cancellation, real GUI, or provider workflow is executed. Unix socket access must be available to this test lane. The regular workspace suite additionally covers read/write backpressure under absolute deadlines, nonblocking refusal of FIFO token substitution, and CLI option validation. Native launch/window acceptance remains deferred.
 
-## Cargo build-footprint contract
-
-`python3 scripts/build_footprint.py target` reports exact logical bytes and regular-file counts for an explicitly selected Cargo target directory without following symlinks or deleting artifacts. `scripts.test_build_footprint` provides hermetic coverage for profile configuration, classification, accounting, deterministic JSON, limits, symlinks, and error handling. See [`build-footprint.md`](build-footprint.md) for the ordinary and full-debug workflows and the same-host profile comparison.
-
 The default verification lane is deterministic and does not require a window:
 
 ```bash
@@ -97,8 +93,6 @@ The test suite includes a headless `App` controller, direct terminal fixtures, r
 Reusable terminal-profile coverage is hermetic: `/bin/sh` fixtures verify exact environment/cwd/title delivery, CLI resolution before window creation, palette hot replacement, frozen pane launch configuration, and workspace identity. No provider-backed or authenticated AI command is executed by this lane. Running-GUI exact-command coverage is also hermetic. Protocol, framing, CLI, replay, preparation, and headless real-PTY fixtures verify literal argv, cwd/title behavior, source-configuration inheritance, stable result IDs, failure atomicity, bounded environment validation, value-blind errors, order-independent replay identity, and exact empty/whitespace/Unicode/shell- character environment delivery for both existing-tab and fresh-window launch. These tests do not open a native window; compositor visibility/placement acceptance is deferred to the operator and is not a release claim. Launch-status coverage adds real child exit/cleanup and ownership-transfer fixtures, consumed-status caching, explicit polling failures, bounded ledger admission/eviction, replay-expiry refusal, and strict CLI/wire/result validation. These fixtures run local shell helpers only. Native GUI status acceptance and any real provider child remain operator work. The separate `scripts/run_fake_provider_acceptance.py` runner resolves and executes only that exact fake-CLI test, strips provider opt-in variables, and emits a sealed partial integration record. CI uploads it with the tested binary digest; every non-fake integration row remains visibly unrecorded. The fake CLI publishes readiness only after writing its launch record. New conversation and context input are logged with the agent's identity, so one agent's log entry cannot satisfy the other's assertions. Resume waits for its own launch record rather than an earlier tab's readiness. This covers fixture scheduling and routing, not the readiness or behavior of real provider executables.
 
 The feature-support contract rejects undefined status vocabulary, README highlights without reviewed matrix mappings, missing/duplicate capability rows, incomplete release-gate domains, missing contributor guidance, and malformed GitHub issue links. Its negative tests prove those failures remain fail-closed; the separate Markdown checker resolves every repository-local documentation target.
-
-For an exact clean candidate, the fixed-command [hermetic release preflight](release-preflight.md) runs these provider-free quality gates offline and binds their complete logs, tool context, Git SHA, and release-binary digest into one validated artifact. It does not replace native, package-manager, soak, remote-host, or authenticated-integration evidence.
 
 Live-domain compatibility coverage includes an executable-level `domain protocol-version --json` probe under an isolated runtime directory. It must return the compiled wire version without creating a daemon socket or token. Exact-version mismatch tests fail before requests or terminal input, while the fake-SSH integration remains credential- and network-free.
 
@@ -267,19 +261,6 @@ python3 -m unittest scripts.test_generate_cldr_annotations
 See [`cldr-annotations.md`](cldr-annotations.md) for the exact download, generation, and byte-for-byte `--check` commands. No test fetches data at runtime.
 
 See [`performance.md`](performance.md) for workload boundaries, repeatability, baseline comparison, CI budgets, and heaptrack/DHAT/perf/flamegraph recipes. The older opt-in three-second core acceptance tests remain coarse safety rails; the JSON suite is the release measurement source of truth.
-
-Cross-terminal evidence is a separate opt-in operator lane. It never runs in ordinary CI and never auto-launches an installed terminal. Select every participant explicitly under one controlled X11 session:
-
-```bash
-xvfb-run -a -s "-screen 0 1280x900x24" \
-  python3 scripts/compare_terminals.py \
-  --terminal termeric --terminal alacritty --terminal kitty \
-  --output target/terminal-comparison/results.json
-```
-
-The runner replaces inherited Wayland/toolkit display selectors, reexecutes once under a private `dbus-run-session`, pins EGL to X11, and applies each terminal's explicit X11 control before any launch. Deliberately empty Wayland display/socket variables make Winit select `DISPLAY` and defeat WGPU's implicit `wayland-0` probe. This keeps an `xvfb-run` comparison on its private display even when invoked from an active Wayland desktop and keeps single-instance IPC out of the operator's live session. `python3 -m unittest scripts.test_compare_terminals` fails if an adapter loses that isolation contract.
-
-Run `python3 -m unittest scripts.test_compare_terminals` to validate adapters, the deterministic byte fixture, process-tree accounting, and per-metric fail-closed comparison logic without launching any terminal. Real runs remain manual because installed versions, font resolution, compositor state, GPU power state, and native geometry are evidence inputs rather than hermetic CI facts. See the comparison section of [`performance.md`](performance.md).
 
 For idle-render changes, run the displayed probe once with `XDG_SESSION_TYPE=wayland` in the native Wayland session and once under Xvfb with `XDG_SESSION_TYPE=x11`. The benchmark runner clears the competing display selector, explicitly selects Winit's backend, and pins EGL to that backend before it starts Termeric. On X11, the Wayland variables remain deliberately present but empty to prevent WGPU from implicitly probing `wayland-0`. This keeps inherited desktop variables from escaping the requested session. Scheduler and PTY wake unit coverage plus the frame-reason diagnostic procedure are in [`event-driven-rendering.md`](event-driven-rendering.md).
 
