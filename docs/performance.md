@@ -42,7 +42,7 @@ This comparison checks declared workload identity, not hidden fixture changes. P
 
 ## Headless budget refresh at `2edd584`
 
-The [preserved raw report](../benchmarks/results/2edd584-headless.json) records clean `2edd584dff72eda42db576fdbe44e22e135466a2`, captured at `2026-09-19T04:09:00Z`. Its SHA-256 is `5c9586aae3c05c4b6ba1056b98b451965314b112b1f7d66b7935516ec60f4a7a`. This is a retained observation, not a replacement for the checked-in baseline.
+The raw report (no longer kept in the repository) records clean `2edd584dff72eda42db576fdbe44e22e135466a2`, captured at `2026-09-19T04:09:00Z`. Its SHA-256 is `5c9586aae3c05c4b6ba1056b98b451965314b112b1f7d66b7935516ec60f4a7a`. This is a retained observation, not a replacement for the checked-in baseline.
 
 The existing runner completed one release-suite process per producer, with five samples per measured metric, on an AMD Ryzen 9 7900X3D / Linux `7.2.6-arch2-1`. Offscreen rendering used Mesa `26.2.3-arch1.1` llvmpipe through Vulkan, explicitly selecting the software ICD. No displayed window or AI provider was launched; PTY fixtures used `/bin/cat` and `/bin/true`.
 

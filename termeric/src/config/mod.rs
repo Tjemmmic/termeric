@@ -1428,6 +1428,13 @@ mod tests {
     }
 
     #[test]
+    fn shipped_example_config_loads() {
+        let example =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../assets/config.example.toml");
+        Config::load_from(&example).unwrap();
+    }
+
+    #[test]
     fn accessibility_preferences_default_to_system_and_round_trip() {
         let defaults: Config = toml::from_str("").unwrap();
         assert_eq!(defaults.accessibility, AccessibilityConfig::default());

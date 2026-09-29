@@ -350,6 +350,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn shipped_custom_theme_example_loads() {
+        let example =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../assets/themes/custom-example.toml");
+        let theme = Theme::load(&example).unwrap();
+        assert_eq!(theme.meta.name, "Custom Example");
+    }
+
+    #[test]
     fn test_hex_color() {
         let c = Color::hex("#FF5500");
         assert_eq!(c.r, 255);
