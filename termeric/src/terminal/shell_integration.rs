@@ -1208,7 +1208,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "known Nushell 0.115.1 OSC 7 percent bug; see docs/osc-integration.md"]
+    #[ignore = "known Nushell 0.115.1 bug: OSC 7 paths containing %2F are misread"]
     fn nushell_native_cwd_preserves_literal_percent_escapes() {
         let program = executable_on_path("nu").expect("this regression requires nu");
         run_shell_semantics_probe_with_options(

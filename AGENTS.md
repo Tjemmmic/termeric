@@ -16,7 +16,7 @@ python3 scripts/check_markdown_links.py
 
 In Markdown, write each paragraph and list item on one line; don't hard-wrap prose.
 
-The deterministic workspace lane, opt-in GPU/performance checks, and release evidence are documented in `docs/testing.md`. `docs/feature-support.md` is the authoritative user-visible support contract: parser recognition or unit coverage alone does not make a feature supported. Update the matrix whenever a change alters a capability boundary.
+[`docs/dev/testing.md`](docs/dev/testing.md) covers the slower suites (native GUI, soaks, benchmarks, fuzzing, packages) and CI. The user guide is an mdBook in `docs/` (`mdbook build docs`); update the affected page when user-visible behavior changes, and [`docs/src/status.md`](docs/src/status.md) when a feature's support level changes. Parser recognition or unit coverage alone does not make a feature supported.
 
 ## Workspace Structure
 
@@ -38,17 +38,17 @@ winit event loop
   → renderer/mod.rs      (builds render data, submits to wgpu)
 ```
 
-PTY output and terminal-generated replies follow one stricter ownership path: `TabManager::poll_events()` polls every tab/pane, `PtyWrite` is consumed beside the originating `PtyHandle`, and only pane-tagged app events leave that owner. Never route a terminal-generated reply through focused input. Queue ceilings, cleanup ordering, and tests are documented in `docs/pane-event-routing.md`.
+PTY output and terminal-generated replies follow one stricter ownership path: `TabManager::poll_events()` polls every tab/pane, `PtyWrite` is consumed beside the originating `PtyHandle`, and only pane-tagged app events leave that owner. Never route a terminal-generated reply through focused input.
 
-In pane mode, the tab's single-terminal owner is detached and adopted by pane zero; no replacement PTY may be spawned. User-facing reads and writes must use `Tab::focused_terminal()`, `focused_terminal_mut()`, or `Tab::write()`; focus changes must refresh search/URL/Git/cursor surfaces. Lifecycle transitions use the take/restore owner APIs. See `docs/focused-pane-routing.md` and `docs/pane-lifecycle.md`.
+In pane mode, the tab's single-terminal owner is detached and adopted by pane zero; no replacement PTY may be spawned. User-facing reads and writes must use `Tab::focused_terminal()`, `focused_terminal_mut()`, or `Tab::write()`; focus changes must refresh search/URL/Git/cursor surfaces. Lifecycle transitions use the take/restore owner APIs.
 
-Session persistence takes one stable focused-terminal snapshot. Pane-local last-command state must move with terminal ownership, and close-time tab snapshot saves must continue through `Tab::save_as_session()`. Complete startup/exit persistence uses the separate versioned workspace archive and reconstructs tabs/panes by relaunching fresh processes. See `docs/session-snapshots.md` and `docs/workspaces.md`.
+Session persistence takes one stable focused-terminal snapshot. Pane-local last-command state must move with terminal ownership, and close-time tab snapshot saves must continue through `Tab::save_as_session()`. Complete startup/exit persistence uses the separate versioned workspace archive and reconstructs tabs/panes by relaunching fresh processes. See [`docs/src/workspaces-and-sessions.md`](docs/src/workspaces-and-sessions.md).
 
-Agent hooks report through `termeric agent-event` over the control socket. Each report names its terminal by the `TERMERIC_TERMINAL_ID` its processes inherited from `PtyHandle`, never by focus. Status lives on the terminal's `TerminalSession` and moves with it. See `docs/agents.md`.
+Agent hooks report through `termeric agent-event` over the control socket. Each report names its terminal by the `TERMERIC_TERMINAL_ID` its processes inherited from `PtyHandle`, never by focus. Status lives on the terminal's `TerminalSession` and moves with it. See [`docs/src/agents.md`](docs/src/agents.md).
 
-The experimental agent view is a docked, non-modal panel right of the terminals that drives Claude Code (stream-json), Codex (app-server), and OpenCode (Agent Client Protocol) headlessly, each through an `agent_view::protocol::Protocol` that translates to agent-neutral events (`agent_view/`). It owns its agent processes, not PTYs, and never routes through focused terminal input. The terminal area ends at `Renderer::content_right()`. A dock width change resizes only the active tab (`sync_agent_dock` → `sync_active_terminal_geometry`); every other geometry change resizes all tabs through `sync_terminal_geometry`. Each tab owns one agent view: the panel state is bound to the active tab in `refresh_focused_terminal_surfaces`, moves with a tab between windows, and ends with it (`app/agent_view_tabs.rs`). Its scene (`ui/agent_view/scene.rs`) is the single source for drawing, hit targets, focus order, and accessibility. See `docs/agent-view.md`.
+The experimental agent view is a docked, non-modal panel right of the terminals that drives Claude Code (stream-json), Codex (app-server), and OpenCode (Agent Client Protocol) headlessly, each through an `agent_view::protocol::Protocol` that translates to agent-neutral events (`agent_view/`). It owns its agent processes, not PTYs, and never routes through focused terminal input. The terminal area ends at `Renderer::content_right()`. A dock width change resizes only the active tab (`sync_agent_dock` → `sync_active_terminal_geometry`); every other geometry change resizes all tabs through `sync_terminal_geometry`. Each tab owns one agent view: the panel state is bound to the active tab in `refresh_focused_terminal_surfaces`, moves with a tab between windows, and ends with it (`app/agent_view_tabs.rs`). Its scene (`ui/agent_view/scene.rs`) is the single source for drawing, hit targets, focus order, and accessibility. See [`docs/src/agent-view.md`](docs/src/agent-view.md).
 
-Experimental live domains are a third, intentionally separate lifecycle. The `domain/` daemon owns real PTYs and parser state; GUI tabs own only relay PTYs. Never save a relay as a workspace shell or mutate its layout locally. Protocol I/O is versioned, authenticated, length-bounded, and kept off PTY reader locks. See `docs/live-domains.md`.
+Experimental live domains are a third, intentionally separate lifecycle. The `domain/` daemon owns real PTYs and parser state; GUI tabs own only relay PTYs. Never save a relay as a workspace shell or mutate its layout locally. Protocol I/O is versioned, authenticated, length-bounded, and kept off PTY reader locks. See [`docs/src/live-domains.md`](docs/src/live-domains.md).
 
 ### Key Modules (termeric/)
 
@@ -181,11 +181,11 @@ In `app/event_loop.rs` (KeyboardInput handler), after AltGraph tracking and quer
 4. Search, then copy mode/quick select
 5. Normal input: broadcast cancel on Escape, F6 chrome focus, Git completion keys, broadcast arming, application shortcuts, plugin/custom keybindings, broadcast writes, then `input/keyboard.rs` encoding
 
-Snapshot DECCKM/DECKPAM from `active_terminal()` immediately before encoding, then write through `Tab::write()` so the mode and PTY always belong to the same focused pane. AltGraph state is explicit and is cleared on focus loss. See `docs/keyboard-input.md`.
+Snapshot DECCKM/DECKPAM from `active_terminal()` immediately before encoding, then write through `Tab::write()` so the mode and PTY always belong to the same focused pane. AltGraph state is explicit and is cleared on focus loss.
 
-Copy mode is bound to the focused tab/pane identity at entry. Mouse focus changes cancel it, resize tracks its cursor/anchor through a grid-bound resize transaction, and its selection is synchronized only through `focused_terminal_mut()`. Quick select scans the visible focused grid and must not create a second text model; see `docs/copy-mode.md`.
+Copy mode is bound to the focused tab/pane identity at entry. Mouse focus changes cancel it, resize tracks its cursor/anchor through a grid-bound resize transaction, and its selection is synchronized only through `focused_terminal_mut()`. Quick select scans the visible focused grid and must not create a second text model.
 
-Mouse, focus, alternate-scroll, and paste reports snapshot mode from the same focused terminal that receives the bytes. Protocol writes bypass editable-line alias/completion handling. Shift is the explicit native mouse bypass. See `docs/terminal-input-protocols.md`.
+Mouse, focus, alternate-scroll, and paste reports snapshot mode from the same focused terminal that receives the bytes. Protocol writes bypass editable-line alias/completion handling. Shift is the explicit native mouse bypass.
 
 ### Rendering vs Input Visibility
 

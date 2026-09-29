@@ -1,6 +1,5 @@
 # cargo-about configuration for termeric/THIRD_PARTY_NOTICES.md.
-# Regenerate after any Cargo.lock change; see "Dependency updates" in
-# docs/install.md.
+# Regenerate after any Cargo.lock change; see "Dependencies" in CONTRIBUTING.md.
 
 accepted = [
     "0BSD",

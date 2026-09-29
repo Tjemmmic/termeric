@@ -43,9 +43,12 @@ jobs:
       - run: cargo test --workspace --locked
       - name: Test the helper scripts
         run: python3 -m unittest $(git ls-files 'scripts/test_*.py' | sed 's|/|.|; s|\.py$||')
-      - name: Check Markdown links and the feature-support matrix
-        run: |
-          python3 scripts/check_markdown_links.py
-          python3 scripts/check_feature_support.py
+      - name: Check Markdown links
+        run: python3 scripts/check_markdown_links.py
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: mdbook
+      - name: Build the user guide
+        run: mdbook build docs
       - name: Check the terminfo entry with Vim, less, and tmux
         run: python3 scripts/check_terminfo.py --require-apps

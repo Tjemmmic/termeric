@@ -7,8 +7,6 @@ use termeric_core::term::TerminalMode;
 use termeric_core::{CellFlags, Terminal, TerminalEvent};
 
 const SUPPORT_MANIFEST: &str = include_str!("fixtures/vt_support.toml");
-const PRODUCT_SUPPORT_MATRIX: &str = include_str!("../../docs/feature-support.md");
-const PROJECT_README: &str = include_str!("../../README.md");
 const CONFORMANCE_CASES: &str = include_str!("fixtures/conformance_cases.toml");
 const PARSER_TEST_SEEDS: &str = include_str!("fixtures/parser_test_seeds.toml");
 const EXTERNAL_TRACES: &str = include_str!("fixtures/external_traces.toml");
@@ -251,95 +249,6 @@ fn support_manifest_is_versioned_unique_and_evidenced() {
             }
         }
     }
-}
-
-#[test]
-fn product_support_matrix_matches_cross_layer_protocol_contracts() {
-    let manifest: SupportManifest = toml::from_str(SUPPORT_MANIFEST).unwrap();
-
-    assert_product_contract(
-        &manifest,
-        "Application keyboard modes and modifiers",
-        "Partial",
-        &[
-            ("csi-kitty-keyboard-enhancements", "partial"),
-            ("csi-xterm-modify-other-keys", "supported"),
-            ("csi-xterm-keyboard-resource-zero", "supported"),
-            ("dec-xterm-keyboard-types", "supported"),
-            ("dcs-dec-user-defined-keys", "supported"),
-            ("csi-xterm-cursor-key-resources", "supported"),
-            ("csi-xterm-function-key-resources", "supported"),
-            ("csi-xterm-keypad-key-resources", "supported"),
-            ("csi-xterm-string-key-resources", "supported"),
-            ("csi-xterm-modifier-key-resources", "supported"),
-            ("csi-xterm-special-key-resources", "supported"),
-        ],
-    );
-    assert_product_contract(
-        &manifest,
-        "Terminal capability and status queries",
-        "Partial",
-        &[
-            ("csi-xtversion", "supported"),
-            ("csi-kitty-keyboard-state-query", "supported"),
-            ("csi-kitty-keyboard-enhancements", "partial"),
-            ("csi-mode-status", "supported"),
-            ("dcs-xtgettcap", "partial"),
-            ("dcs-decrqss", "partial"),
-        ],
-    );
-    assert_product_contract(
-        &manifest,
-        "Synchronized output",
-        "Supported",
-        &[("csi-synchronized-output", "supported")],
-    );
-    assert_product_contract(
-        &manifest,
-        "OSC 8 hyperlinks and detected URLs",
-        "Supported",
-        &[("osc-hyperlinks", "supported")],
-    );
-    assert_product_contract(
-        &manifest,
-        "OSC 133 shell semantics",
-        "Supported (Linux)",
-        &[("osc-shell-semantics", "supported")],
-    );
-    assert_product_contract(
-        &manifest,
-        "Shell-reported working directory",
-        "Partial",
-        &[("osc-current-directory", "supported")],
-    );
-    assert_product_contract(
-        &manifest,
-        "Kitty graphics",
-        "Partial",
-        &[("apc-kitty-graphics", "partial")],
-    );
-    assert_product_contract(
-        &manifest,
-        "Sixel and iTerm2 images",
-        "Partial",
-        &[
-            ("dcs-sixel", "partial"),
-            ("osc-iterm2-inline-images", "partial"),
-        ],
-    );
-
-    assert!(
-        PROJECT_README.contains("accepted Bash/Zsh/Fish OSC 133 semantics"),
-        "README must summarize the supported shell-semantics boundary"
-    );
-    assert!(
-        PROJECT_README.contains("acceptance-pending native Nushell and opt-in Elvish semantics"),
-        "README must disclose the pending and manual shell-semantics boundaries"
-    );
-    assert!(
-        !PROJECT_README.contains("experimental OSC 133"),
-        "README must not contradict the authoritative support matrix"
-    );
 }
 
 #[test]
@@ -832,46 +741,6 @@ fn validate_test_reference(claim_id: &str, reference: &str) {
         claim_id, relative_path, function
     );
 }
-
-fn assert_product_contract(
-    manifest: &SupportManifest,
-    capability: &str,
-    expected_product_status: &str,
-    expected_protocol_claims: &[(&str, &str)],
-) {
-    let prefix = format!("| {capability} |");
-    let matching_rows: Vec<&str> = PRODUCT_SUPPORT_MATRIX
-        .lines()
-        .filter(|line| line.starts_with(&prefix))
-        .collect();
-    assert_eq!(
-        matching_rows.len(),
-        1,
-        "feature matrix must contain exactly one row for {capability}"
-    );
-    let cells: Vec<&str> = matching_rows[0].split('|').map(str::trim).collect();
-    let actual_product_status = cells
-        .get(2)
-        .unwrap_or_else(|| panic!("feature matrix row for {capability} has no status"))
-        .trim_matches('*');
-    assert_eq!(
-        actual_product_status, expected_product_status,
-        "feature matrix status drifted for {capability}"
-    );
-
-    for (claim_id, expected_status) in expected_protocol_claims {
-        let claim = manifest
-            .sequence
-            .iter()
-            .find(|claim| claim.id == *claim_id)
-            .unwrap_or_else(|| panic!("feature matrix contract references missing {claim_id}"));
-        assert_eq!(
-            claim.status, *expected_status,
-            "protocol status drifted for {claim_id}, which backs {capability}"
-        );
-    }
-}
-
 fn decode_hex(input: &str) -> Vec<u8> {
     input
         .split_whitespace()

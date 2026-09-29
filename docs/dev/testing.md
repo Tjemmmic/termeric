@@ -1,0 +1,110 @@
+# Testing
+
+Most of Termeric's tests are ordinary Rust unit and integration tests that run anywhere. A smaller set needs a real GPU, a compositor, or several minutes, and runs in the weekly CI workflow or by hand. Helper scripts in `scripts/` drive those.
+
+## Everyday checks
+
+Run these before sending a change. They are what CI runs on every pull request.
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
+python3 -m unittest $(git ls-files 'scripts/test_*.py' | sed 's|/|.|; s|\.py$||')
+python3 scripts/check_markdown_links.py
+python3 scripts/check_terminfo.py --require-apps
+```
+
+`check_terminfo.py --require-apps` compiles `assets/terminfo/xterm-termeric.terminfo` and runs Vim, less, and tmux against it, so those three need to be installed. The Python tests cover the helper scripts themselves and need nothing beyond Python 3.
+
+To build the user guide, install [mdBook](https://rust-lang.github.io/mdBook/) and run `mdbook build docs`; the output goes to `target/book/`.
+
+## CI
+
+`.github/workflows/ci.yml` runs the everyday checks above on pull requests and pushes to `main`.
+
+`.github/workflows/extended.yml` runs the slower suites every Monday and whenever it's started from the Actions tab:
+
+| Job | What it checks |
+|---|---|
+| Debian package | Builds the `.deb` with `cargo deb`, inspects its contents, then installs, upgrades, and removes it on the runner |
+| Arch package | Builds the package from `packaging/arch/PKGBUILD` in an Arch container, inspects it, then installs and removes it |
+| Native GUI | Drives the real application under Xvfb (X11), Weston, and headless Sway (Wayland): input, panes, tabs, clipboard, renderer recovery, and a headless render compared against a visual baseline |
+| Shell and agent integration | Runs the Bash, Zsh, and Fish integration test in real PTYs, and every agent command against fake agent executables |
+| Resource soaks | Runs the headless and displayed workloads for ten minutes each, checking memory, thread, file-descriptor, and child-process growth |
+| Performance budgets | Runs the benchmark suite and compares it against `benchmarks/budgets.toml` |
+| Fuzzing | Fuzzes the terminal parser, the live-domain protocol, and the graphics protocols for a few minutes each |
+
+## Native GUI tests
+
+`scripts/gui_acceptance.py` launches the built application inside a private compositor and drives it with synthetic input. It needs `sway`, `swaymsg`, `wtype`, and `wl-clipboard` for Wayland scenarios; `xvfb-run`, `xdotool`, `xclip`, and `openbox` for X11; and Pillow for screenshots.
+
+```bash
+cargo build -p termeric --locked
+WGPU_BACKEND=gl python3 scripts/gui_acceptance.py --backend wayland --start-sway \
+  --scenario interaction --skip-visual-checks --font-family 'Noto Sans Mono' \
+  --binary target/debug/termeric --artifacts target/gui-acceptance/wayland
+```
+
+Repeat `--scenario` to run several; run the script with `--help` for the full list. The default font family is DejaVu Sans Mono; pass `--font-family` with an installed family otherwise. Logs, PTY transcripts, and screenshots land in the artifacts directory, and `results.json` records each scenario's result.
+
+## Soaks
+
+The soak runners look for resource leaks by running a busy workload while sampling the process through `/proc`. They print every check and exit non-zero if any limit is exceeded.
+
+```bash
+WGPU_BACKEND=vulkan python3 scripts/run_soak.py --duration-seconds 30 --gpu-smoke \
+  --output target/soak/local.json --log target/soak/local.log
+
+cargo build -p termeric --locked
+WGPU_BACKEND=gl python3 scripts/run_native_gui_soak.py --duration-seconds 30 \
+  --binary target/debug/termeric --artifacts target/native-gui-soak
+```
+
+`run_soak.py` runs the headless workload; `run_native_gui_soak.py` runs the displayed application in headless Sway while it resizes the output and opens and closes panes. Run `--help` on either for the adjustable limits.
+
+## Integration runners
+
+`scripts/run_shell_acceptance.py --output DIR` runs the shell-integration test against the real Bash, Zsh, and Fish on your `PATH`; add `--include-extended-shells` to require Nushell and Elvish as well. `scripts/run_fake_provider_acceptance.py --output DIR` runs every agent command against fake Claude Code and Codex executables. Neither needs an account or network access. Both write `results.json` and their logs to `DIR`.
+
+## Benchmarks
+
+```bash
+python3 scripts/run_benchmarks.py --skip-displayed \
+  --baseline benchmarks/baselines/2026-08-25-linux.json
+```
+
+The runner builds and runs the release benchmark suite, writes `target/benchmarks/latest.json`, and fails if a metric exceeds its budget in `benchmarks/budgets.toml`. `benchmarks/metrics.toml` defines each metric. Use `--no-check` to record results without enforcing budgets.
+
+## Fuzzing
+
+The fuzz targets live in `fuzz/` and use [cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz), which needs a nightly toolchain.
+
+```bash
+python3 scripts/materialize_fuzz_corpus.py /tmp/termeric-fuzz-corpus
+cargo +nightly fuzz run terminal_bytes /tmp/termeric-fuzz-corpus -- \
+  -dict=fuzz/terminal.dict -max_len=65536 -max_total_time=60
+cargo +nightly fuzz run domain_protocol fuzz/corpus/domain_protocol -- -max_total_time=60
+cargo +nightly fuzz run graphics_protocols fuzz/corpus/graphics_protocols -- -max_total_time=60
+```
+
+`materialize_fuzz_corpus.py` turns the reviewable fixtures under `termeric-core/tests/` into binary seeds for the parser target.
+
+## Packages
+
+```bash
+cargo install cargo-deb --locked
+cargo deb -p termeric --locked
+python3 scripts/check_debian_package.py target/debian/termeric_*.deb
+
+python3 scripts/build_arch_package.py --output target/arch
+python3 scripts/check_arch_package.py target/arch/termeric-git-*.pkg.tar.zst
+```
+
+The checkers inspect a package without installing it. Their `--system-lifecycle` mode installs, upgrades, and removes the package, so only use it on a disposable machine or container.
+
+## Generated files
+
+- `scripts/generate_icons.py` renders the hicolor icon set in `assets/icons/` from the master artwork.
+- `scripts/generate_cldr_annotations.py` regenerates the emoji name index used by the Unicode picker from pinned CLDR data.
+- `termeric/THIRD_PARTY_NOTICES.md` is generated by cargo-about; see [Contributing](../../CONTRIBUTING.md) for the command.

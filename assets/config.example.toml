@@ -1,19 +1,16 @@
-# Termeric Configuration
-# Copy this to ~/.config/termeric/config.toml
+# Termeric configuration example.
+# Copy to ~/.config/termeric/config.toml. Every key is optional; a key you leave
+# out keeps its default. The Configuration page of the user guide lists them all.
 
-# Shell configuration
 [shell]
-# Path to shell program (leave empty for default shell). Reload affects new tabs;
-# existing PTYs keep running their current shell.
+# Shell to run in new tabs (leave unset for your login shell).
 # program = "/bin/zsh"
-# Arguments to pass to shell
 # args = ["-l"]
-# Optional bounded child environment
 # env = { EDITOR = "nvim" }
 
-# Reusable non-plugin terminal launches. Each profile becomes a command-palette
-# entry and can be selected with `termeric --terminal-profile development`.
-# Program and args are executed directly; cwd must be absolute.
+# A reusable launch: appears in the command palette and works with
+# `termeric --terminal-profile development`. The program runs directly, and
+# cwd must be an absolute path.
 # [profiles.development]
 # description = "Rust workspace"
 # program = "/bin/zsh"
@@ -22,205 +19,157 @@
 # title = "Project shell"
 # env = { RUST_BACKTRACE = "1" }
 
-# Linux serial profiles use the same CLI/palette profile identity but cannot
-# also set program, args, cwd, or env. Serial tabs cannot be split implicitly.
+# A serial console profile.
 # [profiles.board]
 # description = "Embedded development board"
-# title = "Board console"
 # [profiles.board.serial]
 # device = "/dev/serial/by-id/usb-example"
 # baud = 115200
 # data_bits = 8
-# parity = "none" # none, even, odd
-# stop_bits = 1 # 1 or 2
-# flow_control = "none" # none, software, hardware
+# parity = "none"         # none, even, odd
+# stop_bits = 1           # 1 or 2
+# flow_control = "none"   # none, software, hardware
 
-# Font configuration
 [font]
-# Font family (use "monospace" for system default monospace)
 family = "monospace"
-# Font size in points (96/72 logical pixels per point before display scaling)
-size = 12.0
-# OpenType `wght` values for ordinary and SGR-bold text (1 - 1000). The bold
-# value must be greater than or equal to the normal value. Variable fonts use
-# their real weight axis; static families select the closest available face.
-weight = 400
-bold_weight = 700
-# Line-height multiplier (0.8 - 3.0)
-line_height = 1.2
-# Ordered per-grapheme fallback families. Termeric uses the first configured
-# family that covers the complete grapheme, then platform fallback as a final
-# safety net. At most 16 unique family names may be configured.
-# fallback = ["Noto Sans Mono", "DejaVu Sans Mono"]
-# Enable shaping of common programming ligatures
+size = 12.0               # points
+weight = 400              # 1 to 1000
+bold_weight = 700         # at least `weight`
+line_height = 1.2         # 0.8 to 3.0
 ligatures = true
-# Compatibility option: make SGR bold promote ANSI colors 0-7 to 8-15.
-# Disabled by default because font weight and color intensity are independent.
-bold_is_bright = false
+bold_is_bright = false    # bold also brightens ANSI colors 0 to 7
+# Families tried, in order, for characters the main font lacks.
+# fallback = ["Noto Sans Mono", "DejaVu Sans Mono"]
 
-# Optional explicit OpenType values override the Ligatures preset. Tags must be
-# four lowercase ASCII letters/digits; at most 32. `kern` is rejected because
-# proportional pair kerning would move glyph origins off the terminal grid.
-# Settings > Font > OpenType Features provides a bounded live editor.
+# OpenType features; these override the ligatures setting.
 # [font.features]
 # ss01 = 1
-# cv01 = 2
 # calt = 0
 
-# Optional inclusive Unicode-scalar ranges prefer one family before the global
-# fallback chain. Rules cannot overlap or cross the surrogate range; at most 64.
-# The primary font still owns terminal cell metrics. Settings > Font > Range
-# Overrides provides a bounded live editor; use Settings Save to persist edits.
-# Its read-only inspector explains coverage for literal text or an exact scalar.
+# Prefer a font for a range of code points, such as Nerd Font icons.
 # [[font.range_overrides]]
 # start = 0xE000
 # end = 0xF8FF
 # family = "Symbols Nerd Font Mono"
 
-# Scrollback configuration
 [scrollback]
-# Maximum number of lines to keep in scrollback buffer
 lines = 10000
-# Maximum compact history memory per terminal or pane (MiB)
-max_memory_mib = 128
-# Lines moved per wheel event (0.1 - 100)
-scroll_speed = 6.0
+max_memory_mib = 128      # per terminal
+scroll_speed = 6.0        # lines per wheel step
 
-# Directory inherited by newly split panes: focused, tab, or process.
 [panes]
-cwd = "focused"
+cwd = "focused"           # new splits start in: focused, tab, or process
 
-# Xterm-compatible keyboard type used by new terminals and restored by RIS.
-# Applications can temporarily select legacy/vt220 with private modes 1060/1061.
 [keyboard]
-xterm_type = "normal" # normal, legacy, vt220
+xterm_type = "normal"     # normal, legacy, vt220
 
-# Keyboard-only history navigation and semantic hint matching. Entry shortcuts
-# are configurable in Settings > Keyboard Shortcuts. Modal presets are "vi"
-# (H/J/K/L, V, Y, /) or "emacs" (Ctrl+B/F/P/N, Space, Alt+W, Ctrl+S).
 [copy_mode]
-bindings = "vi"
+bindings = "vi"           # vi or emacs
 
-# Replace this list to control non-OSC-8 quick-select matches. Built-in
-# defaults cover URLs, filesystem paths, and 7-40 digit hexadecimal hashes.
+# Extra quick-select patterns (replace the built-in URL, path, and hash list).
 # [[copy_mode.patterns]]
 # name = "ticket"
 # regex = "PROJ-[0-9]+"
 
-# Theme configuration
 [theme]
-# Theme name (built-in: turmeric, dracula, nord, solarized-dark, solarized-light)
+# A built-in theme (turmeric, ginger, daikon, dracula, nord, ... 26 in all) or
+# the name of a file in ~/.config/termeric/themes/ without ".toml".
 name = "turmeric"
-# Or explicit path to a theme file. The active file is watched for changes.
 # path = "/path/to/custom-theme.toml"
-# Named custom themes are loaded from ~/.config/termeric/themes/<name>.toml.
 
-# Renderer selection: prefer GPU then WGPU software fallback, or force one path.
 [renderer]
-backend = "auto" # auto, gpu, software
+backend = "auto"          # auto, gpu, software
 
 [accessibility]
-# Follow the Linux desktop portal when available; use "on" or "off" to override.
-# Reduced motion removes non-essential UI transitions while retaining semantic changes.
-reduce_motion = "system"
-# High contrast changes application chrome without changing terminal colors.
-high_contrast = "system"
+reduce_motion = "system"  # system, on, off
+high_contrast = "system"  # system, on, off
 
-# Window configuration
 [window]
-# Initial window width (applies to newly created windows)
 width = 800
-# Initial window height (applies to newly created windows)
 height = 600
-# Window opacity (0.1 - 1.0, may not work on all platforms)
-opacity = 1.0
-# Padding around terminal content in pixels
+opacity = 1.0             # 0.1 to 1.0
 padding = 8
-# Use operating-system window borders and title bar
 decorations = true
-# Desktop stacking request: normal, always_on_top, or always_on_bottom.
-# The compositor/window manager remains authoritative.
-level = "normal"
-# Tab strip placement: top or left. Left keeps global controls in the top toolbar.
-tab_bar_position = "top"
+level = "normal"          # normal, always_on_top, always_on_bottom
+tab_bar_position = "top"  # top or left
+share_process = true      # new windows join a running Termeric
 
-# Optional static local PNG/JPEG behind the terminal content. Relative paths
-# resolve beside config.toml. See docs/background-images.md for strict limits.
+# A PNG or JPEG behind the terminal; a relative path is resolved beside this file.
 [window.background_image]
 # path = "/path/to/background.png"
 opacity = 0.20
-fit = "cover" # cover, contain, stretch, or center
+fit = "cover"             # cover, contain, stretch, center
 
 [cursor]
-# Options: block, underline, beam
-style = "block"
+style = "block"           # block, underline, beam
 blink = true
-# One fade interval in milliseconds (100 - 5000)
-blink_rate = 530
+blink_rate = 530          # milliseconds
 
 [bell]
 visual = true
 audio = false
 visual_duration_ms = 100
 
-# Rectangular checksums can reveal visible terminal cells one at a time. Keep
-# them disabled unless compatibility testing explicitly requires DECRQCRA.
+[splash]
+mode = "firstboot"        # never, firstboot, newwindow, newtab
+
 [security]
+# Let programs read your screen one cell at a time (DECRQCRA). Keep off.
 allow_screen_checksum_reports = false
-# Kitty `t=f` lets applications in ordinary local tabs request reads from
-# persistent local paths. Keep it disabled unless every application in the
-# terminal is trusted; domain relays always deny it, and stream, temporary-file,
-# and shared-memory image transfer do not require it.
+# Let programs load Kitty images from files on disk. Keep off unless you trust
+# every program you run.
 allow_kitty_file_transfers = false
-# Running-GUI input can execute commands in any exact pane owned by that GUI.
-# Keep it disabled unless local automation holding Termeric's private control
-# token is trusted. Read-only inventory and bounded get-text do not require it.
+# Let `termeric control` send text to panes. Reading does not need this.
 allow_gui_control_input = false
 
-# OSC 52 is process-controlled clipboard access. Writes are enabled for common
-# remote-copy workflows; reads are denied by default to prevent clipboard
-# exfiltration. Denied reads receive an empty bounded reply.
+# Clipboard access from programs (OSC 52).
 [security.osc52]
 allow_read = false
 allow_write = true
 max_bytes = 1048576
 
-# Optional friendly names for remote live-domain hosts. Each destination is an
-# existing OpenSSH alias or user@host. Ports, identities, proxies, certificates,
-# and known-host policy remain in ~/.ssh/config and OpenSSH's own files.
-# Use with: termeric domain --host-profile build list
-# List configured entries with: termeric domain hosts [--json]
+[session]
+enabled = true
+auto_restore = false      # restore your last workspace at startup
+auto_save = true          # save your workspace when Termeric exits
+save_scrollback = true
+
+# Saved commands for the Commands panel and the command palette.
+# [[commands]]
+# name = "SSH Production"
+# command = "ssh admin@prod.example.com"
+# alias = "prod"
+
+# Change a built-in shortcut (the Settings shortcut editor writes these for you).
+# [[shortcuts]]
+# action = "new_tab"
+# key = "t"
+# ctrl = true
+
+# A friendly name for a remote host used by experimental live domains.
 # [domains.ssh_hosts.build]
 # destination = "developer@build.example"
 # description = "Build farm"
 
-[session]
-enabled = true
-# These compatibility keys now control complete workspace save/restore. Legacy
-# single-terminal snapshots remain available explicitly from the command palette.
-auto_restore = false
-auto_save = true
-save_scrollback = true
+# Coding agents (experimental). Built-in IDs: claude-code, codex, gemini, opencode.
+# [agents.gemini]
+# enabled = false
+# [agents.my-agent]
+# name = "My Agent"
+# program = "my-agent"
 
-# Experimental beta command-history visualization. Disabled by default.
-# Interactive Bash, Zsh, Fish, and unambiguous modern Nushell REPL tabs receive
-# OSC 133 marks automatically; Nushell uses its native producer. Elvish users
-# add `use termeric-integration` once to ~/.config/elvish/rc.elv.
-# Custom shells and script/-c launches are not modified; Harvest will explain
-# when semantic prompt marks are unavailable.
+# [agent_status]
+# notify = true
+
+# [agent_view]
+# open_agents_in = "terminal"   # terminal, split, full
+
+# [supervisor]
+# agent = "claude-code"
+# mode = "assist"               # watch, assist, auto
+
+# Harvest (experimental): a visual history of your commands.
 [harvest]
 enabled = false
 show_indicators = true
-# Count limit; retained command/output strings also share an 8 MiB hard cap.
 max_history = 100
-
-# OpenAI Codex CLI integration (tested with codex-cli 0.137.0)
-[plugins.codex]
-enabled = false
-binary = "codex"
-inherit_cwd = true
-# Termeric maps suggest -> untrusted, auto-edit -> on-request, full-auto -> never.
-approval_mode = "suggest"
-# Options: read-only, workspace-write, full-access
-sandbox_mode = "workspace-write"
-copy_lines = 50

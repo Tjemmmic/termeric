@@ -1,4 +1,4 @@
-//! Bounded passive unified-diff capture. See docs/diff-capture.md.
+//! Bounded passive unified-diff capture for agent diff review.
 //! Output is framed across PTY reads; only validated, complete file patches
 //! reach review/history or the exactly-once completion callback.
 

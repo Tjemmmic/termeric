@@ -1,7 +1,7 @@
 # Termeric's intentionally conservative ncurses capability contract.
 #
-# Keep this entry in sync with docs/terminfo.md, the DA replies documented in
-# docs/device-attributes-and-charsets.md, and the parser/app conformance suite.
+# Keep this entry in sync with the parser's device-attribute replies, the
+# terminal compatibility page of the user guide, and the conformance suite.
 # Compile extended capabilities with `tic -x`.
 xterm-termeric|Termeric terminal emulator,
 	am,
