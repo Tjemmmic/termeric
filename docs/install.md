@@ -94,6 +94,16 @@ Configuration and custom themes live under `~/.config/termeric/` on a normal Lin
 
 `Cargo.lock` is committed because Termeric ships an application. Dependency updates must be intentional, reviewed as their own change when practical, and verified with formatting, strict Clippy, workspace tests, a workspace build, package creation, and the Linux GPU smoke lane. Release and CI builds use `--locked` so an unreviewed resolver change cannot alter an artifact. The core crate is package-verified first; the application tarball is assembled with the whole workspace and `--no-verify` until that matching core version has been published to the target registry.
 
+Every dependency change also regenerates the shipped license notices, which list each crate compiled into the Linux binaries:
+
+```bash
+cargo install --locked --features cli cargo-about
+cargo about generate --locked -c packaging/notices/about.toml \
+  packaging/notices/notices.hbs -o termeric/THIRD_PARTY_NOTICES.md
+```
+
+A new license that is not in `accepted` fails generation; review it before adding it there. Run `cargo audit` as part of the same review.
+
 ## Troubleshooting
 
 - If no GPU adapter is found, Termeric automatically tries WGPU's software fallback. Install current Mesa/Vulkan drivers and try `termeric --renderer software`; `WGPU_BACKEND=vulkan` can restrict the API and `vulkaninfo` can confirm llvmpipe or hardware visibility. The Debian package recommends `mesa-vulkan-drivers`; source and non-Debian installs must provide an equivalent WGPU software implementation. On a Mesa/OpenGL installation, `WGPU_BACKEND=gl LIBGL_ALWAYS_SOFTWARE=true termeric --renderer software` makes the driver choice explicit before WGPU starts. Startup reports every failed path. The Arch recipe exposes `mesa` and `vulkan-icd-loader` as the corresponding optional renderer packages.

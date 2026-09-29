@@ -164,7 +164,7 @@ termeric-core/      Library crate — terminal emulation
 - [`CHANGELOG.md`](CHANGELOG.md) — release-facing changes and known limitations
 - [`docs/feature-support.md`](docs/feature-support.md) — authoritative capability status and release gates
 - [`docs/cldr-annotations.md`](docs/cldr-annotations.md) — pinned CLDR/Emoji inputs, deterministic generation, ranking, memory limits, and licensing
-- [`termeric/THIRD_PARTY_NOTICES.md`](termeric/THIRD_PARTY_NOTICES.md) — notices for bundled Unicode data
+- [`termeric/THIRD_PARTY_NOTICES.md`](termeric/THIRD_PARTY_NOTICES.md) — licenses of the Unicode data and Rust crates in the binary
 - [`docs/terminfo.md`](docs/terminfo.md) — terminal identity, installation, compatibility fallback, and remote use
 - [`docs/integration-acceptance.md`](docs/integration-acceptance.md) — AI, shell, Harvest, and native desktop acceptance boundaries
 - [`docs/operator-acceptance.md`](docs/operator-acceptance.md) — native tool installation, ordered release commands, and manual provider checklist

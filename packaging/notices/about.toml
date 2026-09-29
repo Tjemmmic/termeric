@@ -1,0 +1,34 @@
+# cargo-about configuration for termeric/THIRD_PARTY_NOTICES.md.
+# Regenerate after any Cargo.lock change; see "Dependency updates" in
+# docs/install.md.
+
+accepted = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Unlicense",
+    "Zlib",
+]
+
+# Only what ships in the Linux release binaries.
+targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+private = { ignore = true }
+
+# sublime_fuzzy publishes no `license` field; its LICENSE file is Apache-2.0.
+[sublime_fuzzy.clarify]
+license = "Apache-2.0"
+
+[[sublime_fuzzy.clarify.files]]
+path = "LICENSE"
+license = "Apache-2.0"
+checksum = "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1"
