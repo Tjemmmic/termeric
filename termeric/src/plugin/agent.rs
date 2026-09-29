@@ -123,6 +123,7 @@ mod tests {
 
     fn context() -> PluginContext {
         PluginContext {
+            window_id: 1,
             cwd: Some("/work".into()),
             tab_count: 1,
             active_tab: 0,

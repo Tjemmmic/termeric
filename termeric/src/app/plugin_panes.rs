@@ -118,6 +118,7 @@ impl App {
             anyhow::bail!("target working directory is unavailable");
         }
         let context = PluginContext {
+            window_id: self.control_window_id,
             cwd: cwd.clone(),
             tab_count: tabs.count(),
             active_tab: tabs

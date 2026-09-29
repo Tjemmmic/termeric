@@ -383,6 +383,7 @@ mod tests {
 
     fn test_ctx() -> PluginContext {
         PluginContext {
+            window_id: 1,
             cwd: None,
             tab_count: 1,
             active_tab: 0,

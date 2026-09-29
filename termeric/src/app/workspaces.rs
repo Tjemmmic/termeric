@@ -359,6 +359,7 @@ impl App {
                         .filter(|cwd| std::path::Path::new(cwd).is_dir())
                         .cloned();
                     let ctx = PluginContext {
+                        window_id: self.control_window_id,
                         cwd: cwd.clone(),
                         tab_count: tabs.count(),
                         active_tab: tabs.active_index(),

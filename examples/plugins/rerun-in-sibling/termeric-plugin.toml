@@ -1,0 +1,88 @@
+# Rerun in Sibling
+#
+# Remembers the last command finished in each pane (from command-completed
+# events) and adds a palette command, "Rerun Last Command in Sibling", that
+# types the focused pane's last command into the next pane of the same tab
+# and presses Enter. Useful for re-running a build or test in a split while
+# you keep editing in the focused pane.
+#
+# Needs shell integration (OSC 133) so commands are captured, and
+# `security.allow_gui_control_input = true` in the Termeric config because
+# the plugin types into a terminal. Commands that match Termeric's
+# destructive-command guardrails still ask for confirmation.
+#
+#   termeric plugin install examples/plugins/rerun-in-sibling \
+#     --allow process-spawn --allow event-subscribe --allow ui-actions \
+#     --allow command-output --allow workspace-query --allow terminal-input \
+#     --enable
+
+api_version = 1
+id = "rerun-in-sibling"
+name = "Rerun in Sibling"
+version = "1.0.0"
+description = "Send the focused pane's last command to the next pane in the tab"
+permissions = [
+    "process-spawn",
+    "event-subscribe",
+    "ui-actions",
+    "command-output",
+    "workspace-query",
+    "terminal-input",
+]
+
+[[commands]]
+id = "rerun"
+name = "Rerun Last Command in Sibling"
+description = "Type the focused pane's last command into the next pane and run it"
+
+[event_handler]
+program = "python3"
+args = ["-u", "-c", """
+import json, sys
+
+last_by_pane = {}
+last_by_tab = {}
+
+def short(text, limit=400):
+    return text.encode()[:limit].decode(errors="ignore")
+
+def rerun(windows, origin):
+    window = next((w for w in windows if w["id"] == origin), None)
+    tab = window and next((t for t in window["tabs"] if t["active"] and not t["closed"]), None)
+    if tab is None:
+        return [{"type": "show-message", "message": "No active tab"}]
+    panes = [pane for pane in tab["panes"] if not pane["closed"]]
+    focused = next((pane for pane in panes if pane["focused"]), None)
+    if focused is None or len(panes) < 2:
+        return [{"type": "show-message", "message": "Split the tab first; there is no sibling pane"}]
+    command = last_by_pane.get((tab["id"], focused["id"])) or last_by_tab.get(tab["id"])
+    if not command:
+        return [{"type": "show-message", "message": "No finished command recorded for this pane yet"}]
+    sibling = panes[(panes.index(focused) + 1) % len(panes)]
+    return [{"type": "send-text", "action_id": "rerun", "tab_id": tab["id"],
+             "pane_id": sibling["id"], "text": command, "paste": False, "enter": True}]
+
+for line in sys.stdin:
+    request = json.loads(line)
+    event = request["event"]
+    actions = []
+    if event["type"] == "command-completed":
+        command = event["command"]["text"].strip()
+        if command and "\\n" not in command and not event["command"]["truncated"]:
+            last_by_tab[event["tab_id"]] = command
+            if event["pane_id"] is not None:
+                last_by_pane[(event["tab_id"], event["pane_id"])] = command
+    elif event["type"] == "command-invoked":
+        actions.append({"type": "query-workspace", "query_id": "rerun"})
+    elif event["type"] == "workspace-query-result":
+        actions = rerun(event["windows"], request["origin_window_id"])
+    elif event["type"] == "action-result":
+        if not event["ok"]:
+            actions.append({"type": "show-message", "message": "Rerun failed: " + short(event["error"])})
+        elif event["disposition"] == "pending_confirmation":
+            actions.append({"type": "show-message", "message": "Rerun is waiting for your confirmation"})
+    reply = {"schema_version": 1, "request_id": request["request_id"], "actions": actions}
+    print(json.dumps(reply), flush=True)
+"""]
+mode = "persistent"
+events = ["command-completed", "command-invoked"]

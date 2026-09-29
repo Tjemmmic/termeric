@@ -1,0 +1,68 @@
+# Command Notifier
+#
+# Shows a notice when a shell command fails, with the tail of its output, so a
+# failure in a background tab or pane is not missed. Exit codes you expect
+# (130 is Ctrl-C) can be ignored through the plugin's settings.
+#
+# Needs shell integration (OSC 133) for command boundaries and exit codes.
+# The command-completed event carries no timing, so the notifier reacts to
+# exit codes only.
+#
+#   termeric plugin install examples/plugins/command-notifier \
+#     --allow process-spawn --allow event-subscribe --allow ui-actions \
+#     --allow command-output --enable
+#   termeric plugin configure command-notifier --set output-lines 8
+
+api_version = 1
+id = "command-notifier"
+name = "Command Notifier"
+version = "1.0.0"
+description = "Notices for failed shell commands, with the end of their output"
+permissions = ["process-spawn", "event-subscribe", "ui-actions", "command-output"]
+
+[[settings]]
+type = "integer"
+id = "output-lines"
+name = "Output lines"
+description = "How many trailing output lines the notice shows"
+default = 5
+min = 0
+max = 12
+
+[[settings]]
+type = "text"
+id = "ignored-exit-codes"
+name = "Ignored exit codes"
+description = "Comma-separated exit codes that never produce a notice"
+default = "130"
+
+[event_handler]
+program = "python3"
+args = ["-u", "-c", """
+import json, sys
+
+def clip(text, limit=120):
+    text = "".join(c if c.isprintable() else " " for c in text).strip()
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+for line in sys.stdin:
+    request = json.loads(line)
+    event = request["event"]
+    settings = request["settings"]
+    ignored = {code.strip() for code in settings["ignored-exit-codes"].split(",")}
+    actions = []
+    code = event.get("exit_code")
+    if event["type"] == "command-completed" and code not in (None, 0) and str(code) not in ignored:
+        command = clip(event["command"]["text"]) or "(command text unavailable)"
+        lines = [f"Command: {command}", f"Exit code: {code}"]
+        count = settings["output-lines"]
+        tail = [row for row in map(clip, event["output"]["text"].splitlines()) if row]
+        if count and tail:
+            lines.append("Output:")
+            lines.extend("  " + row for row in tail[-count:])
+        actions.append({"type": "show-notice", "title": "Command failed", "lines": lines})
+    reply = {"schema_version": 1, "request_id": request["request_id"], "actions": actions}
+    print(json.dumps(reply), flush=True)
+"""]
+mode = "persistent"
+events = ["command-completed"]

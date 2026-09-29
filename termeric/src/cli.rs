@@ -1356,8 +1356,8 @@ environment overrides, clipboard data, and provider credentials remain hidden."
 }
 
 fn parse_plugin(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
-    use crate::plugin::runtime::{PluginAdminCommand, PluginConfigurationChange, PluginPermission};
-    use std::collections::BTreeSet;
+    use crate::plugin::permission::{PluginPermission, PluginPermissions};
+    use crate::plugin::runtime::{PluginAdminCommand, PluginConfigurationChange};
 
     let Some(command) = arguments.first().and_then(|argument| argument.to_str()) else {
         return Ok(ParseOutcome::Print(plugin_help_text()));
@@ -1385,7 +1385,7 @@ fn parse_plugin(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
             let directory = values
                 .first()
                 .ok_or_else(|| anyhow::anyhow!("plugin install requires DIRECTORY"))?;
-            let mut grants = BTreeSet::new();
+            let mut grants = Vec::new();
             let mut enable = false;
             let mut replace = false;
             let mut index = 1;
@@ -1398,7 +1398,7 @@ fn parse_plugin(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
                             .and_then(|value| value.to_str())
                             .ok_or_else(|| anyhow::anyhow!("--allow requires PERMISSION"))?
                             .parse::<PluginPermission>()?;
-                        grants.insert(permission);
+                        grants.push(permission);
                     }
                     Some("--enable") => enable = true,
                     Some("--replace") => replace = true,
@@ -1409,7 +1409,7 @@ fn parse_plugin(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
             }
             PluginAdminCommand::Install {
                 directory: PathBuf::from(directory),
-                grants,
+                grants: PluginPermissions::from_permissions(grants)?,
                 enable,
                 replace,
             }
@@ -1482,27 +1482,15 @@ Usage: termeric plugin SUBCOMMAND\n\n\
   configure ID --unset KEY\n\
   configure ID --reset-settings\n\
   remove ID\n\n\
-API v1 supports process-spawn; v2 adds workspace-query. API v3 adds bounded\n\
-event-subscribe handlers and permissioned informational ui-actions. API v4 adds\n\
-separately granted terminal-text for bounded command-completed events. API v5 adds opt-in\n\
-correlated persistent event handlers. API v6 adds a granted current-window workspace query.\n\
-API v7 adds separately granted stable-ID tab selection and pane focus.\n\
-API v8 adds separately granted tab ordering and divider-ratio adjustment.\n\
-API v9 adds bounded namespaced handler commands with exact-owner dispatch.\n\
-API v10 adds bounded typed non-secret settings with explicit user overrides.\n\
-API v11 adds a separately granted bounded exact-pane presented-terminal query.\n\
-API v12 adds separately granted exact ordinary-pane creation.\n\
-API v13 adds separately granted ordinary-tab creation in the current window.\n\
-API v14 adds separately granted exact ordinary-pane closure.\n\
-API v15 adds separately granted exact ordinary-tab closure scheduling.\n\
-API v16 adds separately granted exact ordinary-pane movement between tabs.\n\
-API v17 adds separately granted bounded input to one exact current-window terminal.\n\
-API v18 adds separately granted same-tab pane swapping, balancing, and presets.\n\
-API v19 adds command-scoped, separately granted closure of the invoking window.\n\
-API v20 adds a separately granted, bounded process-wide workspace inventory.\n\
-API v21 adds separately granted non-activating cross-window tab/pane navigation.\n\
-Installation records the\n\
-canonical local source and a manifest fingerprint; it never downloads code."
+Manifests declare api_version = 1 and request permissions. Each --allow grants\n\
+one requested permission; window-acting permissions cover the plugin's own\n\
+window unless requested and granted with an :all-windows suffix, for example\n\
+--allow pane-create:all-windows. Enabling requires every requested permission.\n\
+Permissions: process-spawn, event-subscribe, ui-actions, command-output,\n\
+window-focus, and (scoped) workspace-query, navigate, terminal-read,\n\
+terminal-input, tab-create, tab-close, tab-move, pane-create, pane-close,\n\
+pane-move, pane-layout, window-close. Installation records the canonical\n\
+local source and a manifest fingerprint; it never downloads code."
         .into()
 }
 
@@ -3332,13 +3320,13 @@ mod tests {
                 "--allow",
                 "process-spawn",
                 "--allow",
-                "workspace-query",
+                "workspace-query:all-windows",
                 "--allow",
-                "workspace-actions",
+                "navigate",
                 "--allow",
-                "workspace-topology",
+                "pane-layout:all-windows",
                 "--allow",
-                "terminal-text",
+                "command-output",
                 "--enable",
                 "--replace",
             ]
@@ -3351,14 +3339,8 @@ mod tests {
         };
         assert_eq!(directory, PathBuf::from("/tmp/sample"));
         assert_eq!(
-            grants,
-            std::collections::BTreeSet::from([
-                crate::plugin::runtime::PluginPermission::ProcessSpawn,
-                crate::plugin::runtime::PluginPermission::WorkspaceQuery,
-                crate::plugin::runtime::PluginPermission::WorkspaceActions,
-                crate::plugin::runtime::PluginPermission::WorkspaceTopology,
-                crate::plugin::runtime::PluginPermission::TerminalText,
-            ])
+            grants.to_string(),
+            "process-spawn,command-output,workspace-query:all-windows,navigate,pane-layout:all-windows"
         );
         assert!(enable && replace);
 
@@ -3416,14 +3398,23 @@ mod tests {
             )
             .is_err()
         );
-        assert!(
-            parse(
-                ["plugin", "install", "/tmp/sample", "--allow", "camera"]
-                    .into_iter()
-                    .map(OsString::from)
-            )
-            .is_err()
-        );
+        for invalid in [
+            &["--allow", "camera"][..],
+            &["--allow", "terminal-text"][..],
+            &["--allow", "process-spawn:all-windows"][..],
+            &["--allow", "navigate", "--allow", "navigate:all-windows"][..],
+        ] {
+            assert!(
+                parse(
+                    ["plugin", "install", "/tmp/sample"]
+                        .into_iter()
+                        .chain(invalid.iter().copied())
+                        .map(OsString::from)
+                )
+                .is_err(),
+                "{invalid:?}"
+            );
+        }
         assert!(
             parse(
                 ["plugin", "configure", "sample"]

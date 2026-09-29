@@ -8,6 +8,9 @@ use std::collections::HashMap;
 /// Read-only context passed to plugins during hook dispatch.
 #[derive(Debug, Clone)]
 pub struct PluginContext {
+    /// Stable process-local ID of the window dispatching the hook: the origin
+    /// window of any handler conversation the hook starts.
+    pub window_id: u64,
     /// Current working directory of the active terminal
     pub cwd: Option<String>,
     /// Number of open tabs
@@ -274,6 +277,7 @@ mod tests {
         assert!(plugin.keybindings().is_empty());
 
         let ctx = PluginContext {
+            window_id: 1,
             cwd: None,
             tab_count: 1,
             active_tab: 0,

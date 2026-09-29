@@ -2343,14 +2343,12 @@ impl ApplicationHandler<AppEvent> for App {
                 }
             }
             AppEvent::StructuredPluginCompleted(completion) => {
-                if self
-                    .window
-                    .as_ref()
-                    .is_some_and(|window| window.id() == completion.window_id)
-                {
-                    self.redraw_scheduler.request(RedrawReason::BackgroundTask);
-                    self.handle_structured_plugin_completed(completion);
-                }
+                // A handler's host operation may target any window, so only
+                // the Application that owns every window routes completions.
+                log::debug!(
+                    "Ignoring plugin {:?} completion outside the Application",
+                    completion.plugin_id
+                );
             }
         }
     }

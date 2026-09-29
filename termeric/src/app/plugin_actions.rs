@@ -1,12 +1,36 @@
 //! Plugin command dispatch, context, transcript, export, and diff actions.
+//!
+//! Handler host operations are split by ownership: this window accepts a
+//! completed response and runs actions that target itself, while the
+//! Application resolves target windows, enforces window scope, and routes
+//! every result back to the handler through the origin window.
 
 use super::*;
+use crate::plugin::structured::{
+    PluginPaneLayoutPreset, StructuredHandlerCompletion, StructuredHandlerInvocation,
+    StructuredResponseAction,
+};
+
+const MAX_RESULT_ERROR_BYTES: usize = 1024;
+
+/// A handler's one query or host action, taken from its response for the
+/// Application to execute, with the persistent handler that receives the
+/// result.
+#[derive(Debug)]
+pub(super) struct StructuredHostOperation {
+    pub(super) plugin_id: String,
+    pub(super) operation: StructuredResponseAction,
+    pub(super) continuation: StructuredHandlerInvocation,
+}
 
 impl App {
-    pub(super) fn handle_structured_plugin_completed(
+    /// Accept one completed handler response for this origin window: finish a
+    /// scheduled plugin closure of this window, discard stale generations,
+    /// show UI actions, and hand back the response's host operation, if any.
+    pub(super) fn accept_structured_plugin_completion(
         &mut self,
-        completion: crate::plugin::structured::StructuredHandlerCompletion,
-    ) {
+        completion: StructuredHandlerCompletion,
+    ) -> Option<StructuredHostOperation> {
         if self
             .pending_plugin_window_close
             .as_ref()
@@ -22,7 +46,7 @@ impl App {
                 );
             }
             self.should_exit = true;
-            return;
+            return None;
         }
         if completion.plugin_generation != self.plugin_runtime_generation
             || !self.plugin_manager.contains(&completion.plugin_id)
@@ -32,154 +56,10 @@ impl App {
                 completion.request_id,
                 completion.plugin_id
             );
-            return;
+            return None;
         }
-        let mut continuation = completion.continuation;
-        let mut workspace_operation = None;
         let actions = match completion.result {
-            Ok(actions) => actions
-                .into_iter()
-                .filter_map(|action| {
-                    match action {
-                    crate::plugin::structured::StructuredResponseAction::ShowMessage {
-                        message,
-                    } => Some(crate::plugin::PluginAction::ShowMessage { message }),
-                    crate::plugin::structured::StructuredResponseAction::ShowNotice {
-                        title,
-                        lines,
-                    } => Some(crate::plugin::PluginAction::ShowNotice { title, lines }),
-                    crate::plugin::structured::StructuredResponseAction::QueryWorkspace {
-                        query_id,
-                    } => {
-                        workspace_operation = Some(
-                            crate::plugin::structured::StructuredResponseAction::QueryWorkspace {
-                                query_id,
-                            },
-                        );
-                        None
-                    }
-                    crate::plugin::structured::StructuredResponseAction::QueryProcess {
-                        query_id,
-                    } => {
-                        workspace_operation = Some(
-                            crate::plugin::structured::StructuredResponseAction::QueryProcess {
-                                query_id,
-                            },
-                        );
-                        None
-                    }
-                    action @ (crate::plugin::structured::StructuredResponseAction::SelectProcessTab {
-                        ..
-                    }
-                    | crate::plugin::structured::StructuredResponseAction::FocusProcessPane {
-                        ..
-                    }
-                    | crate::plugin::structured::StructuredResponseAction::QueryProcessTerminal {
-                        ..
-                    }
-                    | crate::plugin::structured::StructuredResponseAction::SendProcessText {
-                        ..
-                    }
-                    | crate::plugin::structured::StructuredResponseAction::CreateProcessTab {
-                        ..
-                    }
-                    | crate::plugin::structured::StructuredResponseAction::CreateProcessPane {
-                        ..
-                    }
-                    | crate::plugin::structured::StructuredResponseAction::MoveProcessPane {
-                        ..
-                    }
-                    | crate::plugin::structured::StructuredResponseAction::MoveProcessTab {
-                        ..
-                    }
-                    | crate::plugin::structured::StructuredResponseAction::CloseProcessPane {
-                        ..
-                    }
-                    | crate::plugin::structured::StructuredResponseAction::CloseProcessTab {
-                        ..
-                    }
-                    | crate::plugin::structured::StructuredResponseAction::SwapProcessPanes {
-                        ..
-                    }
-                    | crate::plugin::structured::StructuredResponseAction::BalanceProcessPanes {
-                        ..
-                    }
-                    | crate::plugin::structured::StructuredResponseAction::ApplyProcessPaneLayout {
-                        ..
-                    }
-                    | crate::plugin::structured::StructuredResponseAction::CloseProcessWindow {
-                        ..
-                    }
-                    | crate::plugin::structured::StructuredResponseAction::FocusProcessWindow {
-                        ..
-                    }) => {
-                        workspace_operation = Some(action);
-                        None
-                    }
-                    crate::plugin::structured::StructuredResponseAction::QueryTerminal {
-                        query_id,
-                        tab_id,
-                        pane_id,
-                        history_lines,
-                        max_bytes,
-                    } => {
-                        workspace_operation = Some(
-                            crate::plugin::structured::StructuredResponseAction::QueryTerminal {
-                                query_id,
-                                tab_id,
-                                pane_id,
-                                history_lines,
-                                max_bytes,
-                            },
-                        );
-                        None
-                    }
-                    action @ (crate::plugin::structured::StructuredResponseAction::SelectTab {
-                        ..
-                    }
-                    | crate::plugin::structured::StructuredResponseAction::FocusPane {
-                        ..
-                    }
-                    | crate::plugin::structured::StructuredResponseAction::MoveTab { .. }
-                    | crate::plugin::structured::StructuredResponseAction::ResizeDivider {
-                        ..
-                    }
-                    | crate::plugin::structured::StructuredResponseAction::CreatePane {
-                        ..
-                    }
-                    | crate::plugin::structured::StructuredResponseAction::CreateTab {
-                        ..
-                    }
-                    | crate::plugin::structured::StructuredResponseAction::ClosePane {
-                        ..
-                    }
-                    | crate::plugin::structured::StructuredResponseAction::CloseTab {
-                        ..
-                    }
-                    | crate::plugin::structured::StructuredResponseAction::MovePane {
-                        ..
-                    }
-                    | crate::plugin::structured::StructuredResponseAction::SendText {
-                        ..
-                    }
-                    | crate::plugin::structured::StructuredResponseAction::SwapPanes {
-                        ..
-                    }
-                    | crate::plugin::structured::StructuredResponseAction::BalancePanes {
-                        ..
-                    }
-                    | crate::plugin::structured::StructuredResponseAction::ApplyPaneLayout {
-                        ..
-                    }
-                    | crate::plugin::structured::StructuredResponseAction::CloseWindow {
-                        ..
-                    }) => {
-                        workspace_operation = Some(action);
-                        None
-                    }
-                }
-                })
-                .collect(),
+            Ok(actions) => actions,
             Err(error) => {
                 log::error!(
                     "Structured plugin {:?} request {} failed: {}",
@@ -191,302 +71,52 @@ impl App {
                     "Plugin {} event handler failed: {}",
                     completion.plugin_id, error
                 ));
-                Vec::new()
+                return None;
             }
         };
-        if let Some(operation) = workspace_operation {
-            let operation_name = match &operation {
-                crate::plugin::structured::StructuredResponseAction::QueryWorkspace { .. } => {
-                    "query"
-                }
-                crate::plugin::structured::StructuredResponseAction::QueryProcess { .. } => {
-                    "process-query"
-                }
-                crate::plugin::structured::StructuredResponseAction::SelectProcessTab {
-                    ..
-                } => "select-process-tab",
-                crate::plugin::structured::StructuredResponseAction::FocusProcessPane {
-                    ..
-                } => "focus-process-pane",
-                crate::plugin::structured::StructuredResponseAction::QueryProcessTerminal {
-                    ..
-                } => "query-process-terminal",
-                crate::plugin::structured::StructuredResponseAction::SendProcessText { .. } => {
-                    "send-process-text"
-                }
-                crate::plugin::structured::StructuredResponseAction::CreateProcessTab {
-                    ..
-                } => "create-process-tab",
-                crate::plugin::structured::StructuredResponseAction::CreateProcessPane {
-                    ..
-                } => "create-process-pane",
-                crate::plugin::structured::StructuredResponseAction::MoveProcessPane { .. } => {
-                    "move-process-pane"
-                }
-                crate::plugin::structured::StructuredResponseAction::MoveProcessTab { .. } => {
-                    "move-process-tab"
-                }
-                crate::plugin::structured::StructuredResponseAction::CloseProcessPane {
-                    ..
-                } => "close-process-pane",
-                crate::plugin::structured::StructuredResponseAction::CloseProcessTab { .. } => {
-                    "close-process-tab"
-                }
-                crate::plugin::structured::StructuredResponseAction::SwapProcessPanes {
-                    ..
-                } => "swap-process-panes",
-                crate::plugin::structured::StructuredResponseAction::BalanceProcessPanes {
-                    ..
-                } => "balance-process-panes",
-                crate::plugin::structured::StructuredResponseAction::ApplyProcessPaneLayout {
-                    ..
-                } => "apply-process-pane-layout",
-                crate::plugin::structured::StructuredResponseAction::CloseProcessWindow {
-                    ..
-                } => "close-process-window",
-                crate::plugin::structured::StructuredResponseAction::FocusProcessWindow {
-                    ..
-                } => "focus-process-window",
-                crate::plugin::structured::StructuredResponseAction::QueryTerminal { .. } => {
-                    "terminal-query"
-                }
-                crate::plugin::structured::StructuredResponseAction::SelectTab { .. } => {
-                    "select-tab"
-                }
-                crate::plugin::structured::StructuredResponseAction::FocusPane { .. } => {
-                    "focus-pane"
-                }
-                crate::plugin::structured::StructuredResponseAction::MoveTab { .. } => "move-tab",
-                crate::plugin::structured::StructuredResponseAction::ResizeDivider { .. } => {
-                    "resize-divider"
-                }
-                crate::plugin::structured::StructuredResponseAction::CreatePane { .. } => {
-                    "create-pane"
-                }
-                crate::plugin::structured::StructuredResponseAction::CreateTab { .. } => {
-                    "create-tab"
-                }
-                crate::plugin::structured::StructuredResponseAction::ClosePane { .. } => {
-                    "close-pane"
-                }
-                crate::plugin::structured::StructuredResponseAction::CloseTab { .. } => "close-tab",
-                crate::plugin::structured::StructuredResponseAction::MovePane { .. } => "move-pane",
-                crate::plugin::structured::StructuredResponseAction::SendText { .. } => "send-text",
-                crate::plugin::structured::StructuredResponseAction::SwapPanes { .. } => {
-                    "swap-panes"
-                }
-                crate::plugin::structured::StructuredResponseAction::BalancePanes { .. } => {
-                    "balance-panes"
-                }
-                crate::plugin::structured::StructuredResponseAction::ApplyPaneLayout { .. } => {
-                    "apply-pane-layout"
-                }
-                crate::plugin::structured::StructuredResponseAction::CloseWindow { .. } => {
-                    "close-window"
-                }
-                _ => unreachable!("only workspace operations are retained"),
-            };
-            let result = self.continue_structured_workspace_operation(
-                &completion.plugin_id,
-                operation,
-                continuation.take(),
+        // Handler validation admits at most one host operation per response.
+        let (mut operations, ui_actions): (Vec<_>, Vec<_>) = actions
+            .into_iter()
+            .partition(StructuredResponseAction::is_host_operation);
+        self.execute_plugin_actions(
+            ui_actions
+                .into_iter()
+                .filter_map(|action| match action {
+                    StructuredResponseAction::ShowMessage { message } => {
+                        Some(crate::plugin::PluginAction::ShowMessage { message })
+                    }
+                    StructuredResponseAction::ShowNotice { title, lines } => {
+                        Some(crate::plugin::PluginAction::ShowNotice { title, lines })
+                    }
+                    _ => None,
+                })
+                .collect(),
+        );
+        let operation = operations.pop()?;
+        let Some(continuation) = completion.continuation else {
+            let error = "host operations require a live persistent handler";
+            log::error!(
+                "Structured plugin {:?} {} failed: {error}",
+                completion.plugin_id,
+                operation.name()
             );
-            if let Err(error) = result {
-                log::error!(
-                    "Structured plugin {:?} workspace {} failed: {}",
-                    completion.plugin_id,
-                    operation_name,
-                    error
-                );
-                self.toasts.error(format!(
-                    "Plugin {} workspace {} failed: {}",
-                    completion.plugin_id, operation_name, error
-                ));
-            }
-        }
-        self.execute_plugin_actions(actions);
-    }
-
-    pub(super) fn continue_structured_workspace_operation(
-        &mut self,
-        plugin_id: &str,
-        operation: crate::plugin::structured::StructuredResponseAction,
-        continuation: Option<crate::plugin::structured::StructuredHandlerInvocation>,
-    ) -> Result<(), String> {
-        let mut invocation = continuation.ok_or_else(|| {
-            "workspace operations require a live persistent handler continuation".to_string()
-        })?;
-        let schedules_window_close = matches!(
+            self.toasts.error(format!(
+                "Plugin {} {} failed: {error}",
+                completion.plugin_id,
+                operation.name()
+            ));
+            return None;
+        };
+        Some(StructuredHostOperation {
+            plugin_id: completion.plugin_id,
             operation,
-            crate::plugin::structured::StructuredResponseAction::CloseWindow { .. }
-        ) && self.validate_plugin_window_close().is_ok();
-        match operation {
-            crate::plugin::structured::StructuredResponseAction::QueryWorkspace { query_id } => {
-                invocation.event_json =
-                    self.structured_workspace_query_event(plugin_id, &query_id)?;
-                // A query result cannot query again, but may perform one
-                // separately granted workspace mutation.
-                invocation.allow_workspace_query = false;
-            }
-            crate::plugin::structured::StructuredResponseAction::QueryProcess { .. } => {
-                return Err(
-                    "process queries require the process-owned Application window registry".into(),
-                );
-            }
-            crate::plugin::structured::StructuredResponseAction::SelectProcessTab { .. }
-            | crate::plugin::structured::StructuredResponseAction::FocusProcessPane { .. }
-            | crate::plugin::structured::StructuredResponseAction::CreateProcessTab { .. }
-            | crate::plugin::structured::StructuredResponseAction::CreateProcessPane { .. }
-            | crate::plugin::structured::StructuredResponseAction::MoveProcessPane { .. } => {
-                return Err(
-                    "process actions require the process-owned Application window registry".into(),
-                );
-            }
-            crate::plugin::structured::StructuredResponseAction::MoveProcessTab { .. } => {
-                return Err(
-                    "process actions require the process-owned Application window registry".into(),
-                );
-            }
-            crate::plugin::structured::StructuredResponseAction::CloseProcessPane { .. } => {
-                return Err(
-                    "process actions require the process-owned Application window registry".into(),
-                );
-            }
-            crate::plugin::structured::StructuredResponseAction::CloseProcessTab { .. } => {
-                return Err(
-                    "process actions require the process-owned Application window registry".into(),
-                );
-            }
-            crate::plugin::structured::StructuredResponseAction::SwapProcessPanes { .. }
-            | crate::plugin::structured::StructuredResponseAction::BalanceProcessPanes { .. }
-            | crate::plugin::structured::StructuredResponseAction::ApplyProcessPaneLayout {
-                ..
-            }
-            | crate::plugin::structured::StructuredResponseAction::CloseProcessWindow { .. }
-            | crate::plugin::structured::StructuredResponseAction::FocusProcessWindow { .. } => {
-                return Err(
-                    "process actions require the process-owned Application window registry".into(),
-                );
-            }
-            crate::plugin::structured::StructuredResponseAction::QueryTerminal {
-                query_id,
-                tab_id,
-                pane_id,
-                history_lines,
-                max_bytes,
-            } => {
-                invocation.event_json = self.structured_terminal_query_event(
-                    plugin_id,
-                    &query_id,
-                    tab_id,
-                    pane_id,
-                    history_lines,
-                    max_bytes,
-                )?;
-                // Presented terminal content is the broadest disclosure in
-                // the public API. Its result cannot initiate another query or
-                // workspace mutation; a later external event may start a new
-                // independently bounded request.
-                clear_structured_host_authority(&mut invocation);
-            }
-            action @ (crate::plugin::structured::StructuredResponseAction::SelectTab { .. }
-            | crate::plugin::structured::StructuredResponseAction::FocusPane { .. }
-            | crate::plugin::structured::StructuredResponseAction::MoveTab { .. }
-            | crate::plugin::structured::StructuredResponseAction::ResizeDivider {
-                ..
-            }
-            | crate::plugin::structured::StructuredResponseAction::CreatePane {
-                ..
-            }
-            | crate::plugin::structured::StructuredResponseAction::CreateTab { .. }
-            | crate::plugin::structured::StructuredResponseAction::ClosePane { .. }
-            | crate::plugin::structured::StructuredResponseAction::CloseTab { .. }
-            | crate::plugin::structured::StructuredResponseAction::MovePane { .. }
-            | crate::plugin::structured::StructuredResponseAction::SendText { .. }
-            | crate::plugin::structured::StructuredResponseAction::SwapPanes { .. }
-            | crate::plugin::structured::StructuredResponseAction::BalancePanes {
-                ..
-            }
-            | crate::plugin::structured::StructuredResponseAction::ApplyPaneLayout {
-                ..
-            }
-            | crate::plugin::structured::StructuredResponseAction::CloseWindow {
-                ..
-            }) => {
-                invocation.event_json =
-                    self.structured_workspace_action_event(plugin_id, action)?;
-                // A mutation result is terminal for host operations.
-                clear_structured_host_authority(&mut invocation);
-            }
-            _ => return Err("structured response did not contain a workspace operation".into()),
-        }
-        let plugin_generation = self.plugin_runtime_generation;
-        let result_request_id = self.submit_structured_handler(invocation)?;
-        if schedules_window_close {
-            self.pending_plugin_window_close = Some(PendingPluginWindowClose {
-                plugin_id: plugin_id.to_string(),
-                plugin_generation,
-                result_request_id,
-            });
-        }
-        Ok(())
+            continuation,
+        })
     }
 
-    pub(super) fn continue_structured_process_query(
+    pub(super) fn submit_structured_handler(
         &mut self,
-        event_json: String,
-        continuation: Option<crate::plugin::structured::StructuredHandlerInvocation>,
-    ) -> Result<u64, String> {
-        let mut invocation = continuation.ok_or_else(|| {
-            "process queries require a live persistent handler continuation".to_string()
-        })?;
-        invocation.event_json = event_json;
-        reduce_structured_process_query_authority(&mut invocation);
-        self.submit_structured_handler(invocation)
-    }
-
-    pub(super) fn continue_structured_process_action(
-        &mut self,
-        event_json: String,
-        continuation: Option<crate::plugin::structured::StructuredHandlerInvocation>,
-    ) -> Result<u64, String> {
-        let mut invocation = continuation.ok_or_else(|| {
-            "process actions require a live persistent handler continuation".to_string()
-        })?;
-        invocation.event_json = event_json;
-        clear_structured_host_authority(&mut invocation);
-        self.submit_structured_handler(invocation)
-    }
-
-    pub(super) fn continue_structured_process_terminal_query(
-        &mut self,
-        event_json: String,
-        continuation: Option<crate::plugin::structured::StructuredHandlerInvocation>,
-    ) -> Result<u64, String> {
-        let mut invocation = continuation.ok_or_else(|| {
-            "process terminal queries require a live persistent handler continuation".to_string()
-        })?;
-        invocation.event_json = event_json;
-        clear_structured_host_authority(&mut invocation);
-        self.submit_structured_handler(invocation)
-    }
-
-    pub(super) fn continue_structured_process_terminal_input(
-        &mut self,
-        event_json: String,
-        continuation: Option<crate::plugin::structured::StructuredHandlerInvocation>,
-    ) -> Result<u64, String> {
-        let mut invocation = continuation.ok_or_else(|| {
-            "process terminal input requires a live persistent handler continuation".to_string()
-        })?;
-        invocation.event_json = event_json;
-        clear_structured_host_authority(&mut invocation);
-        self.submit_structured_handler(invocation)
-    }
-
-    fn submit_structured_handler(
-        &mut self,
-        invocation: crate::plugin::structured::StructuredHandlerInvocation,
+        invocation: StructuredHandlerInvocation,
     ) -> Result<u64, String> {
         let window = self
             .window
@@ -504,766 +134,150 @@ impl App {
         )
     }
 
-    pub(super) fn structured_workspace_query_event(
-        &self,
-        plugin_id: &str,
-        query_id: &str,
-    ) -> Result<String, String> {
-        const MAX_QUERY_TABS: usize = 16;
-        const MAX_QUERY_PANES: usize = 32;
-        const MAX_QUERY_DIVIDERS: usize = MAX_QUERY_PANES - 1;
-        const MAX_QUERY_METADATA_BYTES: usize = 2 * 1024;
-        const MAX_QUERY_WORKSPACE_ID_BYTES: usize = 512;
-        const MAX_QUERY_CWD_BYTES: usize = 1024;
-
-        let ctx = self.build_plugin_context();
-        let mut cwd_budget = MAX_QUERY_CWD_BYTES;
-        let (cwd, cwd_truncated) = ctx.cwd.as_deref().map_or((None, false), |cwd| {
-            let (cwd, truncated) = super::control_metadata(cwd, &mut cwd_budget);
-            (Some(cwd), truncated)
-        });
-        let mut workspace_budget = MAX_QUERY_WORKSPACE_ID_BYTES;
-        let (workspace_id, workspace_truncated) =
-            self.current_workspace_id
-                .as_deref()
-                .map_or((None, false), |workspace| {
-                    let (workspace, truncated) =
-                        super::control_metadata(workspace, &mut workspace_budget);
-                    (Some(workspace), truncated)
-                });
-        let mut budget = super::ControlInventoryBudget {
-            tabs: MAX_QUERY_TABS,
-            panes: MAX_QUERY_PANES,
-            dividers: MAX_QUERY_DIVIDERS,
-            metadata_bytes: MAX_QUERY_METADATA_BYTES - MAX_QUERY_WORKSPACE_ID_BYTES,
-        };
-        // The plugin result is scoped to this exact App/window, so no synthetic
-        // or process-global window identifier enters the public contract.
-        let window = self.control_inventory(1, &mut budget);
-        let envelope = serde_json::json!({
-            "schema_version": 1,
-            "plugin_id": plugin_id,
-            "event": {
-                "type": "workspace-query-result",
-                "query_id": query_id,
-                "snapshot_schema_version": 1,
-                "active_working_directory": cwd,
-                "active_working_directory_truncated": cwd_truncated,
-                "tab_count": ctx.tab_count,
-                "active_tab_index": ctx.active_tab,
-                "terminal": {
-                    "columns": ctx.terminal_size.0,
-                    "rows": ctx.terminal_size.1,
-                },
-                "window": {
-                    "focused": window.focused,
-                    "visible": window.visible,
-                    "quick_access": window.quick_access,
-                    "workspace_id": workspace_id,
-                    "pixel_width": window.pixel_width,
-                    "pixel_height": window.pixel_height,
-                    "tabs": window.tabs,
-                    "truncated": window.truncated || workspace_truncated,
-                },
-            },
-        });
-        let encoded = serde_json::to_string(&envelope)
-            .map_err(|error| format!("could not encode workspace query result: {error}"))?;
-        if encoded.len() > crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES {
-            return Err(format!(
-                "workspace query result exceeds {} bytes",
-                crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES
-            ));
-        }
-        Ok(encoded)
-    }
-
-    pub(super) fn structured_process_query_event(
-        plugin_id: &str,
-        query_id: &str,
-        origin_window_id: u64,
-        inventory: &crate::control::protocol::ProcessInventory,
-    ) -> Result<String, String> {
-        let envelope = serde_json::json!({
-            "schema_version": 1,
-            "plugin_id": plugin_id,
-            "event": {
-                "type": "process-query-result",
-                "query_id": query_id,
-                "snapshot_schema_version": 1,
-                "process_id": inventory.process_id,
-                "origin_window_id": origin_window_id,
-                "windows": inventory.windows,
-                "truncated": inventory.truncated,
-            },
-        });
-        let encoded = serde_json::to_string(&envelope)
-            .map_err(|error| format!("could not encode process query result: {error}"))?;
-        if encoded.len() > crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES {
-            return Err(format!(
-                "process query result exceeds {} bytes",
-                crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES
-            ));
-        }
-        Ok(encoded)
-    }
-
-    pub(super) fn structured_workspace_action_event(
-        &mut self,
-        plugin_id: &str,
-        action: crate::plugin::structured::StructuredResponseAction,
-    ) -> Result<String, String> {
-        const MAX_ACTION_ERROR_BYTES: usize = 1024;
-
-        let event = match action {
-            crate::plugin::structured::StructuredResponseAction::SelectTab {
-                action_id,
-                tab_id,
-            } => match self.select_plugin_tab(tab_id) {
-                Ok(changed) => serde_json::json!({
-                    "type": "workspace-action-result",
-                    "action_id": action_id,
-                    "action": "select-tab",
-                    "ok": true,
-                    "tab_id": tab_id,
-                    "changed": changed,
-                    "error": null,
-                }),
-                Err(error) => {
-                    let mut budget = MAX_ACTION_ERROR_BYTES;
-                    let (error, error_truncated) = super::control_metadata(&error, &mut budget);
-                    serde_json::json!({
-                        "type": "workspace-action-result",
-                        "action_id": action_id,
-                        "action": "select-tab",
-                        "ok": false,
-                        "tab_id": tab_id,
-                        "changed": null,
-                        "error": error,
-                        "error_truncated": error_truncated,
-                    })
-                }
-            },
-            crate::plugin::structured::StructuredResponseAction::FocusPane {
-                action_id,
-                tab_id,
-                pane_id,
-            } => match self.focus_plugin_pane(tab_id, pane_id) {
-                Ok((tab_changed, pane_changed)) => serde_json::json!({
-                    "type": "workspace-action-result",
-                    "action_id": action_id,
-                    "action": "focus-pane",
-                    "ok": true,
-                    "tab_id": tab_id,
-                    "pane_id": pane_id,
-                    "tab_changed": tab_changed,
-                    "pane_changed": pane_changed,
-                    "error": null,
-                }),
-                Err(error) => {
-                    let mut budget = MAX_ACTION_ERROR_BYTES;
-                    let (error, error_truncated) = super::control_metadata(&error, &mut budget);
-                    serde_json::json!({
-                        "type": "workspace-action-result",
-                        "action_id": action_id,
-                        "action": "focus-pane",
-                        "ok": false,
-                        "tab_id": tab_id,
-                        "pane_id": pane_id,
-                        "tab_changed": null,
-                        "pane_changed": null,
-                        "error": error,
-                        "error_truncated": error_truncated,
-                    })
-                }
-            },
-            crate::plugin::structured::StructuredResponseAction::MoveTab {
-                action_id,
-                tab_id,
-                destination_index,
-            } => match self.move_control_tab_within_window(tab_id, destination_index) {
-                Ok(changed) => serde_json::json!({
-                    "type": "workspace-action-result",
-                    "action_id": action_id,
-                    "action": "move-tab",
-                    "ok": true,
-                    "tab_id": tab_id,
-                    "destination_index": destination_index,
-                    "changed": changed,
-                    "error": null,
-                }),
-                Err(error) => {
-                    let mut budget = MAX_ACTION_ERROR_BYTES;
-                    let (error, error_truncated) = super::control_metadata(&error, &mut budget);
-                    serde_json::json!({
-                        "type": "workspace-action-result",
-                        "action_id": action_id,
-                        "action": "move-tab",
-                        "ok": false,
-                        "tab_id": tab_id,
-                        "destination_index": destination_index,
-                        "changed": null,
-                        "error": error,
-                        "error_truncated": error_truncated,
-                    })
-                }
-            },
-            crate::plugin::structured::StructuredResponseAction::ResizeDivider {
-                action_id,
-                tab_id,
-                divider_id,
-                ratio_millis,
-            } => match self.resize_control_divider(tab_id, divider_id, ratio_millis) {
-                Ok((previous_ratio_millis, changed)) => serde_json::json!({
-                    "type": "workspace-action-result",
-                    "action_id": action_id,
-                    "action": "resize-divider",
-                    "ok": true,
-                    "tab_id": tab_id,
-                    "divider_id": divider_id,
-                    "previous_ratio_millis": previous_ratio_millis,
-                    "ratio_millis": ratio_millis,
-                    "changed": changed,
-                    "error": null,
-                }),
-                Err(error) => {
-                    let mut budget = MAX_ACTION_ERROR_BYTES;
-                    let (error, error_truncated) = super::control_metadata(&error, &mut budget);
-                    serde_json::json!({
-                        "type": "workspace-action-result",
-                        "action_id": action_id,
-                        "action": "resize-divider",
-                        "ok": false,
-                        "tab_id": tab_id,
-                        "divider_id": divider_id,
-                        "previous_ratio_millis": null,
-                        "ratio_millis": ratio_millis,
-                        "changed": null,
-                        "error": error,
-                        "error_truncated": error_truncated,
-                    })
-                }
-            },
-            crate::plugin::structured::StructuredResponseAction::CreatePane {
-                action_id,
-                tab_id,
-                pane_id,
-                direction,
-            } => {
-                let pane_direction = match direction {
-                    crate::control::protocol::SplitDirection::Horizontal => {
-                        crate::panes::SplitDirection::Horizontal
-                    }
-                    crate::control::protocol::SplitDirection::Vertical => {
-                        crate::panes::SplitDirection::Vertical
-                    }
-                };
-                match self.create_control_pane(tab_id, pane_id, pane_direction) {
-                    Ok(created_pane_id) => serde_json::json!({
-                        "type": "workspace-action-result",
-                        "action_id": action_id,
-                        "action": "create-pane",
-                        "ok": true,
-                        "tab_id": tab_id,
-                        "pane_id": pane_id,
-                        "direction": direction,
-                        "created_pane_id": created_pane_id,
-                        "error": null,
-                    }),
-                    Err(error) => {
-                        let mut budget = MAX_ACTION_ERROR_BYTES;
-                        let (error, error_truncated) = super::control_metadata(&error, &mut budget);
-                        serde_json::json!({
-                            "type": "workspace-action-result",
-                            "action_id": action_id,
-                            "action": "create-pane",
-                            "ok": false,
-                            "tab_id": tab_id,
-                            "pane_id": pane_id,
-                            "direction": direction,
-                            "created_pane_id": null,
-                            "error": error,
-                            "error_truncated": error_truncated,
-                        })
-                    }
-                }
-            }
-            crate::plugin::structured::StructuredResponseAction::CreateTab { action_id } => {
-                match self.create_plugin_tab() {
-                    Ok(created_tab_id) => serde_json::json!({
-                        "type": "workspace-action-result",
-                        "action_id": action_id,
-                        "action": "create-tab",
-                        "ok": true,
-                        "created_tab_id": created_tab_id,
-                        "error": null,
-                    }),
-                    Err(error) => {
-                        let mut budget = MAX_ACTION_ERROR_BYTES;
-                        let (error, error_truncated) = super::control_metadata(&error, &mut budget);
-                        serde_json::json!({
-                            "type": "workspace-action-result",
-                            "action_id": action_id,
-                            "action": "create-tab",
-                            "ok": false,
-                            "created_tab_id": null,
-                            "error": error,
-                            "error_truncated": error_truncated,
-                        })
-                    }
-                }
-            }
-            crate::plugin::structured::StructuredResponseAction::ClosePane {
-                action_id,
-                tab_id,
-                pane_id,
-            } => match self.close_plugin_pane(tab_id, pane_id) {
-                Ok((remaining_panes, focused_pane_id)) => serde_json::json!({
-                    "type": "workspace-action-result",
-                    "action_id": action_id,
-                    "action": "close-pane",
-                    "ok": true,
-                    "tab_id": tab_id,
-                    "pane_id": pane_id,
-                    "remaining_panes": remaining_panes,
-                    "focused_pane_id": focused_pane_id,
-                    "error": null,
-                }),
-                Err(error) => {
-                    let mut budget = MAX_ACTION_ERROR_BYTES;
-                    let (error, error_truncated) = super::control_metadata(&error, &mut budget);
-                    serde_json::json!({
-                        "type": "workspace-action-result",
-                        "action_id": action_id,
-                        "action": "close-pane",
-                        "ok": false,
-                        "tab_id": tab_id,
-                        "pane_id": pane_id,
-                        "remaining_panes": null,
-                        "focused_pane_id": null,
-                        "error": error,
-                        "error_truncated": error_truncated,
-                    })
-                }
-            },
-            crate::plugin::structured::StructuredResponseAction::CloseTab { action_id, tab_id } => {
-                match self.close_plugin_tab(tab_id) {
-                    Ok((remaining_tabs, active_tab_id, active_changed)) => serde_json::json!({
-                        "type": "workspace-action-result",
-                        "action_id": action_id,
-                        "action": "close-tab",
-                        "ok": true,
-                        "tab_id": tab_id,
-                        "scheduled": true,
-                        "remaining_tabs": remaining_tabs,
-                        "active_tab_id": active_tab_id,
-                        "active_changed": active_changed,
-                        "error": null,
-                    }),
-                    Err(error) => {
-                        let mut budget = MAX_ACTION_ERROR_BYTES;
-                        let (error, error_truncated) = super::control_metadata(&error, &mut budget);
-                        serde_json::json!({
-                            "type": "workspace-action-result",
-                            "action_id": action_id,
-                            "action": "close-tab",
-                            "ok": false,
-                            "tab_id": tab_id,
-                            "scheduled": false,
-                            "remaining_tabs": null,
-                            "active_tab_id": null,
-                            "active_changed": null,
-                            "error": error,
-                            "error_truncated": error_truncated,
-                        })
-                    }
-                }
-            }
-            crate::plugin::structured::StructuredResponseAction::MovePane {
-                action_id,
-                source_tab_id,
-                pane_id,
-                destination_tab_id,
-                target_pane_id,
-                direction,
-            } => {
-                let pane_direction = match direction {
-                    crate::control::protocol::SplitDirection::Horizontal => {
-                        crate::panes::SplitDirection::Horizontal
-                    }
-                    crate::control::protocol::SplitDirection::Vertical => {
-                        crate::panes::SplitDirection::Vertical
-                    }
-                };
-                match self.move_plugin_pane_within_window(
-                    source_tab_id,
-                    pane_id,
-                    destination_tab_id,
-                    target_pane_id,
-                    pane_direction,
-                ) {
-                    Ok((destination_pane_id, source_remaining_panes, active_changed)) => {
-                        serde_json::json!({
-                            "type": "workspace-action-result",
-                            "action_id": action_id,
-                            "action": "move-pane",
-                            "ok": true,
-                            "source_tab_id": source_tab_id,
-                            "pane_id": pane_id,
-                            "destination_tab_id": destination_tab_id,
-                            "target_pane_id": target_pane_id,
-                            "direction": direction,
-                            "destination_pane_id": destination_pane_id,
-                            "source_remaining_panes": source_remaining_panes,
-                            "active_tab_id": destination_tab_id,
-                            "focused_pane_id": destination_pane_id,
-                            "active_changed": active_changed,
-                            "error": null,
-                        })
-                    }
-                    Err(error) => {
-                        let mut budget = MAX_ACTION_ERROR_BYTES;
-                        let (error, error_truncated) = super::control_metadata(&error, &mut budget);
-                        serde_json::json!({
-                            "type": "workspace-action-result",
-                            "action_id": action_id,
-                            "action": "move-pane",
-                            "ok": false,
-                            "source_tab_id": source_tab_id,
-                            "pane_id": pane_id,
-                            "destination_tab_id": destination_tab_id,
-                            "target_pane_id": target_pane_id,
-                            "direction": direction,
-                            "destination_pane_id": null,
-                            "source_remaining_panes": null,
-                            "active_tab_id": null,
-                            "focused_pane_id": null,
-                            "active_changed": null,
-                            "error": error,
-                            "error_truncated": error_truncated,
-                        })
-                    }
-                }
-            }
-            crate::plugin::structured::StructuredResponseAction::SendText {
-                action_id,
-                tab_id,
-                pane_id,
-                text,
-                paste,
-                enter,
-            } => match self.send_plugin_text(tab_id, pane_id, &text, paste, enter) {
-                Ok((input_bytes, wire_bytes, disposition, confirmation_id)) => {
-                    serde_json::json!({
-                        "type": "workspace-action-result",
-                        "action_id": action_id,
-                        "action": "send-text",
-                        "ok": true,
-                        "tab_id": tab_id,
-                        "pane_id": pane_id,
-                        "input_bytes": input_bytes,
-                        "wire_bytes": wire_bytes,
-                        "paste": paste,
-                        "enter": enter,
-                        "disposition": disposition,
-                        "confirmation_id": confirmation_id,
-                        "error": null,
-                    })
-                }
-                Err(error) => {
-                    let mut budget = MAX_ACTION_ERROR_BYTES;
-                    let (error, error_truncated) = super::control_metadata(&error, &mut budget);
-                    serde_json::json!({
-                        "type": "workspace-action-result",
-                        "action_id": action_id,
-                        "action": "send-text",
-                        "ok": false,
-                        "tab_id": tab_id,
-                        "pane_id": pane_id,
-                        "input_bytes": null,
-                        "wire_bytes": null,
-                        "paste": paste,
-                        "enter": enter,
-                        "disposition": null,
-                        "confirmation_id": null,
-                        "error": error,
-                        "error_truncated": error_truncated,
-                    })
-                }
-            },
-            crate::plugin::structured::StructuredResponseAction::SwapPanes {
-                action_id,
-                tab_id,
-                first_pane_id,
-                second_pane_id,
-            } => match self.swap_plugin_panes(tab_id, first_pane_id, second_pane_id) {
-                Ok((pane_order, focused_pane_id, zoomed_pane_id)) => serde_json::json!({
-                    "type": "workspace-action-result",
-                    "action_id": action_id,
-                    "action": "swap-panes",
-                    "ok": true,
-                    "tab_id": tab_id,
-                    "first_pane_id": first_pane_id,
-                    "second_pane_id": second_pane_id,
-                    "pane_order": pane_order,
-                    "focused_pane_id": focused_pane_id,
-                    "zoomed_pane_id": zoomed_pane_id,
-                    "error": null,
-                }),
-                Err(error) => {
-                    let mut budget = MAX_ACTION_ERROR_BYTES;
-                    let (error, error_truncated) = super::control_metadata(&error, &mut budget);
-                    serde_json::json!({
-                        "type": "workspace-action-result",
-                        "action_id": action_id,
-                        "action": "swap-panes",
-                        "ok": false,
-                        "tab_id": tab_id,
-                        "first_pane_id": first_pane_id,
-                        "second_pane_id": second_pane_id,
-                        "pane_order": null,
-                        "focused_pane_id": null,
-                        "zoomed_pane_id": null,
-                        "error": error,
-                        "error_truncated": error_truncated,
-                    })
-                }
-            },
-            crate::plugin::structured::StructuredResponseAction::BalancePanes {
-                action_id,
-                tab_id,
-            } => match self.balance_plugin_panes(tab_id) {
-                Ok((changed, pane_order, focused_pane_id, zoomed_pane_id)) => {
-                    serde_json::json!({
-                        "type": "workspace-action-result",
-                        "action_id": action_id,
-                        "action": "balance-panes",
-                        "ok": true,
-                        "tab_id": tab_id,
-                        "changed": changed,
-                        "pane_order": pane_order,
-                        "focused_pane_id": focused_pane_id,
-                        "zoomed_pane_id": zoomed_pane_id,
-                        "error": null,
-                    })
-                }
-                Err(error) => {
-                    let mut budget = MAX_ACTION_ERROR_BYTES;
-                    let (error, error_truncated) = super::control_metadata(&error, &mut budget);
-                    serde_json::json!({
-                        "type": "workspace-action-result",
-                        "action_id": action_id,
-                        "action": "balance-panes",
-                        "ok": false,
-                        "tab_id": tab_id,
-                        "changed": null,
-                        "pane_order": null,
-                        "focused_pane_id": null,
-                        "zoomed_pane_id": null,
-                        "error": error,
-                        "error_truncated": error_truncated,
-                    })
-                }
-            },
-            crate::plugin::structured::StructuredResponseAction::ApplyPaneLayout {
-                action_id,
-                tab_id,
-                preset,
-            } => {
-                let pane_preset = match preset {
-                    crate::plugin::structured::PluginPaneLayoutPreset::Columns => {
-                        crate::panes::PaneLayoutPreset::Columns
-                    }
-                    crate::plugin::structured::PluginPaneLayoutPreset::Rows => {
-                        crate::panes::PaneLayoutPreset::Rows
-                    }
-                    crate::plugin::structured::PluginPaneLayoutPreset::Grid => {
-                        crate::panes::PaneLayoutPreset::Grid
-                    }
-                    crate::plugin::structured::PluginPaneLayoutPreset::Tall => {
-                        crate::panes::PaneLayoutPreset::Tall
-                    }
-                    crate::plugin::structured::PluginPaneLayoutPreset::Fat => {
-                        crate::panes::PaneLayoutPreset::Fat
-                    }
-                };
-                match self.apply_plugin_pane_layout(tab_id, pane_preset) {
-                    Ok((pane_order, focused_pane_id, zoomed_pane_id)) => serde_json::json!({
-                        "type": "workspace-action-result",
-                        "action_id": action_id,
-                        "action": "apply-pane-layout",
-                        "ok": true,
-                        "tab_id": tab_id,
-                        "preset": preset,
-                        "pane_order": pane_order,
-                        "focused_pane_id": focused_pane_id,
-                        "zoomed_pane_id": zoomed_pane_id,
-                        "error": null,
-                    }),
-                    Err(error) => {
-                        let mut budget = MAX_ACTION_ERROR_BYTES;
-                        let (error, error_truncated) = super::control_metadata(&error, &mut budget);
-                        serde_json::json!({
-                            "type": "workspace-action-result",
-                            "action_id": action_id,
-                            "action": "apply-pane-layout",
-                            "ok": false,
-                            "tab_id": tab_id,
-                            "preset": preset,
-                            "pane_order": null,
-                            "focused_pane_id": null,
-                            "zoomed_pane_id": null,
-                            "error": error,
-                            "error_truncated": error_truncated,
-                        })
-                    }
-                }
-            }
-            crate::plugin::structured::StructuredResponseAction::CloseWindow { action_id } => {
-                match self.validate_plugin_window_close() {
-                    Ok(tab_count) => serde_json::json!({
-                        "type": "workspace-action-result",
-                        "action_id": action_id,
-                        "action": "close-window",
-                        "ok": true,
-                        "scheduled": true,
-                        "tab_count": tab_count,
-                        "error": null,
-                    }),
-                    Err(error) => {
-                        let mut budget = MAX_ACTION_ERROR_BYTES;
-                        let (error, error_truncated) = super::control_metadata(&error, &mut budget);
-                        serde_json::json!({
-                            "type": "workspace-action-result",
-                            "action_id": action_id,
-                            "action": "close-window",
-                            "ok": false,
-                            "scheduled": false,
-                            "tab_count": null,
-                            "error": error,
-                            "error_truncated": error_truncated,
-                        })
-                    }
-                }
-            }
-            _ => return Err("structured response did not contain a workspace action".into()),
-        };
-        let envelope = serde_json::json!({
-            "schema_version": 1,
-            "plugin_id": plugin_id,
-            "event": event,
-        });
-        let encoded = serde_json::to_string(&envelope)
-            .map_err(|error| format!("could not encode workspace action result: {error}"))?;
-        if encoded.len() > crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES {
-            return Err(format!(
-                "workspace action result exceeds {} bytes",
-                crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES
-            ));
-        }
-        Ok(encoded)
-    }
-
+    /// Check that this window can be closed by a plugin and return its tab
+    /// count. The closure itself waits for the plugin's result callback.
     pub(super) fn validate_plugin_window_close(&self) -> Result<u16, String> {
         if self.should_exit {
-            return Err("current window is already closing".into());
+            return Err("window is already closing".into());
         }
         if self.pending_plugin_window_close.is_some() {
-            return Err("current window already has a pending plugin closure".into());
+            return Err("window already has a pending plugin closure".into());
         }
         let tab_count = self
             .tabs
             .as_ref()
             .map(|tabs| tabs.all_tabs().len())
             .filter(|count| *count > 0)
-            .ok_or_else(|| "current window has no initialized tab owners".to_string())?;
-        u16::try_from(tab_count).map_err(|_| "current window tab count is unsupported".into())
+            .ok_or_else(|| "window has no initialized tab owners".to_string())?;
+        u16::try_from(tab_count).map_err(|_| "window tab count is unsupported".into())
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn structured_terminal_query_event(
-        &self,
-        plugin_id: &str,
-        query_id: &str,
-        tab_id: u64,
-        pane_id: u32,
-        history_lines: u16,
-        max_bytes: u32,
-    ) -> Result<String, String> {
-        if history_lines > crate::control::protocol::MAX_TEXT_HISTORY_LINES {
-            return Err(format!(
-                "terminal query history is limited to {} lines",
-                crate::control::protocol::MAX_TEXT_HISTORY_LINES
-            ));
-        }
-        if !(1..=crate::plugin::structured::MAX_TERMINAL_QUERY_BYTES).contains(&max_bytes) {
-            return Err(format!(
-                "terminal query bytes must be between 1 and {}",
-                crate::plugin::structured::MAX_TERMINAL_QUERY_BYTES
-            ));
-        }
-
-        let mut attempt_bytes = max_bytes;
-        loop {
-            let event = match self.read_control_text(tab_id, pane_id, history_lines, attempt_bytes)
-            {
-                Ok((screen, included_history, text, truncated)) => serde_json::json!({
-                    "type": "terminal-query-result",
-                    "query_id": query_id,
-                    "text_schema_version": 1,
-                    "ok": true,
-                    "tab_id": tab_id,
-                    "pane_id": pane_id,
-                    "screen": screen,
-                    "requested_history_lines": history_lines,
-                    "requested_max_bytes": max_bytes,
-                    "history_lines": included_history,
-                    "text_bytes": text.len(),
-                    "text": text,
-                    "truncated": truncated || attempt_bytes < max_bytes,
-                    "error": null,
-                }),
-                Err(error) => {
-                    let mut budget = 1024;
-                    let (error, error_truncated) = super::control_metadata(&error, &mut budget);
-                    serde_json::json!({
-                        "type": "terminal-query-result",
-                        "query_id": query_id,
-                        "text_schema_version": 1,
-                        "ok": false,
-                        "tab_id": tab_id,
-                        "pane_id": pane_id,
-                        "screen": null,
-                        "requested_history_lines": history_lines,
-                        "requested_max_bytes": max_bytes,
-                        "history_lines": null,
-                        "text_bytes": 0,
-                        "text": null,
-                        "truncated": null,
-                        "error": error,
-                        "error_truncated": error_truncated,
-                    })
-                }
-            };
-            let envelope = serde_json::json!({
-                "schema_version": 1,
-                "plugin_id": plugin_id,
-                "event": event,
-            });
-            let encoded = serde_json::to_string(&envelope)
-                .map_err(|error| format!("could not encode terminal query result: {error}"))?;
-            let limit = crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES;
-            if encoded.len() <= limit {
-                return Ok(encoded);
+    /// Run one plugin host action that targets this window and return its
+    /// outcome fields. The Application has already resolved this window from
+    /// the plugin's grants and window scope, and checked process capacity.
+    pub(super) fn run_plugin_window_action(
+        &mut self,
+        action: &StructuredResponseAction,
+    ) -> Result<serde_json::Value, String> {
+        match action {
+            StructuredResponseAction::SelectTab { tab_id, .. } => {
+                let changed = self.select_plugin_tab(*tab_id)?;
+                Ok(serde_json::json!({ "changed": changed }))
             }
-            if attempt_bytes == 1 {
-                return Err(format!("terminal query result exceeds {limit} bytes"));
+            StructuredResponseAction::FocusPane {
+                tab_id, pane_id, ..
+            } => {
+                let (tab_changed, pane_changed) = self.focus_plugin_pane(*tab_id, *pane_id)?;
+                Ok(serde_json::json!({
+                    "tab_changed": tab_changed,
+                    "pane_changed": pane_changed,
+                }))
             }
-            let scaled = (usize::try_from(attempt_bytes).expect("u32 fits usize") * limit
-                / encoded.len())
-            .min(usize::try_from(attempt_bytes - 1).expect("u32 fits usize"))
-            .max(1);
-            attempt_bytes = u32::try_from(scaled).expect("scaled terminal query budget fits u32");
+            StructuredResponseAction::SendText {
+                tab_id,
+                pane_id,
+                text,
+                paste,
+                enter,
+                ..
+            } => {
+                let (input_bytes, wire_bytes, disposition, confirmation_id) =
+                    self.send_plugin_text(*tab_id, *pane_id, text, *paste, *enter)?;
+                Ok(serde_json::json!({
+                    "input_bytes": input_bytes,
+                    "wire_bytes": wire_bytes,
+                    "disposition": disposition,
+                    "confirmation_id": confirmation_id,
+                }))
+            }
+            StructuredResponseAction::CreateTab { .. } => {
+                let created_tab_id = self.create_plugin_tab()?;
+                Ok(serde_json::json!({ "created_tab_id": created_tab_id }))
+            }
+            StructuredResponseAction::CloseTab { tab_id, .. } => {
+                let (remaining_tabs, active_tab_id, active_changed) =
+                    self.close_plugin_tab(*tab_id)?;
+                Ok(serde_json::json!({
+                    "scheduled": true,
+                    "remaining_tabs": remaining_tabs,
+                    "active_tab_id": active_tab_id,
+                    "active_changed": active_changed,
+                }))
+            }
+            StructuredResponseAction::CreatePane {
+                tab_id,
+                pane_id,
+                direction,
+                ..
+            } => {
+                let created_pane_id =
+                    self.create_control_pane(*tab_id, *pane_id, pane_split_direction(*direction))?;
+                Ok(serde_json::json!({ "created_pane_id": created_pane_id }))
+            }
+            StructuredResponseAction::ClosePane {
+                tab_id, pane_id, ..
+            } => {
+                let (remaining_panes, focused_pane_id) =
+                    self.close_plugin_pane(*tab_id, *pane_id)?;
+                Ok(serde_json::json!({
+                    "remaining_panes": remaining_panes,
+                    "focused_pane_id": focused_pane_id,
+                }))
+            }
+            StructuredResponseAction::SwapPanes {
+                tab_id,
+                first_pane_id,
+                second_pane_id,
+                ..
+            } => {
+                let (pane_order, focused_pane_id, zoomed_pane_id) =
+                    self.swap_plugin_panes(*tab_id, *first_pane_id, *second_pane_id)?;
+                Ok(serde_json::json!({
+                    "pane_order": pane_order,
+                    "focused_pane_id": focused_pane_id,
+                    "zoomed_pane_id": zoomed_pane_id,
+                }))
+            }
+            StructuredResponseAction::BalancePanes { tab_id, .. } => {
+                let (changed, pane_order, focused_pane_id, zoomed_pane_id) =
+                    self.balance_plugin_panes(*tab_id)?;
+                Ok(serde_json::json!({
+                    "changed": changed,
+                    "pane_order": pane_order,
+                    "focused_pane_id": focused_pane_id,
+                    "zoomed_pane_id": zoomed_pane_id,
+                }))
+            }
+            StructuredResponseAction::ApplyPaneLayout { tab_id, preset, .. } => {
+                let preset = match preset {
+                    PluginPaneLayoutPreset::Columns => crate::panes::PaneLayoutPreset::Columns,
+                    PluginPaneLayoutPreset::Rows => crate::panes::PaneLayoutPreset::Rows,
+                    PluginPaneLayoutPreset::Grid => crate::panes::PaneLayoutPreset::Grid,
+                    PluginPaneLayoutPreset::Tall => crate::panes::PaneLayoutPreset::Tall,
+                    PluginPaneLayoutPreset::Fat => crate::panes::PaneLayoutPreset::Fat,
+                };
+                let (pane_order, focused_pane_id, zoomed_pane_id) =
+                    self.apply_plugin_pane_layout(*tab_id, preset)?;
+                Ok(serde_json::json!({
+                    "pane_order": pane_order,
+                    "focused_pane_id": focused_pane_id,
+                    "zoomed_pane_id": zoomed_pane_id,
+                }))
+            }
+            StructuredResponseAction::ResizeDivider {
+                tab_id,
+                divider_id,
+                ratio_millis,
+                ..
+            } => {
+                let (previous_ratio_millis, changed) =
+                    self.resize_control_divider(*tab_id, *divider_id, *ratio_millis)?;
+                Ok(serde_json::json!({
+                    "previous_ratio_millis": previous_ratio_millis,
+                    "changed": changed,
+                }))
+            }
+            _ => Err(format!("{} is not a single-window action", action.name())),
         }
     }
 
@@ -1471,6 +485,7 @@ impl App {
         let active_tab = self.tabs.as_ref().map_or(0, |t| t.active_index());
 
         PluginContext {
+            window_id: self.control_window_id,
             cwd,
             tab_count,
             active_tab,
@@ -1888,62 +903,173 @@ impl App {
     }
 }
 
-pub(super) fn clear_structured_host_authority(
-    invocation: &mut crate::plugin::structured::StructuredHandlerInvocation,
-) {
-    invocation.allow_workspace_query = false;
-    invocation.allow_workspace_actions = false;
-    invocation.allow_workspace_topology = false;
-    invocation.allow_terminal_query = false;
-    invocation.allow_pane_create = false;
-    invocation.allow_tab_create = false;
-    invocation.allow_pane_close = false;
-    invocation.allow_tab_close = false;
-    invocation.allow_pane_move = false;
-    invocation.allow_terminal_input = false;
-    invocation.allow_pane_layout = false;
-    invocation.allow_window_close = false;
-    invocation.allow_process_query = false;
-    invocation.allow_process_actions = false;
-    invocation.allow_process_terminal_text = false;
-    invocation.allow_process_terminal_input = false;
-    invocation.allow_process_tab_create = false;
-    invocation.allow_process_pane_create = false;
-    invocation.allow_process_pane_move = false;
-    invocation.allow_process_tab_move = false;
-    invocation.allow_process_pane_close = false;
-    invocation.allow_process_tab_close = false;
-    invocation.allow_process_pane_layout = false;
-    invocation.allow_process_window_close = false;
-    invocation.allow_process_window_focus = false;
+pub(super) fn pane_split_direction(
+    direction: crate::control::protocol::SplitDirection,
+) -> crate::panes::SplitDirection {
+    match direction {
+        crate::control::protocol::SplitDirection::Horizontal => {
+            crate::panes::SplitDirection::Horizontal
+        }
+        crate::control::protocol::SplitDirection::Vertical => {
+            crate::panes::SplitDirection::Vertical
+        }
+    }
 }
 
-pub(super) fn reduce_structured_process_query_authority(
-    invocation: &mut crate::plugin::structured::StructuredHandlerInvocation,
-) {
-    let retain_process_actions = invocation.allow_process_actions;
-    let retain_process_terminal_text = invocation.allow_process_terminal_text;
-    let retain_process_terminal_input = invocation.allow_process_terminal_input;
-    let retain_process_tab_create = invocation.allow_process_tab_create;
-    let retain_process_pane_create = invocation.allow_process_pane_create;
-    let retain_process_pane_move = invocation.allow_process_pane_move;
-    let retain_process_tab_move = invocation.allow_process_tab_move;
-    let retain_process_pane_close = invocation.allow_process_pane_close;
-    let retain_process_tab_close = invocation.allow_process_tab_close;
-    let retain_process_pane_layout = invocation.allow_process_pane_layout;
-    let retain_process_window_close = invocation.allow_process_window_close;
-    let retain_process_window_focus = invocation.allow_process_window_focus;
-    clear_structured_host_authority(invocation);
-    invocation.allow_process_actions = retain_process_actions;
-    invocation.allow_process_terminal_text = retain_process_terminal_text;
-    invocation.allow_process_terminal_input = retain_process_terminal_input;
-    invocation.allow_process_tab_create = retain_process_tab_create;
-    invocation.allow_process_pane_create = retain_process_pane_create;
-    invocation.allow_process_pane_move = retain_process_pane_move;
-    invocation.allow_process_tab_move = retain_process_tab_move;
-    invocation.allow_process_pane_close = retain_process_pane_close;
-    invocation.allow_process_tab_close = retain_process_tab_close;
-    invocation.allow_process_pane_layout = retain_process_pane_layout;
-    invocation.allow_process_window_close = retain_process_window_close;
-    invocation.allow_process_window_focus = retain_process_window_focus;
+fn encode_result_envelope(
+    plugin_id: &str,
+    origin_window_id: u64,
+    event: serde_json::Value,
+) -> Result<String, String> {
+    let kind = event["type"].as_str().unwrap_or("result").to_string();
+    serde_json::to_string(&serde_json::json!({
+        "schema_version": crate::plugin::structured::SCHEMA_VERSION,
+        "plugin_id": plugin_id,
+        "origin_window_id": origin_window_id,
+        "event": event,
+    }))
+    .map_err(|error| format!("could not encode {kind}: {error}"))
+}
+
+/// Wrap one result event in the handler envelope, bounded so a persistent
+/// handler can still receive it with its correlation ID.
+fn plugin_result_envelope(
+    plugin_id: &str,
+    origin_window_id: u64,
+    event: serde_json::Value,
+) -> Result<String, String> {
+    let kind = event["type"].as_str().unwrap_or("result").to_string();
+    let encoded = encode_result_envelope(plugin_id, origin_window_id, event)?;
+    let limit = crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES;
+    if encoded.len() > limit {
+        return Err(format!("{kind} exceeds {limit} bytes"));
+    }
+    Ok(encoded)
+}
+
+/// Add a bounded, control-safe error to a failed result event.
+fn insert_result_error(event: &mut serde_json::Value, error: &str) {
+    let mut budget = MAX_RESULT_ERROR_BYTES;
+    let (error, error_truncated) = super::control_metadata(error, &mut budget);
+    event["error"] = error.into();
+    event["error_truncated"] = error_truncated.into();
+}
+
+/// The `workspace-query-result` for an inventory already limited to the
+/// windows the plugin's workspace-query scope may see.
+pub(super) fn plugin_workspace_query_event(
+    plugin_id: &str,
+    origin_window_id: u64,
+    query_id: &str,
+    inventory: &crate::control::protocol::ProcessInventory,
+) -> Result<String, String> {
+    plugin_result_envelope(
+        plugin_id,
+        origin_window_id,
+        serde_json::json!({
+            "type": "workspace-query-result",
+            "query_id": query_id,
+            "windows": inventory.windows,
+            "truncated": inventory.truncated,
+        }),
+    )
+}
+
+/// The `action-result` for one host action: the request's own fields, with
+/// omitted window IDs resolved to the origin, then either the outcome fields
+/// or a bounded error.
+pub(super) fn plugin_action_result_event(
+    plugin_id: &str,
+    origin_window_id: u64,
+    action: &StructuredResponseAction,
+    outcome: Result<serde_json::Value, String>,
+) -> Result<String, String> {
+    let mut event = serde_json::to_value(action)
+        .map_err(|error| format!("could not encode {} result: {error}", action.name()))?;
+    let fields = event
+        .as_object_mut()
+        .ok_or_else(|| format!("{} did not encode as an object", action.name()))?;
+    fields.remove("type");
+    // Input text is echoed only as byte counts.
+    fields.remove("text");
+    for key in ["window_id", "source_window_id", "destination_window_id"] {
+        if fields.get(key).is_some_and(serde_json::Value::is_null) {
+            fields.insert(key.into(), origin_window_id.into());
+        }
+    }
+    event["type"] = "action-result".into();
+    event["action"] = action.name().into();
+    event["ok"] = outcome.is_ok().into();
+    match outcome {
+        Ok(serde_json::Value::Object(outcome)) => {
+            for (key, value) in outcome {
+                event[key.as_str()] = value;
+            }
+        }
+        Ok(_) => return Err(format!("{} outcome is not an object", action.name())),
+        Err(error) => insert_result_error(&mut event, &error),
+    }
+    plugin_result_envelope(plugin_id, origin_window_id, event)
+}
+
+/// The `terminal-query-result` for one `query-terminal` action. `read`
+/// returns presented text within a byte budget; the budget shrinks until the
+/// complete escaped event fits the persistent handler frame.
+pub(super) fn plugin_terminal_query_event(
+    plugin_id: &str,
+    origin_window_id: u64,
+    query: &StructuredResponseAction,
+    read: impl Fn(u32) -> Result<(crate::control::protocol::TextScreen, u16, String, bool), String>,
+) -> Result<String, String> {
+    let StructuredResponseAction::QueryTerminal {
+        query_id,
+        window_id,
+        tab_id,
+        pane_id,
+        history_lines,
+        max_bytes,
+    } = query
+    else {
+        return Err(format!("{} is not a terminal query", query.name()));
+    };
+    crate::plugin::structured::validate_terminal_query_bounds(*history_lines, *max_bytes)?;
+    let limit = crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES;
+    let mut attempt_bytes = *max_bytes;
+    loop {
+        let mut event = serde_json::json!({
+            "type": "terminal-query-result",
+            "query_id": query_id,
+            "window_id": window_id.unwrap_or(origin_window_id),
+            "tab_id": tab_id,
+            "pane_id": pane_id,
+            "requested_history_lines": history_lines,
+            "requested_max_bytes": max_bytes,
+        });
+        match read(attempt_bytes) {
+            Ok((screen, included_history, text, truncated)) => {
+                event["ok"] = true.into();
+                event["screen"] = serde_json::json!(screen);
+                event["history_lines"] = included_history.into();
+                event["text_bytes"] = text.len().into();
+                event["text"] = text.into();
+                event["truncated"] = (truncated || attempt_bytes < *max_bytes).into();
+            }
+            Err(error) => {
+                event["ok"] = false.into();
+                insert_result_error(&mut event, &error);
+            }
+        }
+        let encoded = encode_result_envelope(plugin_id, origin_window_id, event)?;
+        if encoded.len() <= limit {
+            return Ok(encoded);
+        }
+        if attempt_bytes == 1 {
+            return Err(format!("terminal-query-result exceeds {limit} bytes"));
+        }
+        let scaled = (usize::try_from(attempt_bytes).expect("u32 fits usize") * limit
+            / encoded.len())
+        .min(usize::try_from(attempt_bytes - 1).expect("u32 fits usize"))
+        .max(1);
+        attempt_bytes = u32::try_from(scaled).expect("scaled terminal query budget fits u32");
+    }
 }

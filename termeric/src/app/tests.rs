@@ -4317,6 +4317,52 @@ use termeric_core::event::ClipboardRequest;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
+/// The `action-result` a plugin receives for one action targeting `app`, its
+/// origin window.
+fn plugin_action_event(
+    app: &mut App,
+    plugin_id: &str,
+    action: crate::plugin::structured::StructuredResponseAction,
+) -> serde_json::Value {
+    let outcome = app.run_plugin_window_action(&action);
+    let event = super::plugin_actions::plugin_action_result_event(
+        plugin_id,
+        app.control_window_id,
+        &action,
+        outcome,
+    )
+    .unwrap();
+    serde_json::from_str(&event).unwrap()
+}
+
+/// The `terminal-query-result` a plugin receives for one pane of `app`, its
+/// origin window.
+fn plugin_terminal_query_event(
+    app: &App,
+    query_id: &str,
+    tab_id: u64,
+    pane_id: u32,
+    history_lines: u16,
+    max_bytes: u32,
+) -> serde_json::Value {
+    let query = crate::plugin::structured::StructuredResponseAction::QueryTerminal {
+        query_id: query_id.into(),
+        window_id: None,
+        tab_id,
+        pane_id,
+        history_lines,
+        max_bytes,
+    };
+    let event = super::plugin_actions::plugin_terminal_query_event(
+        "terminal-reader",
+        app.control_window_id,
+        &query,
+        |bytes| app.read_control_text(tab_id, pane_id, history_lines, bytes),
+    )
+    .unwrap();
+    serde_json::from_str(&event).unwrap()
+}
+
 #[cfg(unix)]
 #[test]
 fn control_selection_validates_complete_stable_paths_before_changing_focus() {
@@ -4391,22 +4437,13 @@ fn control_selection_validates_complete_stable_paths_before_changing_focus() {
     assert!(!truncated);
     assert!(app.read_control_text(first as u64, 99, 0, 64).is_err());
 
-    let event = app
-        .structured_terminal_query_event(
-            "terminal-reader",
-            "visible-text",
-            first as u64,
-            0,
-            20,
-            4096,
-        )
-        .unwrap();
-    let event: serde_json::Value = serde_json::from_str(&event).unwrap();
+    let event = plugin_terminal_query_event(&app, "visible-text", first as u64, 0, 20, 4096);
     assert_eq!(event["schema_version"], 1);
     assert_eq!(event["plugin_id"], "terminal-reader");
+    assert_eq!(event["origin_window_id"], app.control_window_id);
     assert_eq!(event["event"]["type"], "terminal-query-result");
     assert_eq!(event["event"]["query_id"], "visible-text");
-    assert_eq!(event["event"]["text_schema_version"], 1);
+    assert_eq!(event["event"]["window_id"], app.control_window_id);
     assert_eq!(event["event"]["ok"], true);
     assert_eq!(event["event"]["tab_id"], first as u64);
     assert_eq!(event["event"]["pane_id"], 0);
@@ -4424,10 +4461,7 @@ fn control_selection_validates_complete_stable_paths_before_changing_focus() {
             .contains("hidden-update")
     );
 
-    let missing = app
-        .structured_terminal_query_event("terminal-reader", "missing-pane", first as u64, 99, 0, 64)
-        .unwrap();
-    let missing: serde_json::Value = serde_json::from_str(&missing).unwrap();
+    let missing = plugin_terminal_query_event(&app, "missing-pane", first as u64, 99, 0, 64);
     assert_eq!(missing["event"]["ok"], false);
     assert_eq!(missing["event"]["pane_id"], 99);
     assert!(missing["event"]["text"].is_null());
@@ -4452,18 +4486,17 @@ fn control_selection_validates_complete_stable_paths_before_changing_focus() {
         .terminal;
     source_terminal.process(b"\x1b[?2026l\x1b[2J\x1b[H");
     source_terminal.process("\\".repeat(9_000).as_bytes());
-    let escaped = app
-        .structured_terminal_query_event(
-            "terminal-reader",
-            "escaped-text",
-            first as u64,
-            0,
-            256,
-            crate::plugin::structured::MAX_TERMINAL_QUERY_BYTES,
-        )
-        .unwrap();
-    assert!(escaped.len() <= crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES);
-    let escaped: serde_json::Value = serde_json::from_str(&escaped).unwrap();
+    let escaped = plugin_terminal_query_event(
+        &app,
+        "escaped-text",
+        first as u64,
+        0,
+        256,
+        crate::plugin::structured::MAX_TERMINAL_QUERY_BYTES,
+    );
+    assert!(
+        escaped.to_string().len() <= crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES
+    );
     assert_eq!(escaped["event"]["ok"], true);
     assert_eq!(escaped["event"]["truncated"], true);
     assert!(
@@ -4471,20 +4504,19 @@ fn control_selection_validates_complete_stable_paths_before_changing_focus() {
             < u64::from(crate::plugin::structured::MAX_TERMINAL_QUERY_BYTES)
     );
 
-    let disabled_input = app
-        .structured_workspace_action_event(
-            "terminal-writer",
-            crate::plugin::structured::StructuredResponseAction::SendText {
-                action_id: "policy-disabled".into(),
-                tab_id: first as u64,
-                pane_id: 0,
-                text: "x".into(),
-                paste: false,
-                enter: false,
-            },
-        )
-        .unwrap();
-    let disabled_input: serde_json::Value = serde_json::from_str(&disabled_input).unwrap();
+    let disabled_input = plugin_action_event(
+        &mut app,
+        "terminal-writer",
+        crate::plugin::structured::StructuredResponseAction::SendText {
+            action_id: "policy-disabled".into(),
+            window_id: None,
+            tab_id: first as u64,
+            pane_id: 0,
+            text: "x".into(),
+            paste: false,
+            enter: false,
+        },
+    );
     assert_eq!(disabled_input["event"]["action"], "send-text");
     assert_eq!(disabled_input["event"]["ok"], false);
     assert!(
@@ -4494,20 +4526,19 @@ fn control_selection_validates_complete_stable_paths_before_changing_focus() {
     );
 
     app.config.security.allow_gui_control_input = true;
-    let sent_input = app
-        .structured_workspace_action_event(
-            "terminal-writer",
-            crate::plugin::structured::StructuredResponseAction::SendText {
-                action_id: "safe-input".into(),
-                tab_id: first as u64,
-                pane_id: 0,
-                text: "x".into(),
-                paste: false,
-                enter: false,
-            },
-        )
-        .unwrap();
-    let sent_input: serde_json::Value = serde_json::from_str(&sent_input).unwrap();
+    let sent_input = plugin_action_event(
+        &mut app,
+        "terminal-writer",
+        crate::plugin::structured::StructuredResponseAction::SendText {
+            action_id: "safe-input".into(),
+            window_id: None,
+            tab_id: first as u64,
+            pane_id: 0,
+            text: "x".into(),
+            paste: false,
+            enter: false,
+        },
+    );
     assert_eq!(sent_input["event"]["ok"], true);
     assert_eq!(sent_input["event"]["disposition"], "sent");
     assert_eq!(sent_input["event"]["input_bytes"], 1);
@@ -4529,20 +4560,19 @@ fn control_selection_validates_complete_stable_paths_before_changing_focus() {
         .get_pane_mut(PaneId(0))
         .unwrap()
         .closed = true;
-    let closed_input = app
-        .structured_workspace_action_event(
-            "terminal-writer",
-            crate::plugin::structured::StructuredResponseAction::SendText {
-                action_id: "closed-input".into(),
-                tab_id: first as u64,
-                pane_id: 0,
-                text: "x".into(),
-                paste: false,
-                enter: false,
-            },
-        )
-        .unwrap();
-    let closed_input: serde_json::Value = serde_json::from_str(&closed_input).unwrap();
+    let closed_input = plugin_action_event(
+        &mut app,
+        "terminal-writer",
+        crate::plugin::structured::StructuredResponseAction::SendText {
+            action_id: "closed-input".into(),
+            window_id: None,
+            tab_id: first as u64,
+            pane_id: 0,
+            text: "x".into(),
+            paste: false,
+            enter: false,
+        },
+    );
     assert_eq!(closed_input["event"]["ok"], false);
     assert!(
         closed_input["event"]["error"]
@@ -4561,20 +4591,19 @@ fn control_selection_validates_complete_stable_paths_before_changing_focus() {
         .unwrap()
         .closed = false;
 
-    let guarded_input = app
-        .structured_workspace_action_event(
-            "terminal-writer",
-            crate::plugin::structured::StructuredResponseAction::SendText {
-                action_id: "guarded-input".into(),
-                tab_id: first as u64,
-                pane_id: 0,
-                text: "rm -rf /".into(),
-                paste: false,
-                enter: true,
-            },
-        )
-        .unwrap();
-    let guarded_input: serde_json::Value = serde_json::from_str(&guarded_input).unwrap();
+    let guarded_input = plugin_action_event(
+        &mut app,
+        "terminal-writer",
+        crate::plugin::structured::StructuredResponseAction::SendText {
+            action_id: "guarded-input".into(),
+            window_id: None,
+            tab_id: first as u64,
+            pane_id: 0,
+            text: "rm -rf /".into(),
+            paste: false,
+            enter: true,
+        },
+    );
     assert_eq!(guarded_input["event"]["ok"], true);
     assert_eq!(
         guarded_input["event"]["disposition"],
@@ -4614,22 +4643,12 @@ fn control_selection_validates_complete_stable_paths_before_changing_focus() {
     assert!(app.select_control_tab(u64::MAX).is_err());
     assert_eq!(app.tabs.as_ref().unwrap().active_tab_id(), Some(second));
 
-    let moved = app
-        .structured_workspace_action_event(
-            "workspace-organizer",
-            crate::plugin::structured::StructuredResponseAction::MoveTab {
-                action_id: "move-first".into(),
-                tab_id: first as u64,
-                destination_index: 1,
-            },
-        )
-        .unwrap();
-    let moved: serde_json::Value = serde_json::from_str(&moved).unwrap();
-    assert_eq!(moved["event"]["type"], "workspace-action-result");
-    assert_eq!(moved["event"]["action"], "move-tab");
-    assert_eq!(moved["event"]["ok"], true);
-    assert_eq!(moved["event"]["changed"], true);
-    assert_eq!(moved["event"]["destination_index"], 1);
+    // Plugin tab moves share the control path, which reorders without
+    // activating.
+    assert_eq!(
+        app.move_control_tab_within_window(first as u64, 1),
+        Ok(true)
+    );
     assert_eq!(app.tabs.as_ref().unwrap().active_tab_id(), Some(second));
     assert_eq!(
         app.tabs
@@ -4642,23 +4661,9 @@ fn control_selection_validates_complete_stable_paths_before_changing_focus() {
         vec![second, first]
     );
 
-    let failed_move = app
-        .structured_workspace_action_event(
-            "workspace-organizer",
-            crate::plugin::structured::StructuredResponseAction::MoveTab {
-                action_id: "invalid-index".into(),
-                tab_id: first as u64,
-                destination_index: 2,
-            },
-        )
-        .unwrap();
-    let failed_move: serde_json::Value = serde_json::from_str(&failed_move).unwrap();
-    assert_eq!(failed_move["event"]["ok"], false);
-    assert_eq!(failed_move["event"]["changed"], serde_json::Value::Null);
     assert!(
-        failed_move["event"]["error"]
-            .as_str()
-            .is_some_and(|error| error.contains("outside"))
+        app.move_control_tab_within_window(first as u64, 2)
+            .is_err_and(|error| error.contains("outside"))
     );
     assert_eq!(
         app.tabs
@@ -4685,18 +4690,17 @@ fn control_selection_validates_complete_stable_paths_before_changing_focus() {
             crate::panes::DividerTarget::Domain(_) => None,
         })
         .unwrap();
-    let resized = app
-        .structured_workspace_action_event(
-            "workspace-organizer",
-            crate::plugin::structured::StructuredResponseAction::ResizeDivider {
-                action_id: "resize-first".into(),
-                tab_id: first as u64,
-                divider_id,
-                ratio_millis: 650,
-            },
-        )
-        .unwrap();
-    let resized: serde_json::Value = serde_json::from_str(&resized).unwrap();
+    let resized = plugin_action_event(
+        &mut app,
+        "workspace-organizer",
+        crate::plugin::structured::StructuredResponseAction::ResizeDivider {
+            action_id: "resize-first".into(),
+            window_id: None,
+            tab_id: first as u64,
+            divider_id,
+            ratio_millis: 650,
+        },
+    );
     assert_eq!(resized["event"]["action"], "resize-divider");
     assert_eq!(resized["event"]["ok"], true);
     assert_eq!(resized["event"]["previous_ratio_millis"], 500);
@@ -4706,18 +4710,17 @@ fn control_selection_validates_complete_stable_paths_before_changing_focus() {
         app.resize_control_divider(first as u64, divider_id, 650),
         Ok((650, false))
     );
-    let failed_resize = app
-        .structured_workspace_action_event(
-            "workspace-organizer",
-            crate::plugin::structured::StructuredResponseAction::ResizeDivider {
-                action_id: "missing-divider".into(),
-                tab_id: first as u64,
-                divider_id: u64::MAX,
-                ratio_millis: 600,
-            },
-        )
-        .unwrap();
-    let failed_resize: serde_json::Value = serde_json::from_str(&failed_resize).unwrap();
+    let failed_resize = plugin_action_event(
+        &mut app,
+        "workspace-organizer",
+        crate::plugin::structured::StructuredResponseAction::ResizeDivider {
+            action_id: "missing-divider".into(),
+            window_id: None,
+            tab_id: first as u64,
+            divider_id: u64::MAX,
+            ratio_millis: 600,
+        },
+    );
     assert_eq!(failed_resize["event"]["ok"], false);
     assert_eq!(
         failed_resize["event"]["previous_ratio_millis"],
@@ -4824,19 +4827,18 @@ fn plugin_pane_creation_is_exact_correlated_and_rejects_unsupported_tabs() {
     let mut app = App::new_headless(Config::default()).unwrap();
     app.tabs = Some(tabs);
 
-    let created = app
-        .structured_workspace_action_event(
-            "pane-builder",
-            crate::plugin::structured::StructuredResponseAction::CreatePane {
-                action_id: "split-exact-pane".into(),
-                tab_id: tab_id as u64,
-                pane_id: 0,
-                direction: crate::control::protocol::SplitDirection::Horizontal,
-            },
-        )
-        .unwrap();
-    let created: serde_json::Value = serde_json::from_str(&created).unwrap();
-    assert_eq!(created["event"]["type"], "workspace-action-result");
+    let created = plugin_action_event(
+        &mut app,
+        "pane-builder",
+        crate::plugin::structured::StructuredResponseAction::CreatePane {
+            action_id: "split-exact-pane".into(),
+            window_id: None,
+            tab_id: tab_id as u64,
+            pane_id: 0,
+            direction: crate::control::protocol::SplitDirection::Horizontal,
+        },
+    );
+    assert_eq!(created["event"]["type"], "action-result");
     assert_eq!(created["event"]["action"], "create-pane");
     assert_eq!(created["event"]["action_id"], "split-exact-pane");
     assert_eq!(created["event"]["ok"], true);
@@ -4857,18 +4859,17 @@ fn plugin_pane_creation_is_exact_correlated_and_rejects_unsupported_tabs() {
             .is_some()
     );
 
-    let stale = app
-        .structured_workspace_action_event(
-            "pane-builder",
-            crate::plugin::structured::StructuredResponseAction::CreatePane {
-                action_id: "stale-pane".into(),
-                tab_id: tab_id as u64,
-                pane_id: u32::MAX,
-                direction: crate::control::protocol::SplitDirection::Vertical,
-            },
-        )
-        .unwrap();
-    let stale: serde_json::Value = serde_json::from_str(&stale).unwrap();
+    let stale = plugin_action_event(
+        &mut app,
+        "pane-builder",
+        crate::plugin::structured::StructuredResponseAction::CreatePane {
+            action_id: "stale-pane".into(),
+            window_id: None,
+            tab_id: tab_id as u64,
+            pane_id: u32::MAX,
+            direction: crate::control::protocol::SplitDirection::Vertical,
+        },
+    );
     assert_eq!(stale["event"]["ok"], false);
     assert!(stale["event"]["created_pane_id"].is_null());
     assert!(
@@ -4883,18 +4884,17 @@ fn plugin_pane_creation_is_exact_correlated_and_rejects_unsupported_tabs() {
         tab_id: 8,
         pane_ids: HashMap::new(),
     });
-    let live = app
-        .structured_workspace_action_event(
-            "pane-builder",
-            crate::plugin::structured::StructuredResponseAction::CreatePane {
-                action_id: "reject-live".into(),
-                tab_id: tab_id as u64,
-                pane_id: 0,
-                direction: crate::control::protocol::SplitDirection::Vertical,
-            },
-        )
-        .unwrap();
-    let live: serde_json::Value = serde_json::from_str(&live).unwrap();
+    let live = plugin_action_event(
+        &mut app,
+        "pane-builder",
+        crate::plugin::structured::StructuredResponseAction::CreatePane {
+            action_id: "reject-live".into(),
+            window_id: None,
+            tab_id: tab_id as u64,
+            pane_id: 0,
+            direction: crate::control::protocol::SplitDirection::Vertical,
+        },
+    );
     assert_eq!(live["event"]["ok"], false);
     assert!(
         live["event"]["error"]
@@ -4907,18 +4907,17 @@ fn plugin_pane_creation_is_exact_correlated_and_rejects_unsupported_tabs() {
     tab.tab_type = crate::tabs::TabType::Serial {
         name: "fixture".into(),
     };
-    let serial = app
-        .structured_workspace_action_event(
-            "pane-builder",
-            crate::plugin::structured::StructuredResponseAction::CreatePane {
-                action_id: "reject-serial".into(),
-                tab_id: tab_id as u64,
-                pane_id: 0,
-                direction: crate::control::protocol::SplitDirection::Vertical,
-            },
-        )
-        .unwrap();
-    let serial: serde_json::Value = serde_json::from_str(&serial).unwrap();
+    let serial = plugin_action_event(
+        &mut app,
+        "pane-builder",
+        crate::plugin::structured::StructuredResponseAction::CreatePane {
+            action_id: "reject-serial".into(),
+            window_id: None,
+            tab_id: tab_id as u64,
+            pane_id: 0,
+            direction: crate::control::protocol::SplitDirection::Vertical,
+        },
+    );
     assert_eq!(serial["event"]["ok"], false);
     assert!(
         serial["event"]["error"]
@@ -4929,18 +4928,17 @@ fn plugin_pane_creation_is_exact_correlated_and_rejects_unsupported_tabs() {
     let tab = app.tabs.as_mut().unwrap().tab_mut_by_id(tab_id).unwrap();
     tab.tab_type = crate::tabs::TabType::Shell;
     tab.closing_at = Some(Instant::now());
-    let closing = app
-        .structured_workspace_action_event(
-            "pane-builder",
-            crate::plugin::structured::StructuredResponseAction::CreatePane {
-                action_id: "reject-closing".into(),
-                tab_id: tab_id as u64,
-                pane_id: 0,
-                direction: crate::control::protocol::SplitDirection::Vertical,
-            },
-        )
-        .unwrap();
-    let closing: serde_json::Value = serde_json::from_str(&closing).unwrap();
+    let closing = plugin_action_event(
+        &mut app,
+        "pane-builder",
+        crate::plugin::structured::StructuredResponseAction::CreatePane {
+            action_id: "reject-closing".into(),
+            window_id: None,
+            tab_id: tab_id as u64,
+            pane_id: 0,
+            direction: crate::control::protocol::SplitDirection::Vertical,
+        },
+    );
     assert_eq!(closing["event"]["ok"], false);
     assert!(
         closing["event"]["error"]
@@ -5001,50 +4999,17 @@ fn plugin_pane_movement_preserves_pty_and_returns_exact_destination_state() {
         targets: vec![PaneId(0), surviving_source_pane],
     };
 
-    let moved = app
-        .structured_workspace_action_event(
-            "pane-mover",
-            crate::plugin::structured::StructuredResponseAction::MovePane {
-                action_id: "move-build-output".into(),
-                source_tab_id: source_tab_id as u64,
-                pane_id: 0,
-                destination_tab_id: destination_tab_id as u64,
-                target_pane_id: destination_anchor.0,
-                direction: crate::control::protocol::SplitDirection::Horizontal,
-            },
-        )
-        .unwrap();
-    let moved: serde_json::Value = serde_json::from_str(&moved).unwrap();
-    assert_eq!(moved["event"]["type"], "workspace-action-result");
-    assert_eq!(moved["event"]["action"], "move-pane");
-    assert_eq!(moved["event"]["action_id"], "move-build-output");
-    assert_eq!(moved["event"]["ok"], true);
-    assert_eq!(moved["event"]["source_tab_id"], source_tab_id as u64);
-    assert_eq!(moved["event"]["pane_id"], 0);
-    assert_eq!(
-        moved["event"]["destination_tab_id"],
-        destination_tab_id as u64
-    );
-    assert_eq!(
-        moved["event"]["target_pane_id"],
-        u64::from(destination_anchor.0)
-    );
-    assert_eq!(moved["event"]["direction"], "horizontal");
-    assert_eq!(moved["event"]["source_remaining_panes"], 1);
-    assert_eq!(moved["event"]["active_tab_id"], destination_tab_id as u64);
-    assert_eq!(moved["event"]["active_changed"], true);
-    assert!(moved["event"]["error"].is_null());
-
+    // Plugins move panes through the shared control path; within one window
+    // it validates the whole transfer before detaching the live PTY.
     let destination_pane_id = PaneId(
-        moved["event"]["destination_pane_id"]
-            .as_u64()
-            .unwrap()
-            .try_into()
-            .unwrap(),
-    );
-    assert_eq!(
-        moved["event"]["focused_pane_id"],
-        u64::from(destination_pane_id.0)
+        app.move_control_pane_within_window(
+            source_tab_id as u64,
+            0,
+            destination_tab_id as u64,
+            destination_anchor.0,
+            SplitDirection::Horizontal,
+        )
+        .unwrap(),
     );
     let tabs = app.tabs.as_ref().unwrap();
     assert_eq!(tabs.active_tab_id(), Some(destination_tab_id));
@@ -5109,18 +5074,17 @@ fn plugin_pane_layout_controls_background_tab_without_changing_terminal_owners()
 
     let mut app = App::new_headless(Config::default()).unwrap();
     app.tabs = Some(tabs);
-    let swapped = app
-        .structured_workspace_action_event(
-            "pane-arranger",
-            crate::plugin::structured::StructuredResponseAction::SwapPanes {
-                action_id: "swap-edges".into(),
-                tab_id: target_tab_id as u64,
-                first_pane_id: original[0].0,
-                second_pane_id: original[2].0,
-            },
-        )
-        .unwrap();
-    let swapped: serde_json::Value = serde_json::from_str(&swapped).unwrap();
+    let swapped = plugin_action_event(
+        &mut app,
+        "pane-arranger",
+        crate::plugin::structured::StructuredResponseAction::SwapPanes {
+            action_id: "swap-edges".into(),
+            window_id: None,
+            tab_id: target_tab_id as u64,
+            first_pane_id: original[0].0,
+            second_pane_id: original[2].0,
+        },
+    );
     let mut expected = original.clone();
     expected.swap(0, 2);
     assert_eq!(swapped["event"]["ok"], true);
@@ -5151,16 +5115,15 @@ fn plugin_pane_layout_controls_background_tab_without_changing_terminal_owners()
     };
     target.resize_local_divider(divider_id, 700).unwrap();
 
-    let balanced = app
-        .structured_workspace_action_event(
-            "pane-arranger",
-            crate::plugin::structured::StructuredResponseAction::BalancePanes {
-                action_id: "balance".into(),
-                tab_id: target_tab_id as u64,
-            },
-        )
-        .unwrap();
-    let balanced: serde_json::Value = serde_json::from_str(&balanced).unwrap();
+    let balanced = plugin_action_event(
+        &mut app,
+        "pane-arranger",
+        crate::plugin::structured::StructuredResponseAction::BalancePanes {
+            action_id: "balance".into(),
+            window_id: None,
+            tab_id: target_tab_id as u64,
+        },
+    );
     assert_eq!(balanced["event"]["ok"], true);
     assert_eq!(balanced["event"]["changed"], true);
     assert_eq!(
@@ -5168,17 +5131,16 @@ fn plugin_pane_layout_controls_background_tab_without_changing_terminal_owners()
         Some(active_tab_id)
     );
 
-    let arranged = app
-        .structured_workspace_action_event(
-            "pane-arranger",
-            crate::plugin::structured::StructuredResponseAction::ApplyPaneLayout {
-                action_id: "tall".into(),
-                tab_id: target_tab_id as u64,
-                preset: crate::plugin::structured::PluginPaneLayoutPreset::Tall,
-            },
-        )
-        .unwrap();
-    let arranged: serde_json::Value = serde_json::from_str(&arranged).unwrap();
+    let arranged = plugin_action_event(
+        &mut app,
+        "pane-arranger",
+        crate::plugin::structured::StructuredResponseAction::ApplyPaneLayout {
+            action_id: "tall".into(),
+            window_id: None,
+            tab_id: target_tab_id as u64,
+            preset: crate::plugin::structured::PluginPaneLayoutPreset::Tall,
+        },
+    );
     assert_eq!(arranged["event"]["ok"], true);
     assert_eq!(arranged["event"]["preset"], "tall");
     assert!(arranged["event"]["zoomed_pane_id"].is_null());
@@ -5373,36 +5335,20 @@ fn plugin_pane_movement_refuses_unsupported_targets_before_detaching() {
         pane_id: u32,
         destination_tab_id: u64,
         target_pane_id: u32,
-    ) -> serde_json::Value {
-        let encoded = app
-            .structured_workspace_action_event(
-                "pane-mover",
-                crate::plugin::structured::StructuredResponseAction::MovePane {
-                    action_id: "refused-move".into(),
-                    source_tab_id,
-                    pane_id,
-                    destination_tab_id,
-                    target_pane_id,
-                    direction: crate::control::protocol::SplitDirection::Vertical,
-                },
-            )
-            .unwrap();
-        serde_json::from_str(&encoded).unwrap()
+    ) -> std::result::Result<u32, String> {
+        app.move_control_pane_within_window(
+            source_tab_id,
+            pane_id,
+            destination_tab_id,
+            target_pane_id,
+            SplitDirection::Vertical,
+        )
     }
 
-    fn assert_refused(result: &serde_json::Value, expected: &str) {
-        assert_eq!(result["event"]["ok"], false);
-        assert!(result["event"]["destination_pane_id"].is_null());
-        assert!(result["event"]["source_remaining_panes"].is_null());
-        assert!(result["event"]["active_tab_id"].is_null());
-        assert!(result["event"]["focused_pane_id"].is_null());
-        assert!(result["event"]["active_changed"].is_null());
+    fn assert_refused(result: &std::result::Result<u32, String>, expected: &str) {
         assert!(
-            result["event"]["error"]
-                .as_str()
-                .is_some_and(|error| error.contains(expected)),
-            "unexpected error: {}",
-            result["event"]["error"]
+            result.as_ref().is_err_and(|error| error.contains(expected)),
+            "unexpected result: {result:?}"
         );
     }
 
@@ -5571,9 +5517,18 @@ fn plugin_pane_movement_refuses_unsupported_targets_before_detaching() {
         plugin_id: "fake".into(),
         profile: None,
     };
-    let moved = move_result(&mut plugin, source as u64, 0, destination as u64, 0);
-    assert_eq!(moved["event"]["ok"], true);
-    assert_eq!(moved["event"]["source_remaining_panes"], 1);
+    move_result(&mut plugin, source as u64, 0, destination as u64, 0).unwrap();
+    let source_panes = plugin
+        .tabs
+        .as_ref()
+        .unwrap()
+        .tab_by_id(source)
+        .unwrap()
+        .pane_manager
+        .as_ref()
+        .unwrap()
+        .open_pane_count();
+    assert_eq!(source_panes, 1);
 
     let (mut last, source, destination, _) = fixture();
     assert_refused(
@@ -5625,18 +5580,17 @@ fn plugin_pane_closure_is_exact_correlated_and_preserves_last_pane() {
         targets: vec![PaneId(0), first_sibling],
     };
 
-    let closed = app
-        .structured_workspace_action_event(
-            "pane-pruner",
-            crate::plugin::structured::StructuredResponseAction::ClosePane {
-                action_id: "close-original".into(),
-                tab_id: target_tab_id as u64,
-                pane_id: 0,
-            },
-        )
-        .unwrap();
-    let closed: serde_json::Value = serde_json::from_str(&closed).unwrap();
-    assert_eq!(closed["event"]["type"], "workspace-action-result");
+    let closed = plugin_action_event(
+        &mut app,
+        "pane-pruner",
+        crate::plugin::structured::StructuredResponseAction::ClosePane {
+            action_id: "close-original".into(),
+            window_id: None,
+            tab_id: target_tab_id as u64,
+            pane_id: 0,
+        },
+    );
+    assert_eq!(closed["event"]["type"], "action-result");
     assert_eq!(closed["event"]["action"], "close-pane");
     assert_eq!(closed["event"]["action_id"], "close-original");
     assert_eq!(closed["event"]["ok"], true);
@@ -5654,17 +5608,16 @@ fn plugin_pane_closure_is_exact_correlated_and_preserves_last_pane() {
     assert!(app.copy_mode_target.is_none());
     assert!(matches!(app.broadcast, BroadcastState::Inactive));
 
-    let stale = app
-        .structured_workspace_action_event(
-            "pane-pruner",
-            crate::plugin::structured::StructuredResponseAction::ClosePane {
-                action_id: "stale-pane".into(),
-                tab_id: target_tab_id as u64,
-                pane_id: u32::MAX,
-            },
-        )
-        .unwrap();
-    let stale: serde_json::Value = serde_json::from_str(&stale).unwrap();
+    let stale = plugin_action_event(
+        &mut app,
+        "pane-pruner",
+        crate::plugin::structured::StructuredResponseAction::ClosePane {
+            action_id: "stale-pane".into(),
+            window_id: None,
+            tab_id: target_tab_id as u64,
+            pane_id: u32::MAX,
+        },
+    );
     assert_eq!(stale["event"]["ok"], false);
     assert!(stale["event"]["remaining_panes"].is_null());
     assert!(stale["event"]["focused_pane_id"].is_null());
@@ -5696,17 +5649,16 @@ fn plugin_pane_closure_is_exact_correlated_and_preserves_last_pane() {
         tab_id: 8,
         pane_ids: HashMap::new(),
     });
-    let live = app
-        .structured_workspace_action_event(
-            "pane-pruner",
-            crate::plugin::structured::StructuredResponseAction::ClosePane {
-                action_id: "reject-live".into(),
-                tab_id: target_tab_id as u64,
-                pane_id: first_sibling.0,
-            },
-        )
-        .unwrap();
-    let live: serde_json::Value = serde_json::from_str(&live).unwrap();
+    let live = plugin_action_event(
+        &mut app,
+        "pane-pruner",
+        crate::plugin::structured::StructuredResponseAction::ClosePane {
+            action_id: "reject-live".into(),
+            window_id: None,
+            tab_id: target_tab_id as u64,
+            pane_id: first_sibling.0,
+        },
+    );
     assert_eq!(live["event"]["ok"], false);
     assert!(
         live["event"]["error"]
@@ -5724,17 +5676,16 @@ fn plugin_pane_closure_is_exact_correlated_and_preserves_last_pane() {
     tab.tab_type = crate::tabs::TabType::Serial {
         name: "fixture".into(),
     };
-    let serial = app
-        .structured_workspace_action_event(
-            "pane-pruner",
-            crate::plugin::structured::StructuredResponseAction::ClosePane {
-                action_id: "reject-serial".into(),
-                tab_id: target_tab_id as u64,
-                pane_id: first_sibling.0,
-            },
-        )
-        .unwrap();
-    let serial: serde_json::Value = serde_json::from_str(&serial).unwrap();
+    let serial = plugin_action_event(
+        &mut app,
+        "pane-pruner",
+        crate::plugin::structured::StructuredResponseAction::ClosePane {
+            action_id: "reject-serial".into(),
+            window_id: None,
+            tab_id: target_tab_id as u64,
+            pane_id: first_sibling.0,
+        },
+    );
     assert_eq!(serial["event"]["ok"], false);
     assert!(
         serial["event"]["error"]
@@ -5748,17 +5699,16 @@ fn plugin_pane_closure_is_exact_correlated_and_preserves_last_pane() {
         .tab_mut_by_id(target_tab_id)
         .unwrap()
         .tab_type = crate::tabs::TabType::Shell;
-    let collapsed = app
-        .structured_workspace_action_event(
-            "pane-pruner",
-            crate::plugin::structured::StructuredResponseAction::ClosePane {
-                action_id: "collapse-split".into(),
-                tab_id: target_tab_id as u64,
-                pane_id: first_sibling.0,
-            },
-        )
-        .unwrap();
-    let collapsed: serde_json::Value = serde_json::from_str(&collapsed).unwrap();
+    let collapsed = plugin_action_event(
+        &mut app,
+        "pane-pruner",
+        crate::plugin::structured::StructuredResponseAction::ClosePane {
+            action_id: "collapse-split".into(),
+            window_id: None,
+            tab_id: target_tab_id as u64,
+            pane_id: first_sibling.0,
+        },
+    );
     assert_eq!(collapsed["event"]["ok"], true);
     assert_eq!(collapsed["event"]["remaining_panes"], 1);
     assert_eq!(
@@ -5769,17 +5719,16 @@ fn plugin_pane_closure_is_exact_correlated_and_preserves_last_pane() {
     assert!(tab.pane_manager.is_none());
     assert_eq!(tab.single_pane_id(), second_sibling);
 
-    let sole = app
-        .structured_workspace_action_event(
-            "pane-pruner",
-            crate::plugin::structured::StructuredResponseAction::ClosePane {
-                action_id: "reject-last".into(),
-                tab_id: target_tab_id as u64,
-                pane_id: second_sibling.0,
-            },
-        )
-        .unwrap();
-    let sole: serde_json::Value = serde_json::from_str(&sole).unwrap();
+    let sole = plugin_action_event(
+        &mut app,
+        "pane-pruner",
+        crate::plugin::structured::StructuredResponseAction::ClosePane {
+            action_id: "reject-last".into(),
+            window_id: None,
+            tab_id: target_tab_id as u64,
+            pane_id: second_sibling.0,
+        },
+    );
     assert_eq!(sole["event"]["ok"], false);
     assert!(
         sole["event"]["error"]
@@ -5797,17 +5746,16 @@ fn plugin_pane_closure_is_exact_correlated_and_preserves_last_pane() {
         .tab_mut_by_id(target_tab_id)
         .unwrap()
         .closing_at = Some(Instant::now());
-    let closing = app
-        .structured_workspace_action_event(
-            "pane-pruner",
-            crate::plugin::structured::StructuredResponseAction::ClosePane {
-                action_id: "reject-closing".into(),
-                tab_id: target_tab_id as u64,
-                pane_id: second_sibling.0,
-            },
-        )
-        .unwrap();
-    let closing: serde_json::Value = serde_json::from_str(&closing).unwrap();
+    let closing = plugin_action_event(
+        &mut app,
+        "pane-pruner",
+        crate::plugin::structured::StructuredResponseAction::ClosePane {
+            action_id: "reject-closing".into(),
+            window_id: None,
+            tab_id: target_tab_id as u64,
+            pane_id: second_sibling.0,
+        },
+    );
     assert_eq!(closing["event"]["ok"], false);
     assert!(
         closing["event"]["error"]
@@ -5815,17 +5763,16 @@ fn plugin_pane_closure_is_exact_correlated_and_preserves_last_pane() {
             .is_some_and(|error| error.contains("closing"))
     );
 
-    let missing_tab = app
-        .structured_workspace_action_event(
-            "pane-pruner",
-            crate::plugin::structured::StructuredResponseAction::ClosePane {
-                action_id: "missing-tab".into(),
-                tab_id: u64::MAX,
-                pane_id: second_sibling.0,
-            },
-        )
-        .unwrap();
-    let missing_tab: serde_json::Value = serde_json::from_str(&missing_tab).unwrap();
+    let missing_tab = plugin_action_event(
+        &mut app,
+        "pane-pruner",
+        crate::plugin::structured::StructuredResponseAction::ClosePane {
+            action_id: "missing-tab".into(),
+            window_id: None,
+            tab_id: u64::MAX,
+            pane_id: second_sibling.0,
+        },
+    );
     assert_eq!(missing_tab["event"]["ok"], false);
     assert!(
         missing_tab["event"]["error"]
@@ -5867,17 +5814,16 @@ fn plugin_tab_closure_is_scheduled_exact_bounded_and_hook_suppressed() {
         )
         .unwrap();
 
-    let background = app
-        .structured_workspace_action_event(
-            "tab-pruner",
-            crate::plugin::structured::StructuredResponseAction::CloseTab {
-                action_id: "close-serial-background".into(),
-                tab_id: serial as u64,
-            },
-        )
-        .unwrap();
-    let background: serde_json::Value = serde_json::from_str(&background).unwrap();
-    assert_eq!(background["event"]["type"], "workspace-action-result");
+    let background = plugin_action_event(
+        &mut app,
+        "tab-pruner",
+        crate::plugin::structured::StructuredResponseAction::CloseTab {
+            action_id: "close-serial-background".into(),
+            window_id: None,
+            tab_id: serial as u64,
+        },
+    );
+    assert_eq!(background["event"]["type"], "action-result");
     assert_eq!(background["event"]["action"], "close-tab");
     assert_eq!(background["event"]["action_id"], "close-serial-background");
     assert_eq!(background["event"]["ok"], true);
@@ -5914,18 +5860,17 @@ fn plugin_tab_closure_is_scheduled_exact_bounded_and_hook_suppressed() {
         tab_id: 8,
         pane_ids: HashMap::new(),
     });
-    let live = app
-        .structured_workspace_action_event(
-            "tab-pruner",
-            crate::plugin::structured::StructuredResponseAction::CloseTab {
-                action_id: "reject-live".into(),
-                tab_id: live_candidate as u64,
-            },
-        )
-        .unwrap();
-    let live: serde_json::Value = serde_json::from_str(&live).unwrap();
+    let live = plugin_action_event(
+        &mut app,
+        "tab-pruner",
+        crate::plugin::structured::StructuredResponseAction::CloseTab {
+            action_id: "reject-live".into(),
+            window_id: None,
+            tab_id: live_candidate as u64,
+        },
+    );
     assert_eq!(live["event"]["ok"], false);
-    assert_eq!(live["event"]["scheduled"], false);
+    assert_eq!(live["event"]["scheduled"], serde_json::Value::Null);
     assert!(live["event"]["remaining_tabs"].is_null());
     assert!(live["event"]["active_tab_id"].is_null());
     assert!(live["event"]["active_changed"].is_null());
@@ -5952,18 +5897,17 @@ fn plugin_tab_closure_is_scheduled_exact_bounded_and_hook_suppressed() {
         .unwrap();
     tab.live_domain = None;
     tab.closed = true;
-    let closed = app
-        .structured_workspace_action_event(
-            "tab-pruner",
-            crate::plugin::structured::StructuredResponseAction::CloseTab {
-                action_id: "reject-closed".into(),
-                tab_id: live_candidate as u64,
-            },
-        )
-        .unwrap();
-    let closed: serde_json::Value = serde_json::from_str(&closed).unwrap();
+    let closed = plugin_action_event(
+        &mut app,
+        "tab-pruner",
+        crate::plugin::structured::StructuredResponseAction::CloseTab {
+            action_id: "reject-closed".into(),
+            window_id: None,
+            tab_id: live_candidate as u64,
+        },
+    );
     assert_eq!(closed["event"]["ok"], false);
-    assert_eq!(closed["event"]["scheduled"], false);
+    assert_eq!(closed["event"]["scheduled"], serde_json::Value::Null);
     assert!(
         closed["event"]["error"]
             .as_str()
@@ -5976,16 +5920,15 @@ fn plugin_tab_closure_is_scheduled_exact_bounded_and_hook_suppressed() {
         .unwrap()
         .closed = false;
 
-    let already_closing = app
-        .structured_workspace_action_event(
-            "tab-pruner",
-            crate::plugin::structured::StructuredResponseAction::CloseTab {
-                action_id: "already-closing".into(),
-                tab_id: serial as u64,
-            },
-        )
-        .unwrap();
-    let already_closing: serde_json::Value = serde_json::from_str(&already_closing).unwrap();
+    let already_closing = plugin_action_event(
+        &mut app,
+        "tab-pruner",
+        crate::plugin::structured::StructuredResponseAction::CloseTab {
+            action_id: "already-closing".into(),
+            window_id: None,
+            tab_id: serial as u64,
+        },
+    );
     assert_eq!(already_closing["event"]["ok"], false);
     assert!(
         already_closing["event"]["error"]
@@ -5993,16 +5936,15 @@ fn plugin_tab_closure_is_scheduled_exact_bounded_and_hook_suppressed() {
             .is_some_and(|error| error.contains("already closing"))
     );
 
-    let missing = app
-        .structured_workspace_action_event(
-            "tab-pruner",
-            crate::plugin::structured::StructuredResponseAction::CloseTab {
-                action_id: "missing-tab".into(),
-                tab_id: u64::MAX,
-            },
-        )
-        .unwrap();
-    let missing: serde_json::Value = serde_json::from_str(&missing).unwrap();
+    let missing = plugin_action_event(
+        &mut app,
+        "tab-pruner",
+        crate::plugin::structured::StructuredResponseAction::CloseTab {
+            action_id: "missing-tab".into(),
+            window_id: None,
+            tab_id: u64::MAX,
+        },
+    );
     assert_eq!(missing["event"]["ok"], false);
     assert!(
         missing["event"]["error"]
@@ -6020,16 +5962,15 @@ fn plugin_tab_closure_is_scheduled_exact_bounded_and_hook_suppressed() {
         tab: initially_active,
         pane: None,
     });
-    let active = app
-        .structured_workspace_action_event(
-            "tab-pruner",
-            crate::plugin::structured::StructuredResponseAction::CloseTab {
-                action_id: "close-active".into(),
-                tab_id: initially_active as u64,
-            },
-        )
-        .unwrap();
-    let active: serde_json::Value = serde_json::from_str(&active).unwrap();
+    let active = plugin_action_event(
+        &mut app,
+        "tab-pruner",
+        crate::plugin::structured::StructuredResponseAction::CloseTab {
+            action_id: "close-active".into(),
+            window_id: None,
+            tab_id: initially_active as u64,
+        },
+    );
     assert_eq!(active["event"]["ok"], true);
     assert_eq!(active["event"]["scheduled"], true);
     assert_eq!(active["event"]["remaining_tabs"], 2);
@@ -6041,33 +5982,31 @@ fn plugin_tab_closure_is_scheduled_exact_bounded_and_hook_suppressed() {
     );
     assert!(app.copy_mode_target.is_none());
 
-    let next_active = app
-        .structured_workspace_action_event(
-            "tab-pruner",
-            crate::plugin::structured::StructuredResponseAction::CloseTab {
-                action_id: "leave-one".into(),
-                tab_id: live_candidate as u64,
-            },
-        )
-        .unwrap();
-    let next_active: serde_json::Value = serde_json::from_str(&next_active).unwrap();
+    let next_active = plugin_action_event(
+        &mut app,
+        "tab-pruner",
+        crate::plugin::structured::StructuredResponseAction::CloseTab {
+            action_id: "leave-one".into(),
+            window_id: None,
+            tab_id: live_candidate as u64,
+        },
+    );
     assert_eq!(next_active["event"]["ok"], true);
     assert_eq!(next_active["event"]["remaining_tabs"], 1);
     assert_eq!(next_active["event"]["active_tab_id"], survivor as u64);
     assert_eq!(next_active["event"]["active_changed"], true);
 
-    let final_tab = app
-        .structured_workspace_action_event(
-            "tab-pruner",
-            crate::plugin::structured::StructuredResponseAction::CloseTab {
-                action_id: "reject-final".into(),
-                tab_id: survivor as u64,
-            },
-        )
-        .unwrap();
-    let final_tab: serde_json::Value = serde_json::from_str(&final_tab).unwrap();
+    let final_tab = plugin_action_event(
+        &mut app,
+        "tab-pruner",
+        crate::plugin::structured::StructuredResponseAction::CloseTab {
+            action_id: "reject-final".into(),
+            window_id: None,
+            tab_id: survivor as u64,
+        },
+    );
     assert_eq!(final_tab["event"]["ok"], false);
-    assert_eq!(final_tab["event"]["scheduled"], false);
+    assert_eq!(final_tab["event"]["scheduled"], serde_json::Value::Null);
     assert!(
         final_tab["event"]["error"]
             .as_str()
@@ -6173,16 +6112,15 @@ fn plugin_tab_creation_returns_stable_identity_without_lifecycle_redispatch() {
         )
         .unwrap();
 
-    let created = app
-        .structured_workspace_action_event(
-            "tab-builder",
-            crate::plugin::structured::StructuredResponseAction::CreateTab {
-                action_id: "new-task".into(),
-            },
-        )
-        .unwrap();
-    let created: serde_json::Value = serde_json::from_str(&created).unwrap();
-    assert_eq!(created["event"]["type"], "workspace-action-result");
+    let created = plugin_action_event(
+        &mut app,
+        "tab-builder",
+        crate::plugin::structured::StructuredResponseAction::CreateTab {
+            action_id: "new-task".into(),
+            window_id: None,
+        },
+    );
+    assert_eq!(created["event"]["type"], "action-result");
     assert_eq!(created["event"]["action"], "create-tab");
     assert_eq!(created["event"]["action_id"], "new-task");
     assert_eq!(created["event"]["ok"], true);
@@ -6213,15 +6151,14 @@ fn plugin_tab_creation_returns_stable_identity_without_lifecycle_redispatch() {
         tab_id: 8,
         pane_ids: HashMap::new(),
     });
-    let live = app
-        .structured_workspace_action_event(
-            "tab-builder",
-            crate::plugin::structured::StructuredResponseAction::CreateTab {
-                action_id: "reject-live".into(),
-            },
-        )
-        .unwrap();
-    let live: serde_json::Value = serde_json::from_str(&live).unwrap();
+    let live = plugin_action_event(
+        &mut app,
+        "tab-builder",
+        crate::plugin::structured::StructuredResponseAction::CreateTab {
+            action_id: "reject-live".into(),
+            window_id: None,
+        },
+    );
     assert_eq!(live["event"]["ok"], false);
     assert!(live["event"]["created_tab_id"].is_null());
     assert!(
@@ -6238,15 +6175,14 @@ fn plugin_tab_creation_returns_stable_identity_without_lifecycle_redispatch() {
         args: Vec::new(),
         env: Default::default(),
     });
-    let launch_failure = app
-        .structured_workspace_action_event(
-            "tab-builder",
-            crate::plugin::structured::StructuredResponseAction::CreateTab {
-                action_id: "failed-launch".into(),
-            },
-        )
-        .unwrap();
-    let launch_failure: serde_json::Value = serde_json::from_str(&launch_failure).unwrap();
+    let launch_failure = plugin_action_event(
+        &mut app,
+        "tab-builder",
+        crate::plugin::structured::StructuredResponseAction::CreateTab {
+            action_id: "failed-launch".into(),
+            window_id: None,
+        },
+    );
     assert_eq!(launch_failure["event"]["ok"], false);
     assert!(launch_failure["event"]["created_tab_id"].is_null());
     assert_eq!(app.tabs.as_ref().unwrap().count(), 3);
@@ -6261,15 +6197,14 @@ fn plugin_tab_creation_returns_stable_identity_without_lifecycle_redispatch() {
     );
 
     let mut uninitialized = App::new_headless(Config::default()).unwrap();
-    let unavailable = uninitialized
-        .structured_workspace_action_event(
-            "tab-builder",
-            crate::plugin::structured::StructuredResponseAction::CreateTab {
-                action_id: "no-tabs".into(),
-            },
-        )
-        .unwrap();
-    let unavailable: serde_json::Value = serde_json::from_str(&unavailable).unwrap();
+    let unavailable = plugin_action_event(
+        &mut uninitialized,
+        "tab-builder",
+        crate::plugin::structured::StructuredResponseAction::CreateTab {
+            action_id: "no-tabs".into(),
+            window_id: None,
+        },
+    );
     assert_eq!(unavailable["event"]["ok"], false);
     assert!(
         unavailable["event"]["error"]
@@ -7313,7 +7248,7 @@ fn guarded_input_producers_follow_only_the_original_owner_through_topology_chang
     use crate::terminal::guardrails::GuardrailAction;
     const COMMAND: &str = "rm -rf /synthetic-never-executed";
     // Only automated producers are confirmed; typed and pasted input is sent as-is.
-    for producer in ["control", "plugin", "process-plugin"] {
+    for producer in ["control", "plugin"] {
         for transition in [
             "split",
             "collapse",
@@ -7346,14 +7281,6 @@ fn guarded_input_producers_follow_only_the_original_owner_through_topology_chang
                         true,
                     ),
                     "plugin" => app.send_plugin_text(
-                        source.tab_id as u64,
-                        source.pane_id,
-                        COMMAND,
-                        true,
-                        true,
-                    ),
-                    "process-plugin" => app.send_process_plugin_text(
-                        7,
                         source.tab_id as u64,
                         source.pane_id,
                         COMMAND,
@@ -11088,118 +11015,114 @@ fn structured_plugin_completions_require_a_live_generation_and_plugin() {
             ]),
         };
 
-    app.handle_structured_plugin_completed(completion(
-        app.plugin_runtime_generation.wrapping_sub(1),
-        "stale",
-    ));
+    assert!(
+        app.accept_structured_plugin_completion(completion(
+            app.plugin_runtime_generation.wrapping_sub(1),
+            "stale",
+        ))
+        .is_none()
+    );
     assert!(app.toasts.iter().all(|toast| toast.message != "stale"));
 
-    app.handle_structured_plugin_completed(completion(app.plugin_runtime_generation, "current"));
+    assert!(
+        app.accept_structured_plugin_completion(completion(
+            app.plugin_runtime_generation,
+            "current"
+        ))
+        .is_none()
+    );
     assert!(app.toasts.iter().any(|toast| toast.message == "current"));
 
     app.plugin_manager.deregister("completion-fixture");
-    app.handle_structured_plugin_completed(completion(app.plugin_runtime_generation, "unloaded"));
+    assert!(
+        app.accept_structured_plugin_completion(completion(
+            app.plugin_runtime_generation,
+            "unloaded"
+        ))
+        .is_none()
+    );
     assert!(app.toasts.iter().all(|toast| toast.message != "unloaded"));
 }
 
 #[test]
-fn process_query_retains_only_independent_process_followups_and_results_revoke_authority() {
-    let mut invocation = crate::plugin::structured::StructuredHandlerInvocation {
-        plugin_id: "process-inspector".into(),
+fn structured_completion_hands_its_host_operation_to_the_application() {
+    use crate::plugin::structured::{
+        HandlerAuthority, StructuredHandlerCompletion, StructuredHandlerInvocation,
+        StructuredHandlerMode, StructuredResponseAction,
+    };
+
+    #[derive(Debug)]
+    struct CompletionPlugin;
+
+    impl crate::plugin::hooks::Plugin for CompletionPlugin {
+        fn id(&self) -> &str {
+            "operation-fixture"
+        }
+
+        fn name(&self) -> &str {
+            "Operation Fixture"
+        }
+    }
+
+    let mut app = App::new_headless(Config::default()).unwrap();
+    let context = app.build_plugin_context();
+    app.plugin_manager
+        .register(Box::new(CompletionPlugin), &context)
+        .unwrap();
+    let select = StructuredResponseAction::SelectTab {
+        action_id: "select".into(),
+        window_id: None,
+        tab_id: 1,
+    };
+    let generation = app.plugin_runtime_generation;
+    let completion = |continuation| StructuredHandlerCompletion {
+        window_id: winit::window::WindowId::dummy(),
+        plugin_generation: generation,
+        plugin_id: "operation-fixture".into(),
+        request_id: 3,
+        continuation,
+        result: Ok(vec![
+            select.clone(),
+            StructuredResponseAction::ShowMessage {
+                message: "selecting".into(),
+            },
+        ]),
+    };
+    let continuation = StructuredHandlerInvocation {
+        plugin_id: "operation-fixture".into(),
         program: "fixture".into(),
         args: Vec::new(),
         event_json: "{}".into(),
-        allow_ui_actions: true,
-        allow_workspace_query: true,
-        allow_workspace_actions: true,
-        allow_workspace_topology: true,
-        allow_terminal_query: true,
-        allow_pane_create: true,
-        allow_tab_create: true,
-        allow_pane_close: true,
-        allow_tab_close: true,
-        allow_pane_move: true,
-        allow_terminal_input: true,
-        allow_pane_layout: true,
-        allow_window_close: true,
-        allow_process_query: true,
-        allow_process_actions: true,
-        allow_process_terminal_text: true,
-        allow_process_terminal_input: true,
-        allow_process_tab_create: true,
-        allow_process_pane_create: true,
-        allow_process_pane_move: true,
-        allow_process_tab_move: true,
-        allow_process_pane_close: true,
-        allow_process_tab_close: true,
-        allow_process_pane_layout: true,
-        allow_process_window_close: true,
-        allow_process_window_focus: true,
-        mode: crate::plugin::structured::StructuredHandlerMode::Persistent,
+        mode: StructuredHandlerMode::Persistent,
+        authority: HandlerAuthority::for_event(
+            crate::plugin::permission::PluginPermissions::default(),
+            StructuredHandlerMode::Persistent,
+            false,
+        ),
     };
 
-    let mut process_query_result = invocation.clone();
-    super::plugin_actions::reduce_structured_process_query_authority(&mut process_query_result);
-    assert!(process_query_result.allow_ui_actions);
-    assert!(process_query_result.allow_process_actions);
-    assert!(process_query_result.allow_process_terminal_text);
-    assert!(process_query_result.allow_process_terminal_input);
-    assert!(process_query_result.allow_process_tab_create);
-    assert!(process_query_result.allow_process_pane_create);
-    assert!(process_query_result.allow_process_pane_move);
-    assert!(process_query_result.allow_process_tab_move);
-    assert!(process_query_result.allow_process_pane_close);
-    assert!(process_query_result.allow_process_tab_close);
-    assert!(process_query_result.allow_process_pane_layout);
-    assert!(process_query_result.allow_process_window_close);
-    assert!(process_query_result.allow_process_window_focus);
-    assert!(!process_query_result.allow_workspace_query);
-    assert!(!process_query_result.allow_workspace_actions);
-    assert!(!process_query_result.allow_workspace_topology);
-    assert!(!process_query_result.allow_terminal_query);
-    assert!(!process_query_result.allow_pane_create);
-    assert!(!process_query_result.allow_tab_create);
-    assert!(!process_query_result.allow_pane_close);
-    assert!(!process_query_result.allow_tab_close);
-    assert!(!process_query_result.allow_pane_move);
-    assert!(!process_query_result.allow_terminal_input);
-    assert!(!process_query_result.allow_pane_layout);
-    assert!(!process_query_result.allow_window_close);
-    assert!(!process_query_result.allow_process_query);
+    let host = app
+        .accept_structured_plugin_completion(completion(Some(continuation)))
+        .unwrap();
+    assert_eq!(host.plugin_id, "operation-fixture");
+    assert_eq!(host.operation, select);
+    assert!(app.toasts.iter().any(|toast| toast.message == "selecting"));
 
-    super::plugin_actions::clear_structured_host_authority(&mut invocation);
-
-    assert!(invocation.allow_ui_actions);
-    assert!(!invocation.allow_workspace_query);
-    assert!(!invocation.allow_workspace_actions);
-    assert!(!invocation.allow_workspace_topology);
-    assert!(!invocation.allow_terminal_query);
-    assert!(!invocation.allow_pane_create);
-    assert!(!invocation.allow_tab_create);
-    assert!(!invocation.allow_pane_close);
-    assert!(!invocation.allow_tab_close);
-    assert!(!invocation.allow_pane_move);
-    assert!(!invocation.allow_terminal_input);
-    assert!(!invocation.allow_pane_layout);
-    assert!(!invocation.allow_window_close);
-    assert!(!invocation.allow_process_query);
-    assert!(!invocation.allow_process_actions);
-    assert!(!invocation.allow_process_terminal_text);
-    assert!(!invocation.allow_process_terminal_input);
-    assert!(!invocation.allow_process_tab_create);
-    assert!(!invocation.allow_process_pane_create);
-    assert!(!invocation.allow_process_pane_move);
-    assert!(!invocation.allow_process_tab_move);
-    assert!(!invocation.allow_process_pane_close);
-    assert!(!invocation.allow_process_tab_close);
-    assert!(!invocation.allow_process_pane_layout);
-    assert!(!invocation.allow_process_window_close);
-    assert!(!invocation.allow_process_window_focus);
+    // A host operation without a live persistent handler fails visibly.
+    assert!(
+        app.accept_structured_plugin_completion(completion(None))
+            .is_none()
+    );
+    assert!(app.toasts.iter().any(|toast| {
+        toast
+            .message
+            .contains("host operations require a live persistent handler")
+    }));
 }
 
 #[cfg(unix)]
 #[test]
-fn plugin_window_close_result_is_scheduled_without_premature_teardown() {
+fn plugin_window_close_validation_never_tears_down_the_window() {
     if !std::path::Path::new("/bin/sh").exists() {
         return;
     }
@@ -11221,66 +11144,7 @@ fn plugin_window_close_result_is_scheduled_without_premature_teardown() {
     let mut app = App::new_headless(Config::default()).unwrap();
     app.tabs = Some(tabs);
 
-    let encoded = app
-        .structured_workspace_action_event(
-            "window-closer",
-            crate::plugin::structured::StructuredResponseAction::CloseWindow {
-                action_id: "close-current-window".into(),
-            },
-        )
-        .unwrap();
-    let envelope: serde_json::Value = serde_json::from_str(&encoded).unwrap();
-    assert_eq!(envelope["plugin_id"], "window-closer");
-    assert_eq!(envelope["event"]["type"], "workspace-action-result");
-    assert_eq!(envelope["event"]["action"], "close-window");
-    assert_eq!(envelope["event"]["ok"], true);
-    assert_eq!(envelope["event"]["scheduled"], true);
-    assert_eq!(envelope["event"]["tab_count"], 1);
-    assert!(!app.should_exit);
-    assert!(app.pending_plugin_window_close.is_none());
-
-    let error = app
-        .continue_structured_workspace_operation(
-            "window-closer",
-            crate::plugin::structured::StructuredResponseAction::CloseWindow {
-                action_id: "submit-without-native-window".into(),
-            },
-            Some(crate::plugin::structured::StructuredHandlerInvocation {
-                plugin_id: "window-closer".into(),
-                program: "/bin/sh".into(),
-                args: vec!["-c".into(), "exit 0".into()],
-                event_json: r#"{"schema_version":1}"#.into(),
-                allow_ui_actions: false,
-                allow_workspace_query: false,
-                allow_workspace_actions: false,
-                allow_workspace_topology: false,
-                allow_terminal_query: false,
-                allow_pane_create: false,
-                allow_tab_create: false,
-                allow_pane_close: false,
-                allow_tab_close: false,
-                allow_pane_move: false,
-                allow_terminal_input: false,
-                allow_pane_layout: false,
-                allow_window_close: true,
-                allow_process_query: false,
-                allow_process_actions: false,
-                allow_process_terminal_text: false,
-                allow_process_terminal_input: false,
-                allow_process_tab_create: false,
-                allow_process_pane_create: false,
-                allow_process_pane_move: false,
-                allow_process_tab_move: false,
-                allow_process_pane_close: false,
-                allow_process_tab_close: false,
-                allow_process_pane_layout: false,
-                allow_process_window_close: false,
-                allow_process_window_focus: false,
-                mode: crate::plugin::structured::StructuredHandlerMode::Persistent,
-            }),
-        )
-        .unwrap_err();
-    assert!(error.contains("native window"));
+    assert_eq!(app.validate_plugin_window_close(), Ok(1));
     assert!(!app.should_exit);
     assert!(app.pending_plugin_window_close.is_none());
 
@@ -11289,25 +11153,18 @@ fn plugin_window_close_result_is_scheduled_without_premature_teardown() {
         plugin_generation: app.plugin_runtime_generation,
         result_request_id: 9,
     });
-    let duplicate: serde_json::Value = serde_json::from_str(
-        &app.structured_workspace_action_event(
-            "window-closer",
-            crate::plugin::structured::StructuredResponseAction::CloseWindow {
-                action_id: "duplicate".into(),
-            },
-        )
-        .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(duplicate["event"]["ok"], false);
-    assert_eq!(duplicate["event"]["scheduled"], false);
     assert!(
-        duplicate["event"]["error"]
-            .as_str()
-            .unwrap()
+        app.validate_plugin_window_close()
+            .unwrap_err()
             .contains("pending plugin closure")
     );
-    assert!(!app.should_exit);
+    app.pending_plugin_window_close = None;
+    app.should_exit = true;
+    assert!(
+        app.validate_plugin_window_close()
+            .unwrap_err()
+            .contains("already closing")
+    );
 }
 
 #[test]
@@ -11328,18 +11185,24 @@ fn plugin_window_close_waits_for_only_the_exact_result_callback() {
         result,
     };
 
-    app.handle_structured_plugin_completed(completion(40, Ok(Vec::new())));
+    assert!(
+        app.accept_structured_plugin_completion(completion(40, Ok(Vec::new())))
+            .is_none()
+    );
     assert!(!app.should_exit);
     assert!(app.pending_plugin_window_close.is_some());
 
-    app.handle_structured_plugin_completed(completion(
-        41,
-        Ok(vec![
-            crate::plugin::structured::StructuredResponseAction::ShowMessage {
-                message: "must not render during teardown".into(),
-            },
-        ]),
-    ));
+    assert!(
+        app.accept_structured_plugin_completion(completion(
+            41,
+            Ok(vec![
+                crate::plugin::structured::StructuredResponseAction::ShowMessage {
+                    message: "must not render during teardown".into(),
+                },
+            ]),
+        ))
+        .is_none()
+    );
     assert!(app.should_exit);
     assert!(app.pending_plugin_window_close.is_none());
     assert!(
@@ -11357,7 +11220,7 @@ fn plugin_window_close_still_finishes_after_final_handler_failure() {
         plugin_generation: app.plugin_runtime_generation,
         result_request_id: 73,
     });
-    app.handle_structured_plugin_completed(
+    app.accept_structured_plugin_completion(
         crate::plugin::structured::StructuredHandlerCompletion {
             window_id: winit::window::WindowId::dummy(),
             plugin_generation: app.plugin_runtime_generation,
@@ -11410,35 +11273,37 @@ fn structured_workspace_query_is_current_window_bounded_and_control_safe() {
     let mut app = App::new_headless(Config::default()).unwrap();
     app.tabs = Some(tabs);
     app.current_workspace_id = Some("workspace\u{7}fixture".into());
-    let encoded = app
-        .structured_workspace_query_event("query-fixture", "inventory-1")
-        .unwrap();
+    // At window scope the inventory holds only the plugin's own window.
+    let inventory =
+        super::application::build_plugin_process_inventory(&[(app.control_window_id, &app)]);
+    let encoded = super::plugin_actions::plugin_workspace_query_event(
+        "query-fixture",
+        app.control_window_id,
+        "inventory-1",
+        &inventory,
+    )
+    .unwrap();
     assert!(encoded.len() <= crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES);
     assert!(!encoded.contains("presented-secret"));
     let value: serde_json::Value = serde_json::from_str(&encoded).unwrap();
     assert_eq!(value["schema_version"], 1);
     assert_eq!(value["plugin_id"], "query-fixture");
+    assert_eq!(value["origin_window_id"], app.control_window_id);
     assert_eq!(value["event"]["type"], "workspace-query-result");
     assert_eq!(value["event"]["query_id"], "inventory-1");
-    assert_eq!(value["event"]["snapshot_schema_version"], 1);
-    assert_eq!(value["event"]["tab_count"], 17);
-    assert_eq!(value["event"]["active_tab_index"], 16);
-    assert!(value["event"]["window"].get("id").is_none());
-    assert_eq!(value["event"]["window"]["workspace_id"], "workspacefixture");
-    assert_eq!(
-        value["event"]["window"]["tabs"].as_array().unwrap().len(),
-        16
-    );
-    assert!(value["event"]["window"]["truncated"].as_bool().unwrap());
-    assert_eq!(value["event"]["window"]["tabs"][0]["id"], first_tab_id);
-    assert_eq!(value["event"]["window"]["tabs"][0]["title"], "unsafe title");
-    assert!(
-        value["event"]["window"]["tabs"][0]["truncated"]
-            .as_bool()
-            .unwrap()
-    );
-    assert_eq!(value["event"]["window"]["tabs"][0]["panes"][0]["cols"], 80);
-    assert_eq!(value["event"]["window"]["tabs"][0]["panes"][0]["rows"], 24);
+    let windows = value["event"]["windows"].as_array().unwrap();
+    assert_eq!(windows.len(), 1);
+    let window = &windows[0];
+    assert_eq!(window["id"], app.control_window_id);
+    // The shared metadata budget may truncate the ID, never pass controls.
+    assert!("workspacefixture".starts_with(window["workspace_id"].as_str().unwrap()));
+    assert_eq!(window["tabs"].as_array().unwrap().len(), 16);
+    assert!(window["truncated"].as_bool().unwrap());
+    assert_eq!(window["tabs"][0]["id"], first_tab_id);
+    assert_eq!(window["tabs"][0]["title"], "unsafe title");
+    assert_eq!(window["tabs"][16 - 1]["active"], false);
+    assert_eq!(window["tabs"][0]["panes"][0]["cols"], 80);
+    assert_eq!(window["tabs"][0]["panes"][0]["rows"], 24);
 
     #[derive(Debug)]
     struct TabSwitchObserver(std::sync::Arc<std::sync::atomic::AtomicUsize>);
@@ -11473,18 +11338,17 @@ fn structured_workspace_query_is_current_window_bounded_and_control_safe() {
         )
         .unwrap();
 
-    let failed = app
-        .structured_workspace_action_event(
-            "workspace-navigator",
-            crate::plugin::structured::StructuredResponseAction::FocusPane {
-                action_id: "missing-pane".into(),
-                tab_id: first_tab_id as u64,
-                pane_id: u32::MAX,
-            },
-        )
-        .unwrap();
-    let failed: serde_json::Value = serde_json::from_str(&failed).unwrap();
-    assert_eq!(failed["event"]["type"], "workspace-action-result");
+    let failed = plugin_action_event(
+        &mut app,
+        "workspace-navigator",
+        crate::plugin::structured::StructuredResponseAction::FocusPane {
+            action_id: "missing-pane".into(),
+            window_id: None,
+            tab_id: first_tab_id as u64,
+            pane_id: u32::MAX,
+        },
+    );
+    assert_eq!(failed["event"]["type"], "action-result");
     assert_eq!(failed["event"]["action_id"], "missing-pane");
     assert_eq!(failed["event"]["action"], "focus-pane");
     assert_eq!(failed["event"]["ok"], false);
@@ -11498,16 +11362,15 @@ fn structured_workspace_query_is_current_window_bounded_and_control_safe() {
         Some(last_tab_id)
     );
 
-    let selected = app
-        .structured_workspace_action_event(
-            "workspace-navigator",
-            crate::plugin::structured::StructuredResponseAction::SelectTab {
-                action_id: "select-first".into(),
-                tab_id: first_tab_id as u64,
-            },
-        )
-        .unwrap();
-    let selected: serde_json::Value = serde_json::from_str(&selected).unwrap();
+    let selected = plugin_action_event(
+        &mut app,
+        "workspace-navigator",
+        crate::plugin::structured::StructuredResponseAction::SelectTab {
+            action_id: "select-first".into(),
+            window_id: None,
+            tab_id: first_tab_id as u64,
+        },
+    );
     assert_eq!(selected["plugin_id"], "workspace-navigator");
     assert_eq!(selected["event"]["ok"], true);
     assert_eq!(selected["event"]["changed"], true);
@@ -11529,22 +11392,21 @@ fn structured_workspace_query_is_current_window_bounded_and_control_safe() {
     );
 
     let pane_id = u32::try_from(
-        value["event"]["window"]["tabs"][0]["panes"][0]["id"]
+        value["event"]["windows"][0]["tabs"][0]["panes"][0]["id"]
             .as_u64()
             .unwrap(),
     )
     .unwrap();
-    let focused = app
-        .structured_workspace_action_event(
-            "workspace-navigator",
-            crate::plugin::structured::StructuredResponseAction::FocusPane {
-                action_id: "focus-first".into(),
-                tab_id: first_tab_id as u64,
-                pane_id,
-            },
-        )
-        .unwrap();
-    let focused: serde_json::Value = serde_json::from_str(&focused).unwrap();
+    let focused = plugin_action_event(
+        &mut app,
+        "workspace-navigator",
+        crate::plugin::structured::StructuredResponseAction::FocusPane {
+            action_id: "focus-first".into(),
+            window_id: None,
+            tab_id: first_tab_id as u64,
+            pane_id,
+        },
+    );
     assert_eq!(focused["event"]["ok"], true);
     assert_eq!(focused["event"]["tab_changed"], true);
     assert_eq!(focused["event"]["pane_changed"], false);

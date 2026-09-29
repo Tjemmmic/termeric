@@ -1,41 +1,17 @@
 //! Installed declarative third-party plugins.
 //!
 //! No public version executes third-party code in the Termeric process. A
-//! validated profile may request an argv-preserving PTY launch; API v3 may also
-//! request a bounded lifecycle-worker invocation after explicit grants, and
-//! API v4 may subscribe to bounded semantic command completions, API v5 may
-//! keep one correlated newline-delimited event handler alive per plugin, and
-//! API v6 may request a bounded current-window workspace inventory. API v7
-//! adds explicitly granted stable-ID tab selection and pane focus. API v8 adds
-//! separately granted non-destructive tab-order and divider-ratio adjustment,
-//! API v9 lets handlers contribute bounded, namespaced palette commands, and
-//! API v10 adds bounded, typed, explicitly user-configured non-secret settings.
-//! API v11 adds an independently granted, bounded presented-terminal query,
-//! API v12 adds exact, separately granted ordinary-pane creation, and API v13
-//! adds separately granted ordinary-tab creation in the originating window.
-//! API v14 adds separately granted exact ordinary-pane closure.
-//! API v15 adds separately granted exact ordinary-tab closure scheduling.
-//! API v16 adds separately granted exact ordinary-pane movement, API v17 adds
-//! bounded exact-pane terminal input, and API v18 adds exact same-tab pane
-//! swapping, balancing, and layout presets. API v19 adds exact current-window
-//! closure, available only from an explicitly invoked plugin command. API v20
-//! adds a separately granted, bounded process-wide workspace inventory, and
-//! API v21 adds exact non-activating cross-window workspace navigation.
-//! API v22 adds bounded cross-window presented-terminal-text queries.
-//! API v23 adds guarded exact cross-window terminal input.
-//! API v24 adds exact cross-window ordinary-tab creation.
-//! API v25 adds exact cross-window ordinary-pane creation.
-//! API v26 adds exact cross-window ordinary-pane movement.
-//! API v27 adds exact cross-window ordinary-tab movement.
-//! API v28 adds exact cross-window ordinary-pane closure.
-//! API v29 adds exact cross-window ordinary-tab closure.
-//! API v30 adds exact cross-window ordinary-pane layouts.
-//! API v31 adds exact process-owned window closure with final-window protection.
-//! API v32 adds exact process-owned native-window focus requests.
+//! validated manifest may declare argv-preserving launch profiles, typed
+//! non-secret settings, palette commands, and one bounded out-of-process event
+//! handler. Every capability is requested in the manifest, reviewed, and
+//! explicitly granted before it takes effect; window-acting capabilities are
+//! limited to the plugin's own window unless granted with `:all-windows`.
 
 use super::hooks::{Hook, HookResponse, Plugin, PluginAction, PluginCommand, PluginContext};
+use super::permission::{Capability, PermissionScope, PluginPermission, PluginPermissions};
 use super::structured::{
-    MAX_PERSISTENT_SOURCE_EVENT_BYTES, StructuredHandlerInvocation, StructuredHandlerMode,
+    HandlerAuthority, MAX_PERSISTENT_SOURCE_EVENT_BYTES, StructuredHandlerInvocation,
+    StructuredHandlerMode,
 };
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -44,8 +20,9 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-pub const PLUGIN_API_VERSION: u32 = 32;
-pub const MIN_PLUGIN_API_VERSION: u32 = 1;
+/// The one declarative plugin API version. Manifests must declare it exactly;
+/// capabilities, not versions, decide what a plugin may do.
+pub const PLUGIN_API_VERSION: u32 = 1;
 pub const REGISTRY_SCHEMA_VERSION: u32 = 1;
 pub const MANIFEST_NAME: &str = "termeric-plugin.toml";
 const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
@@ -63,133 +40,11 @@ const MAX_TOTAL_ARG_BYTES: usize = 32 * 1024;
 const MAX_STRUCTURED_CONTEXT_BYTES: usize = super::structured::MAX_STRUCTURED_EVENT_BYTES;
 const MAX_STRUCTURED_COMMAND_JSON_BYTES: usize = 2 * 1024;
 const MAX_STRUCTURED_OUTPUT_JSON_BYTES: usize = 8 * 1024;
-const STRUCTURED_CONTEXT_SCHEMA_VERSION: u32 = 1;
+/// Version of the launch-context and settings documents handed to profiles
+/// through the environment; they are versioned apart from the handler protocol.
+const ENVIRONMENT_DOCUMENT_SCHEMA_VERSION: u32 = 1;
 const STRUCTURED_CONTEXT_ENV: &str = "TERMERIC_PLUGIN_CONTEXT_JSON";
 const STRUCTURED_SETTINGS_ENV: &str = "TERMERIC_PLUGIN_SETTINGS_JSON";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum PluginPermission {
-    ProcessSpawn,
-    WorkspaceQuery,
-    WorkspaceActions,
-    WorkspaceTopology,
-    EventSubscribe,
-    UiActions,
-    FilesystemRead,
-    FilesystemWrite,
-    Network,
-    Clipboard,
-    TerminalText,
-    TerminalQuery,
-    PaneCreate,
-    TabCreate,
-    PaneClose,
-    TabClose,
-    PaneMove,
-    TerminalInput,
-    PaneLayout,
-    WindowClose,
-    ProcessQuery,
-    ProcessActions,
-    ProcessTerminalText,
-    ProcessTerminalInput,
-    ProcessTabCreate,
-    ProcessPaneCreate,
-    ProcessPaneMove,
-    ProcessTabMove,
-    ProcessPaneClose,
-    ProcessTabClose,
-    ProcessPaneLayout,
-    ProcessWindowClose,
-    ProcessWindowFocus,
-    Secrets,
-}
-
-impl std::fmt::Display for PluginPermission {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::ProcessSpawn => "process-spawn",
-            Self::WorkspaceQuery => "workspace-query",
-            Self::WorkspaceActions => "workspace-actions",
-            Self::WorkspaceTopology => "workspace-topology",
-            Self::EventSubscribe => "event-subscribe",
-            Self::UiActions => "ui-actions",
-            Self::FilesystemRead => "filesystem-read",
-            Self::FilesystemWrite => "filesystem-write",
-            Self::Network => "network",
-            Self::Clipboard => "clipboard",
-            Self::TerminalText => "terminal-text",
-            Self::TerminalQuery => "terminal-query",
-            Self::PaneCreate => "pane-create",
-            Self::TabCreate => "tab-create",
-            Self::PaneClose => "pane-close",
-            Self::TabClose => "tab-close",
-            Self::PaneMove => "pane-move",
-            Self::TerminalInput => "terminal-input",
-            Self::PaneLayout => "pane-layout",
-            Self::WindowClose => "window-close",
-            Self::ProcessQuery => "process-query",
-            Self::ProcessActions => "process-actions",
-            Self::ProcessTerminalText => "process-terminal-text",
-            Self::ProcessTerminalInput => "process-terminal-input",
-            Self::ProcessTabCreate => "process-tab-create",
-            Self::ProcessPaneCreate => "process-pane-create",
-            Self::ProcessPaneMove => "process-pane-move",
-            Self::ProcessTabMove => "process-tab-move",
-            Self::ProcessPaneClose => "process-pane-close",
-            Self::ProcessTabClose => "process-tab-close",
-            Self::ProcessPaneLayout => "process-pane-layout",
-            Self::ProcessWindowClose => "process-window-close",
-            Self::ProcessWindowFocus => "process-window-focus",
-            Self::Secrets => "secrets",
-        })
-    }
-}
-
-impl std::str::FromStr for PluginPermission {
-    type Err = anyhow::Error;
-
-    fn from_str(value: &str) -> Result<Self> {
-        match value {
-            "process-spawn" => Ok(Self::ProcessSpawn),
-            "workspace-query" => Ok(Self::WorkspaceQuery),
-            "workspace-actions" => Ok(Self::WorkspaceActions),
-            "workspace-topology" => Ok(Self::WorkspaceTopology),
-            "event-subscribe" => Ok(Self::EventSubscribe),
-            "ui-actions" => Ok(Self::UiActions),
-            "filesystem-read" => Ok(Self::FilesystemRead),
-            "filesystem-write" => Ok(Self::FilesystemWrite),
-            "network" => Ok(Self::Network),
-            "clipboard" => Ok(Self::Clipboard),
-            "terminal-text" => Ok(Self::TerminalText),
-            "terminal-query" => Ok(Self::TerminalQuery),
-            "pane-create" => Ok(Self::PaneCreate),
-            "tab-create" => Ok(Self::TabCreate),
-            "pane-close" => Ok(Self::PaneClose),
-            "tab-close" => Ok(Self::TabClose),
-            "pane-move" => Ok(Self::PaneMove),
-            "terminal-input" => Ok(Self::TerminalInput),
-            "pane-layout" => Ok(Self::PaneLayout),
-            "window-close" => Ok(Self::WindowClose),
-            "process-query" => Ok(Self::ProcessQuery),
-            "process-actions" => Ok(Self::ProcessActions),
-            "process-terminal-text" => Ok(Self::ProcessTerminalText),
-            "process-terminal-input" => Ok(Self::ProcessTerminalInput),
-            "process-tab-create" => Ok(Self::ProcessTabCreate),
-            "process-pane-create" => Ok(Self::ProcessPaneCreate),
-            "process-pane-move" => Ok(Self::ProcessPaneMove),
-            "process-tab-move" => Ok(Self::ProcessTabMove),
-            "process-pane-close" => Ok(Self::ProcessPaneClose),
-            "process-tab-close" => Ok(Self::ProcessTabClose),
-            "process-pane-layout" => Ok(Self::ProcessPaneLayout),
-            "process-window-close" => Ok(Self::ProcessWindowClose),
-            "process-window-focus" => Ok(Self::ProcessWindowFocus),
-            "secrets" => Ok(Self::Secrets),
-            _ => bail!("unknown plugin permission {value:?}"),
-        }
-    }
-}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -201,7 +56,7 @@ pub struct PluginManifest {
     #[serde(default)]
     pub description: String,
     #[serde(default)]
-    pub permissions: BTreeSet<PluginPermission>,
+    pub permissions: PluginPermissions,
     #[serde(default)]
     pub profiles: Vec<DeclarativeProfile>,
     #[serde(default)]
@@ -219,10 +74,9 @@ pub(crate) struct PluginInstallPreview {
     pub name: String,
     pub version: String,
     pub description: String,
-    pub api_version: u32,
     pub source: PathBuf,
     pub source_fingerprint: String,
-    pub permissions: BTreeSet<PluginPermission>,
+    pub permissions: PluginPermissions,
     pub profile_count: usize,
     pub command_count: usize,
 }
@@ -234,7 +88,6 @@ pub(crate) fn preview_install(directory: &Path) -> Result<PluginInstallPreview> 
         name: manifest.name,
         version: manifest.version,
         description: manifest.description,
-        api_version: manifest.api_version,
         source,
         source_fingerprint: fingerprint(&bytes),
         permissions: manifest.permissions,
@@ -413,12 +266,10 @@ impl PluginManifest {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if !(MIN_PLUGIN_API_VERSION..=PLUGIN_API_VERSION).contains(&self.api_version) {
+        if self.api_version != PLUGIN_API_VERSION {
             bail!(
-                "plugin API version {} is unsupported; Termeric supports {} through {}",
-                self.api_version,
-                MIN_PLUGIN_API_VERSION,
-                PLUGIN_API_VERSION
+                "plugin API version {} is unsupported; Termeric supports API version {PLUGIN_API_VERSION}",
+                self.api_version
             );
         }
         validate_identifier("plugin id", &self.id)?;
@@ -443,7 +294,7 @@ impl PluginManifest {
         if self.profiles.is_empty() && self.commands.is_empty() && self.event_handler.is_none() {
             bail!("plugins must define at least one profile or an event handler");
         }
-        if !self.permissions.contains(&PluginPermission::ProcessSpawn) {
+        if !self.permissions.contains(Capability::ProcessSpawn) {
             bail!("a declarative launch plugin must request process-spawn");
         }
         let mut ids = BTreeSet::new();
@@ -479,11 +330,14 @@ impl PluginManifest {
             validate_text("handler command name", &command.name, 80)?;
             validate_optional_text("handler command description", &command.description, 512)?;
         }
+        self.validate_settings()?;
+        self.validate_event_handler()?;
+        self.validate_capability_requirements()
+    }
+
+    fn validate_settings(&self) -> Result<()> {
         let mut setting_ids = BTreeSet::new();
         for setting in &self.settings {
-            if self.api_version < 10 {
-                bail!("plugin settings require declarative plugin API v10");
-            }
             validate_identifier("setting id", setting.id())?;
             if !setting_ids.insert(setting.id()) {
                 bail!("duplicate setting id {:?}", setting.id());
@@ -531,320 +385,65 @@ impl PluginManifest {
         if !self.settings.is_empty() {
             effective_settings(self, &BTreeMap::new())?;
         }
-        if !self.commands.is_empty() {
-            if self.api_version < 9 {
-                bail!("handler commands require declarative plugin API v9");
-            }
-            if !self.permissions.contains(&PluginPermission::EventSubscribe)
-                || self.event_handler.as_ref().is_none_or(|handler| {
-                    !handler
-                        .events
-                        .contains(&StructuredEventKind::CommandInvoked)
-                })
-            {
-                bail!("handler commands require an event handler subscribed to command-invoked");
-            }
+        Ok(())
+    }
+
+    fn validate_event_handler(&self) -> Result<()> {
+        let subscribes = |event| {
+            self.event_handler
+                .as_ref()
+                .is_some_and(|handler| handler.events.contains(&event))
+        };
+        if !self.commands.is_empty() && !subscribes(StructuredEventKind::CommandInvoked) {
+            bail!("handler commands require an event handler subscribed to command-invoked");
         }
-        if let Some(handler) = &self.event_handler {
-            if self.api_version < 3 {
-                bail!("event handlers require declarative plugin API v3");
-            }
-            if !self.permissions.contains(&PluginPermission::EventSubscribe) {
-                bail!("an event handler must request event-subscribe");
-            }
-            if handler.events.is_empty() {
-                bail!("an event handler must subscribe to at least one event");
-            }
-            validate_argv("event handler", &handler.program, &handler.args)?;
-            if handler.mode == DeclarativeHandlerMode::Persistent && self.api_version < 5 {
-                bail!("persistent event handlers require declarative plugin API v5");
-            }
-            if handler
+        let Some(handler) = &self.event_handler else {
+            return Ok(());
+        };
+        if handler.events.is_empty() {
+            bail!("an event handler must subscribe to at least one event");
+        }
+        validate_argv("event handler", &handler.program, &handler.args)?;
+        if subscribes(StructuredEventKind::CommandInvoked) && self.commands.is_empty() {
+            bail!("command-invoked events require at least one handler command");
+        }
+        Ok(())
+    }
+
+    fn validate_capability_requirements(&self) -> Result<()> {
+        let handler = self.event_handler.as_ref();
+        let has_handler = handler.is_some();
+        let persistent =
+            handler.is_some_and(|handler| handler.mode == DeclarativeHandlerMode::Persistent);
+        let subscribes_to_command_completed = handler.is_some_and(|handler| {
+            handler
                 .events
                 .contains(&StructuredEventKind::CommandCompleted)
-            {
-                if self.api_version < 4 {
-                    bail!("command-completed events require declarative plugin API v4");
-                }
-                if !self.permissions.contains(&PluginPermission::TerminalText) {
-                    bail!("command-completed events must request terminal-text");
-                }
-            }
-            if handler
-                .events
-                .contains(&StructuredEventKind::CommandInvoked)
-            {
-                if self.api_version < 9 {
-                    bail!("command-invoked events require declarative plugin API v9");
-                }
-                if self.commands.is_empty() {
-                    bail!("command-invoked events require at least one handler command");
-                }
-            }
+        });
+        let requests = |capability| self.permissions.contains(capability);
+
+        if has_handler != requests(Capability::EventSubscribe) {
+            bail!("an event handler and the event-subscribe permission require each other");
         }
-        if self.permissions.contains(&PluginPermission::EventSubscribe)
-            && self.event_handler.is_none()
-        {
-            bail!("event-subscribe requires an event handler");
+        if requests(Capability::UiActions) && !has_handler {
+            bail!("ui-actions requires an event handler");
         }
-        if self.permissions.contains(&PluginPermission::UiActions)
-            && (!self.permissions.contains(&PluginPermission::EventSubscribe)
-                || self.event_handler.is_none())
-        {
-            bail!("ui-actions requires an event handler and event-subscribe");
+        if subscribes_to_command_completed != requests(Capability::CommandOutput) {
+            bail!("command-completed events and the command-output permission require each other");
         }
-        if self
-            .permissions
-            .contains(&PluginPermission::WorkspaceActions)
-            && (self.api_version < 7
-                || self
-                    .event_handler
-                    .as_ref()
-                    .is_none_or(|handler| handler.mode != DeclarativeHandlerMode::Persistent))
+        if let Some(capability) = Capability::ALL
+            .into_iter()
+            .find(|capability| capability.is_host_operation() && requests(*capability))
+            && !persistent
         {
-            bail!("workspace-actions requires an API v7 persistent event handler");
+            bail!("{capability} requires a persistent event handler");
         }
-        if self
-            .permissions
-            .contains(&PluginPermission::WorkspaceTopology)
-            && (self.api_version < 8
-                || self
-                    .event_handler
-                    .as_ref()
-                    .is_none_or(|handler| handler.mode != DeclarativeHandlerMode::Persistent))
+        if self.permissions.scope(Capability::WindowClose) == Some(PermissionScope::Window)
+            && self.commands.is_empty()
         {
-            bail!("workspace-topology requires an API v8 persistent event handler");
-        }
-        if self.permissions.contains(&PluginPermission::TerminalQuery)
-            && (self.api_version < 11
-                || self
-                    .event_handler
-                    .as_ref()
-                    .is_none_or(|handler| handler.mode != DeclarativeHandlerMode::Persistent))
-        {
-            bail!("terminal-query requires an API v11 persistent event handler");
-        }
-        if self.permissions.contains(&PluginPermission::PaneCreate)
-            && (self.api_version < 12
-                || self
-                    .event_handler
-                    .as_ref()
-                    .is_none_or(|handler| handler.mode != DeclarativeHandlerMode::Persistent))
-        {
-            bail!("pane-create requires an API v12 persistent event handler");
-        }
-        if self.permissions.contains(&PluginPermission::TabCreate)
-            && (self.api_version < 13
-                || self
-                    .event_handler
-                    .as_ref()
-                    .is_none_or(|handler| handler.mode != DeclarativeHandlerMode::Persistent))
-        {
-            bail!("tab-create requires an API v13 persistent event handler");
-        }
-        if self.permissions.contains(&PluginPermission::PaneClose)
-            && (self.api_version < 14
-                || self
-                    .event_handler
-                    .as_ref()
-                    .is_none_or(|handler| handler.mode != DeclarativeHandlerMode::Persistent))
-        {
-            bail!("pane-close requires an API v14 persistent event handler");
-        }
-        if self.permissions.contains(&PluginPermission::TabClose)
-            && (self.api_version < 15
-                || self
-                    .event_handler
-                    .as_ref()
-                    .is_none_or(|handler| handler.mode != DeclarativeHandlerMode::Persistent))
-        {
-            bail!("tab-close requires an API v15 persistent event handler");
-        }
-        if self.permissions.contains(&PluginPermission::PaneMove)
-            && (self.api_version < 16
-                || self
-                    .event_handler
-                    .as_ref()
-                    .is_none_or(|handler| handler.mode != DeclarativeHandlerMode::Persistent))
-        {
-            bail!("pane-move requires an API v16 persistent event handler");
-        }
-        if self.permissions.contains(&PluginPermission::TerminalInput)
-            && (self.api_version < 17
-                || self
-                    .event_handler
-                    .as_ref()
-                    .is_none_or(|handler| handler.mode != DeclarativeHandlerMode::Persistent))
-        {
-            bail!("terminal-input requires an API v17 persistent event handler");
-        }
-        if self.permissions.contains(&PluginPermission::PaneLayout)
-            && (self.api_version < 18
-                || self
-                    .event_handler
-                    .as_ref()
-                    .is_none_or(|handler| handler.mode != DeclarativeHandlerMode::Persistent))
-        {
-            bail!("pane-layout requires an API v18 persistent event handler");
-        }
-        if self.permissions.contains(&PluginPermission::WindowClose)
-            && (self.api_version < 19
-                || self.commands.is_empty()
-                || self.event_handler.as_ref().is_none_or(|handler| {
-                    handler.mode != DeclarativeHandlerMode::Persistent
-                        || !handler
-                            .events
-                            .contains(&StructuredEventKind::CommandInvoked)
-                }))
-        {
-            bail!("window-close requires an API v19 persistent command-invoked event handler");
-        }
-        if self.permissions.contains(&PluginPermission::ProcessQuery)
-            && (self.api_version < 20
-                || self
-                    .event_handler
-                    .as_ref()
-                    .is_none_or(|handler| handler.mode != DeclarativeHandlerMode::Persistent))
-        {
-            bail!("process-query requires an API v20 persistent event handler");
-        }
-        if self.permissions.contains(&PluginPermission::ProcessActions)
-            && (self.api_version < 21
-                || self
-                    .event_handler
-                    .as_ref()
-                    .is_none_or(|handler| handler.mode != DeclarativeHandlerMode::Persistent))
-        {
-            bail!("process-actions requires an API v21 persistent event handler");
-        }
-        if self
-            .permissions
-            .contains(&PluginPermission::ProcessTerminalText)
-            && (self.api_version < 22
-                || self
-                    .event_handler
-                    .as_ref()
-                    .is_none_or(|handler| handler.mode != DeclarativeHandlerMode::Persistent))
-        {
-            bail!("process-terminal-text requires an API v22 persistent event handler");
-        }
-        if self
-            .permissions
-            .contains(&PluginPermission::ProcessTerminalInput)
-            && (self.api_version < 23
-                || self
-                    .event_handler
-                    .as_ref()
-                    .is_none_or(|handler| handler.mode != DeclarativeHandlerMode::Persistent))
-        {
-            bail!("process-terminal-input requires an API v23 persistent event handler");
-        }
-        if self
-            .permissions
-            .contains(&PluginPermission::ProcessTabCreate)
-            && (self.api_version < 24
-                || self
-                    .event_handler
-                    .as_ref()
-                    .is_none_or(|handler| handler.mode != DeclarativeHandlerMode::Persistent))
-        {
-            bail!("process-tab-create requires an API v24 persistent event handler");
-        }
-        if self
-            .permissions
-            .contains(&PluginPermission::ProcessPaneCreate)
-            && (self.api_version < 25
-                || self
-                    .event_handler
-                    .as_ref()
-                    .is_none_or(|handler| handler.mode != DeclarativeHandlerMode::Persistent))
-        {
-            bail!("process-pane-create requires an API v25 persistent event handler");
-        }
-        if self
-            .permissions
-            .contains(&PluginPermission::ProcessPaneMove)
-            && (self.api_version < 26
-                || self
-                    .event_handler
-                    .as_ref()
-                    .is_none_or(|handler| handler.mode != DeclarativeHandlerMode::Persistent))
-        {
-            bail!("process-pane-move requires an API v26 persistent event handler");
-        }
-        if self.permissions.contains(&PluginPermission::ProcessTabMove)
-            && (self.api_version < 27
-                || self
-                    .event_handler
-                    .as_ref()
-                    .is_none_or(|handler| handler.mode != DeclarativeHandlerMode::Persistent))
-        {
-            bail!("process-tab-move requires an API v27 persistent event handler");
-        }
-        if self
-            .permissions
-            .contains(&PluginPermission::ProcessPaneClose)
-            && (self.api_version < 28
-                || self
-                    .event_handler
-                    .as_ref()
-                    .is_none_or(|handler| handler.mode != DeclarativeHandlerMode::Persistent))
-        {
-            bail!("process-pane-close requires an API v28 persistent event handler");
-        }
-        if self
-            .permissions
-            .contains(&PluginPermission::ProcessTabClose)
-            && (self.api_version < 29
-                || self
-                    .event_handler
-                    .as_ref()
-                    .is_none_or(|handler| handler.mode != DeclarativeHandlerMode::Persistent))
-        {
-            bail!("process-tab-close requires an API v29 persistent event handler");
-        }
-        if self
-            .permissions
-            .contains(&PluginPermission::ProcessPaneLayout)
-            && (self.api_version < 30
-                || self
-                    .event_handler
-                    .as_ref()
-                    .is_none_or(|handler| handler.mode != DeclarativeHandlerMode::Persistent))
-        {
-            bail!("process-pane-layout requires an API v30 persistent event handler");
-        }
-        if self
-            .permissions
-            .contains(&PluginPermission::ProcessWindowClose)
-            && (self.api_version < 31
-                || self
-                    .event_handler
-                    .as_ref()
-                    .is_none_or(|handler| handler.mode != DeclarativeHandlerMode::Persistent))
-        {
-            bail!("process-window-close requires an API v31 persistent event handler");
-        }
-        if self
-            .permissions
-            .contains(&PluginPermission::ProcessWindowFocus)
-            && (self.api_version < 32
-                || self
-                    .event_handler
-                    .as_ref()
-                    .is_none_or(|handler| handler.mode != DeclarativeHandlerMode::Persistent))
-        {
-            bail!("process-window-focus requires an API v32 persistent event handler");
-        }
-        if self.permissions.contains(&PluginPermission::TerminalText)
-            && self.api_version >= 4
-            && self.event_handler.as_ref().is_none_or(|handler| {
-                !handler
-                    .events
-                    .contains(&StructuredEventKind::CommandCompleted)
-            })
-        {
-            bail!("terminal-text requires an API v4 command-completed event handler");
+            bail!(
+                "window-close for the plugin's own window is command-scoped and requires at least one handler command"
+            );
         }
         Ok(())
     }
@@ -858,7 +457,7 @@ pub struct InstalledPlugin {
     pub source: PathBuf,
     pub source_fingerprint: String,
     #[serde(default)]
-    pub grants: BTreeSet<PluginPermission>,
+    pub grants: PluginPermissions,
     pub default_profile: Option<String>,
     #[serde(default)]
     pub settings: BTreeMap<String, PluginSettingValue>,
@@ -902,7 +501,12 @@ impl PluginRegistry {
         }
         let bytes = read_bounded(path, MAX_REGISTRY_BYTES, "plugin registry")?;
         let text = std::str::from_utf8(&bytes).context("plugin registry must be UTF-8")?;
-        let registry: Self = toml::from_str(text).context("invalid plugin registry")?;
+        let registry: Self = toml::from_str(text).with_context(|| {
+            format!(
+                "invalid plugin registry {}; if it records permissions this Termeric no longer recognizes, delete the affected [[plugins]] entry (or the whole file) and reinstall the plugin",
+                path.display()
+            )
+        })?;
         registry.validate()?;
         Ok(registry)
     }
@@ -947,45 +551,6 @@ impl PluginRegistry {
                     plugin.id
                 );
             }
-            if plugin.grants.iter().any(|permission| {
-                !matches!(
-                    permission,
-                    PluginPermission::ProcessSpawn
-                        | PluginPermission::WorkspaceQuery
-                        | PluginPermission::WorkspaceActions
-                        | PluginPermission::WorkspaceTopology
-                        | PluginPermission::EventSubscribe
-                        | PluginPermission::UiActions
-                        | PluginPermission::TerminalText
-                        | PluginPermission::TerminalQuery
-                        | PluginPermission::PaneCreate
-                        | PluginPermission::TabCreate
-                        | PluginPermission::PaneClose
-                        | PluginPermission::TabClose
-                        | PluginPermission::PaneMove
-                        | PluginPermission::TerminalInput
-                        | PluginPermission::PaneLayout
-                        | PluginPermission::WindowClose
-                        | PluginPermission::ProcessQuery
-                        | PluginPermission::ProcessActions
-                        | PluginPermission::ProcessTerminalText
-                        | PluginPermission::ProcessTerminalInput
-                        | PluginPermission::ProcessTabCreate
-                        | PluginPermission::ProcessPaneCreate
-                        | PluginPermission::ProcessPaneMove
-                        | PluginPermission::ProcessTabMove
-                        | PluginPermission::ProcessPaneClose
-                        | PluginPermission::ProcessTabClose
-                        | PluginPermission::ProcessPaneLayout
-                        | PluginPermission::ProcessWindowClose
-                        | PluginPermission::ProcessWindowFocus
-                )
-            }) {
-                bail!(
-                    "installed plugin {:?} contains an unsupported grant",
-                    plugin.id
-                );
-            }
             if let Some(profile) = plugin.default_profile.as_deref() {
                 validate_identifier("default profile id", profile)?;
             }
@@ -1023,9 +588,9 @@ pub(crate) struct PluginUpdatePreview {
     pub candidate_version: String,
     pub current_source_fingerprint: String,
     pub candidate_source_fingerprint: String,
-    pub current_permissions: BTreeSet<PluginPermission>,
-    pub candidate_permissions: BTreeSet<PluginPermission>,
-    pub current_grants: BTreeSet<PluginPermission>,
+    pub current_permissions: PluginPermissions,
+    pub candidate_permissions: PluginPermissions,
+    pub current_grants: PluginPermissions,
     pub enabled: bool,
     pub current_profile_count: usize,
     pub candidate_profile_count: usize,
@@ -1037,11 +602,7 @@ pub(crate) struct PluginUpdatePreview {
 }
 
 impl PluginUpdatePreview {
-    pub(crate) fn command(
-        &self,
-        grants: BTreeSet<PluginPermission>,
-        enable: bool,
-    ) -> PluginAdminCommand {
+    pub(crate) fn command(&self, grants: PluginPermissions, enable: bool) -> PluginAdminCommand {
         PluginAdminCommand::UpdateReviewed {
             id: self.id.clone(),
             expected_candidate_fingerprint: self.candidate_source_fingerprint.clone(),
@@ -1059,8 +620,8 @@ pub struct RuntimePluginStatus {
     pub version: String,
     pub enabled: bool,
     pub source: PathBuf,
-    pub requested: BTreeSet<PluginPermission>,
-    pub granted: BTreeSet<PluginPermission>,
+    pub requested: PluginPermissions,
+    pub granted: PluginPermissions,
     pub profiles: Vec<RuntimePluginProfileSummary>,
     pub configured_default_profile: Option<String>,
     pub settings: BTreeMap<String, PluginSettingValue>,
@@ -1203,7 +764,7 @@ fn discover_from_registry(
                     enabled: installed.enabled,
                     source: installed.source.clone(),
                     requested: inspected
-                        .map_or_else(BTreeSet::new, |manifest| manifest.permissions),
+                        .map_or_else(PluginPermissions::default, |manifest| manifest.permissions),
                     granted: installed.grants.clone(),
                     profiles: Vec::new(),
                     configured_default_profile: installed.default_profile.clone(),
@@ -1257,7 +818,7 @@ fn load_installed(installed: &InstalledPlugin, root: &Path) -> Result<PluginMani
 pub struct DeclarativePlugin {
     manifest: PluginManifest,
     default_profile: Option<String>,
-    grants: BTreeSet<PluginPermission>,
+    grants: PluginPermissions,
     settings: BTreeMap<String, PluginSettingValue>,
 }
 
@@ -1266,7 +827,7 @@ impl DeclarativePlugin {
     fn new(
         manifest: PluginManifest,
         default_profile: Option<String>,
-        grants: BTreeSet<PluginPermission>,
+        grants: PluginPermissions,
     ) -> Self {
         Self::new_with_settings(manifest, default_profile, grants, BTreeMap::new())
     }
@@ -1274,7 +835,7 @@ impl DeclarativePlugin {
     fn new_with_settings(
         manifest: PluginManifest,
         default_profile: Option<String>,
-        grants: BTreeSet<PluginPermission>,
+        grants: PluginPermissions,
         configured_settings: BTreeMap<String, PluginSettingValue>,
     ) -> Self {
         let settings = effective_settings(&manifest, &configured_settings)
@@ -1293,12 +854,11 @@ impl DeclarativePlugin {
         context: &PluginContext,
     ) -> Result<HashMap<String, String>> {
         let mut environment = HashMap::new();
-        if self.manifest.api_version >= 10 && !self.manifest.settings.is_empty() {
+        if !self.manifest.settings.is_empty() {
             let value = encode_settings_document(&self.manifest, &self.settings)?;
             environment.insert(STRUCTURED_SETTINGS_ENV.into(), value);
         }
-        if self.manifest.api_version < 2 || !self.grants.contains(&PluginPermission::WorkspaceQuery)
-        {
+        if !self.grants.contains(Capability::WorkspaceQuery) {
             return Ok(environment);
         }
         #[derive(Serialize)]
@@ -1317,7 +877,7 @@ impl DeclarativePlugin {
             terminal: TerminalSize,
         }
         let value = serde_json::to_string(&LaunchContext {
-            schema_version: STRUCTURED_CONTEXT_SCHEMA_VERSION,
+            schema_version: ENVIRONMENT_DOCUMENT_SCHEMA_VERSION,
             plugin_id: &self.manifest.id,
             profile_id,
             active_working_directory: context.cwd.as_deref(),
@@ -1435,46 +995,42 @@ impl DeclarativePlugin {
             _ => return None,
         };
         let handler = self.manifest.event_handler.as_ref()?;
-        if !handler.events.contains(&kind)
-            || !self.grants.contains(&PluginPermission::EventSubscribe)
-        {
+        if !handler.events.contains(&kind) || !self.grants.contains(Capability::EventSubscribe) {
             return None;
         }
         if kind == StructuredEventKind::CommandCompleted
-            && !self.grants.contains(&PluginPermission::TerminalText)
+            && !self.grants.contains(Capability::CommandOutput)
         {
             return None;
         }
-        let context_value = self
-            .grants
-            .contains(&PluginPermission::WorkspaceQuery)
-            .then(|| {
-                serde_json::json!({
-                    "active_working_directory": context.cwd,
-                    "tab_count": context.tab_count,
-                    "active_tab_index": context.active_tab,
-                    "terminal": {
-                        "columns": context.terminal_size.0,
-                        "rows": context.terminal_size.1,
-                    },
-                })
-            });
         let mut envelope = serde_json::json!({
-            "schema_version": 1,
+            "schema_version": super::structured::SCHEMA_VERSION,
             "plugin_id": self.manifest.id,
+            "origin_window_id": context.window_id,
             "event": event,
         });
-        if self.manifest.api_version >= 10 && !self.manifest.settings.is_empty() {
+        if !self.manifest.settings.is_empty() {
             envelope["settings"] = serde_json::to_value(&self.settings)
                 .expect("validated plugin settings serialize to JSON");
         }
-        if let Some(value) = context_value {
-            envelope["context"] = value;
+        if self.grants.contains(Capability::WorkspaceQuery) {
+            envelope["context"] = serde_json::json!({
+                "active_working_directory": context.cwd,
+                "tab_count": context.tab_count,
+                "active_tab_index": context.active_tab,
+                "terminal": {
+                    "columns": context.terminal_size.0,
+                    "rows": context.terminal_size.1,
+                },
+            });
         }
-        let max_event_bytes = if handler.mode == DeclarativeHandlerMode::Persistent {
-            MAX_PERSISTENT_SOURCE_EVENT_BYTES
-        } else {
-            MAX_STRUCTURED_CONTEXT_BYTES
+        let mode = match handler.mode {
+            DeclarativeHandlerMode::ProcessPerEvent => StructuredHandlerMode::ProcessPerEvent,
+            DeclarativeHandlerMode::Persistent => StructuredHandlerMode::Persistent,
+        };
+        let max_event_bytes = match mode {
+            StructuredHandlerMode::Persistent => MAX_PERSISTENT_SOURCE_EVENT_BYTES,
+            StructuredHandlerMode::ProcessPerEvent => MAX_STRUCTURED_CONTEXT_BYTES,
         };
         let event_json = match if kind == StructuredEventKind::CommandCompleted {
             encode_command_event(envelope, max_event_bytes)
@@ -1486,7 +1042,7 @@ impl DeclarativePlugin {
                 return Some(HookResponse::Action(PluginAction::ShowNotice {
                     title: format!("{} event unavailable", self.manifest.name),
                     lines: vec![format!(
-                        "Structured plugin event exceeds {MAX_STRUCTURED_CONTEXT_BYTES} bytes."
+                        "Structured plugin event exceeds {max_event_bytes} bytes."
                     )],
                 }));
             }
@@ -1504,91 +1060,12 @@ impl DeclarativePlugin {
                     program: handler.program.clone(),
                     args: handler.args.clone(),
                     event_json,
-                    allow_ui_actions: self.grants.contains(&PluginPermission::UiActions),
-                    allow_workspace_query: self.manifest.api_version >= 6
-                        && handler.mode == DeclarativeHandlerMode::Persistent
-                        && self.grants.contains(&PluginPermission::WorkspaceQuery),
-                    allow_workspace_actions: self.manifest.api_version >= 7
-                        && handler.mode == DeclarativeHandlerMode::Persistent
-                        && self.grants.contains(&PluginPermission::WorkspaceActions),
-                    allow_workspace_topology: self.manifest.api_version >= 8
-                        && handler.mode == DeclarativeHandlerMode::Persistent
-                        && self.grants.contains(&PluginPermission::WorkspaceTopology),
-                    allow_terminal_query: self.manifest.api_version >= 11
-                        && handler.mode == DeclarativeHandlerMode::Persistent
-                        && self.grants.contains(&PluginPermission::TerminalQuery),
-                    allow_pane_create: self.manifest.api_version >= 12
-                        && handler.mode == DeclarativeHandlerMode::Persistent
-                        && self.grants.contains(&PluginPermission::PaneCreate),
-                    allow_tab_create: self.manifest.api_version >= 13
-                        && handler.mode == DeclarativeHandlerMode::Persistent
-                        && self.grants.contains(&PluginPermission::TabCreate),
-                    allow_pane_close: self.manifest.api_version >= 14
-                        && handler.mode == DeclarativeHandlerMode::Persistent
-                        && self.grants.contains(&PluginPermission::PaneClose),
-                    allow_tab_close: self.manifest.api_version >= 15
-                        && handler.mode == DeclarativeHandlerMode::Persistent
-                        && self.grants.contains(&PluginPermission::TabClose),
-                    allow_pane_move: self.manifest.api_version >= 16
-                        && handler.mode == DeclarativeHandlerMode::Persistent
-                        && self.grants.contains(&PluginPermission::PaneMove),
-                    allow_terminal_input: self.manifest.api_version >= 17
-                        && handler.mode == DeclarativeHandlerMode::Persistent
-                        && self.grants.contains(&PluginPermission::TerminalInput),
-                    allow_pane_layout: self.manifest.api_version >= 18
-                        && handler.mode == DeclarativeHandlerMode::Persistent
-                        && self.grants.contains(&PluginPermission::PaneLayout),
-                    allow_window_close: self.manifest.api_version >= 19
-                        && handler.mode == DeclarativeHandlerMode::Persistent
-                        && kind == StructuredEventKind::CommandInvoked
-                        && self.grants.contains(&PluginPermission::WindowClose),
-                    allow_process_query: self.manifest.api_version >= 20
-                        && handler.mode == DeclarativeHandlerMode::Persistent
-                        && self.grants.contains(&PluginPermission::ProcessQuery),
-                    allow_process_actions: self.manifest.api_version >= 21
-                        && handler.mode == DeclarativeHandlerMode::Persistent
-                        && self.grants.contains(&PluginPermission::ProcessActions),
-                    allow_process_terminal_text: self.manifest.api_version >= 22
-                        && handler.mode == DeclarativeHandlerMode::Persistent
-                        && self.grants.contains(&PluginPermission::ProcessTerminalText),
-                    allow_process_terminal_input: self.manifest.api_version >= 23
-                        && handler.mode == DeclarativeHandlerMode::Persistent
-                        && self
-                            .grants
-                            .contains(&PluginPermission::ProcessTerminalInput),
-                    allow_process_tab_create: self.manifest.api_version >= 24
-                        && handler.mode == DeclarativeHandlerMode::Persistent
-                        && self.grants.contains(&PluginPermission::ProcessTabCreate),
-                    allow_process_pane_create: self.manifest.api_version >= 25
-                        && handler.mode == DeclarativeHandlerMode::Persistent
-                        && self.grants.contains(&PluginPermission::ProcessPaneCreate),
-                    allow_process_pane_move: self.manifest.api_version >= 26
-                        && handler.mode == DeclarativeHandlerMode::Persistent
-                        && self.grants.contains(&PluginPermission::ProcessPaneMove),
-                    allow_process_tab_move: self.manifest.api_version >= 27
-                        && handler.mode == DeclarativeHandlerMode::Persistent
-                        && self.grants.contains(&PluginPermission::ProcessTabMove),
-                    allow_process_pane_close: self.manifest.api_version >= 28
-                        && handler.mode == DeclarativeHandlerMode::Persistent
-                        && self.grants.contains(&PluginPermission::ProcessPaneClose),
-                    allow_process_tab_close: self.manifest.api_version >= 29
-                        && handler.mode == DeclarativeHandlerMode::Persistent
-                        && self.grants.contains(&PluginPermission::ProcessTabClose),
-                    allow_process_pane_layout: self.manifest.api_version >= 30
-                        && handler.mode == DeclarativeHandlerMode::Persistent
-                        && self.grants.contains(&PluginPermission::ProcessPaneLayout),
-                    allow_process_window_close: self.manifest.api_version >= 31
-                        && handler.mode == DeclarativeHandlerMode::Persistent
-                        && self.grants.contains(&PluginPermission::ProcessWindowClose),
-                    allow_process_window_focus: self.manifest.api_version >= 32
-                        && handler.mode == DeclarativeHandlerMode::Persistent
-                        && self.grants.contains(&PluginPermission::ProcessWindowFocus),
-                    mode: match handler.mode {
-                        DeclarativeHandlerMode::ProcessPerEvent => {
-                            StructuredHandlerMode::ProcessPerEvent
-                        }
-                        DeclarativeHandlerMode::Persistent => StructuredHandlerMode::Persistent,
-                    },
+                    mode,
+                    authority: HandlerAuthority::for_event(
+                        self.grants.clone(),
+                        mode,
+                        kind == StructuredEventKind::CommandInvoked,
+                    ),
                 },
             },
         ))
@@ -1707,13 +1184,13 @@ pub enum PluginAdminCommand {
     },
     Install {
         directory: PathBuf,
-        grants: BTreeSet<PluginPermission>,
+        grants: PluginPermissions,
         enable: bool,
         replace: bool,
     },
     InstallReviewed {
         directory: PathBuf,
-        grants: BTreeSet<PluginPermission>,
+        grants: PluginPermissions,
         enable: bool,
         expected_source_fingerprint: String,
     },
@@ -1724,7 +1201,7 @@ pub enum PluginAdminCommand {
         id: String,
         expected_candidate_fingerprint: String,
         expected_installed: InstalledPlugin,
-        grants: BTreeSet<PluginPermission>,
+        grants: PluginPermissions,
         enable: bool,
     },
     Enable {
@@ -1765,13 +1242,12 @@ pub(crate) fn execute_admin_at(
         PluginAdminCommand::Validate { directory } => {
             let (manifest, source, bytes) = PluginManifest::from_directory(&directory)?;
             Ok(format!(
-                "valid plugin {} v{} api={} source={} fingerprint={} permissions={}",
+                "valid plugin {} v{} source={} fingerprint={} permissions={}",
                 manifest.id,
                 manifest.version,
-                manifest.api_version,
                 source.display(),
                 fingerprint(&bytes),
-                permission_list(manifest.permissions.iter().copied())
+                manifest.permissions
             ))
         }
         PluginAdminCommand::Install {
@@ -1834,11 +1310,9 @@ pub(crate) fn execute_admin_at(
                 );
             }
             let previous_manifest = load_installed(&installed, root)?;
-            let added_permissions: Vec<_> = manifest
+            let added_permissions = manifest
                 .permissions
-                .difference(&previous_manifest.permissions)
-                .copied()
-                .collect();
+                .uncovered_by(&previous_manifest.permissions);
             if !added_permissions.is_empty() {
                 bail!(
                     "update requests new permissions ({}); review and reinstall with explicit grants",
@@ -2021,7 +1495,7 @@ fn install_manifest(
     manifest: PluginManifest,
     source: PathBuf,
     bytes: Vec<u8>,
-    grants: BTreeSet<PluginPermission>,
+    grants: PluginPermissions,
     enable: bool,
     replace: bool,
 ) -> Result<String> {
@@ -2042,30 +1516,18 @@ fn install_manifest(
             manifest.id
         );
     }
-    let unrequested: Vec<_> = grants.difference(&manifest.permissions).copied().collect();
+    let unrequested = grants.uncovered_by(&manifest.permissions);
     if !unrequested.is_empty() {
         bail!(
             "cannot grant unrequested permissions: {}",
-            permission_list(unrequested.iter().copied())
+            permission_list(unrequested)
         );
     }
-    let unsupported: Vec<_> = grants
-        .iter()
-        .copied()
-        .filter(|permission| !permission_supported(manifest.api_version, *permission))
-        .collect();
-    if !unsupported.is_empty() {
-        bail!(
-            "declarative API v{} cannot grant: {}",
-            manifest.api_version,
-            permission_list(unsupported.iter().copied())
-        );
-    }
-    let denied: Vec<_> = manifest.permissions.difference(&grants).copied().collect();
+    let denied = manifest.permissions.uncovered_by(&grants);
     if enable && !denied.is_empty() {
         bail!(
             "cannot enable until permissions are granted: {}",
-            permission_list(denied.iter().copied())
+            permission_list(denied)
         );
     }
     ensure_real_directory(root, "plugin installation root")?;
@@ -2157,21 +1619,19 @@ fn install_manifest(
             backup.display()
         );
     }
+    let granted = registry
+        .plugins
+        .iter()
+        .find(|plugin| plugin.id == manifest.id)
+        .map(|plugin| plugin.grants.to_string())
+        .unwrap_or_default();
     Ok(format!(
-        "installed {} v{} enabled={} source={} permissions={} grants={}",
+        "installed {} v{} enabled={} source={} permissions={} grants={granted}",
         manifest.id,
         manifest.version,
         enable,
         source.display(),
-        permission_list(manifest.permissions.iter().copied()),
-        permission_list(
-            registry
-                .plugins
-                .iter()
-                .find(|plugin| plugin.id == manifest.id)
-                .into_iter()
-                .flat_map(|plugin| plugin.grants.iter().copied())
-        )
+        manifest.permissions,
     ))
 }
 
@@ -2260,561 +1720,19 @@ fn set_enabled(
     ))
 }
 
-fn validate_grants(manifest: &PluginManifest, grants: &BTreeSet<PluginPermission>) -> Result<()> {
-    let denied: Vec<_> = manifest.permissions.difference(grants).copied().collect();
+fn validate_grants(manifest: &PluginManifest, grants: &PluginPermissions) -> Result<()> {
+    let denied = manifest.permissions.uncovered_by(grants);
     if !denied.is_empty() {
-        bail!(
-            "permissions denied: {}",
-            permission_list(denied.iter().copied())
-        );
+        bail!("permissions denied: {}", permission_list(denied));
     }
-    let unsupported: Vec<_> = grants
-        .iter()
-        .copied()
-        .filter(|permission| !permission_supported(manifest.api_version, *permission))
-        .collect();
-    if !unsupported.is_empty() {
+    let unrequested = grants.uncovered_by(&manifest.permissions);
+    if !unrequested.is_empty() {
         bail!(
-            "declarative API v{} cannot grant: {}",
-            manifest.api_version,
-            permission_list(unsupported.iter().copied())
+            "grants exceed the manifest's requests: {}",
+            permission_list(unrequested)
         );
     }
     Ok(())
-}
-
-fn permission_supported(api_version: u32, permission: PluginPermission) -> bool {
-    match api_version {
-        1 => permission == PluginPermission::ProcessSpawn,
-        2 => matches!(
-            permission,
-            PluginPermission::ProcessSpawn | PluginPermission::WorkspaceQuery
-        ),
-        3 => matches!(
-            permission,
-            PluginPermission::ProcessSpawn
-                | PluginPermission::WorkspaceQuery
-                | PluginPermission::EventSubscribe
-                | PluginPermission::UiActions
-        ),
-        4 => matches!(
-            permission,
-            PluginPermission::ProcessSpawn
-                | PluginPermission::WorkspaceQuery
-                | PluginPermission::EventSubscribe
-                | PluginPermission::UiActions
-                | PluginPermission::TerminalText
-        ),
-        5 => matches!(
-            permission,
-            PluginPermission::ProcessSpawn
-                | PluginPermission::WorkspaceQuery
-                | PluginPermission::EventSubscribe
-                | PluginPermission::UiActions
-                | PluginPermission::TerminalText
-        ),
-        6 => matches!(
-            permission,
-            PluginPermission::ProcessSpawn
-                | PluginPermission::WorkspaceQuery
-                | PluginPermission::EventSubscribe
-                | PluginPermission::UiActions
-                | PluginPermission::TerminalText
-        ),
-        7 => matches!(
-            permission,
-            PluginPermission::ProcessSpawn
-                | PluginPermission::WorkspaceQuery
-                | PluginPermission::WorkspaceActions
-                | PluginPermission::EventSubscribe
-                | PluginPermission::UiActions
-                | PluginPermission::TerminalText
-        ),
-        8..=10 => matches!(
-            permission,
-            PluginPermission::ProcessSpawn
-                | PluginPermission::WorkspaceQuery
-                | PluginPermission::WorkspaceActions
-                | PluginPermission::WorkspaceTopology
-                | PluginPermission::EventSubscribe
-                | PluginPermission::UiActions
-                | PluginPermission::TerminalText
-        ),
-        11 => matches!(
-            permission,
-            PluginPermission::ProcessSpawn
-                | PluginPermission::WorkspaceQuery
-                | PluginPermission::WorkspaceActions
-                | PluginPermission::WorkspaceTopology
-                | PluginPermission::EventSubscribe
-                | PluginPermission::UiActions
-                | PluginPermission::TerminalText
-                | PluginPermission::TerminalQuery
-        ),
-        12 => matches!(
-            permission,
-            PluginPermission::ProcessSpawn
-                | PluginPermission::WorkspaceQuery
-                | PluginPermission::WorkspaceActions
-                | PluginPermission::WorkspaceTopology
-                | PluginPermission::EventSubscribe
-                | PluginPermission::UiActions
-                | PluginPermission::TerminalText
-                | PluginPermission::TerminalQuery
-                | PluginPermission::PaneCreate
-        ),
-        13 => matches!(
-            permission,
-            PluginPermission::ProcessSpawn
-                | PluginPermission::WorkspaceQuery
-                | PluginPermission::WorkspaceActions
-                | PluginPermission::WorkspaceTopology
-                | PluginPermission::EventSubscribe
-                | PluginPermission::UiActions
-                | PluginPermission::TerminalText
-                | PluginPermission::TerminalQuery
-                | PluginPermission::PaneCreate
-                | PluginPermission::TabCreate
-        ),
-        14 => matches!(
-            permission,
-            PluginPermission::ProcessSpawn
-                | PluginPermission::WorkspaceQuery
-                | PluginPermission::WorkspaceActions
-                | PluginPermission::WorkspaceTopology
-                | PluginPermission::EventSubscribe
-                | PluginPermission::UiActions
-                | PluginPermission::TerminalText
-                | PluginPermission::TerminalQuery
-                | PluginPermission::PaneCreate
-                | PluginPermission::TabCreate
-                | PluginPermission::PaneClose
-        ),
-        15 => matches!(
-            permission,
-            PluginPermission::ProcessSpawn
-                | PluginPermission::WorkspaceQuery
-                | PluginPermission::WorkspaceActions
-                | PluginPermission::WorkspaceTopology
-                | PluginPermission::EventSubscribe
-                | PluginPermission::UiActions
-                | PluginPermission::TerminalText
-                | PluginPermission::TerminalQuery
-                | PluginPermission::PaneCreate
-                | PluginPermission::TabCreate
-                | PluginPermission::PaneClose
-                | PluginPermission::TabClose
-        ),
-        16 => matches!(
-            permission,
-            PluginPermission::ProcessSpawn
-                | PluginPermission::WorkspaceQuery
-                | PluginPermission::WorkspaceActions
-                | PluginPermission::WorkspaceTopology
-                | PluginPermission::EventSubscribe
-                | PluginPermission::UiActions
-                | PluginPermission::TerminalText
-                | PluginPermission::TerminalQuery
-                | PluginPermission::PaneCreate
-                | PluginPermission::TabCreate
-                | PluginPermission::PaneClose
-                | PluginPermission::TabClose
-                | PluginPermission::PaneMove
-        ),
-        17 => matches!(
-            permission,
-            PluginPermission::ProcessSpawn
-                | PluginPermission::WorkspaceQuery
-                | PluginPermission::WorkspaceActions
-                | PluginPermission::WorkspaceTopology
-                | PluginPermission::EventSubscribe
-                | PluginPermission::UiActions
-                | PluginPermission::TerminalText
-                | PluginPermission::TerminalQuery
-                | PluginPermission::PaneCreate
-                | PluginPermission::TabCreate
-                | PluginPermission::PaneClose
-                | PluginPermission::TabClose
-                | PluginPermission::PaneMove
-                | PluginPermission::TerminalInput
-        ),
-        18 => matches!(
-            permission,
-            PluginPermission::ProcessSpawn
-                | PluginPermission::WorkspaceQuery
-                | PluginPermission::WorkspaceActions
-                | PluginPermission::WorkspaceTopology
-                | PluginPermission::EventSubscribe
-                | PluginPermission::UiActions
-                | PluginPermission::TerminalText
-                | PluginPermission::TerminalQuery
-                | PluginPermission::PaneCreate
-                | PluginPermission::TabCreate
-                | PluginPermission::PaneClose
-                | PluginPermission::TabClose
-                | PluginPermission::PaneMove
-                | PluginPermission::TerminalInput
-                | PluginPermission::PaneLayout
-        ),
-        19 => matches!(
-            permission,
-            PluginPermission::ProcessSpawn
-                | PluginPermission::WorkspaceQuery
-                | PluginPermission::WorkspaceActions
-                | PluginPermission::WorkspaceTopology
-                | PluginPermission::EventSubscribe
-                | PluginPermission::UiActions
-                | PluginPermission::TerminalText
-                | PluginPermission::TerminalQuery
-                | PluginPermission::PaneCreate
-                | PluginPermission::TabCreate
-                | PluginPermission::PaneClose
-                | PluginPermission::TabClose
-                | PluginPermission::PaneMove
-                | PluginPermission::TerminalInput
-                | PluginPermission::PaneLayout
-                | PluginPermission::WindowClose
-        ),
-        20 => matches!(
-            permission,
-            PluginPermission::ProcessSpawn
-                | PluginPermission::WorkspaceQuery
-                | PluginPermission::WorkspaceActions
-                | PluginPermission::WorkspaceTopology
-                | PluginPermission::EventSubscribe
-                | PluginPermission::UiActions
-                | PluginPermission::TerminalText
-                | PluginPermission::TerminalQuery
-                | PluginPermission::PaneCreate
-                | PluginPermission::TabCreate
-                | PluginPermission::PaneClose
-                | PluginPermission::TabClose
-                | PluginPermission::PaneMove
-                | PluginPermission::TerminalInput
-                | PluginPermission::PaneLayout
-                | PluginPermission::WindowClose
-                | PluginPermission::ProcessQuery
-        ),
-        21 => matches!(
-            permission,
-            PluginPermission::ProcessSpawn
-                | PluginPermission::WorkspaceQuery
-                | PluginPermission::WorkspaceActions
-                | PluginPermission::WorkspaceTopology
-                | PluginPermission::EventSubscribe
-                | PluginPermission::UiActions
-                | PluginPermission::TerminalText
-                | PluginPermission::TerminalQuery
-                | PluginPermission::PaneCreate
-                | PluginPermission::TabCreate
-                | PluginPermission::PaneClose
-                | PluginPermission::TabClose
-                | PluginPermission::PaneMove
-                | PluginPermission::TerminalInput
-                | PluginPermission::PaneLayout
-                | PluginPermission::WindowClose
-                | PluginPermission::ProcessQuery
-                | PluginPermission::ProcessActions
-        ),
-        22 => matches!(
-            permission,
-            PluginPermission::ProcessSpawn
-                | PluginPermission::WorkspaceQuery
-                | PluginPermission::WorkspaceActions
-                | PluginPermission::WorkspaceTopology
-                | PluginPermission::EventSubscribe
-                | PluginPermission::UiActions
-                | PluginPermission::TerminalText
-                | PluginPermission::TerminalQuery
-                | PluginPermission::PaneCreate
-                | PluginPermission::TabCreate
-                | PluginPermission::PaneClose
-                | PluginPermission::TabClose
-                | PluginPermission::PaneMove
-                | PluginPermission::TerminalInput
-                | PluginPermission::PaneLayout
-                | PluginPermission::WindowClose
-                | PluginPermission::ProcessQuery
-                | PluginPermission::ProcessActions
-                | PluginPermission::ProcessTerminalText
-        ),
-        23 => matches!(
-            permission,
-            PluginPermission::ProcessSpawn
-                | PluginPermission::WorkspaceQuery
-                | PluginPermission::WorkspaceActions
-                | PluginPermission::WorkspaceTopology
-                | PluginPermission::EventSubscribe
-                | PluginPermission::UiActions
-                | PluginPermission::TerminalText
-                | PluginPermission::TerminalQuery
-                | PluginPermission::PaneCreate
-                | PluginPermission::TabCreate
-                | PluginPermission::PaneClose
-                | PluginPermission::TabClose
-                | PluginPermission::PaneMove
-                | PluginPermission::TerminalInput
-                | PluginPermission::PaneLayout
-                | PluginPermission::WindowClose
-                | PluginPermission::ProcessQuery
-                | PluginPermission::ProcessActions
-                | PluginPermission::ProcessTerminalText
-                | PluginPermission::ProcessTerminalInput
-        ),
-        24 => matches!(
-            permission,
-            PluginPermission::ProcessSpawn
-                | PluginPermission::WorkspaceQuery
-                | PluginPermission::WorkspaceActions
-                | PluginPermission::WorkspaceTopology
-                | PluginPermission::EventSubscribe
-                | PluginPermission::UiActions
-                | PluginPermission::TerminalText
-                | PluginPermission::TerminalQuery
-                | PluginPermission::PaneCreate
-                | PluginPermission::TabCreate
-                | PluginPermission::PaneClose
-                | PluginPermission::TabClose
-                | PluginPermission::PaneMove
-                | PluginPermission::TerminalInput
-                | PluginPermission::PaneLayout
-                | PluginPermission::WindowClose
-                | PluginPermission::ProcessQuery
-                | PluginPermission::ProcessActions
-                | PluginPermission::ProcessTerminalText
-                | PluginPermission::ProcessTerminalInput
-                | PluginPermission::ProcessTabCreate
-        ),
-        25 => matches!(
-            permission,
-            PluginPermission::ProcessSpawn
-                | PluginPermission::WorkspaceQuery
-                | PluginPermission::WorkspaceActions
-                | PluginPermission::WorkspaceTopology
-                | PluginPermission::EventSubscribe
-                | PluginPermission::UiActions
-                | PluginPermission::TerminalText
-                | PluginPermission::TerminalQuery
-                | PluginPermission::PaneCreate
-                | PluginPermission::TabCreate
-                | PluginPermission::PaneClose
-                | PluginPermission::TabClose
-                | PluginPermission::PaneMove
-                | PluginPermission::TerminalInput
-                | PluginPermission::PaneLayout
-                | PluginPermission::WindowClose
-                | PluginPermission::ProcessQuery
-                | PluginPermission::ProcessActions
-                | PluginPermission::ProcessTerminalText
-                | PluginPermission::ProcessTerminalInput
-                | PluginPermission::ProcessTabCreate
-                | PluginPermission::ProcessPaneCreate
-        ),
-        26 => matches!(
-            permission,
-            PluginPermission::ProcessSpawn
-                | PluginPermission::WorkspaceQuery
-                | PluginPermission::WorkspaceActions
-                | PluginPermission::WorkspaceTopology
-                | PluginPermission::EventSubscribe
-                | PluginPermission::UiActions
-                | PluginPermission::TerminalText
-                | PluginPermission::TerminalQuery
-                | PluginPermission::PaneCreate
-                | PluginPermission::TabCreate
-                | PluginPermission::PaneClose
-                | PluginPermission::TabClose
-                | PluginPermission::PaneMove
-                | PluginPermission::TerminalInput
-                | PluginPermission::PaneLayout
-                | PluginPermission::WindowClose
-                | PluginPermission::ProcessQuery
-                | PluginPermission::ProcessActions
-                | PluginPermission::ProcessTerminalText
-                | PluginPermission::ProcessTerminalInput
-                | PluginPermission::ProcessTabCreate
-                | PluginPermission::ProcessPaneCreate
-                | PluginPermission::ProcessPaneMove
-        ),
-        27 => matches!(
-            permission,
-            PluginPermission::ProcessSpawn
-                | PluginPermission::WorkspaceQuery
-                | PluginPermission::WorkspaceActions
-                | PluginPermission::WorkspaceTopology
-                | PluginPermission::EventSubscribe
-                | PluginPermission::UiActions
-                | PluginPermission::TerminalText
-                | PluginPermission::TerminalQuery
-                | PluginPermission::PaneCreate
-                | PluginPermission::TabCreate
-                | PluginPermission::PaneClose
-                | PluginPermission::TabClose
-                | PluginPermission::PaneMove
-                | PluginPermission::TerminalInput
-                | PluginPermission::PaneLayout
-                | PluginPermission::WindowClose
-                | PluginPermission::ProcessQuery
-                | PluginPermission::ProcessActions
-                | PluginPermission::ProcessTerminalText
-                | PluginPermission::ProcessTerminalInput
-                | PluginPermission::ProcessTabCreate
-                | PluginPermission::ProcessPaneCreate
-                | PluginPermission::ProcessPaneMove
-                | PluginPermission::ProcessTabMove
-        ),
-        28 => matches!(
-            permission,
-            PluginPermission::ProcessSpawn
-                | PluginPermission::WorkspaceQuery
-                | PluginPermission::WorkspaceActions
-                | PluginPermission::WorkspaceTopology
-                | PluginPermission::EventSubscribe
-                | PluginPermission::UiActions
-                | PluginPermission::TerminalText
-                | PluginPermission::TerminalQuery
-                | PluginPermission::PaneCreate
-                | PluginPermission::TabCreate
-                | PluginPermission::PaneClose
-                | PluginPermission::TabClose
-                | PluginPermission::PaneMove
-                | PluginPermission::TerminalInput
-                | PluginPermission::PaneLayout
-                | PluginPermission::WindowClose
-                | PluginPermission::ProcessQuery
-                | PluginPermission::ProcessActions
-                | PluginPermission::ProcessTerminalText
-                | PluginPermission::ProcessTerminalInput
-                | PluginPermission::ProcessTabCreate
-                | PluginPermission::ProcessPaneCreate
-                | PluginPermission::ProcessPaneMove
-                | PluginPermission::ProcessTabMove
-                | PluginPermission::ProcessPaneClose
-        ),
-        29 => matches!(
-            permission,
-            PluginPermission::ProcessSpawn
-                | PluginPermission::WorkspaceQuery
-                | PluginPermission::WorkspaceActions
-                | PluginPermission::WorkspaceTopology
-                | PluginPermission::EventSubscribe
-                | PluginPermission::UiActions
-                | PluginPermission::TerminalText
-                | PluginPermission::TerminalQuery
-                | PluginPermission::PaneCreate
-                | PluginPermission::TabCreate
-                | PluginPermission::PaneClose
-                | PluginPermission::TabClose
-                | PluginPermission::PaneMove
-                | PluginPermission::TerminalInput
-                | PluginPermission::PaneLayout
-                | PluginPermission::WindowClose
-                | PluginPermission::ProcessQuery
-                | PluginPermission::ProcessActions
-                | PluginPermission::ProcessTerminalText
-                | PluginPermission::ProcessTerminalInput
-                | PluginPermission::ProcessTabCreate
-                | PluginPermission::ProcessPaneCreate
-                | PluginPermission::ProcessPaneMove
-                | PluginPermission::ProcessTabMove
-                | PluginPermission::ProcessPaneClose
-                | PluginPermission::ProcessTabClose
-        ),
-        30 => matches!(
-            permission,
-            PluginPermission::ProcessSpawn
-                | PluginPermission::WorkspaceQuery
-                | PluginPermission::WorkspaceActions
-                | PluginPermission::WorkspaceTopology
-                | PluginPermission::EventSubscribe
-                | PluginPermission::UiActions
-                | PluginPermission::TerminalText
-                | PluginPermission::TerminalQuery
-                | PluginPermission::PaneCreate
-                | PluginPermission::TabCreate
-                | PluginPermission::PaneClose
-                | PluginPermission::TabClose
-                | PluginPermission::PaneMove
-                | PluginPermission::TerminalInput
-                | PluginPermission::PaneLayout
-                | PluginPermission::WindowClose
-                | PluginPermission::ProcessQuery
-                | PluginPermission::ProcessActions
-                | PluginPermission::ProcessTerminalText
-                | PluginPermission::ProcessTerminalInput
-                | PluginPermission::ProcessTabCreate
-                | PluginPermission::ProcessPaneCreate
-                | PluginPermission::ProcessPaneMove
-                | PluginPermission::ProcessTabMove
-                | PluginPermission::ProcessPaneClose
-                | PluginPermission::ProcessTabClose
-                | PluginPermission::ProcessPaneLayout
-        ),
-        31 => matches!(
-            permission,
-            PluginPermission::ProcessSpawn
-                | PluginPermission::WorkspaceQuery
-                | PluginPermission::WorkspaceActions
-                | PluginPermission::WorkspaceTopology
-                | PluginPermission::EventSubscribe
-                | PluginPermission::UiActions
-                | PluginPermission::TerminalText
-                | PluginPermission::TerminalQuery
-                | PluginPermission::PaneCreate
-                | PluginPermission::TabCreate
-                | PluginPermission::PaneClose
-                | PluginPermission::TabClose
-                | PluginPermission::PaneMove
-                | PluginPermission::TerminalInput
-                | PluginPermission::PaneLayout
-                | PluginPermission::WindowClose
-                | PluginPermission::ProcessQuery
-                | PluginPermission::ProcessActions
-                | PluginPermission::ProcessTerminalText
-                | PluginPermission::ProcessTerminalInput
-                | PluginPermission::ProcessTabCreate
-                | PluginPermission::ProcessPaneCreate
-                | PluginPermission::ProcessPaneMove
-                | PluginPermission::ProcessTabMove
-                | PluginPermission::ProcessPaneClose
-                | PluginPermission::ProcessTabClose
-                | PluginPermission::ProcessPaneLayout
-                | PluginPermission::ProcessWindowClose
-        ),
-        32 => matches!(
-            permission,
-            PluginPermission::ProcessSpawn
-                | PluginPermission::WorkspaceQuery
-                | PluginPermission::WorkspaceActions
-                | PluginPermission::WorkspaceTopology
-                | PluginPermission::EventSubscribe
-                | PluginPermission::UiActions
-                | PluginPermission::TerminalText
-                | PluginPermission::TerminalQuery
-                | PluginPermission::PaneCreate
-                | PluginPermission::TabCreate
-                | PluginPermission::PaneClose
-                | PluginPermission::TabClose
-                | PluginPermission::PaneMove
-                | PluginPermission::TerminalInput
-                | PluginPermission::PaneLayout
-                | PluginPermission::WindowClose
-                | PluginPermission::ProcessQuery
-                | PluginPermission::ProcessActions
-                | PluginPermission::ProcessTerminalText
-                | PluginPermission::ProcessTerminalInput
-                | PluginPermission::ProcessTabCreate
-                | PluginPermission::ProcessPaneCreate
-                | PluginPermission::ProcessPaneMove
-                | PluginPermission::ProcessTabMove
-                | PluginPermission::ProcessPaneClose
-                | PluginPermission::ProcessTabClose
-                | PluginPermission::ProcessPaneLayout
-                | PluginPermission::ProcessWindowClose
-                | PluginPermission::ProcessWindowFocus
-        ),
-        _ => false,
-    }
 }
 
 fn encode_command_event(mut envelope: serde_json::Value, max_event_bytes: usize) -> Result<String> {
@@ -2929,8 +1847,8 @@ fn render_registry(
                     "version": status.version,
                     "enabled": status.enabled,
                     "source": status.source,
-                    "requested_permissions": status.requested.iter().map(ToString::to_string).collect::<Vec<_>>(),
-                    "granted_permissions": status.granted.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                    "requested_permissions": status.requested,
+                    "granted_permissions": status.granted,
                     "settings": status.settings,
                     "diagnostic": status.diagnostic,
                 })
@@ -2951,8 +1869,8 @@ fn render_registry(
                 status.version,
                 status.enabled,
                 status.source.display(),
-                permission_list(status.requested.iter().copied()),
-                permission_list(status.granted.iter().copied()),
+                status.requested,
+                status.granted,
                 serde_json::to_string(&status.settings)
                     .expect("validated plugin settings serialize to JSON"),
                 status
@@ -3157,7 +2075,23 @@ fn fingerprint(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugin::structured::StructuredResponseAction;
     use std::time::{Duration, Instant};
+
+    fn permissions(values: &[&str]) -> PluginPermissions {
+        PluginPermissions::from_permissions(values.iter().map(|value| value.parse().unwrap()))
+            .unwrap()
+    }
+
+    fn context() -> PluginContext {
+        PluginContext {
+            window_id: 3,
+            cwd: None,
+            tab_count: 1,
+            active_tab: 0,
+            terminal_size: (80, 24),
+        }
+    }
 
     fn manifest(version: &str, extra_permission: &str, program: &str) -> String {
         format!(
@@ -3186,670 +2120,60 @@ working_directory = "inherit"
         )
     }
 
-    #[test]
-    fn explicit_pane_hook_preserves_profile_but_uses_host_cwd_policy() {
-        let manifest: PluginManifest =
-            toml::from_str(&manifest("1.0.0", "", "synthetic-not-executed")).unwrap();
-        let mut plugin = DeclarativePlugin::new(
-            manifest,
-            None,
-            BTreeSet::from([PluginPermission::ProcessSpawn]),
-        );
-        assert_eq!(plugin.pane_profiles().unwrap(), vec!["default", "quiet"]);
-        let context = PluginContext {
-            cwd: Some("/chosen/pane".into()),
-            tab_count: 1,
-            active_tab: 0,
-            terminal_size: (39, 12),
-        };
-        for name in ["default", "quiet"] {
-            let response = plugin.on_hook(
-                &Hook::PaneLaunch {
-                    plugin_id: "sample-tools".into(),
-                    profile: Some(name.into()),
-                    cwd: context.cwd.clone(),
-                },
-                &context,
-            );
-            assert!(
-                matches!(response, HookResponse::Action(PluginAction::OpenTab { cwd: Some(cwd), profile: Some(profile), .. }) if cwd == "/chosen/pane" && profile == name)
-            );
+    /// A handler plugin requesting `requested` (beyond process-spawn and
+    /// event-subscribe). A `command-invoked` subscription declares one
+    /// command, and a `command-completed` one requests command-output.
+    fn handler_manifest(requested: &[&str], persistent: bool, events: &[&str]) -> PluginManifest {
+        let mut requested_permissions = vec!["process-spawn", "event-subscribe"];
+        requested_permissions.extend_from_slice(requested);
+        if events.contains(&"command-completed") {
+            requested_permissions.push("command-output");
         }
-        assert!(matches!(
-            plugin.on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "sample-tools.open-quiet".into()
-                },
-                &context
-            ),
-            HookResponse::Action(PluginAction::OpenTab { cwd: None, .. })
-        ));
-    }
-
-    fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
-        let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("source");
-        let root = temp.path().join("installed");
-        let registry = temp.path().join("plugins.toml");
-        fs::create_dir_all(&source).unwrap();
-        fs::write(
-            source.join(MANIFEST_NAME),
-            manifest("1.0.0", "", "sample-cli"),
-        )
-        .unwrap();
-        (temp, source, root, registry)
-    }
-
-    fn process_grant() -> BTreeSet<PluginPermission> {
-        BTreeSet::from([PluginPermission::ProcessSpawn])
-    }
-
-    fn structured_grants() -> BTreeSet<PluginPermission> {
-        BTreeSet::from([
-            PluginPermission::ProcessSpawn,
-            PluginPermission::WorkspaceQuery,
-        ])
-    }
-
-    fn event_grants(workspace: bool) -> BTreeSet<PluginPermission> {
-        let mut grants = BTreeSet::from([
-            PluginPermission::ProcessSpawn,
-            PluginPermission::EventSubscribe,
-            PluginPermission::UiActions,
-        ]);
-        if workspace {
-            grants.insert(PluginPermission::WorkspaceQuery);
-        }
-        grants
-    }
-
-    fn event_manifest(workspace: bool) -> PluginManifest {
-        let workspace_permission = if workspace {
-            ", \"workspace-query\""
+        let commands = if events.contains(&"command-invoked") {
+            "[[commands]]\nid = \"run\"\nname = \"Run\"\n\n"
         } else {
             ""
         };
+        let mode = if persistent {
+            "persistent"
+        } else {
+            "process-per-event"
+        };
         toml::from_str(&format!(
-            r#"api_version = 3
-id = "lifecycle-fixture"
-name = "Lifecycle Fixture"
+            r#"api_version = 1
+id = "handler-fixture"
+name = "Handler Fixture"
 version = "1.0.0"
-permissions = ["process-spawn", "event-subscribe", "ui-actions"{workspace_permission}]
+permissions = {requested_permissions:?}
 
-[event_handler]
-program = "lifecycle-handler"
+{commands}[event_handler]
+program = "fixture-handler"
 args = ["--stdio"]
-events = ["app-ready", "tab-created", "tab-closed", "tab-switched"]
+mode = "{mode}"
+events = {events:?}
 "#
         ))
         .unwrap()
     }
 
-    fn command_event_grants() -> BTreeSet<PluginPermission> {
-        BTreeSet::from([
-            PluginPermission::ProcessSpawn,
-            PluginPermission::EventSubscribe,
-            PluginPermission::TerminalText,
-        ])
-    }
-
-    fn command_event_manifest() -> PluginManifest {
-        toml::from_str(
-            r#"api_version = 4
-id = "command-observer"
-name = "Command Observer"
-version = "1.0.0"
-permissions = ["process-spawn", "event-subscribe", "terminal-text"]
-
-[event_handler]
-program = "command-handler"
-args = ["--stdio"]
-events = ["command-completed"]
-"#,
-        )
-        .unwrap()
-    }
-
-    fn persistent_event_manifest() -> PluginManifest {
-        let mut manifest = event_manifest(false);
-        manifest.api_version = 5;
-        manifest.event_handler.as_mut().unwrap().mode = DeclarativeHandlerMode::Persistent;
-        manifest
-    }
-
-    fn workspace_query_manifest() -> PluginManifest {
-        let mut manifest = persistent_event_manifest();
-        manifest.api_version = 6;
-        manifest
-            .permissions
-            .insert(PluginPermission::WorkspaceQuery);
-        manifest
-    }
-
-    fn terminal_query_grants() -> BTreeSet<PluginPermission> {
-        let mut grants = event_grants(true);
-        grants.insert(PluginPermission::TerminalQuery);
-        grants
-    }
-
-    fn terminal_query_manifest() -> PluginManifest {
-        let mut manifest = workspace_query_manifest();
-        manifest.api_version = 11;
-        manifest.id = "terminal-reader".into();
-        manifest.permissions.insert(PluginPermission::TerminalQuery);
-        manifest.commands.push(DeclarativeHandlerCommand {
-            id: "read-active-terminal".into(),
-            name: "Read Active Terminal".into(),
-            description: String::new(),
-        });
-        manifest
-            .event_handler
-            .as_mut()
-            .unwrap()
-            .events
-            .insert(StructuredEventKind::CommandInvoked);
-        manifest
-    }
-
-    fn pane_create_grants() -> BTreeSet<PluginPermission> {
-        let mut grants = event_grants(true);
-        grants.insert(PluginPermission::PaneCreate);
-        grants
-    }
-
-    fn pane_create_manifest() -> PluginManifest {
-        let mut manifest = workspace_query_manifest();
-        manifest.api_version = 12;
-        manifest.id = "pane-builder".into();
-        manifest.permissions.insert(PluginPermission::PaneCreate);
-        manifest.commands.push(DeclarativeHandlerCommand {
-            id: "split-active-pane".into(),
-            name: "Split Active Pane".into(),
-            description: String::new(),
-        });
-        manifest
-            .event_handler
-            .as_mut()
-            .unwrap()
-            .events
-            .insert(StructuredEventKind::CommandInvoked);
-        manifest
-    }
-
-    fn tab_create_grants() -> BTreeSet<PluginPermission> {
-        let mut grants = event_grants(false);
-        grants.insert(PluginPermission::TabCreate);
-        grants
-    }
-
-    fn tab_create_manifest() -> PluginManifest {
-        let mut manifest = persistent_event_manifest();
-        manifest.api_version = 13;
-        manifest.id = "tab-builder".into();
-        manifest.permissions.insert(PluginPermission::TabCreate);
-        manifest.commands.push(DeclarativeHandlerCommand {
-            id: "new-task-tab".into(),
-            name: "New Task Tab".into(),
-            description: String::new(),
-        });
-        manifest
-            .event_handler
-            .as_mut()
-            .unwrap()
-            .events
-            .insert(StructuredEventKind::CommandInvoked);
-        manifest
-    }
-
-    fn pane_close_grants() -> BTreeSet<PluginPermission> {
-        let mut grants = event_grants(true);
-        grants.insert(PluginPermission::PaneClose);
-        grants
-    }
-
-    fn pane_close_manifest() -> PluginManifest {
-        let mut manifest = workspace_query_manifest();
-        manifest.api_version = 14;
-        manifest.id = "pane-pruner".into();
-        manifest.permissions.insert(PluginPermission::PaneClose);
-        manifest.commands.push(DeclarativeHandlerCommand {
-            id: "close-sibling-pane".into(),
-            name: "Close Sibling Pane".into(),
-            description: String::new(),
-        });
-        manifest
-            .event_handler
-            .as_mut()
-            .unwrap()
-            .events
-            .insert(StructuredEventKind::CommandInvoked);
-        manifest
-    }
-
-    fn tab_close_grants() -> BTreeSet<PluginPermission> {
-        let mut grants = event_grants(true);
-        grants.insert(PluginPermission::TabClose);
-        grants
-    }
-
-    fn tab_close_manifest() -> PluginManifest {
-        let mut manifest = workspace_query_manifest();
-        manifest.api_version = 15;
-        manifest.id = "tab-pruner".into();
-        manifest.permissions.insert(PluginPermission::TabClose);
-        manifest.commands.push(DeclarativeHandlerCommand {
-            id: "close-background-tab".into(),
-            name: "Close Background Tab".into(),
-            description: String::new(),
-        });
-        manifest
-            .event_handler
-            .as_mut()
-            .unwrap()
-            .events
-            .insert(StructuredEventKind::CommandInvoked);
-        manifest
-    }
-
-    fn pane_move_grants() -> BTreeSet<PluginPermission> {
-        let mut grants = event_grants(true);
-        grants.insert(PluginPermission::PaneMove);
-        grants
-    }
-
-    fn pane_move_manifest() -> PluginManifest {
-        let mut manifest = workspace_query_manifest();
-        manifest.api_version = 16;
-        manifest.id = "pane-mover".into();
-        manifest.permissions.insert(PluginPermission::PaneMove);
-        manifest.commands.push(DeclarativeHandlerCommand {
-            id: "move-sibling-pane".into(),
-            name: "Move Sibling Pane".into(),
-            description: String::new(),
-        });
-        manifest
-            .event_handler
-            .as_mut()
-            .unwrap()
-            .events
-            .insert(StructuredEventKind::CommandInvoked);
-        manifest
-    }
-
-    fn terminal_input_grants() -> BTreeSet<PluginPermission> {
-        let mut grants = event_grants(true);
-        grants.insert(PluginPermission::TerminalInput);
-        grants
-    }
-
-    fn terminal_input_manifest() -> PluginManifest {
-        let mut manifest = workspace_query_manifest();
-        manifest.api_version = 17;
-        manifest.id = "terminal-writer".into();
-        manifest.permissions.insert(PluginPermission::TerminalInput);
-        manifest.commands.push(DeclarativeHandlerCommand {
-            id: "draft-cargo-test".into(),
-            name: "Draft Cargo Test".into(),
-            description: String::new(),
-        });
-        manifest
-            .event_handler
-            .as_mut()
-            .unwrap()
-            .events
-            .insert(StructuredEventKind::CommandInvoked);
-        manifest
-    }
-
-    fn pane_layout_grants() -> BTreeSet<PluginPermission> {
-        let mut grants = event_grants(true);
-        grants.insert(PluginPermission::PaneLayout);
-        grants
-    }
-
-    fn pane_layout_manifest() -> PluginManifest {
-        let mut manifest = workspace_query_manifest();
-        manifest.api_version = 18;
-        manifest.id = "pane-arranger".into();
-        manifest.permissions.insert(PluginPermission::PaneLayout);
-        manifest.commands.push(DeclarativeHandlerCommand {
-            id: "apply-grid-layout".into(),
-            name: "Apply Grid Layout".into(),
-            description: String::new(),
-        });
-        manifest
-            .event_handler
-            .as_mut()
-            .unwrap()
-            .events
-            .insert(StructuredEventKind::CommandInvoked);
-        manifest
-    }
-
-    fn window_close_grants() -> BTreeSet<PluginPermission> {
-        let mut grants = event_grants(true);
-        grants.remove(&PluginPermission::UiActions);
-        grants.insert(PluginPermission::WindowClose);
-        grants
-    }
-
-    fn window_close_manifest() -> PluginManifest {
-        let mut manifest = workspace_query_manifest();
-        manifest.api_version = 19;
-        manifest.id = "window-closer".into();
-        manifest.permissions.remove(&PluginPermission::UiActions);
-        manifest.permissions.insert(PluginPermission::WindowClose);
-        manifest.commands.push(DeclarativeHandlerCommand {
-            id: "close-current-window".into(),
-            name: "Close Current Window".into(),
-            description: String::new(),
-        });
-        manifest
-            .event_handler
-            .as_mut()
-            .unwrap()
-            .events
-            .insert(StructuredEventKind::CommandInvoked);
-        manifest
-    }
-
-    fn process_query_grants() -> BTreeSet<PluginPermission> {
-        let mut grants = event_grants(false);
-        grants.insert(PluginPermission::ProcessQuery);
-        grants
-    }
-
-    fn process_query_manifest() -> PluginManifest {
-        let mut manifest = persistent_event_manifest();
-        manifest.api_version = 20;
-        manifest.id = "process-inspector".into();
-        manifest.permissions.insert(PluginPermission::ProcessQuery);
-        manifest.commands.push(DeclarativeHandlerCommand {
-            id: "inspect-process".into(),
-            name: "Inspect Process Windows".into(),
-            description: String::new(),
-        });
-        manifest
-            .event_handler
-            .as_mut()
-            .unwrap()
-            .events
-            .insert(StructuredEventKind::CommandInvoked);
-        manifest
-    }
-
-    fn process_action_grants() -> BTreeSet<PluginPermission> {
-        let mut grants = process_query_grants();
-        grants.insert(PluginPermission::ProcessActions);
-        grants
-    }
-
-    fn process_action_manifest() -> PluginManifest {
-        let mut manifest = process_query_manifest();
-        manifest.api_version = 21;
-        manifest.id = "process-navigator".into();
-        manifest
-            .permissions
-            .insert(PluginPermission::ProcessActions);
-        manifest.commands[0].id = "focus-first-pane".into();
-        manifest.commands[0].name = "Focus First Pane in Another Window".into();
-        manifest
-    }
-
-    fn process_terminal_text_grants() -> BTreeSet<PluginPermission> {
-        let mut grants = process_query_grants();
-        grants.insert(PluginPermission::ProcessTerminalText);
-        grants
-    }
-
-    fn process_terminal_text_manifest() -> PluginManifest {
-        let mut manifest = process_query_manifest();
-        manifest.api_version = 22;
-        manifest.id = "process-terminal-reader".into();
-        manifest
-            .permissions
-            .insert(PluginPermission::ProcessTerminalText);
-        manifest.commands[0].id = "read-sibling-pane".into();
-        manifest.commands[0].name = "Read Sibling Pane Text".into();
-        manifest
-    }
-
-    fn process_terminal_input_grants() -> BTreeSet<PluginPermission> {
-        let mut grants = process_query_grants();
-        grants.insert(PluginPermission::ProcessTerminalInput);
-        grants
-    }
-
-    fn process_terminal_input_manifest() -> PluginManifest {
-        let mut manifest = process_query_manifest();
-        manifest.api_version = 23;
-        manifest.id = "process-terminal-writer".into();
-        manifest
-            .permissions
-            .insert(PluginPermission::ProcessTerminalInput);
-        manifest.commands[0].id = "draft-in-sibling-pane".into();
-        manifest.commands[0].name = "Draft Text in Sibling Pane".into();
-        manifest
-    }
-
-    fn process_tab_create_grants() -> BTreeSet<PluginPermission> {
-        let mut grants = process_query_grants();
-        grants.insert(PluginPermission::ProcessTabCreate);
-        grants
-    }
-
-    fn process_tab_create_manifest() -> PluginManifest {
-        let mut manifest = process_query_manifest();
-        manifest.api_version = 24;
-        manifest.id = "process-tab-builder".into();
-        manifest
-            .permissions
-            .insert(PluginPermission::ProcessTabCreate);
-        manifest.commands[0].id = "new-tab-in-sibling-window".into();
-        manifest.commands[0].name = "New Tab in Another Window".into();
-        manifest
-    }
-
-    fn process_pane_create_grants() -> BTreeSet<PluginPermission> {
-        let mut grants = process_query_grants();
-        grants.insert(PluginPermission::ProcessPaneCreate);
-        grants
-    }
-
-    fn process_pane_create_manifest() -> PluginManifest {
-        let mut manifest = process_query_manifest();
-        manifest.api_version = 25;
-        manifest.id = "process-pane-builder".into();
-        manifest
-            .permissions
-            .insert(PluginPermission::ProcessPaneCreate);
-        manifest.commands[0].id = "split-pane-in-sibling-window".into();
-        manifest.commands[0].name = "Split Pane in Another Window".into();
-        manifest
-    }
-
-    fn process_pane_move_grants() -> BTreeSet<PluginPermission> {
-        let mut grants = process_query_grants();
-        grants.insert(PluginPermission::ProcessPaneMove);
-        grants
-    }
-
-    fn process_pane_move_manifest() -> PluginManifest {
-        let mut manifest = process_query_manifest();
-        manifest.api_version = 26;
-        manifest.id = "process-pane-mover".into();
-        manifest
-            .permissions
-            .insert(PluginPermission::ProcessPaneMove);
-        manifest.commands[0].id = "move-pane-between-windows".into();
-        manifest.commands[0].name = "Move Pane Between Windows".into();
-        manifest
-    }
-
-    fn process_tab_move_grants() -> BTreeSet<PluginPermission> {
-        let mut grants = process_query_grants();
-        grants.insert(PluginPermission::ProcessTabMove);
-        grants
-    }
-
-    fn process_tab_move_manifest() -> PluginManifest {
-        let mut manifest = process_query_manifest();
-        manifest.api_version = 27;
-        manifest.id = "process-tab-mover".into();
-        manifest
-            .permissions
-            .insert(PluginPermission::ProcessTabMove);
-        manifest.commands[0].id = "move-tab-between-windows".into();
-        manifest.commands[0].name = "Move Tab Between Windows".into();
-        manifest
-    }
-
-    fn process_pane_close_grants() -> BTreeSet<PluginPermission> {
-        let mut grants = process_query_grants();
-        grants.insert(PluginPermission::ProcessPaneClose);
-        grants
-    }
-
-    fn process_pane_close_manifest() -> PluginManifest {
-        let mut manifest = process_query_manifest();
-        manifest.api_version = 28;
-        manifest.id = "process-pane-pruner".into();
-        manifest
-            .permissions
-            .insert(PluginPermission::ProcessPaneClose);
-        manifest.commands[0].id = "close-pane-in-sibling-window".into();
-        manifest.commands[0].name = "Close Pane in Another Window".into();
-        manifest
-    }
-
-    fn process_tab_close_grants() -> BTreeSet<PluginPermission> {
-        let mut grants = process_query_grants();
-        grants.insert(PluginPermission::ProcessTabClose);
-        grants
-    }
-
-    fn process_tab_close_manifest() -> PluginManifest {
-        let mut manifest = process_query_manifest();
-        manifest.api_version = 29;
-        manifest.id = "process-tab-pruner".into();
-        manifest
-            .permissions
-            .insert(PluginPermission::ProcessTabClose);
-        manifest.commands[0].id = "close-tab-in-sibling-window".into();
-        manifest.commands[0].name = "Close Tab in Another Window".into();
-        manifest
-    }
-
-    fn process_pane_layout_grants() -> BTreeSet<PluginPermission> {
-        let mut grants = process_query_grants();
-        grants.insert(PluginPermission::ProcessPaneLayout);
-        grants
-    }
-
-    fn process_pane_layout_manifest() -> PluginManifest {
-        let mut manifest = process_query_manifest();
-        manifest.api_version = 30;
-        manifest.id = "process-pane-arranger".into();
-        manifest
-            .permissions
-            .insert(PluginPermission::ProcessPaneLayout);
-        manifest.commands[0].id = "apply-grid-in-sibling-window".into();
-        manifest.commands[0].name = "Grid Panes in Another Window".into();
-        manifest
-    }
-
-    fn process_window_close_grants() -> BTreeSet<PluginPermission> {
-        let mut grants = process_query_grants();
-        grants.insert(PluginPermission::ProcessWindowClose);
-        grants
-    }
-
-    fn process_window_close_manifest() -> PluginManifest {
-        let mut manifest = process_query_manifest();
-        manifest.api_version = 31;
-        manifest.id = "process-window-closer".into();
-        manifest
-            .permissions
-            .insert(PluginPermission::ProcessWindowClose);
-        manifest.commands[0].id = "close-sibling-window".into();
-        manifest.commands[0].name = "Close Another Window".into();
-        manifest
-    }
-
-    fn process_window_focus_grants() -> BTreeSet<PluginPermission> {
-        let mut grants = process_query_grants();
-        grants.insert(PluginPermission::ProcessWindowFocus);
-        grants
-    }
-
-    fn process_window_focus_manifest() -> PluginManifest {
-        let mut manifest = process_query_manifest();
-        manifest.api_version = 32;
-        manifest.id = "process-window-focuser".into();
-        manifest
-            .permissions
-            .insert(PluginPermission::ProcessWindowFocus);
-        manifest.commands[0].id = "focus-sibling-window".into();
-        manifest.commands[0].name = "Focus Another Window".into();
-        manifest
-    }
-
-    fn workspace_action_grants() -> BTreeSet<PluginPermission> {
-        let mut grants = event_grants(true);
-        grants.insert(PluginPermission::WorkspaceActions);
-        grants
-    }
-
-    fn workspace_actions_manifest() -> PluginManifest {
-        let mut manifest = workspace_query_manifest();
-        manifest.api_version = 7;
-        manifest
-            .permissions
-            .insert(PluginPermission::WorkspaceActions);
-        manifest
-    }
-
-    fn workspace_topology_grants() -> BTreeSet<PluginPermission> {
-        let mut grants = event_grants(true);
-        grants.insert(PluginPermission::WorkspaceTopology);
-        grants
-    }
-
-    fn workspace_topology_manifest() -> PluginManifest {
-        let mut manifest = workspace_query_manifest();
-        manifest.api_version = 8;
-        manifest
-            .permissions
-            .insert(PluginPermission::WorkspaceTopology);
-        manifest
-    }
-
-    fn handler_command_manifest() -> PluginManifest {
-        toml::from_str(
-            r#"api_version = 9
-id = "command-tool"
-name = "Command Tool"
-version = "1.0.0"
-permissions = ["process-spawn", "event-subscribe", "ui-actions"]
-
-[[commands]]
-id = "inspect-workspace"
-name = "Inspect Workspace"
-description = "Inspect the current workspace"
-
-[event_handler]
-program = "command-handler"
-args = ["--stdio"]
-mode = "persistent"
-events = ["command-invoked"]
-"#,
-        )
-        .unwrap()
+    fn invocation_for(
+        manifest: PluginManifest,
+        grants: PluginPermissions,
+        hook: &Hook,
+        context: &PluginContext,
+    ) -> StructuredHandlerInvocation {
+        let mut plugin = DeclarativePlugin::new(manifest, None, grants);
+        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) =
+            plugin.on_hook(hook, context)
+        else {
+            panic!("subscribed hook did not create a handler invocation")
+        };
+        invocation
     }
 
     fn configurable_manifest(version: &str) -> String {
         format!(
-            r#"api_version = 10
+            r#"api_version = 1
 id = "configurable-tool"
 name = "Configurable Tool"
 version = "{version}"
@@ -3903,6 +2227,74 @@ events = ["command-invoked"]
         toml::from_str(&configurable_manifest("1.0.0")).unwrap()
     }
 
+    fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let root = temp.path().join("installed");
+        let registry = temp.path().join("plugins.toml");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(
+            source.join(MANIFEST_NAME),
+            manifest("1.0.0", "", "sample-cli"),
+        )
+        .unwrap();
+        (temp, source, root, registry)
+    }
+
+    fn install(
+        source: &Path,
+        grants: PluginPermissions,
+        enable: bool,
+        registry_path: &Path,
+        root: &Path,
+    ) -> Result<String> {
+        execute_admin_at(
+            PluginAdminCommand::Install {
+                directory: source.to_path_buf(),
+                grants,
+                enable,
+                replace: true,
+            },
+            registry_path,
+            root,
+        )
+    }
+
+    #[test]
+    fn explicit_pane_hook_preserves_profile_but_uses_host_cwd_policy() {
+        let manifest: PluginManifest =
+            toml::from_str(&manifest("1.0.0", "", "synthetic-not-executed")).unwrap();
+        let mut plugin = DeclarativePlugin::new(manifest, None, permissions(&["process-spawn"]));
+        assert_eq!(plugin.pane_profiles().unwrap(), vec!["default", "quiet"]);
+        let context = PluginContext {
+            cwd: Some("/chosen/pane".into()),
+            terminal_size: (39, 12),
+            ..context()
+        };
+        for name in ["default", "quiet"] {
+            let response = plugin.on_hook(
+                &Hook::PaneLaunch {
+                    plugin_id: "sample-tools".into(),
+                    profile: Some(name.into()),
+                    cwd: context.cwd.clone(),
+                },
+                &context,
+            );
+            assert!(
+                matches!(response, HookResponse::Action(PluginAction::OpenTab { cwd: Some(cwd), profile: Some(profile), .. }) if cwd == "/chosen/pane" && profile == name)
+            );
+        }
+        assert!(matches!(
+            plugin.on_hook(
+                &Hook::CommandInvoked {
+                    command_id: "sample-tools.open-quiet".into()
+                },
+                &context
+            ),
+            HookResponse::Action(PluginAction::OpenTab { cwd: None, .. })
+        ));
+    }
+
     #[test]
     fn local_plugin_full_lifecycle_is_rebuild_free_and_profile_configurable() {
         let (_temp, source, root, registry_path) = fixture();
@@ -3914,14 +2306,14 @@ events = ["command-invoked"]
             &root,
         )
         .unwrap();
-        assert!(validated.contains("api=1"));
+        assert!(validated.contains("permissions=process-spawn"));
         assert!(validated.contains("source="));
         assert!(validated.contains("fingerprint=fnv1a64:"));
 
         let installed = execute_admin_at(
             PluginAdminCommand::Install {
                 directory: source.clone(),
-                grants: process_grant(),
+                grants: permissions(&["process-spawn"]),
                 enable: true,
                 replace: false,
             },
@@ -3939,9 +2331,7 @@ events = ["command-invoked"]
         assert_eq!(plugins[0].commands().len(), 2);
         let context = PluginContext {
             cwd: Some("/tmp/project".into()),
-            tab_count: 1,
-            active_tab: 0,
-            terminal_size: (80, 24),
+            ..context()
         };
         assert!(matches!(
             plugins[0].on_hook(
@@ -4035,16 +2425,8 @@ events = ["command-invoked"]
         let registry = PluginRegistry::load_from(&registry_path).unwrap();
         let (loaded, statuses) = discover_from_registry(&registry, &root);
         assert!(loaded.is_empty());
-        assert!(
-            statuses[0]
-                .requested
-                .contains(&PluginPermission::ProcessSpawn)
-        );
-        assert!(
-            statuses[0]
-                .granted
-                .contains(&PluginPermission::ProcessSpawn)
-        );
+        assert!(statuses[0].requested.contains(Capability::ProcessSpawn));
+        assert!(statuses[0].granted.contains(Capability::ProcessSpawn));
         execute_admin_at(
             PluginAdminCommand::Enable {
                 id: "sample-tools".into(),
@@ -4063,7 +2445,11 @@ events = ["command-invoked"]
             &root,
         )
         .unwrap();
-        assert!(json.contains("\"requested_permissions\""));
+        let shown: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            shown[0]["requested_permissions"],
+            serde_json::json!(["process-spawn"])
+        );
         assert!(json.contains("\"source\""));
 
         execute_admin_at(
@@ -4089,9 +2475,9 @@ events = ["command-invoked"]
         let preview = preview_install(&source).unwrap();
         assert_eq!(preview.id, "sample-tools");
         assert_eq!(preview.version, "1.0.0");
-        assert_eq!(preview.api_version, 1);
         assert_eq!(preview.profile_count, 2);
         assert_eq!(preview.command_count, 0);
+        assert_eq!(preview.permissions, permissions(&["process-spawn"]));
         assert_eq!(preview.source, source.canonicalize().unwrap());
         assert!(preview.source_fingerprint.starts_with("fnv1a64:"));
 
@@ -4103,7 +2489,7 @@ events = ["command-invoked"]
         let error = execute_admin_at(
             PluginAdminCommand::InstallReviewed {
                 directory: source.clone(),
-                grants: process_grant(),
+                grants: permissions(&["process-spawn"]),
                 enable: true,
                 expected_source_fingerprint: preview.source_fingerprint,
             },
@@ -4119,7 +2505,7 @@ events = ["command-invoked"]
         execute_admin_at(
             PluginAdminCommand::InstallReviewed {
                 directory: current.source,
-                grants: BTreeSet::new(),
+                grants: PluginPermissions::default(),
                 enable: false,
                 expected_source_fingerprint: current.source_fingerprint,
             },
@@ -4136,20 +2522,69 @@ events = ["command-invoked"]
     }
 
     #[test]
-    fn denied_and_unsupported_capabilities_never_become_runtime_actions() {
+    fn api_version_must_be_exactly_one() {
+        let (_temp, source, _root, _registry_path) = fixture();
+        for version in [0, 2, 32, 33] {
+            fs::write(
+                source.join(MANIFEST_NAME),
+                manifest("1.0.0", "", "sample")
+                    .replace("api_version = 1", &format!("api_version = {version}")),
+            )
+            .unwrap();
+            let error = PluginManifest::from_directory(&source).unwrap_err();
+            assert!(
+                format!("{error:#}").contains("supports API version 1"),
+                "{version}: {error:#}"
+            );
+        }
+        let missing = manifest("1.0.0", "", "sample").replace("api_version = 1\n", "");
+        assert!(toml::from_str::<PluginManifest>(&missing).is_err());
+    }
+
+    #[test]
+    fn unknown_removed_duplicate_and_misscoped_permissions_are_rejected() {
+        for (extra, expected) in [
+            (", \"network\"", "unknown plugin permission"),
+            (", \"secrets\"", "unknown plugin permission"),
+            (", \"terminal-text\"", "unknown plugin permission"),
+            (", \"workspace-topology\"", "unknown plugin permission"),
+            (", \"process-query\"", "unknown plugin permission"),
+            (", \"process-pane-create\"", "unknown plugin permission"),
+            (
+                ", \"ui-actions:all-windows\"",
+                "does not take a window scope",
+            ),
+            (
+                ", \"window-focus:all-windows\"",
+                "does not take a window scope",
+            ),
+            (", \"workspace-query:window\"", "unknown scope"),
+            (", \"process-spawn\"", "more than once"),
+            (
+                ", \"workspace-query\", \"workspace-query:all-windows\"",
+                "more than once",
+            ),
+        ] {
+            let error = toml::from_str::<PluginManifest>(&manifest("1.0.0", extra, "sample"))
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(expected), "{extra}: {error}");
+        }
+    }
+
+    #[test]
+    fn grants_may_not_exceed_requests_and_enabling_needs_every_request() {
         let (_temp, source, root, registry_path) = fixture();
         fs::write(
             source.join(MANIFEST_NAME),
-            manifest("1.0.0", ", \"network\"", "untrusted"),
+            manifest("1.0.0", ", \"workspace-query\"", "sample"),
         )
         .unwrap();
-        execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: process_grant(),
-                enable: false,
-                replace: false,
-            },
+
+        install(
+            &source,
+            permissions(&["process-spawn"]),
+            false,
             &registry_path,
             &root,
         )
@@ -4162,46 +2597,74 @@ events = ["command-invoked"]
             &root,
         )
         .unwrap_err();
-        assert!(format!("{error:#}").contains("permissions denied: network"));
+        assert!(format!("{error:#}").contains("permissions denied: workspace-query"));
+        let error = install(
+            &source,
+            permissions(&["process-spawn"]),
+            true,
+            &registry_path,
+            &root,
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("cannot enable until permissions are granted"));
 
+        for (grants, unrequested) in [
+            (&["process-spawn", "navigate"][..], "navigate"),
+            (
+                &["process-spawn", "workspace-query:all-windows"][..],
+                "workspace-query:all-windows",
+            ),
+        ] {
+            let error =
+                install(&source, permissions(grants), false, &registry_path, &root).unwrap_err();
+            assert!(
+                format!("{error:#}").contains(&format!(
+                    "cannot grant unrequested permissions: {unrequested}"
+                )),
+                "{error:#}"
+            );
+        }
+
+        // A tampered registry grant beyond the request cannot enable either.
+        let mut registry = PluginRegistry::load_from(&registry_path).unwrap();
+        registry.plugins[0].grants = permissions(&["process-spawn", "workspace-query:all-windows"]);
+        registry.save_to(&registry_path).unwrap();
         let error = execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source,
-                grants: BTreeSet::from([PluginPermission::ProcessSpawn, PluginPermission::Network]),
-                enable: true,
-                replace: true,
+            PluginAdminCommand::Enable {
+                id: "sample-tools".into(),
             },
             &registry_path,
             &root,
         )
         .unwrap_err();
-        assert!(format!("{error:#}").contains("cannot grant"));
-        let registry = PluginRegistry::load_from(&registry_path).unwrap();
-        let (loaded, statuses) = discover_from_registry(&registry, &root);
-        assert!(loaded.is_empty());
-        assert!(statuses[0].requested.contains(&PluginPermission::Network));
-        assert!(
-            statuses[0]
-                .granted
-                .contains(&PluginPermission::ProcessSpawn)
+        assert!(format!("{error:#}").contains("grants exceed the manifest's requests"));
+
+        install(
+            &source,
+            permissions(&["process-spawn", "workspace-query"]),
+            true,
+            &registry_path,
+            &root,
+        )
+        .unwrap();
+        let (loaded, statuses) = discover_runtime_plugins_at(&registry_path, &root).unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(
+            statuses[0].granted,
+            permissions(&["process-spawn", "workspace-query"])
         );
     }
 
     #[test]
-    fn version_schema_tamper_and_resource_limits_fail_closed() {
+    fn schema_tamper_and_resource_limits_fail_closed() {
         let (_temp, source, root, registry_path) = fixture();
-        let invalid_api =
-            manifest("1.0.0", "", "sample").replace("api_version = 1", "api_version = 33");
-        fs::write(source.join(MANIFEST_NAME), invalid_api).unwrap();
-        assert!(PluginManifest::from_directory(&source).is_err());
-
         let mut oversized = PluginManifest {
             api_version: 1,
             id: "large".into(),
             name: "Large".into(),
             version: "1".into(),
             description: String::new(),
-            permissions: process_grant(),
+            permissions: permissions(&["process-spawn"]),
             profiles: vec![DeclarativeProfile {
                 id: "default".into(),
                 name: "Default".into(),
@@ -4219,14 +2682,10 @@ events = ["command-invoked"]
         oversized.profiles.push(oversized.profiles[0].clone());
         assert!(oversized.validate().is_err());
 
-        fs::write(source.join(MANIFEST_NAME), manifest("1.0.0", "", "sample")).unwrap();
-        execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source,
-                grants: process_grant(),
-                enable: true,
-                replace: false,
-            },
+        install(
+            &source,
+            permissions(&["process-spawn"]),
+            true,
             &registry_path,
             &root,
         )
@@ -4259,7 +2718,7 @@ events = ["command-invoked"]
             enabled: false,
             source: PathBuf::from("relative/source"),
             source_fingerprint: "not-a-fingerprint".into(),
-            grants: BTreeSet::new(),
+            grants: PluginPermissions::default(),
             default_profile: None,
             settings: BTreeMap::new(),
         });
@@ -4267,16 +2726,50 @@ events = ["command-invoked"]
     }
 
     #[test]
-    fn api_v2_workspace_query_is_explicit_versioned_and_bounded() {
-        let parsed: PluginManifest = toml::from_str(
-            &manifest("2.0.0", ", \"workspace-query\"", "context-fixture")
-                .replace("api_version = 1", "api_version = 2"),
+    fn registry_with_removed_permissions_fails_with_reinstall_guidance() {
+        let (_temp, _source, _root, registry_path) = fixture();
+        fs::write(
+            &registry_path,
+            r#"schema_version = 1
+
+[[plugins]]
+id = "sample-tools"
+enabled = true
+source = "/tmp/sample-tools"
+source_fingerprint = "fnv1a64:0123456789abcdef"
+grants = ["process-spawn", "process-query"]
+"#,
         )
         .unwrap();
+        let error = format!(
+            "{:#}",
+            PluginRegistry::load_from(&registry_path).unwrap_err()
+        );
+        assert!(
+            error.contains("unknown plugin permission \"process-query\""),
+            "{error}"
+        );
+        assert!(error.contains("reinstall the plugin"), "{error}");
+        assert!(
+            error.contains(&registry_path.display().to_string()),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn launch_context_is_gated_by_workspace_query_and_bounded() {
+        let parsed: PluginManifest = toml::from_str(&manifest(
+            "2.0.0",
+            ", \"workspace-query\"",
+            "context-fixture",
+        ))
+        .unwrap();
         parsed.validate().unwrap();
-        validate_grants(&parsed, &structured_grants()).unwrap();
-        let mut plugin = DeclarativePlugin::new(parsed, None, structured_grants());
+        let grants = permissions(&["process-spawn", "workspace-query"]);
+        validate_grants(&parsed, &grants).unwrap();
+        let mut plugin = DeclarativePlugin::new(parsed.clone(), None, grants.clone());
         let context = PluginContext {
+            window_id: 3,
             cwd: Some("/workspace/fixture".into()),
             tab_count: 4,
             active_tab: 2,
@@ -4303,7 +2796,6 @@ events = ["command-invoked"]
         assert_eq!(value["terminal"]["columns"], 132);
         assert_eq!(value["terminal"]["rows"], 43);
         assert!(context_json.len() <= MAX_STRUCTURED_CONTEXT_BYTES);
-        assert!(!context_json.contains("terminal_text"));
 
         let response = plugin.on_hook(
             &Hook::WorkspaceRestore {
@@ -4320,2231 +2812,31 @@ events = ["command-invoked"]
         let restored: serde_json::Value =
             serde_json::from_str(env.get(STRUCTURED_CONTEXT_ENV).unwrap()).unwrap();
         assert_eq!(restored["active_working_directory"], "/archived/workspace");
-    }
 
-    #[test]
-    fn api_v2_workspace_query_grant_round_trips_install_and_discovery() {
-        let (_temp, source, root, registry_path) = fixture();
-        fs::write(
-            source.join(MANIFEST_NAME),
-            manifest("2.0.0", ", \"workspace-query\"", "context-fixture")
-                .replace("api_version = 1", "api_version = 2"),
-        )
-        .unwrap();
-        execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source,
-                grants: structured_grants(),
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-        let registry = PluginRegistry::load_from(&registry_path).unwrap();
-        assert_eq!(registry.plugins[0].grants, structured_grants());
-        let (mut loaded, statuses) = discover_from_registry(&registry, &root);
-        assert_eq!(loaded.len(), 1);
-        assert_eq!(statuses[0].granted, structured_grants());
-        let response = loaded[0].on_hook(
+        // Without the grant, no context reaches the profile.
+        let mut ungranted = DeclarativePlugin::new(
+            toml::from_str(&manifest("1.0.0", "", "context-fixture")).unwrap(),
+            None,
+            permissions(&["process-spawn"]),
+        );
+        let HookResponse::Action(PluginAction::OpenTab { env, .. }) = ungranted.on_hook(
             &Hook::CommandInvoked {
                 command_id: "sample-tools.open-default".into(),
             },
-            &PluginContext {
-                cwd: None,
-                tab_count: 2,
-                active_tab: 1,
-                terminal_size: (90, 28),
-            },
-        );
-        assert!(matches!(
-            response,
-            HookResponse::Action(PluginAction::OpenTab { env, .. })
-                if env.contains_key(STRUCTURED_CONTEXT_ENV)
-        ));
-    }
-
-    #[test]
-    fn checked_in_api_v2_context_example_is_a_valid_manifest() {
-        let directory =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/context-probe");
-        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
-        assert_eq!(manifest.api_version, 2);
-        assert_eq!(manifest.id, "context-probe");
-        assert_eq!(manifest.permissions, structured_grants());
-        assert_eq!(source, directory.canonicalize().unwrap());
-    }
-
-    #[test]
-    fn checked_in_api_v3_lifecycle_example_is_a_valid_manifest() {
-        let directory =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/lifecycle-notifier");
-        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
-        assert_eq!(manifest.api_version, 3);
-        assert_eq!(manifest.id, "lifecycle-notifier");
-        assert_eq!(manifest.permissions, event_grants(false));
-        assert!(manifest.profiles.is_empty());
-        assert_eq!(source, directory.canonicalize().unwrap());
-    }
-
-    #[test]
-    fn checked_in_api_v4_command_example_is_a_valid_manifest() {
-        let directory =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/command-observer");
-        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
-        assert_eq!(manifest.api_version, 4);
-        assert_eq!(manifest.id, "command-observer");
-        assert_eq!(manifest.permissions, command_event_grants());
-        assert!(manifest.profiles.is_empty());
-        assert_eq!(source, directory.canonicalize().unwrap());
-
-        let temporary = tempfile::tempdir().unwrap();
-        let registry_path = temporary.path().join("plugins.toml");
-        let root = temporary.path().join("installed");
-        execute_admin_at(
-            PluginAdminCommand::Install {
-                directory,
-                grants: command_event_grants(),
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-        let registry = PluginRegistry::load_from(&registry_path).unwrap();
-        let (loaded, statuses) = discover_from_registry(&registry, &root);
-        assert_eq!(loaded.len(), 1);
-        assert!(statuses[0].enabled);
-        assert_eq!(statuses[0].granted, command_event_grants());
-    }
-
-    #[test]
-    fn checked_in_api_v5_persistent_example_is_a_valid_manifest() {
-        let directory =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/persistent-counter");
-        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
-        assert_eq!(manifest.api_version, 5);
-        assert_eq!(manifest.id, "persistent-counter");
-        assert_eq!(manifest.permissions, event_grants(false));
-        assert_eq!(
-            manifest.event_handler.unwrap().mode,
-            DeclarativeHandlerMode::Persistent
-        );
-        assert_eq!(source, directory.canonicalize().unwrap());
-    }
-
-    #[test]
-    fn checked_in_api_v6_workspace_query_example_is_a_valid_manifest() {
-        let directory =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/workspace-inspector");
-        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
-        assert_eq!(manifest.api_version, 6);
-        assert_eq!(manifest.id, "workspace-inspector");
-        assert_eq!(manifest.permissions, event_grants(true));
-        assert_eq!(
-            manifest.event_handler.unwrap().mode,
-            DeclarativeHandlerMode::Persistent
-        );
-        assert_eq!(source, directory.canonicalize().unwrap());
-    }
-
-    #[test]
-    fn checked_in_api_v7_workspace_action_example_is_a_valid_manifest() {
-        let directory =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/workspace-navigator");
-        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
-        assert_eq!(manifest.api_version, 7);
-        assert_eq!(manifest.id, "workspace-navigator");
-        assert_eq!(manifest.permissions, workspace_action_grants());
-        assert_eq!(
-            manifest.event_handler.unwrap().mode,
-            DeclarativeHandlerMode::Persistent
-        );
-        assert_eq!(source, directory.canonicalize().unwrap());
-    }
-
-    #[test]
-    fn checked_in_api_v8_workspace_topology_example_is_a_valid_manifest() {
-        let directory =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/workspace-organizer");
-        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
-        assert_eq!(manifest.api_version, 8);
-        assert_eq!(manifest.id, "workspace-organizer");
-        assert_eq!(manifest.permissions, workspace_topology_grants());
-        assert_eq!(
-            manifest.event_handler.unwrap().mode,
-            DeclarativeHandlerMode::Persistent
-        );
-        assert_eq!(source, directory.canonicalize().unwrap());
-    }
-
-    #[test]
-    fn checked_in_api_v9_handler_command_example_is_a_valid_manifest() {
-        let directory =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/command-tool");
-        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
-        assert_eq!(manifest.api_version, 9);
-        assert_eq!(manifest.id, "command-tool");
-        assert_eq!(manifest.commands.len(), 1);
-        assert_eq!(manifest.commands[0].id, "inspect-workspace");
-        assert_eq!(manifest.permissions, event_grants(true));
-        assert_eq!(
-            manifest.event_handler.unwrap().mode,
-            DeclarativeHandlerMode::Persistent
-        );
-        assert_eq!(source, directory.canonicalize().unwrap());
-    }
-
-    #[test]
-    fn checked_in_api_v10_configurable_command_example_is_a_valid_manifest() {
-        let directory =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/configurable-command");
-        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
-        assert_eq!(manifest.api_version, 10);
-        assert_eq!(manifest.id, "configurable-command");
-        assert_eq!(manifest.commands.len(), 1);
-        assert_eq!(manifest.settings.len(), 3);
-        assert_eq!(manifest.permissions, event_grants(false));
-        assert_eq!(source, directory.canonicalize().unwrap());
-    }
-
-    #[test]
-    fn checked_in_api_v11_terminal_reader_example_is_a_valid_manifest() {
-        let directory =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/terminal-reader");
-        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
-        assert_eq!(manifest.api_version, 11);
-        assert_eq!(manifest.id, "terminal-reader");
-        assert_eq!(manifest.commands.len(), 1);
-        assert_eq!(manifest.commands[0].id, "read-active-terminal");
-        assert_eq!(manifest.permissions, terminal_query_grants());
-        assert_eq!(
-            manifest.event_handler.unwrap().mode,
-            DeclarativeHandlerMode::Persistent
-        );
-        assert_eq!(source, directory.canonicalize().unwrap());
-        let registry = PluginRegistry {
-            schema_version: REGISTRY_SCHEMA_VERSION,
-            plugins: vec![InstalledPlugin {
-                id: "terminal-reader".into(),
-                enabled: true,
-                source,
-                source_fingerprint: "fnv1a64:0123456789abcdef".into(),
-                grants: terminal_query_grants(),
-                default_profile: None,
-                settings: BTreeMap::new(),
-            }],
+            &context,
+        ) else {
+            panic!("profile did not produce an open-tab action")
         };
-        registry.validate().unwrap();
-    }
+        assert!(env.is_empty());
 
-    #[test]
-    fn checked_in_api_v12_pane_builder_example_is_a_valid_manifest() {
-        let directory =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/pane-builder");
-        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
-        assert_eq!(manifest.api_version, 12);
-        assert_eq!(manifest.id, "pane-builder");
-        assert_eq!(manifest.commands.len(), 1);
-        assert_eq!(manifest.commands[0].id, "split-active-pane");
-        assert_eq!(manifest.permissions, pane_create_grants());
-        assert_eq!(
-            manifest.event_handler.unwrap().mode,
-            DeclarativeHandlerMode::Persistent
-        );
-        assert_eq!(source, directory.canonicalize().unwrap());
-        let registry = PluginRegistry {
-            schema_version: REGISTRY_SCHEMA_VERSION,
-            plugins: vec![InstalledPlugin {
-                id: "pane-builder".into(),
-                enabled: true,
-                source,
-                source_fingerprint: "fnv1a64:0123456789abcdef".into(),
-                grants: pane_create_grants(),
-                default_profile: None,
-                settings: BTreeMap::new(),
-            }],
-        };
-        registry.validate().unwrap();
-    }
-
-    #[test]
-    fn checked_in_api_v16_pane_mover_example_is_a_valid_manifest() {
-        let directory =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/pane-mover");
-        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
-        assert_eq!(manifest.api_version, 16);
-        assert_eq!(manifest.id, "pane-mover");
-        assert_eq!(manifest.commands.len(), 1);
-        assert_eq!(manifest.commands[0].id, "move-sibling-pane");
-        assert_eq!(manifest.permissions, pane_move_grants());
-        assert_eq!(
-            manifest.event_handler.unwrap().mode,
-            DeclarativeHandlerMode::Persistent
-        );
-        assert_eq!(source, directory.canonicalize().unwrap());
-        let registry = PluginRegistry {
-            schema_version: REGISTRY_SCHEMA_VERSION,
-            plugins: vec![InstalledPlugin {
-                id: "pane-mover".into(),
-                enabled: true,
-                source,
-                source_fingerprint: "fnv1a64:0123456789abcdef".into(),
-                grants: pane_move_grants(),
-                default_profile: None,
-                settings: BTreeMap::new(),
-            }],
-        };
-        registry.validate().unwrap();
-    }
-
-    #[test]
-    fn checked_in_api_v17_terminal_writer_example_is_a_valid_manifest() {
-        let directory =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/terminal-writer");
-        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
-        assert_eq!(manifest.api_version, 17);
-        assert_eq!(manifest.id, "terminal-writer");
-        assert_eq!(manifest.commands.len(), 1);
-        assert_eq!(manifest.commands[0].id, "draft-cargo-test");
-        assert_eq!(manifest.permissions, terminal_input_grants());
-        assert_eq!(
-            manifest.event_handler.unwrap().mode,
-            DeclarativeHandlerMode::Persistent
-        );
-        assert_eq!(source, directory.canonicalize().unwrap());
-        let registry = PluginRegistry {
-            schema_version: REGISTRY_SCHEMA_VERSION,
-            plugins: vec![InstalledPlugin {
-                id: "terminal-writer".into(),
-                enabled: true,
-                source,
-                source_fingerprint: "fnv1a64:0123456789abcdef".into(),
-                grants: terminal_input_grants(),
-                default_profile: None,
-                settings: BTreeMap::new(),
-            }],
-        };
-        registry.validate().unwrap();
-    }
-
-    #[test]
-    fn checked_in_api_v18_pane_arranger_example_is_a_valid_manifest() {
-        let directory =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/pane-arranger");
-        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
-        assert_eq!(manifest.api_version, 18);
-        assert_eq!(manifest.id, "pane-arranger");
-        assert_eq!(manifest.commands.len(), 1);
-        assert_eq!(manifest.commands[0].id, "apply-grid-layout");
-        assert_eq!(manifest.permissions, pane_layout_grants());
-        assert_eq!(
-            manifest.event_handler.unwrap().mode,
-            DeclarativeHandlerMode::Persistent
-        );
-        assert_eq!(source, directory.canonicalize().unwrap());
-        let registry = PluginRegistry {
-            schema_version: REGISTRY_SCHEMA_VERSION,
-            plugins: vec![InstalledPlugin {
-                id: "pane-arranger".into(),
-                enabled: true,
-                source,
-                source_fingerprint: "fnv1a64:0123456789abcdef".into(),
-                grants: pane_layout_grants(),
-                default_profile: None,
-                settings: BTreeMap::new(),
-            }],
-        };
-        registry.validate().unwrap();
-    }
-
-    #[test]
-    fn checked_in_api_v19_window_closer_example_is_a_valid_manifest() {
-        let directory =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/window-closer");
-        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
-        assert_eq!(manifest.api_version, 19);
-        assert_eq!(manifest.id, "window-closer");
-        assert_eq!(manifest.commands.len(), 1);
-        assert_eq!(manifest.commands[0].id, "close-current-window");
-        assert_eq!(manifest.permissions, window_close_grants());
-        assert_eq!(
-            manifest.event_handler.unwrap().mode,
-            DeclarativeHandlerMode::Persistent
-        );
-        assert_eq!(source, directory.canonicalize().unwrap());
-        let registry = PluginRegistry {
-            schema_version: REGISTRY_SCHEMA_VERSION,
-            plugins: vec![InstalledPlugin {
-                id: "window-closer".into(),
-                enabled: true,
-                source,
-                source_fingerprint: "fnv1a64:0123456789abcdef".into(),
-                grants: window_close_grants(),
-                default_profile: None,
-                settings: BTreeMap::new(),
-            }],
-        };
-        registry.validate().unwrap();
-    }
-
-    #[test]
-    fn checked_in_api_v20_process_inspector_example_is_a_valid_manifest() {
-        let directory =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/process-inspector");
-        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
-        assert_eq!(manifest.api_version, 20);
-        assert_eq!(manifest.id, "process-inspector");
-        assert_eq!(manifest.commands.len(), 1);
-        assert_eq!(manifest.commands[0].id, "inspect-process");
-        assert_eq!(manifest.permissions, process_query_grants());
-        assert_eq!(
-            manifest.event_handler.unwrap().mode,
-            DeclarativeHandlerMode::Persistent
-        );
-        assert_eq!(source, directory.canonicalize().unwrap());
-        let registry = PluginRegistry {
-            schema_version: REGISTRY_SCHEMA_VERSION,
-            plugins: vec![InstalledPlugin {
-                id: "process-inspector".into(),
-                enabled: true,
-                source,
-                source_fingerprint: "fnv1a64:0123456789abcdef".into(),
-                grants: process_query_grants(),
-                default_profile: None,
-                settings: BTreeMap::new(),
-            }],
-        };
-        registry.validate().unwrap();
-    }
-
-    #[test]
-    fn checked_in_api_v21_process_navigator_example_is_a_valid_manifest() {
-        let directory =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/process-navigator");
-        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
-        assert_eq!(manifest.api_version, 21);
-        assert_eq!(manifest.id, "process-navigator");
-        assert_eq!(manifest.commands.len(), 1);
-        assert_eq!(manifest.commands[0].id, "focus-first-pane");
-        assert_eq!(manifest.permissions, process_action_grants());
-        assert_eq!(
-            manifest.event_handler.unwrap().mode,
-            DeclarativeHandlerMode::Persistent
-        );
-        assert_eq!(source, directory.canonicalize().unwrap());
-        let registry = PluginRegistry {
-            schema_version: REGISTRY_SCHEMA_VERSION,
-            plugins: vec![InstalledPlugin {
-                id: "process-navigator".into(),
-                enabled: true,
-                source,
-                source_fingerprint: "fnv1a64:0123456789abcdef".into(),
-                grants: process_action_grants(),
-                default_profile: None,
-                settings: BTreeMap::new(),
-            }],
-        };
-        registry.validate().unwrap();
-    }
-
-    #[test]
-    fn checked_in_api_v22_process_terminal_reader_example_is_a_valid_manifest() {
-        let directory = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../examples/plugins/process-terminal-reader");
-        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
-        assert_eq!(manifest.api_version, 22);
-        assert_eq!(manifest.id, "process-terminal-reader");
-        assert_eq!(manifest.commands.len(), 1);
-        assert_eq!(manifest.commands[0].id, "read-sibling-pane");
-        assert_eq!(manifest.permissions, process_terminal_text_grants());
-        assert_eq!(
-            manifest.event_handler.unwrap().mode,
-            DeclarativeHandlerMode::Persistent
-        );
-        assert_eq!(source, directory.canonicalize().unwrap());
-        let registry = PluginRegistry {
-            schema_version: REGISTRY_SCHEMA_VERSION,
-            plugins: vec![InstalledPlugin {
-                id: "process-terminal-reader".into(),
-                enabled: true,
-                source,
-                source_fingerprint: "fnv1a64:0123456789abcdef".into(),
-                grants: process_terminal_text_grants(),
-                default_profile: None,
-                settings: BTreeMap::new(),
-            }],
-        };
-        registry.validate().unwrap();
-    }
-
-    #[test]
-    fn checked_in_api_v23_process_terminal_writer_example_is_a_valid_manifest() {
-        let directory = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../examples/plugins/process-terminal-writer");
-        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
-        assert_eq!(manifest.api_version, 23);
-        assert_eq!(manifest.id, "process-terminal-writer");
-        assert_eq!(manifest.commands.len(), 1);
-        assert_eq!(manifest.commands[0].id, "draft-in-sibling-pane");
-        assert_eq!(manifest.permissions, process_terminal_input_grants());
-        assert_eq!(
-            manifest.event_handler.unwrap().mode,
-            DeclarativeHandlerMode::Persistent
-        );
-        assert_eq!(source, directory.canonicalize().unwrap());
-        let registry = PluginRegistry {
-            schema_version: REGISTRY_SCHEMA_VERSION,
-            plugins: vec![InstalledPlugin {
-                id: "process-terminal-writer".into(),
-                enabled: true,
-                source,
-                source_fingerprint: "fnv1a64:0123456789abcdef".into(),
-                grants: process_terminal_input_grants(),
-                default_profile: None,
-                settings: BTreeMap::new(),
-            }],
-        };
-        registry.validate().unwrap();
-    }
-
-    #[test]
-    fn checked_in_api_v24_process_tab_builder_example_is_a_valid_manifest() {
-        let directory =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/process-tab-builder");
-        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
-        assert_eq!(manifest.api_version, 24);
-        assert_eq!(manifest.id, "process-tab-builder");
-        assert_eq!(manifest.commands.len(), 1);
-        assert_eq!(manifest.commands[0].id, "new-tab-in-sibling-window");
-        assert_eq!(manifest.permissions, process_tab_create_grants());
-        assert_eq!(
-            manifest.event_handler.unwrap().mode,
-            DeclarativeHandlerMode::Persistent
-        );
-        assert_eq!(source, directory.canonicalize().unwrap());
-        let registry = PluginRegistry {
-            schema_version: REGISTRY_SCHEMA_VERSION,
-            plugins: vec![InstalledPlugin {
-                id: "process-tab-builder".into(),
-                enabled: true,
-                source,
-                source_fingerprint: "fnv1a64:0123456789abcdef".into(),
-                grants: process_tab_create_grants(),
-                default_profile: None,
-                settings: BTreeMap::new(),
-            }],
-        };
-        registry.validate().unwrap();
-    }
-
-    #[test]
-    fn checked_in_api_v25_process_pane_builder_example_is_a_valid_manifest() {
-        let directory =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/process-pane-builder");
-        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
-        assert_eq!(manifest.api_version, 25);
-        assert_eq!(manifest.id, "process-pane-builder");
-        assert_eq!(manifest.commands.len(), 1);
-        assert_eq!(manifest.commands[0].id, "split-pane-in-sibling-window");
-        assert_eq!(manifest.permissions, process_pane_create_grants());
-        assert_eq!(
-            manifest.event_handler.unwrap().mode,
-            DeclarativeHandlerMode::Persistent
-        );
-        assert_eq!(source, directory.canonicalize().unwrap());
-        let registry = PluginRegistry {
-            schema_version: REGISTRY_SCHEMA_VERSION,
-            plugins: vec![InstalledPlugin {
-                id: "process-pane-builder".into(),
-                enabled: true,
-                source,
-                source_fingerprint: "fnv1a64:0123456789abcdef".into(),
-                grants: process_pane_create_grants(),
-                default_profile: None,
-                settings: BTreeMap::new(),
-            }],
-        };
-        registry.validate().unwrap();
-    }
-
-    #[test]
-    fn checked_in_api_v26_process_pane_mover_example_is_a_valid_manifest() {
-        let directory =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/process-pane-mover");
-        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
-        assert_eq!(manifest.api_version, 26);
-        assert_eq!(manifest.id, "process-pane-mover");
-        assert_eq!(manifest.commands.len(), 1);
-        assert_eq!(manifest.commands[0].id, "move-pane-between-windows");
-        assert_eq!(manifest.permissions, process_pane_move_grants());
-        assert_eq!(
-            manifest.event_handler.unwrap().mode,
-            DeclarativeHandlerMode::Persistent
-        );
-        assert_eq!(source, directory.canonicalize().unwrap());
-        let registry = PluginRegistry {
-            schema_version: REGISTRY_SCHEMA_VERSION,
-            plugins: vec![InstalledPlugin {
-                id: "process-pane-mover".into(),
-                enabled: true,
-                source,
-                source_fingerprint: "fnv1a64:0123456789abcdef".into(),
-                grants: process_pane_move_grants(),
-                default_profile: None,
-                settings: BTreeMap::new(),
-            }],
-        };
-        registry.validate().unwrap();
-    }
-
-    #[test]
-    fn checked_in_api_v27_process_tab_mover_example_is_a_valid_manifest() {
-        let directory =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/process-tab-mover");
-        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
-        assert_eq!(manifest.api_version, 27);
-        assert_eq!(manifest.id, "process-tab-mover");
-        assert_eq!(manifest.commands[0].id, "move-tab-between-windows");
-        assert_eq!(manifest.permissions, process_tab_move_grants());
-        assert_eq!(
-            manifest.event_handler.unwrap().mode,
-            DeclarativeHandlerMode::Persistent
-        );
-        assert_eq!(source, directory.canonicalize().unwrap());
-        PluginRegistry {
-            schema_version: REGISTRY_SCHEMA_VERSION,
-            plugins: vec![InstalledPlugin {
-                id: "process-tab-mover".into(),
-                enabled: true,
-                source,
-                source_fingerprint: "fnv1a64:0123456789abcdef".into(),
-                grants: process_tab_move_grants(),
-                default_profile: None,
-                settings: BTreeMap::new(),
-            }],
-        }
-        .validate()
-        .unwrap();
-    }
-
-    #[test]
-    fn checked_in_api_v28_process_pane_pruner_example_is_a_valid_manifest() {
-        let directory =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/process-pane-pruner");
-        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
-        assert_eq!(manifest.api_version, 28);
-        assert_eq!(manifest.id, "process-pane-pruner");
-        assert_eq!(manifest.commands[0].id, "close-pane-in-sibling-window");
-        assert_eq!(manifest.permissions, process_pane_close_grants());
-        assert_eq!(
-            manifest.event_handler.unwrap().mode,
-            DeclarativeHandlerMode::Persistent
-        );
-        assert_eq!(source, directory.canonicalize().unwrap());
-        PluginRegistry {
-            schema_version: REGISTRY_SCHEMA_VERSION,
-            plugins: vec![InstalledPlugin {
-                id: "process-pane-pruner".into(),
-                enabled: true,
-                source,
-                source_fingerprint: "fnv1a64:0123456789abcdef".into(),
-                grants: process_pane_close_grants(),
-                default_profile: None,
-                settings: BTreeMap::new(),
-            }],
-        }
-        .validate()
-        .unwrap();
-    }
-
-    #[test]
-    fn checked_in_api_v29_process_tab_pruner_example_is_a_valid_manifest() {
-        let directory =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/process-tab-pruner");
-        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
-        assert_eq!(manifest.api_version, 29);
-        assert_eq!(manifest.id, "process-tab-pruner");
-        assert_eq!(manifest.commands[0].id, "close-tab-in-sibling-window");
-        assert_eq!(manifest.permissions, process_tab_close_grants());
-        assert_eq!(
-            manifest.event_handler.unwrap().mode,
-            DeclarativeHandlerMode::Persistent
-        );
-        PluginRegistry {
-            schema_version: REGISTRY_SCHEMA_VERSION,
-            plugins: vec![InstalledPlugin {
-                id: "process-tab-pruner".into(),
-                enabled: true,
-                source,
-                source_fingerprint: "fnv1a64:0123456789abcdef".into(),
-                grants: process_tab_close_grants(),
-                default_profile: None,
-                settings: BTreeMap::new(),
-            }],
-        }
-        .validate()
-        .unwrap();
-    }
-
-    #[test]
-    fn checked_in_api_v30_process_pane_arranger_example_is_a_valid_manifest() {
-        let directory =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/process-pane-arranger");
-        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
-        assert_eq!(manifest.api_version, 30);
-        assert_eq!(manifest.id, "process-pane-arranger");
-        assert_eq!(manifest.commands[0].id, "apply-grid-in-sibling-window");
-        assert_eq!(manifest.permissions, process_pane_layout_grants());
-        assert_eq!(
-            manifest.event_handler.unwrap().mode,
-            DeclarativeHandlerMode::Persistent
-        );
-        PluginRegistry {
-            schema_version: REGISTRY_SCHEMA_VERSION,
-            plugins: vec![InstalledPlugin {
-                id: "process-pane-arranger".into(),
-                enabled: true,
-                source,
-                source_fingerprint: "fnv1a64:0123456789abcdef".into(),
-                grants: process_pane_layout_grants(),
-                default_profile: None,
-                settings: BTreeMap::new(),
-            }],
-        }
-        .validate()
-        .unwrap();
-    }
-
-    #[test]
-    fn checked_in_api_v31_process_window_closer_example_is_a_valid_manifest() {
-        let directory =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/process-window-closer");
-        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
-        assert_eq!(manifest.api_version, 31);
-        assert_eq!(manifest.id, "process-window-closer");
-        assert_eq!(manifest.commands[0].id, "close-sibling-window");
-        assert_eq!(manifest.permissions, process_window_close_grants());
-        assert_eq!(
-            manifest.event_handler.unwrap().mode,
-            DeclarativeHandlerMode::Persistent
-        );
-        PluginRegistry {
-            schema_version: REGISTRY_SCHEMA_VERSION,
-            plugins: vec![InstalledPlugin {
-                id: "process-window-closer".into(),
-                enabled: true,
-                source,
-                source_fingerprint: "fnv1a64:0123456789abcdef".into(),
-                grants: process_window_close_grants(),
-                default_profile: None,
-                settings: BTreeMap::new(),
-            }],
-        }
-        .validate()
-        .unwrap();
-    }
-
-    #[test]
-    fn checked_in_api_v32_process_window_focuser_example_is_a_valid_manifest() {
-        let directory = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../examples/plugins/process-window-focuser");
-        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
-        assert_eq!(manifest.api_version, 32);
-        assert_eq!(manifest.id, "process-window-focuser");
-        assert_eq!(manifest.commands[0].id, "focus-sibling-window");
-        assert_eq!(manifest.permissions, process_window_focus_grants());
-        assert_eq!(
-            manifest.event_handler.unwrap().mode,
-            DeclarativeHandlerMode::Persistent
-        );
-        PluginRegistry {
-            schema_version: REGISTRY_SCHEMA_VERSION,
-            plugins: vec![InstalledPlugin {
-                id: "process-window-focuser".into(),
-                enabled: true,
-                source,
-                source_fingerprint: "fnv1a64:0123456789abcdef".into(),
-                grants: process_window_focus_grants(),
-                default_profile: None,
-                settings: BTreeMap::new(),
-            }],
-        }
-        .validate()
-        .unwrap();
-    }
-
-    #[test]
-    fn checked_in_api_v15_tab_pruner_example_is_a_valid_manifest() {
-        let directory =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/tab-pruner");
-        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
-        assert_eq!(manifest.api_version, 15);
-        assert_eq!(manifest.id, "tab-pruner");
-        assert_eq!(manifest.commands.len(), 1);
-        assert_eq!(manifest.commands[0].id, "close-background-tab");
-        assert_eq!(manifest.permissions, tab_close_grants());
-        assert_eq!(
-            manifest.event_handler.unwrap().mode,
-            DeclarativeHandlerMode::Persistent
-        );
-        assert_eq!(source, directory.canonicalize().unwrap());
-        let registry = PluginRegistry {
-            schema_version: REGISTRY_SCHEMA_VERSION,
-            plugins: vec![InstalledPlugin {
-                id: "tab-pruner".into(),
-                enabled: true,
-                source,
-                source_fingerprint: "fnv1a64:0123456789abcdef".into(),
-                grants: tab_close_grants(),
-                default_profile: None,
-                settings: BTreeMap::new(),
-            }],
-        };
-        registry.validate().unwrap();
-    }
-
-    #[test]
-    fn checked_in_api_v14_pane_pruner_example_is_a_valid_manifest() {
-        let directory =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/pane-pruner");
-        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
-        assert_eq!(manifest.api_version, 14);
-        assert_eq!(manifest.id, "pane-pruner");
-        assert_eq!(manifest.commands.len(), 1);
-        assert_eq!(manifest.commands[0].id, "close-sibling-pane");
-        assert_eq!(manifest.permissions, pane_close_grants());
-        assert_eq!(
-            manifest.event_handler.unwrap().mode,
-            DeclarativeHandlerMode::Persistent
-        );
-        assert_eq!(source, directory.canonicalize().unwrap());
-        let registry = PluginRegistry {
-            schema_version: REGISTRY_SCHEMA_VERSION,
-            plugins: vec![InstalledPlugin {
-                id: "pane-pruner".into(),
-                enabled: true,
-                source,
-                source_fingerprint: "fnv1a64:0123456789abcdef".into(),
-                grants: pane_close_grants(),
-                default_profile: None,
-                settings: BTreeMap::new(),
-            }],
-        };
-        registry.validate().unwrap();
-    }
-
-    #[test]
-    fn checked_in_api_v13_tab_builder_example_is_a_valid_manifest() {
-        let directory =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/tab-builder");
-        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
-        assert_eq!(manifest.api_version, 13);
-        assert_eq!(manifest.id, "tab-builder");
-        assert_eq!(manifest.commands.len(), 1);
-        assert_eq!(manifest.commands[0].id, "new-task-tab");
-        assert_eq!(manifest.permissions, tab_create_grants());
-        assert_eq!(
-            manifest.event_handler.unwrap().mode,
-            DeclarativeHandlerMode::Persistent
-        );
-        assert_eq!(source, directory.canonicalize().unwrap());
-        let registry = PluginRegistry {
-            schema_version: REGISTRY_SCHEMA_VERSION,
-            plugins: vec![InstalledPlugin {
-                id: "tab-builder".into(),
-                enabled: true,
-                source,
-                source_fingerprint: "fnv1a64:0123456789abcdef".into(),
-                grants: tab_create_grants(),
-                default_profile: None,
-                settings: BTreeMap::new(),
-            }],
-        };
-        registry.validate().unwrap();
-    }
-
-    #[test]
-    fn api_v17_terminal_input_installs_and_updates_only_with_the_retained_grant() {
-        let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("source");
-        let root = temp.path().join("installed");
-        let registry_path = temp.path().join("plugins.toml");
-        fs::create_dir(&source).unwrap();
-        let checked_in = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../examples/plugins/terminal-writer")
-            .join(MANIFEST_NAME);
-        let manifest = fs::read_to_string(checked_in).unwrap();
-        fs::write(source.join(MANIFEST_NAME), &manifest).unwrap();
-
-        let error = execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: event_grants(true),
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap_err();
-        assert!(format!("{error:#}").contains("terminal-input"));
-
-        execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: terminal_input_grants(),
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-        fs::write(
-            source.join(MANIFEST_NAME),
-            manifest.replace("version = \"1.0.0\"", "version = \"1.1.0\""),
-        )
-        .unwrap();
-        execute_admin_at(
-            PluginAdminCommand::Update {
-                id: "terminal-writer".into(),
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-
-        let registry = PluginRegistry::load_from(&registry_path).unwrap();
-        let installed = registry
-            .plugins
-            .iter()
-            .find(|plugin| plugin.id == "terminal-writer")
-            .unwrap();
-        assert!(installed.enabled);
-        assert_eq!(installed.grants, terminal_input_grants());
-        let (installed_manifest, _, _) =
-            PluginManifest::from_directory(&root.join("terminal-writer")).unwrap();
-        assert_eq!(installed_manifest.version, "1.1.0");
-    }
-
-    #[test]
-    fn api_v18_pane_layout_installs_and_updates_only_with_the_retained_grant() {
-        let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("source");
-        let root = temp.path().join("installed");
-        let registry_path = temp.path().join("plugins.toml");
-        fs::create_dir(&source).unwrap();
-        let checked_in = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../examples/plugins/pane-arranger")
-            .join(MANIFEST_NAME);
-        let manifest = fs::read_to_string(checked_in).unwrap();
-        fs::write(source.join(MANIFEST_NAME), &manifest).unwrap();
-
-        let error = execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: event_grants(true),
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap_err();
-        assert!(format!("{error:#}").contains("pane-layout"));
-
-        execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: pane_layout_grants(),
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-        fs::write(
-            source.join(MANIFEST_NAME),
-            manifest.replace("version = \"1.0.0\"", "version = \"1.1.0\""),
-        )
-        .unwrap();
-        execute_admin_at(
-            PluginAdminCommand::Update {
-                id: "pane-arranger".into(),
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-
-        let registry = PluginRegistry::load_from(&registry_path).unwrap();
-        let installed = registry
-            .plugins
-            .iter()
-            .find(|plugin| plugin.id == "pane-arranger")
-            .unwrap();
-        assert!(installed.enabled);
-        assert_eq!(installed.grants, pane_layout_grants());
-        let (installed_manifest, _, _) =
-            PluginManifest::from_directory(&root.join("pane-arranger")).unwrap();
-        assert_eq!(installed_manifest.version, "1.1.0");
-    }
-
-    #[test]
-    fn api_v19_window_close_installs_and_updates_only_with_the_retained_grant() {
-        let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("source");
-        let root = temp.path().join("installed");
-        let registry_path = temp.path().join("plugins.toml");
-        fs::create_dir(&source).unwrap();
-        let checked_in = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../examples/plugins/window-closer")
-            .join(MANIFEST_NAME);
-        let manifest = fs::read_to_string(checked_in).unwrap();
-        fs::write(source.join(MANIFEST_NAME), &manifest).unwrap();
-
-        let mut missing_window_close = window_close_grants();
-        missing_window_close.remove(&PluginPermission::WindowClose);
-        let error = execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: missing_window_close,
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap_err();
-        assert!(format!("{error:#}").contains("window-close"));
-
-        execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: window_close_grants(),
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-        fs::write(
-            source.join(MANIFEST_NAME),
-            manifest.replace("version = \"1.0.0\"", "version = \"1.1.0\""),
-        )
-        .unwrap();
-        execute_admin_at(
-            PluginAdminCommand::Update {
-                id: "window-closer".into(),
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-
-        let registry = PluginRegistry::load_from(&registry_path).unwrap();
-        let installed = registry
-            .plugins
-            .iter()
-            .find(|plugin| plugin.id == "window-closer")
-            .unwrap();
-        assert!(installed.enabled);
-        assert_eq!(installed.grants, window_close_grants());
-        let (installed_manifest, _, _) =
-            PluginManifest::from_directory(&root.join("window-closer")).unwrap();
-        assert_eq!(installed_manifest.version, "1.1.0");
-    }
-
-    #[test]
-    fn api_v20_process_query_installs_and_updates_only_with_the_retained_grant() {
-        let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("source");
-        let root = temp.path().join("installed");
-        let registry_path = temp.path().join("plugins.toml");
-        fs::create_dir(&source).unwrap();
-        let checked_in = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../examples/plugins/process-inspector")
-            .join(MANIFEST_NAME);
-        let manifest = fs::read_to_string(checked_in).unwrap();
-        fs::write(source.join(MANIFEST_NAME), &manifest).unwrap();
-
-        let mut missing_process_query = process_query_grants();
-        missing_process_query.remove(&PluginPermission::ProcessQuery);
-        let error = execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: missing_process_query,
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap_err();
-        assert!(format!("{error:#}").contains("process-query"));
-
-        execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: process_query_grants(),
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-        fs::write(
-            source.join(MANIFEST_NAME),
-            manifest.replace("version = \"1.0.0\"", "version = \"1.1.0\""),
-        )
-        .unwrap();
-        execute_admin_at(
-            PluginAdminCommand::Update {
-                id: "process-inspector".into(),
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-
-        let registry = PluginRegistry::load_from(&registry_path).unwrap();
-        let installed = registry
-            .plugins
-            .iter()
-            .find(|plugin| plugin.id == "process-inspector")
-            .unwrap();
-        assert!(installed.enabled);
-        assert_eq!(installed.grants, process_query_grants());
-        let (installed_manifest, _, _) =
-            PluginManifest::from_directory(&root.join("process-inspector")).unwrap();
-        assert_eq!(installed_manifest.version, "1.1.0");
-    }
-
-    #[test]
-    fn api_v21_process_actions_install_and_update_only_with_the_retained_grant() {
-        let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("source");
-        let root = temp.path().join("installed");
-        let registry_path = temp.path().join("plugins.toml");
-        fs::create_dir(&source).unwrap();
-        let checked_in = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../examples/plugins/process-navigator")
-            .join(MANIFEST_NAME);
-        let manifest = fs::read_to_string(checked_in).unwrap();
-        fs::write(source.join(MANIFEST_NAME), &manifest).unwrap();
-
-        let mut missing_process_actions = process_action_grants();
-        missing_process_actions.remove(&PluginPermission::ProcessActions);
-        let error = execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: missing_process_actions,
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap_err();
-        assert!(format!("{error:#}").contains("process-actions"));
-
-        execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: process_action_grants(),
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-        fs::write(
-            source.join(MANIFEST_NAME),
-            manifest.replace("version = \"1.0.0\"", "version = \"1.1.0\""),
-        )
-        .unwrap();
-        execute_admin_at(
-            PluginAdminCommand::Update {
-                id: "process-navigator".into(),
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-
-        let registry = PluginRegistry::load_from(&registry_path).unwrap();
-        let installed = registry
-            .plugins
-            .iter()
-            .find(|plugin| plugin.id == "process-navigator")
-            .unwrap();
-        assert!(installed.enabled);
-        assert_eq!(installed.grants, process_action_grants());
-        let (installed_manifest, _, _) =
-            PluginManifest::from_directory(&root.join("process-navigator")).unwrap();
-        assert_eq!(installed_manifest.version, "1.1.0");
-    }
-
-    #[test]
-    fn api_v22_process_terminal_text_installs_and_updates_only_with_the_retained_grant() {
-        let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("source");
-        let root = temp.path().join("installed");
-        let registry_path = temp.path().join("plugins.toml");
-        fs::create_dir(&source).unwrap();
-        let checked_in = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../examples/plugins/process-terminal-reader")
-            .join(MANIFEST_NAME);
-        let manifest = fs::read_to_string(checked_in).unwrap();
-        fs::write(source.join(MANIFEST_NAME), &manifest).unwrap();
-
-        let mut missing_terminal_text = process_terminal_text_grants();
-        missing_terminal_text.remove(&PluginPermission::ProcessTerminalText);
-        let error = execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: missing_terminal_text,
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap_err();
-        assert!(format!("{error:#}").contains("process-terminal-text"));
-
-        execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: process_terminal_text_grants(),
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-        fs::write(
-            source.join(MANIFEST_NAME),
-            manifest.replace("version = \"1.0.0\"", "version = \"1.1.0\""),
-        )
-        .unwrap();
-        execute_admin_at(
-            PluginAdminCommand::Update {
-                id: "process-terminal-reader".into(),
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-
-        let registry = PluginRegistry::load_from(&registry_path).unwrap();
-        let installed = registry
-            .plugins
-            .iter()
-            .find(|plugin| plugin.id == "process-terminal-reader")
-            .unwrap();
-        assert!(installed.enabled);
-        assert_eq!(installed.grants, process_terminal_text_grants());
-        let (installed_manifest, _, _) =
-            PluginManifest::from_directory(&root.join("process-terminal-reader")).unwrap();
-        assert_eq!(installed_manifest.version, "1.1.0");
-    }
-
-    #[test]
-    fn api_v23_process_terminal_input_installs_and_updates_only_with_the_retained_grant() {
-        let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("source");
-        let root = temp.path().join("installed");
-        let registry_path = temp.path().join("plugins.toml");
-        fs::create_dir(&source).unwrap();
-        let checked_in = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../examples/plugins/process-terminal-writer")
-            .join(MANIFEST_NAME);
-        let manifest = fs::read_to_string(checked_in).unwrap();
-        fs::write(source.join(MANIFEST_NAME), &manifest).unwrap();
-
-        let mut missing_terminal_input = process_terminal_input_grants();
-        missing_terminal_input.remove(&PluginPermission::ProcessTerminalInput);
-        let error = execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: missing_terminal_input,
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap_err();
-        assert!(format!("{error:#}").contains("process-terminal-input"));
-
-        execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: process_terminal_input_grants(),
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-        fs::write(
-            source.join(MANIFEST_NAME),
-            manifest.replace("version = \"1.0.0\"", "version = \"1.1.0\""),
-        )
-        .unwrap();
-        execute_admin_at(
-            PluginAdminCommand::Update {
-                id: "process-terminal-writer".into(),
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-
-        let registry = PluginRegistry::load_from(&registry_path).unwrap();
-        let installed = registry
-            .plugins
-            .iter()
-            .find(|plugin| plugin.id == "process-terminal-writer")
-            .unwrap();
-        assert!(installed.enabled);
-        assert_eq!(installed.grants, process_terminal_input_grants());
-        let (installed_manifest, _, _) =
-            PluginManifest::from_directory(&root.join("process-terminal-writer")).unwrap();
-        assert_eq!(installed_manifest.version, "1.1.0");
-    }
-
-    #[test]
-    fn api_v24_process_tab_create_installs_and_updates_only_with_the_retained_grant() {
-        let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("source");
-        let root = temp.path().join("installed");
-        let registry_path = temp.path().join("plugins.toml");
-        fs::create_dir(&source).unwrap();
-        let checked_in = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../examples/plugins/process-tab-builder")
-            .join(MANIFEST_NAME);
-        let manifest = fs::read_to_string(checked_in).unwrap();
-        fs::write(source.join(MANIFEST_NAME), &manifest).unwrap();
-
-        let mut missing_tab_create = process_tab_create_grants();
-        missing_tab_create.remove(&PluginPermission::ProcessTabCreate);
-        let error = execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: missing_tab_create,
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap_err();
-        assert!(format!("{error:#}").contains("process-tab-create"));
-
-        execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: process_tab_create_grants(),
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-        fs::write(
-            source.join(MANIFEST_NAME),
-            manifest.replace("version = \"1.0.0\"", "version = \"1.1.0\""),
-        )
-        .unwrap();
-        execute_admin_at(
-            PluginAdminCommand::Update {
-                id: "process-tab-builder".into(),
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-
-        let registry = PluginRegistry::load_from(&registry_path).unwrap();
-        let installed = registry
-            .plugins
-            .iter()
-            .find(|plugin| plugin.id == "process-tab-builder")
-            .unwrap();
-        assert!(installed.enabled);
-        assert_eq!(installed.grants, process_tab_create_grants());
-        let (installed_manifest, _, _) =
-            PluginManifest::from_directory(&root.join("process-tab-builder")).unwrap();
-        assert_eq!(installed_manifest.version, "1.1.0");
-    }
-
-    #[test]
-    fn api_v25_process_pane_create_installs_and_updates_only_with_the_retained_grant() {
-        let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("source");
-        let root = temp.path().join("installed");
-        let registry_path = temp.path().join("plugins.toml");
-        fs::create_dir(&source).unwrap();
-        let checked_in = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../examples/plugins/process-pane-builder")
-            .join(MANIFEST_NAME);
-        let manifest = fs::read_to_string(checked_in).unwrap();
-        fs::write(source.join(MANIFEST_NAME), &manifest).unwrap();
-
-        let mut missing_pane_create = process_pane_create_grants();
-        missing_pane_create.remove(&PluginPermission::ProcessPaneCreate);
-        let error = execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: missing_pane_create,
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap_err();
-        assert!(format!("{error:#}").contains("process-pane-create"));
-
-        execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: process_pane_create_grants(),
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-        fs::write(
-            source.join(MANIFEST_NAME),
-            manifest.replace("version = \"1.0.0\"", "version = \"1.1.0\""),
-        )
-        .unwrap();
-        execute_admin_at(
-            PluginAdminCommand::Update {
-                id: "process-pane-builder".into(),
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-
-        let registry = PluginRegistry::load_from(&registry_path).unwrap();
-        let installed = registry
-            .plugins
-            .iter()
-            .find(|plugin| plugin.id == "process-pane-builder")
-            .unwrap();
-        assert!(installed.enabled);
-        assert_eq!(installed.grants, process_pane_create_grants());
-        let (installed_manifest, _, _) =
-            PluginManifest::from_directory(&root.join("process-pane-builder")).unwrap();
-        assert_eq!(installed_manifest.version, "1.1.0");
-    }
-
-    #[test]
-    fn api_v26_process_pane_move_installs_and_updates_only_with_the_retained_grant() {
-        let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("source");
-        let root = temp.path().join("installed");
-        let registry_path = temp.path().join("plugins.toml");
-        fs::create_dir(&source).unwrap();
-        let checked_in = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../examples/plugins/process-pane-mover")
-            .join(MANIFEST_NAME);
-        let manifest = fs::read_to_string(checked_in).unwrap();
-        fs::write(source.join(MANIFEST_NAME), &manifest).unwrap();
-
-        let mut missing_pane_move = process_pane_move_grants();
-        missing_pane_move.remove(&PluginPermission::ProcessPaneMove);
-        let error = execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: missing_pane_move,
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap_err();
-        assert!(format!("{error:#}").contains("process-pane-move"));
-
-        execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: process_pane_move_grants(),
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-        fs::write(
-            source.join(MANIFEST_NAME),
-            manifest.replace("version = \"1.0.0\"", "version = \"1.1.0\""),
-        )
-        .unwrap();
-        execute_admin_at(
-            PluginAdminCommand::Update {
-                id: "process-pane-mover".into(),
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-
-        let registry = PluginRegistry::load_from(&registry_path).unwrap();
-        let installed = registry
-            .plugins
-            .iter()
-            .find(|plugin| plugin.id == "process-pane-mover")
-            .unwrap();
-        assert!(installed.enabled);
-        assert_eq!(installed.grants, process_pane_move_grants());
-        let (installed_manifest, _, _) =
-            PluginManifest::from_directory(&root.join("process-pane-mover")).unwrap();
-        assert_eq!(installed_manifest.version, "1.1.0");
-    }
-
-    #[test]
-    fn api_v27_process_tab_move_installs_and_updates_only_with_the_retained_grant() {
-        let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("source");
-        let root = temp.path().join("installed");
-        let registry_path = temp.path().join("plugins.toml");
-        fs::create_dir(&source).unwrap();
-        let checked_in = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../examples/plugins/process-tab-mover")
-            .join(MANIFEST_NAME);
-        let manifest = fs::read_to_string(checked_in).unwrap();
-        fs::write(source.join(MANIFEST_NAME), &manifest).unwrap();
-
-        let mut missing = process_tab_move_grants();
-        missing.remove(&PluginPermission::ProcessTabMove);
-        let error = execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: missing,
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap_err();
-        assert!(format!("{error:#}").contains("process-tab-move"));
-
-        execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: process_tab_move_grants(),
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-        fs::write(
-            source.join(MANIFEST_NAME),
-            manifest.replace("version = \"1.0.0\"", "version = \"1.1.0\""),
-        )
-        .unwrap();
-        execute_admin_at(
-            PluginAdminCommand::Update {
-                id: "process-tab-mover".into(),
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-        let registry = PluginRegistry::load_from(&registry_path).unwrap();
-        let installed = registry
-            .plugins
-            .iter()
-            .find(|plugin| plugin.id == "process-tab-mover")
-            .unwrap();
-        assert_eq!(installed.grants, process_tab_move_grants());
-        let (installed_manifest, _, _) =
-            PluginManifest::from_directory(&root.join("process-tab-mover")).unwrap();
-        assert_eq!(installed_manifest.version, "1.1.0");
-    }
-
-    #[test]
-    fn api_v28_process_pane_close_installs_and_updates_only_with_the_retained_grant() {
-        let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("source");
-        let root = temp.path().join("installed");
-        let registry_path = temp.path().join("plugins.toml");
-        fs::create_dir(&source).unwrap();
-        let checked_in = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../examples/plugins/process-pane-pruner")
-            .join(MANIFEST_NAME);
-        let manifest = fs::read_to_string(checked_in).unwrap();
-        fs::write(source.join(MANIFEST_NAME), &manifest).unwrap();
-
-        let mut missing = process_pane_close_grants();
-        missing.remove(&PluginPermission::ProcessPaneClose);
-        let error = execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: missing,
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap_err();
-        assert!(format!("{error:#}").contains("process-pane-close"));
-
-        execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: process_pane_close_grants(),
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-        fs::write(
-            source.join(MANIFEST_NAME),
-            manifest.replace("version = \"1.0.0\"", "version = \"1.1.0\""),
-        )
-        .unwrap();
-        execute_admin_at(
-            PluginAdminCommand::Update {
-                id: "process-pane-pruner".into(),
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-        let registry = PluginRegistry::load_from(&registry_path).unwrap();
-        let installed = registry
-            .plugins
-            .iter()
-            .find(|plugin| plugin.id == "process-pane-pruner")
-            .unwrap();
-        assert_eq!(installed.grants, process_pane_close_grants());
-        let (installed_manifest, _, _) =
-            PluginManifest::from_directory(&root.join("process-pane-pruner")).unwrap();
-        assert_eq!(installed_manifest.version, "1.1.0");
-    }
-
-    #[test]
-    fn api_v29_process_tab_close_installs_and_updates_only_with_the_retained_grant() {
-        let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("source");
-        let root = temp.path().join("installed");
-        let registry_path = temp.path().join("plugins.toml");
-        fs::create_dir(&source).unwrap();
-        let checked_in = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../examples/plugins/process-tab-pruner")
-            .join(MANIFEST_NAME);
-        let manifest = fs::read_to_string(checked_in).unwrap();
-        fs::write(source.join(MANIFEST_NAME), &manifest).unwrap();
-        let mut missing = process_tab_close_grants();
-        missing.remove(&PluginPermission::ProcessTabClose);
-        let error = execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: missing,
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap_err();
-        assert!(format!("{error:#}").contains("process-tab-close"));
-        execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: process_tab_close_grants(),
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-        fs::write(
-            source.join(MANIFEST_NAME),
-            manifest.replace("version = \"1.0.0\"", "version = \"1.1.0\""),
-        )
-        .unwrap();
-        execute_admin_at(
-            PluginAdminCommand::Update {
-                id: "process-tab-pruner".into(),
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-        let registry = PluginRegistry::load_from(&registry_path).unwrap();
-        let installed = registry
-            .plugins
-            .iter()
-            .find(|plugin| plugin.id == "process-tab-pruner")
-            .unwrap();
-        assert_eq!(installed.grants, process_tab_close_grants());
-        let (installed_manifest, _, _) =
-            PluginManifest::from_directory(&root.join("process-tab-pruner")).unwrap();
-        assert_eq!(installed_manifest.version, "1.1.0");
-    }
-
-    #[test]
-    fn api_v30_process_pane_layout_installs_and_updates_only_with_the_retained_grant() {
-        let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("source");
-        let root = temp.path().join("installed");
-        let registry_path = temp.path().join("plugins.toml");
-        fs::create_dir(&source).unwrap();
-        let checked_in = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../examples/plugins/process-pane-arranger")
-            .join(MANIFEST_NAME);
-        let manifest = fs::read_to_string(checked_in).unwrap();
-        fs::write(source.join(MANIFEST_NAME), &manifest).unwrap();
-        let mut missing = process_pane_layout_grants();
-        missing.remove(&PluginPermission::ProcessPaneLayout);
-        let error = execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: missing,
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap_err();
-        assert!(format!("{error:#}").contains("process-pane-layout"));
-        execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: process_pane_layout_grants(),
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-        fs::write(
-            source.join(MANIFEST_NAME),
-            manifest.replace("version = \"1.0.0\"", "version = \"1.1.0\""),
-        )
-        .unwrap();
-        execute_admin_at(
-            PluginAdminCommand::Update {
-                id: "process-pane-arranger".into(),
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-        let registry = PluginRegistry::load_from(&registry_path).unwrap();
-        let installed = registry
-            .plugins
-            .iter()
-            .find(|plugin| plugin.id == "process-pane-arranger")
-            .unwrap();
-        assert_eq!(installed.grants, process_pane_layout_grants());
-        let (installed_manifest, _, _) =
-            PluginManifest::from_directory(&root.join("process-pane-arranger")).unwrap();
-        assert_eq!(installed_manifest.version, "1.1.0");
-    }
-
-    #[test]
-    fn api_v31_process_window_close_installs_and_updates_only_with_the_retained_grant() {
-        let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("source");
-        let root = temp.path().join("installed");
-        let registry_path = temp.path().join("plugins.toml");
-        fs::create_dir(&source).unwrap();
-        let checked_in = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../examples/plugins/process-window-closer")
-            .join(MANIFEST_NAME);
-        let manifest = fs::read_to_string(checked_in).unwrap();
-        fs::write(source.join(MANIFEST_NAME), &manifest).unwrap();
-        let mut missing = process_window_close_grants();
-        missing.remove(&PluginPermission::ProcessWindowClose);
-        let error = execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: missing,
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap_err();
-        assert!(format!("{error:#}").contains("process-window-close"));
-        execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: process_window_close_grants(),
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-        fs::write(
-            source.join(MANIFEST_NAME),
-            manifest.replace("version = \"1.0.0\"", "version = \"1.1.0\""),
-        )
-        .unwrap();
-        execute_admin_at(
-            PluginAdminCommand::Update {
-                id: "process-window-closer".into(),
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-        let registry = PluginRegistry::load_from(&registry_path).unwrap();
-        let installed = registry
-            .plugins
-            .iter()
-            .find(|plugin| plugin.id == "process-window-closer")
-            .unwrap();
-        assert_eq!(installed.grants, process_window_close_grants());
-        let (installed_manifest, _, _) =
-            PluginManifest::from_directory(&root.join("process-window-closer")).unwrap();
-        assert_eq!(installed_manifest.version, "1.1.0");
-    }
-
-    #[test]
-    fn api_v32_process_window_focus_installs_and_updates_only_with_the_retained_grant() {
-        let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("source");
-        let root = temp.path().join("installed");
-        let registry_path = temp.path().join("plugins.toml");
-        fs::create_dir(&source).unwrap();
-        let checked_in = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../examples/plugins/process-window-focuser")
-            .join(MANIFEST_NAME);
-        let manifest = fs::read_to_string(checked_in).unwrap();
-        fs::write(source.join(MANIFEST_NAME), &manifest).unwrap();
-        let mut missing = process_window_focus_grants();
-        missing.remove(&PluginPermission::ProcessWindowFocus);
-        let error = execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: missing,
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap_err();
-        assert!(format!("{error:#}").contains("process-window-focus"));
-        execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: process_window_focus_grants(),
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-        fs::write(
-            source.join(MANIFEST_NAME),
-            manifest.replace("version = \"1.0.0\"", "version = \"1.1.0\""),
-        )
-        .unwrap();
-        execute_admin_at(
-            PluginAdminCommand::Update {
-                id: "process-window-focuser".into(),
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-        let registry = PluginRegistry::load_from(&registry_path).unwrap();
-        let installed = registry
-            .plugins
-            .iter()
-            .find(|plugin| plugin.id == "process-window-focuser")
-            .unwrap();
-        assert_eq!(installed.grants, process_window_focus_grants());
-        let (installed_manifest, _, _) =
-            PluginManifest::from_directory(&root.join("process-window-focuser")).unwrap();
-        assert_eq!(installed_manifest.version, "1.1.0");
-    }
-
-    #[test]
-    fn api_v16_pane_move_installs_and_updates_only_with_the_retained_grant() {
-        let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("source");
-        let root = temp.path().join("installed");
-        let registry_path = temp.path().join("plugins.toml");
-        fs::create_dir(&source).unwrap();
-        let checked_in = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../examples/plugins/pane-mover")
-            .join(MANIFEST_NAME);
-        let manifest = fs::read_to_string(checked_in).unwrap();
-        fs::write(source.join(MANIFEST_NAME), &manifest).unwrap();
-
-        let error = execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: event_grants(true),
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap_err();
-        assert!(format!("{error:#}").contains("pane-move"));
-
-        execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: pane_move_grants(),
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-        fs::write(
-            source.join(MANIFEST_NAME),
-            manifest.replace("version = \"1.0.0\"", "version = \"1.1.0\""),
-        )
-        .unwrap();
-        execute_admin_at(
-            PluginAdminCommand::Update {
-                id: "pane-mover".into(),
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-
-        let registry = PluginRegistry::load_from(&registry_path).unwrap();
-        let installed = registry
-            .plugins
-            .iter()
-            .find(|plugin| plugin.id == "pane-mover")
-            .unwrap();
-        assert!(installed.enabled);
-        assert_eq!(installed.grants, pane_move_grants());
-        let (installed_manifest, _, _) =
-            PluginManifest::from_directory(&root.join("pane-mover")).unwrap();
-        assert_eq!(installed_manifest.version, "1.1.0");
-    }
-
-    #[test]
-    fn api_v15_tab_close_installs_and_updates_only_with_the_retained_grant() {
-        let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("source");
-        let root = temp.path().join("installed");
-        let registry_path = temp.path().join("plugins.toml");
-        fs::create_dir(&source).unwrap();
-        let checked_in = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../examples/plugins/tab-pruner")
-            .join(MANIFEST_NAME);
-        let manifest = fs::read_to_string(checked_in).unwrap();
-        fs::write(source.join(MANIFEST_NAME), &manifest).unwrap();
-
-        let error = execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: event_grants(true),
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap_err();
-        assert!(format!("{error:#}").contains("tab-close"));
-
-        execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: tab_close_grants(),
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-        fs::write(
-            source.join(MANIFEST_NAME),
-            manifest.replace("version = \"1.0.0\"", "version = \"1.1.0\""),
-        )
-        .unwrap();
-        execute_admin_at(
-            PluginAdminCommand::Update {
-                id: "tab-pruner".into(),
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-
-        let registry = PluginRegistry::load_from(&registry_path).unwrap();
-        let installed = registry
-            .plugins
-            .iter()
-            .find(|plugin| plugin.id == "tab-pruner")
-            .unwrap();
-        assert!(installed.enabled);
-        assert_eq!(installed.grants, tab_close_grants());
-        let (installed_manifest, _, _) =
-            PluginManifest::from_directory(&root.join("tab-pruner")).unwrap();
-        assert_eq!(installed_manifest.version, "1.1.0");
-    }
-
-    #[test]
-    fn api_v14_pane_close_installs_and_updates_only_with_the_retained_grant() {
-        let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("source");
-        let root = temp.path().join("installed");
-        let registry_path = temp.path().join("plugins.toml");
-        fs::create_dir(&source).unwrap();
-        let checked_in = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../examples/plugins/pane-pruner")
-            .join(MANIFEST_NAME);
-        let manifest = fs::read_to_string(checked_in).unwrap();
-        fs::write(source.join(MANIFEST_NAME), &manifest).unwrap();
-
-        let error = execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: event_grants(true),
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap_err();
-        assert!(format!("{error:#}").contains("pane-close"));
-
-        execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: pane_close_grants(),
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-        fs::write(
-            source.join(MANIFEST_NAME),
-            manifest.replace("version = \"1.0.0\"", "version = \"1.1.0\""),
-        )
-        .unwrap();
-        execute_admin_at(
-            PluginAdminCommand::Update {
-                id: "pane-pruner".into(),
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-
-        let registry = PluginRegistry::load_from(&registry_path).unwrap();
-        let installed = registry
-            .plugins
-            .iter()
-            .find(|plugin| plugin.id == "pane-pruner")
-            .unwrap();
-        assert!(installed.enabled);
-        assert_eq!(installed.grants, pane_close_grants());
-        let (installed_manifest, _, _) =
-            PluginManifest::from_directory(&root.join("pane-pruner")).unwrap();
-        assert_eq!(installed_manifest.version, "1.1.0");
-    }
-
-    #[test]
-    fn api_v13_tab_create_installs_and_updates_only_with_the_retained_grant() {
-        let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("source");
-        let root = temp.path().join("installed");
-        let registry_path = temp.path().join("plugins.toml");
-        fs::create_dir(&source).unwrap();
-        let checked_in = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../examples/plugins/tab-builder")
-            .join(MANIFEST_NAME);
-        let manifest = fs::read_to_string(checked_in).unwrap();
-        fs::write(source.join(MANIFEST_NAME), &manifest).unwrap();
-
-        let error = execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: event_grants(false),
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap_err();
-        assert!(format!("{error:#}").contains("tab-create"));
-
-        execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: tab_create_grants(),
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-        fs::write(
-            source.join(MANIFEST_NAME),
-            manifest.replace("version = \"1.0.0\"", "version = \"1.1.0\""),
-        )
-        .unwrap();
-        execute_admin_at(
-            PluginAdminCommand::Update {
-                id: "tab-builder".into(),
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-
-        let registry = PluginRegistry::load_from(&registry_path).unwrap();
-        let installed = registry
-            .plugins
-            .iter()
-            .find(|plugin| plugin.id == "tab-builder")
-            .unwrap();
-        assert!(installed.enabled);
-        assert_eq!(installed.grants, tab_create_grants());
-        let (installed_manifest, _, _) =
-            PluginManifest::from_directory(&root.join("tab-builder")).unwrap();
-        assert_eq!(installed_manifest.version, "1.1.0");
-    }
-
-    #[test]
-    fn api_v12_pane_create_installs_and_updates_only_with_the_retained_grant() {
-        let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("source");
-        let root = temp.path().join("installed");
-        let registry_path = temp.path().join("plugins.toml");
-        fs::create_dir(&source).unwrap();
-        let checked_in = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../examples/plugins/pane-builder")
-            .join(MANIFEST_NAME);
-        let manifest = fs::read_to_string(checked_in).unwrap();
-        fs::write(source.join(MANIFEST_NAME), &manifest).unwrap();
-
-        let error = execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: event_grants(true),
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap_err();
-        assert!(format!("{error:#}").contains("pane-create"));
-
-        execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: pane_create_grants(),
-                enable: true,
-                replace: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-        fs::write(
-            source.join(MANIFEST_NAME),
-            manifest.replace("version = \"1.0.0\"", "version = \"1.1.0\""),
-        )
-        .unwrap();
-        execute_admin_at(
-            PluginAdminCommand::Update {
-                id: "pane-builder".into(),
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-
-        let registry = PluginRegistry::load_from(&registry_path).unwrap();
-        let installed = registry
-            .plugins
-            .iter()
-            .find(|plugin| plugin.id == "pane-builder")
-            .unwrap();
-        assert!(installed.enabled);
-        assert_eq!(installed.grants, pane_create_grants());
-        let (installed_manifest, _, _) =
-            PluginManifest::from_directory(&root.join("pane-builder")).unwrap();
-        assert_eq!(installed_manifest.version, "1.1.0");
-    }
-
-    #[test]
-    fn api_v1_cannot_gain_workspace_query_and_oversized_context_fails_visible() {
-        let v1: PluginManifest = toml::from_str(&manifest(
-            "1.0.0",
-            ", \"workspace-query\"",
-            "context-fixture",
-        ))
-        .unwrap();
-        v1.validate().unwrap();
-        let error = validate_grants(&v1, &structured_grants()).unwrap_err();
-        assert!(format!("{error:#}").contains("API v1 cannot grant: workspace-query"));
-
-        let v2: PluginManifest = toml::from_str(
-            &manifest("2.0.0", ", \"workspace-query\"", "context-fixture")
-                .replace("api_version = 1", "api_version = 2"),
-        )
-        .unwrap();
-        let mut plugin = DeclarativePlugin::new(v2, None, structured_grants());
+        // Oversized context fails visibly instead of truncating silently.
         let response = plugin.on_hook(
             &Hook::CommandInvoked {
                 command_id: "sample-tools.open-default".into(),
             },
             &PluginContext {
                 cwd: Some("x".repeat(MAX_STRUCTURED_CONTEXT_BYTES + 1)),
-                tab_count: 1,
-                active_tab: 0,
-                terminal_size: (80, 24),
+                ..context
             },
         );
         assert!(matches!(
@@ -6556,29 +2848,75 @@ events = ["command-invoked"]
     }
 
     #[test]
-    fn api_v3_lifecycle_events_are_versioned_coarse_and_permission_scoped() {
-        let manifest = event_manifest(true);
+    fn scoped_grants_round_trip_install_and_discovery() {
+        let (_temp, source, root, registry_path) = fixture();
+        let scoped = handler_manifest(
+            &[
+                "workspace-query:all-windows",
+                "navigate:all-windows",
+                "pane-create",
+            ],
+            true,
+            &["app-ready"],
+        );
+        fs::write(
+            source.join(MANIFEST_NAME),
+            toml::to_string(&scoped).unwrap(),
+        )
+        .unwrap();
+        install(
+            &source,
+            scoped.permissions.clone(),
+            true,
+            &registry_path,
+            &root,
+        )
+        .unwrap();
+        let stored = fs::read_to_string(&registry_path).unwrap();
+        assert!(
+            stored.contains("\"workspace-query:all-windows\""),
+            "{stored}"
+        );
+        assert!(stored.contains("\"pane-create\""), "{stored}");
+        let registry = PluginRegistry::load_from(&registry_path).unwrap();
+        assert_eq!(registry.plugins[0].grants, scoped.permissions);
+        let (loaded, statuses) = discover_from_registry(&registry, &root);
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(statuses[0].granted, scoped.permissions);
+        assert_eq!(
+            statuses[0].granted.scope(Capability::Navigate),
+            Some(PermissionScope::AllWindows)
+        );
+        assert_eq!(
+            statuses[0].granted.scope(Capability::PaneCreate),
+            Some(PermissionScope::Window)
+        );
+    }
+
+    #[test]
+    fn lifecycle_events_carry_the_origin_window_and_grant_scoped_context() {
+        let events = ["app-ready", "tab-created", "tab-closed", "tab-switched"];
+        let manifest = handler_manifest(&["ui-actions", "workspace-query"], false, &events);
         manifest.validate().unwrap();
-        validate_grants(&manifest, &event_grants(true)).unwrap();
-        let mut plugin = DeclarativePlugin::new(manifest, None, event_grants(true));
-        let response = plugin.on_hook(
+        let grants = manifest.permissions.clone();
+        let invocation = invocation_for(
+            manifest,
+            grants.clone(),
             &Hook::TabSwitched { from: 2, to: 4 },
             &PluginContext {
+                window_id: 7,
                 cwd: Some("/workspace/project".into()),
                 tab_count: 5,
                 active_tab: 4,
                 terminal_size: (120, 36),
             },
         );
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = response
-        else {
-            panic!("subscribed lifecycle event did not create a handler invocation")
-        };
-        assert_eq!(invocation.plugin_id, "lifecycle-fixture");
-        assert!(invocation.allow_ui_actions);
+        assert_eq!(invocation.plugin_id, "handler-fixture");
         assert_eq!(invocation.mode, StructuredHandlerMode::ProcessPerEvent);
+        assert_eq!(invocation.authority.grants(), &grants);
         let value: serde_json::Value = serde_json::from_str(&invocation.event_json).unwrap();
         assert_eq!(value["schema_version"], 1);
+        assert_eq!(value["origin_window_id"], 7);
         assert_eq!(value["event"]["type"], "tab-switched");
         assert_eq!(value["event"]["from"], 2);
         assert_eq!(value["event"]["to"], 4);
@@ -6588,1974 +2926,280 @@ events = ["command-invoked"]
         );
         assert_eq!(value["context"]["terminal"]["columns"], 120);
         assert!(invocation.event_json.len() <= MAX_STRUCTURED_CONTEXT_BYTES);
-        assert!(!invocation.event_json.contains("terminal_text"));
         assert!(!invocation.event_json.contains("command"));
 
-        let manifest = event_manifest(false);
-        let mut plugin = DeclarativePlugin::new(manifest, None, event_grants(false));
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::AppReady,
-                &PluginContext {
-                    cwd: Some("/must-not-leak".into()),
-                    tab_count: 1,
-                    active_tab: 0,
-                    terminal_size: (80, 24),
-                },
-            )
-        else {
-            panic!("app-ready subscription did not create an invocation")
-        };
+        let manifest = handler_manifest(&["ui-actions"], false, &events);
+        let grants = manifest.permissions.clone();
+        let invocation = invocation_for(
+            manifest,
+            grants,
+            &Hook::AppReady,
+            &PluginContext {
+                cwd: Some("/must-not-leak".into()),
+                ..context()
+            },
+        );
         let value: serde_json::Value = serde_json::from_str(&invocation.event_json).unwrap();
         assert!(value.get("context").is_none());
+        assert_eq!(value["origin_window_id"], 3);
         assert!(!invocation.event_json.contains("must-not-leak"));
+
+        let unsubscribed = handler_manifest(&["ui-actions"], false, &["app-ready"]);
+        let grants = unsubscribed.permissions.clone();
+        let mut plugin = DeclarativePlugin::new(unsubscribed, None, grants);
+        assert!(matches!(
+            plugin.on_hook(&Hook::TabCreated { tab_id: 1 }, &context()),
+            HookResponse::Ignored
+        ));
     }
 
     #[test]
-    fn api_v3_event_manifest_rules_fail_closed() {
-        let mut manifest = event_manifest(false);
-        manifest.api_version = 2;
-        assert!(
-            manifest
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("API v3")
-        );
-
-        let mut manifest = event_manifest(false);
-        manifest
-            .permissions
-            .remove(&PluginPermission::EventSubscribe);
-        assert!(
-            manifest
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("event-subscribe")
-        );
-
-        let mut manifest = event_manifest(false);
-        manifest.event_handler.as_mut().unwrap().events.clear();
-        assert!(
-            manifest
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("at least one event")
-        );
-
-        let mut manifest: PluginManifest =
-            toml::from_str(&self::manifest("1.0.0", "", "profile-handler")).unwrap();
-        manifest.api_version = 3;
-        manifest
-            .permissions
-            .insert(PluginPermission::EventSubscribe);
-        assert!(
-            manifest
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("event-subscribe requires")
-        );
-
-        let manifest = event_manifest(false);
-        let denied = BTreeSet::from([PluginPermission::ProcessSpawn]);
-        assert!(
-            validate_grants(&manifest, &denied)
-                .unwrap_err()
-                .to_string()
-                .contains("permissions denied")
-        );
-    }
-
-    #[test]
-    fn api_v5_persistent_mode_is_explicit_and_reserves_protocol_space() {
-        let manifest = persistent_event_manifest();
-        manifest.validate().unwrap();
-        validate_grants(&manifest, &event_grants(false)).unwrap();
-        let mut plugin = DeclarativePlugin::new(manifest, None, event_grants(false));
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::TabCreated { tab_id: usize::MAX },
-                &PluginContext {
-                    cwd: None,
-                    tab_count: usize::MAX,
-                    active_tab: usize::MAX,
-                    terminal_size: (usize::MAX, usize::MAX),
-                },
-            )
-        else {
-            panic!("persistent subscription did not create an invocation")
+    fn event_handler_manifest_rules_fail_closed() {
+        let expect_error = |manifest: PluginManifest, expected: &str| {
+            let error = manifest.validate().unwrap_err().to_string();
+            assert!(error.contains(expected), "{expected}: {error}");
         };
+        let base = handler_manifest(&["ui-actions"], false, &["app-ready"]);
+        base.validate().unwrap();
+
+        let mut missing_subscribe = base.clone();
+        missing_subscribe
+            .permissions
+            .remove(Capability::EventSubscribe);
+        expect_error(missing_subscribe, "event-subscribe");
+
+        let mut no_events = base.clone();
+        no_events.event_handler.as_mut().unwrap().events.clear();
+        expect_error(no_events, "at least one event");
+
+        let mut profile_only: PluginManifest =
+            toml::from_str(&manifest("1.0.0", ", \"event-subscribe\"", "profile")).unwrap();
+        expect_error(
+            profile_only.clone(),
+            "event-subscribe permission require each other",
+        );
+        profile_only.permissions = permissions(&["process-spawn", "ui-actions"]);
+        expect_error(profile_only, "ui-actions requires an event handler");
+
+        let mut no_spawn = base.clone();
+        no_spawn.permissions.remove(Capability::ProcessSpawn);
+        expect_error(no_spawn, "must request process-spawn");
+
+        let base_grants = permissions(&["process-spawn", "event-subscribe"]);
+        assert!(
+            validate_grants(&base, &base_grants)
+                .unwrap_err()
+                .to_string()
+                .contains("permissions denied: ui-actions")
+        );
+    }
+
+    #[test]
+    fn persistent_mode_is_explicit_and_reserves_protocol_space() {
+        let manifest = handler_manifest(&["ui-actions"], true, &["tab-created"]);
+        manifest.validate().unwrap();
+        let grants = manifest.permissions.clone();
+        let invocation = invocation_for(
+            manifest,
+            grants,
+            &Hook::TabCreated { tab_id: usize::MAX },
+            &PluginContext {
+                window_id: u64::MAX,
+                cwd: None,
+                tab_count: usize::MAX,
+                active_tab: usize::MAX,
+                terminal_size: (usize::MAX, usize::MAX),
+            },
+        );
         assert_eq!(invocation.mode, StructuredHandlerMode::Persistent);
-        assert!(!invocation.allow_workspace_query);
         assert!(invocation.event_json.len() <= MAX_PERSISTENT_SOURCE_EVENT_BYTES);
-
-        let mut v4 = persistent_event_manifest();
-        v4.api_version = 4;
-        assert!(v4.validate().unwrap_err().to_string().contains("API v5"));
     }
 
     #[test]
-    fn api_v6_workspace_queries_require_persistent_mode_and_exact_grant() {
-        let manifest = workspace_query_manifest();
-        manifest.validate().unwrap();
-        validate_grants(&manifest, &event_grants(true)).unwrap();
-        let context = PluginContext {
-            cwd: Some("/workspace".into()),
-            tab_count: 2,
-            active_tab: 1,
-            terminal_size: (100, 30),
-        };
-        let mut plugin = DeclarativePlugin::new(manifest.clone(), None, event_grants(true));
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) =
-            plugin.on_hook(&Hook::AppReady, &context)
-        else {
-            panic!("API v6 query handler did not create an invocation")
-        };
-        assert!(invocation.allow_workspace_query);
-        assert_eq!(invocation.mode, StructuredHandlerMode::Persistent);
-
-        let mut v5 = manifest.clone();
-        v5.api_version = 5;
-        let mut plugin = DeclarativePlugin::new(v5, None, event_grants(true));
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) =
-            plugin.on_hook(&Hook::AppReady, &context)
-        else {
-            panic!("API v5 persistent handler did not create an invocation")
-        };
-        assert!(!invocation.allow_workspace_query);
-
-        let mut process_per_event = manifest.clone();
-        process_per_event.event_handler.as_mut().unwrap().mode =
-            DeclarativeHandlerMode::ProcessPerEvent;
-        let mut plugin = DeclarativePlugin::new(process_per_event, None, event_grants(true));
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) =
-            plugin.on_hook(&Hook::AppReady, &context)
-        else {
-            panic!("API v6 process-per-event handler did not create an invocation")
-        };
-        assert!(!invocation.allow_workspace_query);
-
-        let mut unrequested = manifest;
-        unrequested
-            .permissions
-            .remove(&PluginPermission::WorkspaceQuery);
-        let grants = BTreeSet::from([
-            PluginPermission::ProcessSpawn,
-            PluginPermission::EventSubscribe,
-            PluginPermission::UiActions,
-        ]);
-        let mut plugin = DeclarativePlugin::new(unrequested, None, grants);
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) =
-            plugin.on_hook(&Hook::AppReady, &context)
-        else {
-            panic!("unrequested query fixture did not create an invocation")
-        };
-        assert!(!invocation.allow_workspace_query);
+    fn host_operation_capabilities_require_a_persistent_handler() {
+        for capability in Capability::ALL {
+            let name = capability.name();
+            if matches!(
+                capability,
+                Capability::ProcessSpawn | Capability::EventSubscribe | Capability::CommandOutput
+            ) {
+                continue;
+            }
+            let (requested, events): (&[&str], &[&str]) = if capability == Capability::WindowClose {
+                (&[name], &["command-invoked"])
+            } else {
+                (&[name], &["app-ready"])
+            };
+            handler_manifest(requested, true, events)
+                .validate()
+                .unwrap_or_else(|error| panic!("{name} with a persistent handler: {error}"));
+            let per_event = handler_manifest(requested, false, events).validate();
+            if capability.is_host_operation() {
+                assert!(
+                    per_event
+                        .unwrap_err()
+                        .to_string()
+                        .contains(&format!("{name} requires a persistent event handler")),
+                    "{name}"
+                );
+            } else {
+                per_event.unwrap_or_else(|error| panic!("{name} per event: {error}"));
+            }
+        }
+        // Window scope and all-windows scope obey the same handler rule.
+        let error = handler_manifest(&["pane-create:all-windows"], false, &["app-ready"])
+            .validate()
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("pane-create requires a persistent event handler"));
     }
 
     #[test]
-    fn api_v11_terminal_queries_require_persistent_mode_and_exact_grant() {
-        let manifest = terminal_query_manifest();
+    fn handler_authority_carries_grants_scopes_and_command_origin() {
+        let close = StructuredResponseAction::CloseWindow {
+            action_id: "close".into(),
+            window_id: None,
+        };
+        let manifest = handler_manifest(
+            &["workspace-query:all-windows", "window-close"],
+            true,
+            &["app-ready", "command-invoked"],
+        );
         manifest.validate().unwrap();
-        validate_grants(&manifest, &terminal_query_grants()).unwrap();
-        let context = PluginContext {
-            cwd: None,
-            tab_count: 1,
-            active_tab: 0,
-            terminal_size: (80, 24),
-        };
-        let mut plugin = DeclarativePlugin::new(manifest.clone(), None, terminal_query_grants());
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "terminal-reader.read-active-terminal".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("API v11 terminal query handler did not create an invocation")
-        };
-        assert!(invocation.allow_workspace_query);
-        assert!(invocation.allow_terminal_query);
-        assert_eq!(invocation.mode, StructuredHandlerMode::Persistent);
+        let grants = manifest.permissions.clone();
 
-        let mut v10 = manifest.clone();
-        v10.api_version = 10;
-        assert!(v10.validate().unwrap_err().to_string().contains("API v11"));
+        let command = invocation_for(
+            manifest.clone(),
+            grants.clone(),
+            &Hook::CommandInvoked {
+                command_id: "handler-fixture.run".into(),
+            },
+            &context(),
+        );
+        assert_eq!(command.mode, StructuredHandlerMode::Persistent);
+        assert_eq!(
+            command.authority.grants().scope(Capability::WorkspaceQuery),
+            Some(PermissionScope::AllWindows)
+        );
+        command
+            .authority
+            .check(std::slice::from_ref(&close))
+            .unwrap();
 
-        let mut process_per_event = manifest.clone();
-        process_per_event.event_handler.as_mut().unwrap().mode =
-            DeclarativeHandlerMode::ProcessPerEvent;
+        let lifecycle = invocation_for(manifest.clone(), grants, &Hook::AppReady, &context());
         assert!(
-            process_per_event
+            lifecycle
+                .authority
+                .check(std::slice::from_ref(&close))
+                .unwrap_err()
+                .contains("outside an invoked plugin command")
+        );
+
+        // Ungranted capabilities never reach the handler's authority.
+        let partial = invocation_for(
+            manifest,
+            permissions(&["process-spawn", "event-subscribe", "workspace-query"]),
+            &Hook::CommandInvoked {
+                command_id: "handler-fixture.run".into(),
+            },
+            &context(),
+        );
+        assert!(
+            partial
+                .authority
+                .check(std::slice::from_ref(&close))
+                .unwrap_err()
+                .contains("without the window-close permission")
+        );
+        assert_eq!(
+            partial.authority.grants().scope(Capability::WorkspaceQuery),
+            Some(PermissionScope::Window)
+        );
+    }
+
+    #[test]
+    fn window_close_scope_selects_its_command_requirement() {
+        let window_scoped = handler_manifest(&["window-close"], true, &["app-ready"]);
+        assert!(
+            window_scoped
                 .validate()
                 .unwrap_err()
                 .to_string()
-                .contains("persistent")
+                .contains("command-scoped")
         );
-
-        let mut grants = terminal_query_grants();
-        grants.remove(&PluginPermission::TerminalQuery);
-        assert!(
-            validate_grants(&manifest, &grants)
-                .unwrap_err()
-                .to_string()
-                .contains("permissions denied: terminal-query")
-        );
+        handler_manifest(&["window-close"], true, &["command-invoked"])
+            .validate()
+            .unwrap();
+        handler_manifest(&["window-close:all-windows"], true, &["app-ready"])
+            .validate()
+            .unwrap();
     }
 
     #[test]
-    fn api_v12_pane_creation_requires_persistent_mode_and_exact_grant() {
-        let manifest = pane_create_manifest();
+    fn handler_commands_are_bounded_namespaced_and_exact() {
+        let manifest = handler_manifest(&["ui-actions"], true, &["command-invoked"]);
         manifest.validate().unwrap();
-        validate_grants(&manifest, &pane_create_grants()).unwrap();
-        let context = PluginContext {
-            cwd: None,
-            tab_count: 1,
-            active_tab: 0,
-            terminal_size: (80, 24),
-        };
-        let mut plugin = DeclarativePlugin::new(manifest.clone(), None, pane_create_grants());
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "pane-builder.split-active-pane".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("API v12 pane creation handler did not create an invocation")
-        };
-        assert!(invocation.allow_workspace_query);
-        assert!(invocation.allow_pane_create);
-        assert_eq!(invocation.mode, StructuredHandlerMode::Persistent);
-
-        let mut v11 = manifest.clone();
-        v11.api_version = 11;
-        assert!(v11.validate().unwrap_err().to_string().contains("API v12"));
-
-        let mut process_per_event = manifest.clone();
-        process_per_event.event_handler.as_mut().unwrap().mode =
-            DeclarativeHandlerMode::ProcessPerEvent;
-        assert!(
-            process_per_event
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("persistent")
-        );
-
-        let mut grants = pane_create_grants();
-        grants.remove(&PluginPermission::PaneCreate);
-        assert!(
-            validate_grants(&manifest, &grants)
-                .unwrap_err()
-                .to_string()
-                .contains("permissions denied: pane-create")
-        );
-
-        let mut plugin = DeclarativePlugin::new(manifest, None, event_grants(true));
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "pane-builder.split-active-pane".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("ungranted pane creation fixture did not create an invocation")
-        };
-        assert!(!invocation.allow_pane_create);
-    }
-
-    #[test]
-    fn api_v17_terminal_input_requires_persistent_mode_and_exact_grant() {
-        let manifest = terminal_input_manifest();
-        manifest.validate().unwrap();
-        validate_grants(&manifest, &terminal_input_grants()).unwrap();
-        let context = PluginContext {
-            cwd: None,
-            tab_count: 1,
-            active_tab: 0,
-            terminal_size: (80, 24),
-        };
-        let mut plugin = DeclarativePlugin::new(manifest.clone(), None, terminal_input_grants());
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "terminal-writer.draft-cargo-test".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("API v17 terminal input handler did not create an invocation")
-        };
-        assert!(invocation.allow_workspace_query);
-        assert!(invocation.allow_terminal_input);
-        assert!(!invocation.allow_pane_move);
-        assert_eq!(invocation.mode, StructuredHandlerMode::Persistent);
-
-        let mut v16 = manifest.clone();
-        v16.api_version = 16;
-        assert!(v16.validate().unwrap_err().to_string().contains("API v17"));
-
-        let mut process_per_event = manifest.clone();
-        process_per_event.event_handler.as_mut().unwrap().mode =
-            DeclarativeHandlerMode::ProcessPerEvent;
-        assert!(
-            process_per_event
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("persistent")
-        );
-
-        let mut grants = terminal_input_grants();
-        grants.remove(&PluginPermission::TerminalInput);
-        assert!(
-            validate_grants(&manifest, &grants)
-                .unwrap_err()
-                .to_string()
-                .contains("permissions denied: terminal-input")
-        );
-
-        let mut plugin = DeclarativePlugin::new(manifest, None, event_grants(true));
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "terminal-writer.draft-cargo-test".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("ungranted terminal input fixture did not create an invocation")
-        };
-        assert!(!invocation.allow_terminal_input);
-    }
-
-    #[test]
-    fn api_v18_pane_layout_requires_persistent_mode_and_exact_grant() {
-        let manifest = pane_layout_manifest();
-        manifest.validate().unwrap();
-        validate_grants(&manifest, &pane_layout_grants()).unwrap();
-        let context = PluginContext {
-            cwd: None,
-            tab_count: 1,
-            active_tab: 0,
-            terminal_size: (80, 24),
-        };
-        let mut plugin = DeclarativePlugin::new(manifest.clone(), None, pane_layout_grants());
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "pane-arranger.apply-grid-layout".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("API v18 pane layout handler did not create an invocation")
-        };
-        assert!(invocation.allow_workspace_query);
-        assert!(invocation.allow_pane_layout);
-        assert!(!invocation.allow_terminal_input);
-        assert_eq!(invocation.mode, StructuredHandlerMode::Persistent);
-
-        let mut v17 = manifest.clone();
-        v17.api_version = 17;
-        assert!(v17.validate().unwrap_err().to_string().contains("API v18"));
-
-        let mut process_per_event = manifest.clone();
-        process_per_event.event_handler.as_mut().unwrap().mode =
-            DeclarativeHandlerMode::ProcessPerEvent;
-        assert!(
-            process_per_event
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("persistent")
-        );
-
-        let mut grants = pane_layout_grants();
-        grants.remove(&PluginPermission::PaneLayout);
-        assert!(
-            validate_grants(&manifest, &grants)
-                .unwrap_err()
-                .to_string()
-                .contains("permissions denied: pane-layout")
-        );
-
-        let mut plugin = DeclarativePlugin::new(manifest, None, event_grants(true));
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "pane-arranger.apply-grid-layout".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("ungranted pane layout fixture did not create an invocation")
-        };
-        assert!(!invocation.allow_pane_layout);
-    }
-
-    #[test]
-    fn api_v19_window_close_requires_exact_grant_and_explicit_command_scope() {
-        let manifest = window_close_manifest();
-        manifest.validate().unwrap();
-        validate_grants(&manifest, &window_close_grants()).unwrap();
-        assert_eq!(PluginPermission::WindowClose.to_string(), "window-close");
-        assert_eq!(
-            "window-close".parse::<PluginPermission>().unwrap(),
-            PluginPermission::WindowClose
-        );
-        let context = PluginContext {
-            cwd: None,
-            tab_count: 2,
-            active_tab: 0,
-            terminal_size: (80, 24),
-        };
-        let mut plugin = DeclarativePlugin::new(manifest.clone(), None, window_close_grants());
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "window-closer.close-current-window".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("API v19 window close command did not create an invocation")
-        };
-        assert!(invocation.allow_workspace_query);
-        assert!(invocation.allow_window_close);
-        assert_eq!(invocation.mode, StructuredHandlerMode::Persistent);
-
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) =
-            plugin.on_hook(&Hook::AppReady, &context)
-        else {
-            panic!("API v19 lifecycle fixture did not create an invocation")
-        };
-        assert!(!invocation.allow_window_close);
-
-        let mut v18 = manifest.clone();
-        v18.api_version = 18;
-        assert!(v18.validate().unwrap_err().to_string().contains("API v19"));
-
-        let mut process_per_event = manifest.clone();
-        process_per_event.event_handler.as_mut().unwrap().mode =
-            DeclarativeHandlerMode::ProcessPerEvent;
-        assert!(
-            process_per_event
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("persistent")
-        );
-
-        let mut no_command = manifest.clone();
-        no_command.commands.clear();
-        assert!(
-            no_command
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("command-invoked")
-        );
-
-        let mut grants = window_close_grants();
-        grants.remove(&PluginPermission::WindowClose);
-        assert!(
-            validate_grants(&manifest, &grants)
-                .unwrap_err()
-                .to_string()
-                .contains("permissions denied: window-close")
-        );
-
-        let mut plugin = DeclarativePlugin::new(manifest, None, event_grants(true));
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "window-closer.close-current-window".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("ungranted window close fixture did not create an invocation")
-        };
-        assert!(!invocation.allow_window_close);
-    }
-
-    #[test]
-    fn api_v20_process_query_requires_persistent_mode_and_exact_grant() {
-        let manifest = process_query_manifest();
-        manifest.validate().unwrap();
-        validate_grants(&manifest, &process_query_grants()).unwrap();
-        assert_eq!(PluginPermission::ProcessQuery.to_string(), "process-query");
-        assert_eq!(
-            "process-query".parse::<PluginPermission>().unwrap(),
-            PluginPermission::ProcessQuery
-        );
-        let context = PluginContext {
-            cwd: None,
-            tab_count: 2,
-            active_tab: 0,
-            terminal_size: (80, 24),
-        };
-        let mut plugin = DeclarativePlugin::new(manifest.clone(), None, process_query_grants());
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "process-inspector.inspect-process".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("API v20 process query command did not create an invocation")
-        };
-        assert!(invocation.allow_process_query);
-        assert!(!invocation.allow_window_close);
-        assert_eq!(invocation.mode, StructuredHandlerMode::Persistent);
-
-        let mut v19 = manifest.clone();
-        v19.api_version = 19;
-        assert!(v19.validate().unwrap_err().to_string().contains("API v20"));
-
-        let mut process_per_event = manifest.clone();
-        process_per_event.event_handler.as_mut().unwrap().mode =
-            DeclarativeHandlerMode::ProcessPerEvent;
-        assert!(
-            process_per_event
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("persistent")
-        );
-
-        let mut grants = process_query_grants();
-        grants.remove(&PluginPermission::ProcessQuery);
-        assert!(
-            validate_grants(&manifest, &grants)
-                .unwrap_err()
-                .to_string()
-                .contains("permissions denied: process-query")
-        );
-
-        let mut plugin = DeclarativePlugin::new(manifest, None, event_grants(false));
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "process-inspector.inspect-process".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("ungranted process query fixture did not create an invocation")
-        };
-        assert!(!invocation.allow_process_query);
-    }
-
-    #[test]
-    fn api_v21_process_actions_require_persistent_mode_and_exact_grant() {
-        let manifest = process_action_manifest();
-        manifest.validate().unwrap();
-        validate_grants(&manifest, &process_action_grants()).unwrap();
-        assert_eq!(
-            PluginPermission::ProcessActions.to_string(),
-            "process-actions"
-        );
-        assert_eq!(
-            "process-actions".parse::<PluginPermission>().unwrap(),
-            PluginPermission::ProcessActions
-        );
-        let context = PluginContext {
-            cwd: None,
-            tab_count: 2,
-            active_tab: 0,
-            terminal_size: (80, 24),
-        };
-        let mut plugin = DeclarativePlugin::new(manifest.clone(), None, process_action_grants());
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "process-navigator.focus-first-pane".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("API v21 process action command did not create an invocation")
-        };
-        assert!(invocation.allow_process_query);
-        assert!(invocation.allow_process_actions);
-        assert!(!invocation.allow_process_terminal_text);
-        assert!(!invocation.allow_process_terminal_input);
-        assert_eq!(invocation.mode, StructuredHandlerMode::Persistent);
-
-        let mut v20 = manifest.clone();
-        v20.api_version = 20;
-        assert!(v20.validate().unwrap_err().to_string().contains("API v21"));
-
-        let mut process_per_event = manifest.clone();
-        process_per_event.event_handler.as_mut().unwrap().mode =
-            DeclarativeHandlerMode::ProcessPerEvent;
-        assert!(
-            process_per_event
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("persistent")
-        );
-
-        let mut grants = process_action_grants();
-        grants.remove(&PluginPermission::ProcessActions);
-        assert!(
-            validate_grants(&manifest, &grants)
-                .unwrap_err()
-                .to_string()
-                .contains("permissions denied: process-actions")
-        );
-
-        let mut plugin = DeclarativePlugin::new(manifest, None, process_query_grants());
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "process-navigator.focus-first-pane".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("ungranted process action fixture did not create an invocation")
-        };
-        assert!(invocation.allow_process_query);
-        assert!(!invocation.allow_process_actions);
-    }
-
-    #[test]
-    fn api_v22_process_terminal_text_requires_persistent_mode_and_exact_grant() {
-        let manifest = process_terminal_text_manifest();
-        manifest.validate().unwrap();
-        validate_grants(&manifest, &process_terminal_text_grants()).unwrap();
-        assert_eq!(
-            PluginPermission::ProcessTerminalText.to_string(),
-            "process-terminal-text"
-        );
-        assert_eq!(
-            "process-terminal-text".parse::<PluginPermission>().unwrap(),
-            PluginPermission::ProcessTerminalText
-        );
-        let context = PluginContext {
-            cwd: None,
-            tab_count: 2,
-            active_tab: 0,
-            terminal_size: (80, 24),
-        };
-        let mut plugin =
-            DeclarativePlugin::new(manifest.clone(), None, process_terminal_text_grants());
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "process-terminal-reader.read-sibling-pane".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("API v22 process terminal query command did not create an invocation")
-        };
-        assert!(invocation.allow_process_query);
-        assert!(!invocation.allow_process_actions);
-        assert!(invocation.allow_process_terminal_text);
-        assert!(!invocation.allow_process_terminal_input);
-        assert_eq!(invocation.mode, StructuredHandlerMode::Persistent);
-
-        let mut v21 = manifest.clone();
-        v21.api_version = 21;
-        assert!(v21.validate().unwrap_err().to_string().contains("API v22"));
-
-        let mut process_per_event = manifest.clone();
-        process_per_event.event_handler.as_mut().unwrap().mode =
-            DeclarativeHandlerMode::ProcessPerEvent;
-        assert!(
-            process_per_event
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("persistent")
-        );
-
-        let mut grants = process_terminal_text_grants();
-        grants.remove(&PluginPermission::ProcessTerminalText);
-        assert!(
-            validate_grants(&manifest, &grants)
-                .unwrap_err()
-                .to_string()
-                .contains("permissions denied: process-terminal-text")
-        );
-
-        let mut plugin = DeclarativePlugin::new(manifest, None, process_query_grants());
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "process-terminal-reader.read-sibling-pane".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("ungranted process terminal query fixture did not create an invocation")
-        };
-        assert!(invocation.allow_process_query);
-        assert!(!invocation.allow_process_terminal_text);
-    }
-
-    #[test]
-    fn api_v23_process_terminal_input_requires_persistent_mode_and_exact_grant() {
-        let manifest = process_terminal_input_manifest();
-        manifest.validate().unwrap();
-        validate_grants(&manifest, &process_terminal_input_grants()).unwrap();
-        assert_eq!(
-            PluginPermission::ProcessTerminalInput.to_string(),
-            "process-terminal-input"
-        );
-        assert_eq!(
-            "process-terminal-input"
-                .parse::<PluginPermission>()
-                .unwrap(),
-            PluginPermission::ProcessTerminalInput
-        );
-        let context = PluginContext {
-            cwd: None,
-            tab_count: 2,
-            active_tab: 0,
-            terminal_size: (80, 24),
-        };
-        let mut plugin =
-            DeclarativePlugin::new(manifest.clone(), None, process_terminal_input_grants());
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "process-terminal-writer.draft-in-sibling-pane".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("API v23 process terminal input command did not create an invocation")
-        };
-        assert!(invocation.allow_process_query);
-        assert!(!invocation.allow_process_actions);
-        assert!(!invocation.allow_process_terminal_text);
-        assert!(invocation.allow_process_terminal_input);
-        assert_eq!(invocation.mode, StructuredHandlerMode::Persistent);
-
-        let mut v22 = manifest.clone();
-        v22.api_version = 22;
-        assert!(v22.validate().unwrap_err().to_string().contains("API v23"));
-
-        let mut process_per_event = manifest.clone();
-        process_per_event.event_handler.as_mut().unwrap().mode =
-            DeclarativeHandlerMode::ProcessPerEvent;
-        assert!(
-            process_per_event
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("persistent")
-        );
-
-        let mut grants = process_terminal_input_grants();
-        grants.remove(&PluginPermission::ProcessTerminalInput);
-        assert!(
-            validate_grants(&manifest, &grants)
-                .unwrap_err()
-                .to_string()
-                .contains("permissions denied: process-terminal-input")
-        );
-
-        let mut plugin = DeclarativePlugin::new(manifest, None, process_query_grants());
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "process-terminal-writer.draft-in-sibling-pane".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("ungranted process terminal input fixture did not create an invocation")
-        };
-        assert!(invocation.allow_process_query);
-        assert!(!invocation.allow_process_terminal_input);
-    }
-
-    #[test]
-    fn api_v24_process_tab_creation_requires_persistent_mode_and_exact_grant() {
-        let manifest = process_tab_create_manifest();
-        manifest.validate().unwrap();
-        validate_grants(&manifest, &process_tab_create_grants()).unwrap();
-        assert_eq!(
-            PluginPermission::ProcessTabCreate.to_string(),
-            "process-tab-create"
-        );
-        assert_eq!(
-            "process-tab-create".parse::<PluginPermission>().unwrap(),
-            PluginPermission::ProcessTabCreate
-        );
-        let context = PluginContext {
-            cwd: None,
-            tab_count: 2,
-            active_tab: 0,
-            terminal_size: (80, 24),
-        };
-        let mut plugin =
-            DeclarativePlugin::new(manifest.clone(), None, process_tab_create_grants());
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "process-tab-builder.new-tab-in-sibling-window".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("API v24 process tab creation command did not create an invocation")
-        };
-        assert!(invocation.allow_process_query);
-        assert!(!invocation.allow_process_actions);
-        assert!(!invocation.allow_process_terminal_text);
-        assert!(!invocation.allow_process_terminal_input);
-        assert!(invocation.allow_process_tab_create);
-        assert_eq!(invocation.mode, StructuredHandlerMode::Persistent);
-
-        let mut v23 = manifest.clone();
-        v23.api_version = 23;
-        assert!(v23.validate().unwrap_err().to_string().contains("API v24"));
-
-        let mut process_per_event = manifest.clone();
-        process_per_event.event_handler.as_mut().unwrap().mode =
-            DeclarativeHandlerMode::ProcessPerEvent;
-        assert!(
-            process_per_event
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("persistent")
-        );
-
-        let mut grants = process_tab_create_grants();
-        grants.remove(&PluginPermission::ProcessTabCreate);
-        assert!(
-            validate_grants(&manifest, &grants)
-                .unwrap_err()
-                .to_string()
-                .contains("permissions denied: process-tab-create")
-        );
-
-        let mut plugin = DeclarativePlugin::new(manifest, None, process_query_grants());
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "process-tab-builder.new-tab-in-sibling-window".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("ungranted process tab creation fixture did not create an invocation")
-        };
-        assert!(invocation.allow_process_query);
-        assert!(!invocation.allow_process_tab_create);
-    }
-
-    #[test]
-    fn api_v25_process_pane_creation_requires_persistent_mode_and_exact_grant() {
-        let manifest = process_pane_create_manifest();
-        manifest.validate().unwrap();
-        validate_grants(&manifest, &process_pane_create_grants()).unwrap();
-        assert_eq!(
-            PluginPermission::ProcessPaneCreate.to_string(),
-            "process-pane-create"
-        );
-        assert_eq!(
-            "process-pane-create".parse::<PluginPermission>().unwrap(),
-            PluginPermission::ProcessPaneCreate
-        );
-        let context = PluginContext {
-            cwd: None,
-            tab_count: 2,
-            active_tab: 0,
-            terminal_size: (80, 24),
-        };
-        let mut plugin =
-            DeclarativePlugin::new(manifest.clone(), None, process_pane_create_grants());
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "process-pane-builder.split-pane-in-sibling-window".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("API v25 process pane creation command did not create an invocation")
-        };
-        assert!(invocation.allow_process_query);
-        assert!(!invocation.allow_process_actions);
-        assert!(!invocation.allow_process_terminal_text);
-        assert!(!invocation.allow_process_terminal_input);
-        assert!(!invocation.allow_process_tab_create);
-        assert!(invocation.allow_process_pane_create);
-        assert_eq!(invocation.mode, StructuredHandlerMode::Persistent);
-
-        let mut v24 = manifest.clone();
-        v24.api_version = 24;
-        assert!(v24.validate().unwrap_err().to_string().contains("API v25"));
-
-        let mut process_per_event = manifest.clone();
-        process_per_event.event_handler.as_mut().unwrap().mode =
-            DeclarativeHandlerMode::ProcessPerEvent;
-        assert!(
-            process_per_event
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("persistent")
-        );
-
-        let mut grants = process_pane_create_grants();
-        grants.remove(&PluginPermission::ProcessPaneCreate);
-        assert!(
-            validate_grants(&manifest, &grants)
-                .unwrap_err()
-                .to_string()
-                .contains("permissions denied: process-pane-create")
-        );
-
-        let mut plugin = DeclarativePlugin::new(manifest, None, process_query_grants());
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "process-pane-builder.split-pane-in-sibling-window".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("ungranted process pane creation fixture did not create an invocation")
-        };
-        assert!(invocation.allow_process_query);
-        assert!(!invocation.allow_process_pane_create);
-    }
-
-    #[test]
-    fn api_v26_process_pane_movement_requires_persistent_mode_and_exact_grant() {
-        let manifest = process_pane_move_manifest();
-        manifest.validate().unwrap();
-        validate_grants(&manifest, &process_pane_move_grants()).unwrap();
-        assert_eq!(
-            PluginPermission::ProcessPaneMove.to_string(),
-            "process-pane-move"
-        );
-        assert_eq!(
-            "process-pane-move".parse::<PluginPermission>().unwrap(),
-            PluginPermission::ProcessPaneMove
-        );
-        let context = PluginContext {
-            cwd: None,
-            tab_count: 2,
-            active_tab: 0,
-            terminal_size: (80, 24),
-        };
-        let mut plugin = DeclarativePlugin::new(manifest.clone(), None, process_pane_move_grants());
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "process-pane-mover.move-pane-between-windows".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("API v26 process pane movement command did not create an invocation")
-        };
-        assert!(invocation.allow_process_query);
-        assert!(!invocation.allow_process_actions);
-        assert!(!invocation.allow_process_terminal_text);
-        assert!(!invocation.allow_process_terminal_input);
-        assert!(!invocation.allow_process_tab_create);
-        assert!(!invocation.allow_process_pane_create);
-        assert!(invocation.allow_process_pane_move);
-        assert_eq!(invocation.mode, StructuredHandlerMode::Persistent);
-
-        let mut v25 = manifest.clone();
-        v25.api_version = 25;
-        assert!(v25.validate().unwrap_err().to_string().contains("API v26"));
-
-        let mut process_per_event = manifest.clone();
-        process_per_event.event_handler.as_mut().unwrap().mode =
-            DeclarativeHandlerMode::ProcessPerEvent;
-        assert!(
-            process_per_event
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("persistent")
-        );
-
-        let mut grants = process_pane_move_grants();
-        grants.remove(&PluginPermission::ProcessPaneMove);
-        assert!(
-            validate_grants(&manifest, &grants)
-                .unwrap_err()
-                .to_string()
-                .contains("permissions denied: process-pane-move")
-        );
-
-        let mut plugin = DeclarativePlugin::new(manifest, None, process_query_grants());
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "process-pane-mover.move-pane-between-windows".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("ungranted process pane movement fixture did not create an invocation")
-        };
-        assert!(invocation.allow_process_query);
-        assert!(!invocation.allow_process_pane_move);
-    }
-
-    #[test]
-    fn api_v27_process_tab_movement_requires_persistent_mode_and_exact_grant() {
-        let manifest = process_tab_move_manifest();
-        manifest.validate().unwrap();
-        validate_grants(&manifest, &process_tab_move_grants()).unwrap();
-        assert_eq!(
-            PluginPermission::ProcessTabMove.to_string(),
-            "process-tab-move"
-        );
-        assert_eq!(
-            "process-tab-move".parse::<PluginPermission>().unwrap(),
-            PluginPermission::ProcessTabMove
-        );
-        let context = PluginContext {
-            cwd: None,
-            tab_count: 2,
-            active_tab: 0,
-            terminal_size: (80, 24),
-        };
-        let mut plugin = DeclarativePlugin::new(manifest.clone(), None, process_tab_move_grants());
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "process-tab-mover.move-tab-between-windows".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("API v27 process tab movement command did not create an invocation")
-        };
-        assert!(invocation.allow_process_query);
-        assert!(!invocation.allow_process_pane_move);
-        assert!(invocation.allow_process_tab_move);
-        assert_eq!(invocation.mode, StructuredHandlerMode::Persistent);
-
-        let mut v26 = manifest.clone();
-        v26.api_version = 26;
-        assert!(v26.validate().unwrap_err().to_string().contains("API v27"));
-        let mut process_per_event = manifest.clone();
-        process_per_event.event_handler.as_mut().unwrap().mode =
-            DeclarativeHandlerMode::ProcessPerEvent;
-        assert!(
-            process_per_event
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("persistent")
-        );
-        let mut grants = process_tab_move_grants();
-        grants.remove(&PluginPermission::ProcessTabMove);
-        assert!(
-            validate_grants(&manifest, &grants)
-                .unwrap_err()
-                .to_string()
-                .contains("permissions denied: process-tab-move")
-        );
-        let mut plugin = DeclarativePlugin::new(manifest, None, process_query_grants());
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "process-tab-mover.move-tab-between-windows".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("ungranted process tab movement fixture did not create an invocation")
-        };
-        assert!(!invocation.allow_process_tab_move);
-    }
-
-    #[test]
-    fn api_v28_process_pane_closure_requires_persistent_mode_and_exact_grant() {
-        let manifest = process_pane_close_manifest();
-        manifest.validate().unwrap();
-        validate_grants(&manifest, &process_pane_close_grants()).unwrap();
-        assert_eq!(
-            PluginPermission::ProcessPaneClose.to_string(),
-            "process-pane-close"
-        );
-        assert_eq!(
-            "process-pane-close".parse::<PluginPermission>().unwrap(),
-            PluginPermission::ProcessPaneClose
-        );
-        let context = PluginContext {
-            cwd: None,
-            tab_count: 2,
-            active_tab: 0,
-            terminal_size: (80, 24),
-        };
-        let mut plugin =
-            DeclarativePlugin::new(manifest.clone(), None, process_pane_close_grants());
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "process-pane-pruner.close-pane-in-sibling-window".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("API v28 process pane closure command did not create an invocation")
-        };
-        assert!(invocation.allow_process_query);
-        assert!(!invocation.allow_process_tab_move);
-        assert!(invocation.allow_process_pane_close);
-        assert_eq!(invocation.mode, StructuredHandlerMode::Persistent);
-
-        let mut v27 = manifest.clone();
-        v27.api_version = 27;
-        assert!(v27.validate().unwrap_err().to_string().contains("API v28"));
-        let mut process_per_event = manifest.clone();
-        process_per_event.event_handler.as_mut().unwrap().mode =
-            DeclarativeHandlerMode::ProcessPerEvent;
-        assert!(
-            process_per_event
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("persistent")
-        );
-        let mut grants = process_pane_close_grants();
-        grants.remove(&PluginPermission::ProcessPaneClose);
-        assert!(
-            validate_grants(&manifest, &grants)
-                .unwrap_err()
-                .to_string()
-                .contains("permissions denied: process-pane-close")
-        );
-        let mut plugin = DeclarativePlugin::new(manifest, None, process_query_grants());
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "process-pane-pruner.close-pane-in-sibling-window".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("ungranted process pane closure fixture did not create an invocation")
-        };
-        assert!(!invocation.allow_process_pane_close);
-    }
-
-    #[test]
-    fn api_v29_process_tab_closure_requires_persistent_mode_and_exact_grant() {
-        let manifest = process_tab_close_manifest();
-        manifest.validate().unwrap();
-        validate_grants(&manifest, &process_tab_close_grants()).unwrap();
-        assert_eq!(
-            PluginPermission::ProcessTabClose.to_string(),
-            "process-tab-close"
-        );
-        assert_eq!(
-            "process-tab-close".parse::<PluginPermission>().unwrap(),
-            PluginPermission::ProcessTabClose
-        );
-        let context = PluginContext {
-            cwd: None,
-            tab_count: 2,
-            active_tab: 0,
-            terminal_size: (80, 24),
-        };
-        let mut plugin = DeclarativePlugin::new(manifest.clone(), None, process_tab_close_grants());
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "process-tab-pruner.close-tab-in-sibling-window".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("API v29 process tab closure command did not create an invocation")
-        };
-        assert!(invocation.allow_process_query);
-        assert!(!invocation.allow_process_pane_close);
-        assert!(invocation.allow_process_tab_close);
-        assert_eq!(invocation.mode, StructuredHandlerMode::Persistent);
-        let mut v28 = manifest.clone();
-        v28.api_version = 28;
-        assert!(v28.validate().unwrap_err().to_string().contains("API v29"));
-        let mut process_per_event = manifest.clone();
-        process_per_event.event_handler.as_mut().unwrap().mode =
-            DeclarativeHandlerMode::ProcessPerEvent;
-        assert!(
-            process_per_event
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("persistent")
-        );
-        let mut grants = process_tab_close_grants();
-        grants.remove(&PluginPermission::ProcessTabClose);
-        assert!(
-            validate_grants(&manifest, &grants)
-                .unwrap_err()
-                .to_string()
-                .contains("permissions denied: process-tab-close")
-        );
-        let mut plugin = DeclarativePlugin::new(manifest, None, process_query_grants());
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "process-tab-pruner.close-tab-in-sibling-window".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("ungranted process tab closure fixture did not create an invocation")
-        };
-        assert!(!invocation.allow_process_tab_close);
-    }
-
-    #[test]
-    fn api_v30_process_pane_layout_requires_persistent_mode_and_exact_grant() {
-        let manifest = process_pane_layout_manifest();
-        manifest.validate().unwrap();
-        validate_grants(&manifest, &process_pane_layout_grants()).unwrap();
-        assert_eq!(
-            PluginPermission::ProcessPaneLayout.to_string(),
-            "process-pane-layout"
-        );
-        assert_eq!(
-            "process-pane-layout".parse::<PluginPermission>().unwrap(),
-            PluginPermission::ProcessPaneLayout
-        );
-        let context = PluginContext {
-            cwd: None,
-            tab_count: 2,
-            active_tab: 0,
-            terminal_size: (80, 24),
-        };
-        let mut plugin =
-            DeclarativePlugin::new(manifest.clone(), None, process_pane_layout_grants());
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "process-pane-arranger.apply-grid-in-sibling-window".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("API v30 process pane layout command did not create an invocation")
-        };
-        assert!(invocation.allow_process_query);
-        assert!(!invocation.allow_process_tab_close);
-        assert!(invocation.allow_process_pane_layout);
-        assert_eq!(invocation.mode, StructuredHandlerMode::Persistent);
-
-        let mut v29 = manifest.clone();
-        v29.api_version = 29;
-        assert!(v29.validate().unwrap_err().to_string().contains("API v30"));
-        let mut process_per_event = manifest.clone();
-        process_per_event.event_handler.as_mut().unwrap().mode =
-            DeclarativeHandlerMode::ProcessPerEvent;
-        assert!(
-            process_per_event
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("persistent")
-        );
-        let mut grants = process_pane_layout_grants();
-        grants.remove(&PluginPermission::ProcessPaneLayout);
-        assert!(
-            validate_grants(&manifest, &grants)
-                .unwrap_err()
-                .to_string()
-                .contains("permissions denied: process-pane-layout")
-        );
-        let mut plugin = DeclarativePlugin::new(manifest, None, process_query_grants());
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "process-pane-arranger.apply-grid-in-sibling-window".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("ungranted process pane layout fixture did not create an invocation")
-        };
-        assert!(!invocation.allow_process_pane_layout);
-    }
-
-    #[test]
-    fn api_v31_process_window_closure_requires_persistent_mode_and_exact_grant() {
-        let manifest = process_window_close_manifest();
-        manifest.validate().unwrap();
-        validate_grants(&manifest, &process_window_close_grants()).unwrap();
-        assert_eq!(
-            PluginPermission::ProcessWindowClose.to_string(),
-            "process-window-close"
-        );
-        assert_eq!(
-            "process-window-close".parse::<PluginPermission>().unwrap(),
-            PluginPermission::ProcessWindowClose
-        );
-        let context = PluginContext {
-            cwd: None,
-            tab_count: 2,
-            active_tab: 0,
-            terminal_size: (80, 24),
-        };
-        let mut plugin =
-            DeclarativePlugin::new(manifest.clone(), None, process_window_close_grants());
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "process-window-closer.close-sibling-window".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("API v31 process window closure command did not create an invocation")
-        };
-        assert!(invocation.allow_process_query);
-        assert!(!invocation.allow_process_pane_layout);
-        assert!(invocation.allow_process_window_close);
-        assert_eq!(invocation.mode, StructuredHandlerMode::Persistent);
-
-        let mut v30 = manifest.clone();
-        v30.api_version = 30;
-        assert!(v30.validate().unwrap_err().to_string().contains("API v31"));
-        let mut process_per_event = manifest.clone();
-        process_per_event.event_handler.as_mut().unwrap().mode =
-            DeclarativeHandlerMode::ProcessPerEvent;
-        assert!(
-            process_per_event
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("persistent")
-        );
-        let mut grants = process_window_close_grants();
-        grants.remove(&PluginPermission::ProcessWindowClose);
-        assert!(
-            validate_grants(&manifest, &grants)
-                .unwrap_err()
-                .to_string()
-                .contains("permissions denied: process-window-close")
-        );
-        let mut plugin = DeclarativePlugin::new(manifest, None, process_query_grants());
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "process-window-closer.close-sibling-window".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("ungranted process window closure fixture did not create an invocation")
-        };
-        assert!(!invocation.allow_process_window_close);
-    }
-
-    #[test]
-    fn api_v32_process_window_focus_requires_persistent_mode_and_exact_grant() {
-        let manifest = process_window_focus_manifest();
-        manifest.validate().unwrap();
-        validate_grants(&manifest, &process_window_focus_grants()).unwrap();
-        assert_eq!(
-            PluginPermission::ProcessWindowFocus.to_string(),
-            "process-window-focus"
-        );
-        assert_eq!(
-            "process-window-focus".parse::<PluginPermission>().unwrap(),
-            PluginPermission::ProcessWindowFocus
-        );
-        let context = PluginContext {
-            cwd: None,
-            tab_count: 2,
-            active_tab: 0,
-            terminal_size: (80, 24),
-        };
-        let mut plugin =
-            DeclarativePlugin::new(manifest.clone(), None, process_window_focus_grants());
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "process-window-focuser.focus-sibling-window".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("API v32 process window focus command did not create an invocation")
-        };
-        assert!(invocation.allow_process_query);
-        assert!(!invocation.allow_process_window_close);
-        assert!(invocation.allow_process_window_focus);
-        assert_eq!(invocation.mode, StructuredHandlerMode::Persistent);
-
-        let mut v31 = manifest.clone();
-        v31.api_version = 31;
-        assert!(v31.validate().unwrap_err().to_string().contains("API v32"));
-        let mut process_per_event = manifest.clone();
-        process_per_event.event_handler.as_mut().unwrap().mode =
-            DeclarativeHandlerMode::ProcessPerEvent;
-        assert!(
-            process_per_event
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("persistent")
-        );
-        let mut grants = process_window_focus_grants();
-        grants.remove(&PluginPermission::ProcessWindowFocus);
-        assert!(
-            validate_grants(&manifest, &grants)
-                .unwrap_err()
-                .to_string()
-                .contains("permissions denied: process-window-focus")
-        );
-        let mut plugin = DeclarativePlugin::new(manifest, None, process_query_grants());
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "process-window-focuser.focus-sibling-window".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("ungranted process window focus fixture did not create an invocation")
-        };
-        assert!(!invocation.allow_process_window_focus);
-    }
-
-    #[test]
-    fn api_v16_pane_movement_requires_persistent_mode_and_exact_grant() {
-        let manifest = pane_move_manifest();
-        manifest.validate().unwrap();
-        validate_grants(&manifest, &pane_move_grants()).unwrap();
-        let context = PluginContext {
-            cwd: None,
-            tab_count: 2,
-            active_tab: 0,
-            terminal_size: (80, 24),
-        };
-        let mut plugin = DeclarativePlugin::new(manifest.clone(), None, pane_move_grants());
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "pane-mover.move-sibling-pane".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("API v16 pane movement handler did not create an invocation")
-        };
-        assert!(invocation.allow_workspace_query);
-        assert!(invocation.allow_pane_move);
-        assert!(!invocation.allow_tab_close);
-        assert_eq!(invocation.mode, StructuredHandlerMode::Persistent);
-
-        let mut v15 = manifest.clone();
-        v15.api_version = 15;
-        assert!(v15.validate().unwrap_err().to_string().contains("API v16"));
-
-        let mut process_per_event = manifest.clone();
-        process_per_event.event_handler.as_mut().unwrap().mode =
-            DeclarativeHandlerMode::ProcessPerEvent;
-        assert!(
-            process_per_event
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("persistent")
-        );
-
-        let mut grants = pane_move_grants();
-        grants.remove(&PluginPermission::PaneMove);
-        assert!(
-            validate_grants(&manifest, &grants)
-                .unwrap_err()
-                .to_string()
-                .contains("permissions denied: pane-move")
-        );
-
-        let mut plugin = DeclarativePlugin::new(manifest, None, event_grants(true));
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "pane-mover.move-sibling-pane".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("ungranted pane movement fixture did not create an invocation")
-        };
-        assert!(!invocation.allow_pane_move);
-    }
-
-    #[test]
-    fn api_v15_tab_closure_requires_persistent_mode_and_exact_grant() {
-        let manifest = tab_close_manifest();
-        manifest.validate().unwrap();
-        validate_grants(&manifest, &tab_close_grants()).unwrap();
-        let context = PluginContext {
-            cwd: None,
-            tab_count: 2,
-            active_tab: 1,
-            terminal_size: (80, 24),
-        };
-        let mut plugin = DeclarativePlugin::new(manifest.clone(), None, tab_close_grants());
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "tab-pruner.close-background-tab".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("API v15 tab closure handler did not create an invocation")
-        };
-        assert!(invocation.allow_workspace_query);
-        assert!(invocation.allow_tab_close);
-        assert!(!invocation.allow_pane_close);
-        assert_eq!(invocation.mode, StructuredHandlerMode::Persistent);
-
-        let mut v14 = manifest.clone();
-        v14.api_version = 14;
-        assert!(v14.validate().unwrap_err().to_string().contains("API v15"));
-
-        let mut process_per_event = manifest.clone();
-        process_per_event.event_handler.as_mut().unwrap().mode =
-            DeclarativeHandlerMode::ProcessPerEvent;
-        assert!(
-            process_per_event
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("persistent")
-        );
-
-        let mut grants = tab_close_grants();
-        grants.remove(&PluginPermission::TabClose);
-        assert!(
-            validate_grants(&manifest, &grants)
-                .unwrap_err()
-                .to_string()
-                .contains("permissions denied: tab-close")
-        );
-
-        let mut plugin = DeclarativePlugin::new(manifest, None, event_grants(true));
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "tab-pruner.close-background-tab".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("ungranted tab closure fixture did not create an invocation")
-        };
-        assert!(!invocation.allow_tab_close);
-    }
-
-    #[test]
-    fn api_v14_pane_closure_requires_persistent_mode_and_exact_grant() {
-        let manifest = pane_close_manifest();
-        manifest.validate().unwrap();
-        validate_grants(&manifest, &pane_close_grants()).unwrap();
-        let context = PluginContext {
-            cwd: None,
-            tab_count: 1,
-            active_tab: 0,
-            terminal_size: (80, 24),
-        };
-        let mut plugin = DeclarativePlugin::new(manifest.clone(), None, pane_close_grants());
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "pane-pruner.close-sibling-pane".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("API v14 pane closure handler did not create an invocation")
-        };
-        assert!(invocation.allow_workspace_query);
-        assert!(invocation.allow_pane_close);
-        assert!(!invocation.allow_pane_create);
-        assert_eq!(invocation.mode, StructuredHandlerMode::Persistent);
-
-        let mut v13 = manifest.clone();
-        v13.api_version = 13;
-        assert!(v13.validate().unwrap_err().to_string().contains("API v14"));
-
-        let mut process_per_event = manifest.clone();
-        process_per_event.event_handler.as_mut().unwrap().mode =
-            DeclarativeHandlerMode::ProcessPerEvent;
-        assert!(
-            process_per_event
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("persistent")
-        );
-
-        let mut grants = pane_close_grants();
-        grants.remove(&PluginPermission::PaneClose);
-        assert!(
-            validate_grants(&manifest, &grants)
-                .unwrap_err()
-                .to_string()
-                .contains("permissions denied: pane-close")
-        );
-
-        let mut plugin = DeclarativePlugin::new(manifest, None, event_grants(true));
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "pane-pruner.close-sibling-pane".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("ungranted pane closure fixture did not create an invocation")
-        };
-        assert!(!invocation.allow_pane_close);
-    }
-
-    #[test]
-    fn api_v13_tab_creation_requires_persistent_mode_and_exact_grant() {
-        let manifest = tab_create_manifest();
-        manifest.validate().unwrap();
-        validate_grants(&manifest, &tab_create_grants()).unwrap();
-        let context = PluginContext {
-            cwd: None,
-            tab_count: 1,
-            active_tab: 0,
-            terminal_size: (80, 24),
-        };
-        let mut plugin = DeclarativePlugin::new(manifest.clone(), None, tab_create_grants());
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "tab-builder.new-task-tab".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("API v13 tab creation handler did not create an invocation")
-        };
-        assert!(invocation.allow_tab_create);
-        assert!(!invocation.allow_pane_create);
-        assert_eq!(invocation.mode, StructuredHandlerMode::Persistent);
-
-        let mut v12 = manifest.clone();
-        v12.api_version = 12;
-        assert!(v12.validate().unwrap_err().to_string().contains("API v13"));
-
-        let mut process_per_event = manifest.clone();
-        process_per_event.event_handler.as_mut().unwrap().mode =
-            DeclarativeHandlerMode::ProcessPerEvent;
-        assert!(
-            process_per_event
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("persistent")
-        );
-
-        let mut grants = tab_create_grants();
-        grants.remove(&PluginPermission::TabCreate);
-        assert!(
-            validate_grants(&manifest, &grants)
-                .unwrap_err()
-                .to_string()
-                .contains("permissions denied: tab-create")
-        );
-
-        let mut plugin = DeclarativePlugin::new(manifest, None, event_grants(false));
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "tab-builder.new-task-tab".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("ungranted tab creation fixture did not create an invocation")
-        };
-        assert!(!invocation.allow_tab_create);
-    }
-
-    #[test]
-    fn api_v7_workspace_actions_require_persistent_mode_and_exact_grant() {
-        let manifest = workspace_actions_manifest();
-        manifest.validate().unwrap();
-        validate_grants(&manifest, &workspace_action_grants()).unwrap();
-        let context = PluginContext {
-            cwd: Some("/workspace".into()),
-            tab_count: 2,
-            active_tab: 1,
-            terminal_size: (100, 30),
-        };
-        let mut plugin = DeclarativePlugin::new(manifest.clone(), None, workspace_action_grants());
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) =
-            plugin.on_hook(&Hook::AppReady, &context)
-        else {
-            panic!("API v7 workspace action handler did not create an invocation")
-        };
-        assert!(invocation.allow_workspace_query);
-        assert!(invocation.allow_workspace_actions);
-        assert_eq!(invocation.mode, StructuredHandlerMode::Persistent);
-
-        let mut action_only_manifest = manifest.clone();
-        action_only_manifest
-            .permissions
-            .remove(&PluginPermission::WorkspaceQuery);
-        let mut action_only_grants = event_grants(false);
-        action_only_grants.insert(PluginPermission::WorkspaceActions);
-        action_only_manifest.validate().unwrap();
-        validate_grants(&action_only_manifest, &action_only_grants).unwrap();
-        let mut plugin = DeclarativePlugin::new(action_only_manifest, None, action_only_grants);
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) =
-            plugin.on_hook(&Hook::AppReady, &context)
-        else {
-            panic!("action-only API v7 fixture did not create an invocation")
-        };
-        assert!(!invocation.allow_workspace_query);
-        assert!(invocation.allow_workspace_actions);
-
-        let mut v6 = manifest.clone();
-        v6.api_version = 6;
-        assert!(
-            v6.validate()
-                .unwrap_err()
-                .to_string()
-                .contains("API v7 persistent")
-        );
-
-        let mut process_per_event = manifest.clone();
-        process_per_event.event_handler.as_mut().unwrap().mode =
-            DeclarativeHandlerMode::ProcessPerEvent;
-        assert!(
-            process_per_event
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("API v7 persistent")
-        );
-
-        let mut plugin = DeclarativePlugin::new(manifest.clone(), None, event_grants(true));
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) =
-            plugin.on_hook(&Hook::AppReady, &context)
-        else {
-            panic!("ungranted workspace action fixture did not create an invocation")
-        };
-        assert!(!invocation.allow_workspace_actions);
-        assert!(
-            validate_grants(&manifest, &event_grants(true))
-                .unwrap_err()
-                .to_string()
-                .contains("workspace-actions")
-        );
-
-        let mut unrequested = manifest;
-        unrequested
-            .permissions
-            .remove(&PluginPermission::WorkspaceActions);
-        let mut plugin = DeclarativePlugin::new(unrequested, None, event_grants(true));
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) =
-            plugin.on_hook(&Hook::AppReady, &context)
-        else {
-            panic!("unrequested workspace action fixture did not create an invocation")
-        };
-        assert!(!invocation.allow_workspace_actions);
-    }
-
-    #[test]
-    fn api_v8_workspace_topology_requires_persistent_mode_and_exact_grant() {
-        let manifest = workspace_topology_manifest();
-        manifest.validate().unwrap();
-        validate_grants(&manifest, &workspace_topology_grants()).unwrap();
-        let context = PluginContext {
-            cwd: Some("/workspace".into()),
-            tab_count: 2,
-            active_tab: 1,
-            terminal_size: (100, 30),
-        };
-        let mut plugin =
-            DeclarativePlugin::new(manifest.clone(), None, workspace_topology_grants());
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) =
-            plugin.on_hook(&Hook::AppReady, &context)
-        else {
-            panic!("API v8 workspace topology handler did not create an invocation")
-        };
-        assert!(invocation.allow_workspace_query);
-        assert!(!invocation.allow_workspace_actions);
-        assert!(invocation.allow_workspace_topology);
-        assert_eq!(invocation.mode, StructuredHandlerMode::Persistent);
-
-        let mut topology_only_manifest = manifest.clone();
-        topology_only_manifest
-            .permissions
-            .remove(&PluginPermission::WorkspaceQuery);
-        let mut topology_only_grants = event_grants(false);
-        topology_only_grants.insert(PluginPermission::WorkspaceTopology);
-        topology_only_manifest.validate().unwrap();
-        validate_grants(&topology_only_manifest, &topology_only_grants).unwrap();
-        let mut plugin = DeclarativePlugin::new(topology_only_manifest, None, topology_only_grants);
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) =
-            plugin.on_hook(&Hook::AppReady, &context)
-        else {
-            panic!("topology-only API v8 fixture did not create an invocation")
-        };
-        assert!(!invocation.allow_workspace_query);
-        assert!(invocation.allow_workspace_topology);
-
-        let mut v7 = manifest.clone();
-        v7.api_version = 7;
-        assert!(
-            v7.validate()
-                .unwrap_err()
-                .to_string()
-                .contains("API v8 persistent")
-        );
-
-        let mut process_per_event = manifest.clone();
-        process_per_event.event_handler.as_mut().unwrap().mode =
-            DeclarativeHandlerMode::ProcessPerEvent;
-        assert!(
-            process_per_event
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("API v8 persistent")
-        );
-
-        let mut plugin = DeclarativePlugin::new(manifest.clone(), None, event_grants(true));
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) =
-            plugin.on_hook(&Hook::AppReady, &context)
-        else {
-            panic!("ungranted workspace topology fixture did not create an invocation")
-        };
-        assert!(!invocation.allow_workspace_topology);
-        assert!(
-            validate_grants(&manifest, &event_grants(true))
-                .unwrap_err()
-                .to_string()
-                .contains("workspace-topology")
-        );
-
-        let mut unrequested = manifest;
-        unrequested
-            .permissions
-            .remove(&PluginPermission::WorkspaceTopology);
-        let mut plugin = DeclarativePlugin::new(unrequested, None, event_grants(true));
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) =
-            plugin.on_hook(&Hook::AppReady, &context)
-        else {
-            panic!("unrequested workspace topology fixture did not create an invocation")
-        };
-        assert!(!invocation.allow_workspace_topology);
-    }
-
-    #[test]
-    fn api_v9_handler_commands_are_bounded_namespaced_and_exact() {
-        let manifest = handler_command_manifest();
-        manifest.validate().unwrap();
-        validate_grants(&manifest, &event_grants(false)).unwrap();
-        let mut plugin = DeclarativePlugin::new(manifest.clone(), None, event_grants(false));
+        let grants = manifest.permissions.clone();
+        let mut plugin = DeclarativePlugin::new(manifest.clone(), None, grants.clone());
         let commands = plugin.commands();
         assert_eq!(commands.len(), 1);
-        assert_eq!(commands[0].id, "command-tool.inspect-workspace");
-        assert_eq!(commands[0].name, "Inspect Workspace");
-        assert_eq!(commands[0].category.as_deref(), Some("Command Tool"));
+        assert_eq!(commands[0].id, "handler-fixture.run");
+        assert_eq!(commands[0].name, "Run");
+        assert_eq!(commands[0].category.as_deref(), Some("Handler Fixture"));
 
         let context = PluginContext {
             cwd: Some("/workspace/private".into()),
-            tab_count: 3,
-            active_tab: 1,
-            terminal_size: (120, 36),
+            ..context()
         };
         let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
             .on_hook(
                 &Hook::CommandInvoked {
-                    command_id: "command-tool.inspect-workspace".into(),
+                    command_id: "handler-fixture.run".into(),
                 },
                 &context,
             )
         else {
-            panic!("declared API v9 command did not create a handler invocation")
+            panic!("declared command did not create a handler invocation")
         };
-        assert_eq!(invocation.plugin_id, "command-tool");
         assert_eq!(invocation.mode, StructuredHandlerMode::Persistent);
         let value: serde_json::Value = serde_json::from_str(&invocation.event_json).unwrap();
         assert_eq!(value["schema_version"], 1);
-        assert_eq!(value["plugin_id"], "command-tool");
+        assert_eq!(value["plugin_id"], "handler-fixture");
         assert_eq!(value["event"]["type"], "command-invoked");
-        assert_eq!(
-            value["event"]["command_id"],
-            "command-tool.inspect-workspace"
-        );
+        assert_eq!(value["event"]["command_id"], "handler-fixture.run");
         assert!(value.get("context").is_none());
         assert!(invocation.event_json.len() <= MAX_PERSISTENT_SOURCE_EVENT_BYTES);
 
         assert!(matches!(
             plugin.on_hook(
                 &Hook::CommandInvoked {
-                    command_id: "command-tool.undeclared".into(),
+                    command_id: "handler-fixture.undeclared".into(),
                 },
                 &context,
             ),
             HookResponse::Ignored
         ));
 
-        let mut process_per_event = manifest;
-        process_per_event.event_handler.as_mut().unwrap().mode =
-            DeclarativeHandlerMode::ProcessPerEvent;
+        let process_per_event = handler_manifest(&["ui-actions"], false, &["command-invoked"]);
         process_per_event.validate().unwrap();
-        let mut plugin = DeclarativePlugin::new(process_per_event, None, event_grants(false));
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "command-tool.inspect-workspace".into(),
-                },
-                &context,
-            )
-        else {
-            panic!("process-per-event API v9 command did not create an invocation")
-        };
+        let invocation = invocation_for(
+            process_per_event,
+            grants,
+            &Hook::CommandInvoked {
+                command_id: "handler-fixture.run".into(),
+            },
+            &context,
+        );
         assert_eq!(invocation.mode, StructuredHandlerMode::ProcessPerEvent);
     }
 
     #[test]
-    fn api_v9_handler_command_contract_fails_closed() {
-        let manifest = handler_command_manifest();
-
-        let mut v8 = manifest.clone();
-        v8.api_version = 8;
-        assert!(v8.validate().unwrap_err().to_string().contains("API v9"));
+    fn handler_command_contract_fails_closed() {
+        let manifest = handler_manifest(&["ui-actions"], true, &["command-invoked"]);
 
         let mut missing_subscription = manifest.clone();
-        missing_subscription
-            .event_handler
-            .as_mut()
-            .unwrap()
-            .events
-            .clear();
+        missing_subscription.event_handler.as_mut().unwrap().events =
+            BTreeSet::from([StructuredEventKind::AppReady]);
         assert!(
             missing_subscription
                 .validate()
@@ -8614,7 +3258,7 @@ events = ["command-invoked"]
     }
 
     #[test]
-    fn api_v10_setting_schema_is_typed_bounded_and_versioned() {
+    fn setting_schema_is_typed_and_bounded() {
         let manifest = configurable_plugin_manifest();
         manifest.validate().unwrap();
         let defaults = effective_settings(&manifest, &BTreeMap::new()).unwrap();
@@ -8627,10 +3271,6 @@ events = ["command-invoked"]
             defaults["detail"],
             PluginSettingValue::Text("summary".into())
         );
-
-        let mut v9 = manifest.clone();
-        v9.api_version = 9;
-        assert!(v9.validate().unwrap_err().to_string().contains("API v10"));
 
         let mut duplicate = manifest.clone();
         duplicate.settings.push(duplicate.settings[0].clone());
@@ -8680,20 +3320,17 @@ events = ["command-invoked"]
     }
 
     #[test]
-    fn api_v10_settings_persist_reload_and_reach_profiles_and_handlers() {
+    fn settings_persist_reload_and_reach_profiles_and_handlers() {
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("source");
         let root = temp.path().join("installed");
         let registry_path = temp.path().join("plugins.toml");
         fs::create_dir_all(&source).unwrap();
         fs::write(source.join(MANIFEST_NAME), configurable_manifest("1.0.0")).unwrap();
-        execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source,
-                grants: event_grants(false),
-                enable: true,
-                replace: false,
-            },
+        install(
+            &source,
+            permissions(&["process-spawn", "event-subscribe", "ui-actions"]),
+            true,
             &registry_path,
             &root,
         )
@@ -8728,9 +3365,7 @@ events = ["command-invoked"]
         );
         let context = PluginContext {
             cwd: Some("/workspace".into()),
-            tab_count: 2,
-            active_tab: 1,
-            terminal_size: (100, 30),
+            ..context()
         };
         let HookResponse::Action(PluginAction::OpenTab { env, .. }) = plugins[0].on_hook(
             &Hook::CommandInvoked {
@@ -8811,20 +3446,17 @@ events = ["command-invoked"]
     }
 
     #[test]
-    fn api_v10_invalid_setting_overrides_fail_without_persistence() {
+    fn invalid_setting_overrides_fail_without_persistence() {
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("source");
         let root = temp.path().join("installed");
         let registry_path = temp.path().join("plugins.toml");
         fs::create_dir_all(&source).unwrap();
         fs::write(source.join(MANIFEST_NAME), configurable_manifest("1.0.0")).unwrap();
-        execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source,
-                grants: event_grants(false),
-                enable: true,
-                replace: false,
-            },
+        install(
+            &source,
+            permissions(&["process-spawn", "event-subscribe", "ui-actions"]),
+            true,
             &registry_path,
             &root,
         )
@@ -8872,47 +3504,48 @@ events = ["command-invoked"]
         );
     }
 
+    fn command_completed(command: String, output: String, content_available: bool) -> Hook {
+        Hook::CommandExecuted {
+            region_id: 44,
+            tab_id: 7,
+            pane_id: Some(3),
+            command,
+            command_truncated: false,
+            output,
+            output_truncated: true,
+            content_available,
+            exit_code: Some(9),
+        }
+    }
+
     #[test]
-    fn api_v4_command_events_are_bounded_typed_and_terminal_text_gated() {
-        let manifest = command_event_manifest();
+    fn command_events_are_bounded_typed_and_command_output_gated() {
+        let manifest = handler_manifest(&[], false, &["command-completed"]);
         manifest.validate().unwrap();
-        validate_grants(&manifest, &command_event_grants()).unwrap();
+        let grants = manifest.permissions.clone();
         assert!(
             validate_grants(
                 &manifest,
-                &BTreeSet::from([
-                    PluginPermission::ProcessSpawn,
-                    PluginPermission::EventSubscribe,
-                ]),
+                &permissions(&["process-spawn", "event-subscribe"])
             )
             .unwrap_err()
             .to_string()
-            .contains("permissions denied: terminal-text")
+            .contains("permissions denied: command-output")
         );
-        let mut plugin = DeclarativePlugin::new(manifest.clone(), None, command_event_grants());
-        let response = plugin.on_hook(
-            &Hook::CommandExecuted {
-                region_id: 44,
-                tab_id: 7,
-                pane_id: Some(3),
-                command: format!("\u{0007}printf '\"{}\"'", "x".repeat(4_000)),
-                command_truncated: false,
-                output: format!("\u{0001}{}", "\\\n".repeat(12_000)),
-                output_truncated: true,
-                content_available: true,
-                exit_code: Some(9),
-            },
-            &PluginContext {
-                cwd: Some("/workspace/project".into()),
-                tab_count: 8,
-                active_tab: 7,
-                terminal_size: (120, 40),
-            },
-        );
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = response
-        else {
-            panic!("subscribed command event did not create a handler invocation")
+        let context = PluginContext {
+            cwd: Some("/workspace/project".into()),
+            ..context()
         };
+        let invocation = invocation_for(
+            manifest.clone(),
+            grants,
+            &command_completed(
+                format!("\u{0007}printf '\"{}\"'", "x".repeat(4_000)),
+                format!("\u{0001}{}", "\\\n".repeat(12_000)),
+                true,
+            ),
+            &context,
+        );
         assert!(invocation.event_json.len() <= MAX_STRUCTURED_CONTEXT_BYTES);
         assert_eq!(invocation.mode, StructuredHandlerMode::ProcessPerEvent);
         let value: serde_json::Value = serde_json::from_str(&invocation.event_json).unwrap();
@@ -8936,77 +3569,51 @@ events = ["command-invoked"]
         let mut ungranted = DeclarativePlugin::new(
             manifest.clone(),
             None,
-            BTreeSet::from([
-                PluginPermission::ProcessSpawn,
-                PluginPermission::EventSubscribe,
-            ]),
+            permissions(&["process-spawn", "event-subscribe"]),
         );
         assert!(matches!(
             ungranted.on_hook(
-                &Hook::CommandExecuted {
-                    region_id: 1,
-                    tab_id: 1,
-                    pane_id: None,
-                    command: "must-not-leak".into(),
-                    command_truncated: false,
-                    output: "must-not-leak".into(),
-                    output_truncated: false,
-                    content_available: true,
-                    exit_code: Some(0),
-                },
-                &PluginContext {
-                    cwd: None,
-                    tab_count: 1,
-                    active_tab: 0,
-                    terminal_size: (80, 24),
-                },
+                &command_completed("must-not-leak".into(), "must-not-leak".into(), true),
+                &context,
             ),
             HookResponse::Ignored
         ));
 
-        let mut v3 = manifest.clone();
-        v3.api_version = 3;
-        assert!(v3.validate().unwrap_err().to_string().contains("API v4"));
-        let mut no_request = manifest;
-        no_request
-            .permissions
-            .remove(&PluginPermission::TerminalText);
+        let mut no_request = manifest.clone();
+        no_request.permissions.remove(Capability::CommandOutput);
         assert!(
             no_request
                 .validate()
                 .unwrap_err()
                 .to_string()
-                .contains("terminal-text")
+                .contains("command-output")
+        );
+        let mut unsubscribed = manifest;
+        unsubscribed.event_handler.as_mut().unwrap().events =
+            BTreeSet::from([StructuredEventKind::AppReady]);
+        assert!(
+            unsubscribed
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("command-output permission require each other")
         );
     }
 
     #[test]
-    fn api_v4_never_discloses_evicted_command_region_text() {
-        let mut plugin =
-            DeclarativePlugin::new(command_event_manifest(), None, command_event_grants());
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandExecuted {
-                    region_id: 90,
-                    tab_id: 2,
-                    pane_id: None,
-                    command: "stale-secret-command".into(),
-                    command_truncated: false,
-                    output: "stale-secret-output".into(),
-                    output_truncated: false,
-                    content_available: false,
-                    exit_code: Some(0),
-                },
-                &PluginContext {
-                    cwd: None,
-                    tab_count: 1,
-                    active_tab: 0,
-                    terminal_size: (80, 24),
-                },
-            )
-        else {
-            panic!("subscribed command event did not create an invocation")
-        };
+    fn command_events_never_disclose_evicted_region_text() {
+        let manifest = handler_manifest(&[], false, &["command-completed"]);
+        let grants = manifest.permissions.clone();
+        let invocation = invocation_for(
+            manifest,
+            grants,
+            &command_completed(
+                "stale-secret-command".into(),
+                "stale-secret-output".into(),
+                false,
+            ),
+            &context(),
+        );
         assert!(!invocation.event_json.contains("stale-secret"));
         let value: serde_json::Value = serde_json::from_str(&invocation.event_json).unwrap();
         assert!(!value["event"]["content_available"].as_bool().unwrap());
@@ -9020,13 +3627,10 @@ events = ["command-invoked"]
         use std::os::unix::fs::symlink;
 
         let (_temp, source, root, registry_path) = fixture();
-        execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: process_grant(),
-                enable: true,
-                replace: false,
-            },
+        install(
+            &source,
+            permissions(&["process-spawn"]),
+            true,
             &registry_path,
             &root,
         )
@@ -9080,7 +3684,7 @@ events = ["command-invoked"]
         let error = execute_admin_at(
             PluginAdminCommand::Install {
                 directory: source,
-                grants: process_grant(),
+                grants: permissions(&["process-spawn"]),
                 enable: true,
                 replace: false,
             },
@@ -9110,13 +3714,10 @@ events = ["command-invoked"]
         fs::create_dir(&real_root).unwrap();
         symlink(&real_root, &linked_root).unwrap();
 
-        let error = execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: process_grant(),
-                enable: true,
-                replace: false,
-            },
+        let error = install(
+            &source,
+            permissions(&["process-spawn"]),
+            true,
             &registry_path,
             &linked_root,
         )
@@ -9125,13 +3726,10 @@ events = ["command-invoked"]
         assert!(fs::read_dir(real_root).unwrap().next().is_none());
         assert!(!registry_path.exists());
 
-        execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source,
-                grants: process_grant(),
-                enable: true,
-                replace: false,
-            },
+        install(
+            &source,
+            permissions(&["process-spawn"]),
+            true,
             &registry_path,
             &root,
         )
@@ -9151,22 +3749,24 @@ events = ["command-invoked"]
     }
 
     #[test]
-    fn update_is_explicit_and_new_permissions_cannot_migrate_silently() {
+    fn update_is_explicit_and_new_or_wider_permissions_cannot_migrate_silently() {
         let (_temp, source, root, registry_path) = fixture();
-        execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: process_grant(),
-                enable: true,
-                replace: false,
-            },
+        fs::write(
+            source.join(MANIFEST_NAME),
+            manifest("1.0.0", ", \"workspace-query\"", "sample"),
+        )
+        .unwrap();
+        install(
+            &source,
+            permissions(&["process-spawn", "workspace-query"]),
+            true,
             &registry_path,
             &root,
         )
         .unwrap();
         fs::write(
             source.join(MANIFEST_NAME),
-            manifest("1.1.0", "", "sample-v2"),
+            manifest("1.1.0", ", \"workspace-query\"", "sample-v2"),
         )
         .unwrap();
         execute_admin_at(
@@ -9177,28 +3777,23 @@ events = ["command-invoked"]
             &root,
         )
         .unwrap();
-        let shown = execute_admin_at(
-            PluginAdminCommand::Show {
-                id: "sample-tools".into(),
-                json: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-        assert!(shown.contains("v1.1.0"));
+        let show = || {
+            execute_admin_at(
+                PluginAdminCommand::Show {
+                    id: "sample-tools".into(),
+                    json: false,
+                },
+                &registry_path,
+                &root,
+            )
+            .unwrap()
+        };
+        assert!(show().contains("v1.1.0"));
 
-        execute_admin_at(
-            PluginAdminCommand::Disable {
-                id: "sample-tools".into(),
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
+        // Widening a scope is a new permission, exactly like a new capability.
         fs::write(
             source.join(MANIFEST_NAME),
-            manifest("2.0.0", ", \"terminal-text\"", "sample-v3"),
+            manifest("2.0.0", ", \"workspace-query:all-windows\"", "sample-v3"),
         )
         .unwrap();
         let error = execute_admin_at(
@@ -9209,117 +3804,105 @@ events = ["command-invoked"]
             &root,
         )
         .unwrap_err();
-        assert!(format!("{error:#}").contains("new permissions"));
-        let shown = execute_admin_at(
-            PluginAdminCommand::Show {
-                id: "sample-tools".into(),
-                json: false,
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-        assert!(shown.contains("v1.1.0"));
+        assert!(format!("{error:#}").contains("new permissions (workspace-query:all-windows)"));
+        assert!(show().contains("v1.1.0"));
     }
 
     #[test]
-    fn reviewed_update_handles_added_and_removed_permissions_explicitly() {
+    fn reviewed_update_intersects_grants_with_scope_aware_requests() {
         let (_temp, source, root, registry_path) = fixture();
-        execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: process_grant(),
-                enable: true,
-                replace: false,
-            },
+        let write = |version: &str, extra: &str| {
+            fs::write(
+                source.join(MANIFEST_NAME),
+                manifest(version, extra, "sample"),
+            )
+            .unwrap();
+        };
+        install(
+            &source,
+            permissions(&["process-spawn"]),
+            true,
             &registry_path,
             &root,
         )
         .unwrap();
 
-        fs::write(
-            source.join(MANIFEST_NAME),
-            manifest("2.0.0", ", \"workspace-query\"", "sample-v2").replacen(
-                "api_version = 1",
-                "api_version = 2",
-                1,
-            ),
-        )
-        .unwrap();
+        // Added capability: the old grants do not cover it.
+        write("2.0.0", ", \"workspace-query:all-windows\"");
         let preview = preview_update_at("sample-tools", &registry_path, &root).unwrap();
-        assert_eq!(preview.current_version, "1.0.0");
-        assert_eq!(preview.candidate_version, "2.0.0");
-        assert_eq!(preview.current_permissions, process_grant());
-        assert_eq!(preview.candidate_permissions, structured_grants());
+        assert_eq!(preview.current_permissions, permissions(&["process-spawn"]));
+        assert_eq!(
+            preview.candidate_permissions,
+            permissions(&["process-spawn", "workspace-query:all-windows"])
+        );
+        let retained = preview
+            .current_grants
+            .intersection(&preview.candidate_permissions);
+        assert_eq!(retained, permissions(&["process-spawn"]));
+        let error = execute_admin_at(
+            preview.command(retained.clone(), true),
+            &registry_path,
+            &root,
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("workspace-query:all-windows"));
+        execute_admin_at(preview.command(retained, false), &registry_path, &root).unwrap();
+        let preview = preview_update_at("sample-tools", &registry_path, &root).unwrap();
         execute_admin_at(
-            preview.command(process_grant(), false),
+            preview.command(preview.candidate_permissions.clone(), true),
             &registry_path,
             &root,
         )
         .unwrap();
-
         let (_, statuses) = discover_runtime_plugins_at(&registry_path, &root).unwrap();
         assert_eq!(statuses[0].version, "2.0.0");
-        assert_eq!(statuses[0].granted, process_grant());
-        assert!(!statuses[0].enabled);
-
-        fs::write(
-            source.join(MANIFEST_NAME),
-            manifest("2.1.0", ", \"workspace-query\"", "sample-v2-1").replacen(
-                "api_version = 1",
-                "api_version = 2",
-                1,
-            ),
-        )
-        .unwrap();
-        let preview = preview_update_at("sample-tools", &registry_path, &root).unwrap();
-        execute_admin_at(
-            preview.command(structured_grants(), true),
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-        let (_, statuses) = discover_runtime_plugins_at(&registry_path, &root).unwrap();
-        assert_eq!(statuses[0].version, "2.1.0");
-        assert_eq!(statuses[0].granted, structured_grants());
         assert!(statuses[0].enabled);
 
-        fs::write(
-            source.join(MANIFEST_NAME),
-            manifest("3.0.0", "", "sample-v3").replacen("api_version = 1", "api_version = 2", 1),
-        )
-        .unwrap();
+        // Narrowed scope: an all-windows grant shrinks to the new request.
+        write("3.0.0", ", \"workspace-query\"");
         let preview = preview_update_at("sample-tools", &registry_path, &root).unwrap();
-        let retained_grants = preview
+        let retained = preview
             .current_grants
-            .intersection(&preview.candidate_permissions)
-            .copied()
-            .collect();
-        assert_eq!(retained_grants, process_grant());
-        execute_admin_at(
-            preview.command(retained_grants, true),
-            &registry_path,
-            &root,
-        )
-        .unwrap();
+            .intersection(&preview.candidate_permissions);
+        assert_eq!(retained, permissions(&["process-spawn", "workspace-query"]));
+        execute_admin_at(preview.command(retained, true), &registry_path, &root).unwrap();
 
+        // Widened scope: a window-scoped grant stays window-scoped, which does
+        // not cover the wider request.
+        write("4.0.0", ", \"workspace-query:all-windows\"");
+        let preview = preview_update_at("sample-tools", &registry_path, &root).unwrap();
+        let retained = preview
+            .current_grants
+            .intersection(&preview.candidate_permissions);
+        assert_eq!(retained, permissions(&["process-spawn", "workspace-query"]));
+        assert_eq!(
+            preview.candidate_permissions.uncovered_by(&retained),
+            vec!["workspace-query:all-windows".parse().unwrap()]
+        );
+        assert!(execute_admin_at(preview.command(retained, true), &registry_path, &root).is_err());
+
+        // Removed capability: its grant is dropped.
+        write("5.0.0", "");
+        let preview = preview_update_at("sample-tools", &registry_path, &root).unwrap();
+        let retained = preview
+            .current_grants
+            .intersection(&preview.candidate_permissions);
+        assert_eq!(retained, permissions(&["process-spawn"]));
+        execute_admin_at(preview.command(retained, true), &registry_path, &root).unwrap();
         let (_, statuses) = discover_runtime_plugins_at(&registry_path, &root).unwrap();
-        assert_eq!(statuses[0].version, "3.0.0");
-        assert_eq!(statuses[0].requested, process_grant());
-        assert_eq!(statuses[0].granted, process_grant());
+        assert_eq!(statuses[0].version, "5.0.0");
+        assert_eq!(statuses[0].requested, permissions(&["process-spawn"]));
+        assert_eq!(statuses[0].granted, permissions(&["process-spawn"]));
         assert!(statuses[0].enabled);
     }
 
     #[test]
     fn reviewed_update_rejects_source_and_registry_drift_without_partial_commit() {
         let (_temp, source, root, registry_path) = fixture();
-        execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: process_grant(),
-                enable: true,
-                replace: false,
-            },
+        install(
+            &source,
+            permissions(&["process-spawn"]),
+            true,
             &registry_path,
             &root,
         )
@@ -9340,7 +3923,7 @@ events = ["command-invoked"]
         )
         .unwrap();
         let error = execute_admin_at(
-            preview.command(process_grant(), true),
+            preview.command(permissions(&["process-spawn"]), true),
             &registry_path,
             &root,
         )
@@ -9360,7 +3943,7 @@ events = ["command-invoked"]
         .unwrap();
         let registry_after_disable = fs::read(&registry_path).unwrap();
         let error = execute_admin_at(
-            preview.command(process_grant(), true),
+            preview.command(permissions(&["process-spawn"]), true),
             &registry_path,
             &root,
         )
@@ -9373,13 +3956,10 @@ events = ["command-invoked"]
     #[test]
     fn reviewed_update_preserves_or_clears_the_configured_profile_truthfully() {
         let (_temp, source, root, registry_path) = fixture();
-        execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: process_grant(),
-                enable: true,
-                replace: false,
-            },
+        install(
+            &source,
+            permissions(&["process-spawn"]),
+            true,
             &registry_path,
             &root,
         )
@@ -9403,7 +3983,7 @@ events = ["command-invoked"]
         assert_eq!(preview.configured_default_profile.as_deref(), Some("quiet"));
         assert!(!preview.default_profile_will_be_cleared);
         execute_admin_at(
-            preview.command(process_grant(), true),
+            preview.command(permissions(&["process-spawn"]), true),
             &registry_path,
             &root,
         )
@@ -9429,7 +4009,7 @@ working_directory = "inherit"
         let preview = preview_update_at("sample-tools", &registry_path, &root).unwrap();
         assert!(preview.default_profile_will_be_cleared);
         execute_admin_at(
-            preview.command(process_grant(), true),
+            preview.command(permissions(&["process-spawn"]), true),
             &registry_path,
             &root,
         )
@@ -9440,20 +4020,17 @@ working_directory = "inherit"
     }
 
     #[test]
-    fn api_v10_update_preserves_compatible_settings_and_rejects_schema_loss() {
+    fn update_preserves_compatible_settings_and_rejects_schema_loss() {
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("source");
         let root = temp.path().join("installed");
         let registry_path = temp.path().join("plugins.toml");
         fs::create_dir_all(&source).unwrap();
         fs::write(source.join(MANIFEST_NAME), configurable_manifest("1.0.0")).unwrap();
-        execute_admin_at(
-            PluginAdminCommand::Install {
-                directory: source.clone(),
-                grants: event_grants(false),
-                enable: true,
-                replace: false,
-            },
+        install(
+            &source,
+            permissions(&["process-spawn", "event-subscribe", "ui-actions"]),
+            true,
             &registry_path,
             &root,
         )
@@ -9526,13 +4103,8 @@ default = "local"
         let parsed: PluginManifest =
             toml::from_str(&manifest("1.0.0", "", "child-that-may-crash-or-hang")).unwrap();
         parsed.validate().unwrap();
-        let mut plugin = DeclarativePlugin::new(parsed, None, process_grant());
-        let context = PluginContext {
-            cwd: None,
-            tab_count: 1,
-            active_tab: 0,
-            terminal_size: (80, 24),
-        };
+        let mut plugin = DeclarativePlugin::new(parsed, None, permissions(&["process-spawn"]));
+        let context = context();
         let started = Instant::now();
         for _ in 0..10_000 {
             let response = plugin.on_hook(
@@ -9547,5 +4119,63 @@ default = "local"
             ));
         }
         assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn every_checked_in_example_validates_installs_and_enables() {
+        let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins");
+        let mut names = fs::read_dir(&examples)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect::<Vec<_>>();
+        names.sort();
+        assert_eq!(
+            names,
+            [
+                "command-notifier",
+                "pane-layouts",
+                "rerun-in-sibling",
+                "task-runner",
+                "window-switcher",
+            ]
+        );
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("installed");
+        let registry_path = temp.path().join("plugins.toml");
+        for name in &names {
+            let directory = examples.join(name);
+            let (manifest, _, _) = PluginManifest::from_directory(&directory)
+                .unwrap_or_else(|error| panic!("example {name} is invalid: {error:#}"));
+            assert_eq!(&manifest.id, name);
+            install(
+                &directory,
+                manifest.permissions.clone(),
+                true,
+                &registry_path,
+                &root,
+            )
+            .unwrap_or_else(|error| panic!("example {name} did not install: {error:#}"));
+        }
+        let (loaded, statuses) = discover_runtime_plugins_at(&registry_path, &root).unwrap();
+        assert_eq!(loaded.len(), names.len());
+        assert!(statuses.iter().all(|status| status.diagnostic.is_none()));
+
+        let task_runner = loaded
+            .into_iter()
+            .find(|plugin| plugin.id() == "task-runner")
+            .unwrap();
+        let mut task_runner = task_runner;
+        let HookResponse::Action(PluginAction::OpenTab { env, .. }) = task_runner.on_hook(
+            &Hook::CommandInvoked {
+                command_id: "task-runner.open-tests".into(),
+            },
+            &context(),
+        ) else {
+            panic!("task-runner tests profile did not open a tab")
+        };
+        let settings: serde_json::Value =
+            serde_json::from_str(&env[STRUCTURED_SETTINGS_ENV]).unwrap();
+        assert_eq!(settings["values"]["test-command"], "cargo test");
+        assert!(env.contains_key(STRUCTURED_CONTEXT_ENV));
     }
 }

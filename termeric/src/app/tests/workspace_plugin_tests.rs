@@ -524,6 +524,7 @@ fn workspace_plugin_hooks_are_targeted_and_mismatched_or_ambiguous_actions_are_r
         assert_eq!(unrelated.load(Ordering::SeqCst), 0);
         // The same rejection contract applies to fresh explicit pane launches.
         let ctx = PluginContext {
+            window_id: 1,
             cwd: snapshot.panes[0].working_directory.clone(),
             tab_count: 1,
             active_tab: 0,

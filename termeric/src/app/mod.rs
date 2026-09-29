@@ -821,14 +821,12 @@ enum RuntimePluginManagerView {
     ReviewInstall {
         page: usize,
         preview: crate::plugin::runtime::PluginInstallPreview,
-        grants: std::collections::BTreeSet<crate::plugin::runtime::PluginPermission>,
-        permission_page: usize,
+        grants: crate::plugin::permission::PluginPermissions,
     },
     ReviewUpdate {
         page: usize,
         preview: Box<crate::plugin::runtime::PluginUpdatePreview>,
-        grants: std::collections::BTreeSet<crate::plugin::runtime::PluginPermission>,
-        permission_page: usize,
+        grants: crate::plugin::permission::PluginPermissions,
     },
     Detail {
         plugin_id: String,

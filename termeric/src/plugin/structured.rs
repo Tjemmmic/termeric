@@ -1,6 +1,12 @@
-//! Bounded out-of-process execution for declarative plugin lifecycle handlers.
+//! Bounded out-of-process execution for declarative plugin event handlers.
+//!
+//! Handlers exchange one schema-v1 JSON document per event. Persistent
+//! handlers additionally echo the host's `request_id`. Each handler response
+//! is checked against a [`HandlerAuthority`]: the plugin's granted
+//! capabilities plus where the response sits in its bounded follow-up chain.
 
-use serde::Deserialize;
+use super::permission::{Capability, PermissionScope, PluginPermissions};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, Command, Stdio};
@@ -21,7 +27,7 @@ pub(crate) const MAX_STRUCTURED_EVENT_BYTES: usize = 16 * 1024;
 pub(crate) const MAX_PERSISTENT_SOURCE_EVENT_BYTES: usize =
     MAX_STRUCTURED_EVENT_BYTES - PERSISTENT_PROTOCOL_RESERVE_BYTES;
 pub(crate) const MAX_TERMINAL_QUERY_BYTES: u32 = 8 * 1024;
-pub(crate) const MAX_TERMINAL_INPUT_BYTES: usize = 8 * 1024;
+const MAX_TERMINAL_INPUT_BYTES: usize = 8 * 1024;
 const PERSISTENT_PROTOCOL_RESERVE_BYTES: usize = 64;
 const HANDLER_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_OUTPUT_BYTES: u64 = 64 * 1024;
@@ -32,9 +38,9 @@ const MAX_TITLE_BYTES: usize = 128;
 const MAX_NOTICE_LINES: usize = 16;
 const MAX_LINE_BYTES: usize = 512;
 const MAX_QUERY_ID_BYTES: usize = 64;
-pub(crate) const MAX_ACTION_ID_BYTES: usize = 64;
-const RESPONSE_SCHEMA_VERSION: u32 = 1;
-const PERSISTENT_SCHEMA_VERSION: u32 = 2;
+const MAX_ACTION_ID_BYTES: usize = 64;
+/// The one handler protocol version, shared by both handler modes.
+pub(crate) const SCHEMA_VERSION: u32 = 1;
 const WORKER_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const PERSISTENT_REAP_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -44,7 +50,7 @@ pub enum StructuredHandlerMode {
     Persistent,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PluginPaneLayoutPreset {
     Columns,
@@ -60,93 +66,132 @@ pub struct StructuredHandlerInvocation {
     pub program: String,
     pub args: Vec<String>,
     pub event_json: String,
-    pub allow_ui_actions: bool,
-    /// Permit one current-window workspace query from this response. Query
-    /// result requests always clear this flag to prevent query chaining.
-    pub allow_workspace_query: bool,
-    /// Permit one current-window focus/selection mutation from this response.
-    /// Workspace action result requests clear every host-operation authority
-    /// so a handler cannot create an unbounded mutation loop.
-    pub allow_workspace_actions: bool,
-    /// Permit one non-destructive current-window topology adjustment from this
-    /// response. Result requests clear every host-operation authority.
-    pub allow_workspace_topology: bool,
-    /// Permit one bounded presented-text query for an exact current-window
-    /// terminal. A terminal result clears every host-operation authority.
-    pub allow_terminal_query: bool,
-    /// Permit one exact ordinary-pane split in the current window. Its result
-    /// clears every host-operation authority to prevent recursive growth.
-    pub allow_pane_create: bool,
-    /// Permit one ordinary local tab in the current window. Its result clears
-    /// every host-operation authority to prevent recursive growth.
-    pub allow_tab_create: bool,
-    /// Permit closing one exact ordinary pane in the current window. Its
-    /// result clears every host-operation authority to prevent recursive
-    /// mutation.
-    pub allow_pane_close: bool,
-    /// Permit scheduling closure of one exact ordinary tab in the current
-    /// window. Its result clears every host-operation authority.
-    pub allow_tab_close: bool,
-    /// Permit moving one exact ordinary pane between current-window tabs.
-    /// Its result clears every host-operation authority.
-    pub allow_pane_move: bool,
-    /// Permit sending bounded text to one exact current-window terminal. Its
-    /// result clears every host-operation authority.
-    pub allow_terminal_input: bool,
-    /// Permit non-destructive same-tab pane layout changes in the current
-    /// window. Its result clears every host-operation authority.
-    pub allow_pane_layout: bool,
-    /// Permit scheduling closure of this exact window. This authority exists
-    /// only on an explicitly invoked plugin command and is cleared from the
-    /// final result request.
-    pub allow_window_close: bool,
-    /// Permit one bounded process-wide workspace inventory query. A result
-    /// clears every query authority while later APIs may retain only their
-    /// separately granted process follow-up authorities.
-    pub allow_process_query: bool,
-    /// Permit one exact non-activating tab selection or pane focus in any live
-    /// window owned by this Termeric process. Its result clears every host
-    /// operation authority.
-    pub allow_process_actions: bool,
-    /// Permit one bounded presentation-safe text query for an exact terminal
-    /// in any live window owned by this Termeric process. Its result clears
-    /// every host operation authority.
-    pub allow_process_terminal_text: bool,
-    /// Permit one bounded guarded text write to an exact terminal in any live
-    /// window owned by this Termeric process. Its result clears every host
-    /// operation authority.
-    pub allow_process_terminal_input: bool,
-    /// Permit one ordinary local tab in an exact live window owned by this
-    /// Termeric process. Its result clears every host operation authority.
-    pub allow_process_tab_create: bool,
-    /// Permit one ordinary pane split at an exact live process-owned pane.
-    /// Its result clears every host operation authority.
-    pub allow_process_pane_create: bool,
-    /// Permit one exact ordinary pane move between live process-owned tabs.
-    /// Its result clears every host operation authority.
-    pub allow_process_pane_move: bool,
-    /// Permit one exact ordinary tab move between live process-owned windows.
-    /// Its result clears every host operation authority.
-    pub allow_process_tab_move: bool,
-    /// Permit closure of one exact ordinary pane in a process-owned window.
-    /// Its result clears every host operation authority.
-    pub allow_process_pane_close: bool,
-    /// Permit closure of one exact ordinary tab in a process-owned window.
-    /// Its result clears every host operation authority.
-    pub allow_process_tab_close: bool,
-    /// Permit non-destructive pane layouts in one exact process-owned tab.
-    /// Its result clears every host operation authority.
-    pub allow_process_pane_layout: bool,
-    /// Permit closure of one exact non-final process-owned window.
-    /// Its result clears every host operation authority.
-    pub allow_process_window_close: bool,
-    /// Permit one native focus request for an exact process-owned window.
-    /// Its result clears every host operation authority.
-    pub allow_process_window_focus: bool,
     pub mode: StructuredHandlerMode,
+    pub authority: HandlerAuthority,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+/// Where a handler response sits in its follow-up chain. An event may start
+/// one query or one host action; a workspace query result may perform one
+/// more host operation; any other result ends the chain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FollowUpStage {
+    Event,
+    AfterWorkspaceQuery,
+    Ended,
+}
+
+/// What one handler response may do: the plugin's granted capabilities and
+/// the response's position in its bounded follow-up chain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HandlerAuthority {
+    grants: PluginPermissions,
+    stage: FollowUpStage,
+    /// Whether the chain started from an explicitly invoked plugin command,
+    /// the only origin allowed to close the plugin's own window at window
+    /// scope.
+    command_invoked: bool,
+}
+
+impl HandlerAuthority {
+    /// Authority for a freshly dispatched event. Process-per-event handlers
+    /// cannot receive results, so they may never start host operations.
+    pub fn for_event(
+        grants: PluginPermissions,
+        mode: StructuredHandlerMode,
+        command_invoked: bool,
+    ) -> Self {
+        Self {
+            grants,
+            stage: match mode {
+                StructuredHandlerMode::ProcessPerEvent => FollowUpStage::Ended,
+                StructuredHandlerMode::Persistent => FollowUpStage::Event,
+            },
+            command_invoked,
+        }
+    }
+
+    pub fn grants(&self) -> &PluginPermissions {
+        &self.grants
+    }
+
+    /// Authority for the result of `operation`: a workspace query result may
+    /// still perform one host operation; every other result ends the chain.
+    pub fn after(&self, operation: &StructuredResponseAction) -> Self {
+        let stage = match (self.stage, operation.operation_kind()) {
+            (FollowUpStage::Event, OperationKind::WorkspaceQuery) => {
+                FollowUpStage::AfterWorkspaceQuery
+            }
+            _ => FollowUpStage::Ended,
+        };
+        Self {
+            stage,
+            ..self.clone()
+        }
+    }
+
+    /// Check one complete handler response: every action needs its
+    /// capability, host operations must fit the follow-up chain, and a
+    /// response carries at most one host operation.
+    pub fn check(&self, actions: &[StructuredResponseAction]) -> Result<(), String> {
+        if actions.len() > MAX_ACTIONS {
+            return Err(format!(
+                "handler response contains more than {MAX_ACTIONS} actions"
+            ));
+        }
+        let mut host_operations = 0;
+        for action in actions {
+            let name = action.name();
+            let capability = action.required_capability();
+            let Some(scope) = self.grants.scope(capability) else {
+                return Err(format!(
+                    "handler requested {name} without the {capability} permission"
+                ));
+            };
+            match (action.operation_kind(), self.stage) {
+                (OperationKind::Ui, _) => {}
+                (_, FollowUpStage::Ended) => {
+                    return Err(format!(
+                        "handler requested {name}, but this response cannot start host operations; process-per-event handlers, action results, and terminal query results end the chain"
+                    ));
+                }
+                (OperationKind::WorkspaceQuery, FollowUpStage::AfterWorkspaceQuery) => {
+                    return Err(format!(
+                        "handler requested {name} from a workspace query result, which may perform only one host action or terminal query"
+                    ));
+                }
+                _ => host_operations += 1,
+            }
+            if matches!(action, StructuredResponseAction::CloseWindow { .. })
+                && scope == PermissionScope::Window
+                && !self.command_invoked
+            {
+                return Err(
+                    "handler requested close-window outside an invoked plugin command; window-close for the plugin's own window is command-scoped"
+                        .into(),
+                );
+            }
+            action.validate_fields()?;
+        }
+        if host_operations > 1 {
+            return Err("handler response contains more than one host operation".into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OperationKind {
+    Ui,
+    WorkspaceQuery,
+    TerminalQuery,
+    Action,
+}
+
+/// One action in a handler response. Actions that target a window, tab, or
+/// pane accept an optional window ID that defaults to the plugin's
+/// originating window; any other window requires the capability's
+/// all-windows scope, which the host enforces where the action executes.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum StructuredResponseAction {
     ShowMessage {
@@ -159,104 +204,10 @@ pub enum StructuredResponseAction {
     QueryWorkspace {
         query_id: String,
     },
-    QueryProcess {
-        query_id: String,
-    },
-    SelectProcessTab {
-        action_id: String,
-        window_id: u64,
-        tab_id: u64,
-    },
-    FocusProcessPane {
-        action_id: String,
-        window_id: u64,
-        tab_id: u64,
-        pane_id: u32,
-    },
-    QueryProcessTerminal {
-        query_id: String,
-        window_id: u64,
-        tab_id: u64,
-        pane_id: u32,
-        history_lines: u16,
-        max_bytes: u32,
-    },
-    SendProcessText {
-        action_id: String,
-        window_id: u64,
-        tab_id: u64,
-        pane_id: u32,
-        text: String,
-        paste: bool,
-        enter: bool,
-    },
-    CreateProcessTab {
-        action_id: String,
-        window_id: u64,
-    },
-    CreateProcessPane {
-        action_id: String,
-        window_id: u64,
-        tab_id: u64,
-        pane_id: u32,
-        direction: crate::control::protocol::SplitDirection,
-    },
-    MoveProcessPane {
-        action_id: String,
-        source_window_id: u64,
-        source_tab_id: u64,
-        pane_id: u32,
-        destination_window_id: u64,
-        destination_tab_id: u64,
-        target_pane_id: u32,
-        direction: crate::control::protocol::SplitDirection,
-    },
-    MoveProcessTab {
-        action_id: String,
-        source_window_id: u64,
-        tab_id: u64,
-        destination_window_id: u64,
-        destination_index: u16,
-    },
-    CloseProcessPane {
-        action_id: String,
-        window_id: u64,
-        tab_id: u64,
-        pane_id: u32,
-    },
-    CloseProcessTab {
-        action_id: String,
-        window_id: u64,
-        tab_id: u64,
-    },
-    SwapProcessPanes {
-        action_id: String,
-        window_id: u64,
-        tab_id: u64,
-        first_pane_id: u32,
-        second_pane_id: u32,
-    },
-    BalanceProcessPanes {
-        action_id: String,
-        window_id: u64,
-        tab_id: u64,
-    },
-    ApplyProcessPaneLayout {
-        action_id: String,
-        window_id: u64,
-        tab_id: u64,
-        preset: PluginPaneLayoutPreset,
-    },
-    CloseProcessWindow {
-        action_id: String,
-        window_id: u64,
-    },
-    FocusProcessWindow {
-        action_id: String,
-        window_id: u64,
-    },
     QueryTerminal {
         query_id: String,
+        #[serde(default)]
+        window_id: Option<u64>,
         tab_id: u64,
         pane_id: u32,
         history_lines: u16,
@@ -264,76 +215,299 @@ pub enum StructuredResponseAction {
     },
     SelectTab {
         action_id: String,
+        #[serde(default)]
+        window_id: Option<u64>,
         tab_id: u64,
     },
     FocusPane {
         action_id: String,
+        #[serde(default)]
+        window_id: Option<u64>,
         tab_id: u64,
         pane_id: u32,
-    },
-    MoveTab {
-        action_id: String,
-        tab_id: u64,
-        destination_index: u16,
-    },
-    ResizeDivider {
-        action_id: String,
-        tab_id: u64,
-        divider_id: u64,
-        ratio_millis: u16,
-    },
-    CreatePane {
-        action_id: String,
-        tab_id: u64,
-        pane_id: u32,
-        direction: crate::control::protocol::SplitDirection,
-    },
-    CreateTab {
-        action_id: String,
-    },
-    ClosePane {
-        action_id: String,
-        tab_id: u64,
-        pane_id: u32,
-    },
-    CloseTab {
-        action_id: String,
-        tab_id: u64,
-    },
-    MovePane {
-        action_id: String,
-        source_tab_id: u64,
-        pane_id: u32,
-        destination_tab_id: u64,
-        target_pane_id: u32,
-        direction: crate::control::protocol::SplitDirection,
     },
     SendText {
         action_id: String,
+        #[serde(default)]
+        window_id: Option<u64>,
         tab_id: u64,
         pane_id: u32,
         text: String,
         paste: bool,
         enter: bool,
     },
+    CreateTab {
+        action_id: String,
+        #[serde(default)]
+        window_id: Option<u64>,
+    },
+    CloseTab {
+        action_id: String,
+        #[serde(default)]
+        window_id: Option<u64>,
+        tab_id: u64,
+    },
+    MoveTab {
+        action_id: String,
+        #[serde(default)]
+        source_window_id: Option<u64>,
+        tab_id: u64,
+        #[serde(default)]
+        destination_window_id: Option<u64>,
+        destination_index: u16,
+    },
+    CreatePane {
+        action_id: String,
+        #[serde(default)]
+        window_id: Option<u64>,
+        tab_id: u64,
+        pane_id: u32,
+        direction: crate::control::protocol::SplitDirection,
+    },
+    ClosePane {
+        action_id: String,
+        #[serde(default)]
+        window_id: Option<u64>,
+        tab_id: u64,
+        pane_id: u32,
+    },
+    MovePane {
+        action_id: String,
+        #[serde(default)]
+        source_window_id: Option<u64>,
+        source_tab_id: u64,
+        pane_id: u32,
+        #[serde(default)]
+        destination_window_id: Option<u64>,
+        destination_tab_id: u64,
+        target_pane_id: u32,
+        direction: crate::control::protocol::SplitDirection,
+    },
     SwapPanes {
         action_id: String,
+        #[serde(default)]
+        window_id: Option<u64>,
         tab_id: u64,
         first_pane_id: u32,
         second_pane_id: u32,
     },
     BalancePanes {
         action_id: String,
+        #[serde(default)]
+        window_id: Option<u64>,
         tab_id: u64,
     },
     ApplyPaneLayout {
         action_id: String,
+        #[serde(default)]
+        window_id: Option<u64>,
         tab_id: u64,
         preset: PluginPaneLayoutPreset,
     },
+    ResizeDivider {
+        action_id: String,
+        #[serde(default)]
+        window_id: Option<u64>,
+        tab_id: u64,
+        divider_id: u64,
+        ratio_millis: u16,
+    },
     CloseWindow {
         action_id: String,
+        #[serde(default)]
+        window_id: Option<u64>,
     },
+    FocusWindow {
+        action_id: String,
+        window_id: u64,
+    },
+}
+
+impl StructuredResponseAction {
+    /// The action's wire `type`.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::ShowMessage { .. } => "show-message",
+            Self::ShowNotice { .. } => "show-notice",
+            Self::QueryWorkspace { .. } => "query-workspace",
+            Self::QueryTerminal { .. } => "query-terminal",
+            Self::SelectTab { .. } => "select-tab",
+            Self::FocusPane { .. } => "focus-pane",
+            Self::SendText { .. } => "send-text",
+            Self::CreateTab { .. } => "create-tab",
+            Self::CloseTab { .. } => "close-tab",
+            Self::MoveTab { .. } => "move-tab",
+            Self::CreatePane { .. } => "create-pane",
+            Self::ClosePane { .. } => "close-pane",
+            Self::MovePane { .. } => "move-pane",
+            Self::SwapPanes { .. } => "swap-panes",
+            Self::BalancePanes { .. } => "balance-panes",
+            Self::ApplyPaneLayout { .. } => "apply-pane-layout",
+            Self::ResizeDivider { .. } => "resize-divider",
+            Self::CloseWindow { .. } => "close-window",
+            Self::FocusWindow { .. } => "focus-window",
+        }
+    }
+
+    /// The capability a plugin must hold for this action.
+    pub fn required_capability(&self) -> Capability {
+        match self {
+            Self::ShowMessage { .. } | Self::ShowNotice { .. } => Capability::UiActions,
+            Self::QueryWorkspace { .. } => Capability::WorkspaceQuery,
+            Self::QueryTerminal { .. } => Capability::TerminalRead,
+            Self::SelectTab { .. } | Self::FocusPane { .. } => Capability::Navigate,
+            Self::SendText { .. } => Capability::TerminalInput,
+            Self::CreateTab { .. } => Capability::TabCreate,
+            Self::CloseTab { .. } => Capability::TabClose,
+            Self::MoveTab { .. } => Capability::TabMove,
+            Self::CreatePane { .. } => Capability::PaneCreate,
+            Self::ClosePane { .. } => Capability::PaneClose,
+            Self::MovePane { .. } => Capability::PaneMove,
+            Self::SwapPanes { .. }
+            | Self::BalancePanes { .. }
+            | Self::ApplyPaneLayout { .. }
+            | Self::ResizeDivider { .. } => Capability::PaneLayout,
+            Self::CloseWindow { .. } => Capability::WindowClose,
+            Self::FocusWindow { .. } => Capability::WindowFocus,
+        }
+    }
+
+    /// Whether the action is a query or host action rather than UI output.
+    pub fn is_host_operation(&self) -> bool {
+        self.operation_kind() != OperationKind::Ui
+    }
+
+    fn operation_kind(&self) -> OperationKind {
+        match self {
+            Self::ShowMessage { .. } | Self::ShowNotice { .. } => OperationKind::Ui,
+            Self::QueryWorkspace { .. } => OperationKind::WorkspaceQuery,
+            Self::QueryTerminal { .. } => OperationKind::TerminalQuery,
+            _ => OperationKind::Action,
+        }
+    }
+
+    fn validate_fields(&self) -> Result<(), String> {
+        let name = self.name();
+        match self {
+            Self::ShowMessage { message } => {
+                validate_text("handler message", message, MAX_MESSAGE_BYTES)
+            }
+            Self::ShowNotice { title, lines } => {
+                validate_text("handler notice title", title, MAX_TITLE_BYTES)?;
+                if lines.is_empty() || lines.len() > MAX_NOTICE_LINES {
+                    return Err(format!(
+                        "handler notice must contain 1 to {MAX_NOTICE_LINES} lines"
+                    ));
+                }
+                lines
+                    .iter()
+                    .try_for_each(|line| validate_text("handler notice line", line, MAX_LINE_BYTES))
+            }
+            Self::QueryWorkspace { query_id } => {
+                validate_text("workspace query id", query_id, MAX_QUERY_ID_BYTES)
+            }
+            Self::QueryTerminal {
+                query_id,
+                history_lines,
+                max_bytes,
+                ..
+            } => {
+                validate_text("terminal query id", query_id, MAX_QUERY_ID_BYTES)?;
+                validate_terminal_query_bounds(*history_lines, *max_bytes)
+            }
+            Self::SendText {
+                action_id,
+                text,
+                enter,
+                ..
+            } => {
+                validate_action_id(name, action_id)?;
+                if text.len() > MAX_TERMINAL_INPUT_BYTES {
+                    return Err(format!(
+                        "plugin terminal input is limited to {MAX_TERMINAL_INPUT_BYTES} UTF-8 bytes"
+                    ));
+                }
+                if text.is_empty() && !enter {
+                    return Err("plugin terminal input must include text or enter".into());
+                }
+                if !crate::control::protocol::valid_control_input_text(text) {
+                    return Err(
+                        "plugin terminal input permits printable UTF-8, tab, and newline only"
+                            .into(),
+                    );
+                }
+                Ok(())
+            }
+            Self::MoveTab {
+                action_id,
+                destination_index,
+                ..
+            } => {
+                validate_action_id(name, action_id)?;
+                if usize::from(*destination_index) >= crate::control::protocol::MAX_TABS_PER_WINDOW
+                {
+                    return Err(format!(
+                        "tab destination index must be below {}",
+                        crate::control::protocol::MAX_TABS_PER_WINDOW
+                    ));
+                }
+                Ok(())
+            }
+            Self::SwapPanes {
+                action_id,
+                first_pane_id,
+                second_pane_id,
+                ..
+            } => {
+                validate_action_id(name, action_id)?;
+                if first_pane_id == second_pane_id {
+                    return Err("pane swap requires two distinct pane IDs".into());
+                }
+                Ok(())
+            }
+            Self::ResizeDivider {
+                action_id,
+                ratio_millis,
+                ..
+            } => {
+                validate_action_id(name, action_id)?;
+                if !(100..=900).contains(ratio_millis) {
+                    return Err("divider ratio must be between 100 and 900 thousandths".into());
+                }
+                Ok(())
+            }
+            Self::SelectTab { action_id, .. }
+            | Self::FocusPane { action_id, .. }
+            | Self::CreateTab { action_id, .. }
+            | Self::CloseTab { action_id, .. }
+            | Self::CreatePane { action_id, .. }
+            | Self::ClosePane { action_id, .. }
+            | Self::MovePane { action_id, .. }
+            | Self::BalancePanes { action_id, .. }
+            | Self::ApplyPaneLayout { action_id, .. }
+            | Self::CloseWindow { action_id, .. }
+            | Self::FocusWindow { action_id, .. } => validate_action_id(name, action_id),
+        }
+    }
+}
+
+/// Bounds shared by handler validation and the host's terminal read.
+pub(crate) fn validate_terminal_query_bounds(
+    history_lines: u16,
+    max_bytes: u32,
+) -> Result<(), String> {
+    if history_lines > crate::control::protocol::MAX_TEXT_HISTORY_LINES {
+        return Err(format!(
+            "terminal query history is limited to {} lines",
+            crate::control::protocol::MAX_TEXT_HISTORY_LINES
+        ));
+    }
+    if !(1..=MAX_TERMINAL_QUERY_BYTES).contains(&max_bytes) {
+        return Err(format!(
+            "terminal query bytes must be between 1 and {MAX_TERMINAL_QUERY_BYTES}"
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -342,8 +516,8 @@ pub struct StructuredHandlerCompletion {
     pub plugin_generation: u64,
     pub plugin_id: String,
     pub request_id: u64,
-    /// Persistent descriptor retained only long enough to deliver a bounded
-    /// follow-up workspace result through the same isolated process.
+    /// Persistent descriptor retained only long enough to deliver one bounded
+    /// follow-up result through the same isolated process.
     pub continuation: Option<StructuredHandlerInvocation>,
     pub result: Result<Vec<StructuredResponseAction>, String>,
 }
@@ -353,14 +527,7 @@ pub struct StructuredHandlerCompletion {
 struct StructuredResponse {
     schema_version: u32,
     #[serde(default)]
-    actions: Vec<StructuredResponseAction>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PersistentStructuredResponse {
-    schema_version: u32,
-    request_id: u64,
+    request_id: Option<u64>,
     #[serde(default)]
     actions: Vec<StructuredResponseAction>,
 }
@@ -533,18 +700,13 @@ impl Drop for StructuredPluginWorker {
     }
 }
 
-fn run_handler(
-    invocation: &StructuredHandlerInvocation,
-    shutdown: &AtomicBool,
-    active_generation: &AtomicU64,
-    expected_generation: u64,
-) -> Result<Vec<StructuredResponseAction>, String> {
+fn handler_command(invocation: &StructuredHandlerInvocation) -> Command {
     let mut command = Command::new(&invocation.program);
     command
         .args(&invocation.args)
         .env_clear()
         .env("TERMERIC_PLUGIN_ID", &invocation.plugin_id)
-        .env("TERMERIC_PLUGIN_EVENT_SCHEMA", "1")
+        .env("TERMERIC_PLUGIN_EVENT_SCHEMA", SCHEMA_VERSION.to_string())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -553,7 +715,16 @@ fn run_handler(
     if let Some(path) = std::env::var_os("PATH") {
         command.env("PATH", path);
     }
-    let mut child = command
+    command
+}
+
+fn run_handler(
+    invocation: &StructuredHandlerInvocation,
+    shutdown: &AtomicBool,
+    active_generation: &AtomicU64,
+    expected_generation: u64,
+) -> Result<Vec<StructuredResponseAction>, String> {
+    let mut child = handler_command(invocation)
         .spawn()
         .map_err(|error| bounded_error(&format!("handler launch failed: {error}")))?;
     let Some(stdin) = child.stdin.take() else {
@@ -639,42 +810,14 @@ fn run_handler(
             "structured plugin response exceeds {MAX_OUTPUT_BYTES} bytes"
         ));
     }
-    parse_response_with_host_mutation(
-        &stdout,
-        invocation.allow_ui_actions,
-        invocation.allow_workspace_query,
-        invocation.allow_workspace_actions,
-        invocation.allow_workspace_topology,
-        invocation.allow_terminal_query,
-        invocation.allow_pane_create,
-        invocation.allow_tab_create,
-        invocation.allow_pane_close,
-        invocation.allow_tab_close,
-        invocation.allow_pane_move,
-        invocation.allow_terminal_input,
-        invocation.allow_pane_layout,
-        invocation.allow_window_close,
-        invocation.allow_process_query,
-        invocation.allow_process_actions,
-        invocation.allow_process_terminal_text,
-        invocation.allow_process_terminal_input,
-        invocation.allow_process_tab_create,
-        invocation.allow_process_pane_create,
-        invocation.allow_process_pane_move,
-        invocation.allow_process_tab_move,
-        invocation.allow_process_pane_close,
-        invocation.allow_process_tab_close,
-        invocation.allow_process_pane_layout,
-        invocation.allow_process_window_close,
-        invocation.allow_process_window_focus,
-    )
+    parse_response(&stdout, &invocation.authority, None)
 }
 
 #[derive(Debug)]
 struct PersistentHandler {
     program: String,
     args: Vec<String>,
-    allow_ui_actions: bool,
+    grants: PluginPermissions,
     child: Child,
     requests: Option<SyncSender<PersistentRequest>>,
     io_thread: Option<JoinHandle<()>>,
@@ -696,24 +839,7 @@ struct BoundedStderr {
 
 impl PersistentHandler {
     fn spawn(invocation: &StructuredHandlerInvocation) -> Result<Self, String> {
-        let mut command = Command::new(&invocation.program);
-        command
-            .args(&invocation.args)
-            .env_clear()
-            .env("TERMERIC_PLUGIN_ID", &invocation.plugin_id)
-            .env(
-                "TERMERIC_PLUGIN_EVENT_SCHEMA",
-                PERSISTENT_SCHEMA_VERSION.to_string(),
-            )
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        #[cfg(unix)]
-        command.process_group(0);
-        if let Some(path) = std::env::var_os("PATH") {
-            command.env("PATH", path);
-        }
-        let mut child = command
+        let mut child = handler_command(invocation)
             .spawn()
             .map_err(|error| bounded_error(&format!("handler launch failed: {error}")))?;
         let Some(mut stdin) = child.stdin.take() else {
@@ -759,7 +885,7 @@ impl PersistentHandler {
         Ok(Self {
             program: invocation.program.clone(),
             args: invocation.args.clone(),
-            allow_ui_actions: invocation.allow_ui_actions,
+            grants: invocation.authority.grants().clone(),
             child,
             requests: Some(request_sender),
             io_thread: Some(io_thread),
@@ -771,7 +897,7 @@ impl PersistentHandler {
     fn matches(&self, invocation: &StructuredHandlerInvocation) -> bool {
         self.program == invocation.program
             && self.args == invocation.args
-            && self.allow_ui_actions == invocation.allow_ui_actions
+            && &self.grants == invocation.authority.grants()
     }
 
     fn is_running(&mut self) -> bool {
@@ -782,31 +908,7 @@ impl PersistentHandler {
         &mut self,
         event: Vec<u8>,
         request_id: u64,
-        allow_workspace_query: bool,
-        allow_workspace_actions: bool,
-        allow_workspace_topology: bool,
-        allow_terminal_query: bool,
-        allow_pane_create: bool,
-        allow_tab_create: bool,
-        allow_pane_close: bool,
-        allow_tab_close: bool,
-        allow_pane_move: bool,
-        allow_terminal_input: bool,
-        allow_pane_layout: bool,
-        allow_window_close: bool,
-        allow_process_query: bool,
-        allow_process_actions: bool,
-        allow_process_terminal_text: bool,
-        allow_process_terminal_input: bool,
-        allow_process_tab_create: bool,
-        allow_process_pane_create: bool,
-        allow_process_pane_move: bool,
-        allow_process_tab_move: bool,
-        allow_process_pane_close: bool,
-        allow_process_tab_close: bool,
-        allow_process_pane_layout: bool,
-        allow_process_window_close: bool,
-        allow_process_window_focus: bool,
+        authority: &HandlerAuthority,
         shutdown: &AtomicBool,
         active_generation: &AtomicU64,
         expected_generation: u64,
@@ -862,36 +964,7 @@ impl PersistentHandler {
                 "structured plugin response exceeds {MAX_OUTPUT_BYTES} bytes"
             ));
         }
-        let actions = parse_persistent_response_with_window_focus(
-            &bytes,
-            self.allow_ui_actions,
-            allow_workspace_query,
-            allow_workspace_actions,
-            allow_workspace_topology,
-            allow_terminal_query,
-            allow_pane_create,
-            allow_tab_create,
-            allow_pane_close,
-            allow_tab_close,
-            allow_pane_move,
-            allow_terminal_input,
-            allow_pane_layout,
-            allow_window_close,
-            allow_process_query,
-            allow_process_actions,
-            allow_process_terminal_text,
-            allow_process_terminal_input,
-            allow_process_tab_create,
-            allow_process_pane_create,
-            allow_process_pane_move,
-            allow_process_tab_move,
-            allow_process_pane_close,
-            allow_process_tab_close,
-            allow_process_pane_layout,
-            allow_process_window_close,
-            allow_process_window_focus,
-            request_id,
-        )?;
+        let actions = parse_response(&bytes, authority, Some(request_id))?;
         if let Some(status) = self
             .child
             .try_wait()
@@ -956,31 +1029,7 @@ fn run_persistent_handler(
             handler.request(
                 event,
                 request_id,
-                invocation.allow_workspace_query,
-                invocation.allow_workspace_actions,
-                invocation.allow_workspace_topology,
-                invocation.allow_terminal_query,
-                invocation.allow_pane_create,
-                invocation.allow_tab_create,
-                invocation.allow_pane_close,
-                invocation.allow_tab_close,
-                invocation.allow_pane_move,
-                invocation.allow_terminal_input,
-                invocation.allow_pane_layout,
-                invocation.allow_window_close,
-                invocation.allow_process_query,
-                invocation.allow_process_actions,
-                invocation.allow_process_terminal_text,
-                invocation.allow_process_terminal_input,
-                invocation.allow_process_tab_create,
-                invocation.allow_process_pane_create,
-                invocation.allow_process_pane_move,
-                invocation.allow_process_tab_move,
-                invocation.allow_process_pane_close,
-                invocation.allow_process_tab_close,
-                invocation.allow_process_pane_layout,
-                invocation.allow_process_window_close,
-                invocation.allow_process_window_focus,
+                &invocation.authority,
                 shutdown,
                 active_generation,
                 expected_generation,
@@ -993,6 +1042,8 @@ fn run_persistent_handler(
     result
 }
 
+/// Add the correlation ID to a schema-v1 source event for a persistent
+/// handler. The schema version is unchanged: `request_id` is part of v1.
 fn persistent_request_json(event_json: &str, request_id: u64) -> Result<Vec<u8>, String> {
     let mut value: serde_json::Value = serde_json::from_str(event_json)
         .map_err(|error| bounded_error(&format!("invalid structured event JSON: {error}")))?;
@@ -1002,21 +1053,18 @@ fn persistent_request_json(event_json: &str, request_id: u64) -> Result<Vec<u8>,
     if object
         .get("schema_version")
         .and_then(serde_json::Value::as_u64)
-        != Some(u64::from(RESPONSE_SCHEMA_VERSION))
+        != Some(u64::from(SCHEMA_VERSION))
     {
-        return Err("persistent handlers require a schema-v1 source event".into());
+        return Err(format!(
+            "persistent handlers require a schema-v{SCHEMA_VERSION} source event"
+        ));
     }
-    object.insert(
-        "schema_version".into(),
-        serde_json::json!(PERSISTENT_SCHEMA_VERSION),
-    );
     object.insert("request_id".into(), serde_json::json!(request_id));
     let bytes = serde_json::to_vec(&value)
         .map_err(|error| bounded_error(&format!("could not encode persistent event: {error}")))?;
     if bytes.len() > MAX_STRUCTURED_EVENT_BYTES {
         return Err(format!(
-            "persistent structured event exceeds {} bytes",
-            MAX_STRUCTURED_EVENT_BYTES
+            "persistent structured event exceeds {MAX_STRUCTURED_EVENT_BYTES} bytes"
         ));
     }
     Ok(bytes)
@@ -1118,852 +1166,47 @@ fn read_bounded(mut stream: impl Read, max: u64) -> std::io::Result<(Vec<u8>, bo
     Ok((bytes, truncated))
 }
 
-#[cfg(test)]
+/// Parse one handler response. Persistent handlers must echo
+/// `expected_request_id`; process-per-event handlers must not send one.
 fn parse_response(
     bytes: &[u8],
-    allow_ui_actions: bool,
-    allow_workspace_query: bool,
-    allow_workspace_actions: bool,
-    allow_workspace_topology: bool,
-    allow_terminal_query: bool,
-) -> Result<Vec<StructuredResponseAction>, String> {
-    parse_response_with_host_creation(
-        bytes,
-        allow_ui_actions,
-        allow_workspace_query,
-        allow_workspace_actions,
-        allow_workspace_topology,
-        allow_terminal_query,
-        false,
-        false,
-        false,
-        false,
-    )
-}
-
-#[cfg(test)]
-fn parse_response_with_host_creation(
-    bytes: &[u8],
-    allow_ui_actions: bool,
-    allow_workspace_query: bool,
-    allow_workspace_actions: bool,
-    allow_workspace_topology: bool,
-    allow_terminal_query: bool,
-    allow_pane_create: bool,
-    allow_tab_create: bool,
-    allow_pane_close: bool,
-    allow_tab_close: bool,
-) -> Result<Vec<StructuredResponseAction>, String> {
-    parse_response_with_host_mutation(
-        bytes,
-        allow_ui_actions,
-        allow_workspace_query,
-        allow_workspace_actions,
-        allow_workspace_topology,
-        allow_terminal_query,
-        allow_pane_create,
-        allow_tab_create,
-        allow_pane_close,
-        allow_tab_close,
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn parse_response_with_host_mutation(
-    bytes: &[u8],
-    allow_ui_actions: bool,
-    allow_workspace_query: bool,
-    allow_workspace_actions: bool,
-    allow_workspace_topology: bool,
-    allow_terminal_query: bool,
-    allow_pane_create: bool,
-    allow_tab_create: bool,
-    allow_pane_close: bool,
-    allow_tab_close: bool,
-    allow_pane_move: bool,
-    allow_terminal_input: bool,
-    allow_pane_layout: bool,
-    allow_window_close: bool,
-    allow_process_query: bool,
-    allow_process_actions: bool,
-    allow_process_terminal_text: bool,
-    allow_process_terminal_input: bool,
-    allow_process_tab_create: bool,
-    allow_process_pane_create: bool,
-    allow_process_pane_move: bool,
-    allow_process_tab_move: bool,
-    allow_process_pane_close: bool,
-    allow_process_tab_close: bool,
-    allow_process_pane_layout: bool,
-    allow_process_window_close: bool,
-    allow_process_window_focus: bool,
+    authority: &HandlerAuthority,
+    expected_request_id: Option<u64>,
 ) -> Result<Vec<StructuredResponseAction>, String> {
     let response: StructuredResponse = serde_json::from_slice(bytes)
         .map_err(|error| bounded_error(&format!("invalid handler response JSON: {error}")))?;
-    if response.schema_version != RESPONSE_SCHEMA_VERSION {
+    if response.schema_version != SCHEMA_VERSION {
         return Err(format!(
-            "unsupported handler response schema {}; expected {RESPONSE_SCHEMA_VERSION}",
+            "unsupported handler response schema {}; expected {SCHEMA_VERSION}",
             response.schema_version
         ));
     }
-    validate_response_actions(
-        response.actions,
-        allow_ui_actions,
-        allow_workspace_query,
-        allow_workspace_actions,
-        allow_workspace_topology,
-        allow_terminal_query,
-        allow_pane_create,
-        allow_tab_create,
-        allow_pane_close,
-        allow_tab_close,
-        allow_pane_move,
-        allow_terminal_input,
-        allow_pane_layout,
-        allow_window_close,
-        allow_process_query,
-        allow_process_actions,
-        allow_process_terminal_text,
-        allow_process_terminal_input,
-        allow_process_tab_create,
-        allow_process_pane_create,
-        allow_process_pane_move,
-        allow_process_tab_move,
-        allow_process_pane_close,
-        allow_process_tab_close,
-        allow_process_pane_layout,
-        allow_process_window_close,
-        allow_process_window_focus,
-    )
-}
-
-#[cfg(test)]
-fn parse_persistent_response(
-    bytes: &[u8],
-    allow_ui_actions: bool,
-    allow_workspace_query: bool,
-    allow_workspace_actions: bool,
-    allow_workspace_topology: bool,
-    allow_terminal_query: bool,
-    expected_request_id: u64,
-) -> Result<Vec<StructuredResponseAction>, String> {
-    parse_persistent_response_with_host_creation(
-        bytes,
-        allow_ui_actions,
-        allow_workspace_query,
-        allow_workspace_actions,
-        allow_workspace_topology,
-        allow_terminal_query,
-        false,
-        false,
-        false,
-        false,
-        expected_request_id,
-    )
-}
-
-#[cfg(test)]
-fn parse_persistent_response_with_host_creation(
-    bytes: &[u8],
-    allow_ui_actions: bool,
-    allow_workspace_query: bool,
-    allow_workspace_actions: bool,
-    allow_workspace_topology: bool,
-    allow_terminal_query: bool,
-    allow_pane_create: bool,
-    allow_tab_create: bool,
-    allow_pane_close: bool,
-    allow_tab_close: bool,
-    expected_request_id: u64,
-) -> Result<Vec<StructuredResponseAction>, String> {
-    parse_persistent_response_with_host_mutation(
-        bytes,
-        allow_ui_actions,
-        allow_workspace_query,
-        allow_workspace_actions,
-        allow_workspace_topology,
-        allow_terminal_query,
-        allow_pane_create,
-        allow_tab_create,
-        allow_pane_close,
-        allow_tab_close,
-        false,
-        false,
-        false,
-        expected_request_id,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-#[cfg(test)]
-fn parse_persistent_response_with_host_mutation(
-    bytes: &[u8],
-    allow_ui_actions: bool,
-    allow_workspace_query: bool,
-    allow_workspace_actions: bool,
-    allow_workspace_topology: bool,
-    allow_terminal_query: bool,
-    allow_pane_create: bool,
-    allow_tab_create: bool,
-    allow_pane_close: bool,
-    allow_tab_close: bool,
-    allow_pane_move: bool,
-    allow_terminal_input: bool,
-    allow_pane_layout: bool,
-    expected_request_id: u64,
-) -> Result<Vec<StructuredResponseAction>, String> {
-    parse_persistent_response_with_window_close(
-        bytes,
-        allow_ui_actions,
-        allow_workspace_query,
-        allow_workspace_actions,
-        allow_workspace_topology,
-        allow_terminal_query,
-        allow_pane_create,
-        allow_tab_create,
-        allow_pane_close,
-        allow_tab_close,
-        allow_pane_move,
-        allow_terminal_input,
-        allow_pane_layout,
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-        expected_request_id,
-    )
-}
-
-#[cfg(test)]
-#[allow(clippy::too_many_arguments)]
-fn parse_persistent_response_with_window_close(
-    bytes: &[u8],
-    allow_ui_actions: bool,
-    allow_workspace_query: bool,
-    allow_workspace_actions: bool,
-    allow_workspace_topology: bool,
-    allow_terminal_query: bool,
-    allow_pane_create: bool,
-    allow_tab_create: bool,
-    allow_pane_close: bool,
-    allow_tab_close: bool,
-    allow_pane_move: bool,
-    allow_terminal_input: bool,
-    allow_pane_layout: bool,
-    allow_window_close: bool,
-    allow_process_query: bool,
-    allow_process_actions: bool,
-    allow_process_terminal_text: bool,
-    allow_process_terminal_input: bool,
-    allow_process_tab_create: bool,
-    allow_process_pane_create: bool,
-    allow_process_pane_move: bool,
-    allow_process_tab_move: bool,
-    allow_process_pane_close: bool,
-    allow_process_tab_close: bool,
-    allow_process_pane_layout: bool,
-    allow_process_window_close: bool,
-    expected_request_id: u64,
-) -> Result<Vec<StructuredResponseAction>, String> {
-    parse_persistent_response_with_window_focus(
-        bytes,
-        allow_ui_actions,
-        allow_workspace_query,
-        allow_workspace_actions,
-        allow_workspace_topology,
-        allow_terminal_query,
-        allow_pane_create,
-        allow_tab_create,
-        allow_pane_close,
-        allow_tab_close,
-        allow_pane_move,
-        allow_terminal_input,
-        allow_pane_layout,
-        allow_window_close,
-        allow_process_query,
-        allow_process_actions,
-        allow_process_terminal_text,
-        allow_process_terminal_input,
-        allow_process_tab_create,
-        allow_process_pane_create,
-        allow_process_pane_move,
-        allow_process_tab_move,
-        allow_process_pane_close,
-        allow_process_tab_close,
-        allow_process_pane_layout,
-        allow_process_window_close,
-        false,
-        expected_request_id,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn parse_persistent_response_with_window_focus(
-    bytes: &[u8],
-    allow_ui_actions: bool,
-    allow_workspace_query: bool,
-    allow_workspace_actions: bool,
-    allow_workspace_topology: bool,
-    allow_terminal_query: bool,
-    allow_pane_create: bool,
-    allow_tab_create: bool,
-    allow_pane_close: bool,
-    allow_tab_close: bool,
-    allow_pane_move: bool,
-    allow_terminal_input: bool,
-    allow_pane_layout: bool,
-    allow_window_close: bool,
-    allow_process_query: bool,
-    allow_process_actions: bool,
-    allow_process_terminal_text: bool,
-    allow_process_terminal_input: bool,
-    allow_process_tab_create: bool,
-    allow_process_pane_create: bool,
-    allow_process_pane_move: bool,
-    allow_process_tab_move: bool,
-    allow_process_pane_close: bool,
-    allow_process_tab_close: bool,
-    allow_process_pane_layout: bool,
-    allow_process_window_close: bool,
-    allow_process_window_focus: bool,
-    expected_request_id: u64,
-) -> Result<Vec<StructuredResponseAction>, String> {
-    let response: PersistentStructuredResponse = serde_json::from_slice(bytes)
-        .map_err(|error| bounded_error(&format!("invalid handler response JSON: {error}")))?;
-    if response.schema_version != PERSISTENT_SCHEMA_VERSION {
-        return Err(format!(
-            "unsupported persistent handler response schema {}; expected {PERSISTENT_SCHEMA_VERSION}",
-            response.schema_version
-        ));
-    }
-    if response.request_id != expected_request_id {
-        return Err(format!(
-            "persistent handler response request id {} did not match {expected_request_id}",
-            response.request_id
-        ));
-    }
-    validate_response_actions(
-        response.actions,
-        allow_ui_actions,
-        allow_workspace_query,
-        allow_workspace_actions,
-        allow_workspace_topology,
-        allow_terminal_query,
-        allow_pane_create,
-        allow_tab_create,
-        allow_pane_close,
-        allow_tab_close,
-        allow_pane_move,
-        allow_terminal_input,
-        allow_pane_layout,
-        allow_window_close,
-        allow_process_query,
-        allow_process_actions,
-        allow_process_terminal_text,
-        allow_process_terminal_input,
-        allow_process_tab_create,
-        allow_process_pane_create,
-        allow_process_pane_move,
-        allow_process_tab_move,
-        allow_process_pane_close,
-        allow_process_tab_close,
-        allow_process_pane_layout,
-        allow_process_window_close,
-        allow_process_window_focus,
-    )
-}
-
-fn validate_response_actions(
-    actions: Vec<StructuredResponseAction>,
-    allow_ui_actions: bool,
-    allow_workspace_query: bool,
-    allow_workspace_actions: bool,
-    allow_workspace_topology: bool,
-    allow_terminal_query: bool,
-    allow_pane_create: bool,
-    allow_tab_create: bool,
-    allow_pane_close: bool,
-    allow_tab_close: bool,
-    allow_pane_move: bool,
-    allow_terminal_input: bool,
-    allow_pane_layout: bool,
-    allow_window_close: bool,
-    allow_process_query: bool,
-    allow_process_actions: bool,
-    allow_process_terminal_text: bool,
-    allow_process_terminal_input: bool,
-    allow_process_tab_create: bool,
-    allow_process_pane_create: bool,
-    allow_process_pane_move: bool,
-    allow_process_tab_move: bool,
-    allow_process_pane_close: bool,
-    allow_process_tab_close: bool,
-    allow_process_pane_layout: bool,
-    allow_process_window_close: bool,
-    allow_process_window_focus: bool,
-) -> Result<Vec<StructuredResponseAction>, String> {
-    if actions.len() > MAX_ACTIONS {
-        return Err(format!(
-            "handler response contains more than {MAX_ACTIONS} actions"
-        ));
-    }
-    let mut host_operations = 0;
-    for action in &actions {
-        match action {
-            StructuredResponseAction::ShowMessage { message } => {
-                if !allow_ui_actions {
-                    return Err("handler returned UI actions without the ui-actions grant".into());
-                }
-                validate_text("handler message", message, MAX_MESSAGE_BYTES)?;
-            }
-            StructuredResponseAction::ShowNotice { title, lines } => {
-                if !allow_ui_actions {
-                    return Err("handler returned UI actions without the ui-actions grant".into());
-                }
-                validate_text("handler notice title", title, MAX_TITLE_BYTES)?;
-                if lines.is_empty() || lines.len() > MAX_NOTICE_LINES {
-                    return Err(format!(
-                        "handler notice must contain 1 to {MAX_NOTICE_LINES} lines"
-                    ));
-                }
-                for line in lines {
-                    validate_text("handler notice line", line, MAX_LINE_BYTES)?;
-                }
-            }
-            StructuredResponseAction::QueryWorkspace { query_id } => {
-                if !allow_workspace_query {
-                    return Err(
-                        "handler requested a workspace query without API v6 persistent workspace-query authority"
-                            .into(),
-                    );
-                }
-                host_operations += 1;
-                validate_text("workspace query id", query_id, MAX_QUERY_ID_BYTES)?;
-            }
-            StructuredResponseAction::QueryProcess { query_id } => {
-                if !allow_process_query {
-                    return Err(
-                        "handler requested a process query without API v20 persistent process-query authority"
-                            .into(),
-                    );
-                }
-                host_operations += 1;
-                validate_text("process query id", query_id, MAX_QUERY_ID_BYTES)?;
-            }
-            StructuredResponseAction::SelectProcessTab { action_id, .. }
-            | StructuredResponseAction::FocusProcessPane { action_id, .. } => {
-                if !allow_process_actions {
-                    return Err(
-                        "handler requested a process action without API v21 persistent process-actions authority"
-                            .into(),
-                    );
-                }
-                host_operations += 1;
-                validate_text("process action id", action_id, MAX_ACTION_ID_BYTES)?;
-            }
-            StructuredResponseAction::QueryProcessTerminal {
-                query_id,
-                history_lines,
-                max_bytes,
-                ..
-            } => {
-                if !allow_process_terminal_text {
-                    return Err(
-                        "handler requested process terminal text without API v22 persistent process-terminal-text authority"
-                            .into(),
-                    );
-                }
-                host_operations += 1;
-                validate_text("process terminal query id", query_id, MAX_QUERY_ID_BYTES)?;
-                if *history_lines > crate::control::protocol::MAX_TEXT_HISTORY_LINES {
-                    return Err(format!(
-                        "process terminal query history is limited to {} lines",
-                        crate::control::protocol::MAX_TEXT_HISTORY_LINES
-                    ));
-                }
-                if !(1..=MAX_TERMINAL_QUERY_BYTES).contains(max_bytes) {
-                    return Err(format!(
-                        "process terminal query bytes must be between 1 and {MAX_TERMINAL_QUERY_BYTES}"
-                    ));
-                }
-            }
-            StructuredResponseAction::SendProcessText {
-                action_id,
-                text,
-                enter,
-                ..
-            } => {
-                if !allow_process_terminal_input {
-                    return Err(
-                        "handler requested process terminal input without API v23 persistent process-terminal-input authority"
-                            .into(),
-                    );
-                }
-                host_operations += 1;
-                validate_terminal_input_action("process terminal input", action_id, text, *enter)?;
-            }
-            StructuredResponseAction::CreateProcessTab { action_id, .. } => {
-                if !allow_process_tab_create {
-                    return Err(
-                        "handler requested process tab creation without API v24 persistent process-tab-create authority"
-                            .into(),
-                    );
-                }
-                host_operations += 1;
-                validate_text(
-                    "process tab creation action id",
-                    action_id,
-                    MAX_ACTION_ID_BYTES,
-                )?;
-            }
-            StructuredResponseAction::CreateProcessPane { action_id, .. } => {
-                if !allow_process_pane_create {
-                    return Err(
-                        "handler requested process pane creation without API v25 persistent process-pane-create authority"
-                            .into(),
-                    );
-                }
-                host_operations += 1;
-                validate_text(
-                    "process pane creation action id",
-                    action_id,
-                    MAX_ACTION_ID_BYTES,
-                )?;
-            }
-            StructuredResponseAction::MoveProcessPane { action_id, .. } => {
-                if !allow_process_pane_move {
-                    return Err(
-                        "handler requested process pane movement without API v26 persistent process-pane-move authority"
-                            .into(),
-                    );
-                }
-                host_operations += 1;
-                validate_text(
-                    "process pane movement action id",
-                    action_id,
-                    MAX_ACTION_ID_BYTES,
-                )?;
-            }
-            StructuredResponseAction::MoveProcessTab { action_id, .. } => {
-                if !allow_process_tab_move {
-                    return Err(
-                        "handler requested process tab movement without API v27 persistent process-tab-move authority"
-                            .into(),
-                    );
-                }
-                host_operations += 1;
-                validate_text(
-                    "process tab movement action id",
-                    action_id,
-                    MAX_ACTION_ID_BYTES,
-                )?;
-            }
-            StructuredResponseAction::CloseProcessPane { action_id, .. } => {
-                if !allow_process_pane_close {
-                    return Err(
-                        "handler requested process pane closure without API v28 persistent process-pane-close authority"
-                            .into(),
-                    );
-                }
-                host_operations += 1;
-                validate_text(
-                    "process pane closure action id",
-                    action_id,
-                    MAX_ACTION_ID_BYTES,
-                )?;
-            }
-            StructuredResponseAction::CloseProcessTab { action_id, .. } => {
-                if !allow_process_tab_close {
-                    return Err(
-                        "handler requested process tab closure without API v29 persistent process-tab-close authority"
-                            .into(),
-                    );
-                }
-                host_operations += 1;
-                validate_text(
-                    "process tab closure action id",
-                    action_id,
-                    MAX_ACTION_ID_BYTES,
-                )?;
-            }
-            StructuredResponseAction::SwapProcessPanes {
-                action_id,
-                first_pane_id,
-                second_pane_id,
-                ..
-            } => {
-                if !allow_process_pane_layout {
-                    return Err(
-                        "handler requested process pane layout without API v30 persistent process-pane-layout authority"
-                            .into(),
-                    );
-                }
-                if first_pane_id == second_pane_id {
-                    return Err("process pane swap requires two distinct pane IDs".into());
-                }
-                host_operations += 1;
-                validate_text(
-                    "process pane layout action id",
-                    action_id,
-                    MAX_ACTION_ID_BYTES,
-                )?;
-            }
-            StructuredResponseAction::BalanceProcessPanes { action_id, .. }
-            | StructuredResponseAction::ApplyProcessPaneLayout { action_id, .. } => {
-                if !allow_process_pane_layout {
-                    return Err(
-                        "handler requested process pane layout without API v30 persistent process-pane-layout authority"
-                            .into(),
-                    );
-                }
-                host_operations += 1;
-                validate_text(
-                    "process pane layout action id",
-                    action_id,
-                    MAX_ACTION_ID_BYTES,
-                )?;
-            }
-            StructuredResponseAction::CloseProcessWindow { action_id, .. } => {
-                if !allow_process_window_close {
-                    return Err(
-                        "handler requested process window closure without API v31 persistent process-window-close authority"
-                            .into(),
-                    );
-                }
-                host_operations += 1;
-                validate_text(
-                    "process window closure action id",
-                    action_id,
-                    MAX_ACTION_ID_BYTES,
-                )?;
-            }
-            StructuredResponseAction::FocusProcessWindow { action_id, .. } => {
-                if !allow_process_window_focus {
-                    return Err(
-                        "handler requested process window focus without API v32 persistent process-window-focus authority"
-                            .into(),
-                    );
-                }
-                host_operations += 1;
-                validate_text(
-                    "process window focus action id",
-                    action_id,
-                    MAX_ACTION_ID_BYTES,
-                )?;
-            }
-            StructuredResponseAction::QueryTerminal {
-                query_id,
-                history_lines,
-                max_bytes,
-                ..
-            } => {
-                if !allow_terminal_query {
-                    return Err(
-                        "handler requested terminal text without API v11 persistent terminal-query authority"
-                            .into(),
-                    );
-                }
-                host_operations += 1;
-                validate_text("terminal query id", query_id, MAX_QUERY_ID_BYTES)?;
-                if *history_lines > crate::control::protocol::MAX_TEXT_HISTORY_LINES {
-                    return Err(format!(
-                        "terminal query history is limited to {} lines",
-                        crate::control::protocol::MAX_TEXT_HISTORY_LINES
-                    ));
-                }
-                if !(1..=MAX_TERMINAL_QUERY_BYTES).contains(max_bytes) {
-                    return Err(format!(
-                        "terminal query bytes must be between 1 and {MAX_TERMINAL_QUERY_BYTES}"
-                    ));
-                }
-            }
-            StructuredResponseAction::SelectTab { action_id, .. }
-            | StructuredResponseAction::FocusPane { action_id, .. } => {
-                if !allow_workspace_actions {
-                    return Err(
-                        "handler requested a workspace action without API v7 persistent workspace-actions authority"
-                            .into(),
-                    );
-                }
-                host_operations += 1;
-                validate_text("workspace action id", action_id, MAX_ACTION_ID_BYTES)?;
-            }
-            StructuredResponseAction::MoveTab {
-                action_id,
-                destination_index,
-                ..
-            } => {
-                if !allow_workspace_topology {
-                    return Err(
-                        "handler requested a workspace topology action without API v8 persistent workspace-topology authority"
-                            .into(),
-                    );
-                }
-                host_operations += 1;
-                validate_text("workspace action id", action_id, MAX_ACTION_ID_BYTES)?;
-                if usize::from(*destination_index) >= crate::control::protocol::MAX_TABS_PER_WINDOW
-                {
-                    return Err(format!(
-                        "workspace tab destination index must be below {}",
-                        crate::control::protocol::MAX_TABS_PER_WINDOW
-                    ));
-                }
-            }
-            StructuredResponseAction::ResizeDivider {
-                action_id,
-                ratio_millis,
-                ..
-            } => {
-                if !allow_workspace_topology {
-                    return Err(
-                        "handler requested a workspace topology action without API v8 persistent workspace-topology authority"
-                            .into(),
-                    );
-                }
-                host_operations += 1;
-                validate_text("workspace action id", action_id, MAX_ACTION_ID_BYTES)?;
-                if !(100..=900).contains(ratio_millis) {
-                    return Err(
-                        "workspace divider ratio must be between 100 and 900 thousandths".into(),
-                    );
-                }
-            }
-            StructuredResponseAction::CreatePane { action_id, .. } => {
-                if !allow_pane_create {
-                    return Err(
-                        "handler requested pane creation without API v12 persistent pane-create authority"
-                            .into(),
-                    );
-                }
-                host_operations += 1;
-                validate_text("pane creation action id", action_id, MAX_ACTION_ID_BYTES)?;
-            }
-            StructuredResponseAction::CreateTab { action_id } => {
-                if !allow_tab_create {
-                    return Err(
-                        "handler requested tab creation without API v13 persistent tab-create authority"
-                            .into(),
-                    );
-                }
-                host_operations += 1;
-                validate_text("tab creation action id", action_id, MAX_ACTION_ID_BYTES)?;
-            }
-            StructuredResponseAction::ClosePane { action_id, .. } => {
-                if !allow_pane_close {
-                    return Err(
-                        "handler requested pane closure without API v14 persistent pane-close authority"
-                            .into(),
-                    );
-                }
-                host_operations += 1;
-                validate_text("pane closure action id", action_id, MAX_ACTION_ID_BYTES)?;
-            }
-            StructuredResponseAction::CloseTab { action_id, .. } => {
-                if !allow_tab_close {
-                    return Err(
-                        "handler requested tab closure without API v15 persistent tab-close authority"
-                            .into(),
-                    );
-                }
-                host_operations += 1;
-                validate_text("tab closure action id", action_id, MAX_ACTION_ID_BYTES)?;
-            }
-            StructuredResponseAction::MovePane { action_id, .. } => {
-                if !allow_pane_move {
-                    return Err(
-                        "handler requested pane movement without API v16 persistent pane-move authority"
-                            .into(),
-                    );
-                }
-                host_operations += 1;
-                validate_text("pane movement action id", action_id, MAX_ACTION_ID_BYTES)?;
-            }
-            StructuredResponseAction::SendText {
-                action_id,
-                text,
-                enter,
-                ..
-            } => {
-                if !allow_terminal_input {
-                    return Err(
-                        "handler requested terminal input without API v17 persistent terminal-input authority"
-                            .into(),
-                    );
-                }
-                host_operations += 1;
-                validate_terminal_input_action("terminal input", action_id, text, *enter)?;
-            }
-            StructuredResponseAction::SwapPanes {
-                action_id,
-                first_pane_id,
-                second_pane_id,
-                ..
-            } => {
-                if !allow_pane_layout {
-                    return Err(
-                        "handler requested pane layout without API v18 persistent pane-layout authority"
-                            .into(),
-                    );
-                }
-                host_operations += 1;
-                validate_text("pane layout action id", action_id, MAX_ACTION_ID_BYTES)?;
-                if first_pane_id == second_pane_id {
-                    return Err("pane swap requires two distinct pane IDs".into());
-                }
-            }
-            StructuredResponseAction::BalancePanes { action_id, .. }
-            | StructuredResponseAction::ApplyPaneLayout { action_id, .. } => {
-                if !allow_pane_layout {
-                    return Err(
-                        "handler requested pane layout without API v18 persistent pane-layout authority"
-                            .into(),
-                    );
-                }
-                host_operations += 1;
-                validate_text("pane layout action id", action_id, MAX_ACTION_ID_BYTES)?;
-            }
-            StructuredResponseAction::CloseWindow { action_id } => {
-                if !allow_window_close {
-                    return Err(
-                        "handler requested window closure without API v19 command-scoped persistent window-close authority"
-                            .into(),
-                    );
-                }
-                host_operations += 1;
-                validate_text("window closure action id", action_id, MAX_ACTION_ID_BYTES)?;
-            }
+    match (expected_request_id, response.request_id) {
+        (Some(expected), Some(actual)) if expected != actual => {
+            return Err(format!(
+                "persistent handler response request id {actual} did not match {expected}"
+            ));
         }
+        (Some(expected), None) => {
+            return Err(format!(
+                "persistent handler response is missing request id {expected}"
+            ));
+        }
+        (None, Some(_)) => {
+            return Err("process-per-event handler responses must not carry a request id".into());
+        }
+        _ => {}
     }
-    if host_operations > 1 {
-        return Err("handler response contains more than one host operation".into());
-    }
-    Ok(actions)
+    authority.check(&response.actions)?;
+    Ok(response.actions)
+}
+
+fn validate_action_id(action: &str, action_id: &str) -> Result<(), String> {
+    validate_text(
+        &format!("{action} action id"),
+        action_id,
+        MAX_ACTION_ID_BYTES,
+    )
 }
 
 fn validate_text(label: &str, value: &str, max: usize) -> Result<(), String> {
@@ -1974,33 +1217,6 @@ fn validate_text(label: &str, value: &str, max: usize) -> Result<(), String> {
     {
         return Err(format!(
             "{label} must be non-empty, control-safe UTF-8 within {max} bytes"
-        ));
-    }
-    Ok(())
-}
-
-fn validate_terminal_input_action(
-    label: &str,
-    action_id: &str,
-    text: &str,
-    enter: bool,
-) -> Result<(), String> {
-    validate_text(
-        &format!("{label} action id"),
-        action_id,
-        MAX_ACTION_ID_BYTES,
-    )?;
-    if text.len() > MAX_TERMINAL_INPUT_BYTES {
-        return Err(format!(
-            "plugin {label} is limited to {MAX_TERMINAL_INPUT_BYTES} UTF-8 bytes"
-        ));
-    }
-    if text.is_empty() && !enter {
-        return Err(format!("plugin {label} must include text or enter"));
-    }
-    if !crate::control::protocol::valid_control_input_text(text) {
-        return Err(format!(
-            "plugin {label} permits printable UTF-8, tab, and newline only"
         ));
     }
     Ok(())
@@ -2024,12 +1240,57 @@ fn bounded_error(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
     use std::io::Cursor;
+
+    fn grants(permissions: &[&str]) -> PluginPermissions {
+        PluginPermissions::from_permissions(
+            permissions
+                .iter()
+                .map(|permission| permission.parse().unwrap()),
+        )
+        .unwrap()
+    }
+
+    fn persistent_authority(permissions: &[&str]) -> HandlerAuthority {
+        HandlerAuthority::for_event(
+            grants(permissions),
+            StructuredHandlerMode::Persistent,
+            false,
+        )
+    }
+
+    /// Check one persistent response carrying `actions` (a JSON array body).
+    fn check(
+        authority: &HandlerAuthority,
+        actions: &str,
+    ) -> Result<Vec<StructuredResponseAction>, String> {
+        parse_response(
+            format!(r#"{{"schema_version":1,"request_id":9,"actions":[{actions}]}}"#).as_bytes(),
+            authority,
+            Some(9),
+        )
+    }
 
     fn run_fixture(
         invocation: &StructuredHandlerInvocation,
     ) -> Result<Vec<StructuredResponseAction>, String> {
         run_handler(invocation, &AtomicBool::new(false), &AtomicU64::new(1), 1)
+    }
+
+    fn process_fixture(plugin_id: &str, script: &str) -> StructuredHandlerInvocation {
+        StructuredHandlerInvocation {
+            plugin_id: plugin_id.into(),
+            program: "/bin/sh".into(),
+            args: vec!["-c".into(), script.into()],
+            event_json: "x".repeat(16 * 1024),
+            mode: StructuredHandlerMode::ProcessPerEvent,
+            authority: HandlerAuthority::for_event(
+                grants(&["ui-actions"]),
+                StructuredHandlerMode::ProcessPerEvent,
+                false,
+            ),
+        }
     }
 
     #[cfg(unix)]
@@ -2039,2771 +1300,417 @@ mod tests {
             program: "/bin/sh".into(),
             args: vec!["-c".into(), script.into()],
             event_json: r#"{"schema_version":1,"event":{"type":"app-ready"}}"#.into(),
-            allow_ui_actions: true,
-            allow_workspace_query: false,
-            allow_workspace_actions: false,
-            allow_workspace_topology: false,
-            allow_terminal_query: false,
-            allow_pane_create: false,
-            allow_tab_create: false,
-            allow_pane_close: false,
-            allow_tab_close: false,
-            allow_pane_move: false,
-            allow_terminal_input: false,
-            allow_pane_layout: false,
-            allow_window_close: false,
-            allow_process_query: false,
-            allow_process_actions: false,
-            allow_process_terminal_text: false,
-            allow_process_terminal_input: false,
-            allow_process_tab_create: false,
-            allow_process_pane_create: false,
-            allow_process_pane_move: false,
-            allow_process_tab_move: false,
-            allow_process_pane_close: false,
-            allow_process_tab_close: false,
-            allow_process_pane_layout: false,
-            allow_process_window_close: false,
-            allow_process_window_focus: false,
             mode: StructuredHandlerMode::Persistent,
+            authority: persistent_authority(&["ui-actions"]),
+        }
+    }
+
+    /// One valid sample of every action, with the capability it needs.
+    const ACTION_SAMPLES: &[(&str, &str)] = &[
+        ("ui-actions", r#"{"type":"show-message","message":"done"}"#),
+        (
+            "ui-actions",
+            r#"{"type":"show-notice","title":"Result","lines":["one","two"]}"#,
+        ),
+        (
+            "workspace-query",
+            r#"{"type":"query-workspace","query_id":"inventory"}"#,
+        ),
+        (
+            "terminal-read",
+            r#"{"type":"query-terminal","query_id":"text","tab_id":7,"pane_id":3,"history_lines":20,"max_bytes":2048}"#,
+        ),
+        (
+            "navigate",
+            r#"{"type":"select-tab","action_id":"a","tab_id":7}"#,
+        ),
+        (
+            "navigate",
+            r#"{"type":"focus-pane","action_id":"a","window_id":2,"tab_id":7,"pane_id":3}"#,
+        ),
+        (
+            "terminal-input",
+            r#"{"type":"send-text","action_id":"a","tab_id":7,"pane_id":3,"text":"ls","paste":false,"enter":true}"#,
+        ),
+        ("tab-create", r#"{"type":"create-tab","action_id":"a"}"#),
+        (
+            "tab-close",
+            r#"{"type":"close-tab","action_id":"a","tab_id":7}"#,
+        ),
+        (
+            "tab-move",
+            r#"{"type":"move-tab","action_id":"a","tab_id":7,"destination_window_id":2,"destination_index":0}"#,
+        ),
+        (
+            "pane-create",
+            r#"{"type":"create-pane","action_id":"a","tab_id":7,"pane_id":3,"direction":"vertical"}"#,
+        ),
+        (
+            "pane-close",
+            r#"{"type":"close-pane","action_id":"a","tab_id":7,"pane_id":3}"#,
+        ),
+        (
+            "pane-move",
+            r#"{"type":"move-pane","action_id":"a","source_tab_id":7,"pane_id":3,"destination_tab_id":8,"target_pane_id":0,"direction":"horizontal"}"#,
+        ),
+        (
+            "pane-layout",
+            r#"{"type":"swap-panes","action_id":"a","tab_id":7,"first_pane_id":0,"second_pane_id":1}"#,
+        ),
+        (
+            "pane-layout",
+            r#"{"type":"balance-panes","action_id":"a","tab_id":7}"#,
+        ),
+        (
+            "pane-layout",
+            r#"{"type":"apply-pane-layout","action_id":"a","tab_id":7,"preset":"grid"}"#,
+        ),
+        (
+            "pane-layout",
+            r#"{"type":"resize-divider","action_id":"a","tab_id":7,"divider_id":1,"ratio_millis":400}"#,
+        ),
+        (
+            "window-close:all-windows",
+            r#"{"type":"close-window","action_id":"a","window_id":2}"#,
+        ),
+        (
+            "window-focus",
+            r#"{"type":"focus-window","action_id":"a","window_id":2}"#,
+        ),
+    ];
+
+    #[test]
+    fn every_action_requires_exactly_its_capability() {
+        for (permission, action) in ACTION_SAMPLES {
+            let granted = persistent_authority(&[permission]);
+            let parsed = check(&granted, action)
+                .unwrap_or_else(|error| panic!("{action} should pass with {permission}: {error}"));
+            assert_eq!(parsed.len(), 1);
+            let capability = permission.split(':').next().unwrap();
+            assert_eq!(parsed[0].required_capability().name(), capability);
+
+            let everything_else = ACTION_SAMPLES
+                .iter()
+                .map(|(other, _)| *other)
+                .filter(|other| other.split(':').next() != Some(capability))
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            let error = check(&persistent_authority(&everything_else), action).unwrap_err();
+            assert!(
+                error.contains(&format!("without the {capability} permission")),
+                "{action}: {error}"
+            );
         }
     }
 
     #[test]
-    fn response_schema_permissions_and_bounds_fail_closed() {
+    fn response_schema_and_correlation_fail_closed() {
+        let authority = HandlerAuthority::for_event(
+            grants(&["ui-actions"]),
+            StructuredHandlerMode::ProcessPerEvent,
+            false,
+        );
         let valid = br#"{"schema_version":1,"actions":[{"type":"show-message","message":"done"},{"type":"show-notice","title":"Result","lines":["one","two"]}]}"#;
-        assert_eq!(
-            parse_response(valid, true, false, false, false, false)
-                .unwrap()
-                .len(),
-            2
-        );
+        assert_eq!(parse_response(valid, &authority, None).unwrap().len(), 2);
         assert!(
-            parse_response(valid, false, false, false, false, false)
+            parse_response(br#"{"schema_version":2,"actions":[]}"#, &authority, None)
                 .unwrap_err()
-                .contains("ui-actions")
+                .contains("unsupported")
         );
         assert!(
             parse_response(
-                br#"{"schema_version":2,"actions":[]}"#,
-                true,
-                false,
-                false,
-                false,
-                false,
+                br#"{"schema_version":1,"request_id":1,"actions":[]}"#,
+                &authority,
+                None
             )
             .unwrap_err()
-            .contains("unsupported")
+            .contains("must not carry a request id")
+        );
+
+        let persistent = persistent_authority(&["ui-actions"]);
+        let correlated = br#"{"schema_version":1,"request_id":42,"actions":[]}"#;
+        assert!(parse_response(correlated, &persistent, Some(42)).is_ok());
+        assert!(
+            parse_response(correlated, &persistent, Some(41))
+                .unwrap_err()
+                .contains("did not match")
         );
         assert!(
             parse_response(
-                format!(
-                    "{{\"schema_version\":1,\"actions\":[{{\"type\":\"show-message\",\"message\":{:?}}}]}}",
-                    "x".repeat(MAX_MESSAGE_BYTES + 1)
-                )
-                .as_bytes(),
-                true,
-                false,
-                false,
-                false,
-                false,
-            )
-            .is_err()
-        );
-        assert!(
-            parse_response(
-                br#"{"schema_version":1,"actions":[{"type":"show-message","message":"two\nlines"}]}"#,
-                true,
-                false,
-                false,
-                false,
-                false,
+                br#"{"schema_version":1,"actions":[]}"#,
+                &persistent,
+                Some(42)
             )
             .unwrap_err()
-            .contains("control-safe")
+            .contains("missing request id")
         );
+        for removed in [
+            r#"{"type":"query-process","query_id":"all"}"#,
+            r#"{"type":"select-process-tab","action_id":"a","window_id":2,"tab_id":7}"#,
+            r#"{"type":"select-tab","action_id":"a","tab_id":7,"extra":true}"#,
+        ] {
+            assert!(
+                check(&persistent_authority(&["navigate"]), removed)
+                    .unwrap_err()
+                    .contains("invalid handler response JSON"),
+                "{removed}"
+            );
+        }
     }
 
     #[test]
-    fn workspace_query_actions_are_independently_gated_and_non_chainable() {
-        let query = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-workspace","query_id":"refresh-1"}]}"#;
+    fn optional_window_ids_parse_as_absent_or_exact() {
+        let authority = persistent_authority(&["navigate:all-windows", "tab-move"]);
         assert_eq!(
-            parse_persistent_response(query, false, true, false, false, false, 9).unwrap(),
-            vec![StructuredResponseAction::QueryWorkspace {
-                query_id: "refresh-1".into()
-            }]
-        );
-        assert!(
-            parse_persistent_response(query, true, false, false, false, false, 9)
-                .unwrap_err()
-                .contains("workspace-query authority")
-        );
-        let duplicate = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-workspace","query_id":"one"},{"type":"query-workspace","query_id":"two"}]}"#;
-        assert!(
-            parse_persistent_response(duplicate, false, true, false, false, false, 9)
-                .unwrap_err()
-                .contains("more than one")
-        );
-        let unsafe_id = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-workspace","query_id":"bad\nquery"}]}"#;
-        assert!(
-            parse_persistent_response(unsafe_id, false, true, false, false, false, 9)
-                .unwrap_err()
-                .contains("control-safe")
-        );
-    }
-
-    #[test]
-    fn process_query_actions_require_v20_authority_and_one_host_operation() {
-        let query = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-process","query_id":"all-windows"}]}"#;
-        assert_eq!(
-            parse_persistent_response_with_window_close(
-                query, false, false, false, false, false, false, false, false, false, false, false,
-                false, false, true, false, false, false, false, false, false, false, false, false,
-                false, false, 9,
+            check(
+                &authority,
+                r#"{"type":"select-tab","action_id":"a","tab_id":7}"#
             )
             .unwrap(),
-            vec![StructuredResponseAction::QueryProcess {
-                query_id: "all-windows".into(),
-            }]
-        );
-        assert!(
-            parse_persistent_response(query, false, false, false, false, false, 9)
-                .unwrap_err()
-                .contains("API v20")
-        );
-
-        let duplicate = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-process","query_id":"one"},{"type":"query-process","query_id":"two"}]}"#;
-        assert!(
-            parse_persistent_response_with_window_close(
-                duplicate, false, false, false, false, false, false, false, false, false, false,
-                false, false, false, true, false, false, false, false, false, false, false, false,
-                false, false, false, 9,
-            )
-            .unwrap_err()
-            .contains("more than one host operation")
-        );
-
-        let mixed = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-process","query_id":"all"},{"type":"query-workspace","query_id":"current"}]}"#;
-        assert!(
-            parse_persistent_response_with_window_close(
-                mixed, false, true, false, false, false, false, false, false, false, false, false,
-                false, false, true, false, false, false, false, false, false, false, false, false,
-                false, false, 9,
-            )
-            .unwrap_err()
-            .contains("more than one host operation")
-        );
-
-        let unsafe_id = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-process","query_id":"two\nlines"}]}"#;
-        assert!(
-            parse_persistent_response_with_window_close(
-                unsafe_id, false, false, false, false, false, false, false, false, false, false,
-                false, false, false, true, false, false, false, false, false, false, false, false,
-                false, false, false, 9,
-            )
-            .unwrap_err()
-            .contains("control-safe")
-        );
-    }
-
-    fn parse_process_action_response(
-        bytes: &[u8],
-        allow_process_query: bool,
-        allow_process_actions: bool,
-    ) -> Result<Vec<StructuredResponseAction>, String> {
-        parse_persistent_response_with_window_close(
-            bytes,
-            false, // ui actions
-            false, // workspace query
-            false, // workspace actions
-            false, // workspace topology
-            false, // terminal query
-            false, // pane create
-            false, // tab create
-            false, // pane close
-            false, // tab close
-            false, // pane move
-            false, // terminal input
-            false, // pane layout
-            false, // window close
-            allow_process_query,
-            allow_process_actions,
-            false, // process terminal text
-            false, // process terminal input
-            false, // process tab create
-            false, // process pane create
-            false, // process pane move
-            false, // process tab move
-            false, // process pane close
-            false, // process tab close
-            false, // process pane layout
-            false, // process window close
-            9,
-        )
-    }
-
-    fn parse_process_terminal_response(
-        bytes: &[u8],
-        allow_process_query: bool,
-        allow_process_actions: bool,
-        allow_process_terminal_text: bool,
-    ) -> Result<Vec<StructuredResponseAction>, String> {
-        parse_persistent_response_with_window_close(
-            bytes,
-            false, // ui actions
-            false, // workspace query
-            false, // workspace actions
-            false, // workspace topology
-            false, // terminal query
-            false, // pane create
-            false, // tab create
-            false, // pane close
-            false, // tab close
-            false, // pane move
-            false, // terminal input
-            false, // pane layout
-            false, // window close
-            allow_process_query,
-            allow_process_actions,
-            allow_process_terminal_text,
-            false, // process terminal input
-            false, // process tab create
-            false, // process pane create
-            false, // process pane move
-            false, // process tab move
-            false, // process pane close
-            false, // process tab close
-            false, // process pane layout
-            false, // process window close
-            9,
-        )
-    }
-
-    fn parse_process_input_response(
-        bytes: &[u8],
-        allow_process_query: bool,
-        allow_process_actions: bool,
-        allow_process_terminal_text: bool,
-        allow_process_terminal_input: bool,
-    ) -> Result<Vec<StructuredResponseAction>, String> {
-        parse_persistent_response_with_window_close(
-            bytes,
-            false, // ui actions
-            false, // workspace query
-            false, // workspace actions
-            false, // workspace topology
-            false, // terminal query
-            false, // pane create
-            false, // tab create
-            false, // pane close
-            false, // tab close
-            false, // pane move
-            false, // terminal input
-            false, // pane layout
-            false, // window close
-            allow_process_query,
-            allow_process_actions,
-            allow_process_terminal_text,
-            allow_process_terminal_input,
-            false, // process tab create
-            false, // process pane create
-            false, // process pane move
-            false, // process tab move
-            false, // process pane close
-            false, // process tab close
-            false, // process pane layout
-            false, // process window close
-            9,
-        )
-    }
-
-    fn parse_process_tab_create_response(
-        bytes: &[u8],
-        allow_process_query: bool,
-        allow_process_tab_create: bool,
-    ) -> Result<Vec<StructuredResponseAction>, String> {
-        parse_persistent_response_with_window_close(
-            bytes,
-            false, // ui actions
-            false, // workspace query
-            false, // workspace actions
-            false, // workspace topology
-            false, // terminal query
-            false, // pane create
-            false, // tab create
-            false, // pane close
-            false, // tab close
-            false, // pane move
-            false, // terminal input
-            false, // pane layout
-            false, // window close
-            allow_process_query,
-            false, // process actions
-            false, // process terminal text
-            false, // process terminal input
-            allow_process_tab_create,
-            false, // process pane create
-            false, // process pane move
-            false, // process tab move
-            false, // process pane close
-            false, // process tab close
-            false, // process pane layout
-            false, // process window close
-            9,
-        )
-    }
-
-    fn parse_process_pane_create_response(
-        bytes: &[u8],
-        allow_process_query: bool,
-        allow_process_pane_create: bool,
-    ) -> Result<Vec<StructuredResponseAction>, String> {
-        parse_persistent_response_with_window_close(
-            bytes,
-            false, // ui actions
-            false, // workspace query
-            false, // workspace actions
-            false, // workspace topology
-            false, // terminal query
-            false, // pane create
-            false, // tab create
-            false, // pane close
-            false, // tab close
-            false, // pane move
-            false, // terminal input
-            false, // pane layout
-            false, // window close
-            allow_process_query,
-            false, // process actions
-            false, // process terminal text
-            false, // process terminal input
-            false, // process tab create
-            allow_process_pane_create,
-            false, // process pane move
-            false, // process tab move
-            false, // process pane close
-            false, // process tab close
-            false, // process pane layout
-            false, // process window close
-            9,
-        )
-    }
-
-    fn parse_process_pane_move_response(
-        bytes: &[u8],
-        allow_process_query: bool,
-        allow_process_pane_move: bool,
-    ) -> Result<Vec<StructuredResponseAction>, String> {
-        parse_persistent_response_with_window_close(
-            bytes,
-            false, // ui actions
-            false, // workspace query
-            false, // workspace actions
-            false, // workspace topology
-            false, // terminal query
-            false, // pane create
-            false, // tab create
-            false, // pane close
-            false, // tab close
-            false, // pane move
-            false, // terminal input
-            false, // pane layout
-            false, // window close
-            allow_process_query,
-            false, // process actions
-            false, // process terminal text
-            false, // process terminal input
-            false, // process tab create
-            false, // process pane create
-            allow_process_pane_move,
-            false, // process tab move
-            false, // process pane close
-            false, // process tab close
-            false, // process pane layout
-            false, // process window close
-            9,
-        )
-    }
-
-    fn parse_process_tab_move_response(
-        bytes: &[u8],
-        allow_process_query: bool,
-        allow_process_tab_move: bool,
-    ) -> Result<Vec<StructuredResponseAction>, String> {
-        parse_persistent_response_with_window_close(
-            bytes,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            allow_process_query,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            allow_process_tab_move,
-            false,
-            false,
-            false,
-            false,
-            9,
-        )
-    }
-
-    fn parse_process_pane_close_response(
-        bytes: &[u8],
-        allow_process_query: bool,
-        allow_process_pane_close: bool,
-    ) -> Result<Vec<StructuredResponseAction>, String> {
-        parse_persistent_response_with_window_close(
-            bytes,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            allow_process_query,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            allow_process_pane_close,
-            false,
-            false,
-            false,
-            9,
-        )
-    }
-
-    fn parse_process_tab_close_response(
-        bytes: &[u8],
-        allow_process_query: bool,
-        allow_process_tab_close: bool,
-    ) -> Result<Vec<StructuredResponseAction>, String> {
-        parse_persistent_response_with_window_close(
-            bytes,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            allow_process_query,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            allow_process_tab_close,
-            false,
-            false,
-            9,
-        )
-    }
-
-    fn parse_process_pane_layout_response(
-        bytes: &[u8],
-        allow_process_query: bool,
-        allow_process_pane_layout: bool,
-    ) -> Result<Vec<StructuredResponseAction>, String> {
-        parse_persistent_response_with_window_close(
-            bytes,
-            false, // ui actions
-            false, // workspace query
-            false, // workspace actions
-            false, // workspace topology
-            false, // terminal query
-            false, // pane create
-            false, // tab create
-            false, // pane close
-            false, // tab close
-            false, // pane move
-            false, // terminal input
-            false, // pane layout
-            false, // window close
-            allow_process_query,
-            false, // process actions
-            false, // process terminal text
-            false, // process terminal input
-            false, // process tab create
-            false, // process pane create
-            false, // process pane move
-            false, // process tab move
-            false, // process pane close
-            false, // process tab close
-            allow_process_pane_layout,
-            false, // process window close
-            9,
-        )
-    }
-
-    fn parse_process_window_close_response(
-        bytes: &[u8],
-        allow_process_query: bool,
-        allow_process_window_close: bool,
-    ) -> Result<Vec<StructuredResponseAction>, String> {
-        parse_persistent_response_with_window_close(
-            bytes,
-            false, // ui actions
-            false, // workspace query
-            false, // workspace actions
-            false, // workspace topology
-            false, // terminal query
-            false, // pane create
-            false, // tab create
-            false, // pane close
-            false, // tab close
-            false, // pane move
-            false, // terminal input
-            false, // pane layout
-            false, // window close
-            allow_process_query,
-            false, // process actions
-            false, // process terminal text
-            false, // process terminal input
-            false, // process tab create
-            false, // process pane create
-            false, // process pane move
-            false, // process tab move
-            false, // process pane close
-            false, // process tab close
-            false, // process pane layout
-            allow_process_window_close,
-            9,
-        )
-    }
-
-    fn parse_process_window_focus_response(
-        bytes: &[u8],
-        allow_process_query: bool,
-        allow_process_window_focus: bool,
-    ) -> Result<Vec<StructuredResponseAction>, String> {
-        parse_persistent_response_with_window_focus(
-            bytes,
-            false, // ui actions
-            false, // workspace query
-            false, // workspace actions
-            false, // workspace topology
-            false, // terminal query
-            false, // pane create
-            false, // tab create
-            false, // pane close
-            false, // tab close
-            false, // pane move
-            false, // terminal input
-            false, // pane layout
-            false, // window close
-            allow_process_query,
-            false, // process actions
-            false, // process terminal text
-            false, // process terminal input
-            false, // process tab create
-            false, // process pane create
-            false, // process pane move
-            false, // process tab move
-            false, // process pane close
-            false, // process tab close
-            false, // process pane layout
-            false, // process window close
-            allow_process_window_focus,
-            9,
-        )
-    }
-
-    #[test]
-    fn process_navigation_actions_require_v21_authority_and_one_host_operation() {
-        let select = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"select-process-tab","action_id":"select-results","window_id":7,"tab_id":42}]}"#;
-        assert_eq!(
-            parse_process_action_response(select, false, true).unwrap(),
-            vec![StructuredResponseAction::SelectProcessTab {
-                action_id: "select-results".into(),
-                window_id: 7,
-                tab_id: 42,
-            }]
-        );
-
-        let focus = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"focus-process-pane","action_id":"focus-shell","window_id":7,"tab_id":42,"pane_id":3}]}"#;
-        assert_eq!(
-            parse_process_action_response(focus, false, true).unwrap(),
-            vec![StructuredResponseAction::FocusProcessPane {
-                action_id: "focus-shell".into(),
-                window_id: 7,
-                tab_id: 42,
-                pane_id: 3,
-            }]
-        );
-        assert!(
-            parse_process_action_response(select, false, false)
-                .unwrap_err()
-                .contains("API v21")
-        );
-
-        let duplicate = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"select-process-tab","action_id":"one","window_id":7,"tab_id":42},{"type":"select-process-tab","action_id":"two","window_id":8,"tab_id":43}]}"#;
-        assert!(
-            parse_process_action_response(duplicate, false, true)
-                .unwrap_err()
-                .contains("more than one host operation")
-        );
-
-        let mixed = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-process","query_id":"inventory"},{"type":"focus-process-pane","action_id":"focus","window_id":7,"tab_id":42,"pane_id":3}]}"#;
-        assert!(
-            parse_process_action_response(mixed, true, true)
-                .unwrap_err()
-                .contains("more than one host operation")
-        );
-
-        let unsafe_id = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"select-process-tab","action_id":"two\nlines","window_id":7,"tab_id":42}]}"#;
-        assert!(
-            parse_process_action_response(unsafe_id, false, true)
-                .unwrap_err()
-                .contains("control-safe")
-        );
-
-        let activation = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"select-process-tab","action_id":"select","window_id":7,"tab_id":42,"activate":true}]}"#;
-        assert!(
-            parse_process_action_response(activation, false, true)
-                .unwrap_err()
-                .contains("unknown field")
-        );
-
-        let malformed_id = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"focus-process-pane","action_id":"focus","window_id":"7","tab_id":42,"pane_id":3}]}"#;
-        assert!(parse_process_action_response(malformed_id, false, true).is_err());
-
-        let unsupported = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"activate-process-window","action_id":"activate","window_id":7}]}"#;
-        assert!(parse_process_action_response(unsupported, false, true).is_err());
-    }
-
-    #[test]
-    fn process_terminal_queries_require_v22_authority_and_strict_bounded_shape() {
-        let query = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-process-terminal","query_id":"sibling-output","window_id":7,"tab_id":42,"pane_id":3,"history_lines":20,"max_bytes":2048}]}"#;
-        assert_eq!(
-            parse_process_terminal_response(query, false, false, true).unwrap(),
-            vec![StructuredResponseAction::QueryProcessTerminal {
-                query_id: "sibling-output".into(),
-                window_id: 7,
-                tab_id: 42,
-                pane_id: 3,
-                history_lines: 20,
-                max_bytes: 2048,
-            }]
-        );
-        assert!(
-            parse_process_terminal_response(query, true, true, false)
-                .unwrap_err()
-                .contains("API v22")
-        );
-
-        let excessive_history = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-process-terminal","query_id":"text","window_id":7,"tab_id":42,"pane_id":3,"history_lines":257,"max_bytes":2048}]}"#;
-        assert!(
-            parse_process_terminal_response(excessive_history, false, false, true)
-                .unwrap_err()
-                .contains("limited to 256 lines")
-        );
-        for max_bytes in [0, MAX_TERMINAL_QUERY_BYTES + 1] {
-            let invalid = format!(
-                "{{\"schema_version\":2,\"request_id\":9,\"actions\":[{{\"type\":\"query-process-terminal\",\"query_id\":\"text\",\"window_id\":7,\"tab_id\":42,\"pane_id\":3,\"history_lines\":0,\"max_bytes\":{max_bytes}}}]}}"
-            );
-            assert!(
-                parse_process_terminal_response(invalid.as_bytes(), false, false, true)
-                    .unwrap_err()
-                    .contains("bytes must be between")
-            );
-        }
-
-        let unsafe_id = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-process-terminal","query_id":"two\nlines","window_id":7,"tab_id":42,"pane_id":3,"history_lines":0,"max_bytes":64}]}"#;
-        assert!(
-            parse_process_terminal_response(unsafe_id, false, false, true)
-                .unwrap_err()
-                .contains("control-safe")
-        );
-        let unknown = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-process-terminal","query_id":"text","window_id":7,"tab_id":42,"pane_id":3,"history_lines":0,"max_bytes":64,"activate":true}]}"#;
-        assert!(
-            parse_process_terminal_response(unknown, false, false, true)
-                .unwrap_err()
-                .contains("unknown field")
-        );
-        let malformed = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-process-terminal","query_id":"text","window_id":"7","tab_id":42,"pane_id":3,"history_lines":0,"max_bytes":64}]}"#;
-        assert!(parse_process_terminal_response(malformed, false, false, true).is_err());
-
-        let mixed = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-process","query_id":"inventory"},{"type":"query-process-terminal","query_id":"text","window_id":7,"tab_id":42,"pane_id":3,"history_lines":0,"max_bytes":64}]}"#;
-        assert!(
-            parse_process_terminal_response(mixed, true, false, true)
-                .unwrap_err()
-                .contains("more than one host operation")
-        );
-        let duplicate = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-process-terminal","query_id":"one","window_id":7,"tab_id":42,"pane_id":3,"history_lines":0,"max_bytes":64},{"type":"query-process-terminal","query_id":"two","window_id":7,"tab_id":42,"pane_id":3,"history_lines":0,"max_bytes":64}]}"#;
-        assert!(
-            parse_process_terminal_response(duplicate, false, false, true)
-                .unwrap_err()
-                .contains("more than one host operation")
-        );
-    }
-
-    #[test]
-    fn process_terminal_input_requires_v23_authority_and_strict_bounded_shape() {
-        let send = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"send-process-text","action_id":"draft-check","window_id":7,"tab_id":42,"pane_id":3,"text":"cargo test\n--workspace","paste":true,"enter":false}]}"#;
-        assert_eq!(
-            parse_process_input_response(send, false, false, false, true).unwrap(),
-            vec![StructuredResponseAction::SendProcessText {
-                action_id: "draft-check".into(),
-                window_id: 7,
-                tab_id: 42,
-                pane_id: 3,
-                text: "cargo test\n--workspace".into(),
-                paste: true,
-                enter: false,
-            }]
-        );
-        assert!(
-            parse_process_input_response(send, true, true, true, false)
-                .unwrap_err()
-                .contains("API v23")
-        );
-
-        let unknown = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"send-process-text","action_id":"draft","window_id":7,"tab_id":42,"pane_id":3,"text":"safe","paste":false,"enter":false,"activate":true}]}"#;
-        assert!(
-            parse_process_input_response(unknown, false, false, false, true)
-                .unwrap_err()
-                .contains("unknown field")
-        );
-        let malformed = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"send-process-text","action_id":"draft","window_id":"7","tab_id":42,"pane_id":3,"text":"safe","paste":false,"enter":false}]}"#;
-        assert!(parse_process_input_response(malformed, false, false, false, true).is_err());
-        let unsafe_id = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"send-process-text","action_id":"two\nlines","window_id":7,"tab_id":42,"pane_id":3,"text":"safe","paste":false,"enter":false}]}"#;
-        assert!(
-            parse_process_input_response(unsafe_id, false, false, false, true)
-                .unwrap_err()
-                .contains("control-safe")
-        );
-        let escape = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"send-process-text","action_id":"escape","window_id":7,"tab_id":42,"pane_id":3,"text":"\u001b[31m","paste":false,"enter":false}]}"#;
-        assert!(
-            parse_process_input_response(escape, false, false, false, true)
-                .unwrap_err()
-                .contains("printable UTF-8")
-        );
-        let empty = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"send-process-text","action_id":"empty","window_id":7,"tab_id":42,"pane_id":3,"text":"","paste":false,"enter":false}]}"#;
-        assert!(
-            parse_process_input_response(empty, false, false, false, true)
-                .unwrap_err()
-                .contains("text or enter")
-        );
-        let oversized = serde_json::to_vec(&serde_json::json!({
-            "schema_version": 2,
-            "request_id": 9,
-            "actions": [{
-                "type": "send-process-text",
-                "action_id": "oversized",
-                "window_id": 7,
-                "tab_id": 42,
-                "pane_id": 3,
-                "text": "x".repeat(MAX_TERMINAL_INPUT_BYTES + 1),
-                "paste": false,
-                "enter": false,
-            }],
-        }))
-        .unwrap();
-        assert!(
-            parse_process_input_response(&oversized, false, false, false, true)
-                .unwrap_err()
-                .contains("limited")
-        );
-
-        let mixed = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-process","query_id":"inventory"},{"type":"send-process-text","action_id":"draft","window_id":7,"tab_id":42,"pane_id":3,"text":"safe","paste":false,"enter":false}]}"#;
-        assert!(
-            parse_process_input_response(mixed, true, false, false, true)
-                .unwrap_err()
-                .contains("more than one host operation")
-        );
-        let duplicate = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"send-process-text","action_id":"one","window_id":7,"tab_id":42,"pane_id":3,"text":"one","paste":false,"enter":false},{"type":"send-process-text","action_id":"two","window_id":7,"tab_id":42,"pane_id":3,"text":"two","paste":false,"enter":false}]}"#;
-        assert!(
-            parse_process_input_response(duplicate, false, false, false, true)
-                .unwrap_err()
-                .contains("more than one host operation")
-        );
-    }
-
-    #[test]
-    fn process_tab_creation_requires_v24_authority_and_strict_bounded_shape() {
-        let create = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"create-process-tab","action_id":"new-sibling-task","window_id":7}]}"#;
-        assert_eq!(
-            parse_process_tab_create_response(create, false, true).unwrap(),
-            vec![StructuredResponseAction::CreateProcessTab {
-                action_id: "new-sibling-task".into(),
-                window_id: 7,
-            }]
-        );
-        assert!(
-            parse_process_tab_create_response(create, true, false)
-                .unwrap_err()
-                .contains("API v24")
-        );
-
-        let unknown = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"create-process-tab","action_id":"new","window_id":7,"activate":true}]}"#;
-        assert!(
-            parse_process_tab_create_response(unknown, false, true)
-                .unwrap_err()
-                .contains("unknown field")
-        );
-        let malformed = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"create-process-tab","action_id":"new","window_id":"7"}]}"#;
-        assert!(parse_process_tab_create_response(malformed, false, true).is_err());
-        let unsafe_id = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"create-process-tab","action_id":"two\nlines","window_id":7}]}"#;
-        assert!(
-            parse_process_tab_create_response(unsafe_id, false, true)
-                .unwrap_err()
-                .contains("control-safe")
-        );
-
-        let mixed = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-process","query_id":"inventory"},{"type":"create-process-tab","action_id":"new","window_id":7}]}"#;
-        assert!(
-            parse_process_tab_create_response(mixed, true, true)
-                .unwrap_err()
-                .contains("more than one host operation")
-        );
-        let duplicate = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"create-process-tab","action_id":"one","window_id":7},{"type":"create-process-tab","action_id":"two","window_id":7}]}"#;
-        assert!(
-            parse_process_tab_create_response(duplicate, false, true)
-                .unwrap_err()
-                .contains("more than one host operation")
-        );
-    }
-
-    #[test]
-    fn process_pane_creation_requires_v25_authority_and_strict_bounded_shape() {
-        let create = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"create-process-pane","action_id":"split-sibling-task","window_id":7,"tab_id":12,"pane_id":3,"direction":"vertical"}]}"#;
-        assert_eq!(
-            parse_process_pane_create_response(create, false, true).unwrap(),
-            vec![StructuredResponseAction::CreateProcessPane {
-                action_id: "split-sibling-task".into(),
-                window_id: 7,
-                tab_id: 12,
-                pane_id: 3,
-                direction: crate::control::protocol::SplitDirection::Vertical,
-            }]
-        );
-        assert!(
-            parse_process_pane_create_response(create, true, false)
-                .unwrap_err()
-                .contains("API v25")
-        );
-
-        let horizontal = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"create-process-pane","action_id":"split","window_id":7,"tab_id":12,"pane_id":3,"direction":"horizontal"}]}"#;
-        assert!(matches!(
-            parse_process_pane_create_response(horizontal, false, true).unwrap()[..],
-            [StructuredResponseAction::CreateProcessPane {
-                direction: crate::control::protocol::SplitDirection::Horizontal,
-                ..
-            }]
-        ));
-        let unknown = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"create-process-pane","action_id":"split","window_id":7,"tab_id":12,"pane_id":3,"direction":"vertical","ratio":0.5}]}"#;
-        assert!(
-            parse_process_pane_create_response(unknown, false, true)
-                .unwrap_err()
-                .contains("unknown field")
-        );
-        let malformed = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"create-process-pane","action_id":"split","window_id":"7","tab_id":12,"pane_id":3,"direction":"vertical"}]}"#;
-        assert!(parse_process_pane_create_response(malformed, false, true).is_err());
-        let bad_direction = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"create-process-pane","action_id":"split","window_id":7,"tab_id":12,"pane_id":3,"direction":"diagonal"}]}"#;
-        assert!(parse_process_pane_create_response(bad_direction, false, true).is_err());
-        let unsafe_id = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"create-process-pane","action_id":"two\nlines","window_id":7,"tab_id":12,"pane_id":3,"direction":"vertical"}]}"#;
-        assert!(
-            parse_process_pane_create_response(unsafe_id, false, true)
-                .unwrap_err()
-                .contains("control-safe")
-        );
-        let mixed = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-process","query_id":"inventory"},{"type":"create-process-pane","action_id":"split","window_id":7,"tab_id":12,"pane_id":3,"direction":"vertical"}]}"#;
-        assert!(
-            parse_process_pane_create_response(mixed, true, true)
-                .unwrap_err()
-                .contains("more than one host operation")
-        );
-        let duplicate = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"create-process-pane","action_id":"one","window_id":7,"tab_id":12,"pane_id":3,"direction":"vertical"},{"type":"create-process-pane","action_id":"two","window_id":7,"tab_id":12,"pane_id":3,"direction":"horizontal"}]}"#;
-        assert!(
-            parse_process_pane_create_response(duplicate, false, true)
-                .unwrap_err()
-                .contains("more than one host operation")
-        );
-    }
-
-    #[test]
-    fn process_pane_movement_requires_v26_authority_and_strict_bounded_shape() {
-        let movement = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"move-process-pane","action_id":"move-sibling-task","source_window_id":7,"source_tab_id":12,"pane_id":3,"destination_window_id":8,"destination_tab_id":21,"target_pane_id":4,"direction":"vertical"}]}"#;
-        assert_eq!(
-            parse_process_pane_move_response(movement, false, true).unwrap(),
-            vec![StructuredResponseAction::MoveProcessPane {
-                action_id: "move-sibling-task".into(),
-                source_window_id: 7,
-                source_tab_id: 12,
-                pane_id: 3,
-                destination_window_id: 8,
-                destination_tab_id: 21,
-                target_pane_id: 4,
-                direction: crate::control::protocol::SplitDirection::Vertical,
-            }]
-        );
-        assert!(
-            parse_process_pane_move_response(movement, true, false)
-                .unwrap_err()
-                .contains("API v26")
-        );
-
-        let horizontal = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"move-process-pane","action_id":"move","source_window_id":7,"source_tab_id":12,"pane_id":3,"destination_window_id":8,"destination_tab_id":21,"target_pane_id":4,"direction":"horizontal"}]}"#;
-        assert!(matches!(
-            parse_process_pane_move_response(horizontal, false, true).unwrap()[..],
-            [StructuredResponseAction::MoveProcessPane {
-                direction: crate::control::protocol::SplitDirection::Horizontal,
-                ..
-            }]
-        ));
-        let unknown = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"move-process-pane","action_id":"move","source_window_id":7,"source_tab_id":12,"pane_id":3,"destination_window_id":8,"destination_tab_id":21,"target_pane_id":4,"direction":"vertical","activate":true}]}"#;
-        assert!(
-            parse_process_pane_move_response(unknown, false, true)
-                .unwrap_err()
-                .contains("unknown field")
-        );
-        let malformed = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"move-process-pane","action_id":"move","source_window_id":"7","source_tab_id":12,"pane_id":3,"destination_window_id":8,"destination_tab_id":21,"target_pane_id":4,"direction":"vertical"}]}"#;
-        assert!(parse_process_pane_move_response(malformed, false, true).is_err());
-        let bad_direction = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"move-process-pane","action_id":"move","source_window_id":7,"source_tab_id":12,"pane_id":3,"destination_window_id":8,"destination_tab_id":21,"target_pane_id":4,"direction":"diagonal"}]}"#;
-        assert!(parse_process_pane_move_response(bad_direction, false, true).is_err());
-        let unsafe_id = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"move-process-pane","action_id":"two\nlines","source_window_id":7,"source_tab_id":12,"pane_id":3,"destination_window_id":8,"destination_tab_id":21,"target_pane_id":4,"direction":"vertical"}]}"#;
-        assert!(
-            parse_process_pane_move_response(unsafe_id, false, true)
-                .unwrap_err()
-                .contains("control-safe")
-        );
-        let mixed = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-process","query_id":"inventory"},{"type":"move-process-pane","action_id":"move","source_window_id":7,"source_tab_id":12,"pane_id":3,"destination_window_id":8,"destination_tab_id":21,"target_pane_id":4,"direction":"vertical"}]}"#;
-        assert!(
-            parse_process_pane_move_response(mixed, true, true)
-                .unwrap_err()
-                .contains("more than one host operation")
-        );
-        let duplicate = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"move-process-pane","action_id":"one","source_window_id":7,"source_tab_id":12,"pane_id":3,"destination_window_id":8,"destination_tab_id":21,"target_pane_id":4,"direction":"vertical"},{"type":"move-process-pane","action_id":"two","source_window_id":7,"source_tab_id":12,"pane_id":3,"destination_window_id":8,"destination_tab_id":21,"target_pane_id":4,"direction":"horizontal"}]}"#;
-        assert!(
-            parse_process_pane_move_response(duplicate, false, true)
-                .unwrap_err()
-                .contains("more than one host operation")
-        );
-    }
-
-    #[test]
-    fn process_tab_movement_requires_v27_authority_and_strict_bounded_shape() {
-        let movement = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"move-process-tab","action_id":"move-sibling-tab","source_window_id":2,"tab_id":5,"destination_window_id":7,"destination_index":1}]}"#;
-        assert_eq!(
-            parse_process_tab_move_response(movement, false, true).unwrap(),
-            vec![StructuredResponseAction::MoveProcessTab {
-                action_id: "move-sibling-tab".into(),
-                source_window_id: 2,
-                tab_id: 5,
-                destination_window_id: 7,
-                destination_index: 1,
-            }]
-        );
-        assert!(
-            parse_process_tab_move_response(movement, true, false)
-                .unwrap_err()
-                .contains("API v27")
-        );
-        let unknown = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"move-process-tab","action_id":"move","source_window_id":2,"tab_id":5,"destination_window_id":7,"destination_index":1,"activate":true}]}"#;
-        assert!(
-            parse_process_tab_move_response(unknown, false, true)
-                .unwrap_err()
-                .contains("unknown field")
-        );
-        let malformed = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"move-process-tab","action_id":"move","source_window_id":"2","tab_id":5,"destination_window_id":7,"destination_index":1}]}"#;
-        assert!(parse_process_tab_move_response(malformed, false, true).is_err());
-        let unsafe_id = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"move-process-tab","action_id":"two\nlines","source_window_id":2,"tab_id":5,"destination_window_id":7,"destination_index":1}]}"#;
-        assert!(
-            parse_process_tab_move_response(unsafe_id, false, true)
-                .unwrap_err()
-                .contains("control-safe")
-        );
-        let mixed = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-process","query_id":"inventory"},{"type":"move-process-tab","action_id":"move","source_window_id":2,"tab_id":5,"destination_window_id":7,"destination_index":1}]}"#;
-        assert!(
-            parse_process_tab_move_response(mixed, true, true)
-                .unwrap_err()
-                .contains("more than one host operation")
-        );
-        let duplicate = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"move-process-tab","action_id":"one","source_window_id":2,"tab_id":5,"destination_window_id":7,"destination_index":1},{"type":"move-process-tab","action_id":"two","source_window_id":2,"tab_id":6,"destination_window_id":7,"destination_index":1}]}"#;
-        assert!(
-            parse_process_tab_move_response(duplicate, false, true)
-                .unwrap_err()
-                .contains("more than one host operation")
-        );
-    }
-
-    #[test]
-    fn process_pane_closure_requires_v28_authority_and_strict_bounded_shape() {
-        let closure = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"close-process-pane","action_id":"close-sibling-pane","window_id":7,"tab_id":12,"pane_id":3}]}"#;
-        assert_eq!(
-            parse_process_pane_close_response(closure, false, true).unwrap(),
-            vec![StructuredResponseAction::CloseProcessPane {
-                action_id: "close-sibling-pane".into(),
-                window_id: 7,
-                tab_id: 12,
-                pane_id: 3,
-            }]
-        );
-        assert!(
-            parse_process_pane_close_response(closure, true, false)
-                .unwrap_err()
-                .contains("API v28")
-        );
-        let unknown = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"close-process-pane","action_id":"close","window_id":7,"tab_id":12,"pane_id":3,"force":true}]}"#;
-        assert!(
-            parse_process_pane_close_response(unknown, false, true)
-                .unwrap_err()
-                .contains("unknown field")
-        );
-        let malformed = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"close-process-pane","action_id":"close","window_id":"7","tab_id":12,"pane_id":3}]}"#;
-        assert!(parse_process_pane_close_response(malformed, false, true).is_err());
-        let unsafe_id = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"close-process-pane","action_id":"two\nlines","window_id":7,"tab_id":12,"pane_id":3}]}"#;
-        assert!(
-            parse_process_pane_close_response(unsafe_id, false, true)
-                .unwrap_err()
-                .contains("control-safe")
-        );
-        let mixed = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-process","query_id":"inventory"},{"type":"close-process-pane","action_id":"close","window_id":7,"tab_id":12,"pane_id":3}]}"#;
-        assert!(
-            parse_process_pane_close_response(mixed, true, true)
-                .unwrap_err()
-                .contains("more than one host operation")
-        );
-        let duplicate = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"close-process-pane","action_id":"one","window_id":7,"tab_id":12,"pane_id":3},{"type":"close-process-pane","action_id":"two","window_id":7,"tab_id":12,"pane_id":4}]}"#;
-        assert!(
-            parse_process_pane_close_response(duplicate, false, true)
-                .unwrap_err()
-                .contains("more than one host operation")
-        );
-    }
-
-    #[test]
-    fn process_tab_closure_requires_v29_authority_and_strict_bounded_shape() {
-        let closure = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"close-process-tab","action_id":"close-sibling-tab","window_id":7,"tab_id":12}]}"#;
-        assert_eq!(
-            parse_process_tab_close_response(closure, false, true).unwrap(),
-            vec![StructuredResponseAction::CloseProcessTab {
-                action_id: "close-sibling-tab".into(),
-                window_id: 7,
-                tab_id: 12,
-            }]
-        );
-        assert!(
-            parse_process_tab_close_response(closure, true, false)
-                .unwrap_err()
-                .contains("API v29")
-        );
-        let unknown = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"close-process-tab","action_id":"close","window_id":7,"tab_id":12,"force":true}]}"#;
-        assert!(
-            parse_process_tab_close_response(unknown, false, true)
-                .unwrap_err()
-                .contains("unknown field")
-        );
-        let malformed = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"close-process-tab","action_id":"close","window_id":"7","tab_id":12}]}"#;
-        assert!(parse_process_tab_close_response(malformed, false, true).is_err());
-        let unsafe_id = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"close-process-tab","action_id":"two\nlines","window_id":7,"tab_id":12}]}"#;
-        assert!(
-            parse_process_tab_close_response(unsafe_id, false, true)
-                .unwrap_err()
-                .contains("control-safe")
-        );
-        let mixed = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-process","query_id":"inventory"},{"type":"close-process-tab","action_id":"close","window_id":7,"tab_id":12}]}"#;
-        assert!(
-            parse_process_tab_close_response(mixed, true, true)
-                .unwrap_err()
-                .contains("more than one host operation")
-        );
-        let duplicate = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"close-process-tab","action_id":"one","window_id":7,"tab_id":12},{"type":"close-process-tab","action_id":"two","window_id":7,"tab_id":13}]}"#;
-        assert!(
-            parse_process_tab_close_response(duplicate, false, true)
-                .unwrap_err()
-                .contains("more than one host operation")
-        );
-    }
-
-    #[test]
-    fn process_pane_layout_requires_v30_authority_and_strict_bounded_shape() {
-        let swap = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"swap-process-panes","action_id":"swap-sibling-panes","window_id":7,"tab_id":12,"first_pane_id":3,"second_pane_id":4}]}"#;
-        assert_eq!(
-            parse_process_pane_layout_response(swap, false, true).unwrap(),
-            vec![StructuredResponseAction::SwapProcessPanes {
-                action_id: "swap-sibling-panes".into(),
-                window_id: 7,
-                tab_id: 12,
-                first_pane_id: 3,
-                second_pane_id: 4,
-            }]
-        );
-        let balance = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"balance-process-panes","action_id":"balance-sibling-panes","window_id":7,"tab_id":12}]}"#;
-        assert_eq!(
-            parse_process_pane_layout_response(balance, false, true).unwrap(),
-            vec![StructuredResponseAction::BalanceProcessPanes {
-                action_id: "balance-sibling-panes".into(),
-                window_id: 7,
-                tab_id: 12,
-            }]
-        );
-        let preset = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"apply-process-pane-layout","action_id":"grid-sibling-panes","window_id":7,"tab_id":12,"preset":"grid"}]}"#;
-        assert_eq!(
-            parse_process_pane_layout_response(preset, false, true).unwrap(),
-            vec![StructuredResponseAction::ApplyProcessPaneLayout {
-                action_id: "grid-sibling-panes".into(),
-                window_id: 7,
-                tab_id: 12,
-                preset: PluginPaneLayoutPreset::Grid,
-            }]
-        );
-        let tall = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"apply-process-pane-layout","action_id":"tall-sibling-panes","window_id":7,"tab_id":12,"preset":"tall"}]}"#;
-        assert!(matches!(
-            parse_process_pane_layout_response(tall, false, true)
-                .unwrap()
-                .as_slice(),
-            [StructuredResponseAction::ApplyProcessPaneLayout {
-                preset: PluginPaneLayoutPreset::Tall,
-                ..
-            }]
-        ));
-        assert!(
-            parse_process_pane_layout_response(preset, true, false)
-                .unwrap_err()
-                .contains("API v30")
-        );
-
-        let same = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"swap-process-panes","action_id":"same","window_id":7,"tab_id":12,"first_pane_id":3,"second_pane_id":3}]}"#;
-        assert!(
-            parse_process_pane_layout_response(same, false, true)
-                .unwrap_err()
-                .contains("distinct")
-        );
-        let invalid_preset = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"apply-process-pane-layout","action_id":"grid","window_id":7,"tab_id":12,"preset":"mosaic"}]}"#;
-        assert!(parse_process_pane_layout_response(invalid_preset, false, true).is_err());
-        let malformed = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"balance-process-panes","action_id":"balance","window_id":"7","tab_id":12}]}"#;
-        assert!(parse_process_pane_layout_response(malformed, false, true).is_err());
-        let unknown = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"balance-process-panes","action_id":"balance","window_id":7,"tab_id":12,"activate":true}]}"#;
-        assert!(
-            parse_process_pane_layout_response(unknown, false, true)
-                .unwrap_err()
-                .contains("unknown field")
-        );
-        let unsafe_id = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"balance-process-panes","action_id":"two\nlines","window_id":7,"tab_id":12}]}"#;
-        assert!(
-            parse_process_pane_layout_response(unsafe_id, false, true)
-                .unwrap_err()
-                .contains("control-safe")
-        );
-        let mixed = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-process","query_id":"inventory"},{"type":"balance-process-panes","action_id":"balance","window_id":7,"tab_id":12}]}"#;
-        assert!(
-            parse_process_pane_layout_response(mixed, true, true)
-                .unwrap_err()
-                .contains("more than one host operation")
-        );
-        let duplicate = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"balance-process-panes","action_id":"balance","window_id":7,"tab_id":12},{"type":"apply-process-pane-layout","action_id":"grid","window_id":7,"tab_id":12,"preset":"grid"}]}"#;
-        assert!(
-            parse_process_pane_layout_response(duplicate, false, true)
-                .unwrap_err()
-                .contains("more than one host operation")
-        );
-    }
-
-    #[test]
-    fn process_window_closure_requires_v31_authority_and_strict_bounded_shape() {
-        let closure = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"close-process-window","action_id":"close-sibling-window","window_id":7}]}"#;
-        assert_eq!(
-            parse_process_window_close_response(closure, false, true).unwrap(),
-            vec![StructuredResponseAction::CloseProcessWindow {
-                action_id: "close-sibling-window".into(),
-                window_id: 7,
-            }]
-        );
-        assert!(
-            parse_process_window_close_response(closure, true, false)
-                .unwrap_err()
-                .contains("API v31")
-        );
-        let unknown = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"close-process-window","action_id":"close","window_id":7,"force":true}]}"#;
-        assert!(
-            parse_process_window_close_response(unknown, false, true)
-                .unwrap_err()
-                .contains("unknown field")
-        );
-        let malformed = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"close-process-window","action_id":"close","window_id":"7"}]}"#;
-        assert!(parse_process_window_close_response(malformed, false, true).is_err());
-        let unsafe_id = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"close-process-window","action_id":"two\nlines","window_id":7}]}"#;
-        assert!(
-            parse_process_window_close_response(unsafe_id, false, true)
-                .unwrap_err()
-                .contains("control-safe")
-        );
-        let oversized = serde_json::json!({
-            "schema_version": 2,
-            "request_id": 9,
-            "actions": [{
-                "type": "close-process-window",
-                "action_id": "x".repeat(MAX_ACTION_ID_BYTES + 1),
-                "window_id": 7,
-            }],
-        });
-        assert!(
-            parse_process_window_close_response(
-                &serde_json::to_vec(&oversized).unwrap(),
-                false,
-                true,
-            )
-            .unwrap_err()
-            .contains("within 64 bytes")
-        );
-        let mixed = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-process","query_id":"inventory"},{"type":"close-process-window","action_id":"close","window_id":7}]}"#;
-        assert!(
-            parse_process_window_close_response(mixed, true, true)
-                .unwrap_err()
-                .contains("more than one host operation")
-        );
-        let duplicate = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"close-process-window","action_id":"one","window_id":7},{"type":"close-process-window","action_id":"two","window_id":8}]}"#;
-        assert!(
-            parse_process_window_close_response(duplicate, false, true)
-                .unwrap_err()
-                .contains("more than one host operation")
-        );
-    }
-
-    #[test]
-    fn process_window_focus_requires_v32_authority_and_strict_bounded_shape() {
-        let focus = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"focus-process-window","action_id":"focus-sibling-window","window_id":7}]}"#;
-        assert_eq!(
-            parse_process_window_focus_response(focus, false, true).unwrap(),
-            vec![StructuredResponseAction::FocusProcessWindow {
-                action_id: "focus-sibling-window".into(),
-                window_id: 7,
-            }]
-        );
-        assert!(
-            parse_process_window_focus_response(focus, true, false)
-                .unwrap_err()
-                .contains("API v32")
-        );
-        let unknown = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"focus-process-window","action_id":"focus","window_id":7,"raise":true}]}"#;
-        assert!(
-            parse_process_window_focus_response(unknown, false, true)
-                .unwrap_err()
-                .contains("unknown field")
-        );
-        let malformed = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"focus-process-window","action_id":"focus","window_id":"7"}]}"#;
-        assert!(parse_process_window_focus_response(malformed, false, true).is_err());
-        let unsafe_id = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"focus-process-window","action_id":"two\nlines","window_id":7}]}"#;
-        assert!(
-            parse_process_window_focus_response(unsafe_id, false, true)
-                .unwrap_err()
-                .contains("control-safe")
-        );
-        let oversized = serde_json::json!({
-            "schema_version": 2,
-            "request_id": 9,
-            "actions": [{
-                "type": "focus-process-window",
-                "action_id": "x".repeat(MAX_ACTION_ID_BYTES + 1),
-                "window_id": 7,
-            }],
-        });
-        assert!(
-            parse_process_window_focus_response(
-                &serde_json::to_vec(&oversized).unwrap(),
-                false,
-                true,
-            )
-            .unwrap_err()
-            .contains("within 64 bytes")
-        );
-        let mixed = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-process","query_id":"inventory"},{"type":"focus-process-window","action_id":"focus","window_id":7}]}"#;
-        assert!(
-            parse_process_window_focus_response(mixed, true, true)
-                .unwrap_err()
-                .contains("more than one host operation")
-        );
-        let duplicate = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"focus-process-window","action_id":"one","window_id":7},{"type":"focus-process-window","action_id":"two","window_id":8}]}"#;
-        assert!(
-            parse_process_window_focus_response(duplicate, false, true)
-                .unwrap_err()
-                .contains("more than one host operation")
-        );
-    }
-
-    #[test]
-    fn terminal_queries_are_independently_gated_bounded_and_single_operation() {
-        let query = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-terminal","query_id":"visible-text","tab_id":42,"pane_id":7,"history_lines":20,"max_bytes":2048}]}"#;
-        assert_eq!(
-            parse_persistent_response(query, false, false, false, false, true, 9).unwrap(),
-            vec![StructuredResponseAction::QueryTerminal {
-                query_id: "visible-text".into(),
-                tab_id: 42,
-                pane_id: 7,
-                history_lines: 20,
-                max_bytes: 2048,
-            }]
-        );
-        assert!(
-            parse_persistent_response(query, false, false, false, false, false, 9)
-                .unwrap_err()
-                .contains("terminal-query authority")
-        );
-
-        let excessive_history = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-terminal","query_id":"visible-text","tab_id":42,"pane_id":7,"history_lines":257,"max_bytes":2048}]}"#;
-        assert!(
-            parse_persistent_response(excessive_history, false, false, false, false, true, 9)
-                .unwrap_err()
-                .contains("limited to 256 lines")
-        );
-        for max_bytes in [0, MAX_TERMINAL_QUERY_BYTES + 1] {
-            let invalid_bytes = format!(
-                "{{\"schema_version\":2,\"request_id\":9,\"actions\":[{{\"type\":\"query-terminal\",\"query_id\":\"visible-text\",\"tab_id\":42,\"pane_id\":7,\"history_lines\":0,\"max_bytes\":{max_bytes}}}]}}"
-            );
-            assert!(
-                parse_persistent_response(
-                    invalid_bytes.as_bytes(),
-                    false,
-                    false,
-                    false,
-                    false,
-                    true,
-                    9,
-                )
-                .unwrap_err()
-                .contains("bytes must be between")
-            );
-        }
-
-        let query_and_workspace = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-workspace","query_id":"inventory"},{"type":"query-terminal","query_id":"visible-text","tab_id":42,"pane_id":7,"history_lines":0,"max_bytes":2048}]}"#;
-        assert!(
-            parse_persistent_response(query_and_workspace, false, true, false, false, true, 9)
-                .unwrap_err()
-                .contains("more than one host operation")
-        );
-        let unsafe_id = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-terminal","query_id":"bad\nquery","tab_id":42,"pane_id":7,"history_lines":0,"max_bytes":2048}]}"#;
-        assert!(
-            parse_persistent_response(unsafe_id, false, false, false, false, true, 9)
-                .unwrap_err()
-                .contains("control-safe")
-        );
-    }
-
-    #[test]
-    fn workspace_actions_are_independently_gated_correlated_and_single_operation() {
-        let select = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"select-tab","action_id":"nav-1","tab_id":42}]}"#;
-        assert_eq!(
-            parse_persistent_response(select, false, false, true, false, false, 9).unwrap(),
             vec![StructuredResponseAction::SelectTab {
-                action_id: "nav-1".into(),
-                tab_id: 42,
+                action_id: "a".into(),
+                window_id: None,
+                tab_id: 7,
             }]
         );
-        assert!(
-            parse_persistent_response(select, true, true, false, false, false, 9)
-                .unwrap_err()
-                .contains("workspace-actions authority")
-        );
-
-        let focus = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"focus-pane","action_id":"focus-1","tab_id":42,"pane_id":7}]}"#;
         assert_eq!(
-            parse_persistent_response(focus, false, false, true, false, false, 9).unwrap(),
-            vec![StructuredResponseAction::FocusPane {
-                action_id: "focus-1".into(),
-                tab_id: 42,
-                pane_id: 7,
-            }]
-        );
-
-        let query_and_action = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-workspace","query_id":"inventory"},{"type":"select-tab","action_id":"nav-2","tab_id":42}]}"#;
-        assert!(
-            parse_persistent_response(query_and_action, false, true, true, false, false, 9)
-                .unwrap_err()
-                .contains("more than one host operation")
-        );
-        let unsafe_id = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"select-tab","action_id":"bad\naction","tab_id":42}]}"#;
-        assert!(
-            parse_persistent_response(unsafe_id, false, false, true, false, false, 9)
-                .unwrap_err()
-                .contains("control-safe")
-        );
-    }
-
-    #[test]
-    fn workspace_topology_actions_are_independently_gated_bounded_and_single_operation() {
-        let move_tab = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"move-tab","action_id":"order-1","tab_id":42,"destination_index":3}]}"#;
-        assert_eq!(
-            parse_persistent_response(move_tab, false, false, false, true, false, 9).unwrap(),
-            vec![StructuredResponseAction::MoveTab {
-                action_id: "order-1".into(),
-                tab_id: 42,
-                destination_index: 3,
-            }]
-        );
-        assert!(
-            parse_persistent_response(move_tab, true, true, true, false, false, 9)
-                .unwrap_err()
-                .contains("workspace-topology authority")
-        );
-
-        let resize = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"resize-divider","action_id":"ratio-1","tab_id":42,"divider_id":7,"ratio_millis":650}]}"#;
-        assert_eq!(
-            parse_persistent_response(resize, false, false, false, true, false, 9).unwrap(),
-            vec![StructuredResponseAction::ResizeDivider {
-                action_id: "ratio-1".into(),
-                tab_id: 42,
-                divider_id: 7,
-                ratio_millis: 650,
-            }]
-        );
-
-        let query_and_resize = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-workspace","query_id":"inventory"},{"type":"resize-divider","action_id":"ratio-2","tab_id":42,"divider_id":7,"ratio_millis":650}]}"#;
-        assert!(
-            parse_persistent_response(query_and_resize, false, true, false, true, false, 9)
-                .unwrap_err()
-                .contains("more than one host operation")
-        );
-        let navigation_and_move = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"select-tab","action_id":"nav","tab_id":42},{"type":"move-tab","action_id":"order","tab_id":42,"destination_index":3}]}"#;
-        assert!(
-            parse_persistent_response(navigation_and_move, false, false, true, true, false, 9)
-                .unwrap_err()
-                .contains("more than one host operation")
-        );
-
-        let invalid_ratio = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"resize-divider","action_id":"ratio","tab_id":42,"divider_id":7,"ratio_millis":99}]}"#;
-        assert!(
-            parse_persistent_response(invalid_ratio, false, false, false, true, false, 9)
-                .unwrap_err()
-                .contains("between 100 and 900")
-        );
-        let invalid_index = format!(
-            "{{\"schema_version\":2,\"request_id\":9,\"actions\":[{{\"type\":\"move-tab\",\"action_id\":\"order\",\"tab_id\":42,\"destination_index\":{}}}]}}",
-            crate::control::protocol::MAX_TABS_PER_WINDOW
-        );
-        assert!(
-            parse_persistent_response(
-                invalid_index.as_bytes(),
-                false,
-                false,
-                false,
-                true,
-                false,
-                9,
-            )
-            .unwrap_err()
-            .contains("destination index")
-        );
-    }
-
-    #[test]
-    fn pane_creation_is_typed_independently_gated_and_single_operation() {
-        let create = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"create-pane","action_id":"split-1","tab_id":42,"pane_id":7,"direction":"horizontal"}]}"#;
-        assert_eq!(
-            parse_persistent_response_with_host_creation(
-                create, false, false, false, false, false, true, false, false, false, 9,
+            check(
+                &authority,
+                r#"{"type":"select-tab","action_id":"a","window_id":4,"tab_id":7}"#
             )
             .unwrap(),
-            vec![StructuredResponseAction::CreatePane {
-                action_id: "split-1".into(),
-                tab_id: 42,
-                pane_id: 7,
-                direction: crate::control::protocol::SplitDirection::Horizontal,
+            vec![StructuredResponseAction::SelectTab {
+                action_id: "a".into(),
+                window_id: Some(4),
+                tab_id: 7,
             }]
         );
-        assert!(
-            parse_persistent_response(create, false, false, false, false, false, 9)
-                .unwrap_err()
-                .contains("pane-create authority")
-        );
-
-        let invalid_direction = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"create-pane","action_id":"split-1","tab_id":42,"pane_id":7,"direction":"diagonal"}]}"#;
-        assert!(
-            parse_persistent_response_with_host_creation(
-                invalid_direction,
-                false,
-                false,
-                false,
-                false,
-                false,
-                true,
-                false,
-                false,
-                false,
-                9,
-            )
-            .unwrap_err()
-            .contains("invalid handler response JSON")
-        );
-        let unknown_field = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"create-pane","action_id":"split-1","tab_id":42,"pane_id":7,"direction":"vertical","command":"forbidden"}]}"#;
-        assert!(
-            parse_persistent_response_with_host_creation(
-                unknown_field,
-                false,
-                false,
-                false,
-                false,
-                false,
-                true,
-                false,
-                false,
-                false,
-                9,
-            )
-            .unwrap_err()
-            .contains("unknown field")
-        );
-        let unsafe_id = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"create-pane","action_id":"bad\naction","tab_id":42,"pane_id":7,"direction":"vertical"}]}"#;
-        assert!(
-            parse_persistent_response_with_host_creation(
-                unsafe_id, false, false, false, false, false, true, false, false, false, 9,
-            )
-            .unwrap_err()
-            .contains("control-safe")
-        );
-        let query_and_create = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-workspace","query_id":"inventory"},{"type":"create-pane","action_id":"split-2","tab_id":42,"pane_id":7,"direction":"vertical"}]}"#;
-        assert!(
-            parse_persistent_response_with_host_creation(
-                query_and_create,
-                false,
-                true,
-                false,
-                false,
-                false,
-                true,
-                false,
-                false,
-                false,
-                9,
-            )
-            .unwrap_err()
-            .contains("more than one host operation")
-        );
-    }
-
-    #[test]
-    fn tab_creation_is_independently_gated_strict_and_single_operation() {
-        let create = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"create-tab","action_id":"new-task"}]}"#;
-        assert_eq!(
-            parse_persistent_response_with_host_creation(
-                create, false, false, false, false, false, false, true, false, false, 9,
-            )
-            .unwrap(),
-            vec![StructuredResponseAction::CreateTab {
-                action_id: "new-task".into(),
-            }]
-        );
-        assert!(
-            parse_persistent_response(create, false, false, false, false, false, 9)
-                .unwrap_err()
-                .contains("tab-create authority")
-        );
-
-        let unknown_field = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"create-tab","action_id":"new-task","command":"forbidden"}]}"#;
-        assert!(
-            parse_persistent_response_with_host_creation(
-                unknown_field,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                true,
-                false,
-                false,
-                9,
-            )
-            .unwrap_err()
-            .contains("unknown field")
-        );
-        let unsafe_id = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"create-tab","action_id":"bad\naction"}]}"#;
-        assert!(
-            parse_persistent_response_with_host_creation(
-                unsafe_id, false, false, false, false, false, false, true, false, false, 9,
-            )
-            .unwrap_err()
-            .contains("control-safe")
-        );
-        let oversized_id = serde_json::json!({
-            "schema_version": 2,
-            "request_id": 9,
-            "actions": [{
-                "type": "create-tab",
-                "action_id": "x".repeat(MAX_ACTION_ID_BYTES + 1),
-            }],
-        });
-        assert!(
-            parse_persistent_response_with_host_creation(
-                &serde_json::to_vec(&oversized_id).unwrap(),
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                true,
-                false,
-                false,
-                9,
-            )
-            .unwrap_err()
-            .contains("within 64 bytes")
-        );
-        let query_and_create = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-workspace","query_id":"inventory"},{"type":"create-tab","action_id":"new-task"}]}"#;
-        assert!(
-            parse_persistent_response_with_host_creation(
-                query_and_create,
-                false,
-                true,
-                false,
-                false,
-                false,
-                false,
-                true,
-                false,
-                false,
-                9,
-            )
-            .unwrap_err()
-            .contains("more than one host operation")
-        );
-    }
-
-    #[test]
-    fn pane_closure_is_independently_gated_strict_and_single_operation() {
-        let close = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"close-pane","action_id":"prune-1","tab_id":42,"pane_id":7}]}"#;
-        assert_eq!(
-            parse_persistent_response_with_host_creation(
-                close, false, false, false, false, false, false, false, true, false, 9,
-            )
-            .unwrap(),
-            vec![StructuredResponseAction::ClosePane {
-                action_id: "prune-1".into(),
-                tab_id: 42,
-                pane_id: 7,
-            }]
-        );
-        assert!(
-            parse_persistent_response(close, false, false, false, false, false, 9)
-                .unwrap_err()
-                .contains("pane-close authority")
-        );
-
-        let process_per_event = br#"{"schema_version":1,"actions":[{"type":"close-pane","action_id":"prune-1","tab_id":42,"pane_id":7}]}"#;
-        assert!(
-            parse_response_with_host_creation(
-                process_per_event,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-            )
-            .unwrap_err()
-            .contains("pane-close authority")
-        );
-        let unknown_field = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"close-pane","action_id":"prune-1","tab_id":42,"pane_id":7,"force":true}]}"#;
-        assert!(
-            parse_persistent_response_with_host_creation(
-                unknown_field,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                true,
-                false,
-                9,
-            )
-            .unwrap_err()
-            .contains("unknown field")
-        );
-        let unsafe_id = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"close-pane","action_id":"bad\naction","tab_id":42,"pane_id":7}]}"#;
-        assert!(
-            parse_persistent_response_with_host_creation(
-                unsafe_id, false, false, false, false, false, false, false, true, false, 9,
-            )
-            .unwrap_err()
-            .contains("control-safe")
-        );
-        let query_and_close = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-workspace","query_id":"inventory"},{"type":"close-pane","action_id":"prune-1","tab_id":42,"pane_id":7}]}"#;
-        assert!(
-            parse_persistent_response_with_host_creation(
-                query_and_close,
-                false,
-                true,
-                false,
-                false,
-                false,
-                false,
-                false,
-                true,
-                false,
-                9,
-            )
-            .unwrap_err()
-            .contains("more than one host operation")
-        );
-    }
-
-    #[test]
-    fn tab_closure_is_independently_gated_strict_and_single_operation() {
-        let close = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"close-tab","action_id":"retire-1","tab_id":42}]}"#;
-        assert_eq!(
-            parse_persistent_response_with_host_creation(
-                close, false, false, false, false, false, false, false, false, true, 9,
-            )
-            .unwrap(),
-            vec![StructuredResponseAction::CloseTab {
-                action_id: "retire-1".into(),
-                tab_id: 42,
-            }]
-        );
-        assert!(
-            parse_persistent_response(close, false, false, false, false, false, 9)
-                .unwrap_err()
-                .contains("tab-close authority")
-        );
-
-        let process_per_event = br#"{"schema_version":1,"actions":[{"type":"close-tab","action_id":"retire-1","tab_id":42}]}"#;
-        assert!(
-            parse_response_with_host_creation(
-                process_per_event,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-            )
-            .unwrap_err()
-            .contains("tab-close authority")
-        );
-        let unknown_field = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"close-tab","action_id":"retire-1","tab_id":42,"force":true}]}"#;
-        assert!(
-            parse_persistent_response_with_host_creation(
-                unknown_field,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                true,
-                9,
-            )
-            .unwrap_err()
-            .contains("unknown field")
-        );
-        let unsafe_id = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"close-tab","action_id":"bad\naction","tab_id":42}]}"#;
-        assert!(
-            parse_persistent_response_with_host_creation(
-                unsafe_id, false, false, false, false, false, false, false, false, true, 9,
-            )
-            .unwrap_err()
-            .contains("control-safe")
-        );
-        let query_and_close = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-workspace","query_id":"inventory"},{"type":"close-tab","action_id":"retire-1","tab_id":42}]}"#;
-        assert!(
-            parse_persistent_response_with_host_creation(
-                query_and_close,
-                false,
-                true,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                true,
-                9,
-            )
-            .unwrap_err()
-            .contains("more than one host operation")
-        );
-    }
-
-    #[test]
-    fn pane_movement_is_typed_independently_gated_strict_and_single_operation() {
-        let move_pane = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"move-pane","action_id":"relocate-1","source_tab_id":42,"pane_id":7,"destination_tab_id":43,"target_pane_id":2,"direction":"horizontal"}]}"#;
-        assert_eq!(
-            parse_persistent_response_with_host_mutation(
-                move_pane, false, false, false, false, false, false, false, false, false, true,
-                false, false, 9,
-            )
-            .unwrap(),
-            vec![StructuredResponseAction::MovePane {
-                action_id: "relocate-1".into(),
-                source_tab_id: 42,
-                pane_id: 7,
-                destination_tab_id: 43,
-                target_pane_id: 2,
-                direction: crate::control::protocol::SplitDirection::Horizontal,
-            }]
-        );
-        assert!(
-            parse_persistent_response(move_pane, false, false, false, false, false, 9)
-                .unwrap_err()
-                .contains("pane-move authority")
-        );
-
-        let invalid_direction = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"move-pane","action_id":"relocate-1","source_tab_id":42,"pane_id":7,"destination_tab_id":43,"target_pane_id":2,"direction":"diagonal"}]}"#;
-        assert!(
-            parse_persistent_response_with_host_mutation(
-                invalid_direction,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                true,
-                false,
-                false,
-                9,
-            )
-            .unwrap_err()
-            .contains("unknown variant")
-        );
-        let unknown_field = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"move-pane","action_id":"relocate-1","source_tab_id":42,"pane_id":7,"destination_tab_id":43,"target_pane_id":2,"direction":"vertical","window_id":9}]}"#;
-        assert!(
-            parse_persistent_response_with_host_mutation(
-                unknown_field,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                true,
-                false,
-                false,
-                9,
-            )
-            .unwrap_err()
-            .contains("unknown field")
-        );
-        let unsafe_id = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"move-pane","action_id":"bad\naction","source_tab_id":42,"pane_id":7,"destination_tab_id":43,"target_pane_id":2,"direction":"vertical"}]}"#;
-        assert!(
-            parse_persistent_response_with_host_mutation(
-                unsafe_id, false, false, false, false, false, false, false, false, false, true,
-                false, false, 9,
-            )
-            .unwrap_err()
-            .contains("control-safe")
-        );
-        let oversized_id = serde_json::json!({
-            "schema_version": 2,
-            "request_id": 9,
-            "actions": [{
-                "type": "move-pane",
-                "action_id": "x".repeat(MAX_ACTION_ID_BYTES + 1),
-                "source_tab_id": 42,
-                "pane_id": 7,
-                "destination_tab_id": 43,
-                "target_pane_id": 2,
-                "direction": "vertical",
-            }],
-        });
-        assert!(
-            parse_persistent_response_with_host_mutation(
-                &serde_json::to_vec(&oversized_id).unwrap(),
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                true,
-                false,
-                false,
-                9,
-            )
-            .unwrap_err()
-            .contains("within 64 bytes")
-        );
-        let query_and_move = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-workspace","query_id":"inventory"},{"type":"move-pane","action_id":"relocate-1","source_tab_id":42,"pane_id":7,"destination_tab_id":43,"target_pane_id":2,"direction":"vertical"}]}"#;
-        assert!(
-            parse_persistent_response_with_host_mutation(
-                query_and_move,
-                false,
-                true,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                true,
-                false,
-                false,
-                9,
-            )
-            .unwrap_err()
-            .contains("more than one host operation")
-        );
-    }
-
-    #[test]
-    fn terminal_input_is_bounded_independently_gated_strict_and_single_operation() {
-        let send_text = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"send-text","action_id":"draft-command","tab_id":42,"pane_id":7,"text":"cargo test\n--workspace","paste":true,"enter":false}]}"#;
-        assert_eq!(
-            parse_persistent_response_with_host_mutation(
-                send_text, false, false, false, false, false, false, false, false, false, false,
-                true, false, 9,
-            )
-            .unwrap(),
-            vec![StructuredResponseAction::SendText {
-                action_id: "draft-command".into(),
-                tab_id: 42,
-                pane_id: 7,
-                text: "cargo test\n--workspace".into(),
-                paste: true,
-                enter: false,
-            }]
-        );
-        assert!(
-            parse_persistent_response(send_text, false, false, false, false, false, 9)
-                .unwrap_err()
-                .contains("terminal-input authority")
-        );
-
-        let unknown_field = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"send-text","action_id":"draft-command","tab_id":42,"pane_id":7,"text":"cargo test","paste":false,"enter":false,"window_id":3}]}"#;
-        assert!(
-            parse_persistent_response_with_host_mutation(
-                unknown_field,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                true,
-                false,
-                9,
-            )
-            .unwrap_err()
-            .contains("unknown field")
-        );
-
-        let unsafe_id = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"send-text","action_id":"bad\naction","tab_id":42,"pane_id":7,"text":"cargo test","paste":false,"enter":false}]}"#;
-        assert!(
-            parse_persistent_response_with_host_mutation(
-                unsafe_id, false, false, false, false, false, false, false, false, false, false,
-                true, false, 9,
-            )
-            .unwrap_err()
-            .contains("control-safe")
-        );
-
-        let escape = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"send-text","action_id":"bad-input","tab_id":42,"pane_id":7,"text":"\u001b[31m","paste":false,"enter":false}]}"#;
-        assert!(
-            parse_persistent_response_with_host_mutation(
-                escape, false, false, false, false, false, false, false, false, false, false, true,
-                false, 9,
-            )
-            .unwrap_err()
-            .contains("printable UTF-8")
-        );
-
-        let empty = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"send-text","action_id":"empty","tab_id":42,"pane_id":7,"text":"","paste":false,"enter":false}]}"#;
-        assert!(
-            parse_persistent_response_with_host_mutation(
-                empty, false, false, false, false, false, false, false, false, false, false, true,
-                false, 9,
-            )
-            .unwrap_err()
-            .contains("include text or enter")
-        );
-
-        let oversized = serde_json::json!({
-            "schema_version": 2,
-            "request_id": 9,
-            "actions": [{
-                "type": "send-text",
-                "action_id": "oversized",
-                "tab_id": 42,
-                "pane_id": 7,
-                "text": "x".repeat(MAX_TERMINAL_INPUT_BYTES + 1),
-                "paste": false,
-                "enter": false,
-            }],
-        });
-        assert!(
-            parse_persistent_response_with_host_mutation(
-                &serde_json::to_vec(&oversized).unwrap(),
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                true,
-                false,
-                9,
-            )
-            .unwrap_err()
-            .contains("limited to 8192")
-        );
-
-        let query_and_send = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-workspace","query_id":"inventory"},{"type":"send-text","action_id":"draft-command","tab_id":42,"pane_id":7,"text":"cargo test","paste":false,"enter":false}]}"#;
-        assert!(
-            parse_persistent_response_with_host_mutation(
-                query_and_send,
-                false,
-                true,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                true,
-                false,
-                9,
-            )
-            .unwrap_err()
-            .contains("more than one host operation")
-        );
-    }
-
-    #[test]
-    fn pane_layout_is_typed_independently_gated_strict_and_single_operation() {
-        let swap = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"swap-panes","action_id":"swap-build-logs","tab_id":42,"first_pane_id":3,"second_pane_id":7}]}"#;
-        assert_eq!(
-            parse_persistent_response_with_host_mutation(
-                swap, false, false, false, false, false, false, false, false, false, false, false,
-                true, 9,
-            )
-            .unwrap(),
-            vec![StructuredResponseAction::SwapPanes {
-                action_id: "swap-build-logs".into(),
-                tab_id: 42,
-                first_pane_id: 3,
-                second_pane_id: 7,
-            }]
-        );
-        assert!(
-            parse_persistent_response(swap, false, false, false, false, false, 9)
-                .unwrap_err()
-                .contains("pane-layout authority")
-        );
-
-        let balance = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"balance-panes","action_id":"balance-build","tab_id":42}]}"#;
-        assert_eq!(
-            parse_persistent_response_with_host_mutation(
-                balance, false, false, false, false, false, false, false, false, false, false,
-                false, true, 9,
-            )
-            .unwrap(),
-            vec![StructuredResponseAction::BalancePanes {
-                action_id: "balance-build".into(),
-                tab_id: 42,
-            }]
-        );
-
-        let preset = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"apply-pane-layout","action_id":"grid-build","tab_id":42,"preset":"grid"}]}"#;
-        assert_eq!(
-            parse_persistent_response_with_host_mutation(
-                preset, false, false, false, false, false, false, false, false, false, false,
-                false, true, 9,
-            )
-            .unwrap(),
-            vec![StructuredResponseAction::ApplyPaneLayout {
-                action_id: "grid-build".into(),
-                tab_id: 42,
-                preset: PluginPaneLayoutPreset::Grid,
-            }]
-        );
-        let fat = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"apply-pane-layout","action_id":"fat-build","tab_id":42,"preset":"fat"}]}"#;
         assert!(matches!(
-            parse_persistent_response_with_host_mutation(
-                fat, false, false, false, false, false, false, false, false, false, false, false,
-                true, 9,
+            check(
+                &authority,
+                r#"{"type":"move-tab","action_id":"a","source_window_id":3,"tab_id":7,"destination_index":1}"#
             )
-            .unwrap()
-            .as_slice(),
-            [StructuredResponseAction::ApplyPaneLayout {
-                preset: PluginPaneLayoutPreset::Fat,
+            .unwrap()[..],
+            [StructuredResponseAction::MoveTab {
+                source_window_id: Some(3),
+                destination_window_id: None,
                 ..
             }]
         ));
+    }
 
-        let same = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"swap-panes","action_id":"same","tab_id":42,"first_pane_id":3,"second_pane_id":3}]}"#;
-        assert!(
-            parse_persistent_response_with_host_mutation(
-                same, false, false, false, false, false, false, false, false, false, false, false,
-                true, 9,
-            )
-            .unwrap_err()
-            .contains("distinct")
+    #[test]
+    fn process_per_event_handlers_cannot_start_host_operations() {
+        let authority = HandlerAuthority::for_event(
+            grants(&["ui-actions", "workspace-query", "navigate"]),
+            StructuredHandlerMode::ProcessPerEvent,
+            false,
         );
-        let invalid_preset = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"apply-pane-layout","action_id":"grid-build","tab_id":42,"preset":"mosaic"}]}"#;
-        assert!(
-            parse_persistent_response_with_host_mutation(
-                invalid_preset,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                true,
-                9,
+        for action in [
+            r#"{"type":"query-workspace","query_id":"inventory"}"#,
+            r#"{"type":"select-tab","action_id":"a","tab_id":7}"#,
+        ] {
+            let error = parse_response(
+                format!(r#"{{"schema_version":1,"actions":[{action}]}}"#).as_bytes(),
+                &authority,
+                None,
             )
-            .unwrap_err()
-            .contains("unknown variant")
-        );
-        let unknown_fields = [
-            serde_json::json!({"type":"swap-panes","action_id":"swap","tab_id":42,"first_pane_id":3,"second_pane_id":7,"window_id":3}),
-            serde_json::json!({"type":"balance-panes","action_id":"balance","tab_id":42,"window_id":3}),
-            serde_json::json!({"type":"apply-pane-layout","action_id":"grid","tab_id":42,"preset":"grid","window_id":3}),
-        ];
-        for action in unknown_fields {
-            let response = serde_json::json!({
-                "schema_version": 2,
-                "request_id": 9,
-                "actions": [action],
-            });
-            assert!(
-                parse_persistent_response_with_host_mutation(
-                    &serde_json::to_vec(&response).unwrap(),
-                    false,
-                    false,
-                    false,
-                    false,
-                    false,
-                    false,
-                    false,
-                    false,
-                    false,
-                    false,
-                    false,
-                    true,
-                    9,
-                )
-                .unwrap_err()
-                .contains("unknown field")
-            );
+            .unwrap_err();
+            assert!(error.contains("cannot start host operations"), "{error}");
         }
-        for action_id in ["bad\naction".into(), "x".repeat(MAX_ACTION_ID_BYTES + 1)] {
-            let shapes = [
-                serde_json::json!({"type":"swap-panes","action_id":action_id.clone(),"tab_id":42,"first_pane_id":3,"second_pane_id":7}),
-                serde_json::json!({"type":"balance-panes","action_id":action_id.clone(),"tab_id":42}),
-                serde_json::json!({"type":"apply-pane-layout","action_id":action_id,"tab_id":42,"preset":"grid"}),
-            ];
-            for action in shapes {
-                let response = serde_json::json!({
-                    "schema_version": 2,
-                    "request_id": 9,
-                    "actions": [action],
-                });
+    }
+
+    #[test]
+    fn follow_up_chain_allows_one_query_then_one_host_operation() {
+        let event =
+            persistent_authority(&["ui-actions", "workspace-query", "terminal-read", "navigate"]);
+        let query = StructuredResponseAction::QueryWorkspace {
+            query_id: "inventory".into(),
+        };
+        let select = r#"{"type":"select-tab","action_id":"a","tab_id":7}"#;
+        let read = r#"{"type":"query-terminal","query_id":"t","tab_id":7,"pane_id":0,"history_lines":0,"max_bytes":64}"#;
+        let workspace_query = r#"{"type":"query-workspace","query_id":"again"}"#;
+        let message = r#"{"type":"show-message","message":"still allowed"}"#;
+
+        // An event may start one query or one host action.
+        assert!(check(&event, workspace_query).is_ok());
+        assert!(check(&event, read).is_ok());
+        assert!(check(&event, select).is_ok());
+
+        // A workspace query result may perform one host action or terminal
+        // query, but never another workspace query.
+        let after_query = event.after(&query);
+        assert!(check(&after_query, select).is_ok());
+        assert!(check(&after_query, read).is_ok());
+        assert!(
+            check(&after_query, workspace_query)
+                .unwrap_err()
+                .contains("from a workspace query result")
+        );
+
+        // Action results and terminal query results end the chain.
+        let select_action = check(&after_query, select).unwrap().remove(0);
+        let read_action = check(&event, read).unwrap().remove(0);
+        for ended in [
+            after_query.after(&select_action),
+            event.after(&select_action),
+            event.after(&read_action),
+            after_query.after(&read_action),
+        ] {
+            for action in [select, read, workspace_query] {
                 assert!(
-                    parse_persistent_response_with_host_mutation(
-                        &serde_json::to_vec(&response).unwrap(),
-                        false,
-                        false,
-                        false,
-                        false,
-                        false,
-                        false,
-                        false,
-                        false,
-                        false,
-                        false,
-                        false,
-                        true,
-                        9,
-                    )
-                    .unwrap_err()
-                    .contains("control-safe")
+                    check(&ended, action)
+                        .unwrap_err()
+                        .contains("cannot start host operations")
                 );
             }
+            assert!(check(&ended, message).is_ok());
         }
-        let two_layouts = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"balance-panes","action_id":"balance-build","tab_id":42},{"type":"apply-pane-layout","action_id":"grid-build","tab_id":42,"preset":"grid"}]}"#;
-        assert!(
-            parse_persistent_response_with_host_mutation(
-                two_layouts,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                true,
-                9,
-            )
-            .unwrap_err()
-            .contains("more than one host operation")
-        );
     }
 
     #[test]
-    fn window_close_is_typed_command_gated_strict_and_single_operation() {
-        let close = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"close-window","action_id":"close-current-window"}]}"#;
-        assert_eq!(
-            parse_persistent_response_with_window_close(
-                close, false, false, false, false, false, false, false, false, false, false, false,
-                false, true, false, false, false, false, false, false, false, false, false, false,
-                false, false, 9,
-            )
-            .unwrap(),
-            vec![StructuredResponseAction::CloseWindow {
-                action_id: "close-current-window".into(),
-            }]
-        );
+    fn responses_carry_at_most_one_host_operation_and_eight_actions() {
+        let authority = persistent_authority(&["ui-actions", "workspace-query", "navigate"]);
+        for pair in [
+            r#"{"type":"query-workspace","query_id":"one"},{"type":"query-workspace","query_id":"two"}"#,
+            r#"{"type":"query-workspace","query_id":"one"},{"type":"select-tab","action_id":"a","tab_id":7}"#,
+        ] {
+            assert!(
+                check(&authority, pair)
+                    .unwrap_err()
+                    .contains("more than one host operation")
+            );
+        }
+        let mixed = r#"{"type":"select-tab","action_id":"a","tab_id":7},{"type":"show-message","message":"selected"}"#;
+        assert_eq!(check(&authority, mixed).unwrap().len(), 2);
+        let too_many = [r#"{"type":"show-message","message":"m"}"#; MAX_ACTIONS + 1].join(",");
         assert!(
-            parse_persistent_response(close, false, false, false, false, false, 9)
+            check(&authority, &too_many)
                 .unwrap_err()
-                .contains("command-scoped")
-        );
-
-        let unknown = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"close-window","action_id":"close-current-window","window_id":3}]}"#;
-        assert!(
-            parse_persistent_response_with_window_close(
-                unknown, false, false, false, false, false, false, false, false, false, false,
-                false, false, true, false, false, false, false, false, false, false, false, false,
-                false, false, false, 9,
-            )
-            .unwrap_err()
-            .contains("unknown field")
-        );
-
-        let unsafe_id = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"close-window","action_id":"bad\naction"}]}"#;
-        assert!(
-            parse_persistent_response_with_window_close(
-                unsafe_id, false, false, false, false, false, false, false, false, false, false,
-                false, false, true, false, false, false, false, false, false, false, false, false,
-                false, false, false, 9,
-            )
-            .unwrap_err()
-            .contains("control-safe")
-        );
-
-        let query_and_close = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-workspace","query_id":"inventory"},{"type":"close-window","action_id":"close-current-window"}]}"#;
-        assert!(
-            parse_persistent_response_with_window_close(
-                query_and_close,
-                false,
-                true,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                true,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                9,
-            )
-            .unwrap_err()
-            .contains("more than one host operation")
+                .contains("more than 8 actions")
         );
     }
 
-    #[cfg(unix)]
     #[test]
-    fn persistent_workspace_query_round_trip_reuses_the_handler() {
-        let mut invocation = persistent_fixture(
-            "query-fixture",
-            r#"count=0
-while IFS= read -r event; do
-  count=$((count + 1))
-  if [ "$count" -eq 1 ]; then
-    printf '{"schema_version":2,"request_id":1,"actions":[{"type":"query-workspace","query_id":"inventory"}]}\n'
-  else
-    printf '{"schema_version":2,"request_id":2,"actions":[{"type":"show-message","message":"query-result-received"}]}\n'
-  fi
-done"#,
+    fn window_scoped_window_close_is_limited_to_invoked_commands() {
+        let close = r#"{"type":"close-window","action_id":"close"}"#;
+        let window_scoped = grants(&["window-close"]);
+        let lifecycle = HandlerAuthority::for_event(
+            window_scoped.clone(),
+            StructuredHandlerMode::Persistent,
+            false,
         );
-        invocation.allow_workspace_query = true;
-        let mut handlers = HashMap::new();
-        let shutdown = AtomicBool::new(false);
-        let generation = AtomicU64::new(1);
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1,)
-                .unwrap(),
-            vec![StructuredResponseAction::QueryWorkspace {
-                query_id: "inventory".into()
-            }]
-        );
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"workspace-query-result","query_id":"inventory"}}"#.into();
-        invocation.allow_workspace_query = false;
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 2, &shutdown, &generation, 1,)
-                .unwrap(),
-            vec![StructuredResponseAction::ShowMessage {
-                message: "query-result-received".into()
-            }]
-        );
-        assert_eq!(handlers.len(), 1);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn persistent_terminal_query_round_trip_reuses_the_handler_without_query_chaining() {
-        let mut invocation = persistent_fixture(
-            "terminal-query-fixture",
-            r#"count=0
-while IFS= read -r event; do
-  count=$((count + 1))
-  if [ "$count" -eq 1 ]; then
-    printf '{"schema_version":2,"request_id":1,"actions":[{"type":"query-terminal","query_id":"visible-text","tab_id":7,"pane_id":3,"history_lines":20,"max_bytes":2048}]}\n'
-  else
-    printf '{"schema_version":2,"request_id":2,"actions":[{"type":"show-message","message":"terminal-result-received"}]}\n'
-  fi
-done"#,
-        );
-        invocation.allow_terminal_query = true;
-        let mut handlers = HashMap::new();
-        let shutdown = AtomicBool::new(false);
-        let generation = AtomicU64::new(1);
-        assert!(matches!(
-            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
-                .unwrap()[..],
-            [StructuredResponseAction::QueryTerminal { .. }]
-        ));
-
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"terminal-query-result","query_id":"visible-text","ok":true}}"#.into();
-        invocation.allow_terminal_query = false;
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 2, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::ShowMessage {
-                message: "terminal-result-received".into(),
-            }]
-        );
-        assert_eq!(handlers.len(), 1);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn persistent_pane_creation_result_cannot_create_again() {
-        let mut invocation = persistent_fixture(
-            "pane-create-fixture",
-            r#"while IFS= read -r event; do
-  printf '{"schema_version":2,"request_id":1,"actions":[{"type":"create-pane","action_id":"split","tab_id":7,"pane_id":3,"direction":"vertical"}]}\n'
-done"#,
-        );
-        invocation.allow_pane_create = true;
-        let mut handlers = HashMap::new();
-        let shutdown = AtomicBool::new(false);
-        let generation = AtomicU64::new(1);
-        assert!(matches!(
-            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
-                .unwrap()[..],
-            [StructuredResponseAction::CreatePane { .. }]
-        ));
-
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"workspace-action-result","action":"create-pane","ok":true}}"#.into();
-        invocation.allow_pane_create = false;
         assert!(
-            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
+            check(&lifecycle, close)
                 .unwrap_err()
-                .contains("pane-create authority")
+                .contains("outside an invoked plugin command")
         );
-        assert!(handlers.is_empty());
+        let command =
+            HandlerAuthority::for_event(window_scoped, StructuredHandlerMode::Persistent, true);
+        assert!(check(&command, close).is_ok());
+        // A workspace query keeps the command origin for its follow-up.
+        let query = StructuredResponseAction::QueryWorkspace {
+            query_id: "q".into(),
+        };
+        assert!(check(&command.after(&query), close).is_ok());
+
+        let all_windows = persistent_authority(&["window-close:all-windows"]);
+        assert!(check(&all_windows, close).is_ok());
     }
 
-    #[cfg(unix)]
     #[test]
-    fn persistent_tab_creation_result_cannot_create_again() {
-        let mut invocation = persistent_fixture(
-            "tab-create-fixture",
-            r#"while IFS= read -r event; do
-  printf '{"schema_version":2,"request_id":1,"actions":[{"type":"create-tab","action_id":"new-task"}]}\n'
-done"#,
-        );
-        invocation.allow_tab_create = true;
-        let mut handlers = HashMap::new();
-        let shutdown = AtomicBool::new(false);
-        let generation = AtomicU64::new(1);
-        assert!(matches!(
-            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
-                .unwrap()[..],
-            [StructuredResponseAction::CreateTab { .. }]
-        ));
-
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"workspace-action-result","action":"create-tab","ok":true}}"#.into();
-        invocation.allow_tab_create = false;
-        assert!(
-            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
-                .unwrap_err()
-                .contains("tab-create authority")
-        );
-        assert!(handlers.is_empty());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn persistent_query_then_pane_close_then_result_is_bounded() {
-        let mut invocation = persistent_fixture(
-            "pane-close-fixture",
-            r#"count=0
-while IFS= read -r event; do
-  count=$((count + 1))
-  if [ "$count" -eq 1 ]; then
-    printf '{"schema_version":2,"request_id":1,"actions":[{"type":"query-workspace","query_id":"inventory"}]}\n'
-  elif [ "$count" -eq 2 ]; then
-    printf '{"schema_version":2,"request_id":2,"actions":[{"type":"close-pane","action_id":"prune","tab_id":7,"pane_id":3}]}\n'
-  else
-    printf '{"schema_version":2,"request_id":3,"actions":[{"type":"show-message","message":"close-result-received"}]}\n'
-  fi
-done"#,
-        );
-        invocation.allow_workspace_query = true;
-        invocation.allow_pane_close = true;
-        let mut handlers = HashMap::new();
-        let shutdown = AtomicBool::new(false);
-        let generation = AtomicU64::new(1);
-        assert!(matches!(
-            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
-                .unwrap()[..],
-            [StructuredResponseAction::QueryWorkspace { .. }]
-        ));
-
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"workspace-query-result","query_id":"inventory"}}"#.into();
-        invocation.allow_workspace_query = false;
-        assert!(matches!(
-            run_persistent_handler(&mut handlers, &invocation, 2, &shutdown, &generation, 1)
-                .unwrap()[..],
-            [StructuredResponseAction::ClosePane { .. }]
-        ));
-
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"workspace-action-result","action":"close-pane","ok":true}}"#.into();
-        invocation.allow_pane_close = false;
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 3, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::ShowMessage {
-                message: "close-result-received".into(),
-            }]
-        );
-        assert_eq!(handlers.len(), 1);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn persistent_query_then_tab_close_then_result_is_bounded() {
-        let mut invocation = persistent_fixture(
-            "tab-close-fixture",
-            r#"count=0
-while IFS= read -r event; do
-  count=$((count + 1))
-  if [ "$count" -eq 1 ]; then
-    printf '{"schema_version":2,"request_id":1,"actions":[{"type":"query-workspace","query_id":"inventory"}]}\n'
-  elif [ "$count" -eq 2 ]; then
-    printf '{"schema_version":2,"request_id":2,"actions":[{"type":"close-tab","action_id":"retire","tab_id":7}]}\n'
-  else
-    printf '{"schema_version":2,"request_id":3,"actions":[{"type":"show-message","message":"close-result-received"}]}\n'
-  fi
-done"#,
-        );
-        invocation.allow_workspace_query = true;
-        invocation.allow_tab_close = true;
-        let mut handlers = HashMap::new();
-        let shutdown = AtomicBool::new(false);
-        let generation = AtomicU64::new(1);
-        assert!(matches!(
-            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
-                .unwrap()[..],
-            [StructuredResponseAction::QueryWorkspace { .. }]
-        ));
-
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"workspace-query-result","query_id":"inventory"}}"#.into();
-        invocation.allow_workspace_query = false;
-        assert!(matches!(
-            run_persistent_handler(&mut handlers, &invocation, 2, &shutdown, &generation, 1)
-                .unwrap()[..],
-            [StructuredResponseAction::CloseTab { .. }]
-        ));
-
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"workspace-action-result","action":"close-tab","ok":true,"scheduled":true}}"#.into();
-        invocation.allow_tab_close = false;
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 3, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::ShowMessage {
-                message: "close-result-received".into(),
-            }]
-        );
-        assert_eq!(handlers.len(), 1);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn persistent_query_then_pane_move_then_result_is_bounded() {
-        let mut invocation = persistent_fixture(
-            "pane-move-fixture",
-            r#"count=0
-while IFS= read -r event; do
-  count=$((count + 1))
-  if [ "$count" -eq 1 ]; then
-    printf '{"schema_version":2,"request_id":1,"actions":[{"type":"query-workspace","query_id":"inventory"}]}\n'
-  elif [ "$count" -eq 2 ]; then
-    printf '{"schema_version":2,"request_id":2,"actions":[{"type":"move-pane","action_id":"relocate","source_tab_id":7,"pane_id":3,"destination_tab_id":8,"target_pane_id":1,"direction":"vertical"}]}\n'
-  else
-    printf '{"schema_version":2,"request_id":3,"actions":[{"type":"show-message","message":"move-result-received"}]}\n'
-  fi
-done"#,
-        );
-        invocation.allow_workspace_query = true;
-        invocation.allow_pane_move = true;
-        let mut handlers = HashMap::new();
-        let shutdown = AtomicBool::new(false);
-        let generation = AtomicU64::new(1);
-        assert!(matches!(
-            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
-                .unwrap()[..],
-            [StructuredResponseAction::QueryWorkspace { .. }]
-        ));
-
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"workspace-query-result","query_id":"inventory"}}"#.into();
-        invocation.allow_workspace_query = false;
-        assert!(matches!(
-            run_persistent_handler(&mut handlers, &invocation, 2, &shutdown, &generation, 1)
-                .unwrap()[..],
-            [StructuredResponseAction::MovePane { .. }]
-        ));
-
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"workspace-action-result","action":"move-pane","ok":true}}"#.into();
-        invocation.allow_pane_move = false;
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 3, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::ShowMessage {
-                message: "move-result-received".into(),
-            }]
-        );
-        assert_eq!(handlers.len(), 1);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn persistent_query_then_terminal_input_then_result_is_bounded() {
-        let mut invocation = persistent_fixture(
-            "terminal-input-fixture",
-            r#"count=0
-while IFS= read -r event; do
-  count=$((count + 1))
-  if [ "$count" -eq 1 ]; then
-    printf '{"schema_version":2,"request_id":1,"actions":[{"type":"query-workspace","query_id":"inventory"}]}\n'
-  elif [ "$count" -eq 2 ]; then
-    printf '{"schema_version":2,"request_id":2,"actions":[{"type":"send-text","action_id":"draft","tab_id":7,"pane_id":3,"text":"cargo test","paste":false,"enter":false}]}\n'
-  else
-    printf '{"schema_version":2,"request_id":3,"actions":[{"type":"show-message","message":"input-result-received"}]}\n'
-  fi
-done"#,
-        );
-        invocation.allow_workspace_query = true;
-        invocation.allow_terminal_input = true;
-        let mut handlers = HashMap::new();
-        let shutdown = AtomicBool::new(false);
-        let generation = AtomicU64::new(1);
-        assert!(matches!(
-            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
-                .unwrap()[..],
-            [StructuredResponseAction::QueryWorkspace { .. }]
-        ));
-
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"workspace-query-result","query_id":"inventory"}}"#.into();
-        invocation.allow_workspace_query = false;
-        assert!(matches!(
-            run_persistent_handler(&mut handlers, &invocation, 2, &shutdown, &generation, 1)
-                .unwrap()[..],
-            [StructuredResponseAction::SendText { .. }]
-        ));
-
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"workspace-action-result","action":"send-text","ok":true,"disposition":"sent"}}"#.into();
-        invocation.allow_terminal_input = false;
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 3, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::ShowMessage {
-                message: "input-result-received".into(),
-            }]
-        );
-        assert_eq!(handlers.len(), 1);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn persistent_query_then_pane_layout_then_result_is_bounded() {
-        let mut invocation = persistent_fixture(
-            "pane-layout-fixture",
-            r#"count=0
-while IFS= read -r event; do
-  count=$((count + 1))
-  if [ "$count" -eq 1 ]; then
-    printf '{"schema_version":2,"request_id":1,"actions":[{"type":"query-workspace","query_id":"inventory"}]}\n'
-  elif [ "$count" -eq 2 ]; then
-    printf '{"schema_version":2,"request_id":2,"actions":[{"type":"apply-pane-layout","action_id":"grid","tab_id":7,"preset":"grid"}]}\n'
-  else
-    printf '{"schema_version":2,"request_id":3,"actions":[{"type":"show-message","message":"layout-result-received"}]}\n'
-  fi
-done"#,
-        );
-        invocation.allow_workspace_query = true;
-        invocation.allow_pane_layout = true;
-        let mut handlers = HashMap::new();
-        let shutdown = AtomicBool::new(false);
-        let generation = AtomicU64::new(1);
-        assert!(matches!(
-            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
-                .unwrap()[..],
-            [StructuredResponseAction::QueryWorkspace { .. }]
-        ));
-
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"workspace-query-result","query_id":"inventory"}}"#.into();
-        invocation.allow_workspace_query = false;
-        assert!(matches!(
-            run_persistent_handler(&mut handlers, &invocation, 2, &shutdown, &generation, 1)
-                .unwrap()[..],
-            [StructuredResponseAction::ApplyPaneLayout {
-                preset: PluginPaneLayoutPreset::Grid,
-                ..
-            }]
-        ));
-
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"workspace-action-result","action":"apply-pane-layout","ok":true}}"#.into();
-        invocation.allow_pane_layout = false;
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 3, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::ShowMessage {
-                message: "layout-result-received".into(),
-            }]
-        );
-        assert_eq!(handlers.len(), 1);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn persistent_query_then_window_close_then_final_result_is_bounded() {
-        let mut invocation = persistent_fixture(
-            "window-close-fixture",
-            r#"count=0
-while IFS= read -r event; do
-  count=$((count + 1))
-  if [ "$count" -eq 1 ]; then
-    printf '{"schema_version":2,"request_id":1,"actions":[{"type":"query-workspace","query_id":"confirm-current-window"}]}\n'
-  elif [ "$count" -eq 2 ]; then
-    printf '{"schema_version":2,"request_id":2,"actions":[{"type":"close-window","action_id":"close-current-window"}]}\n'
-  else
-    printf '{"schema_version":2,"request_id":3,"actions":[]}\n'
-  fi
-done"#,
-        );
-        invocation.allow_workspace_query = true;
-        invocation.allow_window_close = true;
-        let mut handlers = HashMap::new();
-        let shutdown = AtomicBool::new(false);
-        let generation = AtomicU64::new(1);
-        assert!(matches!(
-            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
-                .unwrap()[..],
-            [StructuredResponseAction::QueryWorkspace { .. }]
-        ));
-
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"workspace-query-result","query_id":"confirm-current-window"}}"#.into();
-        invocation.allow_workspace_query = false;
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 2, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::CloseWindow {
-                action_id: "close-current-window".into(),
-            }]
-        );
-
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"workspace-action-result","action":"close-window","ok":true,"scheduled":true}}"#.into();
-        invocation.allow_window_close = false;
-        assert!(
-            run_persistent_handler(&mut handlers, &invocation, 3, &shutdown, &generation, 1)
-                .unwrap()
-                .is_empty()
-        );
-        assert_eq!(handlers.len(), 1);
+    fn action_fields_are_bounded_and_control_safe() {
+        let authority = persistent_authority(&[
+            "ui-actions",
+            "workspace-query",
+            "terminal-read",
+            "terminal-input",
+            "tab-move",
+            "pane-layout",
+            "navigate",
+        ]);
+        let rejected = [
+            (
+                format!(
+                    r#"{{"type":"show-message","message":{:?}}}"#,
+                    "x".repeat(MAX_MESSAGE_BYTES + 1)
+                ),
+                "control-safe",
+            ),
+            (
+                r#"{"type":"show-message","message":"two\nlines"}"#.into(),
+                "control-safe",
+            ),
+            (
+                r#"{"type":"show-notice","title":"t","lines":[]}"#.into(),
+                "1 to 16 lines",
+            ),
+            (
+                r#"{"type":"query-workspace","query_id":"bad\nquery"}"#.into(),
+                "control-safe",
+            ),
+            (
+                r#"{"type":"select-tab","action_id":"","tab_id":7}"#.into(),
+                "select-tab action id",
+            ),
+            (
+                format!(
+                    r#"{{"type":"query-terminal","query_id":"t","tab_id":7,"pane_id":0,"history_lines":{},"max_bytes":64}}"#,
+                    crate::control::protocol::MAX_TEXT_HISTORY_LINES + 1
+                ),
+                "history is limited",
+            ),
+            (
+                format!(
+                    r#"{{"type":"query-terminal","query_id":"t","tab_id":7,"pane_id":0,"history_lines":0,"max_bytes":{}}}"#,
+                    MAX_TERMINAL_QUERY_BYTES + 1
+                ),
+                "bytes must be between",
+            ),
+            (
+                r#"{"type":"query-terminal","query_id":"t","tab_id":7,"pane_id":0,"history_lines":0,"max_bytes":0}"#.into(),
+                "bytes must be between",
+            ),
+            (
+                format!(
+                    r#"{{"type":"send-text","action_id":"a","tab_id":7,"pane_id":0,"text":{:?},"paste":false,"enter":false}}"#,
+                    "x".repeat(MAX_TERMINAL_INPUT_BYTES + 1)
+                ),
+                "limited to",
+            ),
+            (
+                r#"{"type":"send-text","action_id":"a","tab_id":7,"pane_id":0,"text":"","paste":false,"enter":false}"#.into(),
+                "text or enter",
+            ),
+            (
+                r#"{"type":"send-text","action_id":"a","tab_id":7,"pane_id":0,"text":"\u001b[A","paste":false,"enter":false}"#.into(),
+                "printable UTF-8",
+            ),
+            (
+                format!(
+                    r#"{{"type":"move-tab","action_id":"a","tab_id":7,"destination_index":{}}}"#,
+                    crate::control::protocol::MAX_TABS_PER_WINDOW
+                ),
+                "destination index",
+            ),
+            (
+                r#"{"type":"swap-panes","action_id":"a","tab_id":7,"first_pane_id":1,"second_pane_id":1}"#.into(),
+                "two distinct pane IDs",
+            ),
+            (
+                r#"{"type":"resize-divider","action_id":"a","tab_id":7,"divider_id":1,"ratio_millis":950}"#.into(),
+                "between 100 and 900",
+            ),
+        ];
+        for (action, expected) in rejected {
+            let error = check(&authority, &action).unwrap_err();
+            assert!(error.contains(expected), "{action}: {error}");
+        }
+        let tab_and_newline = r#"{"type":"send-text","action_id":"a","tab_id":7,"pane_id":0,"text":"a\tb\n","paste":true,"enter":false}"#;
+        assert!(check(&authority, tab_and_newline).is_ok());
+        let enter_only = r#"{"type":"send-text","action_id":"a","tab_id":7,"pane_id":0,"text":"","paste":false,"enter":true}"#;
+        assert!(check(&authority, enter_only).is_ok());
     }
 
     #[cfg(unix)]
@@ -4815,38 +1722,43 @@ done"#,
 while IFS= read -r event; do
   count=$((count + 1))
   if [ "$count" -eq 1 ]; then
-    printf '{"schema_version":2,"request_id":1,"actions":[{"type":"query-workspace","query_id":"inventory"}]}\n'
+    printf '{"schema_version":1,"request_id":1,"actions":[{"type":"query-workspace","query_id":"inventory"}]}\n'
   elif [ "$count" -eq 2 ]; then
-    printf '{"schema_version":2,"request_id":2,"actions":[{"type":"select-tab","action_id":"select-active","tab_id":7}]}\n'
+    printf '{"schema_version":1,"request_id":2,"actions":[{"type":"select-tab","action_id":"select-active","window_id":4,"tab_id":7}]}\n'
   else
-    printf '{"schema_version":2,"request_id":3,"actions":[{"type":"show-message","message":"action-result-received"}]}\n'
+    printf '{"schema_version":1,"request_id":3,"actions":[{"type":"show-message","message":"action-result-received"}]}\n'
   fi
 done"#,
         );
-        invocation.allow_workspace_query = true;
-        invocation.allow_workspace_actions = true;
+        invocation.authority =
+            persistent_authority(&["ui-actions", "workspace-query", "navigate:all-windows"]);
         let mut handlers = HashMap::new();
         let shutdown = AtomicBool::new(false);
         let generation = AtomicU64::new(1);
-        assert!(matches!(
+        let query =
             run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
-                .unwrap()[..],
+                .unwrap();
+        assert!(matches!(
+            query[..],
             [StructuredResponseAction::QueryWorkspace { .. }]
         ));
 
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"workspace-query-result","query_id":"inventory"}}"#.into();
-        invocation.allow_workspace_query = false;
-        assert_eq!(
+        invocation.event_json = r#"{"schema_version":1,"origin_window_id":4,"event":{"type":"workspace-query-result","query_id":"inventory","windows":[]}}"#.into();
+        invocation.authority = invocation.authority.after(&query[0]);
+        let action =
             run_persistent_handler(&mut handlers, &invocation, 2, &shutdown, &generation, 1)
-                .unwrap(),
+                .unwrap();
+        assert_eq!(
+            action,
             vec![StructuredResponseAction::SelectTab {
                 action_id: "select-active".into(),
+                window_id: Some(4),
                 tab_id: 7,
             }]
         );
 
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"workspace-action-result","action_id":"select-active","ok":true}}"#.into();
-        invocation.allow_workspace_actions = false;
+        invocation.event_json = r#"{"schema_version":1,"origin_window_id":4,"event":{"type":"action-result","action":"select-tab","action_id":"select-active","ok":true}}"#.into();
+        invocation.authority = invocation.authority.after(&action[0]);
         assert_eq!(
             run_persistent_handler(&mut handlers, &invocation, 3, &shutdown, &generation, 1)
                 .unwrap(),
@@ -4859,1028 +1771,42 @@ done"#,
 
     #[cfg(unix)]
     #[test]
-    fn persistent_process_query_then_navigation_then_result_reuses_one_bounded_handler() {
+    fn persistent_result_that_repeats_its_operation_fails_closed() {
         let mut invocation = persistent_fixture(
-            "process-navigation-fixture",
+            "pane-create-fixture",
             r#"count=0
 while IFS= read -r event; do
   count=$((count + 1))
-  if [ "$count" -eq 1 ]; then
-    printf '{"schema_version":2,"request_id":1,"actions":[{"type":"query-process","query_id":"windows"}]}\n'
-  elif [ "$count" -eq 2 ]; then
-    printf '{"schema_version":2,"request_id":2,"actions":[{"type":"focus-process-pane","action_id":"focus-target","window_id":7,"tab_id":12,"pane_id":3}]}\n'
-  else
-    printf '{"schema_version":2,"request_id":3,"actions":[{"type":"show-message","message":"process-action-result-received"}]}\n'
-  fi
+  printf '{"schema_version":1,"request_id":%s,"actions":[{"type":"create-pane","action_id":"split","tab_id":7,"pane_id":3,"direction":"vertical"}]}\n' "$count"
 done"#,
         );
-        invocation.allow_process_query = true;
-        invocation.allow_process_actions = true;
+        invocation.authority = persistent_authority(&["pane-create"]);
         let mut handlers = HashMap::new();
         let shutdown = AtomicBool::new(false);
         let generation = AtomicU64::new(1);
-        assert!(matches!(
+        let created =
             run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
-                .unwrap()[..],
-            [StructuredResponseAction::QueryProcess { .. }]
-        ));
-
-        invocation.event_json =
-            r#"{"schema_version":1,"event":{"type":"process-query-result","query_id":"windows"}}"#
-                .into();
-        invocation.allow_process_query = false;
-        assert_eq!(
+                .unwrap();
+        invocation.event_json = r#"{"schema_version":1,"event":{"type":"action-result","action":"create-pane","ok":true}}"#.into();
+        invocation.authority = invocation.authority.after(&created[0]);
+        let error =
             run_persistent_handler(&mut handlers, &invocation, 2, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::FocusProcessPane {
-                action_id: "focus-target".into(),
-                window_id: 7,
-                tab_id: 12,
-                pane_id: 3,
-            }]
-        );
-
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"process-action-result","action_id":"focus-target","ok":true}}"#.into();
-        invocation.allow_process_actions = false;
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 3, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::ShowMessage {
-                message: "process-action-result-received".into(),
-            }]
-        );
-        assert_eq!(handlers.len(), 1);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn persistent_process_query_then_terminal_query_then_result_is_bounded() {
-        let mut invocation = persistent_fixture(
-            "process-terminal-fixture",
-            r#"count=0
-while IFS= read -r event; do
-  count=$((count + 1))
-  if [ "$count" -eq 1 ]; then
-    printf '{"schema_version":2,"request_id":1,"actions":[{"type":"query-process","query_id":"windows"}]}\n'
-  elif [ "$count" -eq 2 ]; then
-    printf '{"schema_version":2,"request_id":2,"actions":[{"type":"query-process-terminal","query_id":"sibling-output","window_id":7,"tab_id":12,"pane_id":3,"history_lines":20,"max_bytes":2048}]}\n'
-  else
-    printf '{"schema_version":2,"request_id":3,"actions":[{"type":"show-message","message":"process-terminal-result-received"}]}\n'
-  fi
-done"#,
-        );
-        invocation.allow_process_query = true;
-        invocation.allow_process_terminal_text = true;
-        let mut handlers = HashMap::new();
-        let shutdown = AtomicBool::new(false);
-        let generation = AtomicU64::new(1);
-        assert!(matches!(
-            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
-                .unwrap()[..],
-            [StructuredResponseAction::QueryProcess { .. }]
-        ));
-
-        invocation.event_json =
-            r#"{"schema_version":1,"event":{"type":"process-query-result","query_id":"windows"}}"#
-                .into();
-        invocation.allow_process_query = false;
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 2, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::QueryProcessTerminal {
-                query_id: "sibling-output".into(),
-                window_id: 7,
-                tab_id: 12,
-                pane_id: 3,
-                history_lines: 20,
-                max_bytes: 2048,
-            }]
-        );
-
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"process-terminal-query-result","query_id":"sibling-output","ok":true,"text":"bounded"}}"#.into();
-        invocation.allow_process_terminal_text = false;
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 3, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::ShowMessage {
-                message: "process-terminal-result-received".into(),
-            }]
-        );
-        assert_eq!(handlers.len(), 1);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn checked_in_process_terminal_reader_completes_a_hermetic_three_event_conversation() {
-        if !std::path::Path::new("/usr/bin/python3").is_file()
-            && !std::path::Path::new("/bin/python3").is_file()
-        {
-            return;
-        }
-        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../examples/plugins/process-terminal-reader");
-        let (manifest, _, _) =
-            crate::plugin::runtime::PluginManifest::from_directory(&directory).unwrap();
-        let handler = manifest.event_handler.unwrap();
-        let mut invocation = StructuredHandlerInvocation {
-            plugin_id: manifest.id,
-            program: handler.program,
-            args: handler.args,
-            event_json: r#"{"schema_version":1,"event":{"type":"command-invoked"}}"#.into(),
-            allow_ui_actions: true,
-            allow_workspace_query: false,
-            allow_workspace_actions: false,
-            allow_workspace_topology: false,
-            allow_terminal_query: false,
-            allow_pane_create: false,
-            allow_tab_create: false,
-            allow_pane_close: false,
-            allow_tab_close: false,
-            allow_pane_move: false,
-            allow_terminal_input: false,
-            allow_pane_layout: false,
-            allow_window_close: false,
-            allow_process_query: true,
-            allow_process_actions: false,
-            allow_process_terminal_text: true,
-            allow_process_terminal_input: false,
-            allow_process_tab_create: false,
-            allow_process_pane_create: false,
-            allow_process_pane_move: false,
-            allow_process_tab_move: false,
-            allow_process_pane_close: false,
-            allow_process_tab_close: false,
-            allow_process_pane_layout: false,
-            allow_process_window_close: false,
-            allow_process_window_focus: false,
-            mode: StructuredHandlerMode::Persistent,
-        };
-        let mut handlers = HashMap::new();
-        let shutdown = AtomicBool::new(false);
-        let generation = AtomicU64::new(1);
-
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::QueryProcess {
-                query_id: "terminal-targets".into(),
-            }]
-        );
-
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"process-query-result","origin_window_id":2,"windows":[{"id":2,"tabs":[]},{"id":7,"tabs":[{"id":12,"closed":false,"panes":[{"id":3,"closed":false}]}]}]}}"#.into();
-        invocation.allow_process_query = false;
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 2, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::QueryProcessTerminal {
-                query_id: "sibling-output".into(),
-                window_id: 7,
-                tab_id: 12,
-                pane_id: 3,
-                history_lines: 20,
-                max_bytes: 2048,
-            }]
-        );
-
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"process-terminal-query-result","ok":true,"text_bytes":11,"history_lines":0,"truncated":false,"text":"hello\nworld"}}"#.into();
-        invocation.allow_process_terminal_text = false;
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 3, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::ShowNotice {
-                title: "Sibling pane text".into(),
-                lines: vec![
-                    "Text bytes: 11".into(),
-                    "History lines: 0".into(),
-                    "Truncated: False".into(),
-                    "Preview: hello world".into(),
-                ],
-            }]
-        );
-        assert_eq!(handlers.len(), 1);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn checked_in_process_terminal_writer_completes_a_hermetic_three_event_conversation() {
-        if !std::path::Path::new("/usr/bin/python3").is_file()
-            && !std::path::Path::new("/bin/python3").is_file()
-        {
-            return;
-        }
-        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../examples/plugins/process-terminal-writer");
-        let (manifest, _, _) =
-            crate::plugin::runtime::PluginManifest::from_directory(&directory).unwrap();
-        let handler = manifest.event_handler.unwrap();
-        let mut invocation = StructuredHandlerInvocation {
-            plugin_id: manifest.id,
-            program: handler.program,
-            args: handler.args,
-            event_json: r#"{"schema_version":1,"event":{"type":"command-invoked"}}"#.into(),
-            allow_ui_actions: true,
-            allow_workspace_query: false,
-            allow_workspace_actions: false,
-            allow_workspace_topology: false,
-            allow_terminal_query: false,
-            allow_pane_create: false,
-            allow_tab_create: false,
-            allow_pane_close: false,
-            allow_tab_close: false,
-            allow_pane_move: false,
-            allow_terminal_input: false,
-            allow_pane_layout: false,
-            allow_window_close: false,
-            allow_process_query: true,
-            allow_process_actions: false,
-            allow_process_terminal_text: false,
-            allow_process_terminal_input: true,
-            allow_process_tab_create: false,
-            allow_process_pane_create: false,
-            allow_process_pane_move: false,
-            allow_process_tab_move: false,
-            allow_process_pane_close: false,
-            allow_process_tab_close: false,
-            allow_process_pane_layout: false,
-            allow_process_window_close: false,
-            allow_process_window_focus: false,
-            mode: StructuredHandlerMode::Persistent,
-        };
-        let mut handlers = HashMap::new();
-        let shutdown = AtomicBool::new(false);
-        let generation = AtomicU64::new(1);
-
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::QueryProcess {
-                query_id: "input-targets".into(),
-            }]
-        );
-
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"process-query-result","origin_window_id":2,"windows":[{"id":2,"tabs":[]},{"id":7,"tabs":[{"id":12,"closed":false,"panes":[{"id":3,"closed":false}]}]}]}}"#.into();
-        invocation.allow_process_query = false;
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 2, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::SendProcessText {
-                action_id: "draft-safe-text".into(),
-                window_id: 7,
-                tab_id: 12,
-                pane_id: 3,
-                text: "hello from the process terminal writer".into(),
-                paste: true,
-                enter: false,
-            }]
-        );
-
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"process-action-result","action":"send-process-text","ok":true,"disposition":"sent","window_id":7,"input_bytes":38}}"#.into();
-        invocation.allow_process_terminal_input = false;
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 3, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::ShowNotice {
-                title: "Process terminal writer".into(),
-                lines: vec!["Input sent.".into(), "Window: 7".into(), "Bytes: 38".into(),],
-            }]
-        );
-        assert_eq!(handlers.len(), 1);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn checked_in_process_tab_builder_completes_a_hermetic_three_event_conversation() {
-        if !std::path::Path::new("/usr/bin/python3").is_file()
-            && !std::path::Path::new("/bin/python3").is_file()
-        {
-            return;
-        }
-        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../examples/plugins/process-tab-builder");
-        let (manifest, _, _) =
-            crate::plugin::runtime::PluginManifest::from_directory(&directory).unwrap();
-        let handler = manifest.event_handler.unwrap();
-        let mut invocation = StructuredHandlerInvocation {
-            plugin_id: manifest.id,
-            program: handler.program,
-            args: handler.args,
-            event_json: r#"{"schema_version":1,"event":{"type":"command-invoked"}}"#.into(),
-            allow_ui_actions: true,
-            allow_workspace_query: false,
-            allow_workspace_actions: false,
-            allow_workspace_topology: false,
-            allow_terminal_query: false,
-            allow_pane_create: false,
-            allow_tab_create: false,
-            allow_pane_close: false,
-            allow_tab_close: false,
-            allow_pane_move: false,
-            allow_terminal_input: false,
-            allow_pane_layout: false,
-            allow_window_close: false,
-            allow_process_query: true,
-            allow_process_actions: false,
-            allow_process_terminal_text: false,
-            allow_process_terminal_input: false,
-            allow_process_tab_create: true,
-            allow_process_pane_create: false,
-            allow_process_pane_move: false,
-            allow_process_tab_move: false,
-            allow_process_pane_close: false,
-            allow_process_tab_close: false,
-            allow_process_pane_layout: false,
-            allow_process_window_close: false,
-            allow_process_window_focus: false,
-            mode: StructuredHandlerMode::Persistent,
-        };
-        let mut handlers = HashMap::new();
-        let shutdown = AtomicBool::new(false);
-        let generation = AtomicU64::new(1);
-
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::QueryProcess {
-                query_id: "tab-creation-targets".into(),
-            }]
-        );
-
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"process-query-result","origin_window_id":2,"windows":[{"id":2,"tabs":[]},{"id":7,"tabs":[]}]}}"#.into();
-        invocation.allow_process_query = false;
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 2, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::CreateProcessTab {
-                action_id: "new-sibling-task".into(),
-                window_id: 7,
-            }]
-        );
-
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"process-action-result","action":"create-process-tab","ok":true,"window_id":7,"tab_id":12,"selected":true}}"#.into();
-        invocation.allow_process_tab_create = false;
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 3, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::ShowNotice {
-                title: "Process tab builder".into(),
-                lines: vec!["Created tab 12.".into(), "Window: 7".into()],
-            }]
-        );
-        assert_eq!(handlers.len(), 1);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn checked_in_process_pane_builder_completes_a_hermetic_three_event_conversation() {
-        if !std::path::Path::new("/usr/bin/python3").is_file()
-            && !std::path::Path::new("/bin/python3").is_file()
-        {
-            return;
-        }
-        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../examples/plugins/process-pane-builder");
-        let (manifest, _, _) =
-            crate::plugin::runtime::PluginManifest::from_directory(&directory).unwrap();
-        let handler = manifest.event_handler.unwrap();
-        let mut invocation = StructuredHandlerInvocation {
-            plugin_id: manifest.id,
-            program: handler.program,
-            args: handler.args,
-            event_json: r#"{"schema_version":1,"event":{"type":"command-invoked"}}"#.into(),
-            allow_ui_actions: true,
-            allow_workspace_query: false,
-            allow_workspace_actions: false,
-            allow_workspace_topology: false,
-            allow_terminal_query: false,
-            allow_pane_create: false,
-            allow_tab_create: false,
-            allow_pane_close: false,
-            allow_tab_close: false,
-            allow_pane_move: false,
-            allow_terminal_input: false,
-            allow_pane_layout: false,
-            allow_window_close: false,
-            allow_process_query: true,
-            allow_process_actions: false,
-            allow_process_terminal_text: false,
-            allow_process_terminal_input: false,
-            allow_process_tab_create: false,
-            allow_process_pane_create: true,
-            allow_process_pane_move: false,
-            allow_process_tab_move: false,
-            allow_process_pane_close: false,
-            allow_process_tab_close: false,
-            allow_process_pane_layout: false,
-            allow_process_window_close: false,
-            allow_process_window_focus: false,
-            mode: StructuredHandlerMode::Persistent,
-        };
-        let mut handlers = HashMap::new();
-        let shutdown = AtomicBool::new(false);
-        let generation = AtomicU64::new(1);
-
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::QueryProcess {
-                query_id: "pane-creation-targets".into(),
-            }]
-        );
-
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"process-query-result","origin_window_id":2,"windows":[{"id":2,"tabs":[]},{"id":7,"tabs":[{"id":12,"closed":false,"panes":[{"id":3,"closed":false}]}]}]}}"#.into();
-        invocation.allow_process_query = false;
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 2, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::CreateProcessPane {
-                action_id: "split-sibling-task".into(),
-                window_id: 7,
-                tab_id: 12,
-                pane_id: 3,
-                direction: crate::control::protocol::SplitDirection::Vertical,
-            }]
-        );
-
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"process-action-result","action":"create-process-pane","ok":true,"window_id":7,"tab_id":12,"pane_id":3,"created_pane_id":4}}"#.into();
-        invocation.allow_process_pane_create = false;
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 3, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::ShowNotice {
-                title: "Process pane builder".into(),
-                lines: vec![
-                    "Created pane 4.".into(),
-                    "Window: 7".into(),
-                    "Tab: 12".into(),
-                ],
-            }]
-        );
-        assert_eq!(handlers.len(), 1);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn checked_in_process_pane_mover_completes_a_hermetic_three_event_conversation() {
-        if !std::path::Path::new("/usr/bin/python3").is_file()
-            && !std::path::Path::new("/bin/python3").is_file()
-        {
-            return;
-        }
-        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../examples/plugins/process-pane-mover");
-        let (manifest, _, _) =
-            crate::plugin::runtime::PluginManifest::from_directory(&directory).unwrap();
-        let handler = manifest.event_handler.unwrap();
-        let mut invocation = StructuredHandlerInvocation {
-            plugin_id: manifest.id,
-            program: handler.program,
-            args: handler.args,
-            event_json: r#"{"schema_version":1,"event":{"type":"command-invoked"}}"#.into(),
-            allow_ui_actions: true,
-            allow_workspace_query: false,
-            allow_workspace_actions: false,
-            allow_workspace_topology: false,
-            allow_terminal_query: false,
-            allow_pane_create: false,
-            allow_tab_create: false,
-            allow_pane_close: false,
-            allow_tab_close: false,
-            allow_pane_move: false,
-            allow_terminal_input: false,
-            allow_pane_layout: false,
-            allow_window_close: false,
-            allow_process_query: true,
-            allow_process_actions: false,
-            allow_process_terminal_text: false,
-            allow_process_terminal_input: false,
-            allow_process_tab_create: false,
-            allow_process_pane_create: false,
-            allow_process_pane_move: true,
-            allow_process_tab_move: false,
-            allow_process_pane_close: false,
-            allow_process_tab_close: false,
-            allow_process_pane_layout: false,
-            allow_process_window_close: false,
-            allow_process_window_focus: false,
-            mode: StructuredHandlerMode::Persistent,
-        };
-        let mut handlers = HashMap::new();
-        let shutdown = AtomicBool::new(false);
-        let generation = AtomicU64::new(1);
-
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::QueryProcess {
-                query_id: "pane-move-targets".into(),
-            }]
-        );
-
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"process-query-result","origin_window_id":2,"windows":[{"id":2,"tabs":[{"id":5,"closed":false,"panes":[{"id":1,"closed":false},{"id":2,"closed":false}]}]},{"id":7,"tabs":[{"id":12,"closed":false,"panes":[{"id":3,"closed":false}]}]}]}}"#.into();
-        invocation.allow_process_query = false;
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 2, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::MoveProcessPane {
-                action_id: "move-sibling-task".into(),
-                source_window_id: 2,
-                source_tab_id: 5,
-                pane_id: 1,
-                destination_window_id: 7,
-                destination_tab_id: 12,
-                target_pane_id: 3,
-                direction: crate::control::protocol::SplitDirection::Vertical,
-            }]
-        );
-
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"process-action-result","action":"move-process-pane","ok":true,"source_pane_id":1,"destination_window_id":7,"destination_tab_id":12,"destination_pane_id":4}}"#.into();
-        invocation.allow_process_pane_move = false;
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 3, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::ShowNotice {
-                title: "Process pane mover".into(),
-                lines: vec![
-                    "Moved pane 1 as pane 4.".into(),
-                    "Destination window: 7".into(),
-                    "Destination tab: 12".into(),
-                ],
-            }]
-        );
-        assert_eq!(handlers.len(), 1);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn checked_in_process_tab_mover_completes_a_hermetic_three_event_conversation() {
-        if !std::path::Path::new("/usr/bin/python3").is_file()
-            && !std::path::Path::new("/bin/python3").is_file()
-        {
-            return;
-        }
-        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../examples/plugins/process-tab-mover");
-        let (manifest, _, _) =
-            crate::plugin::runtime::PluginManifest::from_directory(&directory).unwrap();
-        let handler = manifest.event_handler.unwrap();
-        let mut invocation = StructuredHandlerInvocation {
-            plugin_id: manifest.id,
-            program: handler.program,
-            args: handler.args,
-            event_json: r#"{"schema_version":1,"event":{"type":"command-invoked"}}"#.into(),
-            allow_ui_actions: true,
-            allow_workspace_query: false,
-            allow_workspace_actions: false,
-            allow_workspace_topology: false,
-            allow_terminal_query: false,
-            allow_pane_create: false,
-            allow_tab_create: false,
-            allow_pane_close: false,
-            allow_tab_close: false,
-            allow_pane_move: false,
-            allow_terminal_input: false,
-            allow_pane_layout: false,
-            allow_window_close: false,
-            allow_process_query: true,
-            allow_process_actions: false,
-            allow_process_terminal_text: false,
-            allow_process_terminal_input: false,
-            allow_process_tab_create: false,
-            allow_process_pane_create: false,
-            allow_process_pane_move: false,
-            allow_process_tab_move: true,
-            allow_process_pane_close: false,
-            allow_process_tab_close: false,
-            allow_process_pane_layout: false,
-            allow_process_window_close: false,
-            allow_process_window_focus: false,
-            mode: StructuredHandlerMode::Persistent,
-        };
-        let mut handlers = HashMap::new();
-        let shutdown = AtomicBool::new(false);
-        let generation = AtomicU64::new(1);
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::QueryProcess {
-                query_id: "tab-move-targets".into(),
-            }]
-        );
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"process-query-result","origin_window_id":2,"windows":[{"id":2,"tabs":[{"id":5,"closed":false},{"id":6,"closed":false}]},{"id":7,"tabs":[{"id":12,"closed":false}]}]}}"#.into();
-        invocation.allow_process_query = false;
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 2, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::MoveProcessTab {
-                action_id: "move-sibling-tab".into(),
-                source_window_id: 2,
-                tab_id: 5,
-                destination_window_id: 7,
-                destination_index: 1,
-            }]
-        );
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"process-action-result","action":"move-process-tab","ok":true,"source_tab_id":5,"destination_window_id":7,"destination_tab_id":13,"destination_index":1}}"#.into();
-        invocation.allow_process_tab_move = false;
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 3, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::ShowNotice {
-                title: "Process tab mover".into(),
-                lines: vec![
-                    "Moved tab 5 as tab 13.".into(),
-                    "Destination window: 7".into(),
-                    "Destination index: 1".into(),
-                ],
-            }]
-        );
-        assert_eq!(handlers.len(), 1);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn checked_in_process_pane_pruner_completes_a_hermetic_three_event_conversation() {
-        if !std::path::Path::new("/usr/bin/python3").is_file()
-            && !std::path::Path::new("/bin/python3").is_file()
-        {
-            return;
-        }
-        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../examples/plugins/process-pane-pruner");
-        let (manifest, _, _) =
-            crate::plugin::runtime::PluginManifest::from_directory(&directory).unwrap();
-        let handler = manifest.event_handler.unwrap();
-        let mut invocation = StructuredHandlerInvocation {
-            plugin_id: manifest.id,
-            program: handler.program,
-            args: handler.args,
-            event_json: r#"{"schema_version":1,"event":{"type":"command-invoked"}}"#.into(),
-            allow_ui_actions: true,
-            allow_workspace_query: false,
-            allow_workspace_actions: false,
-            allow_workspace_topology: false,
-            allow_terminal_query: false,
-            allow_pane_create: false,
-            allow_tab_create: false,
-            allow_pane_close: false,
-            allow_tab_close: false,
-            allow_pane_move: false,
-            allow_terminal_input: false,
-            allow_pane_layout: false,
-            allow_window_close: false,
-            allow_process_query: true,
-            allow_process_actions: false,
-            allow_process_terminal_text: false,
-            allow_process_terminal_input: false,
-            allow_process_tab_create: false,
-            allow_process_pane_create: false,
-            allow_process_pane_move: false,
-            allow_process_tab_move: false,
-            allow_process_pane_close: true,
-            allow_process_tab_close: false,
-            allow_process_pane_layout: false,
-            allow_process_window_close: false,
-            allow_process_window_focus: false,
-            mode: StructuredHandlerMode::Persistent,
-        };
-        let mut handlers = HashMap::new();
-        let shutdown = AtomicBool::new(false);
-        let generation = AtomicU64::new(1);
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::QueryProcess {
-                query_id: "pane-close-targets".into(),
-            }]
-        );
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"process-query-result","origin_window_id":2,"windows":[{"id":2,"tabs":[{"id":5,"closed":false,"panes":[{"id":1,"closed":false}]}]},{"id":7,"tabs":[{"id":12,"closed":false,"panes":[{"id":3,"closed":false},{"id":4,"closed":false}]}]}]}}"#.into();
-        invocation.allow_process_query = false;
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 2, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::CloseProcessPane {
-                action_id: "close-sibling-pane".into(),
-                window_id: 7,
-                tab_id: 12,
-                pane_id: 3,
-            }]
-        );
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"process-action-result","action":"close-process-pane","ok":true,"pane_id":3,"remaining_panes":1,"focused_pane_id":4}}"#.into();
-        invocation.allow_process_pane_close = false;
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 3, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::ShowNotice {
-                title: "Process pane pruner".into(),
-                lines: vec![
-                    "Closed pane 3.".into(),
-                    "Remaining panes: 1".into(),
-                    "Focused pane: 4".into(),
-                ],
-            }]
-        );
-        assert_eq!(handlers.len(), 1);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn checked_in_process_tab_pruner_completes_a_hermetic_three_event_conversation() {
-        if !std::path::Path::new("/usr/bin/python3").is_file()
-            && !std::path::Path::new("/bin/python3").is_file()
-        {
-            return;
-        }
-        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../examples/plugins/process-tab-pruner");
-        let (manifest, _, _) =
-            crate::plugin::runtime::PluginManifest::from_directory(&directory).unwrap();
-        let handler = manifest.event_handler.unwrap();
-        let mut invocation = persistent_fixture(&manifest.id, "exit 1");
-        invocation.program = handler.program;
-        invocation.args = handler.args;
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"command-invoked"}}"#.into();
-        invocation.allow_process_query = true;
-        invocation.allow_process_tab_close = true;
-        let mut handlers = HashMap::new();
-        let shutdown = AtomicBool::new(false);
-        let generation = AtomicU64::new(1);
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::QueryProcess {
-                query_id: "tab-close-targets".into(),
-            }]
-        );
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"process-query-result","origin_window_id":2,"windows":[{"id":2,"tabs":[{"id":5,"closed":false}]},{"id":7,"tabs":[{"id":12,"closed":false},{"id":13,"closed":false}]}]}}"#.into();
-        invocation.allow_process_query = false;
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 2, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::CloseProcessTab {
-                action_id: "close-sibling-tab".into(),
-                window_id: 7,
-                tab_id: 12,
-            }]
-        );
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"process-action-result","action":"close-process-tab","ok":true,"tab_id":12,"remaining_tabs":1,"active_tab_id":13}}"#.into();
-        invocation.allow_process_tab_close = false;
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 3, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::ShowNotice {
-                title: "Process tab pruner".into(),
-                lines: vec![
-                    "Closing tab 12.".into(),
-                    "Remaining tabs: 1".into(),
-                    "Active tab: 13".into(),
-                ],
-            }]
-        );
-        assert_eq!(handlers.len(), 1);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn checked_in_process_pane_arranger_completes_a_hermetic_three_event_conversation() {
-        if !std::path::Path::new("/usr/bin/python3").is_file()
-            && !std::path::Path::new("/bin/python3").is_file()
-        {
-            return;
-        }
-        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../examples/plugins/process-pane-arranger");
-        let (manifest, _, _) =
-            crate::plugin::runtime::PluginManifest::from_directory(&directory).unwrap();
-        let handler = manifest.event_handler.unwrap();
-        let mut invocation = persistent_fixture(&manifest.id, "exit 1");
-        invocation.program = handler.program;
-        invocation.args = handler.args;
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"command-invoked"}}"#.into();
-        invocation.allow_process_query = true;
-        invocation.allow_process_pane_layout = true;
-        let mut handlers = HashMap::new();
-        let shutdown = AtomicBool::new(false);
-        let generation = AtomicU64::new(1);
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::QueryProcess {
-                query_id: "pane-layout-targets".into(),
-            }]
-        );
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"process-query-result","origin_window_id":2,"windows":[{"id":2,"tabs":[{"id":5,"closed":false,"kind":"ordinary","panes":[{"id":1,"closed":false}]}]},{"id":7,"tabs":[{"id":12,"closed":false,"kind":"ordinary","panes":[{"id":3,"closed":false},{"id":4,"closed":false}]}]}]}}"#.into();
-        invocation.allow_process_query = false;
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 2, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::ApplyProcessPaneLayout {
-                action_id: "apply-sibling-grid".into(),
-                window_id: 7,
-                tab_id: 12,
-                preset: PluginPaneLayoutPreset::Grid,
-            }]
-        );
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"process-action-result","action":"apply-process-pane-layout","ok":true,"pane_order":[3,4],"focused_pane_id":4,"zoomed_pane_id":null}}"#.into();
-        invocation.allow_process_pane_layout = false;
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 3, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::ShowNotice {
-                title: "Process Pane Arranger".into(),
-                lines: vec![
-                    "Applied grid layout. Pane order: 3, 4; focused: 4; zoomed: None".into()
-                ],
-            }]
-        );
-        assert_eq!(handlers.len(), 1);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn checked_in_process_window_closer_completes_a_hermetic_three_event_conversation() {
-        if !std::path::Path::new("/usr/bin/python3").is_file()
-            && !std::path::Path::new("/bin/python3").is_file()
-        {
-            return;
-        }
-        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../examples/plugins/process-window-closer");
-        let (manifest, _, _) =
-            crate::plugin::runtime::PluginManifest::from_directory(&directory).unwrap();
-        let handler = manifest.event_handler.unwrap();
-        let mut invocation = persistent_fixture(&manifest.id, "exit 1");
-        invocation.program = handler.program;
-        invocation.args = handler.args;
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"command-invoked"}}"#.into();
-        invocation.allow_process_query = true;
-        invocation.allow_process_window_close = true;
-        let mut handlers = HashMap::new();
-        let shutdown = AtomicBool::new(false);
-        let generation = AtomicU64::new(1);
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::QueryProcess {
-                query_id: "window-close-targets".into(),
-            }]
-        );
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"process-query-result","origin_window_id":2,"windows":[{"id":2},{"id":7}]}}"#.into();
-        invocation.allow_process_query = false;
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 2, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::CloseProcessWindow {
-                action_id: "close-sibling-window".into(),
-                window_id: 7,
-            }]
-        );
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"process-action-result","action":"close-process-window","ok":true,"window_id":7,"remaining_windows":1}}"#.into();
-        invocation.allow_process_window_close = false;
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 3, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::ShowNotice {
-                title: "Process Window Closer".into(),
-                lines: vec!["Closing window 7; remaining windows: 1".into()],
-            }]
-        );
-        assert_eq!(handlers.len(), 1);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn checked_in_process_window_focuser_completes_a_hermetic_three_event_conversation() {
-        if !std::path::Path::new("/usr/bin/python3").is_file()
-            && !std::path::Path::new("/bin/python3").is_file()
-        {
-            return;
-        }
-        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../examples/plugins/process-window-focuser");
-        let (manifest, _, _) =
-            crate::plugin::runtime::PluginManifest::from_directory(&directory).unwrap();
-        let handler = manifest.event_handler.unwrap();
-        let mut invocation = persistent_fixture(&manifest.id, "exit 1");
-        invocation.program = handler.program;
-        invocation.args = handler.args;
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"command-invoked"}}"#.into();
-        invocation.allow_process_query = true;
-        invocation.allow_process_window_focus = true;
-        let mut handlers = HashMap::new();
-        let shutdown = AtomicBool::new(false);
-        let generation = AtomicU64::new(1);
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::QueryProcess {
-                query_id: "window-focus-targets".into(),
-            }]
-        );
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"process-query-result","origin_window_id":2,"windows":[{"id":2},{"id":7}]}}"#.into();
-        invocation.allow_process_query = false;
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 2, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::FocusProcessWindow {
-                action_id: "focus-sibling-window".into(),
-                window_id: 7,
-            }]
-        );
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"process-action-result","action":"focus-process-window","ok":true,"window_id":7,"already_focused":false,"requested":true}}"#.into();
-        invocation.allow_process_window_focus = false;
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 3, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::ShowNotice {
-                title: "Process Window Focuser".into(),
-                lines: vec!["Window 7 received a focus request.".into()],
-            }]
-        );
-        assert_eq!(handlers.len(), 1);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn persistent_query_then_topology_then_result_reuses_one_bounded_handler() {
-        let mut invocation = persistent_fixture(
-            "workspace-topology-fixture",
-            r#"count=0
-while IFS= read -r event; do
-  count=$((count + 1))
-  if [ "$count" -eq 1 ]; then
-    printf '{"schema_version":2,"request_id":1,"actions":[{"type":"query-workspace","query_id":"inventory"}]}\n'
-  elif [ "$count" -eq 2 ]; then
-    printf '{"schema_version":2,"request_id":2,"actions":[{"type":"move-tab","action_id":"keep-order","tab_id":7,"destination_index":0}]}\n'
-  else
-    printf '{"schema_version":2,"request_id":3,"actions":[{"type":"show-message","message":"topology-result-received"}]}\n'
-  fi
-done"#,
-        );
-        invocation.allow_workspace_query = true;
-        invocation.allow_workspace_topology = true;
-        let mut handlers = HashMap::new();
-        let shutdown = AtomicBool::new(false);
-        let generation = AtomicU64::new(1);
-        assert!(matches!(
-            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
-                .unwrap()[..],
-            [StructuredResponseAction::QueryWorkspace { .. }]
-        ));
-
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"workspace-query-result","query_id":"inventory"}}"#.into();
-        invocation.allow_workspace_query = false;
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 2, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::MoveTab {
-                action_id: "keep-order".into(),
-                tab_id: 7,
-                destination_index: 0,
-            }]
-        );
-
-        invocation.event_json = r#"{"schema_version":1,"event":{"type":"workspace-action-result","action_id":"keep-order","ok":true}}"#.into();
-        invocation.allow_workspace_topology = false;
-        assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 3, &shutdown, &generation, 1)
-                .unwrap(),
-            vec![StructuredResponseAction::ShowMessage {
-                message: "topology-result-received".into(),
-            }]
-        );
-        assert_eq!(handlers.len(), 1);
+                .unwrap_err();
+        assert!(error.contains("cannot start host operations"), "{error}");
+        // A protocol violation discards the process; the next event restarts it.
+        assert!(handlers.is_empty());
     }
 
     #[test]
-    fn persistent_protocol_requires_object_source_and_exact_correlation() {
+    fn persistent_protocol_requires_object_source_and_keeps_one_schema() {
         let request =
             persistent_request_json(r#"{"schema_version":1,"event":{"type":"app-ready"}}"#, 42)
                 .unwrap();
         let value: serde_json::Value = serde_json::from_slice(&request).unwrap();
-        assert_eq!(value["schema_version"], PERSISTENT_SCHEMA_VERSION);
+        assert_eq!(value["schema_version"], SCHEMA_VERSION);
         assert_eq!(value["request_id"], 42);
         assert!(persistent_request_json("[]", 1).is_err());
         assert!(persistent_request_json(r#"{"schema_version":2}"#, 1).is_err());
-
-        let valid = br#"{"schema_version":2,"request_id":42,"actions":[]}"#;
-        assert!(parse_persistent_response(valid, true, false, false, false, false, 42).is_ok());
-        assert!(
-            parse_persistent_response(valid, true, false, false, false, false, 41)
-                .unwrap_err()
-                .contains("did not match")
-        );
-        assert!(
-            parse_persistent_response(
-                br#"{"schema_version":1,"request_id":42,"actions":[]}"#,
-                true,
-                false,
-                false,
-                false,
-                false,
-                42,
-            )
-            .unwrap_err()
-            .contains("unsupported")
-        );
     }
 
     #[test]
@@ -5908,7 +1834,7 @@ done"#,
             r#"count=0
 while IFS= read -r event; do
   count=$((count + 1))
-  printf '{"schema_version":2,"request_id":%s,"actions":[{"type":"show-message","message":"pid=%s count=%s"}]}\n' "$count" "$$" "$count"
+  printf '{"schema_version":1,"request_id":%s,"actions":[{"type":"show-message","message":"pid=%s count=%s"}]}\n' "$count" "$$" "$count"
 done"#,
         );
         let mut handlers = HashMap::new();
@@ -5936,11 +1862,33 @@ done"#,
 
     #[cfg(unix)]
     #[test]
+    fn persistent_handler_is_replaced_when_its_grants_change() {
+        let mut invocation = persistent_fixture(
+            "descriptor-fixture",
+            r#"while IFS= read -r event; do
+  printf '{"schema_version":1,"request_id":1,"actions":[]}\n'
+done"#,
+        );
+        let mut handlers = HashMap::new();
+        let shutdown = AtomicBool::new(false);
+        let generation = AtomicU64::new(1);
+        run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1).unwrap();
+        invocation.authority = persistent_authority(&["ui-actions", "navigate"]);
+        assert!(
+            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
+                .unwrap_err()
+                .contains("descriptor changed")
+        );
+        assert!(handlers.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn persistent_protocol_failure_discards_process_and_allows_restart() {
         let mismatched = persistent_fixture(
             "restart-fixture",
             r#"IFS= read -r event
-printf '{"schema_version":2,"request_id":999,"actions":[]}\n'
+printf '{"schema_version":1,"request_id":999,"actions":[]}\n'
 sleep 10"#,
         );
         let mut handlers = HashMap::new();
@@ -5955,11 +1903,11 @@ sleep 10"#,
         let healthy = persistent_fixture(
             "restart-fixture",
             r#"while IFS= read -r event; do
-  printf '{"schema_version":2,"request_id":2,"actions":[]}\n'
+  printf '{"schema_version":1,"request_id":2,"actions":[]}\n'
 done"#,
         );
         assert!(
-            run_persistent_handler(&mut handlers, &healthy, 2, &shutdown, &generation, 1,).is_ok()
+            run_persistent_handler(&mut handlers, &healthy, 2, &shutdown, &generation, 1).is_ok()
         );
         assert_eq!(handlers.len(), 1);
     }
@@ -6003,7 +1951,7 @@ done"#,
 
         let crash = persistent_fixture("crash-fixture", "printf 'fixture failure\\n' >&2\nexit 7");
         assert!(
-            run_persistent_handler(&mut handlers, &crash, 2, &shutdown, &generation, 1,).is_err()
+            run_persistent_handler(&mut handlers, &crash, 2, &shutdown, &generation, 1).is_err()
         );
         assert!(handlers.is_empty());
     }
@@ -6018,7 +1966,7 @@ done"#,
             let invocation = persistent_fixture(
                 &format!("fixture-{request_id}"),
                 &format!(
-                    "while IFS= read -r event; do printf '{{\"schema_version\":2,\"request_id\":{request_id},\"actions\":[]}}\\n'; done"
+                    "while IFS= read -r event; do printf '{{\"schema_version\":1,\"request_id\":{request_id},\"actions\":[]}}\\n'; done"
                 ),
             );
             run_persistent_handler(
@@ -6034,7 +1982,7 @@ done"#,
         assert_eq!(handlers.len(), MAX_PERSISTENT_HANDLERS);
         let overflow = persistent_fixture("fixture-overflow", "sleep 10");
         assert!(
-            run_persistent_handler(&mut handlers, &overflow, 99, &shutdown, &generation, 1,)
+            run_persistent_handler(&mut handlers, &overflow, 99, &shutdown, &generation, 1)
                 .unwrap_err()
                 .contains("limit reached")
         );
@@ -6055,7 +2003,7 @@ done"#,
 
         let replacement = persistent_fixture(
             "replacement",
-            "while IFS= read -r event; do printf '{\"schema_version\":2,\"request_id\":1,\"actions\":[]}\\n'; done",
+            "while IFS= read -r event; do printf '{\"schema_version\":1,\"request_id\":1,\"actions\":[]}\\n'; done",
         );
         assert!(
             run_persistent_handler(
@@ -6075,42 +2023,10 @@ done"#,
     #[cfg(unix)]
     #[test]
     fn local_stdio_handler_round_trip_is_argv_preserving_and_bounded() {
-        let invocation = StructuredHandlerInvocation {
-            plugin_id: "fixture".into(),
-            program: "/bin/sh".into(),
-            args: vec![
-                "-c".into(),
-                "cat >/dev/null; printf '%s' '{\"schema_version\":1,\"actions\":[{\"type\":\"show-message\",\"message\":\"handled\"}]}'".into(),
-            ],
-            event_json: "x".repeat(16 * 1024),
-            allow_ui_actions: true,
-            allow_workspace_query: false,
-            allow_workspace_actions: false,
-            allow_workspace_topology: false,
-            allow_terminal_query: false,
-            allow_pane_create: false,
-            allow_tab_create: false,
-            allow_pane_close: false,
-            allow_tab_close: false,
-            allow_pane_move: false,
-            allow_terminal_input: false,
-            allow_pane_layout: false,
-            allow_window_close: false,
-            allow_process_query: false,
-            allow_process_actions: false,
-            allow_process_terminal_text: false,
-            allow_process_terminal_input: false,
-            allow_process_tab_create: false,
-            allow_process_pane_create: false,
-            allow_process_pane_move: false,
-            allow_process_tab_move: false,
-            allow_process_pane_close: false,
-            allow_process_tab_close: false,
-            allow_process_pane_layout: false,
-            allow_process_window_close: false,
-            allow_process_window_focus: false,
-            mode: StructuredHandlerMode::ProcessPerEvent,
-        };
+        let invocation = process_fixture(
+            "fixture",
+            "test \"$TERMERIC_PLUGIN_EVENT_SCHEMA\" = 1 || exit 9; cat >/dev/null; printf '%s' '{\"schema_version\":1,\"actions\":[{\"type\":\"show-message\",\"message\":\"handled\"}]}'",
+        );
         assert_eq!(
             run_fixture(&invocation).unwrap(),
             vec![StructuredResponseAction::ShowMessage {
@@ -6133,39 +2049,7 @@ done"#,
     #[cfg(unix)]
     #[test]
     fn timed_out_handler_process_group_is_terminated() {
-        let invocation = StructuredHandlerInvocation {
-            plugin_id: "timeout-fixture".into(),
-            program: "/bin/sh".into(),
-            args: vec!["-c".into(), "sleep 10".into()],
-            event_json: "x".repeat(16 * 1024),
-            allow_ui_actions: false,
-            allow_workspace_query: false,
-            allow_workspace_actions: false,
-            allow_workspace_topology: false,
-            allow_terminal_query: false,
-            allow_pane_create: false,
-            allow_tab_create: false,
-            allow_pane_close: false,
-            allow_tab_close: false,
-            allow_pane_move: false,
-            allow_terminal_input: false,
-            allow_pane_layout: false,
-            allow_window_close: false,
-            allow_process_query: false,
-            allow_process_actions: false,
-            allow_process_terminal_text: false,
-            allow_process_terminal_input: false,
-            allow_process_tab_create: false,
-            allow_process_pane_create: false,
-            allow_process_pane_move: false,
-            allow_process_tab_move: false,
-            allow_process_pane_close: false,
-            allow_process_tab_close: false,
-            allow_process_pane_layout: false,
-            allow_process_window_close: false,
-            allow_process_window_focus: false,
-            mode: StructuredHandlerMode::ProcessPerEvent,
-        };
+        let invocation = process_fixture("timeout-fixture", "sleep 10");
         let started = Instant::now();
         let error = run_fixture(&invocation).unwrap_err();
         assert!(error.contains("exceeded 2000 ms"));
@@ -6175,39 +2059,7 @@ done"#,
     #[cfg(unix)]
     #[test]
     fn registry_generation_change_cancels_active_handler() {
-        let invocation = StructuredHandlerInvocation {
-            plugin_id: "cancel-fixture".into(),
-            program: "/bin/sh".into(),
-            args: vec!["-c".into(), "cat >/dev/null; sleep 10".into()],
-            event_json: "{\"schema_version\":1}".into(),
-            allow_ui_actions: false,
-            allow_workspace_query: false,
-            allow_workspace_actions: false,
-            allow_workspace_topology: false,
-            allow_terminal_query: false,
-            allow_pane_create: false,
-            allow_tab_create: false,
-            allow_pane_close: false,
-            allow_tab_close: false,
-            allow_pane_move: false,
-            allow_terminal_input: false,
-            allow_pane_layout: false,
-            allow_window_close: false,
-            allow_process_query: false,
-            allow_process_actions: false,
-            allow_process_terminal_text: false,
-            allow_process_terminal_input: false,
-            allow_process_tab_create: false,
-            allow_process_pane_create: false,
-            allow_process_pane_move: false,
-            allow_process_tab_move: false,
-            allow_process_pane_close: false,
-            allow_process_tab_close: false,
-            allow_process_pane_layout: false,
-            allow_process_window_close: false,
-            allow_process_window_focus: false,
-            mode: StructuredHandlerMode::ProcessPerEvent,
-        };
+        let invocation = process_fixture("cancel-fixture", "cat >/dev/null; sleep 10");
         let generation = Arc::new(AtomicU64::new(1));
         let update = Arc::clone(&generation);
         let changer = thread::spawn(move || {
@@ -6226,5 +2078,144 @@ done"#,
         let error = bounded_error(&format!("bad\n\u{1b}{}", "x".repeat(2_000)));
         assert!(error.len() <= 1024);
         assert!(!error.chars().any(char::is_control));
+    }
+
+    fn python3_available() -> bool {
+        Command::new("python3")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    }
+
+    /// Start a conversation with a checked-in example's handler, granted
+    /// everything its manifest requests.
+    fn example_invocation(example: &str, command_invoked: bool) -> StructuredHandlerInvocation {
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../examples/plugins")
+            .join(example);
+        let (manifest, _, _) =
+            crate::plugin::runtime::PluginManifest::from_directory(&directory).unwrap();
+        let handler = manifest.event_handler.unwrap();
+        StructuredHandlerInvocation {
+            plugin_id: manifest.id,
+            program: handler.program,
+            args: handler.args,
+            event_json: String::new(),
+            mode: StructuredHandlerMode::Persistent,
+            authority: HandlerAuthority::for_event(
+                manifest.permissions,
+                StructuredHandlerMode::Persistent,
+                command_invoked,
+            ),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rerun_in_sibling_example_sends_the_last_command_to_the_next_pane() {
+        if !python3_available() {
+            return;
+        }
+        let mut handlers = HashMap::new();
+        let shutdown = AtomicBool::new(false);
+        let generation = AtomicU64::new(1);
+
+        // A completed command in pane 0 of tab 5 is remembered, not acted on.
+        let mut completed = example_invocation("rerun-in-sibling", false);
+        completed.event_json = r#"{"schema_version":1,"plugin_id":"rerun-in-sibling","origin_window_id":3,"event":{"type":"command-completed","region_id":1,"tab_id":5,"pane_id":0,"exit_code":0,"content_available":true,"command":{"text":"cargo test","truncated":false,"sanitized":false},"output":{"text":"ok","truncated":false,"sanitized":false}}}"#.into();
+        assert!(
+            run_persistent_handler(&mut handlers, &completed, 1, &shutdown, &generation, 1)
+                .unwrap()
+                .is_empty()
+        );
+
+        let mut invocation = example_invocation("rerun-in-sibling", true);
+        invocation.event_json = r#"{"schema_version":1,"plugin_id":"rerun-in-sibling","origin_window_id":3,"event":{"type":"command-invoked","command_id":"rerun-in-sibling.rerun"}}"#.into();
+        let query =
+            run_persistent_handler(&mut handlers, &invocation, 2, &shutdown, &generation, 1)
+                .unwrap();
+        assert_eq!(
+            query,
+            vec![StructuredResponseAction::QueryWorkspace {
+                query_id: "rerun".into(),
+            }]
+        );
+
+        invocation.authority = invocation.authority.after(&query[0]);
+        invocation.event_json = r#"{"schema_version":1,"plugin_id":"rerun-in-sibling","origin_window_id":3,"event":{"type":"workspace-query-result","query_id":"rerun","truncated":false,"windows":[{"id":3,"tabs":[{"id":4,"title":"other","active":false,"closed":false,"panes":[]},{"id":5,"title":"work","active":true,"closed":false,"panes":[{"id":0,"focused":true,"closed":false},{"id":1,"focused":false,"closed":false}]}]}]}}"#.into();
+        let send = run_persistent_handler(&mut handlers, &invocation, 3, &shutdown, &generation, 1)
+            .unwrap();
+        assert_eq!(
+            send,
+            vec![StructuredResponseAction::SendText {
+                action_id: "rerun".into(),
+                window_id: None,
+                tab_id: 5,
+                pane_id: 1,
+                text: "cargo test".into(),
+                paste: false,
+                enter: true,
+            }]
+        );
+
+        invocation.authority = invocation.authority.after(&send[0]);
+        invocation.event_json = r#"{"schema_version":1,"plugin_id":"rerun-in-sibling","origin_window_id":3,"event":{"type":"action-result","action":"send-text","action_id":"rerun","ok":false,"error":"External terminal input is disabled"}}"#.into();
+        assert_eq!(
+            run_persistent_handler(&mut handlers, &invocation, 4, &shutdown, &generation, 1)
+                .unwrap(),
+            vec![StructuredResponseAction::ShowMessage {
+                message: "Rerun failed: External terminal input is disabled".into(),
+            }]
+        );
+        assert_eq!(handlers.len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_notifier_example_reports_only_unexpected_failures() {
+        if !python3_available() {
+            return;
+        }
+        let mut handlers = HashMap::new();
+        let shutdown = AtomicBool::new(false);
+        let generation = AtomicU64::new(1);
+        let mut invocation = example_invocation("command-notifier", false);
+        let completed = |exit_code: i32| {
+            format!(
+                r#"{{"schema_version":1,"plugin_id":"command-notifier","origin_window_id":1,"settings":{{"output-lines":2,"ignored-exit-codes":"130"}},"event":{{"type":"command-completed","region_id":1,"tab_id":5,"pane_id":null,"exit_code":{exit_code},"content_available":true,"command":{{"text":"make\u001b build","truncated":false,"sanitized":true}},"output":{{"text":"one\ntwo\n\nthree\n","truncated":false,"sanitized":false}}}}}}"#
+            )
+        };
+        for (request_id, exit_code) in [(1, 0), (2, 130)] {
+            invocation.event_json = completed(exit_code);
+            assert!(
+                run_persistent_handler(
+                    &mut handlers,
+                    &invocation,
+                    request_id,
+                    &shutdown,
+                    &generation,
+                    1
+                )
+                .unwrap()
+                .is_empty()
+            );
+        }
+        invocation.event_json = completed(2);
+        assert_eq!(
+            run_persistent_handler(&mut handlers, &invocation, 3, &shutdown, &generation, 1)
+                .unwrap(),
+            vec![StructuredResponseAction::ShowNotice {
+                title: "Command failed".into(),
+                lines: vec![
+                    "Command: make  build".into(),
+                    "Exit code: 2".into(),
+                    "Output:".into(),
+                    "  two".into(),
+                    "  three".into(),
+                ],
+            }]
+        );
     }
 }

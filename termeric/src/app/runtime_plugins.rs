@@ -1,19 +1,23 @@
 //! Request-scoped in-app management for installed declarative plugins.
 
 use super::*;
+use crate::plugin::permission::{PluginPermission, PluginPermissions};
 use crate::plugin::runtime::{
     DeclarativeSetting, PluginAdminCommand, PluginConfigurationChange, PluginInstallPreview,
-    PluginPermission, PluginSettingValue, PluginUpdatePreview, RuntimePluginStatus,
-    preview_install, preview_update,
+    PluginSettingValue, PluginUpdatePreview, RuntimePluginStatus, preview_install, preview_update,
 };
 use crate::ui::info_overlay::InfoOverlayChoice;
-use std::collections::BTreeSet;
 
 const PLUGIN_MANAGER_PAGE_SIZE: usize = 24;
 const PLUGIN_SETTINGS_PAGE_SIZE: usize = 24;
 const PLUGIN_SETTING_VALUES_PAGE_SIZE: usize = 24;
-const PLUGIN_PERMISSION_PAGE_SIZE: usize = 24;
 const PLUGIN_PROFILE_PAGE_SIZE: usize = 24;
+/// Install and update reviews list every permission on one page beside at
+/// most six action choices.
+const _: () = assert!(
+    crate::plugin::permission::Capability::ALL.len() + 6
+        <= crate::ui::info_overlay::MAX_INFO_CHOICES
+);
 const PLUGIN_LIST_SHORTCUTS: [char; PLUGIN_MANAGER_PAGE_SIZE] = [
     '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'd', 'e', 'f', 'g', 'h', 't', 'j', 'k', 'l',
     'm', 'o', 'q', 'r', 's',
@@ -211,24 +215,12 @@ impl App {
         &mut self,
         page: usize,
         preview: PluginInstallPreview,
-        grants: BTreeSet<PluginPermission>,
-        requested_permission_page: usize,
+        grants: PluginPermissions,
         error: Option<&str>,
     ) {
-        let permissions = preview.permissions.iter().copied().collect::<Vec<_>>();
-        let page_count = permissions
-            .len()
-            .div_ceil(PLUGIN_PERMISSION_PAGE_SIZE)
-            .max(1);
-        let permission_page = requested_permission_page.min(page_count - 1);
-        let start = permission_page * PLUGIN_PERMISSION_PAGE_SIZE;
-        let end = (start + PLUGIN_PERMISSION_PAGE_SIZE).min(permissions.len());
         let mut lines = vec![
             format!("{} ({})", preview.name, preview.id),
-            format!(
-                "Version: {} · API: {}",
-                preview.version, preview.api_version
-            ),
+            format!("Version: {}", preview.version),
             format!(
                 "Profiles: {} · Commands: {}",
                 preview.profile_count, preview.command_count
@@ -253,49 +245,17 @@ impl App {
         lines.extend([
             String::new(),
             format!(
-                "Requested permissions: {} · page {}/{}",
-                permissions.len(),
-                permission_page + 1,
-                page_count
+                "Requested permissions: {}",
+                preview.permissions.iter().count()
             ),
             "Select a permission to toggle its grant.".into(),
         ]);
 
         let mut choices = Vec::new();
-        for permission in &permissions[start..end] {
+        for permission in preview.permissions.iter() {
             let source_line = lines.len();
-            let marker = if grants.contains(permission) {
-                "x"
-            } else {
-                " "
-            };
-            lines.push(format!("[{marker}] {permission}"));
-            choices.push(InfoOverlayChoice::new(
-                format!("permission:{permission}"),
-                format!("Toggle {permission} permission"),
-                source_line,
-                None,
-            ));
-        }
-        if permission_page > 0 {
-            let source_line = lines.len();
-            lines.push("[P] Previous permissions".into());
-            choices.push(InfoOverlayChoice::new(
-                "previous-page",
-                "Previous permissions",
-                source_line,
-                Some('p'),
-            ));
-        }
-        if permission_page + 1 < page_count {
-            let source_line = lines.len();
-            lines.push("[N] Next permissions".into());
-            choices.push(InfoOverlayChoice::new(
-                "next-page",
-                "Next permissions",
-                source_line,
-                Some('n'),
-            ));
+            lines.push(permission_review_line(permission, &grants, ""));
+            choices.push(permission_toggle_choice(permission, source_line));
         }
         lines.push(String::new());
         if grants != preview.permissions {
@@ -358,7 +318,6 @@ impl App {
                 page,
                 preview,
                 grants,
-                permission_page,
             },
         });
     }
@@ -368,10 +327,8 @@ impl App {
             Ok(preview) => {
                 let grants = preview
                     .current_grants
-                    .intersection(&preview.candidate_permissions)
-                    .copied()
-                    .collect();
-                self.show_runtime_plugin_update_review(page, Box::new(preview), grants, 0, None);
+                    .intersection(&preview.candidate_permissions);
+                self.show_runtime_plugin_update_review(page, Box::new(preview), grants, None);
             }
             Err(error) => {
                 let error = format!("{error:#}");
@@ -390,32 +347,15 @@ impl App {
         &mut self,
         page: usize,
         preview: Box<PluginUpdatePreview>,
-        grants: BTreeSet<PluginPermission>,
-        requested_permission_page: usize,
+        grants: PluginPermissions,
         error: Option<&str>,
     ) {
-        let permissions = preview
-            .candidate_permissions
-            .iter()
-            .copied()
-            .collect::<Vec<_>>();
         let added = preview
             .candidate_permissions
-            .difference(&preview.current_permissions)
-            .copied()
-            .collect::<BTreeSet<_>>();
+            .uncovered_by(&preview.current_permissions);
         let removed = preview
             .current_permissions
-            .difference(&preview.candidate_permissions)
-            .copied()
-            .collect::<BTreeSet<_>>();
-        let page_count = permissions
-            .len()
-            .div_ceil(PLUGIN_PERMISSION_PAGE_SIZE)
-            .max(1);
-        let permission_page = requested_permission_page.min(page_count - 1);
-        let start = permission_page * PLUGIN_PERMISSION_PAGE_SIZE;
-        let end = (start + PLUGIN_PERMISSION_PAGE_SIZE).min(permissions.len());
+            .uncovered_by(&preview.candidate_permissions);
         let mut lines = vec![
             format!("{} ({})", preview.name, preview.id),
             format!(
@@ -448,8 +388,14 @@ impl App {
                 "Candidate fingerprint: {}",
                 preview.candidate_source_fingerprint
             ),
-            format!("Added permissions: {}", display_permissions(&added)),
-            format!("Removed permissions: {}", display_permissions(&removed)),
+            format!(
+                "Added permissions: {}",
+                display_permissions(added.iter().copied())
+            ),
+            format!(
+                "Removed permissions: {}",
+                display_permissions(removed.iter().copied())
+            ),
         ]);
         if preview.default_profile_will_be_cleared {
             lines.push(format!(
@@ -464,54 +410,22 @@ impl App {
         lines.extend([
             String::new(),
             format!(
-                "Candidate permissions: {} · page {}/{}",
-                permissions.len(),
-                permission_page + 1,
-                page_count
+                "Candidate permissions: {}",
+                preview.candidate_permissions.iter().count()
             ),
             "Select a permission to toggle its post-update grant.".into(),
         ]);
 
         let mut choices = Vec::new();
-        for permission in &permissions[start..end] {
+        for permission in preview.candidate_permissions.iter() {
             let source_line = lines.len();
-            let marker = if grants.contains(permission) {
-                "x"
-            } else {
-                " "
-            };
-            let delta = if added.contains(permission) {
+            let delta = if added.contains(&permission) {
                 " · newly requested"
             } else {
                 ""
             };
-            lines.push(format!("[{marker}] {permission}{delta}"));
-            choices.push(InfoOverlayChoice::new(
-                format!("permission:{permission}"),
-                format!("Toggle {permission} permission"),
-                source_line,
-                None,
-            ));
-        }
-        if permission_page > 0 {
-            let source_line = lines.len();
-            lines.push("[P] Previous permissions".into());
-            choices.push(InfoOverlayChoice::new(
-                "previous-page",
-                "Previous permissions",
-                source_line,
-                Some('p'),
-            ));
-        }
-        if permission_page + 1 < page_count {
-            let source_line = lines.len();
-            lines.push("[N] Next permissions".into());
-            choices.push(InfoOverlayChoice::new(
-                "next-page",
-                "Next permissions",
-                source_line,
-                Some('n'),
-            ));
+            lines.push(permission_review_line(permission, &grants, delta));
+            choices.push(permission_toggle_choice(permission, source_line));
         }
         lines.push(String::new());
         if grants != preview.candidate_permissions {
@@ -584,7 +498,6 @@ impl App {
                 page,
                 preview,
                 grants,
-                permission_page,
             },
         });
     }
@@ -609,8 +522,8 @@ impl App {
             return;
         };
 
-        let requested = display_permissions(&status.requested);
-        let granted = display_permissions(&status.granted);
+        let requested = display_permissions(status.requested.iter());
+        let granted = display_permissions(status.granted.iter());
         let mut lines = vec![
             format!("{} ({})", status.name, status.id),
             format!("Version: {}", status.version),
@@ -1312,44 +1225,22 @@ impl App {
                 page,
                 preview,
                 mut grants,
-                permission_page,
             } => match choice_id {
-                "previous-page" => self.show_runtime_plugin_install_review(
-                    page,
-                    preview,
-                    grants,
-                    permission_page.saturating_sub(1),
-                    None,
-                ),
-                "next-page" => self.show_runtime_plugin_install_review(
-                    page,
-                    preview,
-                    grants,
-                    permission_page.saturating_add(1),
-                    None,
-                ),
                 "grant-all" => {
                     grants = preview.permissions.clone();
-                    self.show_runtime_plugin_install_review(
-                        page,
-                        preview,
-                        grants,
-                        permission_page,
-                        None,
-                    );
+                    self.show_runtime_plugin_install_review(page, preview, grants, None);
                 }
                 "clear-grants" => self.show_runtime_plugin_install_review(
                     page,
                     preview,
-                    BTreeSet::new(),
-                    permission_page,
+                    PluginPermissions::default(),
                     None,
                 ),
                 "install-disabled" => {
-                    self.apply_runtime_plugin_install(preview, grants, false, page, permission_page)
+                    self.apply_runtime_plugin_install(preview, grants, false, page)
                 }
                 "install-enabled" if grants == preview.permissions => {
-                    self.apply_runtime_plugin_install(preview, grants, true, page, permission_page)
+                    self.apply_runtime_plugin_install(preview, grants, true, page)
                 }
                 "back" => self.show_runtime_plugin_install_path(
                     page,
@@ -1357,98 +1248,40 @@ impl App {
                     None,
                 ),
                 choice if choice.starts_with("permission:") => {
-                    let permission = choice[11..].parse::<PluginPermission>().ok();
-                    if let Some(permission) =
-                        permission.filter(|permission| preview.permissions.contains(permission))
-                    {
-                        if !grants.remove(&permission) {
-                            grants.insert(permission);
-                        }
-                    }
-                    self.show_runtime_plugin_install_review(
-                        page,
-                        preview,
-                        grants,
-                        permission_page,
-                        None,
-                    );
+                    toggle_requested_grant(&mut grants, &preview.permissions, &choice[11..]);
+                    self.show_runtime_plugin_install_review(page, preview, grants, None);
                 }
-                _ => self.show_runtime_plugin_install_review(
-                    page,
-                    preview,
-                    grants,
-                    permission_page,
-                    None,
-                ),
+                _ => self.show_runtime_plugin_install_review(page, preview, grants, None),
             },
             RuntimePluginManagerView::ReviewUpdate {
                 page,
                 preview,
                 mut grants,
-                permission_page,
             } => match choice_id {
-                "previous-page" => self.show_runtime_plugin_update_review(
-                    page,
-                    preview,
-                    grants,
-                    permission_page.saturating_sub(1),
-                    None,
-                ),
-                "next-page" => self.show_runtime_plugin_update_review(
-                    page,
-                    preview,
-                    grants,
-                    permission_page.saturating_add(1),
-                    None,
-                ),
                 "grant-all" => {
                     grants = preview.candidate_permissions.clone();
-                    self.show_runtime_plugin_update_review(
-                        page,
-                        preview,
-                        grants,
-                        permission_page,
-                        None,
-                    );
+                    self.show_runtime_plugin_update_review(page, preview, grants, None);
                 }
                 "clear-grants" => self.show_runtime_plugin_update_review(
                     page,
                     preview,
-                    BTreeSet::new(),
-                    permission_page,
+                    PluginPermissions::default(),
                     None,
                 ),
-                "update-disabled" => {
-                    self.apply_runtime_plugin_update(preview, grants, false, page, permission_page)
-                }
+                "update-disabled" => self.apply_runtime_plugin_update(preview, grants, false, page),
                 "update-enabled" if grants == preview.candidate_permissions => {
-                    self.apply_runtime_plugin_update(preview, grants, true, page, permission_page)
+                    self.apply_runtime_plugin_update(preview, grants, true, page)
                 }
                 "back" => self.show_runtime_plugin_detail(preview.id.clone(), page),
                 choice if choice.starts_with("permission:") => {
-                    let permission = choice[11..].parse::<PluginPermission>().ok();
-                    if let Some(permission) = permission
-                        .filter(|permission| preview.candidate_permissions.contains(permission))
-                    {
-                        if !grants.remove(&permission) {
-                            grants.insert(permission);
-                        }
-                    }
-                    self.show_runtime_plugin_update_review(
-                        page,
-                        preview,
-                        grants,
-                        permission_page,
-                        None,
+                    toggle_requested_grant(
+                        &mut grants,
+                        &preview.candidate_permissions,
+                        &choice[11..],
                     );
+                    self.show_runtime_plugin_update_review(page, preview, grants, None);
                 }
-                _ => self.show_runtime_plugin_update_review(
-                    page,
-                    preview,
-                    grants,
-                    permission_page,
-                    None,
-                ),
+                _ => self.show_runtime_plugin_update_review(page, preview, grants, None),
             },
             RuntimePluginManagerView::Detail { plugin_id, page } => match choice_id {
                 "choose-default-profile" => {
@@ -1753,8 +1586,7 @@ impl App {
                             Ok(false) => self.show_runtime_plugin_install_review(
                                 page,
                                 preview,
-                                BTreeSet::new(),
-                                0,
+                                PluginPermissions::default(),
                                 None,
                             ),
                             Err(error) => self.show_runtime_plugin_install_path(
@@ -1838,10 +1670,9 @@ impl App {
     fn apply_runtime_plugin_install(
         &mut self,
         preview: PluginInstallPreview,
-        grants: BTreeSet<PluginPermission>,
+        grants: PluginPermissions,
         enable: bool,
         page: usize,
-        permission_page: usize,
     ) {
         let command = PluginAdminCommand::InstallReviewed {
             directory: preview.source.clone(),
@@ -1864,13 +1695,7 @@ impl App {
                 let error = format!("{error:#}");
                 self.toasts
                     .error(format!("Plugin installation failed: {error}"));
-                self.show_runtime_plugin_install_review(
-                    page,
-                    preview,
-                    grants,
-                    permission_page,
-                    Some(&error),
-                );
+                self.show_runtime_plugin_install_review(page, preview, grants, Some(&error));
             }
         }
     }
@@ -1878,10 +1703,9 @@ impl App {
     fn apply_runtime_plugin_update(
         &mut self,
         preview: Box<PluginUpdatePreview>,
-        grants: BTreeSet<PluginPermission>,
+        grants: PluginPermissions,
         enable: bool,
         page: usize,
-        permission_page: usize,
     ) {
         let command = preview.command(grants.clone(), enable);
         match self.execute_runtime_plugin_admin(command) {
@@ -1898,13 +1722,7 @@ impl App {
             Err(error) => {
                 let error = format!("{error:#}");
                 self.toasts.error(format!("Plugin update failed: {error}"));
-                self.show_runtime_plugin_update_review(
-                    page,
-                    preview,
-                    grants,
-                    permission_page,
-                    Some(&error),
-                );
+                self.show_runtime_plugin_update_review(page, preview, grants, Some(&error));
             }
         }
     }
@@ -2102,17 +1920,55 @@ fn setting_kind(setting: &DeclarativeSetting) -> &'static str {
     }
 }
 
-fn display_permissions(
-    permissions: &std::collections::BTreeSet<crate::plugin::runtime::PluginPermission>,
-) -> String {
-    if permissions.is_empty() {
+fn display_permissions(permissions: impl IntoIterator<Item = PluginPermission>) -> String {
+    let names = permissions
+        .into_iter()
+        .map(|permission| permission.to_string())
+        .collect::<Vec<_>>();
+    if names.is_empty() {
         "none".into()
     } else {
-        permissions
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join(", ")
+        names.join(", ")
+    }
+}
+
+/// One reviewable permission: whether the pending grants cover it, what it
+/// allows with its window scope, and its manifest name.
+fn permission_review_line(
+    permission: PluginPermission,
+    grants: &PluginPermissions,
+    suffix: &str,
+) -> String {
+    let marker = if grants.covers(permission) { "x" } else { " " };
+    format!("[{marker}] {} · {permission}{suffix}", permission.label())
+}
+
+fn permission_toggle_choice(permission: PluginPermission, source_line: usize) -> InfoOverlayChoice {
+    InfoOverlayChoice::new(
+        format!("permission:{permission}"),
+        format!("Toggle {}", permission.label()),
+        source_line,
+        None,
+    )
+}
+
+/// Toggle the grant for one requested permission at exactly its requested
+/// scope. A narrower existing grant is widened rather than removed.
+fn toggle_requested_grant(
+    grants: &mut PluginPermissions,
+    requested: &PluginPermissions,
+    choice: &str,
+) {
+    let Ok(permission) = choice.parse::<PluginPermission>() else {
+        return;
+    };
+    if requested.scope(permission.capability) != Some(permission.scope) {
+        return;
+    }
+    if grants.covers(permission) {
+        grants.remove(permission.capability);
+    } else {
+        grants.set(permission);
     }
 }
 
@@ -2148,9 +2004,15 @@ fn push_wrapped_field(lines: &mut Vec<String>, label: &str, value: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugin::permission::{Capability, PermissionScope};
     use crate::plugin::runtime::{InstalledPlugin, PluginAdminCommand, PluginConfigurationChange};
     use crate::ui::info_overlay::InfoOverlayAction;
     use std::collections::BTreeSet;
+
+    fn permissions(values: &[&str]) -> PluginPermissions {
+        PluginPermissions::from_permissions(values.iter().map(|value| value.parse().unwrap()))
+            .unwrap()
+    }
 
     fn fixture_manifest(id: &str, version: &str, with_setting: bool) -> String {
         let setting = if with_setting {
@@ -2165,7 +2027,7 @@ default = true
             ""
         };
         format!(
-            r#"api_version = 10
+            r#"api_version = 1
 id = "{id}"
 name = "Fixture {id}"
 version = "{version}"
@@ -2194,7 +2056,7 @@ program = "termeric-test-fixture-must-not-run-{index}"
             .collect::<Vec<_>>()
             .join("\n");
         format!(
-            r#"api_version = 10
+            r#"api_version = 1
 id = "{id}"
 name = "Fixture {id}"
 version = "{version}"
@@ -2212,7 +2074,7 @@ default = true
 
     fn event_only_fixture_manifest(id: &str) -> String {
         format!(
-            r#"api_version = 3
+            r#"api_version = 1
 id = "{id}"
 name = "Fixture {id}"
 version = "1.0.0"
@@ -2227,7 +2089,7 @@ events = ["app-ready"]
 
     fn typed_fixture_manifest(integer_max: i64) -> String {
         format!(
-            r#"api_version = 10
+            r#"api_version = 1
 id = "typed-tool"
 name = "Typed Tool"
 version = "1.0.0"
@@ -2287,7 +2149,7 @@ choices = ["safe", "fast", "careful"]
         crate::plugin::runtime::execute_admin_at(
             PluginAdminCommand::Install {
                 directory: source.clone(),
-                grants: BTreeSet::from([crate::plugin::runtime::PluginPermission::ProcessSpawn]),
+                grants: permissions(&["process-spawn"]),
                 enable: false,
                 replace: false,
             },
@@ -2310,7 +2172,7 @@ choices = ["safe", "fast", "careful"]
         std::fs::write(
             source.join(crate::plugin::runtime::MANIFEST_NAME),
             format!(
-                r#"api_version = 10
+                r#"api_version = 1
 id = "{id}"
 name = "Generated {id}"
 version = "1.0.0"
@@ -2328,7 +2190,7 @@ program = "termeric-test-fixture-must-not-run"
         crate::plugin::runtime::execute_admin_at(
             PluginAdminCommand::Install {
                 directory: source,
-                grants: BTreeSet::from([crate::plugin::runtime::PluginPermission::ProcessSpawn]),
+                grants: permissions(&["process-spawn"]),
                 enable: false,
                 replace: false,
             },
@@ -2355,7 +2217,7 @@ program = "termeric-test-fixture-must-not-run"
         crate::plugin::runtime::execute_admin_at(
             PluginAdminCommand::Install {
                 directory: source.clone(),
-                grants: BTreeSet::from([crate::plugin::runtime::PluginPermission::ProcessSpawn]),
+                grants: permissions(&["process-spawn"]),
                 enable: false,
                 replace: false,
             },
@@ -2383,7 +2245,7 @@ program = "termeric-test-fixture-must-not-run"
         crate::plugin::runtime::execute_admin_at(
             PluginAdminCommand::Install {
                 directory: source.clone(),
-                grants: BTreeSet::from([PluginPermission::ProcessSpawn]),
+                grants: permissions(&["process-spawn"]),
                 enable: false,
                 replace: false,
             },
@@ -2516,10 +2378,7 @@ program = "termeric-test-fixture-must-not-run"
         assert_eq!(statuses.len(), 1);
         assert_eq!(statuses[0].id, "local-tool");
         assert!(statuses[0].enabled);
-        assert_eq!(
-            statuses[0].granted,
-            BTreeSet::from([PluginPermission::ProcessSpawn])
-        );
+        assert_eq!(statuses[0].granted, permissions(&["process-spawn"]));
         assert!(app.info_overlay.title().starts_with("Plugin:"));
 
         choose(&mut app, "back");
@@ -2589,99 +2448,83 @@ program = "termeric-test-fixture-must-not-run"
         assert!(!root.join("stale-tool").exists());
     }
 
+    fn every_permission() -> PluginPermissions {
+        PluginPermissions::from_permissions(Capability::ALL.into_iter().map(|capability| {
+            PluginPermission {
+                capability,
+                scope: if capability.is_scoped() {
+                    PermissionScope::AllWindows
+                } else {
+                    PermissionScope::Window
+                },
+            }
+        }))
+        .unwrap()
+    }
+
+    fn assert_every_permission_is_listed_with_its_scope(app: &mut App) {
+        let request_id = app.info_overlay.request_id();
+        assert!(app.info_overlay.choices().len() <= crate::ui::info_overlay::MAX_INFO_CHOICES);
+        assert!(app.info_overlay.choice(request_id, "next-page").is_none());
+        for permission in every_permission().iter() {
+            assert!(
+                app.info_overlay
+                    .choice(request_id, &format!("permission:{permission}"))
+                    .is_some(),
+                "{permission}"
+            );
+        }
+        assert!(app.info_overlay.lines().iter().any(|line| {
+            line.starts_with("[ ] Create panes (all windows) · pane-create:all-windows")
+        }));
+        assert!(
+            app.info_overlay
+                .lines()
+                .iter()
+                .any(|line| line.starts_with("[ ] Start processes · process-spawn"))
+        );
+
+        // A choice must name the exact requested scope to toggle a grant.
+        choose(app, "permission:pane-create:all-windows");
+        assert!(app.info_overlay.lines().iter().any(|line| {
+            line.starts_with("[x] Create panes (all windows) · pane-create:all-windows")
+        }));
+        let request_id = app.info_overlay.request_id();
+        app.apply_info_overlay_action(InfoOverlayAction::Choose {
+            request_id,
+            choice_id: "permission:pane-create".into(),
+        });
+        assert!(app.info_overlay.lines().iter().any(|line| {
+            line.starts_with("[x] Create panes (all windows) · pane-create:all-windows")
+        }));
+    }
+
     #[test]
-    fn install_review_paginates_permissions_within_overlay_limits() {
-        let permissions = BTreeSet::from([
-            PluginPermission::ProcessSpawn,
-            PluginPermission::WorkspaceQuery,
-            PluginPermission::WorkspaceActions,
-            PluginPermission::WorkspaceTopology,
-            PluginPermission::EventSubscribe,
-            PluginPermission::UiActions,
-            PluginPermission::FilesystemRead,
-            PluginPermission::FilesystemWrite,
-            PluginPermission::Network,
-            PluginPermission::Clipboard,
-            PluginPermission::TerminalText,
-            PluginPermission::TerminalQuery,
-            PluginPermission::PaneCreate,
-            PluginPermission::TabCreate,
-            PluginPermission::PaneClose,
-            PluginPermission::TabClose,
-            PluginPermission::PaneMove,
-            PluginPermission::TerminalInput,
-            PluginPermission::PaneLayout,
-            PluginPermission::WindowClose,
-            PluginPermission::ProcessQuery,
-            PluginPermission::ProcessActions,
-            PluginPermission::ProcessTerminalText,
-            PluginPermission::ProcessTerminalInput,
-            PluginPermission::ProcessTabCreate,
-        ]);
+    fn install_review_lists_every_scoped_permission_on_one_page() {
         let preview = PluginInstallPreview {
             id: "many-permissions".into(),
             name: "Many Permissions".into(),
             version: "1.0.0".into(),
             description: String::new(),
-            api_version: crate::plugin::runtime::PLUGIN_API_VERSION,
             source: PathBuf::from("/tmp/many-permissions"),
             source_fingerprint: "fnv1a64:0000000000000000".into(),
-            permissions,
+            permissions: every_permission(),
             profile_count: 1,
             command_count: 0,
         };
         let mut app = App::new_headless(Config::default()).unwrap();
-        app.show_runtime_plugin_install_review(0, preview, BTreeSet::new(), 0, None);
-        assert!(app.info_overlay.choices().len() <= crate::ui::info_overlay::MAX_INFO_CHOICES);
-        assert!(
-            app.info_overlay
-                .choice(app.info_overlay.request_id(), "next-page")
-                .is_some()
-        );
-        choose(&mut app, "next-page");
-        assert!(app.info_overlay.choices().len() <= crate::ui::info_overlay::MAX_INFO_CHOICES);
-        assert!(
-            app.info_overlay
-                .choice(app.info_overlay.request_id(), "previous-page")
-                .is_some()
-        );
+        app.show_runtime_plugin_install_review(0, preview, PluginPermissions::default(), None);
+        assert_every_permission_is_listed_with_its_scope(&mut app);
     }
 
     #[test]
-    fn update_review_paginates_permissions_within_overlay_limits() {
-        let permissions = BTreeSet::from([
-            PluginPermission::ProcessSpawn,
-            PluginPermission::WorkspaceQuery,
-            PluginPermission::WorkspaceActions,
-            PluginPermission::WorkspaceTopology,
-            PluginPermission::EventSubscribe,
-            PluginPermission::UiActions,
-            PluginPermission::FilesystemRead,
-            PluginPermission::FilesystemWrite,
-            PluginPermission::Network,
-            PluginPermission::Clipboard,
-            PluginPermission::TerminalText,
-            PluginPermission::TerminalQuery,
-            PluginPermission::PaneCreate,
-            PluginPermission::TabCreate,
-            PluginPermission::PaneClose,
-            PluginPermission::TabClose,
-            PluginPermission::PaneMove,
-            PluginPermission::TerminalInput,
-            PluginPermission::PaneLayout,
-            PluginPermission::WindowClose,
-            PluginPermission::ProcessQuery,
-            PluginPermission::ProcessActions,
-            PluginPermission::ProcessTerminalText,
-            PluginPermission::ProcessTerminalInput,
-            PluginPermission::ProcessTabCreate,
-        ]);
+    fn update_review_lists_every_scoped_permission_on_one_page() {
         let expected_installed = InstalledPlugin {
             id: "many-permissions".into(),
             enabled: false,
             source: PathBuf::from("/tmp/many-permissions"),
             source_fingerprint: "fnv1a64:0000000000000000".into(),
-            grants: BTreeSet::new(),
+            grants: PluginPermissions::default(),
             default_profile: None,
             settings: Default::default(),
         };
@@ -2693,9 +2536,9 @@ program = "termeric-test-fixture-must-not-run"
             candidate_version: "2.0.0".into(),
             current_source_fingerprint: expected_installed.source_fingerprint.clone(),
             candidate_source_fingerprint: "fnv1a64:1111111111111111".into(),
-            current_permissions: BTreeSet::new(),
-            candidate_permissions: permissions,
-            current_grants: BTreeSet::new(),
+            current_permissions: PluginPermissions::default(),
+            candidate_permissions: every_permission(),
+            current_grants: PluginPermissions::default(),
             enabled: false,
             current_profile_count: 0,
             candidate_profile_count: 1,
@@ -2706,20 +2549,13 @@ program = "termeric-test-fixture-must-not-run"
             expected_installed,
         };
         let mut app = App::new_headless(Config::default()).unwrap();
-        app.show_runtime_plugin_update_review(0, Box::new(preview), BTreeSet::new(), 0, None);
-        assert!(app.info_overlay.choices().len() <= crate::ui::info_overlay::MAX_INFO_CHOICES);
-        assert!(
-            app.info_overlay
-                .choice(app.info_overlay.request_id(), "next-page")
-                .is_some()
+        app.show_runtime_plugin_update_review(
+            0,
+            Box::new(preview),
+            PluginPermissions::default(),
+            None,
         );
-        choose(&mut app, "next-page");
-        assert!(app.info_overlay.choices().len() <= crate::ui::info_overlay::MAX_INFO_CHOICES);
-        assert!(
-            app.info_overlay
-                .choice(app.info_overlay.request_id(), "previous-page")
-                .is_some()
-        );
+        assert_every_permission_is_listed_with_its_scope(&mut app);
     }
 
     #[test]
@@ -2826,7 +2662,7 @@ program = "termeric-test-fixture-must-not-run"
         crate::plugin::runtime::execute_admin_at(
             PluginAdminCommand::Install {
                 directory: event_source,
-                grants: BTreeSet::new(),
+                grants: PluginPermissions::default(),
                 enable: false,
                 replace: false,
             },
@@ -3107,10 +2943,37 @@ program = "termeric-test-fixture-must-not-run"
         assert!(statuses[0].enabled);
         assert_eq!(
             statuses[0].granted,
-            BTreeSet::from([
-                PluginPermission::ProcessSpawn,
-                PluginPermission::WorkspaceQuery,
-            ])
+            permissions(&["process-spawn", "workspace-query"])
+        );
+
+        // Widening a granted capability's scope is reviewed like a new one.
+        let widened = fixture_manifest("permission-tool", "2.1.0", false).replace(
+            "permissions = [\"process-spawn\"]",
+            "permissions = [\"process-spawn\", \"workspace-query:all-windows\"]",
+        );
+        std::fs::write(source.join(crate::plugin::runtime::MANIFEST_NAME), widened).unwrap();
+        choose(&mut app, "update");
+        assert!(
+            app.info_overlay
+                .lines()
+                .iter()
+                .any(|line| line.contains("Added permissions: workspace-query:all-windows"))
+        );
+        assert!(app.info_overlay.lines().iter().any(|line| line
+            == "[ ] Inspect windows, tabs, and panes (all windows) · workspace-query:all-windows · newly requested"));
+        assert!(
+            app.info_overlay
+                .choice(app.info_overlay.request_id(), "update-enabled")
+                .is_none()
+        );
+        choose(&mut app, "permission:workspace-query:all-windows");
+        choose(&mut app, "update-enabled");
+        let (_, statuses) =
+            crate::plugin::runtime::discover_runtime_plugins_at(&registry, &root).unwrap();
+        assert_eq!(statuses[0].version, "2.1.0");
+        assert_eq!(
+            statuses[0].granted,
+            permissions(&["process-spawn", "workspace-query:all-windows"])
         );
 
         std::fs::write(
@@ -3123,7 +2986,7 @@ program = "termeric-test-fixture-must-not-run"
             app.info_overlay
                 .lines()
                 .iter()
-                .any(|line| line.contains("Removed permissions: workspace-query"))
+                .any(|line| line.contains("Removed permissions: workspace-query:all-windows"))
         );
         assert!(
             app.info_overlay
@@ -3135,10 +2998,7 @@ program = "termeric-test-fixture-must-not-run"
         let (_, statuses) =
             crate::plugin::runtime::discover_runtime_plugins_at(&registry, &root).unwrap();
         assert_eq!(statuses[0].version, "3.0.0");
-        assert_eq!(
-            statuses[0].granted,
-            BTreeSet::from([PluginPermission::ProcessSpawn])
-        );
+        assert_eq!(statuses[0].granted, permissions(&["process-spawn"]));
         assert!(statuses[0].enabled);
     }
 

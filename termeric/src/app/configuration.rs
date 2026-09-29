@@ -599,24 +599,12 @@ impl App {
                 .iter()
                 .take(4)
                 .map(|status| {
-                    let requested = status
-                        .requested
-                        .iter()
-                        .map(ToString::to_string)
-                        .collect::<Vec<_>>()
-                        .join(",");
-                    let granted = status
-                        .granted
-                        .iter()
-                        .map(ToString::to_string)
-                        .collect::<Vec<_>>()
-                        .join(",");
                     format!(
                         "{}:{} req=[{}] grant=[{}] settings={}{}",
                         status.id,
                         if status.enabled { "on" } else { "off" },
-                        requested,
-                        granted,
+                        status.requested,
+                        status.granted,
                         status.settings.len(),
                         status.diagnostic.as_ref().map_or("", |_| " error")
                     )

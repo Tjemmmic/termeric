@@ -1,0 +1,98 @@
+# Window Switcher
+#
+# Palette commands for moving between Termeric windows:
+#
+# - "Next Window" focuses the window after the current one, wrapping around.
+# - "Jump to Tab" finds the first tab in any window whose title contains the
+#   "Tab title" setting (case-insensitive). If that tab is not yet selected it
+#   is selected in its window; run the command again to focus that window.
+#
+# Both commands query every window (workspace-query:all-windows), then either
+# select a tab in any window (navigate:all-windows) or focus a window
+# (window-focus). Some Wayland compositors ignore focus requests.
+#
+#   termeric plugin install examples/plugins/window-switcher \
+#     --allow process-spawn --allow event-subscribe --allow ui-actions \
+#     --allow workspace-query:all-windows --allow navigate:all-windows \
+#     --allow window-focus --enable
+#   termeric plugin configure window-switcher --set tab-title "server"
+
+api_version = 1
+id = "window-switcher"
+name = "Window Switcher"
+version = "1.0.0"
+description = "Cycle through windows and jump to a tab by title in any window"
+permissions = [
+    "process-spawn",
+    "event-subscribe",
+    "ui-actions",
+    "workspace-query:all-windows",
+    "navigate:all-windows",
+    "window-focus",
+]
+
+[[settings]]
+type = "text"
+id = "tab-title"
+name = "Tab title"
+description = "Text that Jump to Tab looks for in tab titles"
+default = "server"
+
+[[commands]]
+id = "next-window"
+name = "Next Window"
+description = "Focus the next Termeric window"
+
+[[commands]]
+id = "jump-to-tab"
+name = "Jump to Tab"
+description = "Select, then focus, the first tab whose title matches the setting"
+
+[event_handler]
+program = "python3"
+args = ["-u", "-c", """
+import json, sys
+
+def short(text, limit=400):
+    return text.encode()[:limit].decode(errors="ignore")
+
+def next_window(windows, origin):
+    ids = [window["id"] for window in windows]
+    if len(ids) < 2 or origin not in ids:
+        return [{"type": "show-message", "message": "No other window to switch to"}]
+    target = ids[(ids.index(origin) + 1) % len(ids)]
+    return [{"type": "focus-window", "action_id": "next-window", "window_id": target}]
+
+def jump_to_tab(windows, needle):
+    for window in windows:
+        for tab in window["tabs"]:
+            if tab["closed"] or needle.lower() not in tab["title"].lower():
+                continue
+            if tab["active"]:
+                return [{"type": "focus-window", "action_id": "jump", "window_id": window["id"]}]
+            return [
+                {"type": "select-tab", "action_id": "jump", "window_id": window["id"], "tab_id": tab["id"]},
+                {"type": "show-message", "message": "Tab selected; run Jump to Tab again to focus its window"},
+            ]
+    return [{"type": "show-message", "message": "No tab title contains " + short(repr(needle), 200)}]
+
+for line in sys.stdin:
+    request = json.loads(line)
+    event = request["event"]
+    actions = []
+    if event["type"] == "command-invoked":
+        command = event["command_id"].rsplit(".", 1)[-1]
+        actions.append({"type": "query-workspace", "query_id": command})
+    elif event["type"] == "workspace-query-result":
+        windows = event["windows"]
+        if event["query_id"] == "next-window":
+            actions = next_window(windows, request["origin_window_id"])
+        else:
+            actions = jump_to_tab(windows, request["settings"]["tab-title"])
+    elif event["type"] == "action-result" and not event["ok"]:
+        actions.append({"type": "show-message", "message": "Window switch failed: " + short(event["error"])})
+    reply = {"schema_version": 1, "request_id": request["request_id"], "actions": actions}
+    print(json.dumps(reply), flush=True)
+"""]
+mode = "persistent"
+events = ["command-invoked"]

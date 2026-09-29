@@ -1,0 +1,93 @@
+# Pane Layouts
+#
+# Palette commands that arrange the panes of the active tab:
+#
+# - "Dev Layout" grows the tab one step at a time: a single pane gains a pane
+#   to its right, two panes gain a third below the focused one, and three or
+#   more are arranged as one tall main pane beside a stack.
+# - "Tile Panes" arranges every pane in a grid.
+# - "Balance Panes" evens out every split ratio.
+#
+# Each command queries the workspace to find the active tab and focused pane,
+# then performs one pane change. Failures appear as a message.
+#
+#   termeric plugin install examples/plugins/pane-layouts \
+#     --allow process-spawn --allow event-subscribe --allow ui-actions \
+#     --allow workspace-query --allow pane-create --allow pane-layout --enable
+
+api_version = 1
+id = "pane-layouts"
+name = "Pane Layouts"
+version = "1.0.0"
+description = "Commands that split, tile, and balance the panes of the active tab"
+permissions = [
+    "process-spawn",
+    "event-subscribe",
+    "ui-actions",
+    "workspace-query",
+    "pane-create",
+    "pane-layout",
+]
+
+[[commands]]
+id = "dev-layout"
+name = "Dev Layout"
+description = "Add a pane, or arrange three or more as a main pane and a stack"
+
+[[commands]]
+id = "tile"
+name = "Tile Panes"
+description = "Arrange every pane of the active tab in a grid"
+
+[[commands]]
+id = "balance"
+name = "Balance Panes"
+description = "Give every pane of the active tab an equal share"
+
+[event_handler]
+program = "python3"
+args = ["-u", "-c", """
+import json, sys
+
+def short(text, limit=400):
+    return text.encode()[:limit].decode(errors="ignore")
+
+def active_tab(windows, origin):
+    for window in windows:
+        if window["id"] == origin:
+            return next((t for t in window["tabs"] if t["active"] and not t["closed"]), None)
+    return None
+
+def layout_action(command, tab):
+    panes = [pane for pane in tab["panes"] if not pane["closed"]]
+    target = {"action_id": command, "tab_id": tab["id"]}
+    if command == "tile":
+        return dict(target, type="apply-pane-layout", preset="grid")
+    if command == "balance":
+        return dict(target, type="balance-panes")
+    if len(panes) >= 3:
+        return dict(target, type="apply-pane-layout", preset="tall")
+    focused = next((pane for pane in panes if pane["focused"]), panes[0])
+    direction = "vertical" if len(panes) == 1 else "horizontal"
+    return dict(target, type="create-pane", pane_id=focused["id"], direction=direction)
+
+for line in sys.stdin:
+    request = json.loads(line)
+    event = request["event"]
+    actions = []
+    if event["type"] == "command-invoked":
+        command = event["command_id"].rsplit(".", 1)[-1]
+        actions.append({"type": "query-workspace", "query_id": command})
+    elif event["type"] == "workspace-query-result":
+        tab = active_tab(event["windows"], request["origin_window_id"])
+        if tab is None or all(pane["closed"] for pane in tab["panes"]):
+            actions.append({"type": "show-message", "message": "No active tab to arrange"})
+        else:
+            actions.append(layout_action(event["query_id"], tab))
+    elif event["type"] == "action-result" and not event["ok"]:
+        actions.append({"type": "show-message", "message": "Layout unchanged: " + short(event["error"])})
+    reply = {"schema_version": 1, "request_id": request["request_id"], "actions": actions}
+    print(json.dumps(reply), flush=True)
+"""]
+mode = "persistent"
+events = ["command-invoked"]

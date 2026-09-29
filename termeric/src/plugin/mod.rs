@@ -17,6 +17,7 @@
 pub mod agent;
 pub mod hooks;
 pub mod manager;
+pub mod permission;
 pub mod runtime;
 pub mod structured;
 
