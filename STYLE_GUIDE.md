@@ -1,7 +1,6 @@
 # Termeric Style Guide
 
-> **For contributors and AI agents working in this repo.**
-> Termeric is a play on *Turmeric* — the root. That identity shapes everything: the icon, the themes, the animations, and the overall feel. Read this guide before writing any UI code, theme, or user-facing feature.
+> **For contributors and AI agents working in this repo.** Termeric is a play on *Turmeric* — the root. That identity shapes everything: the icon, the themes, the animations, and the overall feel. Read this guide before writing any UI code, theme, or user-facing feature.
 
 ---
 
@@ -17,8 +16,7 @@ Termeric is a terminal emulator that draws its personality from **roots and rhiz
 | Use warm, earthy language          | Use cold, clinical language        |
 | Say "organic", "grounded", "warm"  | Say "sleek", "futuristic", "sharp" |
 
-Built-in theme names **must** be real roots, rhizomes, or tubers:
-`turmeric`, `ginger`, `daikon`, `turnip`, `malanga`, `beet`, `yuca`, `taro`, `wasabi`, `galangal`, `horseradish`, `parsnip`, etc.
+Built-in theme names **must** be real roots, rhizomes, or tubers: `turmeric`, `ginger`, `daikon`, `turnip`, `malanga`, `beet`, `yuca`, `taro`, `wasabi`, `galangal`, `horseradish`, `parsnip`, etc.
 
 Third-party / community themes (Solarized, Catppuccin, etc.) keep their original names but are presented as "guest themes" — the roots are the house palette.
 

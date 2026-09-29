@@ -1,333 +1,79 @@
 # Kitty terminal file transfer
 
-Termeric implements a bounded Linux subset of Kitty's
-[file-transfer protocol](https://sw.kovidgoyal.net/kitty/file-transfer-protocol/)
-over OSC 5113. Kitty `send` lets a child process or remote shell place files on
-the computer running the Termeric window. A narrower Kitty `receive` slice lets
-that exact child read explicitly listed regular files after a separate
-path-disclosing approval. These back the common
-`kitten transfer remote-file /local/path` and regular-file
-`kitten transfer --direction=upload /local/file remote-file` workflows.
+Termeric implements a bounded Linux subset of Kitty's [file-transfer protocol](https://sw.kovidgoyal.net/kitty/file-transfer-protocol/) over OSC 5113. Kitty `send` lets a child process or remote shell place files on the computer running the Termeric window. A narrower Kitty `receive` slice lets that exact child read explicitly listed regular files after a separate path-disclosing approval. These back the common `kitten transfer remote-file /local/path` and regular-file `kitten transfer --direction=upload /local/file remote-file` workflows.
 
-The support status is **Partial** until a current native `kitten transfer` run
-has accepted evidence. The parser, consent boundary, filesystem transaction,
-and failure paths have hermetic coverage; native client acceptance is deferred.
+The support status is **Partial** until a current native `kitten transfer` run has accepted evidence. The parser, consent boundary, filesystem transaction, and failure paths have hermetic coverage; native client acceptance is deferred.
 
 ## Supported profile
 
-- One explicit approval per transfer session and direction, scoped to the exact
-  originating tab or pane.
+- One explicit approval per transfer session and direction, scoped to the exact originating tab or pane.
 - Ordinary shell/profile terminals and attached live-domain panes on Linux.
 - Regular files, directories, symbolic links, and hard links.
-- Simple transmission with no compression or zlib compression. Compression EOF
-  is independent of packet boundaries: a complete stream may be followed by
-  empty `data` packets and an empty `end_data`. Only `end_data` completes the
-  entry, and only `finish` publishes it. Truncation, checksum errors, trailing
-  bytes, concatenated streams, and declared-size mismatches are rejected.
-- `send`, `file`, `data`, `end_data`, `cancel`, and `finish`, with canonical
-  status/progress replies in the requesting terminal's S7C1T/S8C1T mode.
-- At most 4 active transfers, 1,024 destination entries per transfer (including
-  automatically created parent directories), 4,096 decoded bytes
-  per data command, 64 MiB of declared/uncompressed payload per transfer, a
-  1,024-command worker queue, and 10 minutes of inactivity.
-  Commit preflight counts unique announced destinations and missing ancestors;
-  shared parents count once and pre-existing directories do not consume the
-  creation budget. Known excess fails with `EFBIG` before destination creation.
-  Every destination creation also checks the running count, so filesystem
-  changes cannot expand a transaction beyond the limit after preflight; failure
-  takes the usual best-effort rollback path. Temporary staging files have their
-  separate bound of at most one per announced regular file. Progress/completion
-  counts still describe announced entries, not inferred parents. Hermetic tests
-  cover exact-limit planning, shared/explicit/existing parents, a deep implicit
-  tree rejected without writes, and runtime exhaustion/cleanup without requiring
-  thousands of real files or descriptors. OS resource limits may reject earlier.
-- File contents staged outside the visible destination, individual regular
-  files published without overwrite, and best-effort transaction rollback if
-  a later entry fails during `finish`.
-- Mode bits limited to `0777`; setuid, setgid, and sticky bits are stripped.
-  Directories use private `0700` assembly permissions, even with a restrictive
-  umask, then receive the requested mode without adding owner permissions.
-  On Linux, declared directories and automatically created parents use
-  no-symlink `openat2` parent resolution followed by creation and identity capture
-  through the pinned parent's procfs reference. Replacing a parent or higher
-  ancestor after pinning cannot redirect those operations. Directory creation
-  therefore requires `openat2` and accessible procfs, with no original-path
-  fallback. Regressions cover parent/ancestor replacement, metadata on the
-  original directory, existing-entry refusal, private implicit-parent modes,
-  and ordinary rollback that preserves pre-existing ancestors.
-  On Linux, unreadable newly created directories are pinned with `O_PATH` and
-  recovered through their trusted `/proc/self/fd` references, never through the
-  original destination path. This recovery requires accessible procfs; failure
-  does not fall back to a pathname chmod. Missing or mismatched handles fail
-  without changing replacement directories or symlink targets.
-  Final directory modes and modification times are applied deepest-first after
-  their contents. Signed nanoseconds since the Unix epoch, including pre-1970
-  times, are passed to the filesystem; its supported
-  date range and timestamp precision still apply. Hermetic transaction tests
-  check pre-epoch fractional seconds, zero, and positive times on files,
-  directories, hard links, and symbolic links without following symlink targets.
+- Simple transmission with no compression or zlib compression. Compression EOF is independent of packet boundaries: a complete stream may be followed by empty `data` packets and an empty `end_data`. Only `end_data` completes the entry, and only `finish` publishes it. Truncation, checksum errors, trailing bytes, concatenated streams, and declared-size mismatches are rejected.
+- `send`, `file`, `data`, `end_data`, `cancel`, and `finish`, with canonical status/progress replies in the requesting terminal's S7C1T/S8C1T mode.
+- At most 4 active transfers, 1,024 destination entries per transfer (including automatically created parent directories), 4,096 decoded bytes per data command, 64 MiB of declared/uncompressed payload per transfer, a 1,024-command worker queue, and 10 minutes of inactivity. Commit preflight counts unique announced destinations and missing ancestors; shared parents count once and pre-existing directories do not consume the creation budget. Known excess fails with `EFBIG` before destination creation. Every destination creation also checks the running count, so filesystem changes cannot expand a transaction beyond the limit after preflight; failure takes the usual best-effort rollback path. Temporary staging files have their separate bound of at most one per announced regular file. Progress/completion counts still describe announced entries, not inferred parents. Hermetic tests cover exact-limit planning, shared/explicit/existing parents, a deep implicit tree rejected without writes, and runtime exhaustion/cleanup without requiring thousands of real files or descriptors. OS resource limits may reject earlier.
+- File contents staged outside the visible destination, individual regular files published without overwrite, and best-effort transaction rollback if a later entry fails during `finish`.
+- Mode bits limited to `0777`; setuid, setgid, and sticky bits are stripped. Directories use private `0700` assembly permissions, even with a restrictive umask, then receive the requested mode without adding owner permissions. On Linux, declared directories and automatically created parents use no-symlink `openat2` parent resolution followed by creation and identity capture through the pinned parent's procfs reference. Replacing a parent or higher ancestor after pinning cannot redirect those operations. Directory creation therefore requires `openat2` and accessible procfs, with no original-path fallback. Regressions cover parent/ancestor replacement, metadata on the original directory, existing-entry refusal, private implicit-parent modes, and ordinary rollback that preserves pre-existing ancestors. On Linux, unreadable newly created directories are pinned with `O_PATH` and recovered through their trusted `/proc/self/fd` references, never through the original destination path. This recovery requires accessible procfs; failure does not fall back to a pathname chmod. Missing or mismatched handles fail without changing replacement directories or symlink targets. Final directory modes and modification times are applied deepest-first after their contents. Signed nanoseconds since the Unix epoch, including pre-1970 times, are passed to the filesystem; its supported date range and timestamp precision still apply. Hermetic transaction tests check pre-epoch fractional seconds, zero, and positive times on files, directories, hard links, and symbolic links without following symlink targets.
 
-For Kitty `receive` (host-to-child), the supported subset is intentionally
-smaller:
+For Kitty `receive` (host-to-child), the supported subset is intentionally smaller:
 
-- The start command must declare 1–16 path specifications. Termeric collects
-  exactly that many unique IDs and unique lexical paths before showing a modal.
-- The modal shows every host-resolved path. No requested path is opened or
-  inspected before approval.
-- Only UTF-8 regular files are exported. Directories, symbolic links, hard
-  links, devices, sockets, and FIFOs fail closed; recursive traversal is not
-  performed.
-- No compression is emitted in the `receive` slice; zlib remains supported
-  only when the child sends data to the host.
-- Relative paths and `~/` resolve against the host home directory. Empty,
-  traversal, repeated, display-control, oversized-component, and
-  oversized-total paths fail before consent.
-- Approved paths are first pinned through Linux `openat2` with `O_PATH` and
-  `RESOLVE_NO_SYMLINKS`,
-  rejecting a link in any component and failing closed if the kernel cannot
-  provide that guarantee. This is a
-  [metadata-only handle, not a data open](https://man7.org/linux/man-pages/man2/open.2.html).
-  A source must be regular with a link count of one, and must match the path's
-  re-read device and inode. Only then is its trusted `/proc/self/fd` reference
-  opened for reading and its regular-file identity/link count rechecked before
-  metadata is returned. Accessible procfs is required; there is no original-name
-  reopening fallback. FIFO, socket, device, directory, and multiply linked
-  sources are rejected before a data open. Regressions cover a writer-free FIFO
-  with no retained reader, metadata-only handles for rejected source types,
-  zero exported metadata/payload on rejection, and reading the original inode
-  after its name is replaced by a file or symlink.
-  This avoids FIFO-open waits and device data-open side effects; general
-  filesystem lookup/read operations can still block. It is not an immutable
-  snapshot or a lock against later same-inode changes.
-- The aggregate opened size is capped at 64 MiB. Contents stream one file at a
-  time in 4,096-byte protocol chunks. At most eight chunks enter one UI event,
-  and the worker waits for exact-origin PTY acknowledgement before producing
-  the next batch, so the event loop cannot accumulate a whole transfer.
-- If a source is truncated or a read fails, terminal error progress retains
-  completed-file bytes plus acknowledged batches from the current file. Bytes
-  buffered but not delivered are excluded, and the incomplete file is not
-  counted as completed. Deterministic same-inode truncation tests cover zero,
-  one, and two delivered batches, discarded partial batches, and prior empty
-  or nonempty files. This records local PTY delivery, not remote persistence.
-- Empty files emit one empty `end_data` frame through that same acknowledged
-  delivery path. They increment the completed-file count without adding bytes;
-  rejected delivery or cancellation stops later files, and duplicate requests
-  cannot emit another completion. Hermetic worker tests cover isolated and
-  interleaved empty files, exact canonical frames, captured S7/S8 mode flags,
-  cumulative file/byte counts, negative acknowledgement, cancellation, and
-  duplicate rejection. Native interoperability remains deferred.
-- Metadata and payload use the session's captured S7C1T/S8C1T framing. A file
-  can be requested once and its request must repeat the approved ID and path.
+- The start command must declare 1–16 path specifications. Termeric collects exactly that many unique IDs and unique lexical paths before showing a modal.
+- The modal shows every host-resolved path. No requested path is opened or inspected before approval.
+- Only UTF-8 regular files are exported. Directories, symbolic links, hard links, devices, sockets, and FIFOs fail closed; recursive traversal is not performed.
+- No compression is emitted in the `receive` slice; zlib remains supported only when the child sends data to the host.
+- Relative paths and `~/` resolve against the host home directory. Empty, traversal, repeated, display-control, oversized-component, and oversized-total paths fail before consent.
+- Approved paths are first pinned through Linux `openat2` with `O_PATH` and `RESOLVE_NO_SYMLINKS`, rejecting a link in any component and failing closed if the kernel cannot provide that guarantee. This is a [metadata-only handle, not a data open](https://man7.org/linux/man-pages/man2/open.2.html). A source must be regular with a link count of one, and must match the path's re-read device and inode. Only then is its trusted `/proc/self/fd` reference opened for reading and its regular-file identity/link count rechecked before metadata is returned. Accessible procfs is required; there is no original-name reopening fallback. FIFO, socket, device, directory, and multiply linked sources are rejected before a data open. Regressions cover a writer-free FIFO with no retained reader, metadata-only handles for rejected source types, zero exported metadata/payload on rejection, and reading the original inode after its name is replaced by a file or symlink. This avoids FIFO-open waits and device data-open side effects; general filesystem lookup/read operations can still block. It is not an immutable snapshot or a lock against later same-inode changes.
+- The aggregate opened size is capped at 64 MiB. Contents stream one file at a time in 4,096-byte protocol chunks. At most eight chunks enter one UI event, and the worker waits for exact-origin PTY acknowledgement before producing the next batch, so the event loop cannot accumulate a whole transfer.
+- If a source is truncated or a read fails, terminal error progress retains completed-file bytes plus acknowledged batches from the current file. Bytes buffered but not delivered are excluded, and the incomplete file is not counted as completed. Deterministic same-inode truncation tests cover zero, one, and two delivered batches, discarded partial batches, and prior empty or nonempty files. This records local PTY delivery, not remote persistence.
+- Empty files emit one empty `end_data` frame through that same acknowledged delivery path. They increment the completed-file count without adding bytes; rejected delivery or cancellation stops later files, and duplicate requests cannot emit another completion. Hermetic worker tests cover isolated and interleaved empty files, exact canonical frames, captured S7/S8 mode flags, cumulative file/byte counts, negative acknowledgement, cancellation, and duplicate rejection. Native interoperability remains deferred.
+- Metadata and payload use the session's captured S7C1T/S8C1T framing. A file can be requested once and its request must repeat the approved ID and path.
 
-Relative destination paths and `~/` are resolved against the terminal host's
-home directory, as required by the protocol. Absolute destinations are
-accepted. Empty paths, NUL, traversal components, oversized components,
-non-directory or symbolic-link ancestors, existing destination entries,
-duplicates, and inconsistent sizes fail closed. Destination state is checked
-when metadata arrives and again immediately before commit. Regular-file
-publication uses no-clobber semantics. On Linux, its destination parent is
-pinned with `openat2(RESOLVE_NO_SYMLINKS)` before publication, rejecting symlinks
-in any parent component. Publication addresses that retained directory through
-`/proc/self/fd`, so renaming or replacing a parent afterward cannot redirect
-the destination write. If renamed, the original directory receives the file,
-not the replacement at its old pathname. This requires `openat2` and accessible
-procfs; failure does not retry the original destination path. The `O_PATH`
-parent handle does not require directory read permission. See the
-[Linux resolution contract](https://man7.org/linux/man-pages/man2/openat2.2.html).
-Deterministic regressions replace both immediate parents and higher ancestors
-with directories or symlinks, and verify retained file identity/metadata,
-untouched replacements, and refusal to overwrite regular files or symlinks.
-The source is also descriptor-bound: Linux publication uses
-[`linkat(AT_SYMLINK_FOLLOW)`](https://man7.org/linux/man-pages/man2/link.2.html)
-on the staging file's trusted `/proc/self/fd` reference, never its mutable name.
-The filesystem must support hard links on the same mount. Kernel/filesystem
-rejection fails without falling back to a pathname rename or copying from the
-staging name. A renamed source can still publish its original inode; a removed
-source with no remaining links fails closed. Regressions replace staging names
-with regular files or symlinks and check destination bytes, inode, permissions,
-timestamps, untouched replacements, and rejection of unlinked originals.
+Relative destination paths and `~/` are resolved against the terminal host's home directory, as required by the protocol. Absolute destinations are accepted. Empty paths, NUL, traversal components, oversized components, non-directory or symbolic-link ancestors, existing destination entries, duplicates, and inconsistent sizes fail closed. Destination state is checked when metadata arrives and again immediately before commit. Regular-file publication uses no-clobber semantics. On Linux, its destination parent is pinned with `openat2(RESOLVE_NO_SYMLINKS)` before publication, rejecting symlinks in any parent component. Publication addresses that retained directory through `/proc/self/fd`, so renaming or replacing a parent afterward cannot redirect the destination write. If renamed, the original directory receives the file, not the replacement at its old pathname. This requires `openat2` and accessible procfs; failure does not retry the original destination path. The `O_PATH` parent handle does not require directory read permission. See the [Linux resolution contract](https://man7.org/linux/man-pages/man2/openat2.2.html). Deterministic regressions replace both immediate parents and higher ancestors with directories or symlinks, and verify retained file identity/metadata, untouched replacements, and refusal to overwrite regular files or symlinks. The source is also descriptor-bound: Linux publication uses [`linkat(AT_SYMLINK_FOLLOW)`](https://man7.org/linux/man-pages/man2/link.2.html) on the staging file's trusted `/proc/self/fd` reference, never its mutable name. The filesystem must support hard links on the same mount. Kernel/filesystem rejection fails without falling back to a pathname rename or copying from the staging name. A renamed source can still publish its original inode; a removed source with no remaining links fails closed. Regressions replace staging names with regular files or symlinks and check destination bytes, inode, permissions, timestamps, untouched replacements, and rejection of unlinked originals.
 
-On Linux, staging pins its nearest existing parent with no-symlink `openat2`
-resolution before creating a temporary file through that parent's trusted
-procfs reference. The staged file retains one additional directory descriptor
-until cleanup finishes. Creation requires `openat2` and accessible procfs, with
-no original-path fallback. Missing destination directories are still deferred
-until commit. Regressions replace immediate parents and higher ancestors before
-creation and after creation, preserve replacement-directory entries, and verify
-cleanup on drop and after successful/refused publication.
+On Linux, staging pins its nearest existing parent with no-symlink `openat2` resolution before creating a temporary file through that parent's trusted procfs reference. The staged file retains one additional directory descriptor until cleanup finishes. Creation requires `openat2` and accessible procfs, with no original-path fallback. Missing destination directories are still deferred until commit. Regressions replace immediate parents and higher ancestors before creation and after creation, preserve replacement-directory entries, and verify cleanup on drop and after successful/refused publication.
 
-Staging cleanup on cancellation, failure, and successful publication compares
-the remaining name's no-follow identity with the retained file before unlinking.
-It uses the retained parent even if that directory or an ancestor was renamed.
-Unknown or replaced leaf names are left alone; individually renamed staging
-files are not searched for. This cleanup and transaction rollback remain best
-effort: neither identity-check-then-unlink is atomic, and either may leave an
-orphan. Same-type substitutions before identity capture and same-inode content
-mutation by a process with write authority also remain outside these guarantees.
+Staging cleanup on cancellation, failure, and successful publication compares the remaining name's no-follow identity with the retained file before unlinking. It uses the retained parent even if that directory or an ancestor was renamed. Unknown or replaced leaf names are left alone; individually renamed staging files are not searched for. This cleanup and transaction rollback remain best effort: neither identity-check-then-unlink is atomic, and either may leave an orphan. Same-type substitutions before identity capture and same-inode content mutation by a process with write authority also remain outside these guarantees.
 
-Hard links may name only a regular file ID in the same transfer. On Linux,
-creation uses that source's recorded regular-file handle after validating its
-type and device/inode, not a fresh lookup of its destination name. It shares
-regular-file publication's pinned destination parent, descriptor-based source,
-procfs requirement, and atomic no-overwrite link operation. Bookkeeping records
-the known source identity directly; subsequent link timestamps therefore apply
-to the same original shared inode, even when its earlier name was replaced.
-Missing, foreign, wrong-type, and unlinked source handles fail without a path
-fallback or new rollback authority. Regressions cover replaced file/symlink
-source names, unchanged replacement timestamps/content, invalid handles,
-existing destinations, symbolic-link ancestors, and rollback preservation.
-This does not make rollback unlink atomic.
+Hard links may name only a regular file ID in the same transfer. On Linux, creation uses that source's recorded regular-file handle after validating its type and device/inode, not a fresh lookup of its destination name. It shares regular-file publication's pinned destination parent, descriptor-based source, procfs requirement, and atomic no-overwrite link operation. Bookkeeping records the known source identity directly; subsequent link timestamps therefore apply to the same original shared inode, even when its earlier name was replaced. Missing, foreign, wrong-type, and unlinked source handles fail without a path fallback or new rollback authority. Regressions cover replaced file/symlink source names, unchanged replacement timestamps/content, invalid handles, existing destinations, symbolic-link ancestors, and rollback preservation. This does not make rollback unlink atomic.
 
-Symbolic links
-support Kitty's `fid:`, `fid_abs:`, and `path:` forms. `fid` targets must name an
-entry in the same transfer, including a directory. Relative and absolute links
-can name entries declared later: their destination paths are resolved at commit
-without dereferencing them. Hard links to directories and unknown target IDs
-are rejected, with transaction rollback covered by local tests. A `path:` target
-may intentionally point outside
-the transfer so ordinary relative, absolute, and broken symlinks can be
-preserved; the approval dialog calls out that the remote side controls symbolic
-link targets. The link destination itself remains subject to every path and
-no-overwrite check. On Linux, symbolic-link creation and subsequent no-follow
-identity capture use the pinned destination parent through its trusted procfs
-reference. Replacing an immediate parent or higher ancestor after pinning
-cannot redirect either operation. The original destination is retained only as
-the rollback lookup key; a moved original directory may therefore retain its
-new link after best-effort rollback. Missing `openat2`/procfs support fails
-without falling back to the original pathname.
+Symbolic links support Kitty's `fid:`, `fid_abs:`, and `path:` forms. `fid` targets must name an entry in the same transfer, including a directory. Relative and absolute links can name entries declared later: their destination paths are resolved at commit without dereferencing them. Hard links to directories and unknown target IDs are rejected, with transaction rollback covered by local tests. A `path:` target may intentionally point outside the transfer so ordinary relative, absolute, and broken symlinks can be preserved; the approval dialog calls out that the remote side controls symbolic link targets. The link destination itself remains subject to every path and no-overwrite check. On Linux, symbolic-link creation and subsequent no-follow identity capture use the pinned destination parent through its trusted procfs reference. Replacing an immediate parent or higher ancestor after pinning cannot redirect either operation. The original destination is retained only as the rollback lookup key; a moved original directory may therefore retain its new link after best-effort rollback. Missing `openat2`/procfs support fails without falling back to the original pathname.
 
-Regressions replace parent/ancestor paths with directories and symlinks, check
-that creation and timestamps stay on the original link, preserve target content
-and metadata, retain literal relative/absolute/dangling targets, refuse existing
-file/directory/link destinations, and exercise ordinary rollback. This does not
-make creation and identity capture atomic: same-type directory or symbolic-link
-leaf substitutions between those operations and check-then-unlink cleanup
-remain separate limitations. A moved original destination directory can retain
-published entries after best-effort rollback; transaction rollback does not
-chase renamed paths. Staging cleanup has its own retained parent as described
-above.
+Regressions replace parent/ancestor paths with directories and symlinks, check that creation and timestamps stay on the original link, preserve target content and metadata, retain literal relative/absolute/dangling targets, refuse existing file/directory/link destinations, and exercise ordinary rollback. This does not make creation and identity capture atomic: same-type directory or symbolic-link leaf substitutions between those operations and check-then-unlink cleanup remain separate limitations. A moved original destination directory can retain published entries after best-effort rollback; transaction rollback does not chase renamed paths. Staging cleanup has its own retained parent as described above.
 
-Linux rollback bookkeeping retains created entry identities through file
-handles; symlink identities use metadata-only, no-follow handles.
-Retained directory handles let rollback restore owner access top-down before
-removing children after restrictive final modes have been applied; this does not
-chmod a replacement directory or follow a replacement link. Final directory
-permissions and timestamps also use those handles, after checking their recorded
-device/inode identity; missing or mismatched handles fail rather than falling
-back to a path lookup. Replacement-directory and replacement-symlink regressions
-verify that only the original directory receives metadata. Regular files receive
-timestamps and permissions through the retained staging handle and are synced
-before no-overwrite publication; there is no destination-path timestamp update
-after publication. Regressions cover metadata before publication, absent and
-signed timestamps, restrictive modes, replacement paths, and unchanged existing
-destinations after publication refusal. On Linux, link timestamps use the
-recorded metadata-only handle with `utimensat(AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW)`
-after checking type and device/inode identity. This requires Linux 5.8 or newer
-when link timestamps are supplied; missing handles, kernel rejection, and stale
-identity fail without a pathname fallback. Tests cover hard-link shared-inode
-semantics, untouched symlink targets and replacement paths, absent timestamps,
-invalid guards, and dangling links whose names were removed.
-Bookkeeping does not
-open symbolic-link targets as data files, so links to FIFOs do not wait for a target
-writer. Local regressions cover
-writer-free FIFO-link commit, target preservation, dangling-link identity, and
-preserving a replacement link during rollback. General filesystem calls can
-still block; these protections do not eliminate every filesystem race.
+Linux rollback bookkeeping retains created entry identities through file handles; symlink identities use metadata-only, no-follow handles. Retained directory handles let rollback restore owner access top-down before removing children after restrictive final modes have been applied; this does not chmod a replacement directory or follow a replacement link. Final directory permissions and timestamps also use those handles, after checking their recorded device/inode identity; missing or mismatched handles fail rather than falling back to a path lookup. Replacement-directory and replacement-symlink regressions verify that only the original directory receives metadata. Regular files receive timestamps and permissions through the retained staging handle and are synced before no-overwrite publication; there is no destination-path timestamp update after publication. Regressions cover metadata before publication, absent and signed timestamps, restrictive modes, replacement paths, and unchanged existing destinations after publication refusal. On Linux, link timestamps use the recorded metadata-only handle with `utimensat(AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW)` after checking type and device/inode identity. This requires Linux 5.8 or newer when link timestamps are supplied; missing handles, kernel rejection, and stale identity fail without a pathname fallback. Tests cover hard-link shared-inode semantics, untouched symlink targets and replacement paths, absent timestamps, invalid guards, and dangling links whose names were removed. Bookkeeping does not open symbolic-link targets as data files, so links to FIFOs do not wait for a target writer. Local regressions cover writer-free FIFO-link commit, target preservation, dangling-link identity, and preserving a replacement link during rollback. General filesystem calls can still block; these protections do not eliminate every filesystem race.
 
-Created-entry bookkeeping rejects observed types that do not match the entry
-being created. A failed identity lookup or type mismatch grants no rollback
-authority and triggers no speculative unlink or chmod. Fault-injected tests
-preserve files, directories, and links replaced during an inspection failure;
-type-mismatch tests preserve both the entry and any symlink target. Cleanup
-remains best effort: an entry whose identity could not be recorded may remain
-on disk, and same-type substitutions before identity capture are still a gap.
+Created-entry bookkeeping rejects observed types that do not match the entry being created. A failed identity lookup or type mismatch grants no rollback authority and triggers no speculative unlink or chmod. Fault-injected tests preserve files, directories, and links replaced during an inspection failure; type-mismatch tests preserve both the entry and any symlink target. Cleanup remains best effort: an entry whose identity could not be recorded may remain on disk, and same-type substitutions before identity capture are still a gap.
 
 ## Consent and lifecycle
 
-Terminal output is untrusted. An initial `send` command only opens a modal; it
-does not create a destination or stage payload bytes. An initial `receive`
-command only establishes a 60-second bounded path-list collection; no file is
-opened until the complete list is visible and approved. Data received before
-approval retires the applicable pending session. A stale modal choice cannot
-approve a new request. Replacing/dismissing the modal, closing the originating
-pane or tab, canceling, timing out, closing the window, or shutting down the app
-drops the transaction, closes approved read descriptors, and removes staged
-download files.
+Terminal output is untrusted. An initial `send` command only opens a modal; it does not create a destination or stage payload bytes. An initial `receive` command only establishes a 60-second bounded path-list collection; no file is opened until the complete list is visible and approved. Data received before approval retires the applicable pending session. A stale modal choice cannot approve a new request. Replacing/dismissing the modal, closing the originating pane or tab, canceling, timing out, closing the window, or shutting down the app drops the transaction, closes approved read descriptors, and removes staged download files.
 
-Hermetic download-worker shutdown tests first verify that an empty or nonempty
-file has actually been staged, then exercise cancellation with a queued
-`finish`, rejected completion delivery, sender disconnect, idle expiry, and
-invalid data followed by a queued `finish`. Each unsuccessful exit removes its
-staging file, preserves an unrelated file, and neither publishes the destination
-nor reports `Finished`. A successful-commit control verifies exact published
-contents and counts with no leftover staging file. These are local worker and
-filesystem checks, not native-client acceptance evidence.
+Hermetic download-worker shutdown tests first verify that an empty or nonempty file has actually been staged, then exercise cancellation with a queued `finish`, rejected completion delivery, sender disconnect, idle expiry, and invalid data followed by a queued `finish`. Each unsuccessful exit removes its staging file, preserves an unrelated file, and neither publishes the destination nor reports `Finished`. A successful-commit control verifies exact published contents and counts with no leftover staging file. These are local worker and filesystem checks, not native-client acceptance evidence.
 
-Download commit checks cancellation between entries, during final directory
-metadata updates, and once more after all filesystem work before accepting
-completion. Cancellation observed at that final check returns `Canceled` and
-attempts transaction rollback instead of reporting `Finished`. An existing
-filesystem error retains its original status and diagnostics while also taking
-the rollback path. Hermetic regressions cancel after real mixed-file commit
-work, including nested directories finalized to mode `000`, and verify cleanup
-of regular files, both link types, and owned directories while preserving an
-unrelated file. They also verify unchanged successful file/byte counts and
-original-error preservation.
+Download commit checks cancellation between entries, during final directory metadata updates, and once more after all filesystem work before accepting completion. Cancellation observed at that final check returns `Canceled` and attempts transaction rollback instead of reporting `Finished`. An existing filesystem error retains its original status and diagnostics while also taking the rollback path. Hermetic regressions cancel after real mixed-file commit work, including nested directories finalized to mode `000`, and verify cleanup of regular files, both link types, and owned directories while preserving an unrelated file. They also verify unchanged successful file/byte counts and original-error preservation.
 
-Cancellation is cooperative: it cannot interrupt an in-progress filesystem
-call, and arrival after the final successful check does not revoke an already
-accepted transfer. Rollback remains best effort with the identity/cleanup
-limitations above; cancellation is not a filesystem-wide atomic transaction.
+Cancellation is cooperative: it cannot interrupt an in-progress filesystem call, and arrival after the final successful check does not revoke an already accepted transfer. Rollback remains best effort with the identity/cleanup limitations above; cancellation is not a filesystem-wide atomic transaction.
 
-After approval, filesystem work runs on a bounded worker rather than the
-render/input path. A persistent toast reports only entry and byte counts; it
-does not expose paths. Replies use the captured origin even if focus changes.
-A vanished origin cancels instead of falling back to the focused terminal.
+After approval, filesystem work runs on a bounded worker rather than the render/input path. A persistent toast reports only entry and byte counts; it does not expose paths. Replies use the captured origin even if focus changes. A vanished origin cancels instead of falling back to the focused terminal.
 
-Session keys retain the stable tab-local pane identity, not a tab-versus-pane
-event route. Path collection, consent, command lookup, cancellation, and worker
-replies follow the same surviving owner through split/collapse (including a
-nonzero surviving pane). Removing that owner never transfers its approval or
-host-file bytes to a replacement single pane. Closed/closing owners are rejected
-before reply delivery; stale upload completions receive a failed delivery
-acknowledgement and their active session is canceled. Protocol replies still
-bypass editable-input and broadcast routes, including in a read-only pane.
+Session keys retain the stable tab-local pane identity, not a tab-versus-pane event route. Path collection, consent, command lookup, cancellation, and worker replies follow the same surviving owner through split/collapse (including a nonzero surviving pane). Removing that owner never transfers its approval or host-file bytes to a replacement single pane. Closed/closing owners are rejected before reply delivery; stale upload completions receive a failed delivery acknowledgement and their active session is canceled. Protocol replies still bypass editable-input and broadcast routes, including in a read-only pane.
 
-Attached live domains relay the raw OSC to the GUI, which owns consent and the
-filesystem transaction. A detached domain immediately returns `EPERM`; its
-daemon never writes desktop-host files or preserves a request for later.
+Attached live domains relay the raw OSC to the GUI, which owns consent and the filesystem transaction. A detached domain immediately returns `EPERM`; its daemon never writes desktop-host files or preserves a request for later.
 
-The existing `[security] allow_kitty_file_transfers` option is unrelated. It
-authorizes narrowly constrained ordinary-file reads for Kitty graphics `t=f`
-in local terminals. It never bypasses OSC 5113 consent.
+The existing `[security] allow_kitty_file_transfers` option is unrelated. It authorizes narrowly constrained ordinary-file reads for Kitty graphics `t=f` in local terminals. It never bypasses OSC 5113 consent.
 
 ## Explicitly unsupported
 
-- `receive` directory recursion and symbolic/hard-link export. The receive
-  profile is regular-file-only.
-- Quiet levels 1 and 2. Termeric requires acknowledgement flow so bounded queue
-  saturation and filesystem errors cannot become silent or unbounded.
+- `receive` directory recursion and symbolic/hard-link export. The receive profile is regular-file-only.
+- Quiet levels 1 and 2. Termeric requires acknowledgement flow so bounded queue saturation and filesystem errors cannot become silent or unbounded.
 - Password/public-key confirmation bypass.
 - Rsync/delta mode, replacement, resume, and partial retention.
 - Detached-domain, plugin, serial, macOS, and Windows host writes.
 
-Unsupported sessions receive a bounded `EINVAL` or `EPERM` response when a
-valid session ID is available. Malformed and oversized input is discarded
-without filesystem effects; parser errors with a recoverable ID receive
-`EINVAL`. Payload and bypass bytes are never included in debug formatting or
-normal logs.
+Unsupported sessions receive a bounded `EINVAL` or `EPERM` response when a valid session ID is available. Malformed and oversized input is discarded without filesystem effects; parser errors with a recoverable ID receive `EINVAL`. Payload and bypass bytes are never included in debug formatting or normal logs.
 
 ## Evidence
 
-Automated coverage is documented in [`testing.md`](testing.md). The deferred
-real-client procedure and evidence fields are in
-[`operator-acceptance.md`](operator-acceptance.md#5a-kitty-terminal-file-transfer-client).
-Until both direction rows pass on a candidate build, do not advertise complete
-bidirectional Kitty transfer or mark the feature Supported.
+Automated coverage is documented in [`testing.md`](testing.md). The deferred real-client procedure and evidence fields are in [`operator-acceptance.md`](operator-acceptance.md#5a-kitty-terminal-file-transfer-client). Until both direction rows pass on a candidate build, do not advertise complete bidirectional Kitty transfer or mark the feature Supported.
 
-Owner-routing regressions use raw local PTY capture plus synthetic worker
-completions: both directions, S7/S8 framing, pending path collection, split and
-collapse, a nonzero survivor, removed/replaced/closed/closing owners, sibling
-session-ID isolation, pruning, and replayed completion. These tests do not start
-a native window or approve real host-file workers, and are not native-client
-acceptance. See [#120](https://github.com/Tjemmmic/termeric/issues/120).
+Owner-routing regressions use raw local PTY capture plus synthetic worker completions: both directions, S7/S8 framing, pending path collection, split and collapse, a nonzero survivor, removed/replaced/closed/closing owners, sibling session-ID isolation, pruning, and replayed completion. These tests do not start a native window or approve real host-file workers, and are not native-client acceptance. See [#120](https://github.com/Tjemmmic/termeric/issues/120).

@@ -20,56 +20,11 @@ A GPU-accelerated terminal emulator written in Rust, themed around roots and rhi
 - **Hyperlinks and shell semantics** — OSC 8 links, URL detection, OSC 7 working directories, accepted Bash/Zsh/Fish OSC 133 semantics, acceptance-pending native Nushell and opt-in Elvish semantics, and bidirectional prompt navigation through retained scrollback on Linux
 - **Harvest (experimental)** — opt-in semantic command history, per-terminal growth indicators, scoped output search, rerun/copy, and consent-gated AI explanation
 
-Bounded Kitty, static Sixel, and static iTerm2 PNG profiles share one isolated
-image cache and GPU renderer with truthful negotiation. Kitty Unicode
-placeholders follow grid text through reflow and scrollback, bounded relative
-placements follow ordinary or Unicode parents, and bounded Kitty frame
-animations support loading, editing, composition, control, and deletion.
-Live-domain reconnects stream already-decoded images, placements, aliases, and
-animation state through a bounded one-shot replica snapshot; ordinary-file
-media remains denied on both sides of the relay.
-See the [Kitty](docs/kitty-graphics.md) and
-[Sixel/iTerm2](docs/inline-images.md) capability contracts.
-Kitty OSC 5113 transfers have a separate
-[consent and security contract](docs/kitty-file-transfer.md). Remote-to-host
-downloads cover bounded file trees and links; host-to-child uploads are limited
-to the exact regular-file paths shown in a one-shot approval. Bypass
-credentials, quiet modes, and rsync deltas are not claimed.
-Left-to-right Unicode grapheme geometry, SGR text effects, and pane-local
-legacy/xterm, xterm keyboard/cursor/function/keypad/modifier/special/other-key resources, and Kitty progressive keyboard input follow the documented [width policy](docs/unicode-support.md),
-[rendering policy](docs/sgr-rendering.md), and
-[keyboard policy](docs/keyboard-input.md). Mouse, focus, and bracketed paste
-follow the [terminal-input policy](docs/terminal-input-protocols.md), and font
-ligatures follow the [row-run shaping policy](docs/ligature-rendering.md).
-Platform IME, color-font, keyboard-chrome, and screen-reader behavior follows
-the [modern input and accessibility policy](docs/accessibility-and-input.md). See the
-[OSC integration policy](docs/osc-integration.md) for terminal-controlled
-titles, working directories, clipboard access, dynamic colors, and mouse
-pointer shapes, including bounded application-owned title/icon queries and the
-xterm title stack, plus capability-negotiated Kitty OSC 99 desktop notifications
-with bounded application/category/icon-name metadata, Linux urgency routing,
-transmitted PNG/JPEG/GIF icons with a process-wide bounded cache, and
-origin-scoped replacement, close, expiry, close/activation reports, button
-actions, default-on exact-origin notification focus, sound policy, alive
-queries, and exact-origin `always`, `unfocused`, and `invisible` presentation
-filtering across tabs, panes, zoom, and native
-window focus/occlusion state.
-Kitty OSC 66 text sizing and explicit cell widths have bounded
-automated coverage, with native visual acceptance still pending. See the
-[feature-support matrix](docs/feature-support.md) for exact boundaries rather
-than inferring support from a parser, setting, or UI entry.
+Bounded Kitty, static Sixel, and static iTerm2 PNG profiles share one isolated image cache and GPU renderer with truthful negotiation. Kitty Unicode placeholders follow grid text through reflow and scrollback, bounded relative placements follow ordinary or Unicode parents, and bounded Kitty frame animations support loading, editing, composition, control, and deletion. Live-domain reconnects stream already-decoded images, placements, aliases, and animation state through a bounded one-shot replica snapshot; ordinary-file media remains denied on both sides of the relay. See the [Kitty](docs/kitty-graphics.md) and [Sixel/iTerm2](docs/inline-images.md) capability contracts. Kitty OSC 5113 transfers have a separate [consent and security contract](docs/kitty-file-transfer.md). Remote-to-host downloads cover bounded file trees and links; host-to-child uploads are limited to the exact regular-file paths shown in a one-shot approval. Bypass credentials, quiet modes, and rsync deltas are not claimed. Left-to-right Unicode grapheme geometry, SGR text effects, and pane-local legacy/xterm, xterm keyboard/cursor/function/keypad/modifier/special/other-key resources, and Kitty progressive keyboard input follow the documented [width policy](docs/unicode-support.md), [rendering policy](docs/sgr-rendering.md), and [keyboard policy](docs/keyboard-input.md). Mouse, focus, and bracketed paste follow the [terminal-input policy](docs/terminal-input-protocols.md), and font ligatures follow the [row-run shaping policy](docs/ligature-rendering.md). Platform IME, color-font, keyboard-chrome, and screen-reader behavior follows the [modern input and accessibility policy](docs/accessibility-and-input.md). See the [OSC integration policy](docs/osc-integration.md) for terminal-controlled titles, working directories, clipboard access, dynamic colors, and mouse pointer shapes, including bounded application-owned title/icon queries and the xterm title stack, plus capability-negotiated Kitty OSC 99 desktop notifications with bounded application/category/icon-name metadata, Linux urgency routing, transmitted PNG/JPEG/GIF icons with a process-wide bounded cache, and origin-scoped replacement, close, expiry, close/activation reports, button actions, default-on exact-origin notification focus, sound policy, alive queries, and exact-origin `always`, `unfocused`, and `invisible` presentation filtering across tabs, panes, zoom, and native window focus/occlusion state. Kitty OSC 66 text sizing and explicit cell widths have bounded automated coverage, with native visual acceptance still pending. See the [feature-support matrix](docs/feature-support.md) for exact boundaries rather than inferring support from a parser, setting, or UI entry.
 
 ## Status
 
-Active Linux developer-preview development — expect churn and correctness
-gaps. Native X11 workflows and a private Wayland launch/render/close path run
-in CI, but Termeric is not yet a general beta or daily-driver terminal. See the
-[GUI acceptance harness](docs/gui-acceptance.md). The authoritative
-[feature-support matrix](docs/feature-support.md) defines current behavior and
-release gates. Historical release evidence is recorded separately in
-[`docs/release-acceptance.md`](docs/release-acceptance.md). macOS and Windows
-have build-and-unit CI only and remain unverified as runtime targets; see the
-[platform support policy](docs/platform-support.md).
+Active Linux developer-preview development — expect churn and correctness gaps. Native X11 workflows and a private Wayland launch/render/close path run in CI, but Termeric is not yet a general beta or daily-driver terminal. See the [GUI acceptance harness](docs/gui-acceptance.md). The authoritative [feature-support matrix](docs/feature-support.md) defines current behavior and release gates. Historical release evidence is recorded separately in [`docs/release-acceptance.md`](docs/release-acceptance.md). macOS and Windows have build-and-unit CI only and remain unverified as runtime targets; see the [platform support policy](docs/platform-support.md).
 
 ## Building
 
@@ -87,16 +42,11 @@ cargo build              # optimized + debuginfo
 cargo test --workspace --locked
 ```
 
-For packaged installation, upgrades, uninstall steps, configuration paths,
-and Linux troubleshooting, see [`docs/install.md`](docs/install.md).
+For packaged installation, upgrades, uninstall steps, configuration paths, and Linux troubleshooting, see [`docs/install.md`](docs/install.md).
 
 ## Configuration
 
-Termeric reads `~/.config/termeric/config.toml` and reloads it when it changes.
-If the file has an error, Termeric starts with defaults and says why, and
-nothing it saves, such as a theme you pick, replaces the file until you fix
-it. **Reset Configuration** replaces it after keeping a copy beside it,
-ending in `.bak`. A starter config lives in [`assets/config.example.toml`](assets/config.example.toml):
+Termeric reads `~/.config/termeric/config.toml` and reloads it when it changes. If the file has an error, Termeric starts with defaults and says why, and nothing it saves, such as a theme you pick, replaces the file until you fix it. **Reset Configuration** replaces it after keeping a copy beside it, ending in `.bak`. A starter config lives in [`assets/config.example.toml`](assets/config.example.toml):
 
 ```toml
 [font]
@@ -146,325 +96,33 @@ max_memory_mib = 128
 bindings = "vi" # or "emacs"
 ```
 
-Settings are also editable live from within the terminal — press the settings (≡) button at the right of the tab bar, or open the settings modal via the command palette.
-Font → Normal Weight and Bold Weight apply validated OpenType `wght` values
-live; variable fonts use their real weight axis while static fonts select the
-closest face.
-Font → Range Overrides opens a bounded manager for adding, editing, and deleting
-rules with `U+START-U+END | FAMILY`; changes apply live and use the normal
-Settings Save action for persistence. Its **Inspect Glyph Coverage** action
-explains range/primary/fallback attempts and the resolved platform shaping face
-for literal text or an exact `U+` / `0x` scalar without changing configuration.
-Font → OpenType Features manages at most 32 explicit four-byte tags such as
-`ss01 = 1`; these apply live after the Ligatures preset and persist with the
-normal Settings Save action. `kern` remains disabled to protect the cell grid.
-Line and memory limits are both enforced per terminal and pane; see the
-[scrollback memory model](docs/scrollback-memory.md).
-Copy mode entry and quick select are configurable in Keyboard Shortcuts; modal
-motions and semantic-pattern configuration are documented in the
-[keyboard copy-mode contract](docs/copy-mode.md).
-Run **Insert Unicode Character...** from the command palette to search Unicode
-17.0 canonical names and the curated character aliases, or enter an exact
-non-control scalar such as `U+2192`, `0x20AC`, or `1F680`. Empty input keeps the
-common-character catalog visible, while any name query retains at most 256
-ranked results. The action is also configurable in Keyboard Shortcuts but has
-no default chord, avoiding conflicts with shell and desktop input methods.
-Selection remains bound to the writable tab or pane that opened the picker.
-Adapter selection, software fallback, diagnostics, and loss recovery are
-documented in the [renderer recovery contract](docs/renderer-recovery.md).
-Local declarative extensions can be installed without rebuilding. API v2 can
-pass a separately granted, bounded structured launch-context snapshot; API v3
-adds bounded out-of-process app/tab lifecycle handlers with permissioned
-message/notice responses; API v4 adds explicitly granted, bounded semantic
-command-completion events without raw PTY streaming or terminal mutation; API
-v5 adds opt-in correlated persistent handlers for bounded state retention and
-launch reuse; API v6 adds an explicitly granted, bounded live inventory of the
-current window without terminal-content disclosure; API v7 adds separately
-granted stable-ID tab selection and pane focus with correlated results; API v8
-adds independently granted local tab ordering and divider-ratio adjustment;
-API v9 lets handlers contribute bounded, namespaced command-palette commands
-that are dispatched only to their owning plugin; API v10 adds bounded typed
-non-secret settings with explicit set/unset/reset and safe update behavior; API
-v11 adds a separately granted, stable-ID read of bounded presented text from
-one exact current-window pane, without raw PTY streaming or mutation;
-APIs v12-v15 separately grant ordinary pane/tab creation and closure, and API
-v16 separately grants exact cross-tab movement of one ordinary pane while
-preserving its live PTY and returning its fresh destination-local identity.
-API v17 separately grants bounded UTF-8 input to one exact current-window pane;
-the global external-input policy remains disabled by default, and destructive
-commands require visible confirmation regardless of the destination tab type.
-API v18 separately grants exact same-tab pane swapping, divider balancing, and
-columns/rows/grid/tall/fat presets for ordinary split tabs while preserving live
-terminal owners, focus, and stable pane IDs.
-API v19 separately grants closure of the exact invoking window, only from a
-declared plugin command. Termeric delivers the bounded correlated result to the
-persistent handler before normal window teardown; lifecycle events, stale
-targets, duplicate requests, and cross-window IDs cannot initiate closure.
-API v20 adds a separate read-only process query that returns bounded,
-creation-ordered inventories for up to eight live Termeric windows, with the
-originating stable window ID and explicit truncation. It discloses no terminal
-text or raw PTY data and grants no cross-window mutation to API v20 handlers.
-API v21 adds separately granted, non-activating cross-window workspace
-navigation. A persistent handler can select one exact tab or focus one exact
-pane using the process/window/tab/pane identities returned by API v20; the
-complete path is revalidated atomically and the result cannot chain another
-host operation. Native window activation and every broader mutation remain
-outside this grant.
-API v22 adds separately granted, non-activating cross-window terminal text
-queries. A persistent handler can read one exact process-owned pane using the
-same stable identities, with at most 256 history lines and 8 KiB of
-presentation-safe UTF-8 text inside the existing bounded event frame. The
-result clears every host authority; raw PTY streaming, terminal input, and
-fallback to an active target remain outside this grant.
-API v23 adds separately granted, guarded cross-window terminal input. One exact
-process-owned pane can receive at most 8 KiB of validated UTF-8 using its own
-paste mode, only when the destination window has explicitly enabled external
-input. Destructive matches remain pending in that exact window until confirmed;
-the action never activates or retargets by focus, and its result cannot chain.
-API v24 adds separately granted cross-window ordinary-tab creation. A
-persistent handler can create and select one local shell tab in one exact live
-process-owned window using the stable identity returned by API v20. The action
-does not activate the native window or dispatch a derived `tab-created` hook,
-and stale, closing, live-domain, uninitialized, or capacity-limited targets fail
-without fallback; the correlated result cannot chain another host operation.
-API v25 adds separately granted cross-window ordinary-pane creation. A
-persistent handler can split one exact pane in one exact process-owned window
-using strict window/tab/pane identities and a horizontal or vertical direction.
-The existing ordinary split path preserves launch/cwd inheritance and target
-validation without activating the native window; the correlated fresh pane ID
-cannot chain another host operation.
-API v26 adds separately granted cross-window ordinary-pane movement. A
-persistent handler can move one exact live ordinary pane onto one exact target
-pane in another process-owned tab or window using strict source and destination
-identities plus a horizontal or vertical direction. The existing atomic
-transfer path preserves the live PTY, title, history, and launch state, returns
-the fresh destination-local pane ID, never activates a native window, and
-cannot chain another host operation.
-API v27 adds separately granted cross-window ordinary-tab movement and exact
-same-window reordering. A persistent handler identifies the source window/tab,
-destination window/index, and action correlation explicitly. The atomic
-transfer preserves live PTYs, panes, plugin-tab state, title, history, launch
-state, and pinning while returning a fresh destination-local tab ID without
-native activation. Cross-window movement refuses the source window's final
-non-closing tab so this grant cannot implicitly close a window.
-API v28 adds separately granted closure of one exact ordinary pane in any live
-process-owned window. It reuses the local close path, preserves the containing
-tab and window, refuses the final pane plus stale, closing, live-domain, serial,
-and uninitialized targets, and returns the remaining pane count and focused
-pane ID without selecting a tab or activating a native window.
-API v29 adds separately granted scheduled closure of one exact ordinary tab in
-any live process-owned window. It preserves the containing window, refuses the
-final non-closing tab plus stale, closing, live-domain, and uninitialized
-targets, suppresses lifecycle feedback, and reports remaining/active tab state
-without native activation.
-API v30 adds separately granted swapping, balancing, and columns/rows/grid/tall/fat
-layout presets for one exact ordinary split tab in any live process-owned
-window. It preserves live terminal owners, stable pane IDs, focus, and active
-tab selection; stale, closing, unsplit, live-domain, serial, and duplicate-pane
-targets fail without fallback or native activation.
-API v31 adds separately granted closure of one exact process-owned window.
-The bounded correlated result is submitted before teardown; originating-window
-targets wait for its exact callback, sibling targets close independently, and
-the final live process window remains protected without native activation or
-identity fallback.
-API v32 adds a separately granted native focus request for one exact live
-process-owned window. It reuses authenticated GUI control policy, succeeds
-without another request when already focused, refuses hidden/minimized and
-Wayland targets explicitly, and never claims compositor-confirmed activation.
-Settings includes an installed-plugin manager with source/permission inspection,
-enable/disable, reviewed permission-aware update, confirmed settings reset, and
-confirmed managed-copy removal. It can also review and install a local plugin
-from an absolute directory path with explicit grants; installation or update can
-remain disabled with a permission subset, while enabling is offered only after
-every requested permission is granted. Typed settings are editable in-app.
-The manager also shows, selects, and clears each plugin's default launch profile.
-Replacement installs remain an explicit CLI operation.
-See the [third-party plugin API and security model](docs/plugins.md).
+Settings are also editable live from within the terminal — press the settings (≡) button at the right of the tab bar, or open the settings modal via the command palette. Font → Normal Weight and Bold Weight apply validated OpenType `wght` values live; variable fonts use their real weight axis while static fonts select the closest face. Font → Range Overrides opens a bounded manager for adding, editing, and deleting rules with `U+START-U+END | FAMILY`; changes apply live and use the normal Settings Save action for persistence. Its **Inspect Glyph Coverage** action explains range/primary/fallback attempts and the resolved platform shaping face for literal text or an exact `U+` / `0x` scalar without changing configuration. Font → OpenType Features manages at most 32 explicit four-byte tags such as `ss01 = 1`; these apply live after the Ligatures preset and persist with the normal Settings Save action. `kern` remains disabled to protect the cell grid. Line and memory limits are both enforced per terminal and pane; see the [scrollback memory model](docs/scrollback-memory.md). Copy mode entry and quick select are configurable in Keyboard Shortcuts; modal motions and semantic-pattern configuration are documented in the [keyboard copy-mode contract](docs/copy-mode.md). Run **Insert Unicode Character...** from the command palette to search Unicode 17.0 canonical names and the curated character aliases, or enter an exact non-control scalar such as `U+2192`, `0x20AC`, or `1F680`. Empty input keeps the common-character catalog visible, while any name query retains at most 256 ranked results. The action is also configurable in Keyboard Shortcuts but has no default chord, avoiding conflicts with shell and desktop input methods. Selection remains bound to the writable tab or pane that opened the picker. Adapter selection, software fallback, diagnostics, and loss recovery are documented in the [renderer recovery contract](docs/renderer-recovery.md). Local declarative extensions can be installed without rebuilding. API v2 can pass a separately granted, bounded structured launch-context snapshot; API v3 adds bounded out-of-process app/tab lifecycle handlers with permissioned message/notice responses; API v4 adds explicitly granted, bounded semantic command-completion events without raw PTY streaming or terminal mutation; API v5 adds opt-in correlated persistent handlers for bounded state retention and launch reuse; API v6 adds an explicitly granted, bounded live inventory of the current window without terminal-content disclosure; API v7 adds separately granted stable-ID tab selection and pane focus with correlated results; API v8 adds independently granted local tab ordering and divider-ratio adjustment; API v9 lets handlers contribute bounded, namespaced command-palette commands that are dispatched only to their owning plugin; API v10 adds bounded typed non-secret settings with explicit set/unset/reset and safe update behavior; API v11 adds a separately granted, stable-ID read of bounded presented text from one exact current-window pane, without raw PTY streaming or mutation; APIs v12-v15 separately grant ordinary pane/tab creation and closure, and API v16 separately grants exact cross-tab movement of one ordinary pane while preserving its live PTY and returning its fresh destination-local identity. API v17 separately grants bounded UTF-8 input to one exact current-window pane; the global external-input policy remains disabled by default, and destructive commands require visible confirmation regardless of the destination tab type. API v18 separately grants exact same-tab pane swapping, divider balancing, and columns/rows/grid/tall/fat presets for ordinary split tabs while preserving live terminal owners, focus, and stable pane IDs. API v19 separately grants closure of the exact invoking window, only from a declared plugin command. Termeric delivers the bounded correlated result to the persistent handler before normal window teardown; lifecycle events, stale targets, duplicate requests, and cross-window IDs cannot initiate closure. API v20 adds a separate read-only process query that returns bounded, creation-ordered inventories for up to eight live Termeric windows, with the originating stable window ID and explicit truncation. It discloses no terminal text or raw PTY data and grants no cross-window mutation to API v20 handlers. API v21 adds separately granted, non-activating cross-window workspace navigation. A persistent handler can select one exact tab or focus one exact pane using the process/window/tab/pane identities returned by API v20; the complete path is revalidated atomically and the result cannot chain another host operation. Native window activation and every broader mutation remain outside this grant. API v22 adds separately granted, non-activating cross-window terminal text queries. A persistent handler can read one exact process-owned pane using the same stable identities, with at most 256 history lines and 8 KiB of presentation-safe UTF-8 text inside the existing bounded event frame. The result clears every host authority; raw PTY streaming, terminal input, and fallback to an active target remain outside this grant. API v23 adds separately granted, guarded cross-window terminal input. One exact process-owned pane can receive at most 8 KiB of validated UTF-8 using its own paste mode, only when the destination window has explicitly enabled external input. Destructive matches remain pending in that exact window until confirmed; the action never activates or retargets by focus, and its result cannot chain. API v24 adds separately granted cross-window ordinary-tab creation. A persistent handler can create and select one local shell tab in one exact live process-owned window using the stable identity returned by API v20. The action does not activate the native window or dispatch a derived `tab-created` hook, and stale, closing, live-domain, uninitialized, or capacity-limited targets fail without fallback; the correlated result cannot chain another host operation. API v25 adds separately granted cross-window ordinary-pane creation. A persistent handler can split one exact pane in one exact process-owned window using strict window/tab/pane identities and a horizontal or vertical direction. The existing ordinary split path preserves launch/cwd inheritance and target validation without activating the native window; the correlated fresh pane ID cannot chain another host operation. API v26 adds separately granted cross-window ordinary-pane movement. A persistent handler can move one exact live ordinary pane onto one exact target pane in another process-owned tab or window using strict source and destination identities plus a horizontal or vertical direction. The existing atomic transfer path preserves the live PTY, title, history, and launch state, returns the fresh destination-local pane ID, never activates a native window, and cannot chain another host operation. API v27 adds separately granted cross-window ordinary-tab movement and exact same-window reordering. A persistent handler identifies the source window/tab, destination window/index, and action correlation explicitly. The atomic transfer preserves live PTYs, panes, plugin-tab state, title, history, launch state, and pinning while returning a fresh destination-local tab ID without native activation. Cross-window movement refuses the source window's final non-closing tab so this grant cannot implicitly close a window. API v28 adds separately granted closure of one exact ordinary pane in any live process-owned window. It reuses the local close path, preserves the containing tab and window, refuses the final pane plus stale, closing, live-domain, serial, and uninitialized targets, and returns the remaining pane count and focused pane ID without selecting a tab or activating a native window. API v29 adds separately granted scheduled closure of one exact ordinary tab in any live process-owned window. It preserves the containing window, refuses the final non-closing tab plus stale, closing, live-domain, and uninitialized targets, suppresses lifecycle feedback, and reports remaining/active tab state without native activation. API v30 adds separately granted swapping, balancing, and columns/rows/grid/tall/fat layout presets for one exact ordinary split tab in any live process-owned window. It preserves live terminal owners, stable pane IDs, focus, and active tab selection; stale, closing, unsplit, live-domain, serial, and duplicate-pane targets fail without fallback or native activation. API v31 adds separately granted closure of one exact process-owned window. The bounded correlated result is submitted before teardown; originating-window targets wait for its exact callback, sibling targets close independently, and the final live process window remains protected without native activation or identity fallback. API v32 adds a separately granted native focus request for one exact live process-owned window. It reuses authenticated GUI control policy, succeeds without another request when already focused, refuses hidden/minimized and Wayland targets explicitly, and never claims compositor-confirmed activation. Settings includes an installed-plugin manager with source/permission inspection, enable/disable, reviewed permission-aware update, confirmed settings reset, and confirmed managed-copy removal. It can also review and install a local plugin from an absolute directory path with explicit grants; installation or update can remain disabled with a permission subset, while enabling is offered only after every requested permission is granted. Typed settings are editable in-app. The manager also shows, selects, and clears each plugin's default launch profile. Replacement installs remain an explicit CLI operation. See the [third-party plugin API and security model](docs/plugins.md).
 
-Bundled themes live under [`termeric/themes/`](termeric/themes/). Put personal
-themes in `~/.config/termeric/themes/` (or point `[theme].path` at an explicit
-file) and they appear in Settings and in **Change Theme…**, survive restart, and
-reload when the active file changes. **Change Theme…** in the command palette
-previews each theme as you move through the list; Enter keeps it and Escape
-restores the previous one. A malformed edit keeps the last valid colors active
-and reports the file error in-app.
+Bundled themes live under [`termeric/themes/`](termeric/themes/). Put personal themes in `~/.config/termeric/themes/` (or point `[theme].path` at an explicit file) and they appear in Settings and in **Change Theme…**, survive restart, and reload when the active file changes. **Change Theme…** in the command palette previews each theme as you move through the list; Enter keeps it and Escape restores the previous one. A malformed edit keeps the last valid colors active and reports the file error in-app.
 
-**New Agent…** (Ctrl+Shift+I) starts Claude Code, Codex, Gemini CLI, OpenCode,
-or any agent you add under `[agents.<id>]`, in a tab or a split. An agent is
-recognized in any pane, however it was started, and the palette offers its
-commands only while it is focused. See [coding agents](docs/agents.md).
+**New Agent…** (Ctrl+Shift+I) starts Claude Code, Codex, Gemini CLI, OpenCode, or any agent you add under `[agents.<id>]`, in a tab or a split. An agent is recognized in any pane, however it was started, and the palette offers its commands only while it is focused. See [coding agents](docs/agents.md).
 
 ### Windows and command-line launch
 
-Termeric can own multiple independent native windows in one process. Use **New
-Window** in the command palette, or group startup windows/tabs with
-`--new-window` and `--tab`. CLI controls cover cwd, direct commands and exact
-argv after `--`, named plugin profiles, complete workspaces, initial pixel
-geometry, X11 class/Wayland app ID, titles, and shell-pane splits. Run
-`termeric --help` or see [`docs/command-line.md`](docs/command-line.md).
-Bind `termeric --quick-access` to a desktop shortcut for a single-owner,
-monitor-relative drop-down window whose hidden PTYs remain alive; see the
-[quick-access contract](docs/quick-access.md) for X11 and Wayland boundaries.
-Already-running Unix GUI processes expose authenticated inventory through
-`termeric control list [--json]` plus replay-safe exact-source window creation,
-exact-window local tab creation, and exact-pane splitting through `termeric
-control new-window PROCESS SOURCE_WINDOW`, `termeric control new-tab PROCESS
-WINDOW`, and `termeric control split-pane PROCESS WINDOW TAB PANE DIRECTION`.
-`termeric control launch-tab PROCESS WINDOW [options] -- PROGRAM [ARG ...]`
-adds direct, bounded, exact-argv launch into an ordinary local tab with optional
-absolute cwd, initial title, and repeatable non-secret `--env NAME=VALUE`
-overlays, explicit `--unset-env NAME` removal, or `--clear-env` inheritance
-clearing that retains the required terminal identity; it performs no implicit
-shell evaluation and returns the new stable
-tab ID.
-`termeric control launch-window PROCESS SOURCE_WINDOW [options] -- PROGRAM
-[ARG ...]` creates a fresh native window from the exact source configuration,
-starts one exact local command under the same bounded environment-overlay
-contract as its initial tab, and returns both new stable IDs only after native,
-renderer, and PTY initialization succeed.
-`termeric control launch-status PROCESS REQUEST_ID [--json]` observes the
-initial child's portable completion result across tab/pane moves and cleanup,
-within a 256-record process-local retention limit.
-`termeric control wait-launch PROCESS REQUEST_ID [--timeout SECONDS] [--json]`
-waits in the CLI and returns the child's portable exit status, without keeping
-a GUI request open or canceling the child when the wait ends.
-Exact window-focus requests, tab selection, and pane focus are available through
-`focus-window`, `select-tab`, and `focus-pane`; Wayland window activation remains
-compositor-controlled and fails explicitly.
-Typed `close-window`, `close-tab`, and `close-pane` actions preserve exact target
-identity and replay safety; surviving pane IDs now remain stable through
-single-pane collapse and later re-splitting.
-Typed `move-tab` and `move-pane` actions validate complete source/destination
-paths before transferring live owners across ordinary tabs or process-owned
-windows, and return the fresh destination-local ID when its namespace changes.
-Inventory now includes stable tab-local divider IDs; `resize-divider` applies an
-exact 100-900 thousandths ratio synchronously, while `resize-window` honestly
-acknowledges a bounded native physical-pixel size request that the window
-manager may apply asynchronously.
-`get-text` reads one exact pane's presented viewport plus at most 256 requested
-primary-history rows, retains the newest content within a 64 KiB UTF-8 ceiling,
-and never crosses from an alternate screen into primary history or reveals
-hidden synchronized output. Opt-in `send-text` targets one stable pane with at
-most 64 KiB of typed UTF-8, explicit paste/Enter semantics, replay protection,
-and visible destructive-command confirmation for plugin tabs; arbitrary bytes
-remain unavailable. Discovery and text queries do not expose existing argv,
-environment, clipboard, or provider data. See the
-[running-GUI control contract](docs/gui-control.md).
-Press F11 or run **Toggle Fullscreen** from the command palette to change only
-the current native window; the shortcut is configurable and the view state is
-not restored from a workspace.
-Reusable `[profiles.NAME]` entries bundle either exact executable/argv/cwd/env
-or a typed Linux serial device/line configuration for CLI or command-palette launches; see the
-[terminal-profile contract](docs/terminal-profiles.md).
-Native local file and directory drops insert one validated, POSIX-quoted path
-into an ordinary shell/profile tab without reading the object or pressing
-Enter. A real file/directory drop on an authenticated local/OpenSSH live-domain pane
-requires explicit confirmation, streams at most 64 MiB to that exact pane cwd,
-uses a bounded metadata-normalizing archive for directories, never overwrites,
-and can retain a SHA-256-verified partial for later authenticated CLI resume,
-then inserts the quoted remote path without Enter. Plugin,
-serial, broadcast, and modal routes fail closed. See the
-[drag/drop and transfer contract](docs/file-drag-and-drop.md).
+Termeric can own multiple independent native windows in one process. Use **New Window** in the command palette, or group startup windows/tabs with `--new-window` and `--tab`. CLI controls cover cwd, direct commands and exact argv after `--`, named plugin profiles, complete workspaces, initial pixel geometry, X11 class/Wayland app ID, titles, and shell-pane splits. Run `termeric --help` or see [`docs/command-line.md`](docs/command-line.md). Bind `termeric --quick-access` to a desktop shortcut for a single-owner, monitor-relative drop-down window whose hidden PTYs remain alive; see the [quick-access contract](docs/quick-access.md) for X11 and Wayland boundaries. Already-running Unix GUI processes expose authenticated inventory through `termeric control list [--json]` plus replay-safe exact-source window creation, exact-window local tab creation, and exact-pane splitting through `termeric control new-window PROCESS SOURCE_WINDOW`, `termeric control new-tab PROCESS WINDOW`, and `termeric control split-pane PROCESS WINDOW TAB PANE DIRECTION`. `termeric control launch-tab PROCESS WINDOW [options] -- PROGRAM [ARG ...]` adds direct, bounded, exact-argv launch into an ordinary local tab with optional absolute cwd, initial title, and repeatable non-secret `--env NAME=VALUE` overlays, explicit `--unset-env NAME` removal, or `--clear-env` inheritance clearing that retains the required terminal identity; it performs no implicit shell evaluation and returns the new stable tab ID. `termeric control launch-window PROCESS SOURCE_WINDOW [options] -- PROGRAM [ARG ...]` creates a fresh native window from the exact source configuration, starts one exact local command under the same bounded environment-overlay contract as its initial tab, and returns both new stable IDs only after native, renderer, and PTY initialization succeed. `termeric control launch-status PROCESS REQUEST_ID [--json]` observes the initial child's portable completion result across tab/pane moves and cleanup, within a 256-record process-local retention limit. `termeric control wait-launch PROCESS REQUEST_ID [--timeout SECONDS] [--json]` waits in the CLI and returns the child's portable exit status, without keeping a GUI request open or canceling the child when the wait ends. Exact window-focus requests, tab selection, and pane focus are available through `focus-window`, `select-tab`, and `focus-pane`; Wayland window activation remains compositor-controlled and fails explicitly. Typed `close-window`, `close-tab`, and `close-pane` actions preserve exact target identity and replay safety; surviving pane IDs now remain stable through single-pane collapse and later re-splitting. Typed `move-tab` and `move-pane` actions validate complete source/destination paths before transferring live owners across ordinary tabs or process-owned windows, and return the fresh destination-local ID when its namespace changes. Inventory now includes stable tab-local divider IDs; `resize-divider` applies an exact 100-900 thousandths ratio synchronously, while `resize-window` honestly acknowledges a bounded native physical-pixel size request that the window manager may apply asynchronously. `get-text` reads one exact pane's presented viewport plus at most 256 requested primary-history rows, retains the newest content within a 64 KiB UTF-8 ceiling, and never crosses from an alternate screen into primary history or reveals hidden synchronized output. Opt-in `send-text` targets one stable pane with at most 64 KiB of typed UTF-8, explicit paste/Enter semantics, replay protection, and visible destructive-command confirmation for plugin tabs; arbitrary bytes remain unavailable. Discovery and text queries do not expose existing argv, environment, clipboard, or provider data. See the [running-GUI control contract](docs/gui-control.md). Press F11 or run **Toggle Fullscreen** from the command palette to change only the current native window; the shortcut is configurable and the view state is not restored from a workspace. Reusable `[profiles.NAME]` entries bundle either exact executable/argv/cwd/env or a typed Linux serial device/line configuration for CLI or command-palette launches; see the [terminal-profile contract](docs/terminal-profiles.md). Native local file and directory drops insert one validated, POSIX-quoted path into an ordinary shell/profile tab without reading the object or pressing Enter. A real file/directory drop on an authenticated local/OpenSSH live-domain pane requires explicit confirmation, streams at most 64 MiB to that exact pane cwd, uses a bounded metadata-normalizing archive for directories, never overwrites, and can retain a SHA-256-verified partial for later authenticated CLI resume, then inserts the quoted remote path without Enter. Plugin, serial, broadcast, and modal routes fail closed. See the [drag/drop and transfer contract](docs/file-drag-and-drop.md).
 
 ### Workspaces, sessions, and transcripts
 
-The command palette can save and manage complete workspaces. A workspace
-preserves ordered shell, terminal-profile, and plugin tabs, nested pane trees and ratios, focused
-tab/pane, titles, working directories, last-command metadata, named plugin
-profiles, configuration references, and bounded optional scrollback. Restore
-relaunches fresh shells and plugin CLIs; it never claims to resurrect processes.
-Corrupt tabs, unavailable directories, removed profiles, and missing CLIs are
-reported and healthy tabs recover independently. See
-[`docs/workspaces.md`](docs/workspaces.md).
+The command palette can save and manage complete workspaces. A workspace preserves ordered shell, terminal-profile, and plugin tabs, nested pane trees and ratios, focused tab/pane, titles, working directories, last-command metadata, named plugin profiles, configuration references, and bounded optional scrollback. Restore relaunches fresh shells and plugin CLIs; it never claims to resurrect processes. Corrupt tabs, unavailable directories, removed profiles, and missing CLIs are reported and healthy tabs recover independently. See [`docs/workspaces.md`](docs/workspaces.md).
 
-Persistent local domains are also available as an experimental live-process
-workflow. `termeric domain create NAME` starts a user-private daemon-owned
-shell, `termeric domain attach DOMAIN` opens or reattaches a native window, and
-the scriptable control API can list, spawn, split, focus, close panes/tabs, send
-input, and read bounded text after every GUI closes. Attached GUI New Tab,
-Split, Close, nested-divider drag, pane swap/balance/layout and cross-tab move,
-Rename, Pin/Unpin, and tab-reorder actions use the daemon too, and monotonic
-topology revisions converge every attached window without reattachment while
-preserving existing relay PTYs.
-Closure is daemon-owned and cannot implicitly destroy the final tab or domain.
-Experimental CLI controls and GUI attachment can target an already trusted
-OpenSSH destination without exposing the daemon token. GUI topology, controls,
-focus, reconnects, and relays retain that authority. Bounded saved profiles can
-name existing OpenSSH destinations for controls and GUI attachment. **Attach
-Live Domain...** in the command palette asynchronously browses local/saved-host
-domains and opens the selected domain in another native window. Native
-real-host acceptance and a native TLS transport are not yet available. See
-the [live-domain contract](docs/live-domains.md) and
-[remote threat model](docs/remote-domains.md).
+Persistent local domains are also available as an experimental live-process workflow. `termeric domain create NAME` starts a user-private daemon-owned shell, `termeric domain attach DOMAIN` opens or reattaches a native window, and the scriptable control API can list, spawn, split, focus, close panes/tabs, send input, and read bounded text after every GUI closes. Attached GUI New Tab, Split, Close, nested-divider drag, pane swap/balance/layout and cross-tab move, Rename, Pin/Unpin, and tab-reorder actions use the daemon too, and monotonic topology revisions converge every attached window without reattachment while preserving existing relay PTYs. Closure is daemon-owned and cannot implicitly destroy the final tab or domain. Experimental CLI controls and GUI attachment can target an already trusted OpenSSH destination without exposing the daemon token. GUI topology, controls, focus, reconnects, and relays retain that authority. Bounded saved profiles can name existing OpenSSH destinations for controls and GUI attachment. **Attach Live Domain...** in the command palette asynchronously browses local/saved-host domains and opens the selected domain in another native window. Native real-host acceptance and a native TLS transport are not yet available. See the [live-domain contract](docs/live-domains.md) and [remote threat model](docs/remote-domains.md).
 
-Legacy single-terminal sessions include up to 1 MiB of metadata and 5 MiB of terminal scrollback. Termeric
-shows a warning when that scrollback limit is reached, and reports save,
-restore, deletion, corruption, and partial-recovery failures in the UI.
-Restoring a session launches a new shell; it does not restore a running process
-or a complete pane/workspace layout. In a split tab, a legacy session captures only the
-focused pane's cwd, last command, and bounded text history; the UI labels that
-reduced scope when saving and browsing snapshots.
-Version 5 publishes metadata and text in one bounded atomic snapshot, rejects
-stale restore selections, and coordinates writers without waiting on a lock.
-Versions 1–4 remain readable; saving upgrades the format. See the
-[snapshot storage and rollback contract](docs/session-snapshots.md#storage-and-compatibility).
+Legacy single-terminal sessions include up to 1 MiB of metadata and 5 MiB of terminal scrollback. Termeric shows a warning when that scrollback limit is reached, and reports save, restore, deletion, corruption, and partial-recovery failures in the UI. Restoring a session launches a new shell; it does not restore a running process or a complete pane/workspace layout. In a split tab, a legacy session captures only the focused pane's cwd, last command, and bounded text history; the UI labels that reduced scope when saving and browsing snapshots. Version 5 publishes metadata and text in one bounded atomic snapshot, rejects stale restore selections, and coordinates writers without waiting on a lock. Versions 1–4 remain readable; saving upgrades the format. See the [snapshot storage and rollback contract](docs/session-snapshots.md#storage-and-compatibility).
 
-AI transcript recording writes JSONL up to 50 MiB and reports the first cap or
-write failure instead of silently discarding data. Background export produces
-Markdown and JSONL from one verified recording snapshot, with bounded streaming
-conversion and explicit completion/failure feedback. The private export directory
-is complete only when its `complete.json` marker is present; see the
-[export contract](docs/transcript-export.md). Automatic redaction covers
-common credential prefixes, but it is best-effort and is not a complete secret
-scanner; review transcripts before sharing them.
+AI transcript recording writes JSONL up to 50 MiB and reports the first cap or write failure instead of silently discarding data. Background export produces Markdown and JSONL from one verified recording snapshot, with bounded streaming conversion and explicit completion/failure feedback. The private export directory is complete only when its `complete.json` marker is present; see the [export contract](docs/transcript-export.md). Automatic redaction covers common credential prefixes, but it is best-effort and is not a complete secret scanner; review transcripts before sharing them.
 
 ### Harvest and shell integration
 
-Harvest is an experimental beta and remains disabled by default. When enabled,
-its commands appear in the command palette and its history is populated from
-OSC 133 semantic prompt marks. The bounded Root Cellar displays real command
-text and exit health, opens on the newest entry, and supports keyboard, mouse,
-wheel, and screen-reader navigation. Stable command-region identities and
-signed coordinates follow scrollback and resize reflow. Each history entry
-retains a bounded output snapshot (64 KiB per entry and 8 MiB across the
-Cellar), so copy and rerun remain useful after terminal scrollback eviction.
-The Cellar reports how many older entries its count or memory limits evicted
-and marks clipped snapshots. Search and scroll require retained live text;
-their Sprout rows are visibly disabled and described as not retained when it
-is gone (or as alternate-screen-blocked while a full-screen application owns
-the source terminal), while truncated snapshot actions disclose that
-limitation before execution. Previous/Next Prompt walk exact retained
-marks in both directions from the viewed position, follow reflow and new output,
-and reset their navigation origin after direct scrolling. Activating an exact
-history entry opens a window-clamped action menu for copy, rerun, scoped search,
-scroll, and optional AI explanation; menu requests are identity-scoped so
-replaced actions cannot target stale commands. Normal interactive Bash, Zsh,
-Fish, and Nushell tabs get those marks plus OSC 7 working-directory reports
-automatically. Elvish gets the same semantics after the user adds
-`use termeric-integration` once to `~/.config/elvish/rc.elv`. Termeric writes
-small generated integration files under
-`~/.config/termeric/shell-integration/` for Bash and Zsh, uses Fish's
-init-command hook, and enables Nushell's native OSC 7/133 producers after its
-normal configuration loads. It exposes the Elvish module through that shell's
-standard module search path and restores the original environment when the
-module loads. The generated Bash/Zsh files load the user's normal shell rc
-first. Nushell and Elvish real-PTY acceptance remain pending on hosts with the
-respective shells installed.
+Harvest is an experimental beta and remains disabled by default. When enabled, its commands appear in the command palette and its history is populated from OSC 133 semantic prompt marks. The bounded Root Cellar displays real command text and exit health, opens on the newest entry, and supports keyboard, mouse, wheel, and screen-reader navigation. Stable command-region identities and signed coordinates follow scrollback and resize reflow. Each history entry retains a bounded output snapshot (64 KiB per entry and 8 MiB across the Cellar), so copy and rerun remain useful after terminal scrollback eviction. The Cellar reports how many older entries its count or memory limits evicted and marks clipped snapshots. Search and scroll require retained live text; their Sprout rows are visibly disabled and described as not retained when it is gone (or as alternate-screen-blocked while a full-screen application owns the source terminal), while truncated snapshot actions disclose that limitation before execution. Previous/Next Prompt walk exact retained marks in both directions from the viewed position, follow reflow and new output, and reset their navigation origin after direct scrolling. Activating an exact history entry opens a window-clamped action menu for copy, rerun, scoped search, scroll, and optional AI explanation; menu requests are identity-scoped so replaced actions cannot target stale commands. Normal interactive Bash, Zsh, Fish, and Nushell tabs get those marks plus OSC 7 working-directory reports automatically. Elvish gets the same semantics after the user adds `use termeric-integration` once to `~/.config/elvish/rc.elv`. Termeric writes small generated integration files under `~/.config/termeric/shell-integration/` for Bash and Zsh, uses Fish's init-command hook, and enables Nushell's native OSC 7/133 producers after its normal configuration loads. It exposes the Elvish module through that shell's standard module search path and restores the original environment when the module loads. The generated Bash/Zsh files load the user's normal shell rc first. Nushell and Elvish real-PTY acceptance remain pending on hosts with the respective shells installed.
 
-Prompt and command metadata is primary-screen state. Full viewport erase and
-RIS retire only marks whose backing live rows were erased, clearing scrollback
-retires historical row authority, and alternate-screen applications cannot add
-shell marks. Stable completion identity remains bounded and observable once so
-Harvest can fall back safely without treating replacement cells as old output.
-The parser accepts complete `A → B → C → D` command lifecycles, ignores stray
-or duplicate boundaries, and prevents prompt-only cycles from becoming command
-history. Missing finishes recover at the next prompt after output begins, and
-shell exit statuses are bounded to 0–255.
+Prompt and command metadata is primary-screen state. Full viewport erase and RIS retire only marks whose backing live rows were erased, clearing scrollback retires historical row authority, and alternate-screen applications cannot add shell marks. Stable completion identity remains bounded and observable once so Harvest can fall back safely without treating replacement cells as old output. The parser accepts complete `A → B → C → D` command lifecycles, ignores stray or duplicate boundaries, and prevents prompt-only cycles from becoming command history. Missing finishes recover at the next prompt after output begins, and shell exit statuses are bounded to 0–255.
 
-Custom shells and shell configurations that execute a script or `-c` command
-are left untouched. Harvest then explains that prompt marks are unavailable
-instead of showing an empty menu. Existing tabs keep their launch environment
-when shell configuration changes; open a new tab to pick up the new setup.
+Custom shells and shell configurations that execute a script or `-c` command are left untouched. Harvest then explains that prompt marks are unavailable instead of showing an empty menu. Existing tabs keep their launch environment when shell configuration changes; open a new tab to pick up the new setup.
 
 ```toml
 [harvest]
