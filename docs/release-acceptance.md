@@ -160,9 +160,9 @@ The rows below are not manual substitutes. Their checked-in lanes must produce f
 
 ## Required manual rows still open
 
-New Linux candidate evidence for the rows below must use the validated [native acceptance record](native-linux-acceptance.md); prose or source inspection alone cannot promote a row.
+New Linux candidate evidence for the rows below must use the validated native acceptance record; prose or source inspection alone cannot promote a row.
 
-Shell, Harvest, desktop-integration, fake-provider, and authenticated-provider results additionally use the candidate-bound record in [integration acceptance](integration-acceptance.md). Authenticated `pass` or `fail` results are invalid without explicit approval metadata and redacted, secret-reviewed, SHA-256-sealed artifacts; the record tool itself never runs a provider.
+Shell, Harvest, desktop-integration, fake-provider, and authenticated-provider results additionally use the candidate-bound record in integration acceptance. Authenticated `pass` or `fail` results are invalid without explicit approval metadata and redacted, secret-reviewed, SHA-256-sealed artifacts; the record tool itself never runs a provider.
 
 These cannot be truthfully inferred from synthetic input or source inspection:
 

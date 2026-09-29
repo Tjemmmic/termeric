@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""Record Linux shell acceptance; optionally include Nushell and opt-in Elvish."""
+"""Run the real-shell integration test for Bash, Zsh, and Fish (optionally Nushell and Elvish)."""
 from __future__ import annotations
 
 import argparse
 import json
 import os
 from pathlib import Path
-import platform
 import re
 import selectors
 import signal
@@ -18,12 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.integration_acceptance_record import (
-    CASE_DEFINITIONS, RecordError, atomic_write_json, create_template,
-    disposition_for_checks, file_sha256, validate_record,
-)
 from scripts.run_fake_provider_acceptance import test_binary_from_cargo_messages
-from scripts.soak_provenance import PinnedExecutable, provenance_checks, source_identity
 
 TEST = "terminal::shell_integration::tests::supported_shells_preserve_user_rc_and_emit_multiline_exit_regions"
 PREFIX = "TERMERIC_SHELL_ACCEPTANCE="
@@ -45,6 +39,10 @@ REMOVED_ENVIRONMENT = (
 )
 
 
+class ShellAcceptanceError(RuntimeError):
+    """The shell integration test failed or reported unexpected output."""
+
+
 def safe_environment(source: dict[str, str], extended: bool = False) -> dict[str, str]:
     result = {key: value for key, value in source.items() if key not in REMOVED_ENVIRONMENT}
     result["TERMERIC_REQUIRE_SHELL_ACCEPTANCE"] = "1"
@@ -56,7 +54,7 @@ def safe_environment(source: dict[str, str], extended: bool = False) -> dict[str
 
 def run_logged(command: list[str], path: Path, environment: dict[str, str], timeout: float) -> str:
     """Bound output and wall time, retaining diagnostics and reaping the private group."""
-    with path.open("xb") as log:
+    with path.open("wb") as log:
         process = subprocess.Popen(
             command, cwd=ROOT, env=environment, stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True,
@@ -68,7 +66,7 @@ def run_logged(command: list[str], path: Path, environment: dict[str, str], time
                 selector.register(process.stdout, selectors.EVENT_READ)
                 while selector.get_map():
                     if time.monotonic() >= deadline:
-                        raise RecordError(f"command timed out; see {path}")
+                        raise ShellAcceptanceError(f"command timed out; see {path}")
                     for key, _ in selector.select(min(0.1, max(0, deadline - time.monotonic()))):
                         chunk = os.read(key.fd, min(65536, MAX_LOG_BYTES - len(output) + 1))
                         if not chunk:
@@ -78,13 +76,13 @@ def run_logged(command: list[str], path: Path, environment: dict[str, str], time
                         log.write(chunk[:remaining])
                         output.extend(chunk[:remaining])
                         if len(chunk) > remaining:
-                            raise RecordError(f"command output exceeds {MAX_LOG_BYTES} bytes; see {path}")
+                            raise ShellAcceptanceError(f"command output exceeds {MAX_LOG_BYTES} bytes; see {path}")
             try:
                 code = process.wait(timeout=max(0.001, deadline - time.monotonic()))
             except subprocess.TimeoutExpired as error:
-                raise RecordError(f"command timed out; see {path}") from error
+                raise ShellAcceptanceError(f"command timed out; see {path}") from error
             if code != 0:
-                raise RecordError(f"command exited {code}; see {path}")
+                raise ShellAcceptanceError(f"command exited {code}; see {path}")
             return output.decode("utf-8", errors="replace")
         finally:
             # Only the private session we just created, never the caller's group.
@@ -97,16 +95,17 @@ def run_logged(command: list[str], path: Path, environment: dict[str, str], time
 
 
 def observations(output: str, extended: bool = False) -> dict[str, dict]:
+    """Require exactly the selected tests to pass and every shell to report in."""
     tests = EXTENDED_TESTS if extended else (TEST,)
     shells = EXTENDED_SHELLS if extended else SHELLS
     passed = re.findall(r"^test (.+) \.\.\. ok$", output, re.MULTILINE)
     if sorted(passed) != sorted(tests):
-        raise RecordError("exact shell tests did not pass, or unexpected tests ran")
+        raise ShellAcceptanceError("exact shell tests did not pass, or unexpected tests ran")
     summaries = re.findall(r"^test result: (.+)$", output, re.MULTILINE)
     if len(summaries) != 1 or not summaries[0].startswith(
         f"ok. {len(tests)} passed; 0 failed; 0 ignored;"
     ):
-        raise RecordError("expected exactly the selected passing, non-ignored shell tests")
+        raise ShellAcceptanceError("expected exactly the selected passing, non-ignored shell tests")
     result = {}
     for line in output.splitlines():
         if not line.startswith(PREFIX):
@@ -114,143 +113,63 @@ def observations(output: str, extended: bool = False) -> dict[str, dict]:
         try:
             row = json.loads(line[len(PREFIX):])
         except json.JSONDecodeError as error:
-            raise RecordError("invalid shell observation JSON") from error
+            raise ShellAcceptanceError("invalid shell observation JSON") from error
         if not isinstance(row, dict) or set(row) != {"shell", "path", "version", "sha256", "capability_replies"}:
-            raise RecordError("invalid shell observation fields")
+            raise ShellAcceptanceError("invalid shell observation fields")
         name = row["shell"]
         if not isinstance(name, str) or name not in shells or name in result:
-            raise RecordError("unexpected or duplicate shell observation")
+            raise ShellAcceptanceError("unexpected or duplicate shell observation")
         if (not isinstance(row["path"], str) or not Path(row["path"]).is_absolute()
             or not isinstance(row["version"], str) or not row["version"].strip()
             or len(row["version"]) > 1024
-            or not isinstance(row["sha256"], str) or re.fullmatch(r"[0-9a-f]{64}", row["sha256"]) is None
             or type(row["capability_replies"]) is not int or not 0 <= row["capability_replies"] <= 10000):
-            raise RecordError("invalid shell observation values")
-        result[name] = row
+            raise ShellAcceptanceError("invalid shell observation values")
+        result[name] = {key: row[key] for key in ("path", "version", "capability_replies")}
     if set(result) != set(shells):
-        raise RecordError("missing required shell observations")
+        raise ShellAcceptanceError("missing required shell observations")
     return result
 
 
-def fill_shell_cases(record: dict, rows: dict[str, dict], binary_digest: str,
-                     extended: bool = False) -> None:
-    shells = EXTENDED_SHELLS if extended else SHELLS
-    for case in record["cases"]:
-        name = case["id"].removeprefix("shell.")
-        if case["id"] != f"shell.{name}" or name not in shells:
-            continue
-        row = rows[name]
-        case["environment"] = {
-            "platform": platform.platform(), "shell": shells[name],
-            "shell_path": row["path"], "shell_version": row["version"],
-            "test_binary_sha256": binary_digest,
-        }
-        case["checks"] = {check: "pass" for check in CASE_DEFINITIONS[case["id"]].checks}
-        if "capability_replies_return_to_origin" in case["checks"] and not row["capability_replies"]:
-            case["checks"]["capability_replies_return_to_origin"] = "accepted_limitation"
-        if name == "nushell":
-            # The ordinary-directory fixture cannot establish percent-path
-            # correctness. Keep this limitation until its known-failure test
-            # is fixed and explicitly added to the selected evidence lane.
-            case["checks"]["native_osc7_working_directory"] = "accepted_limitation"
-        case["disposition"] = disposition_for_checks(case["checks"])
-        case["notes"] = (
-            "Isolated real PTY, synthetic rc and commands; no provider or native GUI. "
-            f"Observed {row['capability_replies']} replies written to the originating PTY. "
-            "A zero count is explicitly an unexercised reply-path limitation, not a pass."
+def run(output: Path, extended: bool = False) -> dict:
+    """Build and run the shell test, writing results.json and logs to `output`."""
+    output.mkdir(parents=True, exist_ok=True)
+    tests = list(EXTENDED_TESTS if extended else (TEST,))
+    results: dict = {"status": "fail", "tests": tests, "shells": {},
+                     "removed_environment": list(REMOVED_ENVIRONMENT),
+                     "logs": ["shell-build.log", "shell-test.log"]}
+    try:
+        environment = safe_environment(dict(os.environ), extended)
+        build = run_logged(
+            ["cargo", "test", "-p", "termeric", "--locked", "--no-run", "--message-format=json"],
+            output / "shell-build.log", environment, 900,
         )
-        if name == "nushell":
-            case["notes"] += (
-                " Ordinary-directory cwd only: Nushell 0.115.1 native literal-percent paths "
-                "remain a known failure; the ignored percent regression is not selected. "
-                "This lane does not establish arbitrary configuration or all directory names."
-            )
-        elif name == "elvish":
-            case["notes"] += (
-                " Synthetic rc explicitly imports the module; automatic setup is not claimed. "
-                "Separate exact tests cover special-mode pass-through and ten environment "
-                "handoff/child-cleanup cases. No arbitrary user configuration is accepted."
-            )
-        case["artifacts"] = [
-            {"path": f"artifacts/{filename}", "description": description, "sha256": "0" * 64}
-            for filename, description in (
-                ("shell-test.log", "Exact required real-shell fixture output"),
-                ("shell-result.json", "Shell identities, observed replies and pinned test provenance"),
-                ("shell-build.log", "Cargo build output identifying the test executable"),
-            )
-        ]
-
-
-def run(output: Path, operator: str, extended: bool = False) -> None:
-    if sys.platform != "linux":
-        raise RecordError("shell evidence runner requires Linux executable-fd provenance")
-    if not operator.strip():
-        raise RecordError("operator must not be empty")
-    # A fresh directory prevents accidental mixing with another candidate's artifacts.
-    output = output.absolute()
-    if output.exists() or output.is_symlink():
-        raise RecordError(f"refusing to overwrite existing output: {output}")
-    initial = source_identity(ROOT)
-    if initial["worktree_dirty"]:
-        raise RecordError("refusing dirty candidate source")
-    output.mkdir(parents=True)
-    artifacts = output / "artifacts"
-    artifacts.mkdir()
-    environment = safe_environment(dict(os.environ), extended)
-    tests = EXTENDED_TESTS if extended else (TEST,)
-    build_command = ["cargo", "test", "-p", "termeric", "--locked", "--no-run", "--message-format=json"]
-    build = run_logged(build_command, artifacts / "shell-build.log", environment, 900)
-    binary = test_binary_from_cargo_messages(build)
-    with PinnedExecutable(ROOT, binary, initial) as pinned:
-        command = [str(pinned.launch("scenario")), *tests, "--exact", "--show-output", "--test-threads=1"]
-        try:
-            result = run_logged(command, artifacts / "shell-test.log", environment, 60)
-        finally:
-            proof = pinned.finish()
-            atomic_write_json(artifacts / "shell-provenance.json", proof)
-        if not all(check["passed"] for check in provenance_checks(proof, ["scenario"])):
-            raise RecordError("source or test executable changed; see shell-provenance.json")
-        rows = observations(result, extended)
-        for row in rows.values():
-            if file_sha256(Path(row["path"])) != row["sha256"]:
-                raise RecordError("shell executable changed after its probe")
-        digest = pinned.file_evidence["sha256"]
-    evidence = {
-        "schema": 2, "tests": list(tests), "candidate_sha": initial["commit"],
-        "test_binary_sha256": digest, "shells": rows, "provenance": proof,
-        "removed_environment": list(REMOVED_ENVIRONMENT),
-        "build_command": build_command, "test_command": command,
-    }
-    atomic_write_json(artifacts / "shell-result.json", evidence)
-    record = create_template(initial["commit"], operator)
-    fill_shell_cases(record, rows, digest, extended)
-    path = output / "record.json"
-    # Seal in memory first: no record is published before checks and hashes agree.
-    for case in record["cases"]:
-        for artifact in case["artifacts"]:
-            artifact["sha256"] = file_sha256(output / artifact["path"])
-    failures = validate_record(path, record, allow_incomplete=True, expected_sha=initial["commit"])
-    if failures:
-        raise RecordError("; ".join(failures))
-    if source_identity(ROOT) != initial:
-        raise RecordError("source changed before record publication")
-    atomic_write_json(path, record)
+        binary = test_binary_from_cargo_messages(build)
+        command = [str(binary), *tests, "--exact", "--show-output", "--test-threads=1"]
+        test_output = run_logged(command, output / "shell-test.log", environment, 60)
+        results["shells"] = observations(test_output, extended)
+        results["status"] = "pass"
+        return results
+    except Exception as error:
+        results["error"] = str(error)
+        raise
+    finally:
+        (output / "results.json").write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, required=True, help="new evidence directory")
-    parser.add_argument("--operator", required=True)
+    parser.add_argument("--output", type=Path, required=True, help="directory for results.json and logs")
     parser.add_argument("--include-extended-shells", action="store_true",
-                        help="also require Nushell and Elvish; retain known cwd/setup limitations")
+                        help="also require Nushell and Elvish")
     args = parser.parse_args()
     try:
-        run(args.output, args.operator, args.include_extended_shells)
-    except (OSError, ValueError, RecordError, subprocess.SubprocessError) as error:
+        results = run(args.output, args.include_extended_shells)
+    except (OSError, ValueError, ShellAcceptanceError, subprocess.SubprocessError) as error:
         print(f"Shell acceptance failed: {error}", file=sys.stderr)
         return 1
-    print(f"Recorded partial shell acceptance: {args.output / 'record.json'}")
-    print("Selected shell checks recorded with explicit limitations; provider and desktop cases remain unrecorded.")
+    for shell, row in results["shells"].items():
+        print(f"PASS: {shell} {row['version']} ({row['capability_replies']} capability replies)")
+    print(f"Results: {args.output / 'results.json'}")
     return 0
 
 

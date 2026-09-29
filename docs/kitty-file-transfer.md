@@ -74,6 +74,6 @@ Unsupported sessions receive a bounded `EINVAL` or `EPERM` response when a valid
 
 ## Evidence
 
-Automated coverage is documented in [`testing.md`](testing.md). The deferred real-client procedure and evidence fields are in [`operator-acceptance.md`](operator-acceptance.md#5a-kitty-terminal-file-transfer-client). Until both direction rows pass on a candidate build, do not advertise complete bidirectional Kitty transfer or mark the feature Supported.
+Automated coverage is documented in [`testing.md`](testing.md). Until both direction rows pass on a candidate build, do not advertise complete bidirectional Kitty transfer or mark the feature Supported.
 
 Owner-routing regressions use raw local PTY capture plus synthetic worker completions: both directions, S7/S8 framing, pending path collection, split and collapse, a nonzero survivor, removed/replaced/closed/closing owners, sibling session-ID isolation, pruning, and replayed completion. These tests do not start a native window or approve real host-file workers, and are not native-client acceptance. See [#120](https://github.com/Tjemmmic/termeric/issues/120).

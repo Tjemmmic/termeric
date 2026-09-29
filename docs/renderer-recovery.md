@@ -62,7 +62,7 @@ env -u WLR_RENDERER -u LIBGL_ALWAYS_SOFTWARE WGPU_BACKEND=gl \
   --artifacts /tmp/termeric-wayland-recovery-6ab38bf-release
 ```
 
-No user desktop or real provider was exercised. This does not establish X11, pixel-perfect visuals, native IME/Orca, physical device removal, or real-desktop policy. Xvfb and Openbox were unavailable on this host, so the X11 lane was not run or replaced by this Wayland result. The [operator prerequisites](operator-acceptance.md#arch-linux) now also include the default DejaVu primary-font package that was missing from the Arch command. Local `/tmp` bundles are not published or signed artifacts, and the GUI [provenance boundary](gui-acceptance.md) still applies.
+No user desktop or real provider was exercised. This does not establish X11, pixel-perfect visuals, native IME/Orca, physical device removal, or real-desktop policy. Xvfb and Openbox were unavailable on this host, so the X11 lane was not run or replaced by this Wayland result. The operator prerequisites now also include the default DejaVu primary-font package that was missing from the Arch command. Local `/tmp` bundles are not published or signed artifacts, and the GUI [provenance boundary](gui-acceptance.md) still applies.
 
 ### GPU smoke and benchmark evidence
 

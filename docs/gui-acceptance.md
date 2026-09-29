@@ -296,4 +296,4 @@ The capture helper implements v1 `wlr-screencopy` with bounded shared memory; no
 
 Plugin chrome, driver-memory bounds, physical GPU recovery, and equivalent X11 presentation remain separate gates. Visual/contrast judgment and real desktop policy remain a manual pass on one X11 and one Wayland compositor without invoking any provider integration.
 
-Real X11/Wayland candidate results belong in the schema-versioned, artifact-hashed [native Linux acceptance record](native-linux-acceptance.md). That record fails closed on missing environments, incomplete checks, inconsistent dispositions, and changed evidence; an unavailable prerequisite remains visibly different from a pass.
+Real X11/Wayland candidate results belong in the schema-versioned, artifact-hashed native Linux acceptance record. That record fails closed on missing environments, incomplete checks, inconsistent dispositions, and changed evidence; an unavailable prerequisite remains visibly different from a pass.

@@ -177,7 +177,7 @@ Automated semantics now cover every current application surface. Issue #32 remai
 
 ## Platform acceptance
 
-Record Linux results with the candidate-bound, artifact-hashed [native acceptance record](native-linux-acceptance.md). Its exact IBus, Fcitx 5, and Orca cases turn the following procedure into validated evidence while still keeping real input and screen-reader judgment manual.
+Record Linux results with the candidate-bound, artifact-hashed native acceptance record. Its exact IBus, Fcitx 5, and Orca cases turn the following procedure into validated evidence while still keeping real input and screen-reader judgment manual.
 
 IME tests should use both single-terminal and split-pane layouts and confirm that preedit never appears in the PTY transcript before commit, then that CJK text and a dead-key composition arrive exactly once. Also move focus during a composition and verify it is cancelled rather than committed to another pane.
 

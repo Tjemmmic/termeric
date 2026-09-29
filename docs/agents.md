@@ -215,4 +215,4 @@ A saved [workspace](workspaces.md) records each agent terminal's agent, profile,
 - Agents in [live-domain](live-domains.md) terminals cannot report status. Their processes belong to the domain daemon rather than to a window.
 - Agents inside tmux or screen cannot report status. The server keeps the environment of the terminal it was started in, but it detaches from that terminal, and a report from a process that does not descend from the terminal's own is set aside. This check needs a platform that reports the sender's process, as Linux does.
 - Diffs are read from the terminal output, so an agent that never prints a unified diff has nothing to review.
-- Automated tests use fake agent executables in real PTYs. They never start a real agent or contact a provider. See [integration acceptance](integration-acceptance.md).
+- Automated tests use fake agent executables in real PTYs. They never start a real agent or contact a provider. See integration acceptance.

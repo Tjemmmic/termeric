@@ -193,22 +193,16 @@ jobs:
             libxkbcommon-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libvulkan-dev zsh fish
       - name: Bash, Zsh, and Fish shell integration
-        run: >-
-          python3 scripts/run_shell_acceptance.py
-          --output target/shell-acceptance
-          --operator "GitHub Actions"
+        run: python3 scripts/run_shell_acceptance.py --output target/shell-acceptance
       - name: Agent workflows against fake agent executables
-        run: >-
-          python3 scripts/run_fake_provider_acceptance.py
-          --output target/integration-acceptance/record.json
-          --operator "GitHub Actions"
+        run: python3 scripts/run_fake_provider_acceptance.py --output target/agent-acceptance
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: integration
           path: |
             target/shell-acceptance/
-            target/integration-acceptance/
+            target/agent-acceptance/
           if-no-files-found: error
 
   soak:
