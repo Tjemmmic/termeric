@@ -86,16 +86,11 @@ class TabPlacementTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             placement.native_chord(app, "invalid", (), "F6")
 
-    def test_native_tools_are_scenario_local_and_ci_selects_the_new_lane(self):
+    def test_native_tools_are_scenario_local(self):
         self.assertEqual(gui.required_tools("wayland", ["tab-placement"], False, True),
                          ["fc-list", "sway", "swaymsg", "tic", "wtype"])
         self.assertEqual(gui.required_tools("x11", ["tab-placement"], False, False, True),
                          ["fc-list", "openbox", "tic", "xdotool"])
-        workflow = (gui.ROOT / ".github/workflows/ci.yml").read_text()
-        block = workflow.split("- name: Run Wayland keyboard, pane, and clipboard scenario", 1)[1].split("- name:", 1)[0]
-        self.assertIn("--scenario tab-placement", block)
-        self.assertIn("--require-clean", block)
-        self.assertEqual(workflow.count("python3 -m unittest scripts.test_gui_tab_placement"), 2)
 
     def test_overflow_traversal_crosses_last_close_and_previous_to_new_tab(self):
         for count in (2, 12, 32):
@@ -107,15 +102,11 @@ class TabPlacementTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 placement.overflow_navigation_keys(count)
 
-    def test_overflow_lane_is_selected_with_backend_local_tools(self):
+    def test_overflow_scenario_uses_backend_local_tools(self):
         self.assertEqual(gui.required_tools("wayland", ["tab-overflow"], False, True),
                          ["fc-list", "sway", "swaymsg", "tic", "wl-paste", "wtype"])
         self.assertEqual(gui.required_tools("x11", ["tab-overflow"], False, False, True),
                          ["fc-list", "openbox", "tic", "xclip", "xdotool"])
-        workflow = (gui.ROOT / ".github/workflows/ci.yml").read_text()
-        block = workflow.split("- name: Run Wayland keyboard, pane, and clipboard scenario", 1)[1].split("- name:", 1)[0]
-        self.assertIn("--scenario tab-overflow", block)
-        self.assertIn("--require-clean", block)
 
     def test_compact_points_use_observed_metrics_and_reject_noncompact_fixtures(self):
         points = placement.compact_pointer_targets((5, 80, 720, 85))

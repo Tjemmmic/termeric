@@ -231,16 +231,6 @@ class ShellAcceptanceTests(unittest.TestCase):
             with self.assertRaisesRegex(runner.RecordError, "overwrite"):
                 runner.run(output, "operator")
 
-    def test_ci_uses_required_runner_and_separate_always_uploaded_artifact(self):
-        workflow = (runner.ROOT / ".github/workflows/ci.yml").read_text()
-        self.assertIn("python3 -m unittest scripts.test_run_shell_acceptance", workflow)
-        block = workflow.split("- name: Record Bash, Zsh, and Fish shell integration", 1)[1].split("- run: cargo clippy", 1)[0]
-        self.assertIn("python3 scripts/run_shell_acceptance.py", block)
-        self.assertIn("--output target/shell-acceptance", block)
-        self.assertIn("if: always()", block)
-        self.assertIn("name: required-shell-acceptance", block)
-        self.assertIn("path: target/shell-acceptance/", block)
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,331 @@
+# Slower suites that are too expensive for every pull request. They run every
+# Monday against the default branch, and on demand from the Actions tab.
+name: Extended checks
+
+on:
+  schedule:
+    - cron: "23 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: extended-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  debian-package:
+    name: Debian package
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install build and packaging dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libfontconfig1-dev libwayland-dev \
+            libxkbcommon-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libvulkan-dev desktop-file-utils dpkg-dev ncurses-bin
+      - name: Build and inspect the package
+        run: |
+          cargo install cargo-deb --locked
+          cargo deb -p termeric --locked
+          package="$(find target/debian -maxdepth 1 -name 'termeric_*.deb' -print -quit)"
+          test -n "$package"
+          python3 scripts/check_debian_package.py "$package" \
+            --report target/debian/package-acceptance.json
+      - name: Install, upgrade, and remove the package
+        run: |
+          package="$(find target/debian -maxdepth 1 -name 'termeric_*.deb' -print -quit)"
+          sudo TERMERIC_PACKAGE_LIFECYCLE_ACCEPT=1 python3 \
+            scripts/check_debian_package.py "$package" --system-lifecycle \
+            --report target/debian/package-acceptance.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: termeric-debian
+          path: |
+            target/debian/*.deb
+            target/debian/package-acceptance.json
+          if-no-files-found: error
+
+  arch-package:
+    name: Arch package
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    container: archlinux:base-devel-20260906.0.587075
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install build and runtime dependencies
+        run: >-
+          pacman -Syu --noconfirm --needed
+          cargo desktop-file-utils fontconfig gcc-libs git glibc libx11
+          libxkbcommon ncurses pkgconf python vulkan-icd-loader wayland zlib
+      - name: Check that .SRCINFO matches the PKGBUILD
+        working-directory: packaging/arch
+        run: makepkg --printsrcinfo | diff - .SRCINFO
+      - name: Build the package as an unprivileged user
+        run: |
+          useradd --create-home builder
+          mkdir -p target/arch
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          runuser -u builder -- env HOME=/home/builder python3 \
+            scripts/build_arch_package.py --output target/arch \
+            2>&1 | tee target/arch/build.log
+      - name: Inspect the package
+        run: |
+          package="$(find target/arch -maxdepth 1 -name 'termeric-git-*.pkg.tar.zst' -print -quit)"
+          test -n "$package"
+          python3 scripts/check_arch_package.py "$package" \
+            --report target/arch/package-acceptance.json
+      - name: Install and remove the package
+        env:
+          TERMERIC_ARCH_PACKAGE_LIFECYCLE_ACCEPT: "1"
+        run: |
+          package="$(find target/arch -maxdepth 1 -name 'termeric-git-*.pkg.tar.zst' -print -quit)"
+          python3 scripts/check_arch_package.py "$package" --system-lifecycle \
+            --report target/arch/package-acceptance.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: termeric-arch
+          path: |
+            target/arch/*.pkg.tar.zst
+            target/arch/package-acceptance.json
+            target/arch/*.log
+          if-no-files-found: error
+
+  native-gui:
+    name: Native GUI (X11 and Wayland)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      WGPU_BACKEND: vulkan
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install GUI, compositor, and software-renderer dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libfontconfig1-dev libwayland-dev \
+            libxkbcommon-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libvulkan-dev mesa-vulkan-drivers xvfb xauth xdotool xclip \
+            imagemagick ffmpeg python3-pil fontconfig fonts-dejavu-core \
+            fonts-noto-color-emoji vim less tmux libsixel-bin timg kitty \
+            openbox sway weston wl-clipboard wtype util-linux
+      - run: cargo build -p termeric --locked
+      - name: Headless render and visual baseline
+        env:
+          TERMERIC_GPU_SMOKE: "1"
+          TERMERIC_GUI_VISUAL_OUTPUT: ${{ github.workspace }}/target/gui-acceptance/renderer.png
+        run: |
+          cargo test -p termeric --locked linux_headless_gpu_render_smoke_when_requested -- --nocapture
+          python3 scripts/check_gui_visual.py target/gui-acceptance/renderer.png
+      - name: X11 interaction and renderer recovery
+        run: >-
+          env WGPU_BACKEND=gl EGL_PLATFORM=x11
+          xvfb-run -a -s "-screen 0 1280x800x24"
+          python3 scripts/gui_acceptance.py --backend x11
+          --require-clean
+          --start-window-manager
+          --force-surface-loss
+          --force-surface-outdated
+          --force-device-loss
+          --binary target/debug/termeric
+          --artifacts target/gui-acceptance/x11
+          --skip-visual-checks
+      - name: Wayland launch, render, and close
+        run: >-
+          env WGPU_BACKEND=gl
+          python3 scripts/gui_acceptance.py --backend wayland --start-weston
+          --require-clean
+          --binary target/debug/termeric
+          --artifacts target/gui-acceptance/wayland
+      - name: Wayland fullscreen and sibling windows
+        run: >-
+          env WGPU_BACKEND=gl
+          python3 scripts/gui_acceptance.py --backend wayland --start-sway
+          --require-clean
+          --scenario fullscreen
+          --binary target/debug/termeric
+          --artifacts target/gui-acceptance/wayland-fullscreen
+      - name: Wayland keyboard, panes, tabs, clipboard, and recovery
+        run: >-
+          env WGPU_BACKEND=gl
+          python3 scripts/gui_acceptance.py --backend wayland --start-sway
+          --require-clean
+          --scenario interaction
+          --scenario tab-placement
+          --scenario tab-overflow
+          --scenario background
+          --force-surface-loss
+          --force-surface-outdated
+          --force-device-loss
+          --binary target/debug/termeric
+          --artifacts target/gui-acceptance/wayland-interaction
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-gui
+          path: target/gui-acceptance/
+          if-no-files-found: error
+
+  integration:
+    name: Shell and agent integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install build dependencies and shells
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libfontconfig1-dev libwayland-dev \
+            libxkbcommon-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libvulkan-dev zsh fish
+      - name: Bash, Zsh, and Fish shell integration
+        run: >-
+          python3 scripts/run_shell_acceptance.py
+          --output target/shell-acceptance
+          --operator "GitHub Actions"
+      - name: Agent workflows against fake agent executables
+        run: >-
+          python3 scripts/run_fake_provider_acceptance.py
+          --output target/integration-acceptance/record.json
+          --operator "GitHub Actions"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: integration
+          path: |
+            target/shell-acceptance/
+            target/integration-acceptance/
+          if-no-files-found: error
+
+  soak:
+    name: Ten-minute resource soaks
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      WGPU_BACKEND: vulkan
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install software-renderer and compositor dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libfontconfig1-dev libwayland-dev \
+            libxkbcommon-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libvulkan-dev mesa-vulkan-drivers fonts-dejavu-core ncurses-bin \
+            sway wtype
+      - name: Headless soak
+        run: >-
+          python3 scripts/run_soak.py --duration-seconds 600 --gpu-smoke
+          --output target/soak/headless.json
+          --log target/soak/headless.log
+      - name: Check headless soak ceilings
+        if: always()
+        run: python3 scripts/validate_soak.py target/soak/headless.json --source .
+      - run: cargo build -p termeric --locked
+      - name: Displayed Wayland soak
+        run: >-
+          env WGPU_BACKEND=gl
+          python3 scripts/run_native_gui_soak.py
+          --duration-seconds 600
+          --require-clean
+          --binary target/debug/termeric
+          --artifacts target/soak/native-gui
+      - name: Check displayed soak ceilings
+        if: always()
+        run: >-
+          python3 scripts/validate_native_gui_soak.py
+          target/soak/native-gui/results.json --source .
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: soak
+          path: target/soak/
+          if-no-files-found: error
+
+  benchmarks:
+    name: Performance budgets
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      WGPU_BACKEND: vulkan
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install software-renderer dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libfontconfig1-dev libwayland-dev \
+            libxkbcommon-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libvulkan-dev mesa-vulkan-drivers
+      - name: Run benchmarks against their budgets
+        run: >-
+          python3 scripts/run_benchmarks.py --skip-displayed
+          --baseline benchmarks/baselines/2026-08-25-linux.json
+          --output target/benchmarks/results.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: benchmarks
+          path: target/benchmarks/results.json
+          if-no-files-found: error
+
+  fuzz:
+    name: Fuzzing
+    runs-on: ubuntu-latest
+    # The three targets run for seven minutes in total; the rest covers the
+    # cargo-fuzz install, the build, and minimizing any crash.
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: cargo install cargo-fuzz --locked --version 0.13.2
+      - name: Build the parser seed corpus
+        run: python3 scripts/materialize_fuzz_corpus.py /tmp/termeric-fuzz-corpus
+      - name: Terminal parser and grid
+        run: >-
+          cargo fuzz run terminal_bytes /tmp/termeric-fuzz-corpus --
+          -dict=fuzz/terminal.dict -max_len=65536 -timeout=5 -max_total_time=180
+      - name: Live-domain protocol
+        run: >-
+          cargo fuzz run domain_protocol fuzz/corpus/domain_protocol --
+          -max_len=1048576 -timeout=5 -max_total_time=60
+      - name: Graphics protocols
+        run: >-
+          cargo fuzz run graphics_protocols fuzz/corpus/graphics_protocols --
+          -max_len=1048576 -timeout=5 -max_total_time=180
+      - name: Minimize crashes
+        if: failure()
+        shell: bash
+        run: |
+          shopt -s nullglob
+          for target in terminal_bytes domain_protocol graphics_protocols; do
+            for artifact in "fuzz/artifacts/$target"/*; do
+              cargo fuzz tmin "$target" "$artifact" -- -max_total_time=60 || true
+            done
+          done
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fuzz-crashes
+          path: fuzz/artifacts/
+          if-no-files-found: ignore

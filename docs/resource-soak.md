@@ -48,7 +48,7 @@ Failures after scenario setup are retained as diagnostic records. A missing or r
 
 ### Commands
 
-Run the same 30-second lane used for pushes and pull requests:
+Run a short 30-second soak locally:
 
 ```bash
 WGPU_BACKEND=vulkan python3 scripts/run_soak.py \
@@ -58,7 +58,7 @@ WGPU_BACKEND=vulkan python3 scripts/run_soak.py \
 python3 scripts/validate_soak.py target/soak/local.json --source .
 ```
 
-The weekly and manually dispatched CI lane runs for ten minutes. For a release candidate, run at least that lane on the exact candidate and retain both files:
+The weekly `Extended checks` workflow runs it for ten minutes. For a release candidate, run at least that lane on the exact candidate and retain both files:
 
 ```bash
 WGPU_BACKEND=vulkan python3 scripts/run_soak.py \
@@ -79,7 +79,7 @@ LIBGL_ALWAYS_SOFTWARE=true WGPU_BACKEND=gl python3 scripts/run_soak.py \
 
 This combination passed the offscreen smoke on llvmpipe on the current Arch host. `WGPU_BACKEND=gl` alone exposed only its Radeon adapter and failed the software-only test. Retain such failures; a later successful probe must not be spliced into an earlier failed record. No desktop window is created by this core/offscreen lane, and the environment selection is scoped to that command.
 
-The log must be inside the report directory because the schema records its confined relative path, exact byte length, and SHA-256 digest. The independent validator rejects missing or unknown fields, unsafe or symlinked paths, non-finite/type-confused values, altered log or binary contents, candidate identity drift, malformed samples/progress, non-reconciling inventories, and any stored summary or check that differs from a fresh reconstruction. CI runs this command after both core-soak durations, even if the runner failed, before uploading the evidence bundle.
+The log must be inside the report directory because the schema records its confined relative path, exact byte length, and SHA-256 digest. The independent validator rejects missing or unknown fields, unsafe or symlinked paths, non-finite/type-confused values, altered log or binary contents, candidate identity drift, malformed samples/progress, non-reconciling inventories, and any stored summary or check that differs from a fresh reconstruction. CI runs this command after the ten-minute soak, even if the runner failed, before uploading the evidence bundle.
 
 A passing run from a dirty worktree is deliberately classified as a `dirty-dry-run` and the validator rejects it by default. Use `--allow-ineligible` only to inspect an internally consistent dirty or failed diagnostic record; that flag cannot turn it into candidate evidence.
 
@@ -119,7 +119,7 @@ python3 scripts/validate_native_gui_soak.py \
 
 `--max-gpu-resident-mib` and `--max-gpu-resident-growth-mib` tighten the default 1024 MiB peak and 256 MiB first-to-last-quartile resident-memory rails. The required mode fails if any sample is unavailable or if availability changes during a run. A driver that exposes total but not resident memory still records the total exactly; resident peak/growth remain explicitly absent rather than being inferred.
 
-Weekly/manual CI runs both the core scenario above and this displayed scenario for ten minutes. Native defaults allow 768 MiB peak RSS, 192 MiB first-to-last-quartile RSS growth, eight threads and sixteen file descriptors of growth, and eight concurrent direct children. The report also requires continuous PTY progress, enough resize/pane actions for the configured duration, zero runtime/GPU validation errors, a normal application exit, and complete child cleanup. Resize and pane-churn counts have independent minimums; one workload cannot compensate for the other in the aggregate action count. These are broad regression rails, not expected steady-state consumption targets.
+The weekly `Extended checks` workflow runs both the core scenario above and this displayed scenario for ten minutes. Native defaults allow 768 MiB peak RSS, 192 MiB first-to-last-quartile RSS growth, eight threads and sixteen file descriptors of growth, and eight concurrent direct children. The report also requires continuous PTY progress, enough resize/pane actions for the configured duration, zero runtime/GPU validation errors, a normal application exit, and complete child cleanup. Resize and pane-churn counts have independent minimums; one workload cannot compensate for the other in the aggregate action count. These are broad regression rails, not expected steady-state consumption targets.
 
 The schema-6 native report records UTC time, candidate commit, explicit worktree-dirty and eligibility state, a source-relative tested binary with byte length and SHA-256, backend/compositor/WGPU identity, every raw process sample, reconstructable exit/driver/cleanup/workload outcomes, resource-category summaries, per-client/per-region DRM memory snapshots and their derived summary, explicit thresholds, and individual results. Every regular file beside `results.json` is listed in an exact sorted manifest with byte length and SHA-256. The validator rejects extra, missing, altered, symlinked, special, or unsafe-path artifacts; it re-derives PTY progress and exact Kitty acknowledgements from the transcript, runtime errors from the application log, threshold formulas from the run parameters, and every summary/check from raw inputs. Run the pure regression and validator detectors with:
 
@@ -151,7 +151,7 @@ The validator tests deliberately alter samples, thresholds, outcomes, stored che
 
 Launch-provenance fixtures additionally exercise the actual core/native report paths with private fake processes, source changes during build and run, clean-to-dirty transitions, rebuilds between GPU and scenario launches, replacement and restoration of executable paths, launch failure, timeout, interruption, and descriptor cleanup. A harmless real Python-interpreter fixture proves Linux executes the pinned bytes after pathname replacement without inheriting the runner's descriptor. Native-runner fixtures never start a compositor or GUI. CI's ordinary quality lane includes both validators and these fixtures; native acceptance remains a separate deferred lane.
 
-`python3 -m unittest scripts.test_ci_resource_contract` separately fails if the native macOS/Windows build/unit plus PTY-lifecycle matrix, either 30-second Linux soak, either scheduled 600-second soak, or the always-uploaded failure artifacts disappear from CI. It verifies wiring, not a green remote run; actual job history remains required evidence.
+The ten-minute headless and displayed soaks run in the weekly `Extended checks` workflow (`.github/workflows/extended.yml`), which can also be started by hand.
 
 These tests prove the evaluator rejects the relevant monotonic-growth shapes; they do not intentionally leak resources from the test runner process.
 

@@ -50,7 +50,7 @@ Maintainers can inspect the generated artifact without installing it:
 python3 scripts/check_debian_package.py target/debian/termeric_*.deb
 ```
 
-The destructive install/upgrade/remove mode is intended only for a fresh, disposable Debian-family host. It requires root and the explicit `TERMERIC_PACKAGE_LIFECYCLE_ACCEPT=1` opt-in; it refuses to replace a Termeric package that was already installed. CI runs that mode on its fresh Ubuntu runner. See [testing.md](testing.md#debian-package-lifecycle-lane) for the exact contract.
+The destructive install/upgrade/remove mode is intended only for a fresh, disposable Debian-family host. It requires root and the explicit `TERMERIC_PACKAGE_LIFECYCLE_ACCEPT=1` opt-in; it refuses to replace a Termeric package that was already installed. The weekly `Extended checks` workflow runs that mode on a fresh Ubuntu runner. See [testing.md](testing.md#debian-package-lifecycle-lane) for the exact contract.
 
 On Arch Linux and derivatives, the maintained VCS recipe can clone and package the current upstream revision:
 

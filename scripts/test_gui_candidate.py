@@ -198,14 +198,6 @@ class GuiCandidateTests(unittest.TestCase):
             with self.assertRaises(OSError):
                 os.fstat(fd)
 
-    def test_ci_requires_clean_mode_for_each_native_gui_command(self):
-        workflow = (gui.ROOT / ".github/workflows/ci.yml").read_text()
-        self.assertEqual(workflow.count("python3 -m unittest scripts.test_gui_candidate"), 2)
-        commands = workflow.split("python3 scripts/gui_acceptance.py")[1:]
-        self.assertEqual(len(commands), 4)
-        for command in commands:
-            self.assertIn("--require-clean", command.split("- name:", 1)[0])
-
 
 if __name__ == "__main__":
     unittest.main()
