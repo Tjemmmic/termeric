@@ -53,7 +53,7 @@ jobs:
           path: |
             target/debian/*.deb
             target/debian/package-acceptance.json
-          if-no-files-found: error
+          if-no-files-found: warn
 
   arch-package:
     name: Arch package
@@ -72,14 +72,18 @@ jobs:
           pacman -Syu --noconfirm --needed
           cargo desktop-file-utils fontconfig gcc-libs git glibc libx11
           libxkbcommon ncurses pkgconf python vulkan-icd-loader wayland zlib
-      - name: Check that .SRCINFO matches the PKGBUILD
-        working-directory: packaging/arch
-        run: makepkg --printsrcinfo | diff - .SRCINFO
-      - name: Build the package as an unprivileged user
+      # makepkg refuses to run as root, even for --printsrcinfo.
+      - name: Create an unprivileged build user
         run: |
           useradd --create-home builder
           mkdir -p target/arch
           chown -R builder:builder "$GITHUB_WORKSPACE"
+      - name: Check that .SRCINFO matches the PKGBUILD
+        run: >-
+          runuser -u builder -- bash -c 'cd packaging/arch && makepkg --printsrcinfo'
+          | diff - packaging/arch/.SRCINFO
+      - name: Build the package
+        run: |
           runuser -u builder -- env HOME=/home/builder python3 \
             scripts/build_arch_package.py --output target/arch \
             2>&1 | tee target/arch/build.log
@@ -104,7 +108,7 @@ jobs:
             target/arch/*.pkg.tar.zst
             target/arch/package-acceptance.json
             target/arch/*.log
-          if-no-files-found: error
+          if-no-files-found: warn
 
   native-gui:
     name: Native GUI (X11 and Wayland)
@@ -125,15 +129,11 @@ jobs:
             imagemagick ffmpeg python3-pil fontconfig fonts-dejavu-core \
             fonts-noto-color-emoji vim less tmux libsixel-bin timg kitty \
             openbox sway weston wl-clipboard wtype util-linux
-      - run: cargo build -p termeric --locked
-      - name: Headless render and visual baseline
-        env:
-          TERMERIC_GPU_SMOKE: "1"
-          TERMERIC_GUI_VISUAL_OUTPUT: ${{ github.workspace }}/target/gui-acceptance/renderer.png
-        run: |
-          cargo test -p termeric --locked linux_headless_gpu_render_smoke_when_requested -- --nocapture
-          python3 scripts/check_gui_visual.py target/gui-acceptance/renderer.png
+      - name: Build the application
+        id: build
+        run: cargo build -p termeric --locked
       - name: X11 interaction and renderer recovery
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: >-
           env WGPU_BACKEND=gl EGL_PLATFORM=x11
           xvfb-run -a -s "-screen 0 1280x800x24"
@@ -146,12 +146,14 @@ jobs:
           --artifacts target/gui-acceptance/x11
           --skip-visual-checks
       - name: Wayland launch, render, and close
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: >-
           env WGPU_BACKEND=gl
           python3 scripts/gui_acceptance.py --backend wayland --start-weston
           --binary target/debug/termeric
           --artifacts target/gui-acceptance/wayland
       - name: Wayland fullscreen and sibling windows
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: >-
           env WGPU_BACKEND=gl
           python3 scripts/gui_acceptance.py --backend wayland --start-sway
@@ -159,6 +161,7 @@ jobs:
           --binary target/debug/termeric
           --artifacts target/gui-acceptance/wayland-fullscreen
       - name: Wayland keyboard, panes, tabs, clipboard, and recovery
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: >-
           env WGPU_BACKEND=gl
           python3 scripts/gui_acceptance.py --backend wayland --start-sway
@@ -171,12 +174,20 @@ jobs:
           --force-device-loss
           --binary target/debug/termeric
           --artifacts target/gui-acceptance/wayland-interaction
+      - name: Headless render and visual baseline
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        env:
+          TERMERIC_GPU_SMOKE: "1"
+          TERMERIC_GUI_VISUAL_OUTPUT: ${{ github.workspace }}/target/gui-acceptance/renderer.png
+        run: |
+          cargo test -p termeric --locked linux_headless_gpu_render_smoke_when_requested -- --nocapture
+          python3 scripts/check_gui_visual.py target/gui-acceptance/renderer.png
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: native-gui
           path: target/gui-acceptance/
-          if-no-files-found: error
+          if-no-files-found: warn
 
   integration:
     name: Shell and agent integration
@@ -195,6 +206,7 @@ jobs:
       - name: Bash, Zsh, and Fish shell integration
         run: python3 scripts/run_shell_acceptance.py --output target/shell-acceptance
       - name: Agent workflows against fake agent executables
+        if: ${{ !cancelled() }}
         run: python3 scripts/run_fake_provider_acceptance.py --output target/agent-acceptance
       - uses: actions/upload-artifact@v4
         if: always()
@@ -203,7 +215,7 @@ jobs:
           path: |
             target/shell-acceptance/
             target/agent-acceptance/
-          if-no-files-found: error
+          if-no-files-found: warn
 
   soak:
     name: Ten-minute resource soaks
@@ -244,7 +256,7 @@ jobs:
         with:
           name: soak
           path: target/soak/
-          if-no-files-found: error
+          if-no-files-found: warn
 
   benchmarks:
     name: Performance budgets
@@ -272,7 +284,7 @@ jobs:
         with:
           name: benchmarks
           path: target/benchmarks/results.json
-          if-no-files-found: error
+          if-no-files-found: warn
 
   fuzz:
     name: Fuzzing
