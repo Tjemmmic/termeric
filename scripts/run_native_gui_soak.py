@@ -244,6 +244,13 @@ def evaluate_native_checks(
     return checks
 
 
+def application_log_check(path: Path) -> dict[str, Any]:
+    """A missing log would read as empty and silently pass the runtime-error check."""
+    present = path.is_file()
+    return {"name": "application log present", "actual": present, "expected": True,
+            "passed": present}
+
+
 def build_native_soak_checks(
     samples: list[dict[str, Any]],
     thresholds: dict[str, Any],
@@ -560,13 +567,7 @@ def run_displayed(args: argparse.Namespace, binary: Path) -> int:
         "driver_error": failure,
     }
     checks = build_native_soak_checks(samples, thresholds, outcomes)
-    # A missing log would read as empty and silently pass the runtime-error check.
-    checks.append({
-        "name": "application log present",
-        "actual": application_log.is_file(),
-        "expected": True,
-        "passed": application_log.is_file(),
-    })
+    checks.append(application_log_check(application_log))
     passed = all(check["passed"] for check in checks)
     report = {
         "status": "pass" if passed else "fail",

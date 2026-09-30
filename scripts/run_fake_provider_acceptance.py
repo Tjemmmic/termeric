@@ -15,6 +15,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from scripts.cargo_artifacts import test_binary_from_cargo_messages
+
 
 FAKE_PROVIDER_TEST = (
     "app::tests::fake_agent_clis_exercise_every_agent_command_end_to_end"
@@ -31,43 +33,6 @@ def safe_test_environment(source: dict[str, str]) -> dict[str, str]:
     for variable in PROVIDER_OPT_IN_ENVIRONMENT:
         environment.pop(variable, None)
     return environment
-
-
-def test_binary_from_cargo_messages(output: str) -> Path:
-    executables: set[Path] = set()
-    for line in output.splitlines():
-        try:
-            message = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(message, dict) or message.get("reason") != "compiler-artifact":
-            continue
-        target = message.get("target")
-        profile = message.get("profile")
-        executable = message.get("executable")
-        kind = target.get("kind") if isinstance(target, dict) else None
-        if (
-            isinstance(target, dict)
-            and target.get("name") == "termeric"
-            and isinstance(kind, list)
-            and "bin" in kind
-            and isinstance(profile, dict)
-            and profile.get("test") is True
-            and isinstance(executable, str)
-        ):
-            reported = Path(executable)
-            executables.add(
-                (reported if reported.is_absolute() else ROOT / reported).resolve()
-            )
-    if len(executables) != 1:
-        raise AcceptanceError(
-            "expected one Termeric test executable from Cargo, found "
-            f"{len(executables)}"
-        )
-    binary = executables.pop()
-    if binary.is_symlink() or not binary.is_file():
-        raise AcceptanceError(f"Cargo reported a missing test executable: {binary}")
-    return binary
 
 
 def run_fake_provider_test(
@@ -138,7 +103,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         run_fake_provider_test(args.output)
-    except (OSError, AcceptanceError, subprocess.SubprocessError) as error:
+    except (OSError, ValueError, AcceptanceError, subprocess.SubprocessError) as error:
         print(f"Fake-agent acceptance failed: {error}", file=sys.stderr)
         return 1
     print(f"PASS: {FAKE_PROVIDER_TEST}")

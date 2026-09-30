@@ -75,7 +75,7 @@ def verify_palette_delivery(streams, expected):
     """Join fragments before calling; refuse duplicates, leakage, and wrong PTYs."""
     actual = {pid: bytes(data) for pid, data in streams.items() if data}
     if len(expected) != 2 or any(not data for data in expected.values()):
-        raise ValueError("palette evidence requires two exact fenced PTY owners")
+        raise ValueError("palette checks require two exact fenced PTY owners")
     if actual != expected:
         raise ValueError(f"palette input escaped its modal or exact destination: {actual!r} != {expected!r}")
 
@@ -93,8 +93,7 @@ def run_palette_input_checks(gui, app, transcript, original_pid):
         gui.wait_until(value, lambda: gui.pids_receiving_token(records(), value.encode()) == {owner})
 
     report = {
-        "schema": 3, "backend": "wayland", "cases": [],
-        "coverage": "private Sway native query editing and exact local-pane bytes; not native IME, screen-reader, or visual acceptance",
+        "backend": "wayland", "cases": [],
     }
     try:
         app.renderer_resize("wayland", *SURFACE)
@@ -161,7 +160,7 @@ def run_palette_input_checks(gui, app, transcript, original_pid):
                 report["cases"].append(case)
                 verify_palette_delivery(delta, expected)
                 if case["unrelated_focus_losses"] != 0:
-                    raise gui.AcceptanceError("unrelated focus loss invalidated palette editing evidence")
+                    raise gui.AcceptanceError("unrelated focus loss during a palette editing case")
             select(sibling)
             app.wayland_chord(("alt", "shift"), "w")
             gui.wait_until("palette sibling closes", lambda: not gui.Path(f"/proc/{sibling}").exists())

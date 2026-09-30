@@ -79,6 +79,30 @@ class SoakCeilingTests(unittest.TestCase):
         # Each record must reconcile against its predecessor, not just totals.
         self.assertFalse(all(check["passed"] for check in evaluate_diff_history_checks([valid, valid])))
 
+    def test_progress_iterations_must_be_contiguous_and_end_with_one_completion(self):
+        def record(iteration):
+            return {"iteration": iteration, "transcript_queue_bytes": 1024,
+                    "transcript_queue_bytes_after_finish": 0,
+                    "transcript_entries_accepted": 68, "transcript_entries_dropped": 0}
+
+        def contiguous(progress):
+            checks = evaluate_progress_ceilings(progress, max_transcript_queue_bytes=4096)
+            return next(check for check in checks if check["name"].startswith("iterations are contiguous"))["passed"]
+
+        done = {"complete": True, "iterations": 2}
+        self.assertTrue(contiguous([record(1), record(2), done]))
+        for name, progress in {
+            "gap": [record(1), record(3), {"complete": True, "iterations": 2}],
+            "duplicate": [record(1), record(1), done],
+            "no completion": [record(1), record(2)],
+            "completion mid-stream": [record(1), done, record(2)],
+            "two completions": [record(1), record(2), done, done],
+            "wrong count": [record(1), record(2), {"complete": True, "iterations": 3}],
+            "empty": [],
+        }.items():
+            with self.subTest(name=name):
+                self.assertFalse(contiguous(progress))
+
     def evaluate(self, samples: list[dict]) -> list[dict]:
         return evaluate_resource_ceilings(
             samples,
@@ -383,7 +407,7 @@ class CoreRunnerMainTests(unittest.TestCase):
                 patch.object(run_soak, "build_test_binary", return_value=Path("/fixture/test-binary")),
                 patch.object(run_soak.subprocess, "Popen", FakeProcess),
                 patch.object(run_soak.subprocess, "run", side_effect=fake_command),
-                patch.object(run_soak, "process_snapshot", side_effect=snapshots),
+                patch.object(run_soak, "process_snapshot", side_effect=snapshots) as snapshot,
                 patch.object(run_soak.time, "sleep"),
                 (patch.object(run_soak.time, "monotonic", side_effect=[0.0, 100.0])
                  if mode == "timeout" else contextlib.nullcontext()),
@@ -395,6 +419,7 @@ class CoreRunnerMainTests(unittest.TestCase):
                     exited = False
                 except SystemExit:
                     exited = True
+            state["snapshot_calls"] = snapshot.call_count
             return json.loads(report_path.read_text()), state, exited
 
     def test_clean_run_passes_and_writes_the_report(self):
@@ -411,6 +436,9 @@ class CoreRunnerMainTests(unittest.TestCase):
                 self.assertEqual(report["status"], "fail")
                 if mode in {"interrupt", "timeout"}:
                     self.assertTrue(state["killed"])
+                if mode == "timeout":
+                    # The deadline passes before the first sample; the scenario is killed for it.
+                    self.assertEqual(state["snapshot_calls"], 0)
 
     def test_gpu_timeout_does_not_launch_the_scenario(self):
         report, state, exited = self.invoke("gpu-timeout", gpu=True)

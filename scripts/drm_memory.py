@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded Linux DRM fdinfo memory parsing for native soak evidence."""
+"""Bounded Linux DRM fdinfo memory parsing for the displayed resource soak."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ PCI_DEVICE = re.compile(r"[0-9A-Fa-f]{4}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}\.[0-7]")
 
 
 class DrmMemoryError(ValueError):
-    """Standardized DRM usage data violates the evidence contract."""
+    """Standardized DRM usage data is malformed or exceeds its limits."""
 
 
 def _bounded_label(value: object, field: str) -> str:
@@ -309,8 +309,7 @@ def _edge_growth(values: list[int]) -> float:
 
 def summarize_drm_memory(samples: list[dict[str, Any]]) -> dict[str, Any]:
     snapshots = [
-        sample.get("gpu_memory") or _unavailable("no-drm-client-fd")
-        for sample in samples
+        sample["gpu_memory"] for sample in samples
     ]
     measured = [snapshot for snapshot in snapshots if snapshot["status"] == "measured"]
     total_values = [

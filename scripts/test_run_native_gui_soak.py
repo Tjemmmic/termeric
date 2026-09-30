@@ -9,6 +9,7 @@ from scripts.run_native_gui_soak import (
     MAX_DRIVER_ERROR_CHARACTERS,
     bounded_driver_error,
     bounded_process_tree_pids,
+    application_log_check,
     build_native_soak_checks,
     evaluate_native_checks,
     fixture_arguments,
@@ -239,8 +240,12 @@ class NativeGuiSoakTests(unittest.TestCase):
         self.assertEqual(checks[-1]["actual"], error)
 
 
-
-
+    def test_missing_application_log_fails_its_check(self) -> None:
+        with TemporaryDirectory() as directory:
+            log = Path(directory) / "termeric.log"
+            self.assertFalse(application_log_check(log)["passed"])
+            log.write_text("", encoding="utf-8")
+            self.assertTrue(application_log_check(log)["passed"])
 
     def test_artifact_destination_must_be_new_or_empty(self) -> None:
         with TemporaryDirectory() as directory:

@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.run_fake_provider_acceptance import test_binary_from_cargo_messages
+from scripts.cargo_artifacts import test_binary_from_cargo_messages
 
 TEST = "terminal::shell_integration::tests::supported_shells_preserve_user_rc_and_emit_multiline_exit_regions"
 PREFIX = "TERMERIC_SHELL_ACCEPTANCE="

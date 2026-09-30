@@ -41,7 +41,7 @@ from scripts.gui_background import run_background_scenario
 from scripts.gui_mouse_routing import run_mouse_ownership_checks
 from scripts.gui_palette_input import run_palette_input_checks
 from scripts.gui_graphics import CLIENT_TIMEOUT, graphics_clients_ready, run_wayland_graphics
-from scripts.gui_settings_input import run_settings_input_checks
+from scripts.gui_settings_input import CASES as SETTINGS_CASES, run_settings_input_checks
 
 FIXTURE = ROOT / "termeric" / "tests" / "gui" / "terminal_fixture.py"
 BASELINES = ROOT / "termeric" / "tests" / "gui" / "baselines"
@@ -1649,6 +1649,13 @@ def run_wayland_interaction_scenario(
         run_palette_input_checks(sys.modules[__name__], app, transcript, original_pid)
         run_settings_input_checks(sys.modules[__name__], app, transcript, original_pid)
         run_mouse_ownership_checks(sys.modules[__name__], app, transcript, original_pid)
+        # Only the Settings cases may change the font anywhere in this scenario.
+        font_changes = app.log_count("Font size set to ")
+        if font_changes != 2 * len(SETTINGS_CASES):
+            raise AcceptanceError(
+                f"expected {2 * len(SETTINGS_CASES)} font-size changes from the Settings "
+                f"cases, saw {font_changes}"
+            )
 
         app.wayland_chord(("alt",), "F4")
         try:

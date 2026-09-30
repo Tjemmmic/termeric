@@ -109,7 +109,7 @@ def run_mouse_ownership_checks(gui, app, transcript, original_pid):
                     streams = gui.input_streams(records())
                     delta = {pid: bytes(streams.get(pid, b""))[len(baseline.get(pid, b"")):] for pid in (original_pid, other)}
                     if app.log_count("Window focus changed: false") != lost:
-                        raise gui.AcceptanceError("unrelated focus loss invalidated mouse ownership evidence")
+                        raise gui.AcceptanceError("unrelated focus loss during a mouse ownership case")
                     # Moving before a tab switch is still inside the old full
                     # grid and may legitimately emit motion before cancellation.
                     try:

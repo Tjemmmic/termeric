@@ -4,12 +4,12 @@ import tempfile
 import unittest
 from unittest import mock
 
+from scripts.cargo_artifacts import CargoArtifactError, test_binary_from_cargo_messages
 from scripts.run_fake_provider_acceptance import (
     FAKE_PROVIDER_TEST,
     AcceptanceError,
     run_fake_provider_test,
     safe_test_environment,
-    test_binary_from_cargo_messages,
 )
 
 
@@ -40,7 +40,7 @@ class FakeProviderAcceptanceTests(unittest.TestCase):
             self.assertEqual(test_binary_from_cargo_messages(messages), binary)
 
     def test_cargo_message_rejects_missing_or_ambiguous_test_binaries(self) -> None:
-        with self.assertRaisesRegex(AcceptanceError, "found 0"):
+        with self.assertRaisesRegex(CargoArtifactError, "found 0"):
             test_binary_from_cargo_messages("not json")
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -48,7 +48,7 @@ class FakeProviderAcceptanceTests(unittest.TestCase):
             for binary in binaries:
                 binary.write_bytes(b"test")
             messages = "\n".join(build_message(binary) for binary in binaries)
-            with self.assertRaisesRegex(AcceptanceError, "found 2"):
+            with self.assertRaisesRegex(CargoArtifactError, "found 2"):
                 test_binary_from_cargo_messages(messages)
 
     def run_with(self, root: Path, test_stdout: str):

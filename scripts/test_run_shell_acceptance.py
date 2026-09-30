@@ -6,6 +6,7 @@ import unittest
 from unittest import mock
 
 from scripts import run_shell_acceptance as runner
+from scripts.cargo_artifacts import CargoArtifactError
 
 
 def rows(extended=False):
@@ -152,6 +153,17 @@ class ShellAcceptanceTests(unittest.TestCase):
                 self.assertEqual(results["status"], "fail")
                 self.assertTrue(results["error"])
 
+
+    def test_missing_test_binary_fails_cleanly(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "out"
+            with mock.patch.object(runner, "run_logged", return_value="build fixture"), \
+                 mock.patch.object(runner, "test_binary_from_cargo_messages",
+                                   side_effect=CargoArtifactError("found 0")), \
+                 mock.patch.object(sys, "argv", ["run_shell_acceptance.py", "--output", str(output)]), \
+                 mock.patch("sys.stderr"):
+                self.assertEqual(runner.main(), 1)
+            self.assertEqual(json.loads((output / "results.json").read_text())["status"], "fail")
 
 if __name__ == "__main__":
     unittest.main()
