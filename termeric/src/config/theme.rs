@@ -331,8 +331,10 @@ impl Default for Color {
 #[serde(untagged)]
 enum ColorDef {
     Hex(String),
-    Rgb { r: u8, g: u8, b: u8 },
+    // Untagged variants are tried in order, and `Rgb` would also accept a
+    // table carrying `a` (dropping it), so the alpha form must come first.
     Rgba { r: u8, g: u8, b: u8, a: f32 },
+    Rgb { r: u8, g: u8, b: u8 },
 }
 
 impl From<ColorDef> for Color {
@@ -348,6 +350,29 @@ impl From<ColorDef> for Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inline_color_tables_keep_their_alpha() {
+        #[derive(Deserialize)]
+        struct Colors {
+            translucent: Color,
+            opaque: Color,
+        }
+        let colors: Colors = toml::from_str(
+            "translucent = { r = 40, g = 42, b = 54, a = 0.5 }\nopaque = { r = 1, g = 2, b = 3 }",
+        )
+        .unwrap();
+        assert_eq!(
+            (
+                colors.translucent.r,
+                colors.translucent.g,
+                colors.translucent.b
+            ),
+            (40, 42, 54)
+        );
+        assert_eq!(colors.translucent.a, 0.5);
+        assert_eq!(colors.opaque.a, 1.0);
+    }
 
     #[test]
     fn shipped_custom_theme_example_loads() {
