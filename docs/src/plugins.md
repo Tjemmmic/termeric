@@ -59,7 +59,7 @@ Select an installed plugin to see its source, requested and granted permissions,
 | `show ID [--json]` | The same for one plugin. |
 | `validate DIRECTORY` | Check a plugin directory without installing it, and print its ID, version, fingerprint, and permissions. |
 | `install DIRECTORY [--allow PERMISSION]… [--enable] [--replace]` | Install a plugin, granting each permission named with `--allow`. `--enable` turns it on and requires every requested permission. `--replace` reinstalls a plugin that is already installed. |
-| `update ID` | Reinstall from the directory it was installed from, keeping its grants and whether it's enabled. |
+| `update ID` | Reinstall from the directory it was installed from, keeping whether it's enabled and its grants for the permissions the update still requests. |
 | `enable ID` | Turn a plugin on. Every requested permission must already be granted. |
 | `disable ID` | Turn a plugin off without removing it. |
 | `configure ID --default-profile PROFILE` | Set the default profile. |
@@ -81,7 +81,7 @@ You grant permissions when you install. The rules are the same everywhere:
 
 Installing copies the manifest, so editing the plugin's source directory has no effect until you update. **Update from source** in the manager shows the installed and updated version, profile and command counts, both fingerprints, and the permissions added and removed. Permissions that stay the same keep their grants; newly requested ones start ungranted. Choose **Update and keep enabled** (or **Update and enable**), which needs every permission granted, or **Update and disable**.
 
-`termeric plugin update ID` does the same without a review, so it refuses an update that requests a permission or a wider scope the installed version didn't; install that version with `--replace` and explicit `--allow` options instead.
+`termeric plugin update ID` does the same without a review, so it refuses an update that requests a permission or a wider scope the installed version didn't; install that version with `--replace` and explicit `--allow` options instead. Grants for permissions the update drops are removed, and a grant whose permission the update narrows to window scope narrows with it.
 
 An update keeps your settings, and is refused if a setting you changed doesn't fit the updated manifest; unset or reset it first. A default profile that the updated manifest drops is cleared.
 
@@ -267,7 +267,7 @@ Tabs, panes, and focus changed by a plugin's own actions raise no events; the ac
 
 A response has `schema_version` 1, the `request_id` for persistent handlers (and none for process-per-event handlers), and up to 8 `actions`. Any number of them may be `show-message` or `show-notice`; at most one may be a query or another action. An empty `actions` list is a valid reply.
 
-Termeric checks the whole response before doing anything: if any action lacks its permission, has an invalid field, or isn't allowed at that point in the conversation, none of it runs and you see an error toast naming the plugin.
+Termeric checks the whole response before doing anything: if any action lacks its permission, has an invalid field, or isn't allowed at that point in the conversation, none of it runs and you see an error toast naming the plugin. Which window an action targets is checked only when the action runs, so naming another window without the permission's `:all-windows` scope comes back as a result with `ok` set to `false`, after the response's messages have been shown.
 
 ### Actions
 
@@ -297,7 +297,7 @@ Every action has a `type`. All but the two message actions and the two queries a
 
 What the actions do, and their rules:
 
-- `select-tab` and `focus-pane` change the selection inside a window without raising it; `focus-window` asks the desktop to raise a window, which a Wayland compositor may refuse.
+- `select-tab` and `focus-pane` change the selection inside a window without raising it; `focus-window` asks the desktop to raise a window. On Wayland the compositor controls focus, so Termeric refuses `focus-window` unless the window is already focused.
 - `send-text` types `text` (at most 8 KiB of printable characters, tabs, and newlines), as a bracketed paste when `paste` is `true`, then presses Enter when `enter` is `true`. It needs `security.allow_gui_control_input = true` in your [configuration](configuration.md) and is refused for a read-only pane. Text that looks like a destructive command, such as `rm -rf ~`, opens a confirmation dialog instead of being typed: `disposition` is `pending_confirmation` and `confirmation_id` identifies the dialog. Otherwise `disposition` is `sent`. While a confirmation is open in that window, further `send-text` actions are refused.
 - `create-tab` opens a shell tab. It is refused while the window's active tab belongs to a [live domain](live-domains.md).
 - `close-tab` can't close a window's last tab, and `close-pane` can't close a tab's last pane.
@@ -317,13 +317,15 @@ A query or action gets exactly one result, sent to the persistent handler as a r
 
 ### Follow-ups
 
-A conversation is limited so that a plugin can't loop:
+A conversation is limited so that one event can't set off an endless chain of requests:
 
 1. An event may start one query or one action.
 2. A `workspace-query-result` may start one `query-terminal` or one action, but not another workspace query.
 3. A `terminal-query-result` or `action-result` ends the conversation; its response may only show messages and notices.
 
 So "inspect, then act" takes three replies: the event asks for `query-workspace`, the result names the action, and the `action-result` reports how it went.
+
+The limit applies to one conversation, not across events. An action can cause a new event that starts a new conversation: a `send-text` with `enter` set runs a command, and its `command-completed` event reaches the handler again. A handler that sends text in reply to `command-completed` must decide for itself when to stop.
 
 ### Limits and errors
 
@@ -336,7 +338,7 @@ So "inspect, then act" takes three replies: the event asks for `query-workspace`
 | Persistent handlers per window | 8 |
 | Queued requests per window | 32 |
 
-A handler that exits with an error, times out, writes invalid JSON, sends the wrong `schema_version` or `request_id`, or asks for something it may not do produces an error toast, "Plugin ID event handler failed", with the reason and up to 4 KiB of its standard error. An action that Termeric accepts but can't carry out, such as selecting a tab that has closed, comes back as an `action-result` with `ok` set to `false`.
+A handler that exits with an error, times out, writes invalid JSON, sends the wrong `schema_version` or `request_id`, or asks for something it may not do produces an error toast, "Plugin ID event handler failed", with the reason and, when the handler exited with an error, the start of its standard error. Control characters are removed and the whole message is cut to 1 KiB. An action that Termeric accepts but can't carry out, such as selecting a tab that has closed, comes back as an `action-result` with `ok` set to `false`.
 
 ### A complete example
 

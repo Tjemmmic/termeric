@@ -7,7 +7,7 @@ use super::{
 use crate::cli::{LaunchPlan, WindowLaunch};
 use crate::config::Config;
 use crate::plugin::permission::{Capability, PermissionScope, PluginPermissions};
-use crate::plugin::structured::StructuredResponseAction;
+use crate::plugin::structured::{StructuredHandlerInvocation, StructuredResponseAction};
 use anyhow::Result;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::collections::{HashMap, VecDeque};
@@ -373,10 +373,25 @@ impl Application {
         &mut self,
         event_loop: &ActiveEventLoop,
     ) -> Vec<std::result::Result<CreatedWindow, String>> {
+        self.start_pending_windows(|window| ApplicationHandler::resumed(window, event_loop))
+    }
+
+    /// Start every pending window with `start` (native window creation) and
+    /// register each one that became usable.
+    fn start_pending_windows(
+        &mut self,
+        mut start: impl FnMut(&mut App),
+    ) -> Vec<std::result::Result<CreatedWindow, String>> {
         let mut startup_errors = Vec::new();
         let mut results = Vec::with_capacity(self.pending.len());
         for mut window in self.pending.drain(..) {
-            ApplicationHandler::resumed(&mut window, event_loop);
+            // Starting a window already hands its stable ID to plugins (in
+            // app-ready and in restored plugin panes' launch context), so the
+            // ID is assigned first. A window that fails to start keeps its ID
+            // out of circulation rather than lending it to the next one.
+            window.control_window_id = self.next_control_window_id;
+            self.next_control_window_id = self.next_control_window_id.saturating_add(1);
+            start(&mut window);
             if window.startup_error.is_none()
                 && !window.should_exit
                 && let Some(id) = window.window.as_ref().map(|native| native.id())
@@ -389,11 +404,9 @@ impl Application {
                     // tab moves in, right after this.
                     .or(window.launch.adopts_tab.then_some(0))
             {
-                let control_id = self.next_control_window_id;
-                window.control_window_id = control_id;
+                let control_id = window.control_window_id;
                 self.window_order.push(id);
                 self.control_window_ids.insert(id, control_id);
-                self.next_control_window_id = self.next_control_window_id.saturating_add(1);
                 self.windows.insert(id, window);
                 results.push(Ok(CreatedWindow {
                     window_id: control_id,
@@ -864,19 +877,17 @@ impl Application {
             native_id: origin_native_id,
             window_id: origin_window_id,
         };
-        let result = self.plugin_host_operation_event(
-            &host.plugin_id,
-            origin,
-            host.continuation.authority.grants(),
-            &host.operation,
-        );
+        let super::plugin_actions::StructuredHostOperation {
+            plugin_id,
+            operation,
+            continuation,
+        } = host;
+        let result =
+            self.plugin_host_operation_continuation(&plugin_id, origin, &operation, continuation);
         let Some(origin_window) = self.windows.get_mut(&origin_native_id) else {
             return;
         };
-        let submitted = result.and_then(|(event_json, close_target)| {
-            let mut continuation = host.continuation;
-            continuation.authority = continuation.authority.after(&host.operation);
-            continuation.event_json = event_json;
+        let submitted = result.and_then(|(continuation, close_target)| {
             origin_window
                 .submit_structured_handler(continuation)
                 .map(|request_id| (request_id, close_target))
@@ -885,22 +896,41 @@ impl Application {
             Ok((request_id, Some(close_target))) => self.arm_plugin_window_close(
                 close_target,
                 origin_native_id,
-                &host.plugin_id,
+                &plugin_id,
                 plugin_generation,
                 request_id,
             ),
             Ok((_, None)) => {}
             Err(error) => {
-                let name = host.operation.name();
-                log::error!(
-                    "Structured plugin {:?} {name} failed: {error}",
-                    host.plugin_id
-                );
+                let name = operation.name();
+                log::error!("Structured plugin {plugin_id:?} {name} failed: {error}");
                 origin_window
                     .toasts
-                    .error(format!("Plugin {} {name} failed: {error}", host.plugin_id));
+                    .error(format!("Plugin {plugin_id} {name} failed: {error}"));
             }
         }
+    }
+
+    /// Execute a handler's host operation for `origin` and turn the handler's
+    /// `continuation` into the invocation that delivers the result, under the
+    /// authority the follow-up rule leaves it. A plugin window closure also
+    /// returns the window to close once that result has been submitted.
+    fn plugin_host_operation_continuation(
+        &mut self,
+        plugin_id: &str,
+        origin: PluginOrigin,
+        operation: &StructuredResponseAction,
+        mut continuation: StructuredHandlerInvocation,
+    ) -> std::result::Result<(StructuredHandlerInvocation, Option<WindowId>), String> {
+        let (event_json, close_target) = self.plugin_host_operation_event(
+            plugin_id,
+            origin,
+            continuation.authority.grants(),
+            operation,
+        )?;
+        continuation.authority = continuation.authority.after(operation);
+        continuation.event_json = event_json;
+        Ok((continuation, close_target))
     }
 
     fn handle_control_request(
@@ -3845,19 +3875,24 @@ mod tests {
     use super::*;
     use crate::plugin::permission::PluginPermission;
 
-    /// Every capability, scoped ones at all-windows scope.
-    fn all_windows_grants() -> PluginPermissions {
+    /// Every capability, scoped ones at `scope`.
+    fn every_capability(scope: PermissionScope) -> PluginPermissions {
         PluginPermissions::from_permissions(Capability::ALL.into_iter().map(|capability| {
             PluginPermission {
                 capability,
                 scope: if capability.is_scoped() {
-                    PermissionScope::AllWindows
+                    scope
                 } else {
                     PermissionScope::Window
                 },
             }
         }))
         .unwrap()
+    }
+
+    /// Every capability, scoped ones at all-windows scope.
+    fn all_windows_grants() -> PluginPermissions {
+        every_capability(PermissionScope::AllWindows)
     }
 
     /// Execute one plugin host operation for origin window `origin_window_id`,
@@ -5507,7 +5542,7 @@ mod tests {
     }
 
     #[test]
-    fn plugin_process_inventory_is_ordered_bounded_and_excludes_closing_windows() {
+    fn plugin_workspace_query_inventory_is_ordered_bounded_and_excludes_closing_windows() {
         let plan = LaunchPlan {
             windows: vec![WindowLaunch::default(); super::super::PLUGIN_PROCESS_MAX_WINDOWS + 2],
             separate_process: false,
@@ -5573,7 +5608,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn plugin_process_navigation_is_exact_atomic_non_activating_and_hook_suppressed() {
+    fn plugin_navigation_is_exact_atomic_non_activating_and_hook_suppressed() {
         if !std::path::Path::new("/bin/sh").is_file() {
             return;
         }
@@ -5583,11 +5618,11 @@ mod tests {
 
         impl crate::plugin::hooks::Plugin for TabSwitchObserver {
             fn id(&self) -> &str {
-                "process-navigator"
+                "navigator"
             }
 
             fn name(&self) -> &str {
-                "Process Navigation Observer"
+                "Navigation Observer"
             }
 
             fn on_hook(
@@ -5653,7 +5688,7 @@ mod tests {
 
         let selected = plugin_event(
             &mut application,
-            "process-navigator",
+            "navigator",
             9,
             crate::plugin::structured::StructuredResponseAction::SelectTab {
                 action_id: "select-sibling".into(),
@@ -5661,7 +5696,7 @@ mod tests {
                 tab_id: first as u64,
             },
         );
-        assert_eq!(selected["plugin_id"], "process-navigator");
+        assert_eq!(selected["plugin_id"], "navigator");
         assert_eq!(selected["event"]["type"], "action-result");
         assert_eq!(selected["origin_window_id"], 9);
         assert_eq!(selected["event"]["window_id"], 7);
@@ -5683,7 +5718,7 @@ mod tests {
 
         let selected_same_window = plugin_event(
             &mut application,
-            "process-navigator",
+            "navigator",
             7,
             crate::plugin::structured::StructuredResponseAction::SelectTab {
                 action_id: "select-current".into(),
@@ -5700,7 +5735,7 @@ mod tests {
             crate::plugin::structured::StructuredHandlerCompletion {
                 window_id: native_id,
                 plugin_generation: generation,
-                plugin_id: "process-navigator".into(),
+                plugin_id: "navigator".into(),
                 request_id: 99,
                 continuation: None,
                 result: Ok(vec![
@@ -5723,7 +5758,7 @@ mod tests {
 
         let missing_pane = plugin_event(
             &mut application,
-            "process-navigator",
+            "navigator",
             7,
             crate::plugin::structured::StructuredResponseAction::FocusPane {
                 action_id: "missing-pane".into(),
@@ -5751,7 +5786,7 @@ mod tests {
 
         let focused = plugin_event(
             &mut application,
-            "process-navigator",
+            "navigator",
             9,
             crate::plugin::structured::StructuredResponseAction::FocusPane {
                 action_id: "focus-sibling".into(),
@@ -5770,7 +5805,7 @@ mod tests {
 
         let stale = plugin_event(
             &mut application,
-            "process-navigator",
+            "navigator",
             9,
             crate::plugin::structured::StructuredResponseAction::SelectTab {
                 action_id: "stale-window".into(),
@@ -5798,7 +5833,7 @@ mod tests {
             .closed = true;
         let closed = plugin_event(
             &mut application,
-            "process-navigator",
+            "navigator",
             9,
             crate::plugin::structured::StructuredResponseAction::SelectTab {
                 action_id: "closed-tab".into(),
@@ -5817,7 +5852,7 @@ mod tests {
         application.windows.get_mut(&native_id).unwrap().should_exit = true;
         let closing = plugin_event(
             &mut application,
-            "process-navigator",
+            "navigator",
             9,
             crate::plugin::structured::StructuredResponseAction::SelectTab {
                 action_id: "closing-window".into(),
@@ -5838,7 +5873,7 @@ mod tests {
         target.tabs = None;
         let uninitialized = plugin_event(
             &mut application,
-            "process-navigator",
+            "navigator",
             9,
             crate::plugin::structured::StructuredResponseAction::SelectTab {
                 action_id: "uninitialized-window".into(),
@@ -5861,7 +5896,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn plugin_process_tab_creation_is_exact_non_activating_and_hook_suppressed() {
+    fn plugin_tab_creation_is_exact_non_activating_and_hook_suppressed() {
         if !std::path::Path::new("/bin/sh").is_file() {
             return;
         }
@@ -5871,11 +5906,11 @@ mod tests {
 
         impl crate::plugin::hooks::Plugin for TabCreatedObserver {
             fn id(&self) -> &str {
-                "process-tab-builder"
+                "tab-builder"
             }
 
             fn name(&self) -> &str {
-                "Process Tab Builder Observer"
+                "Tab Builder Observer"
             }
 
             fn on_hook(
@@ -5921,14 +5956,14 @@ mod tests {
 
         let created = plugin_event(
             &mut application,
-            "process-tab-builder",
+            "tab-builder",
             9,
             crate::plugin::structured::StructuredResponseAction::CreateTab {
                 action_id: "new-sibling-task".into(),
                 window_id: Some(7),
             },
         );
-        assert_eq!(created["plugin_id"], "process-tab-builder");
+        assert_eq!(created["plugin_id"], "tab-builder");
         assert_eq!(created["event"]["type"], "action-result");
         assert_eq!(created["event"]["action"], "create-tab");
         assert_eq!(created["event"]["action_id"], "new-sibling-task");
@@ -5951,7 +5986,7 @@ mod tests {
 
         let created_same_window = plugin_event(
             &mut application,
-            "process-tab-builder",
+            "tab-builder",
             7,
             crate::plugin::structured::StructuredResponseAction::CreateTab {
                 action_id: "new-current-task".into(),
@@ -5979,7 +6014,7 @@ mod tests {
 
         let stale = plugin_event(
             &mut application,
-            "process-tab-builder",
+            "tab-builder",
             9,
             crate::plugin::structured::StructuredResponseAction::CreateTab {
                 action_id: "stale-window".into(),
@@ -6006,7 +6041,7 @@ mod tests {
         application.windows.get_mut(&native_id).unwrap().should_exit = true;
         let closing = plugin_event(
             &mut application,
-            "process-tab-builder",
+            "tab-builder",
             9,
             crate::plugin::structured::StructuredResponseAction::CreateTab {
                 action_id: "closing-window".into(),
@@ -6044,7 +6079,7 @@ mod tests {
         });
         let live_domain = plugin_event(
             &mut application,
-            "process-tab-builder",
+            "tab-builder",
             9,
             crate::plugin::structured::StructuredResponseAction::CreateTab {
                 action_id: "live-domain-window".into(),
@@ -6079,7 +6114,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn plugin_process_pane_creation_is_exact_atomic_and_non_activating() {
+    fn plugin_pane_creation_is_exact_atomic_and_non_activating() {
         if !std::path::Path::new("/bin/sh").is_file() {
             return;
         }
@@ -6121,7 +6156,7 @@ mod tests {
 
         let created = plugin_event(
             &mut application,
-            "process-pane-builder",
+            "pane-builder",
             9,
             crate::plugin::structured::StructuredResponseAction::CreatePane {
                 action_id: "split-sibling-task".into(),
@@ -6131,7 +6166,7 @@ mod tests {
                 direction: crate::control::protocol::SplitDirection::Vertical,
             },
         );
-        assert_eq!(created["plugin_id"], "process-pane-builder");
+        assert_eq!(created["plugin_id"], "pane-builder");
         assert_eq!(created["event"]["action"], "create-pane");
         assert_eq!(created["event"]["action_id"], "split-sibling-task");
         assert_eq!(created["event"]["ok"], true);
@@ -6163,7 +6198,7 @@ mod tests {
 
         let created_same_window = plugin_event(
             &mut application,
-            "process-pane-builder",
+            "pane-builder",
             7,
             crate::plugin::structured::StructuredResponseAction::CreatePane {
                 action_id: "split-current-task".into(),
@@ -6192,7 +6227,7 @@ mod tests {
 
         let stale_window = plugin_event(
             &mut application,
-            "process-pane-builder",
+            "pane-builder",
             9,
             crate::plugin::structured::StructuredResponseAction::CreatePane {
                 action_id: "stale-window".into(),
@@ -6212,7 +6247,7 @@ mod tests {
 
         let stale_pane = plugin_event(
             &mut application,
-            "process-pane-builder",
+            "pane-builder",
             9,
             crate::plugin::structured::StructuredResponseAction::CreatePane {
                 action_id: "stale-pane".into(),
@@ -6254,7 +6289,7 @@ mod tests {
         });
         let live_domain = plugin_event(
             &mut application,
-            "process-pane-builder",
+            "pane-builder",
             9,
             crate::plugin::structured::StructuredResponseAction::CreatePane {
                 action_id: "live-domain".into(),
@@ -6287,7 +6322,7 @@ mod tests {
         };
         let serial = plugin_event(
             &mut application,
-            "process-pane-builder",
+            "pane-builder",
             9,
             crate::plugin::structured::StructuredResponseAction::CreatePane {
                 action_id: "serial".into(),
@@ -6308,7 +6343,7 @@ mod tests {
         application.windows.get_mut(&native_id).unwrap().should_exit = true;
         let closing = plugin_event(
             &mut application,
-            "process-pane-builder",
+            "pane-builder",
             9,
             crate::plugin::structured::StructuredResponseAction::CreatePane {
                 action_id: "closing-window".into(),
@@ -6338,7 +6373,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn plugin_process_terminal_queries_are_exact_bounded_and_non_activating() {
+    fn plugin_terminal_queries_are_exact_bounded_and_non_activating() {
         if !std::path::Path::new("/bin/sh").is_file() {
             return;
         }
@@ -6389,7 +6424,7 @@ mod tests {
 
         let encoded = plugin_event(
             &mut application,
-            "process-terminal-reader",
+            "terminal-reader",
             9,
             StructuredResponseAction::QueryTerminal {
                 query_id: "sibling-output".into(),
@@ -6406,7 +6441,7 @@ mod tests {
         );
         let value = encoded;
         assert_eq!(value["schema_version"], 1);
-        assert_eq!(value["plugin_id"], "process-terminal-reader");
+        assert_eq!(value["plugin_id"], "terminal-reader");
         assert_eq!(value["event"]["type"], "terminal-query-result");
         assert_eq!(value["event"]["query_id"], "sibling-output");
         assert_eq!(value["event"]["ok"], true);
@@ -6438,7 +6473,7 @@ mod tests {
 
         let missing = plugin_event(
             &mut application,
-            "process-terminal-reader",
+            "terminal-reader",
             9,
             StructuredResponseAction::QueryTerminal {
                 query_id: "stale-target".into(),
@@ -6470,7 +6505,7 @@ mod tests {
             .process(format!("\x1b[?2026l\x1b[2J\x1b[H{}", "\\".repeat(9_000)).as_bytes());
         let escaped = plugin_event(
             &mut application,
-            "process-terminal-reader",
+            "terminal-reader",
             9,
             StructuredResponseAction::QueryTerminal {
                 query_id: "escaped-text".into(),
@@ -6495,7 +6530,7 @@ mod tests {
         assert!(
             application
                 .plugin_host_operation_event(
-                    "process-terminal-reader",
+                    "terminal-reader",
                     PluginOrigin {
                         native_id,
                         window_id: 9,
@@ -6516,7 +6551,7 @@ mod tests {
         assert!(
             application
                 .plugin_host_operation_event(
-                    "process-terminal-reader",
+                    "terminal-reader",
                     PluginOrigin {
                         native_id,
                         window_id: 9,
@@ -6538,7 +6573,7 @@ mod tests {
         application.windows.get_mut(&native_id).unwrap().should_exit = true;
         let closing = plugin_event(
             &mut application,
-            "process-terminal-reader",
+            "terminal-reader",
             9,
             StructuredResponseAction::QueryTerminal {
                 query_id: "closing-window".into(),
@@ -6560,7 +6595,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn plugin_process_terminal_input_is_exact_guarded_policy_gated_and_non_activating() {
+    fn plugin_terminal_input_is_exact_guarded_policy_gated_and_non_activating() {
         if !std::path::Path::new("/bin/sh").is_file() {
             return;
         }
@@ -6611,7 +6646,7 @@ mod tests {
 
         let disabled = plugin_event(
             &mut application,
-            "process-terminal-writer",
+            "terminal-writer",
             9,
             StructuredResponseAction::SendText {
                 action_id: "policy-disabled".into(),
@@ -6640,7 +6675,7 @@ mod tests {
             .allow_gui_control_input = true;
         let sent = plugin_event(
             &mut application,
-            "process-terminal-writer",
+            "terminal-writer",
             9,
             StructuredResponseAction::SendText {
                 action_id: "safe-input".into(),
@@ -6655,7 +6690,7 @@ mod tests {
         assert!(
             sent.to_string().len() <= crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES
         );
-        assert_eq!(sent["plugin_id"], "process-terminal-writer");
+        assert_eq!(sent["plugin_id"], "terminal-writer");
         assert_eq!(sent["event"]["type"], "action-result");
         assert_eq!(sent["event"]["action"], "send-text");
         assert_eq!(sent["event"]["action_id"], "safe-input");
@@ -6680,7 +6715,7 @@ mod tests {
 
         let stale = plugin_event(
             &mut application,
-            "process-terminal-writer",
+            "terminal-writer",
             9,
             StructuredResponseAction::SendText {
                 action_id: "stale-window".into(),
@@ -6703,7 +6738,7 @@ mod tests {
         application.windows.get_mut(&native_id).unwrap().should_exit = true;
         let closing = plugin_event(
             &mut application,
-            "process-terminal-writer",
+            "terminal-writer",
             9,
             StructuredResponseAction::SendText {
                 action_id: "closing-window".into(),
@@ -6738,7 +6773,7 @@ mod tests {
         );
         let read_only = plugin_event(
             &mut application,
-            "process-terminal-writer",
+            "terminal-writer",
             7,
             StructuredResponseAction::SendText {
                 action_id: "read-only".into(),
@@ -6772,7 +6807,7 @@ mod tests {
 
         let guarded = plugin_event(
             &mut application,
-            "process-terminal-writer",
+            "terminal-writer",
             9,
             StructuredResponseAction::SendText {
                 action_id: "guarded-input".into(),
@@ -6825,13 +6860,7 @@ mod tests {
         application.window_order = vec![origin_native, other_native];
         application.control_window_ids.insert(origin_native, 7);
         application.control_window_ids.insert(other_native, 8);
-        let window_scoped = window_scoped_grants(&[
-            "workspace-query",
-            "navigate",
-            "terminal-read",
-            "pane-move",
-            "window-close",
-        ]);
+        let window_scoped = window_scoped_grants(&["workspace-query", "navigate", "window-close"]);
         let select = |window_id| StructuredResponseAction::SelectTab {
             action_id: "select".into(),
             window_id,
@@ -6870,62 +6899,6 @@ mod tests {
                 "{error}"
             );
         }
-        let (read, _) = plugin_operation(
-            &mut application,
-            "scoped",
-            7,
-            &window_scoped,
-            StructuredResponseAction::QueryTerminal {
-                query_id: "other".into(),
-                window_id: Some(8),
-                tab_id: 0,
-                pane_id: 0,
-                history_lines: 0,
-                max_bytes: 64,
-            },
-        );
-        assert_eq!(read["event"]["type"], "terminal-query-result");
-        assert_eq!(read["event"]["ok"], false);
-        assert!(
-            read["event"]["error"]
-                .as_str()
-                .unwrap()
-                .contains("terminal-read:all-windows")
-        );
-        let (moved, _) = plugin_operation(
-            &mut application,
-            "scoped",
-            7,
-            &window_scoped,
-            StructuredResponseAction::MovePane {
-                action_id: "move".into(),
-                source_window_id: None,
-                source_tab_id: 0,
-                pane_id: 1,
-                destination_window_id: Some(8),
-                destination_tab_id: 0,
-                target_pane_id: 0,
-                direction: crate::control::protocol::SplitDirection::Vertical,
-            },
-        );
-        assert_eq!(moved["event"]["ok"], false);
-        assert!(
-            moved["event"]["error"]
-                .as_str()
-                .unwrap()
-                .contains("pane-move:all-windows")
-        );
-        let origin_panes = application.windows[&origin_native]
-            .tabs
-            .as_ref()
-            .unwrap()
-            .active_tab()
-            .unwrap()
-            .pane_manager
-            .as_ref()
-            .unwrap()
-            .pane_count();
-        assert_eq!(origin_panes, 2);
 
         // Workspace queries see only the origin window at window scope.
         let query = StructuredResponseAction::QueryWorkspace {
@@ -7014,6 +6987,377 @@ mod tests {
         assert!(!application.windows[&origin_native].should_exit);
     }
 
+    /// Every action that targets a window, tab, or pane, aimed at window 8,
+    /// with the capability whose scope governs it and its outcome once that
+    /// capability is granted for all windows. Windows 7 (the origin) and 8
+    /// each hold tab 0, split into panes 0 and 1 by divider `divider_id`, and
+    /// a single-pane tab 1.
+    fn actions_targeting_window_8(
+        divider_id: u64,
+    ) -> Vec<(
+        StructuredResponseAction,
+        Capability,
+        std::result::Result<(), &'static str>,
+    )> {
+        use crate::control::protocol::SplitDirection;
+        let action_id = || "scoped".to_string();
+        vec![
+            (
+                StructuredResponseAction::SelectTab {
+                    action_id: action_id(),
+                    window_id: Some(8),
+                    tab_id: 1,
+                },
+                Capability::Navigate,
+                Ok(()),
+            ),
+            (
+                StructuredResponseAction::FocusPane {
+                    action_id: action_id(),
+                    window_id: Some(8),
+                    tab_id: 0,
+                    pane_id: 0,
+                },
+                Capability::Navigate,
+                Ok(()),
+            ),
+            (
+                StructuredResponseAction::QueryTerminal {
+                    query_id: "scoped".into(),
+                    window_id: Some(8),
+                    tab_id: 0,
+                    pane_id: 0,
+                    history_lines: 0,
+                    max_bytes: 64,
+                },
+                Capability::TerminalRead,
+                Ok(()),
+            ),
+            (
+                StructuredResponseAction::SendText {
+                    action_id: action_id(),
+                    window_id: Some(8),
+                    tab_id: 0,
+                    pane_id: 0,
+                    text: "scoped".into(),
+                    paste: false,
+                    enter: false,
+                },
+                Capability::TerminalInput,
+                Ok(()),
+            ),
+            (
+                StructuredResponseAction::CreateTab {
+                    action_id: action_id(),
+                    window_id: Some(8),
+                },
+                Capability::TabCreate,
+                Ok(()),
+            ),
+            (
+                StructuredResponseAction::CloseTab {
+                    action_id: action_id(),
+                    window_id: Some(8),
+                    tab_id: 1,
+                },
+                Capability::TabClose,
+                Ok(()),
+            ),
+            (
+                StructuredResponseAction::MoveTab {
+                    action_id: action_id(),
+                    source_window_id: Some(8),
+                    tab_id: 1,
+                    destination_window_id: None,
+                    destination_index: 0,
+                },
+                Capability::TabMove,
+                Ok(()),
+            ),
+            (
+                StructuredResponseAction::MoveTab {
+                    action_id: action_id(),
+                    source_window_id: None,
+                    tab_id: 1,
+                    destination_window_id: Some(8),
+                    destination_index: 0,
+                },
+                Capability::TabMove,
+                Ok(()),
+            ),
+            (
+                StructuredResponseAction::CreatePane {
+                    action_id: action_id(),
+                    window_id: Some(8),
+                    tab_id: 1,
+                    pane_id: 0,
+                    direction: SplitDirection::Vertical,
+                },
+                Capability::PaneCreate,
+                // Headless windows cannot size a new pane.
+                Err("Target window has no initialized renderer"),
+            ),
+            (
+                StructuredResponseAction::ClosePane {
+                    action_id: action_id(),
+                    window_id: Some(8),
+                    tab_id: 0,
+                    pane_id: 1,
+                },
+                Capability::PaneClose,
+                Ok(()),
+            ),
+            (
+                StructuredResponseAction::MovePane {
+                    action_id: action_id(),
+                    source_window_id: Some(8),
+                    source_tab_id: 0,
+                    pane_id: 1,
+                    destination_window_id: None,
+                    destination_tab_id: 0,
+                    target_pane_id: 0,
+                    direction: SplitDirection::Vertical,
+                },
+                Capability::PaneMove,
+                Ok(()),
+            ),
+            (
+                StructuredResponseAction::MovePane {
+                    action_id: action_id(),
+                    source_window_id: None,
+                    source_tab_id: 0,
+                    pane_id: 1,
+                    destination_window_id: Some(8),
+                    destination_tab_id: 0,
+                    target_pane_id: 0,
+                    direction: SplitDirection::Vertical,
+                },
+                Capability::PaneMove,
+                Ok(()),
+            ),
+            (
+                StructuredResponseAction::SwapPanes {
+                    action_id: action_id(),
+                    window_id: Some(8),
+                    tab_id: 0,
+                    first_pane_id: 0,
+                    second_pane_id: 1,
+                },
+                Capability::PaneLayout,
+                Ok(()),
+            ),
+            (
+                StructuredResponseAction::BalancePanes {
+                    action_id: action_id(),
+                    window_id: Some(8),
+                    tab_id: 0,
+                },
+                Capability::PaneLayout,
+                Ok(()),
+            ),
+            (
+                StructuredResponseAction::ApplyPaneLayout {
+                    action_id: action_id(),
+                    window_id: Some(8),
+                    tab_id: 0,
+                    preset: crate::plugin::structured::PluginPaneLayoutPreset::Rows,
+                },
+                Capability::PaneLayout,
+                Ok(()),
+            ),
+            (
+                StructuredResponseAction::ResizeDivider {
+                    action_id: action_id(),
+                    window_id: Some(8),
+                    tab_id: 0,
+                    divider_id,
+                    ratio_millis: 400,
+                },
+                Capability::PaneLayout,
+                Ok(()),
+            ),
+            (
+                StructuredResponseAction::CloseWindow {
+                    action_id: action_id(),
+                    window_id: Some(8),
+                },
+                Capability::WindowClose,
+                Ok(()),
+            ),
+        ]
+    }
+
+    /// Windows 7 and 8 as described by [`actions_targeting_window_8`], both
+    /// accepting external terminal input so only scope can refuse it.
+    #[cfg(unix)]
+    fn two_window_scope_fixture() -> Application {
+        let mut application =
+            Application::from_config(Config::default(), None, LaunchPlan::default()).unwrap();
+        application.pending.clear();
+        for (native_id, control_id) in [(2_101_u64, 7), (2_202, 8)] {
+            let (mut window, _, _) = pane_transfer_fixture();
+            window.config.security.allow_gui_control_input = true;
+            window
+                .tabs
+                .as_mut()
+                .unwrap()
+                .new_tab_with_command(
+                    "/bin/sh",
+                    &["-c".into(), "sleep 5".into()],
+                    None,
+                    Some("second"),
+                    None,
+                    std::collections::HashMap::new(),
+                )
+                .unwrap();
+            let native_id = WindowId::from(native_id);
+            application.windows.insert(native_id, window);
+            application.window_order.push(native_id);
+            application.control_window_ids.insert(native_id, control_id);
+        }
+        application
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn window_scoped_grants_refuse_every_action_targeting_another_window() {
+        if !std::path::Path::new("/bin/sh").is_file() {
+            return;
+        }
+        let inventory = |application: &Application| {
+            serde_json::to_value(application.plugin_process_inventory()).unwrap()
+        };
+        let divider_id =
+            inventory(&two_window_scope_fixture())["windows"][1]["tabs"][0]["dividers"][0]["id"]
+                .as_u64()
+                .unwrap();
+        let window_scoped = every_capability(PermissionScope::Window);
+        let all_windows = all_windows_grants();
+        for (action, capability, allowed) in actions_targeting_window_8(divider_id) {
+            let name = action.name();
+            let mut application = two_window_scope_fixture();
+            let before = inventory(&application);
+            let (refused, close_target) = plugin_operation(
+                &mut application,
+                "scoped",
+                7,
+                &window_scoped,
+                action.clone(),
+            );
+            assert_eq!(refused["event"]["ok"], false, "{name}: {refused}");
+            assert_eq!(
+                refused["event"]["error"],
+                format!(
+                    "window 8 is not the plugin's own window; targeting it requires {capability}:all-windows"
+                ),
+                "{name}"
+            );
+            assert!(close_target.is_none(), "{name}");
+            assert_eq!(inventory(&application), before, "{name} changed a window");
+
+            let (result, _) = plugin_operation(&mut application, "all", 7, &all_windows, action);
+            match allowed {
+                Ok(()) => assert_eq!(result["event"]["ok"], true, "{name}: {result}"),
+                Err(error) => {
+                    assert_eq!(result["event"]["ok"], false, "{name}: {result}");
+                    assert_eq!(result["event"]["error"], error, "{name}");
+                }
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plugin_host_results_continue_under_the_follow_up_rule() {
+        use crate::plugin::structured::{HandlerAuthority, StructuredHandlerMode};
+        if !std::path::Path::new("/bin/sh").is_file() {
+            return;
+        }
+        let mut application = two_window_scope_fixture();
+        let origin = PluginOrigin {
+            native_id: application.control_native_window_id(7).unwrap(),
+            window_id: 7,
+        };
+        let grants = all_windows_grants();
+        let event_continuation = StructuredHandlerInvocation {
+            plugin_id: "follow-up".into(),
+            program: "handler".into(),
+            args: Vec::new(),
+            event_json: "{}".into(),
+            mode: StructuredHandlerMode::Persistent,
+            authority: HandlerAuthority::for_event(
+                grants.clone(),
+                StructuredHandlerMode::Persistent,
+                false,
+            ),
+        };
+        let query = StructuredResponseAction::QueryWorkspace {
+            query_id: "windows".into(),
+        };
+        let select = StructuredResponseAction::SelectTab {
+            action_id: "select".into(),
+            window_id: None,
+            tab_id: 1,
+        };
+        let notice = StructuredResponseAction::ShowMessage {
+            message: "done".into(),
+        };
+        let continue_after =
+            |application: &mut Application, operation: &StructuredResponseAction, from| {
+                let (continuation, close_target) = application
+                    .plugin_host_operation_continuation("follow-up", origin, operation, from)
+                    .unwrap();
+                assert!(close_target.is_none());
+                continuation
+            };
+
+        // A workspace query result may still perform one host action, but not
+        // another query.
+        let after_query = continue_after(&mut application, &query, event_continuation.clone());
+        let result: serde_json::Value = serde_json::from_str(&after_query.event_json).unwrap();
+        assert_eq!(result["event"]["type"], "workspace-query-result");
+        assert_eq!(after_query.authority.grants(), &grants);
+        assert!(
+            after_query
+                .authority
+                .check(std::slice::from_ref(&select))
+                .is_ok()
+        );
+        assert!(
+            after_query
+                .authority
+                .check(std::slice::from_ref(&query))
+                .unwrap_err()
+                .contains("may perform only one host action")
+        );
+
+        // An action result ends the chain, whether the action came straight
+        // from an event or from a workspace query result: it may only show UI.
+        for from in [event_continuation, after_query] {
+            let after_action = continue_after(&mut application, &select, from);
+            let result: serde_json::Value = serde_json::from_str(&after_action.event_json).unwrap();
+            assert_eq!(result["event"]["type"], "action-result");
+            assert_eq!(result["event"]["ok"], true, "{result}");
+            assert!(
+                after_action
+                    .authority
+                    .check(std::slice::from_ref(&notice))
+                    .is_ok()
+            );
+            for next in [&select, &query] {
+                assert!(
+                    after_action
+                        .authority
+                        .check(std::slice::from_ref(next))
+                        .unwrap_err()
+                        .contains("cannot start host operations"),
+                    "{} after an action result",
+                    next.name()
+                );
+            }
+        }
+    }
+
     #[test]
     fn sole_default_window_retains_automatic_restore_eligibility() {
         let application =
@@ -7056,6 +7400,63 @@ mod tests {
         assert!(error.contains("no adapter"));
         assert!(error.contains("device rejected"));
         assert!(application.take_fatal_startup_error().is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn each_window_reports_app_ready_under_its_own_stable_id() {
+        if !std::path::Path::new("/bin/sh").is_file() {
+            return;
+        }
+
+        #[derive(Debug)]
+        struct AppReadyObserver(std::sync::Arc<std::sync::Mutex<Vec<u64>>>);
+
+        impl crate::plugin::hooks::Plugin for AppReadyObserver {
+            fn id(&self) -> &str {
+                "app-ready-observer"
+            }
+
+            fn name(&self) -> &str {
+                "App Ready Observer"
+            }
+
+            fn on_hook(
+                &mut self,
+                hook: &crate::plugin::Hook,
+                context: &crate::plugin::PluginContext,
+            ) -> crate::plugin::hooks::HookResponse {
+                if matches!(hook, crate::plugin::Hook::AppReady) {
+                    self.0.lock().unwrap().push(context.window_id);
+                }
+                crate::plugin::hooks::HookResponse::Ignored
+            }
+        }
+
+        let mut application =
+            Application::from_config(Config::default(), None, LaunchPlan::default()).unwrap();
+        application.pending.clear();
+        let observed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        for _ in 0..2 {
+            let mut window = App::new_headless(Config::default()).unwrap();
+            window.launch.tabs[0].target = crate::cli::LaunchTarget::Command {
+                program: "/bin/sh".into(),
+                args: vec!["-c".into(), "exit 0".into()],
+            };
+            let context = window.build_plugin_context();
+            window
+                .plugin_manager
+                .register(Box::new(AppReadyObserver(observed.clone())), &context)
+                .unwrap();
+            application.pending.push(window);
+        }
+
+        // Headless windows never gain a native window, so both starts fail
+        // after app-ready and neither lends its ID to a later window.
+        let results = application.start_pending_windows(|window| window.init_tabs().unwrap());
+        assert!(results.iter().all(std::result::Result::is_err));
+        assert_eq!(*observed.lock().unwrap(), vec![1, 2]);
+        assert_eq!(application.next_control_window_id, 3);
     }
 
     #[test]
@@ -7346,7 +7747,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn plugin_process_pane_movement_routes_exactly_across_windows_and_is_atomic() {
+    fn plugin_pane_movement_routes_exactly_across_windows_and_is_atomic() {
         if !std::path::Path::new("/bin/sh").is_file() {
             return;
         }
@@ -7364,7 +7765,7 @@ mod tests {
 
         let refused = plugin_event(
             &mut application,
-            "process-pane-mover",
+            "pane-mover",
             7,
             crate::plugin::structured::StructuredResponseAction::MovePane {
                 action_id: "stale-target".into(),
@@ -7401,7 +7802,7 @@ mod tests {
 
         let moved = plugin_event(
             &mut application,
-            "process-pane-mover",
+            "pane-mover",
             7,
             crate::plugin::structured::StructuredResponseAction::MovePane {
                 action_id: "move-sibling-task".into(),
@@ -7414,7 +7815,7 @@ mod tests {
                 direction: crate::control::protocol::SplitDirection::Horizontal,
             },
         );
-        assert_eq!(moved["plugin_id"], "process-pane-mover");
+        assert_eq!(moved["plugin_id"], "pane-mover");
         assert_eq!(moved["event"]["type"], "action-result");
         assert_eq!(moved["event"]["action"], "move-pane");
         assert_eq!(moved["event"]["action_id"], "move-sibling-task");
@@ -7782,7 +8183,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn plugin_process_tab_movement_preserves_state_and_refuses_final_source_tab() {
+    fn plugin_tab_movement_preserves_state_and_refuses_final_source_tab() {
         if !std::path::Path::new("/bin/sh").is_file() {
             return;
         }
@@ -7805,7 +8206,7 @@ mod tests {
             destination_window_id: Some(8),
             destination_index: 1,
         };
-        let refused = plugin_event(&mut application, "process-tab-mover", 7, action());
+        let refused = plugin_event(&mut application, "tab-mover", 7, action());
         assert_eq!(refused["event"]["ok"], false);
         assert!(refused["event"]["destination_tab_id"].is_null());
         assert!(
@@ -7849,7 +8250,7 @@ mod tests {
             .unwrap();
         let reordered = plugin_event(
             &mut application,
-            "process-tab-mover",
+            "tab-mover",
             7,
             crate::plugin::structured::StructuredResponseAction::MoveTab {
                 action_id: "reorder-source-tab".into(),
@@ -7863,8 +8264,8 @@ mod tests {
         assert_eq!(reordered["event"]["destination_tab_id"], 0);
         assert_eq!(reordered["event"]["changed"], true);
         assert_eq!(reordered["event"]["source_window_closing"], false);
-        let moved = plugin_event(&mut application, "process-tab-mover", 7, action());
-        assert_eq!(moved["plugin_id"], "process-tab-mover");
+        let moved = plugin_event(&mut application, "tab-mover", 7, action());
+        assert_eq!(moved["plugin_id"], "tab-mover");
         assert_eq!(moved["event"]["action"], "move-tab");
         assert_eq!(moved["event"]["ok"], true);
         assert_eq!(moved["event"]["tab_id"], 0);
@@ -7907,7 +8308,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn plugin_process_pane_closure_targets_exact_same_or_sibling_window_and_preserves_tab() {
+    fn plugin_pane_closure_targets_exact_same_or_sibling_window_and_preserves_tab() {
         if !std::path::Path::new("/bin/sh").is_file() {
             return;
         }
@@ -7943,7 +8344,7 @@ mod tests {
             .0;
         let stale = plugin_event(
             &mut application,
-            "process-pane-pruner",
+            "pane-pruner",
             7,
             crate::plugin::structured::StructuredResponseAction::ClosePane {
                 action_id: "stale-pane".into(),
@@ -7962,7 +8363,7 @@ mod tests {
 
         let closed = plugin_event(
             &mut application,
-            "process-pane-pruner",
+            "pane-pruner",
             7,
             crate::plugin::structured::StructuredResponseAction::ClosePane {
                 action_id: "close-sibling-pane".into(),
@@ -7971,7 +8372,7 @@ mod tests {
                 pane_id: target_pane_id,
             },
         );
-        assert_eq!(closed["plugin_id"], "process-pane-pruner");
+        assert_eq!(closed["plugin_id"], "pane-pruner");
         assert_eq!(closed["event"]["action"], "close-pane");
         assert_eq!(closed["event"]["ok"], true);
         assert_eq!(closed["origin_window_id"], 7);
@@ -7989,7 +8390,7 @@ mod tests {
         let sole_pane_id = closed["event"]["focused_pane_id"].as_u64().unwrap() as u32;
         let refused = plugin_event(
             &mut application,
-            "process-pane-pruner",
+            "pane-pruner",
             8,
             crate::plugin::structured::StructuredResponseAction::ClosePane {
                 action_id: "refuse-final-pane".into(),
@@ -8029,7 +8430,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn plugin_process_tab_closure_targets_exact_window_and_preserves_final_tab() {
+    fn plugin_tab_closure_targets_exact_window_and_preserves_final_tab() {
         if !std::path::Path::new("/bin/sh").is_file() {
             return;
         }
@@ -8061,7 +8462,7 @@ mod tests {
 
         let stale = plugin_event(
             &mut application,
-            "process-tab-pruner",
+            "tab-pruner",
             7,
             crate::plugin::structured::StructuredResponseAction::CloseTab {
                 action_id: "stale-tab".into(),
@@ -8079,7 +8480,7 @@ mod tests {
 
         let closed = plugin_event(
             &mut application,
-            "process-tab-pruner",
+            "tab-pruner",
             7,
             crate::plugin::structured::StructuredResponseAction::CloseTab {
                 action_id: "close-sibling-tab".into(),
@@ -8087,7 +8488,7 @@ mod tests {
                 tab_id: target_tab_id as u64,
             },
         );
-        assert_eq!(closed["plugin_id"], "process-tab-pruner");
+        assert_eq!(closed["plugin_id"], "tab-pruner");
         assert_eq!(closed["event"]["action"], "close-tab");
         assert_eq!(closed["event"]["ok"], true);
         assert_eq!(closed["origin_window_id"], 7);
@@ -8103,7 +8504,7 @@ mod tests {
 
         let refused = plugin_event(
             &mut application,
-            "process-tab-pruner",
+            "tab-pruner",
             8,
             crate::plugin::structured::StructuredResponseAction::CloseTab {
                 action_id: "refuse-final-tab".into(),
@@ -8129,7 +8530,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn plugin_process_pane_layout_targets_exact_window_and_preserves_identity_and_focus() {
+    fn plugin_pane_layout_targets_exact_window_and_preserves_identity_and_focus() {
         if !std::path::Path::new("/bin/sh").is_file() {
             return;
         }
@@ -8174,7 +8575,7 @@ mod tests {
 
         let stale = plugin_event(
             &mut application,
-            "process-pane-arranger",
+            "pane-arranger",
             7,
             crate::plugin::structured::StructuredResponseAction::BalancePanes {
                 action_id: "stale-window".into(),
@@ -8187,7 +8588,7 @@ mod tests {
 
         let swapped = plugin_event(
             &mut application,
-            "process-pane-arranger",
+            "pane-arranger",
             7,
             crate::plugin::structured::StructuredResponseAction::SwapPanes {
                 action_id: "swap-sibling-panes".into(),
@@ -8197,7 +8598,7 @@ mod tests {
                 second_pane_id: initial_order[1],
             },
         );
-        assert_eq!(swapped["plugin_id"], "process-pane-arranger");
+        assert_eq!(swapped["plugin_id"], "pane-arranger");
         assert_eq!(swapped["event"]["action"], "swap-panes");
         assert_eq!(swapped["event"]["ok"], true);
         assert_eq!(swapped["origin_window_id"], 7);
@@ -8219,7 +8620,7 @@ mod tests {
 
         let balanced = plugin_event(
             &mut application,
-            "process-pane-arranger",
+            "pane-arranger",
             8,
             crate::plugin::structured::StructuredResponseAction::BalancePanes {
                 action_id: "balance-current-panes".into(),
@@ -8234,7 +8635,7 @@ mod tests {
 
         let applied = plugin_event(
             &mut application,
-            "process-pane-arranger",
+            "pane-arranger",
             7,
             crate::plugin::structured::StructuredResponseAction::ApplyPaneLayout {
                 action_id: "fat-sibling-panes".into(),
@@ -8280,7 +8681,7 @@ mod tests {
             .unwrap();
         let unsplit = plugin_event(
             &mut application,
-            "process-pane-arranger",
+            "pane-arranger",
             7,
             crate::plugin::structured::StructuredResponseAction::BalancePanes {
                 action_id: "refuse-unsplit".into(),
@@ -8305,7 +8706,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn plugin_process_window_closure_is_exact_non_final_and_result_gated() {
+    fn plugin_window_closure_is_exact_non_final_and_result_gated() {
         if !std::path::Path::new("/bin/sh").is_file() {
             return;
         }
@@ -8323,7 +8724,7 @@ mod tests {
 
         let stale = plugin_event(
             &mut application,
-            "process-window-closer",
+            "window-closer",
             7,
             crate::plugin::structured::StructuredResponseAction::CloseWindow {
                 action_id: "stale-window".into(),
@@ -8345,7 +8746,7 @@ mod tests {
         });
         let already_pending = plugin_event(
             &mut application,
-            "process-window-closer",
+            "window-closer",
             7,
             crate::plugin::structured::StructuredResponseAction::CloseWindow {
                 action_id: "duplicate-close".into(),
@@ -8367,14 +8768,14 @@ mod tests {
 
         let sibling = plugin_event(
             &mut application,
-            "process-window-closer",
+            "window-closer",
             7,
             crate::plugin::structured::StructuredResponseAction::CloseWindow {
                 action_id: "close-sibling-window".into(),
                 window_id: Some(8),
             },
         );
-        assert_eq!(sibling["plugin_id"], "process-window-closer");
+        assert_eq!(sibling["plugin_id"], "window-closer");
         assert_eq!(sibling["event"]["action"], "close-window");
         assert_eq!(sibling["event"]["ok"], true);
         assert_eq!(sibling["origin_window_id"], 7);
@@ -8383,13 +8784,7 @@ mod tests {
         assert_eq!(sibling["event"]["tab_count"], 1);
         assert_eq!(sibling["event"]["remaining_windows"], 1);
         assert!(!application.windows[&target_native].should_exit);
-        application.arm_plugin_window_close(
-            target_native,
-            origin_native,
-            "process-window-closer",
-            4,
-            41,
-        );
+        application.arm_plugin_window_close(target_native, origin_native, "window-closer", 4, 41);
         assert!(application.windows[&target_native].should_exit);
         assert!(!application.windows[&origin_native].should_exit);
         assert!(
@@ -8405,7 +8800,7 @@ mod tests {
             .should_exit = false;
         let origin_event = plugin_event(
             &mut application,
-            "process-window-closer",
+            "window-closer",
             7,
             crate::plugin::structured::StructuredResponseAction::CloseWindow {
                 action_id: "close-origin-window".into(),
@@ -8417,14 +8812,14 @@ mod tests {
         application.arm_plugin_window_close(
             origin_native,
             origin_native,
-            "process-window-closer",
+            "window-closer",
             generation,
             42,
         );
         let completion = |request_id| crate::plugin::structured::StructuredHandlerCompletion {
             window_id: origin_native,
             plugin_generation: generation,
-            plugin_id: "process-window-closer".into(),
+            plugin_id: "window-closer".into(),
             request_id,
             continuation: None,
             result: Ok(Vec::new()),
@@ -8468,7 +8863,7 @@ mod tests {
             .should_exit = true;
         let final_window = plugin_event(
             &mut application,
-            "process-window-closer",
+            "window-closer",
             7,
             crate::plugin::structured::StructuredResponseAction::CloseWindow {
                 action_id: "refuse-final-window".into(),
@@ -8488,7 +8883,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn plugin_process_window_focus_is_exact_bounded_and_reuses_native_policy() {
+    fn plugin_window_focus_is_exact_bounded_and_reuses_native_policy() {
         if !std::path::Path::new("/bin/sh").is_file() {
             return;
         }
@@ -8506,7 +8901,7 @@ mod tests {
 
         let stale = plugin_event(
             &mut application,
-            "process-window-focuser",
+            "window-focuser",
             7,
             crate::plugin::structured::StructuredResponseAction::FocusWindow {
                 action_id: "stale-window".into(),
@@ -8523,7 +8918,7 @@ mod tests {
 
         let native_less = plugin_event(
             &mut application,
-            "process-window-focuser",
+            "window-focuser",
             7,
             crate::plugin::structured::StructuredResponseAction::FocusWindow {
                 action_id: "exact-sibling".into(),
@@ -8547,7 +8942,7 @@ mod tests {
             .should_exit = true;
         let closing = plugin_event(
             &mut application,
-            "process-window-focuser",
+            "window-focuser",
             7,
             crate::plugin::structured::StructuredResponseAction::FocusWindow {
                 action_id: "closing-sibling".into(),

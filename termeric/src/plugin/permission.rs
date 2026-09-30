@@ -105,7 +105,7 @@ impl Capability {
 
     /// Whether the capability is exercised only through handler queries or
     /// actions, which need a persistent handler to receive their results.
-    pub fn is_host_operation(self) -> bool {
+    pub fn requires_persistent_handler(self) -> bool {
         !matches!(
             self,
             Self::ProcessSpawn

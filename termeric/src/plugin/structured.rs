@@ -2218,4 +2218,332 @@ done"#,
             }]
         );
     }
+
+    /// A persistent-handler conversation with a checked-in example, granted
+    /// everything its manifest requests. Like the host, it sends settings
+    /// only with events, never with results.
+    struct ExampleConversation {
+        handlers: HashMap<String, PersistentHandler>,
+        shutdown: AtomicBool,
+        generation: AtomicU64,
+        invocation: StructuredHandlerInvocation,
+        origin_window_id: u64,
+        request_id: u64,
+    }
+
+    impl ExampleConversation {
+        fn new(example: &str, origin_window_id: u64) -> Self {
+            Self {
+                handlers: HashMap::new(),
+                shutdown: AtomicBool::new(false),
+                generation: AtomicU64::new(1),
+                invocation: example_invocation(example, true),
+                origin_window_id,
+                request_id: 0,
+            }
+        }
+
+        /// Invoke one of the example's palette commands.
+        fn command(
+            &mut self,
+            command: &str,
+            settings: Option<serde_json::Value>,
+        ) -> Vec<StructuredResponseAction> {
+            self.invocation.authority = HandlerAuthority::for_event(
+                self.invocation.authority.grants().clone(),
+                StructuredHandlerMode::Persistent,
+                true,
+            );
+            let plugin_id = self.invocation.plugin_id.clone();
+            let mut envelope = self.envelope(serde_json::json!({
+                "type": "command-invoked",
+                "command_id": format!("{plugin_id}.{command}"),
+            }));
+            if let Some(settings) = settings {
+                envelope["settings"] = settings;
+            }
+            self.send(envelope)
+        }
+
+        /// Deliver the result of `operation`, the handler's previous request.
+        fn result(
+            &mut self,
+            operation: &StructuredResponseAction,
+            event: serde_json::Value,
+        ) -> Vec<StructuredResponseAction> {
+            self.invocation.authority = self.invocation.authority.after(operation);
+            let envelope = self.envelope(event);
+            self.send(envelope)
+        }
+
+        /// Invoke a command whose handler first queries the workspace under
+        /// the command's name, answer with `windows`, and return the
+        /// handler's follow-up.
+        fn command_with_workspace(
+            &mut self,
+            command: &str,
+            settings: Option<serde_json::Value>,
+            windows: serde_json::Value,
+        ) -> Vec<StructuredResponseAction> {
+            assert_eq!(self.command(command, settings), vec![query(command)]);
+            self.result(
+                &query(command),
+                serde_json::json!({
+                    "type": "workspace-query-result",
+                    "query_id": command,
+                    "truncated": false,
+                    "windows": windows,
+                }),
+            )
+        }
+
+        fn envelope(&self, event: serde_json::Value) -> serde_json::Value {
+            serde_json::json!({
+                "schema_version": SCHEMA_VERSION,
+                "plugin_id": self.invocation.plugin_id,
+                "origin_window_id": self.origin_window_id,
+                "event": event,
+            })
+        }
+
+        fn send(&mut self, envelope: serde_json::Value) -> Vec<StructuredResponseAction> {
+            self.invocation.event_json = envelope.to_string();
+            self.request_id += 1;
+            let actions = run_persistent_handler(
+                &mut self.handlers,
+                &self.invocation,
+                self.request_id,
+                &self.shutdown,
+                &self.generation,
+                1,
+            )
+            .unwrap();
+            assert_eq!(self.handlers.len(), 1, "the handler must stay persistent");
+            actions
+        }
+    }
+
+    fn query(query_id: &str) -> StructuredResponseAction {
+        StructuredResponseAction::QueryWorkspace {
+            query_id: query_id.into(),
+        }
+    }
+
+    fn message(message: &str) -> StructuredResponseAction {
+        StructuredResponseAction::ShowMessage {
+            message: message.into(),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn window_switcher_example_cycles_windows_and_jumps_to_a_tab_by_title() {
+        if !python3_available() {
+            return;
+        }
+        let tab = |id: u64, title: &str, active: bool| {
+            serde_json::json!({
+                "id": id,
+                "title": title,
+                "active": active,
+                "closed": false,
+                "panes": [{"id": 0, "focused": true, "closed": false}],
+            })
+        };
+        let windows = |logs_active: bool| {
+            serde_json::json!([
+                {"id": 3, "tabs": [tab(1, "shell", true)]},
+                {"id": 4, "tabs": [tab(2, "editor", !logs_active), tab(3, "App Logs", logs_active)]},
+                {"id": 5, "tabs": [tab(6, "build", true)]},
+            ])
+        };
+        let settings = || Some(serde_json::json!({"tab-title": "logs"}));
+        let mut conversation = ExampleConversation::new("window-switcher", 4);
+
+        // Next Window focuses the window after the origin, wrapping around,
+        // and reports a refused focus request.
+        for (origin, target) in [(4, 5), (5, 3)] {
+            conversation.origin_window_id = origin;
+            let focus = StructuredResponseAction::FocusWindow {
+                action_id: "next-window".into(),
+                window_id: target,
+            };
+            assert_eq!(
+                conversation.command_with_workspace("next-window", settings(), windows(false)),
+                vec![focus.clone()]
+            );
+            let error =
+                "Termeric can focus another window on Wayland only when it is already focused";
+            assert_eq!(
+                conversation.result(
+                    &focus,
+                    serde_json::json!({
+                        "type": "action-result",
+                        "action": "focus-window",
+                        "action_id": "next-window",
+                        "window_id": target,
+                        "ok": false,
+                        "error": error,
+                        "error_truncated": false,
+                    }),
+                ),
+                vec![message(&format!("Window switch failed: {error}"))]
+            );
+        }
+
+        // Jump to Tab matches the title setting from the command event even
+        // though the query result carries no settings; without it, the empty
+        // title would match window 3's "shell" tab first.
+        conversation.origin_window_id = 3;
+        let select = StructuredResponseAction::SelectTab {
+            action_id: "jump".into(),
+            window_id: Some(4),
+            tab_id: 3,
+        };
+        assert_eq!(
+            conversation.command_with_workspace("jump-to-tab", settings(), windows(false)),
+            vec![
+                select.clone(),
+                message("Tab selected; run Jump to Tab again to focus its window"),
+            ]
+        );
+        assert!(
+            conversation
+                .result(
+                    &select,
+                    serde_json::json!({
+                        "type": "action-result",
+                        "action": "select-tab",
+                        "action_id": "jump",
+                        "window_id": 4,
+                        "tab_id": 3,
+                        "ok": true,
+                        "changed": true,
+                    }),
+                )
+                .is_empty()
+        );
+
+        // Once the tab is selected, running it again focuses its window.
+        assert_eq!(
+            conversation.command_with_workspace("jump-to-tab", settings(), windows(true)),
+            vec![StructuredResponseAction::FocusWindow {
+                action_id: "jump".into(),
+                window_id: 4,
+            }]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pane_layouts_example_arranges_the_origin_windows_active_tab() {
+        use crate::control::protocol::SplitDirection;
+        if !python3_available() {
+            return;
+        }
+        // Window 3 is the origin; its active tab 5 holds `pane_count` panes,
+        // the last one focused. Window 2's active tab must be ignored.
+        let windows = |pane_count: u32| {
+            let panes: Vec<_> = (0..pane_count)
+                .map(|id| serde_json::json!({"id": id, "focused": id + 1 == pane_count, "closed": false}))
+                .collect();
+            let single = serde_json::json!([{"id": 0, "focused": true, "closed": false}]);
+            serde_json::json!([
+                {"id": 2, "tabs": [{"id": 9, "title": "other", "active": true, "closed": false, "panes": single}]},
+                {"id": 3, "tabs": [
+                    {"id": 4, "title": "idle", "active": false, "closed": false, "panes": single},
+                    {"id": 5, "title": "work", "active": true, "closed": false, "panes": panes},
+                ]},
+            ])
+        };
+        let mut conversation = ExampleConversation::new("pane-layouts", 3);
+
+        // Dev Layout adds a pane to the right of one pane and below the
+        // focused one of two, and arranges three or more as a tall main pane
+        // beside a stack. A failed change is reported.
+        let create = |pane_id, direction| StructuredResponseAction::CreatePane {
+            action_id: "dev-layout".into(),
+            window_id: None,
+            tab_id: 5,
+            pane_id,
+            direction,
+        };
+        assert_eq!(
+            conversation.command_with_workspace("dev-layout", None, windows(1)),
+            vec![create(0, SplitDirection::Vertical)]
+        );
+        let split = create(1, SplitDirection::Horizontal);
+        assert_eq!(
+            conversation.command_with_workspace("dev-layout", None, windows(2)),
+            vec![split.clone()]
+        );
+        assert_eq!(
+            conversation.result(
+                &split,
+                serde_json::json!({
+                    "type": "action-result",
+                    "action": "create-pane",
+                    "action_id": "dev-layout",
+                    "window_id": 3,
+                    "tab_id": 5,
+                    "pane_id": 1,
+                    "direction": "horizontal",
+                    "ok": false,
+                    "error": "Tab 5 has reached its pane limit",
+                    "error_truncated": false,
+                }),
+            ),
+            vec![message(
+                "Layout unchanged: Tab 5 has reached its pane limit"
+            )]
+        );
+        let layout = |action_id: &str, preset| StructuredResponseAction::ApplyPaneLayout {
+            action_id: action_id.into(),
+            window_id: None,
+            tab_id: 5,
+            preset,
+        };
+        assert_eq!(
+            conversation.command_with_workspace("dev-layout", None, windows(3)),
+            vec![layout("dev-layout", PluginPaneLayoutPreset::Tall)]
+        );
+
+        // Tile and Balance act on the same tab; a successful result is quiet.
+        let tile = layout("tile", PluginPaneLayoutPreset::Grid);
+        assert_eq!(
+            conversation.command_with_workspace("tile", None, windows(4)),
+            vec![tile.clone()]
+        );
+        assert!(
+            conversation
+                .result(
+                    &tile,
+                    serde_json::json!({
+                        "type": "action-result",
+                        "action": "apply-pane-layout",
+                        "action_id": "tile",
+                        "window_id": 3,
+                        "tab_id": 5,
+                        "preset": "grid",
+                        "ok": true,
+                        "changed": true,
+                    }),
+                )
+                .is_empty()
+        );
+        assert_eq!(
+            conversation.command_with_workspace("balance", None, windows(2)),
+            vec![StructuredResponseAction::BalancePanes {
+                action_id: "balance".into(),
+                window_id: None,
+                tab_id: 5,
+            }]
+        );
+
+        // A workspace without the origin window has nothing to arrange.
+        assert_eq!(
+            conversation.command_with_workspace("tile", None, serde_json::json!([])),
+            vec![message("No active tab to arrange")]
+        );
+    }
 }

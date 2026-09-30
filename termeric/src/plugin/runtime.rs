@@ -433,7 +433,7 @@ impl PluginManifest {
         }
         if let Some(capability) = Capability::ALL
             .into_iter()
-            .find(|capability| capability.is_host_operation() && requests(*capability))
+            .find(|capability| capability.requires_persistent_handler() && requests(*capability))
             && !persistent
         {
             bail!("{capability} requires a persistent event handler");
@@ -503,7 +503,7 @@ impl PluginRegistry {
         let text = std::str::from_utf8(&bytes).context("plugin registry must be UTF-8")?;
         let registry: Self = toml::from_str(text).with_context(|| {
             format!(
-                "invalid plugin registry {}; if it records permissions this Termeric no longer recognizes, delete the affected [[plugins]] entry (or the whole file) and reinstall the plugin",
+                "invalid plugin registry {}; if it records permissions this Termeric no longer recognizes, delete the affected [[plugins]] entry (or the whole file), then reinstall the plugin with `termeric plugin install <directory> --replace`, since its installed copy remains",
                 path.display()
             )
         })?;
@@ -1319,6 +1319,10 @@ pub(crate) fn execute_admin_at(
                     permission_list(added_permissions)
                 );
             }
+            // Like the in-app update review, keep only what the update still
+            // requests, each at the narrower of the granted and requested
+            // scopes.
+            let grants = installed.grants.intersection(&manifest.permissions);
             install_manifest(
                 &mut registry,
                 registry_path,
@@ -1326,7 +1330,7 @@ pub(crate) fn execute_admin_at(
                 manifest,
                 source,
                 bytes,
-                installed.grants,
+                grants,
                 installed.enabled,
                 true,
             )
@@ -3034,7 +3038,7 @@ grants = ["process-spawn", "process-query"]
                 .validate()
                 .unwrap_or_else(|error| panic!("{name} with a persistent handler: {error}"));
             let per_event = handler_manifest(requested, false, events).validate();
-            if capability.is_host_operation() {
+            if capability.requires_persistent_handler() {
                 assert!(
                     per_event
                         .unwrap_err()
@@ -3806,6 +3810,124 @@ grants = ["process-spawn", "process-query"]
         .unwrap_err();
         assert!(format!("{error:#}").contains("new permissions (workspace-query:all-windows)"));
         assert!(show().contains("v1.1.0"));
+    }
+
+    #[test]
+    fn unrecognized_registry_grants_explain_the_replacing_reinstall() {
+        let (_temp, source, root, registry_path) = fixture();
+        install(
+            &source,
+            permissions(&["process-spawn"]),
+            false,
+            &registry_path,
+            &root,
+        )
+        .unwrap();
+        let registry = fs::read_to_string(&registry_path).unwrap();
+        assert!(registry.contains("\"process-spawn\""), "{registry}");
+        fs::write(
+            &registry_path,
+            registry.replace("\"process-spawn\"", "\"retired-permission\""),
+        )
+        .unwrap();
+        let error = format!(
+            "{:#}",
+            PluginRegistry::load_from(&registry_path).unwrap_err()
+        );
+        assert!(
+            error.contains("delete the affected [[plugins]] entry")
+                && error.contains("termeric plugin install <directory> --replace"),
+            "{error}"
+        );
+
+        // With the entry gone the installed copy remains, so only a replacing
+        // install succeeds, exactly as the error says.
+        fs::remove_file(&registry_path).unwrap();
+        let install_without_replace = execute_admin_at(
+            PluginAdminCommand::Install {
+                directory: source.clone(),
+                grants: permissions(&["process-spawn"]),
+                enable: false,
+                replace: false,
+            },
+            &registry_path,
+            &root,
+        );
+        assert!(
+            format!("{:#}", install_without_replace.unwrap_err())
+                .contains("unregistered installed copy already exists")
+        );
+        install(
+            &source,
+            permissions(&["process-spawn"]),
+            false,
+            &registry_path,
+            &root,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn update_narrows_grants_to_dropped_or_narrowed_requests() {
+        let (_temp, source, root, registry_path) = fixture();
+        let write = |version: &str, extra: &str| {
+            fs::write(
+                source.join(MANIFEST_NAME),
+                manifest(version, extra, "sample"),
+            )
+            .unwrap();
+        };
+        let update = || {
+            execute_admin_at(
+                PluginAdminCommand::Update {
+                    id: "sample-tools".into(),
+                },
+                &registry_path,
+                &root,
+            )
+        };
+        let installed = || {
+            let (_, statuses) = discover_runtime_plugins_at(&registry_path, &root).unwrap();
+            let status = statuses.into_iter().next().unwrap();
+            (status.version, status.granted, status.enabled)
+        };
+        write("1.0.0", ", \"workspace-query:all-windows\"");
+        install(
+            &source,
+            permissions(&["process-spawn", "workspace-query:all-windows"]),
+            true,
+            &registry_path,
+            &root,
+        )
+        .unwrap();
+
+        // A narrowed scope narrows its grant; the plugin stays enabled.
+        write("2.0.0", ", \"workspace-query\"");
+        update().unwrap();
+        assert_eq!(
+            installed(),
+            (
+                "2.0.0".into(),
+                permissions(&["process-spawn", "workspace-query"]),
+                true
+            )
+        );
+
+        // A narrowed grant is never widened back by a later update.
+        write("3.0.0", ", \"workspace-query:all-windows\"");
+        assert!(
+            format!("{:#}", update().unwrap_err())
+                .contains("new permissions (workspace-query:all-windows)")
+        );
+        assert_eq!(installed().0, "2.0.0");
+
+        // A dropped request drops its grant.
+        write("4.0.0", "");
+        update().unwrap();
+        assert_eq!(
+            installed(),
+            ("4.0.0".into(), permissions(&["process-spawn"]), true)
+        );
     }
 
     #[test]

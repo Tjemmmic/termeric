@@ -9,7 +9,8 @@
 #
 # Both commands query every window (workspace-query:all-windows), then either
 # select a tab in any window (navigate:all-windows) or focus a window
-# (window-focus). Some Wayland compositors ignore focus requests.
+# (window-focus). On Wayland, Termeric cannot focus another window, so
+# focusing works only on X11; selecting a tab works everywhere.
 #
 #   termeric plugin install examples/plugins/window-switcher \
 #     --allow process-spawn --allow event-subscribe --allow ui-actions \
