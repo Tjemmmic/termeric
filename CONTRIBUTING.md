@@ -17,7 +17,7 @@ The workspace has two crates: `termeric/` is the application (windowing, renderi
 
 ## Before you send a change
 
-Run the same checks CI runs on every pull request:
+Run the core checks CI runs on every pull request:
 
 ```bash
 cargo fmt --all -- --check

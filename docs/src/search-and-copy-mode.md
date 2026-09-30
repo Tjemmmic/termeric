@@ -56,7 +56,7 @@ The arrow keys, `Home`, `End`, `Page Up`, and `Page Down` work with either style
 | Start or stop selecting a block | `Ctrl+V` | none |
 | Search | `/` | `Ctrl+S` |
 | Next / previous search match | `n` / `Shift+N` | `n` / `Shift+N` |
-| Copy the selection and leave | `y` or `Enter` | `Alt+W` or `Enter` |
+| Copy the selection and leave (with nothing selected, a warning appears and copy mode stays open) | `y` or `Enter` | `Alt+W` or `Enter` |
 | Leave without copying | `Escape` | `Ctrl+G` or `Escape` |
 
 To copy, move to one end of the text, start a selection, move to the other end, and copy. The selection grows from where you started it to the cursor.
@@ -75,7 +75,7 @@ Quick select labels every link, file path, and commit hash on screen with a shor
 
 Quick select runs inside copy mode. After you open or copy a match, or press `Escape`, you're back in copy mode; press `Escape` again to return to the terminal.
 
-Opening uses your desktop's default handler (`xdg-open`). A relative path such as `src/main.rs` opens relative to the directory the shell last reported, which requires [shell integration](shell-integration.md); without it, relative paths can be copied but not opened. Absolute paths and URLs always open. A target that begins with `-` is refused; write it as `./-name` instead.
+Opening uses your desktop's default handler (`xdg-open`). A relative path such as `./src/main.rs` opens relative to the directory the shell last reported, which requires [shell integration](shell-integration.md); without it, relative paths can be copied but not opened. Absolute paths and URLs always open. A target that begins with `-` is refused; write it as `./-name` instead.
 
 Quick select only looks at what's visible in the focused pane. Scroll to bring other matches into view first.
 

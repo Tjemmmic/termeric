@@ -408,7 +408,7 @@ All notable changes to Termeric are recorded here. The project follows [Keep a C
 
 ### Known limitations
 
-- Termeric is a Linux developer preview, not yet a general beta. The [feature-support matrix is the authoritative list of working, partial, broken, experimental, unverified, and unsupported paths.
+- Termeric is a Linux developer preview, not yet a general beta. [Feature status](docs/src/status.md) lists what works fully, what works in part, what is experimental, and what isn't supported.
 - Linux Wayland/X11 have launch and short resource evidence but open correctness and interaction gates; macOS and Windows build/unit tiers do not yet establish runtime support.
 - Kitty graphics uses the documented bounded static and frame-animation profile, including decoded live-domain reconnect snapshots. Bidirectional text reordering remains unsupported; native IME, color-font, and screen-reader acceptance is still required on each release platform.
 - Harvest is experimental and disabled by default.

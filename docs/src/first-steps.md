@@ -25,7 +25,7 @@ If you remember only one shortcut, make it this one.
 
 ## Settings
 
-Press **Ctrl+,** or click the gear icon at the right end of the tab bar to open Settings. Pages in the sidebar group the options: Appearance, Font, Terminal, Keyboard, Agents, Sessions, Accessibility, Plugins, and Experimental.
+Press **Ctrl+,** or click the gear icon in the top bar to open Settings. Pages in the sidebar group the options: Appearance, Font, Terminal, Keyboard, Agents, Sessions, Accessibility, Plugins, and Experimental.
 
 Changes apply as soon as you make them, so you can try things out. To keep them, press **Ctrl+S** or click **Save**; until then the dialog shows "Unsaved changes". Settings are stored in `~/.config/termeric/config.toml`, and editing that file directly works too: Termeric reloads it when you save it.
 

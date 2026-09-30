@@ -2,7 +2,7 @@
 
 This page lists Termeric's default key bindings, shows how to change them, and explains how the mouse, clipboard, and input methods behave.
 
-Termeric's shortcuts are checked before keys reach the program in the terminal, so a key bound here never also reaches your shell. Most defaults use `Ctrl+Shift` so that plain `Ctrl` combinations stay with your programs.
+Termeric's shortcuts are checked before keys reach the program in the terminal, so a key bound here doesn't also reach your shell. The exceptions are Copy and Clear Selection: with nothing selected, their keys go to the program. Most defaults use `Ctrl+Shift` so that plain `Ctrl` combinations stay with your programs.
 
 ## Default key bindings
 

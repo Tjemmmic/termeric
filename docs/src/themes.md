@@ -116,7 +116,7 @@ search_match = "#F1FA8C"
 url = "#8BE9FD"
 ```
 
-Write colors as `"#RRGGBB"` or `"#RRGGBBAA"` (with alpha), or as an inline table such as `{ r = 40, g = 42, b = 54 }` or `{ r = 40, g = 42, b = 54, a = 0.5 }`. Use the full six or eight hex digits: a shorter or misspelled value is read as black rather than reported as an error.
+Write colors as `"#RRGGBB"` or `"#RRGGBBAA"` (with alpha), or as an inline table such as `{ r = 40, g = 42, b = 54 }` or `{ r = 40, g = 42, b = 54, a = 0.5 }`. Use the full six or eight hex digits. Colors aren't validated: a value of the wrong length is read as black, and an invalid pair of hex digits is read as 0 for that channel.
 
 `[meta]` holds `name`, `author`, and an optional `description`, which Settings shows beside the theme.
 

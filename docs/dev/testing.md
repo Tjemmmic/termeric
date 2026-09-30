@@ -15,7 +15,7 @@ python3 scripts/check_markdown_links.py
 python3 scripts/check_terminfo.py --require-apps
 ```
 
-`check_terminfo.py --require-apps` compiles `assets/terminfo/xterm-termeric.terminfo` and runs Vim, less, and tmux against it, so those three need to be installed. The Python tests cover the helper scripts themselves and need nothing beyond Python 3.
+`check_terminfo.py --require-apps` compiles `assets/terminfo/xterm-termeric.terminfo` and runs Vim, less, and tmux against it, so those three need to be installed. The Python tests cover the helper scripts themselves and need Python 3 with Pillow (`python3-pil` on Debian and Ubuntu, `python-pillow` on Arch).
 
 To build the user guide, install [mdBook](https://rust-lang.github.io/mdBook/) and run `mdbook build docs`; the output goes to `target/book/`.
 
@@ -37,7 +37,7 @@ To build the user guide, install [mdBook](https://rust-lang.github.io/mdBook/) a
 
 ## Native GUI tests
 
-`scripts/gui_acceptance.py` launches the built application inside a private compositor and drives it with synthetic input. It needs `sway`, `swaymsg`, `wtype`, and `wl-clipboard` for Wayland scenarios; `xvfb-run`, `xdotool`, `xclip`, and `openbox` for X11; and Pillow for screenshots.
+`scripts/gui_acceptance.py` launches the built application inside a private compositor and drives it with synthetic input. Every run needs `tic`, `fc-list`, and Pillow. Wayland scenarios need `sway`, `swaymsg`, `wtype`, and `wl-clipboard`, plus `weston` for `--start-weston`; X11 scenarios need `xvfb-run`, `xdotool`, `xclip`, and `openbox`. The `graphics` scenario also needs `kitten` (from kitty), `img2sixel`, and `timg`, and the `vim`, `less`, and `tmux` scenarios need those programs. The script names anything missing before it starts.
 
 ```bash
 cargo build -p termeric --locked
@@ -61,7 +61,7 @@ WGPU_BACKEND=gl python3 scripts/run_native_gui_soak.py --duration-seconds 30 \
   --binary target/debug/termeric --artifacts target/native-gui-soak
 ```
 
-`run_soak.py` runs the headless workload; `run_native_gui_soak.py` runs the displayed application in headless Sway while it resizes the output and opens and closes panes. Run `--help` on either for the adjustable limits.
+`run_soak.py` runs the headless workload. `run_native_gui_soak.py` runs the displayed application in headless Sway while it resizes the output and opens and closes panes; it needs `sway`, `swaymsg`, `tic`, and `wtype`, and an artifacts directory that is new or empty. Run `--help` on either for the adjustable limits.
 
 ## Integration runners
 

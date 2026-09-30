@@ -22,7 +22,7 @@ sudo apt remove termeric
 
 ## Arch Linux
 
-Termeric is in the AUR as two packages:
+From the first release, Termeric will be in the AUR as two packages:
 
 | Package | Builds |
 |---|---|
@@ -45,6 +45,8 @@ makepkg -si
 ```
 
 The optional dependencies `mesa` and `vulkan-icd-loader` provide the Vulkan and OpenGL drivers Termeric renders with, including the software fallback. Install them if your system doesn't already have them.
+
+Until then, `cd packaging/arch && makepkg -si` in a clone of this repository builds the development package from the latest source on GitHub.
 
 Upgrade with your AUR helper (`paru -Syu`), or pull the AUR repository and run `makepkg -si` again. Uninstall with `sudo pacman -R termeric` (or `termeric-git`).
 

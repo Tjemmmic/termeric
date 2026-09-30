@@ -120,6 +120,6 @@ Screen checksum reports (DECRQCRA) are off by default because they can be used t
 - Reverse-video screen mode (DECSCNM, mode 5) and overline (SGR 53) are not supported.
 - SGR-pixel mouse coordinates (mode 1016) and color-scheme change notifications (mode 2031) are not supported.
 - XTWINOPS only reports sizes and titles; programs cannot move, resize, or raise the window.
-- iTerm2 file downloads, non-PNG iTerm2 images, and animated images are not supported.
+- iTerm2 file downloads, non-PNG iTerm2 images, and animated iTerm2 images are not supported. (Kitty graphics animation works.)
 - The `xterm-termeric` terminfo entry does not list styled underlines (`Smulx`, `Setulc`), cursor shapes (`Ss`, `Se`), clipboard access (`Ms`), or synchronized output. Termeric supports all four, but a program that only checks terminfo will not use them until you enable them in its own settings.
 - `xterm-256color` is a compatible name, not a promise of every xterm feature. Prefer `xterm-termeric` wherever you can install it.

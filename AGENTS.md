@@ -8,6 +8,7 @@ This file guides coding agents and contributors working in this repository. Read
 
 ```bash
 cargo build --workspace --locked
+cargo fmt --all -- --check
 cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo build --release --locked
@@ -72,8 +73,8 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 | `agent_view/` | Agent view core: agent-neutral events, the agents it drives and their protocols (Claude Code stream-json, Codex app-server, ACP for OpenCode), agent process and pipes, sessions, transcript, Markdown, tool presentation, earlier-conversation history |
 | `ui/agent_view/` | Agent view panel state, colors, scene (primitives, hits, accessibility nodes), and layout |
 | `agents/` | Coding-agent catalog (built-in + `[agents.<id>]`), foreground-process detection, config migration, hook status (`status`, `hook`, `setup`, `transcript`), Git change review (`changes`), supervisor policy (`supervisor`) |
-| `plugin/` | Plugin trait, hooks, manager, `AgentPlugin` launch integration for catalog agents |
-| `terminal/` | Search, copy mode, URL detection, diff detection, shell integration, and guardrails for automated (control-protocol and plugin) input |
+| `plugin/` | Plugin trait, hooks, and manager; `AgentPlugin` launch integration for catalog agents; third-party plugins: `permission.rs` (capabilities and `:all-windows` scopes), `runtime.rs` (manifests, registry, install/update/enable), `structured.rs` (handler processes, protocol, follow-up authority) |
+| `terminal/` | Search, copy mode, URL detection, diff detection, shell integration, shared terminal-event draining (`events.rs`), and guardrails for automated (control-protocol and plugin) input |
 | `git/` | Branch detection, Git completion, and repository watching |
 | `harvest/` | Experimental Harvest mode: command history cellar, growth indicators, sprout actions |
 | `notifications/` | Bell and desktop notifications |
@@ -93,6 +94,7 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 | `shell/` | Shell integration, prompt detection |
 | `event.rs` | `TerminalEvent`, the events a terminal raises for the app |
 | `file_transfer.rs` | Kitty file-transfer (OSC 5113) wire types |
+| `unicode.rs` | Grapheme segmentation and cell-width rules |
 
 ### Renderer Sub-modules
 
@@ -163,7 +165,7 @@ In `app/mouse.rs` (`handle_mouse_input`): 0. The docked agent view claims presse
 1. Native scrollbar/divider presses only when `pointer_panel_owns_input()` is false
 2. Global Settings button (preserves direct panel-to-Settings switching)
 3. Commands panel, Agents panel, session panel, Workspaces menu, and Settings intercept their clicks, including outside-click dismissal, before background controls
-4. Tab bar and search bar
+4. Tab bar and search bar, then toggling a pane in or out of an armed broadcast target set
 5. Pane focus, Ctrl+Click hyperlink, and terminal mouse reporting when requested; Shift bypasses to native selection
 6. Terminal selection (default)
 
