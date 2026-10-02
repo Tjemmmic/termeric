@@ -151,6 +151,7 @@ impl Pane {
     }
 
     /// Create a new pane with a shell
+    #[cfg(test)]
     pub fn new(
         id: PaneId,
         geometry: TerminalGeometry,
@@ -521,6 +522,7 @@ pub struct PaneManager {
 
 impl PaneManager {
     /// Create a new pane manager with a single pane
+    #[cfg(test)]
     pub fn new(
         cols: usize,
         rows: usize,
@@ -1435,19 +1437,6 @@ impl PaneManager {
             width: self.total_width,
             height: self.total_height,
         })
-    }
-
-    /// Resize a split divider at the given position (in content-local coordinates).
-    ///
-    /// `threshold` controls how close the pointer must be for the initial hit
-    /// test. Active UI drags retain that divider's [`DividerTarget`] and call
-    /// [`Self::resize_divider_target`] directly.
-    pub fn resize_divider_at(&mut self, pos_x: f32, pos_y: f32, threshold: f32) -> bool {
-        let Some(divider) = self.divider_at(pos_x, pos_y, threshold) else {
-            return false;
-        };
-        self.resize_divider_target(divider.target, pos_x, pos_y)
-            .is_some()
     }
 
     /// Resize the exact divider selected at mouse-down. This prevents a nested

@@ -19,7 +19,6 @@ mod harvest;
 mod input;
 mod mcp;
 mod notifications;
-#[allow(dead_code)]
 mod panes;
 mod plugin;
 mod renderer;
