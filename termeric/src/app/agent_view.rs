@@ -322,10 +322,18 @@ impl App {
                         .as_ref()
                         .is_none_or(|(folder, _)| folder != cwd);
                 if stale {
-                    self.agent_view.past = Some((
-                        cwd.to_path_buf(),
-                        history::past_conversations(cwd, PAST_LIMIT),
-                    ));
+                    // Claude reads its logs from the directory its launch
+                    // environment names, which the catalog may override.
+                    let env = self
+                        .agent_view_program(AgentKind::ClaudeCode)
+                        .env
+                        .into_iter()
+                        .collect();
+                    let past = crate::agents::setup::CLAUDE_CODE
+                        .config_dir(&env)
+                        .map(|dir| history::past_conversations(&dir, cwd, PAST_LIMIT))
+                        .unwrap_or_default();
+                    self.agent_view.past = Some((cwd.to_path_buf(), past));
                 }
                 self.agent_view
                     .past

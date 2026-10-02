@@ -22,14 +22,6 @@ const TAIL_BYTES: u64 = 64 * 1024;
 /// Longest title kept.
 const TITLE_CHARS: usize = 80;
 
-/// Claude Code's own directory, honoring `CLAUDE_CONFIG_DIR`.
-fn claude_dir() -> Option<PathBuf> {
-    if let Some(dir) = std::env::var_os("CLAUDE_CONFIG_DIR").filter(|dir| !dir.is_empty()) {
-        return Some(PathBuf::from(dir));
-    }
-    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".claude"))
-}
-
 /// The log folder name Claude Code uses for a working directory.
 pub fn project_folder_name(cwd: &Path) -> String {
     cwd.to_string_lossy()
@@ -44,14 +36,13 @@ pub fn project_folder_name(cwd: &Path) -> String {
         .collect()
 }
 
-/// The most recent conversations started in `cwd`, newest first.
-pub fn past_conversations(cwd: &Path, limit: usize) -> Vec<EarlierConversation> {
-    match claude_dir() {
-        Some(dir) => {
-            past_conversations_in(&dir.join("projects").join(project_folder_name(cwd)), limit)
-        }
-        None => Vec::new(),
-    }
+/// The most recent conversations started in `cwd`, newest first, from the
+/// logs in Claude Code's configuration directory `claude_dir`.
+pub fn past_conversations(claude_dir: &Path, cwd: &Path, limit: usize) -> Vec<EarlierConversation> {
+    past_conversations_in(
+        &claude_dir.join("projects").join(project_folder_name(cwd)),
+        limit,
+    )
 }
 
 fn past_conversations_in(folder: &Path, limit: usize) -> Vec<EarlierConversation> {

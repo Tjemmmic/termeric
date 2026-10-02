@@ -14209,3 +14209,39 @@ fn page_scrolling_moves_by_the_focused_terminals_screen() {
     assert!(app.handle_action(Action::ScrollPageDown));
     assert_eq!(app.active_terminal().unwrap().grid().scroll_offset(), 0);
 }
+
+#[test]
+fn earlier_claude_conversations_come_from_the_configured_directory() {
+    let claude = tempfile::tempdir().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    let folder = claude
+        .path()
+        .join("projects")
+        .join(crate::agent_view::history::project_folder_name(cwd.path()));
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(
+        folder.join("earlier.jsonl"),
+        "{\"type\":\"user\",\"message\":{\"content\":\"Plan the release\"}}\n",
+    )
+    .unwrap();
+    let mut config = Config::default();
+    config.agents.insert(
+        "claude-code".into(),
+        crate::agents::AgentConfig {
+            env: [(
+                "CLAUDE_CONFIG_DIR".to_owned(),
+                claude.path().display().to_string(),
+            )]
+            .into(),
+            ..Default::default()
+        },
+    );
+    let mut app = App::new_headless(config).unwrap();
+    let past = app.agent_view_past(
+        crate::agent_view::agent::AgentKind::ClaudeCode,
+        cwd.path(),
+        true,
+    );
+    assert_eq!(past.len(), 1);
+    assert_eq!(past[0].title, "Plan the release");
+}

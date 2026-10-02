@@ -74,21 +74,30 @@ pub const CODEX: HookedAgent = HookedAgent {
 pub const HOOKED_AGENTS: [HookedAgent; 2] = [CLAUDE_CODE, CODEX];
 
 impl HookedAgent {
-    /// The file this agent reads hooks from, honoring the agent's own
-    /// configuration-directory variable: as set for it in Termeric's
-    /// configuration (`launch_env`), else in Termeric's own environment.
-    pub fn settings_path(self, launch_env: &BTreeMap<String, String>) -> Option<PathBuf> {
-        let (variable, default, file) = match self.agent_id {
-            "claude-code" => ("CLAUDE_CONFIG_DIR", ".claude", "settings.json"),
-            _ => ("CODEX_HOME", ".codex", "hooks.json"),
+    /// This agent's own configuration directory, honoring its directory
+    /// variable as set for it in Termeric's configuration (`launch_env`),
+    /// else in Termeric's own environment. A relative value is ignored: it
+    /// would depend on where the agent starts.
+    pub fn config_dir(self, launch_env: &BTreeMap<String, String>) -> Option<PathBuf> {
+        let (variable, default) = match self.agent_id {
+            "claude-code" => ("CLAUDE_CONFIG_DIR", ".claude"),
+            _ => ("CODEX_HOME", ".codex"),
         };
-        let directory = launch_env
+        launch_env
             .get(variable)
             .map(PathBuf::from)
             .or_else(|| std::env::var_os(variable).map(PathBuf::from))
             .filter(|path| path.is_absolute())
-            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(default)))?;
-        Some(directory.join(file))
+            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(default)))
+    }
+
+    /// The file this agent reads hooks from, in its configuration directory.
+    pub fn settings_path(self, launch_env: &BTreeMap<String, String>) -> Option<PathBuf> {
+        let file = match self.agent_id {
+            "claude-code" => "settings.json",
+            _ => "hooks.json",
+        };
+        Some(self.config_dir(launch_env)?.join(file))
     }
 }
 
