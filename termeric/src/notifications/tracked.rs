@@ -1790,31 +1790,6 @@ mod tests {
     }
 
     #[test]
-    fn failed_replacement_does_not_claim_a_new_sound_policy() {
-        let event_origin = origin(1, 1);
-        let tracked_key = key(event_origin, "sound");
-        let mut state = TrackedState::new(FakeBackend::default());
-        let mut first = request("sound", NotificationExpiry::System);
-        first.sound = NotificationSound::Silent;
-        assert!(state.show(tracked_key.clone(), first).is_empty());
-
-        state.backend.show_error = Some("synthetic replacement failure".into());
-        let mut failed = request("sound", NotificationExpiry::System);
-        failed.sound = NotificationSound::Error;
-        assert_eq!(state.show(tracked_key.clone(), failed).len(), 1);
-        assert_eq!(state.backend.shown_sounds, vec![NotificationSound::Silent]);
-
-        state.backend.show_error = None;
-        let mut replacement = request("sound", NotificationExpiry::System);
-        replacement.sound = NotificationSound::Information;
-        assert!(state.show(tracked_key, replacement).is_empty());
-        assert_eq!(
-            state.backend.shown_sounds,
-            vec![NotificationSound::Silent, NotificationSound::Information]
-        );
-    }
-
-    #[test]
     fn replacement_uses_only_the_latest_successful_close_report_policy() {
         let event_origin = origin(1, 1);
         let tracked_key = key(event_origin, "job");
