@@ -35,27 +35,18 @@ impl Renderer {
                     adjust_alpha(self.ui.palette_border, 0.45 * opacity),
                     adjust_alpha(self.ui.palette_accent, opacity),
                 ),
-                ToastSeverity::Success => {
-                    let green = [0.38, 0.73, 0.42, 1.0];
-                    (
-                        adjust_alpha(green, 0.45 * opacity),
-                        adjust_alpha(green, opacity),
-                    )
-                }
-                ToastSeverity::Warning => {
-                    let amber = [0.92, 0.66, 0.20, 1.0];
-                    (
-                        adjust_alpha(amber, 0.55 * opacity),
-                        adjust_alpha(amber, opacity),
-                    )
-                }
-                ToastSeverity::Error => {
-                    let red = [0.85, 0.36, 0.30, 1.0];
-                    (
-                        adjust_alpha(red, 0.65 * opacity),
-                        adjust_alpha(red, opacity),
-                    )
-                }
+                ToastSeverity::Success => (
+                    adjust_alpha(self.ui.success, 0.45 * opacity),
+                    adjust_alpha(self.ui.success, opacity),
+                ),
+                ToastSeverity::Warning => (
+                    adjust_alpha(self.ui.warning, 0.55 * opacity),
+                    adjust_alpha(self.ui.warning, opacity),
+                ),
+                ToastSeverity::Error => (
+                    adjust_alpha(self.ui.error, 0.65 * opacity),
+                    adjust_alpha(self.ui.error, opacity),
+                ),
             };
 
             // Card background — slightly darker than the palette background

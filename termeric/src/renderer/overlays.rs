@@ -4,7 +4,7 @@
 
 use super::draw::DrawCtx;
 use super::types::*;
-use super::{Renderer, adjust_alpha};
+use super::{Renderer, adjust_alpha, mix};
 use crate::terminal::guardrails::GuardrailLayout;
 use crate::ui::constants::*;
 
@@ -532,12 +532,12 @@ impl Renderer {
 
         let content_start_y = layout.content.y;
         let dim_color = adjust_alpha(self.ui.palette_text_dim, 0.7 * anim);
-        let added_color = adjust_alpha([0.4, 0.85, 0.4, 1.0], anim);
-        let removed_color = adjust_alpha([0.9, 0.4, 0.4, 1.0], anim);
-        let header_color = adjust_alpha([0.5, 0.6, 0.9, 1.0], anim);
-        let omitted_color = adjust_alpha([0.9, 0.7, 0.3, 1.0], anim);
-        let added_bg = adjust_alpha([0.2, 0.5, 0.2, 0.15], anim);
-        let removed_bg = adjust_alpha([0.5, 0.2, 0.2, 0.15], anim);
+        let added_color = adjust_alpha(self.ui.success, anim);
+        let removed_color = adjust_alpha(self.ui.error, anim);
+        let header_color = adjust_alpha(self.ui.palette_accent, anim);
+        let omitted_color = adjust_alpha(self.ui.warning, anim);
+        let added_bg = adjust_alpha(self.ui.success, 0.15 * anim);
+        let removed_bg = adjust_alpha(self.ui.error, 0.15 * anim);
 
         for (visible_row, (_, row)) in info.visible_rows.iter().enumerate() {
             let line_y = content_start_y + visible_row as f32 * layout.line_height;
@@ -980,17 +980,15 @@ impl Renderer {
         let card_x = layout.card.x;
         let card_y = layout.card.y;
 
-        // Card background with warning tint — drawn via DrawCtx helpers
-        let card_bg = if info.is_critical {
-            adjust_alpha([0.15, 0.05, 0.05, 1.0], anim)
+        // The card is the theme's surface tinted by the severity's hue, so it
+        // reads correctly on light and dark themes alike.
+        let severity_color = if info.is_critical {
+            self.ui.error
         } else {
-            adjust_alpha([0.12, 0.10, 0.03, 1.0], anim)
+            self.ui.warning
         };
-        let border_color = if info.is_critical {
-            adjust_alpha([0.9, 0.2, 0.2, 0.8], anim)
-        } else {
-            adjust_alpha([0.9, 0.7, 0.2, 0.8], anim)
-        };
+        let card_bg = adjust_alpha(mix(self.ui.palette_bg, severity_color, 0.12), anim);
+        let border_color = adjust_alpha(severity_color, 0.8 * anim);
 
         {
             let mut ctx = DrawCtx {

@@ -914,9 +914,9 @@ impl Renderer {
                 let fill = match badge {
                     // Working is a neutral ring: it asks nothing of the person.
                     AgentBadge::Working => color,
-                    AgentBadge::NeedsYou => self.ui.agent_needs_you,
-                    AgentBadge::Failed => self.ui.agent_failed,
-                    AgentBadge::Done => self.ui.agent_done,
+                    AgentBadge::NeedsYou => self.ui.warning,
+                    AgentBadge::Failed => self.ui.error,
+                    AgentBadge::Done => self.ui.success,
                 };
                 self.rect_pipeline.push_rounded_rect(
                     left,

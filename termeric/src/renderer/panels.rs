@@ -454,9 +454,9 @@ impl Renderer {
                 AgentRowState::Unknown => None,
                 AgentRowState::Idle => Some(adjust_alpha(dim, 0.5)),
                 AgentRowState::Working => Some(text),
-                AgentRowState::NeedsYou => Some(self.ui.agent_needs_you),
-                AgentRowState::Done => Some(self.ui.agent_done),
-                AgentRowState::Failed => Some(self.ui.agent_failed),
+                AgentRowState::NeedsYou => Some(self.ui.warning),
+                AgentRowState::Done => Some(self.ui.success),
+                AgentRowState::Failed => Some(self.ui.error),
             };
             let (dot_x, dot_y) = ((title_x).round(), (top + (line - dot) / 2.0).round());
             if let Some(fill) = fill {

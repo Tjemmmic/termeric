@@ -115,11 +115,11 @@ impl Renderer {
                 )
             };
             let rate_color = if cellar.success_rate > 0.8 {
-                adjust_alpha([0.3, 0.8, 0.4, 1.0], anim) // green
+                adjust_alpha(self.ui.success, anim)
             } else if cellar.success_rate > 0.5 {
-                adjust_alpha([0.8, 0.7, 0.2, 1.0], anim) // yellow
+                adjust_alpha(self.ui.warning, anim)
             } else {
-                adjust_alpha([0.8, 0.3, 0.2, 1.0], anim) // red
+                adjust_alpha(self.ui.error, anim)
             };
             ctx.draw_text(
                 &rate_text,
