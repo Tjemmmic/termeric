@@ -1635,250 +1635,7 @@ impl ApplicationHandler<AppEvent> for App {
             }
 
             WindowEvent::MouseWheel { delta, .. } => {
-                if self.info_overlay.is_active() {
-                    let (mut horizontal, mut vertical) = match delta {
-                        winit::event::MouseScrollDelta::LineDelta(x, y) => (x, y),
-                        winit::event::MouseScrollDelta::PixelDelta(pos) => {
-                            ((pos.x / 20.0) as f32, (pos.y / 20.0) as f32)
-                        }
-                    };
-                    if self.modifiers.shift_key() && horizontal == 0.0 {
-                        horizontal = vertical;
-                        vertical = 0.0;
-                    }
-                    let request_id = self.info_overlay.request_id();
-                    let action = if horizontal.abs() > vertical.abs() {
-                        crate::ui::info_overlay::InfoOverlayAction::ScrollColumns {
-                            request_id,
-                            delta: -(horizontal.signum() * horizontal.abs().ceil().max(1.0))
-                                as isize,
-                        }
-                    } else {
-                        crate::ui::info_overlay::InfoOverlayAction::ScrollLines {
-                            request_id,
-                            delta: -(vertical.signum() * vertical.abs().ceil().max(1.0)) as isize,
-                        }
-                    };
-                    self.apply_info_overlay_action(action);
-                    if let Some(window) = &self.window {
-                        window.request_redraw();
-                    }
-                    return;
-                }
-                if self.diff_review.is_active() {
-                    let (mut horizontal, mut vertical) = match delta {
-                        winit::event::MouseScrollDelta::LineDelta(x, y) => (x, y),
-                        winit::event::MouseScrollDelta::PixelDelta(pos) => {
-                            ((pos.x / 20.0) as f32, (pos.y / 20.0) as f32)
-                        }
-                    };
-                    if self.modifiers.shift_key() && horizontal == 0.0 {
-                        horizontal = vertical;
-                        vertical = 0.0;
-                    }
-                    let request_id = self.diff_review.request_id();
-                    let action = if horizontal.abs() > vertical.abs() {
-                        crate::ui::diff_review::DiffReviewAction::ScrollColumns {
-                            request_id,
-                            delta: -(horizontal.signum() * horizontal.abs().ceil().max(1.0))
-                                as isize,
-                        }
-                    } else {
-                        crate::ui::diff_review::DiffReviewAction::ScrollRows {
-                            request_id,
-                            delta: -(vertical.signum() * vertical.abs().ceil().max(1.0)) as isize,
-                        }
-                    };
-                    self.apply_diff_review_action(action);
-                    if let Some(window) = &self.window {
-                        window.request_redraw();
-                    }
-                    return;
-                }
-                if self.context_picker.is_active() {
-                    let lines = match delta {
-                        winit::event::MouseScrollDelta::LineDelta(_, y) => y,
-                        winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
-                    };
-                    let delta = if lines > 0.0 {
-                        -(lines.ceil() as isize)
-                    } else if lines < 0.0 {
-                        (-lines).ceil() as isize
-                    } else {
-                        0
-                    };
-                    self.apply_context_picker_action(
-                        crate::ui::context_picker::ContextPickerAction::Scroll {
-                            request_id: self.context_picker.request_id(),
-                            delta,
-                        },
-                    );
-                    if let Some(window) = &self.window {
-                        window.request_redraw();
-                    }
-                    return;
-                }
-                if self.session_panel.is_open() {
-                    let lines = match delta {
-                        winit::event::MouseScrollDelta::LineDelta(_, y) => y,
-                        winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
-                    };
-                    if lines > 0.0 {
-                        self.session_panel.scroll_up(lines.ceil() as usize);
-                    } else if lines < 0.0 {
-                        self.session_panel.scroll_down((-lines).ceil() as usize);
-                    }
-                    if let Some(window) = &self.window {
-                        window.request_redraw();
-                    }
-                    return;
-                }
-                // Scroll settings panel when active
-                if self.settings_panel.is_active() {
-                    let lines = match delta {
-                        winit::event::MouseScrollDelta::LineDelta(_, y) => y,
-                        winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
-                    };
-                    if lines > 0.0 {
-                        self.settings_panel.scroll_up(lines.ceil() as usize);
-                    } else if lines < 0.0 {
-                        let total = self
-                            .settings_panel
-                            .build_entries(&self.config, &self.shortcut_registry)
-                            .len();
-                        self.settings_panel
-                            .scroll_down((-lines).ceil() as usize, total);
-                    }
-                    if let Some(window) = &self.window {
-                        window.request_redraw();
-                    }
-                    return;
-                }
-                // Scroll shortcuts panel when active
-                if self.shortcuts_panel.is_active() {
-                    let lines = match delta {
-                        winit::event::MouseScrollDelta::LineDelta(_, y) => y,
-                        winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
-                    };
-                    if lines > 0.0 {
-                        self.shortcuts_panel.scroll_up(lines.ceil() as usize);
-                    } else if lines < 0.0 {
-                        self.shortcuts_panel
-                            .scroll_down((-lines).ceil() as usize, &self.shortcut_registry);
-                    }
-                    if let Some(window) = &self.window {
-                        window.request_redraw();
-                    }
-                    return;
-                }
-                if self.domain_picker.is_active() {
-                    let lines = match delta {
-                        winit::event::MouseScrollDelta::LineDelta(_, y) => y,
-                        winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
-                    };
-                    if lines > 0.0 {
-                        self.domain_picker.scroll_up(lines.ceil() as usize);
-                    } else if lines < 0.0 {
-                        self.domain_picker.scroll_down((-lines).ceil() as usize);
-                    }
-                    if let Some(window) = &self.window {
-                        window.request_redraw();
-                    }
-                    return;
-                }
-                if self.unicode_picker.is_active() {
-                    let lines = match delta {
-                        winit::event::MouseScrollDelta::LineDelta(_, y) => y,
-                        winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
-                    };
-                    if lines > 0.0 {
-                        self.unicode_picker.scroll_up(lines.ceil() as usize);
-                    } else if lines < 0.0 {
-                        self.unicode_picker.scroll_down((-lines).ceil() as usize);
-                    }
-                    if let Some(window) = &self.window {
-                        window.request_redraw();
-                    }
-                    return;
-                }
-                // Scroll palette list when palette is active
-                if self.command_palette.is_active() {
-                    let lines = match delta {
-                        winit::event::MouseScrollDelta::LineDelta(_, y) => y,
-                        winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
-                    };
-                    if lines > 0.0 {
-                        self.command_palette.scroll_up(lines.ceil() as usize);
-                    } else if lines < 0.0 {
-                        self.command_palette.scroll_down((-lines).ceil() as usize);
-                    }
-                    if let Some(window) = &self.window {
-                        window.request_redraw();
-                    }
-                    return;
-                }
-                // Root Cellar owns the wheel while open; positive deltas move
-                // toward older commands, matching terminal scroll direction.
-                if self
-                    .harvest
-                    .as_ref()
-                    .is_some_and(|harvest| harvest.cellar.is_expanded())
-                {
-                    let lines = match delta {
-                        winit::event::MouseScrollDelta::LineDelta(_, y) => y,
-                        winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
-                    };
-                    if let Some(harvest) = &mut self.harvest {
-                        if lines > 0.0 {
-                            harvest.cellar.scroll_by(-(lines.ceil() as isize));
-                        } else if lines < 0.0 {
-                            harvest.cellar.scroll_by((-lines).ceil() as isize);
-                        }
-                    }
-                    if let Some(window) = &self.window {
-                        window.request_redraw();
-                    }
-                    return;
-                }
-                // Every remaining modal/context surface owns the wheel while
-                // visible, even when it has no scroll action of its own.
-                if self.session_panel.is_open()
-                    || self.workspace_menu.is_some()
-                    || self.info_overlay.is_active()
-                    || self.diff_review.is_active()
-                    || self.context_picker.is_active()
-                    || self.domain_picker.is_active()
-                    || self.unicode_picker.is_active()
-                    || self.guardrail.is_active()
-                    || self
-                        .harvest
-                        .as_ref()
-                        .is_some_and(|harvest| harvest.sprout_menu.is_some())
-                {
-                    return;
-                }
-                if self.handle_commands_panel_scroll(delta)
-                    || self.handle_agents_panel_scroll(delta)
-                {
-                    return;
-                }
-                if let Some((x, y)) = self.last_cursor_pos
-                    && self.handle_agent_view_wheel(x as f32, y as f32, delta)
-                {
-                    return;
-                }
-                let scroll_speed = self.config.scrollback.scroll_speed;
-                let (x_delta, y_delta) = match delta {
-                    winit::event::MouseScrollDelta::LineDelta(x, y) => {
-                        (x as f64 * scroll_speed, y as f64 * scroll_speed)
-                    }
-                    winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.x / 10.0, pos.y / 10.0),
-                };
-                if x_delta.abs() > y_delta.abs() {
-                    self.handle_horizontal_scroll(x_delta);
-                } else {
-                    self.handle_scroll(y_delta);
-                }
+                self.handle_mouse_wheel(delta);
             }
 
             WindowEvent::Focused(focused) => {
@@ -2387,6 +2144,253 @@ impl ApplicationHandler<AppEvent> for App {
             event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
         } else {
             event_loop.set_control_flow(ControlFlow::Wait);
+        }
+    }
+}
+
+impl App {
+    /// Scroll whatever owns the wheel: the frontmost modal surface, a
+    /// side panel, the agent view, or the terminal.
+    pub(super) fn handle_mouse_wheel(&mut self, delta: winit::event::MouseScrollDelta) {
+        if self.info_overlay.is_active() {
+            let (mut horizontal, mut vertical) = match delta {
+                winit::event::MouseScrollDelta::LineDelta(x, y) => (x, y),
+                winit::event::MouseScrollDelta::PixelDelta(pos) => {
+                    ((pos.x / 20.0) as f32, (pos.y / 20.0) as f32)
+                }
+            };
+            if self.modifiers.shift_key() && horizontal == 0.0 {
+                horizontal = vertical;
+                vertical = 0.0;
+            }
+            let request_id = self.info_overlay.request_id();
+            let action = if horizontal.abs() > vertical.abs() {
+                crate::ui::info_overlay::InfoOverlayAction::ScrollColumns {
+                    request_id,
+                    delta: -(horizontal.signum() * horizontal.abs().ceil().max(1.0)) as isize,
+                }
+            } else {
+                crate::ui::info_overlay::InfoOverlayAction::ScrollLines {
+                    request_id,
+                    delta: -(vertical.signum() * vertical.abs().ceil().max(1.0)) as isize,
+                }
+            };
+            self.apply_info_overlay_action(action);
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            return;
+        }
+        if self.diff_review.is_active() {
+            let (mut horizontal, mut vertical) = match delta {
+                winit::event::MouseScrollDelta::LineDelta(x, y) => (x, y),
+                winit::event::MouseScrollDelta::PixelDelta(pos) => {
+                    ((pos.x / 20.0) as f32, (pos.y / 20.0) as f32)
+                }
+            };
+            if self.modifiers.shift_key() && horizontal == 0.0 {
+                horizontal = vertical;
+                vertical = 0.0;
+            }
+            let request_id = self.diff_review.request_id();
+            let action = if horizontal.abs() > vertical.abs() {
+                crate::ui::diff_review::DiffReviewAction::ScrollColumns {
+                    request_id,
+                    delta: -(horizontal.signum() * horizontal.abs().ceil().max(1.0)) as isize,
+                }
+            } else {
+                crate::ui::diff_review::DiffReviewAction::ScrollRows {
+                    request_id,
+                    delta: -(vertical.signum() * vertical.abs().ceil().max(1.0)) as isize,
+                }
+            };
+            self.apply_diff_review_action(action);
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            return;
+        }
+        if self.context_picker.is_active() {
+            let lines = match delta {
+                winit::event::MouseScrollDelta::LineDelta(_, y) => y,
+                winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
+            };
+            let delta = if lines > 0.0 {
+                -(lines.ceil() as isize)
+            } else if lines < 0.0 {
+                (-lines).ceil() as isize
+            } else {
+                0
+            };
+            self.apply_context_picker_action(
+                crate::ui::context_picker::ContextPickerAction::Scroll {
+                    request_id: self.context_picker.request_id(),
+                    delta,
+                },
+            );
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            return;
+        }
+        if self.session_panel.is_open() {
+            let lines = match delta {
+                winit::event::MouseScrollDelta::LineDelta(_, y) => y,
+                winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
+            };
+            if lines > 0.0 {
+                self.session_panel.scroll_up(lines.ceil() as usize);
+            } else if lines < 0.0 {
+                self.session_panel.scroll_down((-lines).ceil() as usize);
+            }
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            return;
+        }
+        // Scroll settings panel when active
+        if self.settings_panel.is_active() {
+            let lines = match delta {
+                winit::event::MouseScrollDelta::LineDelta(_, y) => y,
+                winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
+            };
+            if lines > 0.0 {
+                self.settings_panel.scroll_up(lines.ceil() as usize);
+            } else if lines < 0.0 {
+                let total = self
+                    .settings_panel
+                    .build_entries(&self.config, &self.shortcut_registry)
+                    .len();
+                self.settings_panel
+                    .scroll_down((-lines).ceil() as usize, total);
+            }
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            return;
+        }
+        // Scroll shortcuts panel when active
+        if self.shortcuts_panel.is_active() {
+            let lines = match delta {
+                winit::event::MouseScrollDelta::LineDelta(_, y) => y,
+                winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
+            };
+            if lines > 0.0 {
+                self.shortcuts_panel.scroll_up(lines.ceil() as usize);
+            } else if lines < 0.0 {
+                self.shortcuts_panel
+                    .scroll_down((-lines).ceil() as usize, &self.shortcut_registry);
+            }
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            return;
+        }
+        if self.domain_picker.is_active() {
+            let lines = match delta {
+                winit::event::MouseScrollDelta::LineDelta(_, y) => y,
+                winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
+            };
+            if lines > 0.0 {
+                self.domain_picker.scroll_up(lines.ceil() as usize);
+            } else if lines < 0.0 {
+                self.domain_picker.scroll_down((-lines).ceil() as usize);
+            }
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            return;
+        }
+        if self.unicode_picker.is_active() {
+            let lines = match delta {
+                winit::event::MouseScrollDelta::LineDelta(_, y) => y,
+                winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
+            };
+            if lines > 0.0 {
+                self.unicode_picker.scroll_up(lines.ceil() as usize);
+            } else if lines < 0.0 {
+                self.unicode_picker.scroll_down((-lines).ceil() as usize);
+            }
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            return;
+        }
+        // Scroll palette list when palette is active
+        if self.command_palette.is_active() {
+            let lines = match delta {
+                winit::event::MouseScrollDelta::LineDelta(_, y) => y,
+                winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
+            };
+            if lines > 0.0 {
+                self.command_palette.scroll_up(lines.ceil() as usize);
+            } else if lines < 0.0 {
+                self.command_palette.scroll_down((-lines).ceil() as usize);
+            }
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            return;
+        }
+        // Root Cellar owns the wheel while open; positive deltas move
+        // toward older commands, matching terminal scroll direction.
+        if self
+            .harvest
+            .as_ref()
+            .is_some_and(|harvest| harvest.cellar.is_expanded())
+        {
+            let lines = match delta {
+                winit::event::MouseScrollDelta::LineDelta(_, y) => y,
+                winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
+            };
+            if let Some(harvest) = &mut self.harvest {
+                if lines > 0.0 {
+                    harvest.cellar.scroll_by(-(lines.ceil() as isize));
+                } else if lines < 0.0 {
+                    harvest.cellar.scroll_by((-lines).ceil() as isize);
+                }
+            }
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            return;
+        }
+        // Every remaining modal/context surface owns the wheel while
+        // visible, even when it has no scroll action of its own.
+        if self.session_panel.is_open()
+            || self.workspace_menu.is_some()
+            || self.info_overlay.is_active()
+            || self.diff_review.is_active()
+            || self.context_picker.is_active()
+            || self.domain_picker.is_active()
+            || self.unicode_picker.is_active()
+            || self.guardrail.is_active()
+            || self
+                .harvest
+                .as_ref()
+                .is_some_and(|harvest| harvest.sprout_menu.is_some())
+        {
+            return;
+        }
+        if self.handle_commands_panel_scroll(delta) || self.handle_agents_panel_scroll(delta) {
+            return;
+        }
+        if let Some((x, y)) = self.last_cursor_pos
+            && self.handle_agent_view_wheel(x as f32, y as f32, delta)
+        {
+            return;
+        }
+        let scroll_speed = self.config.scrollback.scroll_speed;
+        let (x_delta, y_delta) = match delta {
+            winit::event::MouseScrollDelta::LineDelta(x, y) => {
+                (x as f64 * scroll_speed, y as f64 * scroll_speed)
+            }
+            winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.x / 10.0, pos.y / 10.0),
+        };
+        if x_delta.abs() > y_delta.abs() {
+            self.handle_horizontal_scroll(x_delta);
+        } else {
+            self.handle_scroll(y_delta);
         }
     }
 }
