@@ -7,10 +7,10 @@ pub enum Action {
     Copy,
     /// Paste from clipboard
     Paste,
-    /// Scroll up by N lines
-    ScrollUp(usize),
-    /// Scroll down by N lines
-    ScrollDown(usize),
+    /// Scroll back by one screen of the focused terminal
+    ScrollPageUp,
+    /// Scroll forward by one screen of the focused terminal
+    ScrollPageDown,
     /// Scroll to top of scrollback
     ScrollToTop,
     /// Scroll to bottom (current output)

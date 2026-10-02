@@ -14181,3 +14181,31 @@ fn tab_bar_hover_fades_in_by_elapsed_time_not_frame_count() {
     app.tab_bar_hover = None;
     assert_eq!(app.tab_bar_hover_progress(), 0.0);
 }
+
+#[test]
+fn page_scrolling_moves_by_the_focused_terminals_screen() {
+    let mut config = Config::default();
+    config.shell.program = Some("/bin/sh".into());
+    config.shell.args = vec!["-c".into(), "sleep 2".into()];
+    let mut app = App::new_headless(config).unwrap();
+    app.allow_auto_restore = false;
+    app.init_tabs().unwrap();
+    let terminal = app.active_terminal_mut().unwrap();
+    for line in 0..200 {
+        terminal.process(format!("line {line}\r\n").as_bytes());
+    }
+    let rows = terminal.grid().rows();
+    assert!(terminal.grid().scrollback_len() > 2 * rows);
+
+    assert!(app.handle_action(Action::ScrollPageUp));
+    assert!(app.handle_action(Action::ScrollPageUp));
+    assert_eq!(
+        app.active_terminal().unwrap().grid().scroll_offset(),
+        2 * rows
+    );
+    assert!(app.handle_action(Action::ScrollPageDown));
+    assert_eq!(app.active_terminal().unwrap().grid().scroll_offset(), rows);
+    assert!(app.handle_action(Action::ScrollPageDown));
+    assert!(app.handle_action(Action::ScrollPageDown));
+    assert_eq!(app.active_terminal().unwrap().grid().scroll_offset(), 0);
+}

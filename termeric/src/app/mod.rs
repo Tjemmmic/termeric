@@ -3565,18 +3565,18 @@ impl App {
             Action::Paste => {
                 self.paste_clipboard();
             }
-            Action::ScrollUp(lines) => {
+            Action::ScrollPageUp => {
                 if let Some(terminal) = self.active_terminal_mut() {
-                    let offset = terminal.grid().scroll_offset();
-                    terminal.grid_mut().set_scroll_offset(offset + lines);
+                    let grid = terminal.grid_mut();
+                    let offset = grid.scroll_offset() + grid.rows();
+                    grid.set_scroll_offset(offset);
                 }
             }
-            Action::ScrollDown(lines) => {
+            Action::ScrollPageDown => {
                 if let Some(terminal) = self.active_terminal_mut() {
-                    let offset = terminal.grid().scroll_offset();
-                    terminal
-                        .grid_mut()
-                        .set_scroll_offset(offset.saturating_sub(lines));
+                    let grid = terminal.grid_mut();
+                    let offset = grid.scroll_offset().saturating_sub(grid.rows());
+                    grid.set_scroll_offset(offset);
                 }
             }
             Action::ScrollToTop => {

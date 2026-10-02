@@ -72,8 +72,8 @@ Prompt and failed-command jumps need [shell integration](shell-integration.md). 
 
 | Key | Action | ID |
 | --- | --- | --- |
-| `Shift+PageUp` | Scroll up 10 lines | `scroll_page_up` |
-| `Shift+PageDown` | Scroll down 10 lines | `scroll_page_down` |
+| `Shift+PageUp` | Scroll back one screen | `scroll_page_up` |
+| `Shift+PageDown` | Scroll forward one screen | `scroll_page_down` |
 | `Ctrl+Shift+Home` | Scroll to the top of the scrollback | `scroll_to_top` |
 | `Ctrl+Shift+End` | Scroll to the bottom | `scroll_to_bottom` |
 
