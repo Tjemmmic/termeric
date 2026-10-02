@@ -73,11 +73,15 @@ impl App {
     /// Return whether the current focus owner is a text destination. Modal
     /// surfaces without an editable field intentionally swallow IME input.
     fn accepts_ime_text(&self) -> bool {
+        // The guardrail can open over any surface, including an info-overlay
+        // text field, and owns the keyboard until it is answered.
+        if self.guardrail.is_active() {
+            return false;
+        }
         if self.info_overlay.is_active() {
             return self.info_overlay.input_focused();
         }
         if matches!(self.broadcast, BroadcastState::Armed { .. })
-            || self.guardrail.is_active()
             || self.diff_review.is_active()
             || self.context_picker.is_active()
             || self
@@ -101,6 +105,11 @@ impl App {
         }
         if self.session_panel.is_open() {
             return self.session_panel.is_renaming();
+        }
+        // Like every key, IME text must not reach a field beneath an open
+        // Workspaces menu.
+        if self.workspace_menu.is_some() {
+            return false;
         }
         if self.commands_panel.is_open() {
             return self.commands_panel.is_editing();
@@ -558,6 +567,55 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_open_workspaces_menu_swallows_ime_text_like_every_key() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.search.start();
+        assert!(app.accepts_ime_text());
+        app.workspace_menu = Some(crate::ui::popup_menu::PopupMenu::new(
+            crate::ui::workspace_menu::workspace_menu_rows(&[], None),
+            false,
+        ));
+        assert!(!app.accepts_ime_text());
+        assert!(!app.search_owns_ime_text());
+        app.handle_ime_event(Ime::Preedit("日本".into(), None));
+        assert!(app.ime.preedit().is_none());
+        app.handle_ime_event(Ime::Commit("日本".into()));
+        assert_eq!(app.search.query(), "");
+    }
+
+    #[test]
+    fn a_guardrail_over_an_info_overlay_field_swallows_ime_text() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        let request_id = app.info_overlay.show_input(
+            "Name",
+            vec!["Name:".into()],
+            0,
+            "Name",
+            "",
+            64,
+            Vec::new(),
+        );
+        assert!(app.accepts_ime_text());
+        app.guardrail.show(
+            crate::terminal::guardrails::GuardrailMatch {
+                command: "rm -rf /".into(),
+                reason: "fixture".into(),
+                severity: crate::terminal::guardrails::Severity::Critical,
+                target: "Local".into(),
+                user: "tester".into(),
+            },
+            vec![crate::terminal::guardrails::GuardedWrite::for_pane(
+                1,
+                crate::panes::PaneId(0),
+                b"x".to_vec(),
+            )],
+        );
+        assert!(!app.accepts_ime_text());
+        app.handle_ime_event(Ime::Commit("hidden".into()));
+        assert_eq!(app.info_overlay.input_value(request_id), Some(""));
+    }
 
     #[test]
     fn settings_ime_matches_scrolled_filter_and_refuses_dropdown_or_higher_owners() {

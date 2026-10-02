@@ -2152,6 +2152,11 @@ impl App {
     /// Scroll whatever owns the wheel: the frontmost modal surface, a
     /// side panel, the agent view, or the terminal.
     pub(super) fn handle_mouse_wheel(&mut self, delta: winit::event::MouseScrollDelta) {
+        // The guardrail draws above every surface and can open over
+        // any of them, so nothing beneath it may scroll.
+        if self.guardrail.is_active() {
+            return;
+        }
         if self.info_overlay.is_active() {
             let (mut horizontal, mut vertical) = match delta {
                 winit::event::MouseScrollDelta::LineDelta(x, y) => (x, y),
@@ -2364,7 +2369,6 @@ impl App {
             || self.context_picker.is_active()
             || self.domain_picker.is_active()
             || self.unicode_picker.is_active()
-            || self.guardrail.is_active()
             || self
                 .harvest
                 .as_ref()
@@ -2466,5 +2470,39 @@ mod quick_access_tests {
         );
         assert_eq!(position, PhysicalPosition::new(-1_920, 24));
         assert_eq!(size, PhysicalSize::new(1_920, 1_080));
+    }
+}
+
+#[cfg(test)]
+mod wheel_tests {
+    use super::*;
+    use crate::config::Config;
+    use winit::event::MouseScrollDelta;
+
+    #[test]
+    fn the_guardrail_keeps_the_wheel_from_scrolling_surfaces_beneath_it() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        let lines = (0..100).map(|line| format!("line {line}")).collect();
+        app.info_overlay.show("Long notice", lines);
+        app.info_overlay.set_viewport(5, 80);
+        app.handle_mouse_wheel(MouseScrollDelta::LineDelta(0.0, -3.0));
+        assert_eq!(app.info_overlay.scroll_offset(), 3);
+
+        app.guardrail.show(
+            crate::terminal::guardrails::GuardrailMatch {
+                command: "rm -rf /".into(),
+                reason: "fixture".into(),
+                severity: crate::terminal::guardrails::Severity::Critical,
+                target: "Local".into(),
+                user: "tester".into(),
+            },
+            vec![crate::terminal::guardrails::GuardedWrite::for_pane(
+                1,
+                crate::panes::PaneId(0),
+                b"x".to_vec(),
+            )],
+        );
+        app.handle_mouse_wheel(MouseScrollDelta::LineDelta(0.0, -3.0));
+        assert_eq!(app.info_overlay.scroll_offset(), 3);
     }
 }
