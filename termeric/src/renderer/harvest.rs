@@ -140,7 +140,7 @@ impl Renderer {
             // Entry list
             for (entry, (_, row)) in cellar.entries.iter().zip(&layout.rows) {
                 let entry_y = row.y;
-                let entry_color = adjust_alpha(entry.health_color, entry.opacity * anim);
+                let entry_color = adjust_alpha(entry.health_color, anim);
 
                 if cellar.selected_id == Some(entry.id) {
                     ctx.rect.push_rounded_rect(

@@ -2840,14 +2840,10 @@ impl App {
                     .map(|e| CellarEntryInfo {
                         id: e.id,
                         command: e.command.clone(),
-                        row: e.row,
                         exit_code: e.exit_code,
-                        success: e.success,
                         output_truncated: e.output_truncated,
                         health: e.health(),
                         health_color: e.health_color(),
-                        opacity: e.visual_state.opacity,
-                        depth: e.visual_state.depth,
                     })
                     .collect(),
                 total_entries: harvest.cellar.len(),

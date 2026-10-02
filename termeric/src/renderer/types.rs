@@ -347,26 +347,17 @@ pub struct CellarRenderInfo {
 }
 
 /// A single entry in the root cellar
-#[allow(dead_code)]
 pub struct CellarEntryInfo {
     pub id: u64,
     pub command: String,
-    /// Terminal row of the command
-    pub row: i32,
     /// Exit code (None if still running)
     pub exit_code: Option<i32>,
-    /// Whether the command succeeded
-    pub success: bool,
     /// Whether only a clipped 64-KiB output snapshot is retained.
     pub output_truncated: bool,
     /// Health level (0 = healthy, 1 = warning, 2 = sick)
     pub health: u8,
     /// Health color (RGBA)
     pub health_color: [f32; 4],
-    /// Visual opacity
-    pub opacity: f32,
-    /// Depth/age value
-    pub depth: f32,
 }
 
 /// Sprout context menu render info

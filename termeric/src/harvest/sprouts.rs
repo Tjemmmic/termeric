@@ -174,7 +174,6 @@ impl SproutAvailability {
 
 /// Sprout menu - context menu for commands
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct SproutMenu {
     /// Identity of this exact visible menu request.
     pub request_id: u64,

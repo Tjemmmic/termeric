@@ -63,8 +63,6 @@ pub struct GrowthIndicator {
     pub phase: GrowthPhase,
     /// Monotonic command start time.
     started_at: Instant,
-    /// Animation progress within current phase (0.0 to 1.0)
-    pub progress: f32,
     /// Whether the command completed
     pub completed: bool,
     /// Whether the command was successful
@@ -73,7 +71,6 @@ pub struct GrowthIndicator {
     completed_at: Option<Instant>,
 }
 
-#[allow(dead_code)]
 impl GrowthIndicator {
     /// Create a new growth indicator
     pub fn new(region_id: u64, prompt_row: usize) -> Self {
@@ -82,7 +79,6 @@ impl GrowthIndicator {
             prompt_row,
             phase: GrowthPhase::Seed,
             started_at: Instant::now(),
-            progress: 0.0,
             completed: false,
             success: false,
             completed_at: None,
@@ -98,7 +94,6 @@ impl GrowthIndicator {
         let elapsed = now.duration_since(self.started_at).as_secs_f32();
         if let Some(completed_at) = self.completed_at {
             let completion_elapsed = now.duration_since(completed_at).as_secs_f32();
-            self.progress = (completion_elapsed * 3.0).min(1.0);
             self.phase = if completion_elapsed > 2.0 {
                 GrowthPhase::Finished
             } else if self.success {
@@ -114,7 +109,6 @@ impl GrowthIndicator {
                 _ => GrowthPhase::FullGrowth,
             };
             self.phase = new_phase;
-            self.progress = phase_progress(elapsed);
         }
     }
 
@@ -122,7 +116,6 @@ impl GrowthIndicator {
     pub fn complete(&mut self, success: bool) {
         self.completed = true;
         self.success = success;
-        self.progress = 0.0;
         self.completed_at = Some(Instant::now());
     }
 
@@ -143,12 +136,6 @@ impl GrowthIndicator {
         }
     }
 
-    /// Get the current rotation (for growth animation)
-    pub fn rotation(&self) -> f32 {
-        // Gentle swaying motion
-        (self.started_at.elapsed().as_secs_f32() * 2.0).sin() * 0.1
-    }
-
     /// Get the current color with animation
     pub fn color(&self) -> [f32; 4] {
         let base = self.phase.color();
@@ -165,19 +152,6 @@ impl GrowthIndicator {
             base
         }
     }
-}
-
-fn phase_progress(elapsed: f32) -> f32 {
-    let (start, duration) = if elapsed < 0.5 {
-        (0.0, 0.5)
-    } else if elapsed < 2.0 {
-        (0.5, 1.5)
-    } else if elapsed < 5.0 {
-        (2.0, 3.0)
-    } else {
-        (5.0, 1.0)
-    };
-    ((elapsed - start) / duration).clamp(0.0, 1.0)
 }
 
 #[cfg(test)]

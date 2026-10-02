@@ -5,7 +5,6 @@
 
 use super::HarvestSource;
 use std::collections::VecDeque;
-use std::time::Instant;
 use termeric_core::CommandRegion;
 
 /// Default maximum number of commands to keep in history. Overridable per-
@@ -24,7 +23,6 @@ const UNAVAILABLE_COMMAND_TEXT: &str = "(command text unavailable)";
 
 /// A command entry in the root cellar
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct CommandEntry {
     /// Stable identity within the owning cellar.
     pub id: u64,
@@ -47,23 +45,8 @@ pub struct CommandEntry {
     pub row: i32,
     /// Exit code (None if still running)
     pub exit_code: Option<i32>,
-    /// When the command was recorded
-    pub timestamp: Instant,
     /// Whether this command was successful
     pub success: bool,
-    /// Visual state for animation
-    pub visual_state: CommandVisualState,
-}
-
-/// Visual state for command entry animation
-#[derive(Debug, Clone, Copy, Default)]
-pub struct CommandVisualState {
-    /// Animation progress (0.0 to 1.0)
-    pub progress: f32,
-    /// Current opacity
-    pub opacity: f32,
-    /// "Root depth" for visual effect
-    pub depth: f32,
 }
 
 impl CommandEntry {
@@ -93,13 +76,7 @@ impl CommandEntry {
             source,
             row,
             exit_code,
-            timestamp: Instant::now(),
             success,
-            visual_state: CommandVisualState {
-                progress: 0.0,
-                opacity: 1.0,
-                depth: 0.0,
-            },
         }
     }
 
@@ -302,9 +279,9 @@ impl Default for RootCellar {
     }
 }
 
-#[allow(dead_code)]
 impl RootCellar {
     /// Create a new root cellar with the default capacity.
+    #[cfg(test)]
     pub fn new() -> Self {
         Self::default()
     }
@@ -401,6 +378,7 @@ impl RootCellar {
     }
 
     /// Get the most recent entry
+    #[cfg(test)]
     pub fn latest(&self) -> Option<&CommandEntry> {
         self.entries.back()
     }
@@ -416,6 +394,7 @@ impl RootCellar {
         self.entries.iter().find(|entry| entry.id == id)
     }
 
+    #[cfg(test)]
     pub fn selected(&self) -> Option<&CommandEntry> {
         self.selected_id.and_then(|id| self.entry(id))
     }
@@ -510,11 +489,6 @@ impl RootCellar {
             .take(self.viewport_rows)
     }
 
-    /// Get entry at a specific row
-    pub fn at_row(&self, row: i32) -> Option<&CommandEntry> {
-        self.entries.iter().find(|e| e.row == row)
-    }
-
     /// Get number of entries
     pub fn len(&self) -> usize {
         self.entries.len()
@@ -526,13 +500,9 @@ impl RootCellar {
         self.evicted_commands
     }
 
+    #[cfg(test)]
     pub fn snapshot_bytes(&self) -> usize {
         self.snapshot_bytes
-    }
-
-    /// Check if empty
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
     }
 
     /// Clear all entries
@@ -571,17 +541,7 @@ impl RootCellar {
     /// Update animations (call each frame). Returns true if anything is
     /// still animating (caller should keep scheduling redraws).
     pub fn update(&mut self) -> bool {
-        let mut any_active = false;
-        for entry in &mut self.entries {
-            let progress = (entry.timestamp.elapsed().as_secs_f32() / 0.5).min(1.0);
-            entry.visual_state.progress = progress;
-            if progress < 1.0 {
-                any_active = true;
-            }
-        }
-        // Drive the open/close animation.
-        any_active |= self.animation.needs_redraw();
-        any_active
+        self.animation.needs_redraw()
     }
 
     /// Get success rate (percentage of successful commands)
@@ -707,9 +667,8 @@ mod tests {
         cellar.add(CommandEntry::new(0, Some(0)));
         cellar.add(CommandEntry::new(5, Some(1)));
 
-        assert_eq!(cellar.len(), 2);
-        assert_eq!(cellar.at_row(0).unwrap().exit_code, Some(0));
-        assert_eq!(cellar.at_row(5).unwrap().exit_code, Some(1));
+        let exit_codes: Vec<_> = cellar.entries().map(|entry| entry.exit_code).collect();
+        assert_eq!(exit_codes, [Some(0), Some(1)]);
     }
 
     #[test]
