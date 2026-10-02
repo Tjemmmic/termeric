@@ -688,12 +688,24 @@ impl App {
             "  A  Allow this transfer".into(),
             "  D  Deny".into(),
         ];
+        let allow_line = lines.len() - 2;
+        let deny_line = lines.len() - 1;
         let request_id = self.info_overlay.show_choices(
             "Allow remote file transfer?",
             lines,
             vec![
-                InfoOverlayChoice::new("kitty-download-allow", "Allow transfer", 10, Some('a')),
-                InfoOverlayChoice::new("kitty-download-deny", "Deny transfer", 11, Some('d')),
+                InfoOverlayChoice::new(
+                    "kitty-download-allow",
+                    "Allow transfer",
+                    allow_line,
+                    Some('a'),
+                ),
+                InfoOverlayChoice::new(
+                    "kitty-download-deny",
+                    "Deny transfer",
+                    deny_line,
+                    Some('d'),
+                ),
             ],
         );
         self.kitty_file_transfers.pending = Some(PendingConsent {
