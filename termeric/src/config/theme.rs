@@ -254,7 +254,7 @@ pub struct UiColors {
 
 /// A color with optional alpha channel
 #[derive(Debug, Clone, Copy, Deserialize)]
-#[serde(from = "ColorDef")]
+#[serde(try_from = "ColorDef")]
 pub struct Color {
     pub r: u8,
     pub g: u8,
@@ -273,25 +273,29 @@ impl Color {
         Self { r, g, b, a }
     }
 
-    /// Create a color from a hex string
-    pub fn hex(s: &str) -> Self {
-        let s = s.trim_start_matches('#');
-        let len = s.len();
-
-        if len == 6 {
-            let r = u8::from_str_radix(&s[0..2], 16).unwrap_or(0);
-            let g = u8::from_str_radix(&s[2..4], 16).unwrap_or(0);
-            let b = u8::from_str_radix(&s[4..6], 16).unwrap_or(0);
-            Self::rgb(r, g, b)
-        } else if len == 8 {
-            let r = u8::from_str_radix(&s[0..2], 16).unwrap_or(0);
-            let g = u8::from_str_radix(&s[2..4], 16).unwrap_or(0);
-            let b = u8::from_str_radix(&s[4..6], 16).unwrap_or(0);
-            let a = u8::from_str_radix(&s[6..8], 16).unwrap_or(255);
-            Self::rgba(r, g, b, a as f32 / 255.0)
-        } else {
-            Self::rgb(0, 0, 0)
+    /// Parse `#RRGGBB` or `#RRGGBBAA`.
+    pub fn parse_hex(text: &str) -> Result<Self, String> {
+        let invalid = || format!("invalid color {text:?}: expected #RRGGBB or #RRGGBBAA");
+        let digits = text.strip_prefix('#').unwrap_or(text);
+        if !matches!(digits.len(), 6 | 8) || !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(invalid());
         }
+        let channel = |index: usize| u8::from_str_radix(&digits[index..index + 2], 16);
+        let (r, g, b) = (channel(0), channel(2), channel(4));
+        let (Ok(r), Ok(g), Ok(b)) = (r, g, b) else {
+            return Err(invalid());
+        };
+        if digits.len() == 6 {
+            return Ok(Self::rgb(r, g, b));
+        }
+        let a = channel(6).map_err(|_| invalid())?;
+        Ok(Self::rgba(r, g, b, f32::from(a) / 255.0))
+    }
+
+    /// A color from a hex literal known to be valid.
+    #[cfg(test)]
+    pub fn hex(text: &str) -> Self {
+        Self::parse_hex(text).unwrap()
     }
 
     /// Return this color with a different alpha value
@@ -337,12 +341,17 @@ enum ColorDef {
     Rgb { r: u8, g: u8, b: u8 },
 }
 
-impl From<ColorDef> for Color {
-    fn from(def: ColorDef) -> Self {
+impl TryFrom<ColorDef> for Color {
+    type Error = String;
+
+    fn try_from(def: ColorDef) -> Result<Self, String> {
         match def {
-            ColorDef::Hex(s) => Color::hex(&s),
-            ColorDef::Rgb { r, g, b } => Color::rgb(r, g, b),
-            ColorDef::Rgba { r, g, b, a } => Color::rgba(r, g, b, a),
+            ColorDef::Hex(text) => Color::parse_hex(&text),
+            ColorDef::Rgb { r, g, b } => Ok(Color::rgb(r, g, b)),
+            ColorDef::Rgba { r, g, b, a } if (0.0..=1.0).contains(&a) => {
+                Ok(Color::rgba(r, g, b, a))
+            }
+            ColorDef::Rgba { a, .. } => Err(format!("invalid alpha {a}: expected 0.0 to 1.0")),
         }
     }
 }
@@ -380,6 +389,32 @@ mod tests {
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../assets/themes/custom-example.toml");
         let theme = Theme::load(&example).unwrap();
         assert_eq!(theme.meta.name, "Custom Example");
+    }
+
+    #[test]
+    fn malformed_colors_are_refused_instead_of_becoming_black() {
+        for text in [
+            "#ZZ0000",
+            "#12345",
+            "#1234567",
+            "FF00GG",
+            "#aébbb",
+            "#aébbbbb",
+            "##FF0000",
+        ] {
+            assert!(Color::parse_hex(text).is_err(), "{text}");
+        }
+        assert_eq!(Color::parse_hex("ff5500").unwrap().g, 85);
+        for source in [
+            r##"value = "#GG0000""##,
+            "value = { r = 1, g = 2, b = 3, a = 1.5 }",
+            "value = { r = 1, g = 2, b = 3, a = -0.1 }",
+        ] {
+            let error = toml::from_str::<std::collections::HashMap<String, Color>>(source)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("invalid"), "{source}: {error}");
+        }
     }
 
     #[test]

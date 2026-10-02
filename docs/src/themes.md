@@ -116,7 +116,7 @@ search_match = "#F1FA8C"
 url = "#8BE9FD"
 ```
 
-Write colors as `"#RRGGBB"` or `"#RRGGBBAA"` (with alpha), or as an inline table such as `{ r = 40, g = 42, b = 54 }` or `{ r = 40, g = 42, b = 54, a = 0.5 }`. Use the full six or eight hex digits. Colors aren't validated: a value of the wrong length is read as black, and an invalid pair of hex digits is read as 0 for that channel.
+Write colors as `"#RRGGBB"` or `"#RRGGBBAA"` (with alpha), or as an inline table such as `{ r = 40, g = 42, b = 54 }` or `{ r = 40, g = 42, b = 54, a = 0.5 }`. Use the full six or eight hex digits, and keep alpha in an inline table between 0.0 and 1.0. A theme with a malformed color doesn't load, and the error names the value.
 
 `[meta]` holds `name`, `author`, and an optional `description`, which Settings shows beside the theme.
 
