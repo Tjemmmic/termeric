@@ -6022,7 +6022,7 @@ mod tests {
             },
         );
         assert_eq!(stale["event"]["ok"], false);
-        assert!(stale["event"]["tab_id"].is_null());
+        assert!(stale["event"]["created_tab_id"].is_null());
         assert!(
             stale["event"]["error"]
                 .as_str()
