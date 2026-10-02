@@ -2297,6 +2297,37 @@ program = "termeric-test-fixture-must-not-run"
     }
 
     #[test]
+    fn a_custom_agent_taking_an_installed_plugin_id_is_reported_by_name() {
+        let temp = tempfile::tempdir().unwrap();
+        let registry = temp.path().join("registry.toml");
+        let root = temp.path().join("installed");
+        std::fs::create_dir_all(&root).unwrap();
+        install_fixture(temp.path(), &registry, &root, "local-tool", false);
+        crate::plugin::runtime::execute_admin_at(
+            PluginAdminCommand::Enable {
+                id: "local-tool".into(),
+            },
+            &registry,
+            &root,
+        )
+        .unwrap();
+        let mut config = Config::default();
+        config.agents.insert(
+            "local-tool".into(),
+            crate::agents::AgentConfig {
+                name: Some("Local Agent".into()),
+                program: Some("/bin/true".into()),
+                ..Default::default()
+            },
+        );
+        let mut app = App::new_headless(config).unwrap();
+        app.set_runtime_plugin_test_paths(registry, root);
+        app.sync_plugins_from_config();
+        assert!(app.toasts.iter().any(|toast| toast.message
+            == "Third-party plugin local-tool was not loaded: the agent Local Agent uses the same ID"));
+    }
+
+    #[test]
     fn manager_reviews_permissions_and_installs_local_plugin() {
         let temp = tempfile::tempdir().unwrap();
         let registry = temp.path().join("registry.toml");

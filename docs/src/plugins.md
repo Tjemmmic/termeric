@@ -122,7 +122,7 @@ A plugin is a directory with a `termeric-plugin.toml`. Check it with `termeric p
 | Key | Required | Description |
 | --- | --- | --- |
 | `api_version` | yes | Must be `1`. |
-| `id` | yes | The plugin's ID. `claude-code` and `codex` are reserved. |
+| `id` | yes | The plugin's ID. Built-in agent IDs (`claude-code`, `codex`, `gemini`, `opencode`) are reserved, and a plugin isn't loaded while a [custom agent](agents.md#configuration) uses its ID. |
 | `name` | yes | Display name, one line, at most 80 bytes. |
 | `version` | yes | Any one-line text, at most 64 bytes. |
 | `description` | no | At most 1024 bytes. |

@@ -584,6 +584,16 @@ impl App {
             };
         for plugin in runtime_plugins {
             let id = crate::plugin::hooks::Plugin::id(&plugin).to_string();
+            // Custom agents can take an installed plugin's ID after it was
+            // installed; built-in agent IDs are refused at install time.
+            if let Some(agent) = self.agents.get(&id) {
+                log::error!("Third-party plugin {id:?} was not loaded: agent {id:?} uses its ID");
+                self.toasts.error(format!(
+                    "Third-party plugin {id} was not loaded: the agent {} uses the same ID",
+                    agent.name
+                ));
+                continue;
+            }
             if let Err(error) = self.plugin_manager.register(Box::new(plugin), &ctx) {
                 log::error!("Third-party plugin {id:?} was not loaded: {error:#}");
                 self.toasts

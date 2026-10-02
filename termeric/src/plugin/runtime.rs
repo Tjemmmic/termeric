@@ -273,7 +273,7 @@ impl PluginManifest {
             );
         }
         validate_identifier("plugin id", &self.id)?;
-        if matches!(self.id.as_str(), "claude-code" | "codex") {
+        if is_reserved_plugin_id(&self.id) {
             bail!(
                 "plugin id {:?} is reserved for a built-in integration",
                 self.id
@@ -525,7 +525,7 @@ impl PluginRegistry {
         let mut ids = BTreeSet::new();
         for plugin in &self.plugins {
             validate_identifier("installed plugin id", &plugin.id)?;
-            if matches!(plugin.id.as_str(), "claude-code" | "codex") {
+            if is_reserved_plugin_id(&plugin.id) {
                 bail!("installed plugin id {:?} is reserved", plugin.id);
             }
             if !ids.insert(plugin.id.as_str()) {
@@ -1900,6 +1900,12 @@ pub fn plugins_dir() -> PathBuf {
         .map_or_else(|| PathBuf::from("plugins"), |parent| parent.join("plugins"))
 }
 
+/// Built-in agents register as plugins under their own IDs, so a
+/// third-party plugin can never use one.
+fn is_reserved_plugin_id(id: &str) -> bool {
+    crate::agents::builtin_agent_names().any(|(builtin, _)| builtin == id)
+}
+
 fn validate_identifier(label: &str, value: &str) -> Result<()> {
     if value.is_empty()
         || value.len() > 64
@@ -2122,6 +2128,17 @@ args = ["--quiet"]
 working_directory = "inherit"
 "#
         )
+    }
+
+    #[test]
+    fn every_built_in_agent_id_is_reserved() {
+        for (id, _) in crate::agents::builtin_agent_names() {
+            let source = manifest("1.0.0", "", "/bin/true")
+                .replace(r#"id = "sample-tools""#, &format!("id = {id:?}"));
+            let parsed: PluginManifest = toml::from_str(&source).unwrap();
+            let error = parsed.validate().unwrap_err().to_string();
+            assert!(error.contains("reserved"), "{id}: {error}");
+        }
     }
 
     /// A handler plugin requesting `requested` (beyond process-spawn and
