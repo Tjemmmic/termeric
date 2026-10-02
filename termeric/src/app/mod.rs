@@ -1260,7 +1260,8 @@ pub struct App {
     /// Which tab bar element is currently hovered (for icon animations)
     tab_bar_hover: Option<crate::renderer::TabBarClick>,
     /// Smooth hover animation progress (0.0 = not hovered, 1.0 = fully hovered)
-    tab_bar_hover_progress: f32,
+    /// When the current tab bar hover target began, for its fade-in.
+    tab_bar_hover_since: Instant,
     /// Plugin manager
     plugin_manager: PluginManager,
     /// Bounded off-UI-thread executor for declarative lifecycle handlers.
@@ -1530,7 +1531,7 @@ impl App {
             git_completion_index: None,
             git_completions_visible: false,
             tab_bar_hover: None,
-            tab_bar_hover_progress: 0.0,
+            tab_bar_hover_since: Instant::now(),
             plugin_manager: PluginManager::new(),
             structured_plugin_worker: crate::plugin::structured::StructuredPluginWorker::new()
                 .map_err(anyhow::Error::msg)?,
@@ -2144,15 +2145,7 @@ impl App {
         // Completing a filter scan may replace the displayed row projection.
         self.reconcile_mouse_selection_presentation();
 
-        // Smooth hover animation progress for tab bar icons unless the user
-        // requested static application chrome.
-        if reduced_motion {
-            self.tab_bar_hover_progress = f32::from(self.tab_bar_hover.is_some());
-        } else if self.tab_bar_hover.is_some() {
-            self.tab_bar_hover_progress = (self.tab_bar_hover_progress + 0.2).min(1.0);
-        } else {
-            self.tab_bar_hover_progress = (self.tab_bar_hover_progress - 0.2).max(0.0);
-        }
+        let tab_bar_hover_progress = self.tab_bar_hover_progress();
 
         // Build pane render info (before renderer borrow)
         let pane_info = self.pane_render_info();
@@ -2678,7 +2671,7 @@ impl App {
             }
         }
 
-        renderer.set_tab_bar_hover(self.tab_bar_hover, self.tab_bar_hover_progress);
+        renderer.set_tab_bar_hover(self.tab_bar_hover, tab_bar_hover_progress);
         if !renderer.git_completion_fits() {
             self.git_completions_visible = false;
             self.git_completions.clear();
@@ -3170,8 +3163,7 @@ impl App {
                     .copy_flash_start
                     .is_some_and(|start| start.elapsed().as_secs_f32() < 0.15)
                 || self.focus_change_time.elapsed().as_secs_f32() < 0.1
-                || (self.tab_bar_hover.is_some() && self.tab_bar_hover_progress < 1.0)
-                || (self.tab_bar_hover.is_none() && self.tab_bar_hover_progress > 0.0))
+                || (self.tab_bar_hover.is_some() && self.tab_bar_hover_progress() < 1.0))
     }
 
     fn presentation_suspended(&self) -> bool {

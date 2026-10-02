@@ -14160,3 +14160,24 @@ fn codex_supervises_as_an_agent_view_conversation() {
     app.stop_supervisor();
     assert!(!app.supervisor_running());
 }
+
+#[test]
+fn tab_bar_hover_fades_in_by_elapsed_time_not_frame_count() {
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.config.accessibility.reduce_motion = crate::config::AccessibilityPreference::Off;
+    assert_eq!(app.tab_bar_hover_progress(), 0.0);
+
+    app.tab_bar_hover = Some(crate::renderer::TabBarClick::NewTab);
+    app.tab_bar_hover_since = Instant::now() - Duration::from_millis(50);
+    let halfway = app.tab_bar_hover_progress();
+    assert!((0.4..0.9).contains(&halfway), "{halfway}");
+    app.tab_bar_hover_since = Instant::now() - Duration::from_secs(1);
+    assert_eq!(app.tab_bar_hover_progress(), 1.0);
+
+    app.tab_bar_hover_since = Instant::now();
+    app.config.accessibility.reduce_motion = crate::config::AccessibilityPreference::On;
+    assert_eq!(app.tab_bar_hover_progress(), 1.0);
+
+    app.tab_bar_hover = None;
+    assert_eq!(app.tab_bar_hover_progress(), 0.0);
+}

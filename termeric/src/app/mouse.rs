@@ -827,7 +827,7 @@ impl App {
             };
             if new_hover != self.tab_bar_hover {
                 self.tab_bar_hover = new_hover;
-                self.tab_bar_hover_progress = 0.0;
+                self.tab_bar_hover_since = Instant::now();
             }
             self.drag_tab_to_pointer(position);
         }

@@ -217,4 +217,4 @@ let t = (elapsed / DURATION).min(1.0);
 self.progress += dt * speed;
 ```
 
-Easing: ease-out cubic `1.0 - (1.0 - t).powi(3)` (`ease_out_cubic`). Default durations: 150ms overlays (`DEFAULT_OVERLAY_DURATION`), 200ms panels (`DEFAULT_PANEL_DURATION`); the Commands and Agents panels and the guardrail overlay use 250ms.
+Easing: ease-out cubic `1.0 - (1.0 - t).powi(3)` (`ease_out_cubic`). Default durations: 150ms overlays (`DEFAULT_OVERLAY_DURATION`), 200ms panels (`DEFAULT_PANEL_DURATION`); the Commands and Agents panels and the guardrail overlay use 250ms; the tab-bar hover fade-in takes 100ms.

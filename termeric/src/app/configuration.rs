@@ -2,6 +2,8 @@
 
 use super::*;
 
+const TAB_BAR_HOVER_FADE_SECONDS: f32 = 0.1;
+
 impl App {
     pub(super) const CONFIG_POLL_INTERVAL: std::time::Duration =
         std::time::Duration::from_millis(750);
@@ -445,7 +447,6 @@ impl App {
         }
         if tab_bar_position_changed {
             self.tab_bar_hover = None;
-            self.tab_bar_hover_progress = 0.0;
         }
         self.set_padding(self.config.window.padding);
         self.sync_agent_view_config();
@@ -669,7 +670,6 @@ impl App {
             harvest.set_reduced_motion(reduced_motion);
         }
         if reduced_motion {
-            self.tab_bar_hover_progress = f32::from(self.tab_bar_hover.is_some());
             self.copy_flash_start = None;
         }
         if let Some(renderer) = &mut self.renderer {
@@ -682,6 +682,18 @@ impl App {
             .accessibility
             .reduce_motion
             .resolve(self.system_accessibility.reduce_motion)
+    }
+
+    /// Fade-in of the hovered tab bar control, from 0 to 1. It restarts
+    /// whenever the hovered control changes and ends at once when hover ends.
+    pub(super) fn tab_bar_hover_progress(&self) -> f32 {
+        if self.tab_bar_hover.is_none() {
+            return 0.0;
+        }
+        if self.reduced_motion_enabled() {
+            return 1.0;
+        }
+        (self.tab_bar_hover_since.elapsed().as_secs_f32() / TAB_BAR_HOVER_FADE_SECONDS).min(1.0)
     }
 
     pub(super) fn high_contrast_enabled(&self) -> bool {
@@ -882,7 +894,6 @@ impl App {
             SettingsAction::SetTabBarPosition(position) => {
                 self.config.window.tab_bar_position = position;
                 self.tab_bar_hover = None;
-                self.tab_bar_hover_progress = 0.0;
                 if let Some(renderer) = &mut self.renderer {
                     renderer.set_tab_bar_position(position);
                 }
