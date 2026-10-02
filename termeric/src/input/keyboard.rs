@@ -979,7 +979,7 @@ fn encode_xterm_with_profile(
         physical_key,
         text,
         modifiers,
-        false,
+        alt_graph_active,
         mode,
         cursor_policy,
         function_policy,
@@ -2777,6 +2777,36 @@ mod tests {
             XtermSpecialKeys::default(),
         );
         assert_eq!(altgr, Some("€".as_bytes().to_vec()));
+
+        // AltGr on a key that produced no text: below the level that encodes
+        // it, xterm falls back to the legacy encoding, which must treat AltGr
+        // as layout composition there too, not as Control+Alt.
+        for level in [0, 1] {
+            let unproduced = encode_xterm_modify_other_keys(
+                &Key::Character("e".into()),
+                PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified),
+                None,
+                mods(false, true, true),
+                true,
+                TerminalMode::default(),
+                XtermModifyOtherKeys::new(level, 0).unwrap(),
+                XtermCursorKeys::default(),
+                XtermFunctionKeys::default(),
+                XtermKeypadKeys::default(),
+                XtermModifierKeys::default(),
+                XtermSpecialKeys::default(),
+            );
+            let legacy = encode_legacy_xterm(
+                &Key::Character("e".into()),
+                PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified),
+                None,
+                mods(false, true, true),
+                true,
+                TerminalMode::default(),
+            );
+            assert_eq!(unproduced, legacy, "level {level}");
+            assert_eq!(unproduced, Some(b"e".to_vec()), "level {level}");
+        }
     }
 
     #[test]
