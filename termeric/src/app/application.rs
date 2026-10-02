@@ -3528,6 +3528,7 @@ impl ApplicationHandler<AppEvent> for Application {
             }
             AppEvent::AccessKit(event) => {
                 if let Some(window) = self.windows.get_mut(&event.window_id) {
+                    window.redraw_scheduler.request(RedrawReason::Accessibility);
                     window.handle_accesskit_event(event);
                 }
                 self.remove_closed_windows(event_loop);
@@ -3539,6 +3540,9 @@ impl ApplicationHandler<AppEvent> for Application {
                 failure,
             } => {
                 if let Some(window) = self.windows.get_mut(&window_id) {
+                    window
+                        .redraw_scheduler
+                        .request(RedrawReason::SurfaceRecovery);
                     window.handle_renderer_device_lost(generation, failure);
                 }
                 self.remove_closed_windows(event_loop);
@@ -3551,6 +3555,9 @@ impl ApplicationHandler<AppEvent> for Application {
                 result,
             } => {
                 if let Some(window) = self.windows.get_mut(&window_id) {
+                    window
+                        .redraw_scheduler
+                        .request(RedrawReason::BackgroundTask);
                     window.handle_background_image_loaded(generation, path, result);
                 }
                 self.remove_closed_windows(event_loop);
@@ -3562,6 +3569,9 @@ impl ApplicationHandler<AppEvent> for Application {
                 result,
             } => {
                 if let Some(window) = self.windows.get_mut(&window_id) {
+                    window
+                        .redraw_scheduler
+                        .request(RedrawReason::BackgroundTask);
                     window.handle_live_domain_control_completed(control.clone(), result.clone());
                 }
                 self.complete_live_domain_control(window_id, &control, &result);
@@ -3574,6 +3584,9 @@ impl ApplicationHandler<AppEvent> for Application {
                 result,
             } => {
                 if let Some(window) = self.windows.get_mut(&window_id) {
+                    window
+                        .redraw_scheduler
+                        .request(RedrawReason::BackgroundTask);
                     window.handle_live_domain_topology(domain_id, result);
                 }
                 self.remove_closed_windows(event_loop);
@@ -3585,6 +3598,9 @@ impl ApplicationHandler<AppEvent> for Application {
                 result,
             } => {
                 if let Some(window) = self.windows.get_mut(&window_id) {
+                    window
+                        .redraw_scheduler
+                        .request(RedrawReason::BackgroundTask);
                     window.handle_domain_picker_loaded(generation, result);
                 }
                 self.remove_closed_windows(event_loop);
@@ -3596,6 +3612,9 @@ impl ApplicationHandler<AppEvent> for Application {
                 result,
             } => {
                 let requested = if let Some(window) = self.windows.get_mut(&window_id) {
+                    window
+                        .redraw_scheduler
+                        .request(RedrawReason::BackgroundTask);
                     window.handle_domain_picker_prepared(generation, result);
                     window
                         .requested_window_launch
@@ -3619,6 +3638,9 @@ impl ApplicationHandler<AppEvent> for Application {
                 result,
             } => {
                 if let Some(window) = self.windows.get_mut(&window_id) {
+                    window
+                        .redraw_scheduler
+                        .request(RedrawReason::BackgroundTask);
                     window.handle_context_gathered(request_id, result);
                 }
                 self.remove_closed_windows(event_loop);
@@ -3630,6 +3652,9 @@ impl ApplicationHandler<AppEvent> for Application {
                 result,
             } => {
                 if let Some(window) = self.windows.get_mut(&window_id) {
+                    window
+                        .redraw_scheduler
+                        .request(RedrawReason::BackgroundTask);
                     window.handle_file_upload_completed(request_id, result);
                 }
                 self.remove_closed_windows(event_loop);
@@ -3642,6 +3667,9 @@ impl ApplicationHandler<AppEvent> for Application {
                 total_bytes,
             } => {
                 if let Some(window) = self.windows.get_mut(&window_id) {
+                    window
+                        .redraw_scheduler
+                        .request(RedrawReason::BackgroundTask);
                     window.handle_file_upload_progress(request_id, bytes_sent, total_bytes);
                 }
                 self.remove_closed_windows(event_loop);
@@ -3653,6 +3681,9 @@ impl ApplicationHandler<AppEvent> for Application {
                 result,
             } => {
                 if let Some(window) = self.windows.get_mut(&window_id) {
+                    window
+                        .redraw_scheduler
+                        .request(RedrawReason::BackgroundTask);
                     window.handle_kitty_file_transfer_completed(token, result);
                 }
                 self.remove_closed_windows(event_loop);
@@ -3664,6 +3695,9 @@ impl ApplicationHandler<AppEvent> for Application {
                 result,
             } => {
                 if let Some(window) = self.windows.get_mut(&window_id) {
+                    window
+                        .redraw_scheduler
+                        .request(RedrawReason::BackgroundTask);
                     window.handle_kitty_file_upload_completed(token, result);
                 }
                 self.remove_closed_windows(event_loop);
