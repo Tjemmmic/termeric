@@ -86,6 +86,10 @@ enum TrackedCommand {
         key: TrackedKey,
         request: Box<NotificationRequest>,
     },
+    /// A notification nothing will replace, close, query, or report on.
+    ShowUntracked {
+        request: Box<NotificationRequest>,
+    },
     Close {
         key: TrackedKey,
     },
@@ -158,6 +162,15 @@ impl<B: TrackedNotificationBackend> TrackedState<B> {
             closing_order: VecDeque::new(),
             next_action_generation: 1,
         }
+    }
+
+    fn show_untracked(&mut self, request: &NotificationRequest) -> Vec<String> {
+        let result = self.backend.show(request, 0, &[]);
+        let mut warnings = self.backend.take_warning().into_iter().collect::<Vec<_>>();
+        if let Err(error) = result {
+            warnings.push(format!("could not display notification: {error}"));
+        }
+        warnings
     }
 
     fn show(&mut self, key: TrackedKey, request: NotificationRequest) -> Vec<String> {
@@ -623,22 +636,26 @@ impl TrackedNotifications {
         let capture = move || {
             receiver
                 .try_iter()
-                .map(|command| match command {
-                    TrackedCommand::Show { ref key, .. } | TrackedCommand::Close { ref key } => {
-                        let kind = if matches!(command, TrackedCommand::Show { .. }) {
-                            "show"
-                        } else {
-                            "close"
-                        };
-                        let InternalIdentifier::Named(identifier) = &key.identifier else {
-                            panic!("expected named fixture request")
-                        };
-                        (kind, key.origin, identifier.clone())
-                    }
-                    TrackedCommand::Alive {
-                        origin, identifier, ..
-                    } => ("alive", origin, identifier),
-                    _ => panic!("unexpected fixture command"),
+                .filter_map(|command| {
+                    Some(match command {
+                        TrackedCommand::ShowUntracked { .. } => return None,
+                        TrackedCommand::Show { ref key, .. }
+                        | TrackedCommand::Close { ref key } => {
+                            let kind = if matches!(command, TrackedCommand::Show { .. }) {
+                                "show"
+                            } else {
+                                "close"
+                            };
+                            let InternalIdentifier::Named(identifier) = &key.identifier else {
+                                panic!("expected named fixture request")
+                            };
+                            (kind, key.origin, identifier.clone())
+                        }
+                        TrackedCommand::Alive {
+                            origin, identifier, ..
+                        } => ("alive", origin, identifier),
+                        _ => panic!("unexpected fixture command"),
+                    })
                 })
                 .collect()
         };
@@ -647,6 +664,12 @@ impl TrackedNotifications {
 
     pub(super) fn new() -> Result<Self, String> {
         Self::new_with_backend(FreedesktopBackend::default())
+    }
+
+    /// A real worker whose notification service refuses every notification.
+    #[cfg(test)]
+    pub(super) fn failing_for_test(error: &str) -> Result<Self, String> {
+        Self::new_with_backend(FailingBackend(error.to_owned()))
     }
 
     fn new_with_backend<B: TrackedNotificationBackend>(backend: B) -> Result<Self, String> {
@@ -690,6 +713,12 @@ impl TrackedNotifications {
         );
         self.send(TrackedCommand::Show {
             key: TrackedKey { origin, identifier },
+            request: Box::new(request),
+        })
+    }
+
+    pub(super) fn show_untracked(&self, request: NotificationRequest) -> Result<(), String> {
+        self.send(TrackedCommand::ShowUntracked {
             request: Box::new(request),
         })
     }
@@ -774,6 +803,10 @@ fn tracked_worker<B: TrackedNotificationBackend>(
                         "could not prepare notification close tracking: {error}"
                     )],
                 };
+                publish_operation(&completions, &mut last_failure, failures);
+            }
+            Ok(TrackedCommand::ShowUntracked { request }) => {
+                let failures = state.show_untracked(&request);
                 publish_operation(&completions, &mut last_failure, failures);
             }
             Ok(TrackedCommand::Close { key }) => {
@@ -868,6 +901,20 @@ fn publish_operation(
 fn wake_app() {
     if let Some(wake) = crate::app::pty_event_waker() {
         wake();
+    }
+}
+
+#[cfg(test)]
+struct FailingBackend(String);
+
+#[cfg(test)]
+impl TrackedNotificationBackend for FailingBackend {
+    fn show(&mut self, _: &NotificationRequest, _: u32, _: &[String]) -> Result<u32, String> {
+        Err(self.0.clone())
+    }
+
+    fn close(&mut self, _: u32) -> Result<(), String> {
+        Ok(())
     }
 }
 
@@ -1787,6 +1834,26 @@ mod tests {
             ..NotificationRequest::default()
         };
         assert_eq!(freedesktop_app_icon(&unsafe_request, None, false), "");
+    }
+
+    #[test]
+    fn untracked_notifications_are_shown_without_keeping_state() {
+        let mut state = TrackedState::new(FakeBackend::default());
+        let untracked = NotificationRequest {
+            title: Some("<b>Build</b>".into()),
+            body: "done".into(),
+            ..NotificationRequest::default()
+        };
+        assert!(state.show_untracked(&untracked).is_empty());
+        assert_eq!(state.backend.shows.len(), 1);
+        assert_eq!(state.backend.shows[0].1, 0, "never replaces a notification");
+        assert!(state.entries.is_empty());
+        assert!(state.native_keys.is_empty());
+
+        state.backend.show_error = Some("synthetic show failure".into());
+        let failures = state.show_untracked(&untracked);
+        assert_eq!(failures.len(), 1);
+        assert!(failures[0].contains("synthetic show failure"));
     }
 
     #[test]

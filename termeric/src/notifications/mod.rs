@@ -13,7 +13,6 @@ use std::time::{Duration, Instant};
 use termeric_core::NotificationRequest;
 #[cfg(test)]
 use termeric_core::NotificationSound;
-use termeric_core::NotificationUrgency;
 
 const DESKTOP_COMMAND_QUEUE_CAPACITY: usize = 16;
 const MAX_DESKTOP_HELPER_CHILDREN: usize = 8;
@@ -370,8 +369,8 @@ pub struct Notifications {
     last_notification: Option<Instant>,
     /// Minimum time between notifications
     rate_limit: Duration,
-    command: Option<String>,
     last_delivery_failure: Option<String>,
+    /// The desktop notification worker, started on first use.
     tracked: Option<tracked::TrackedNotifications>,
 }
 
@@ -388,7 +387,6 @@ impl Notifications {
             enabled: true,
             last_notification: None,
             rate_limit: Duration::from_secs(1),
-            command: default_notification_command(),
             last_delivery_failure: None,
             tracked: None,
         }
@@ -396,43 +394,31 @@ impl Notifications {
 
     /// Send a desktop notification
     pub fn notify(&mut self, title: &str, body: &str) -> Option<String> {
-        self.notify_request(&NotificationRequest {
+        self.notify_untracked(NotificationRequest {
             title: Some(title.to_owned()),
             body: body.to_owned(),
             ..NotificationRequest::default()
         })
     }
 
-    /// Send one typed terminal notification through the platform helper.
-    pub fn notify_request(&mut self, request: &NotificationRequest) -> Option<String> {
-        if !self.enabled {
+    /// Show a notification nothing will replace, close, or report on. These
+    /// are rate limited because any program can trigger one.
+    fn notify_untracked(&mut self, request: NotificationRequest) -> Option<String> {
+        if !self.enabled
+            || self
+                .last_notification
+                .is_some_and(|last| last.elapsed() < self.rate_limit)
+        {
             return None;
         }
-
-        // Rate limit
-        if let Some(last) = self.last_notification {
-            if last.elapsed() < self.rate_limit {
-                return None;
-            }
-        }
-
         self.last_notification = Some(Instant::now());
-
-        let title = request.title.as_deref().unwrap_or("Terminal");
-        let Some(command) = &self.command else {
-            log::info!("Notification: {} - {}", title, request.body);
-            return None;
+        let delivered = match self.tracked() {
+            Ok(tracked) => tracked.show_untracked(request),
+            Err(report) => return report,
         };
-        let args = notification_args(request, title);
-        if let Err(error) = spawn_desktop_command(command, &args, "desktop notification") {
-            let message = bounded_delivery_error("Desktop notification unavailable", &error);
-            log::warn!("{message}");
-            return report_new_failure(&mut self.last_delivery_failure, message);
-        }
-        self.last_delivery_failure = None;
-
-        log::debug!("Sent notification: {title:?} - {:?}", request.body);
-        None
+        delivered
+            .err()
+            .and_then(|error| self.report_failure(&error))
     }
 
     /// Route a terminal-owned notification, using tracked native handles when
@@ -446,29 +432,16 @@ impl Notifications {
         if !self.enabled {
             return None;
         }
-        if requires_tracked_notification(&request) {
-            let tracked = match self.tracked.as_mut() {
-                Some(tracked) => tracked,
-                None => {
-                    self.tracked = match tracked::TrackedNotifications::new() {
-                        Ok(tracked) => Some(tracked),
-                        Err(error) => {
-                            let message =
-                                bounded_delivery_error("Desktop notification unavailable", &error);
-                            return report_new_failure(&mut self.last_delivery_failure, message);
-                        }
-                    };
-                    self.tracked
-                        .as_mut()
-                        .expect("tracked worker was initialized")
-                }
-            };
-            return tracked.show(origin, request).err().and_then(|error| {
-                let message = bounded_delivery_error("Desktop notification unavailable", &error);
-                report_new_failure(&mut self.last_delivery_failure, message)
-            });
+        if !requires_tracked_notification(&request) {
+            return self.notify_untracked(request);
         }
-        self.notify_request(&request)
+        let delivered = match self.tracked() {
+            Ok(tracked) => tracked.show(origin, request),
+            Err(report) => return report,
+        };
+        delivered
+            .err()
+            .and_then(|error| self.report_failure(&error))
     }
 
     /// Query the exact origin's currently live named OSC 99 notifications.
@@ -478,29 +451,13 @@ impl Notifications {
         identifier: String,
         reply_uses_8bit_controls: bool,
     ) -> Option<String> {
-        let tracked = match self.tracked.as_mut() {
-            Some(tracked) => tracked,
-            None => {
-                self.tracked = match tracked::TrackedNotifications::new() {
-                    Ok(tracked) => Some(tracked),
-                    Err(error) => {
-                        let message =
-                            bounded_delivery_error("Desktop notification unavailable", &error);
-                        return report_new_failure(&mut self.last_delivery_failure, message);
-                    }
-                };
-                self.tracked
-                    .as_mut()
-                    .expect("tracked worker was initialized")
-            }
+        let delivered = match self.tracked() {
+            Ok(tracked) => tracked.alive(origin, identifier, reply_uses_8bit_controls),
+            Err(report) => return report,
         };
-        tracked
-            .alive(origin, identifier, reply_uses_8bit_controls)
+        delivered
             .err()
-            .and_then(|error| {
-                let message = bounded_delivery_error("Desktop notification unavailable", &error);
-                report_new_failure(&mut self.last_delivery_failure, message)
-            })
+            .and_then(|error| self.report_failure(&error))
     }
 
     /// Close one exact origin-owned tracked notification.
@@ -509,11 +466,26 @@ impl Notifications {
         origin: crate::tabs::TerminalIdentity,
         identifier: String,
     ) -> Option<String> {
-        let tracked = self.tracked.as_ref()?;
-        tracked.close(origin, identifier).err().and_then(|error| {
-            let message = bounded_delivery_error("Desktop notification unavailable", &error);
-            report_new_failure(&mut self.last_delivery_failure, message)
-        })
+        let closed = self.tracked.as_ref()?.close(origin, identifier);
+        closed.err().and_then(|error| self.report_failure(&error))
+    }
+
+    /// The desktop notification worker, started on first use. On failure,
+    /// returns the error to report, unless it repeats the last one.
+    fn tracked(&mut self) -> Result<&mut tracked::TrackedNotifications, Option<String>> {
+        if self.tracked.is_none() {
+            match tracked::TrackedNotifications::new() {
+                Ok(tracked) => self.tracked = Some(tracked),
+                Err(error) => return Err(self.report_failure(&error)),
+            }
+        }
+        Ok(self.tracked.as_mut().expect("worker was started"))
+    }
+
+    fn report_failure(&mut self, error: &str) -> Option<String> {
+        let message = bounded_delivery_error("Desktop notification unavailable", error);
+        log::warn!("{message}");
+        report_new_failure(&mut self.last_delivery_failure, message)
     }
 
     /// Drain asynchronous lifecycle failures for visible app reporting.
@@ -551,9 +523,11 @@ impl Notifications {
             .collect()
     }
 
+    /// Deliver through a worker whose notification service refuses every
+    /// notification, without a rate limit.
     #[cfg(test)]
-    pub(crate) fn set_command_for_test(&mut self, program: impl Into<String>) {
-        self.command = Some(program.into());
+    pub(crate) fn fail_delivery_for_test(&mut self, error: &str) {
+        self.tracked = Some(tracked::TrackedNotifications::failing_for_test(error).unwrap());
         self.rate_limit = Duration::ZERO;
     }
 
@@ -582,37 +556,6 @@ fn requires_tracked_notification(request: &NotificationRequest) -> bool {
         || !matches!(request.sound, termeric_core::NotificationSound::System)
         || request.icon_cache_id.is_some()
         || request.icon_data.is_some()
-}
-
-fn default_notification_command() -> Option<String> {
-    Some("notify-send".into())
-}
-
-fn notification_args(request: &NotificationRequest, title: &str) -> Vec<String> {
-    let app_name = request.application_name.as_deref().unwrap_or("Termeric");
-    let mut args = vec![format!("--app-name={app_name}")];
-    if !request.notification_types.is_empty() {
-        args.push(format!(
-            "--category={}",
-            request.notification_types.join(",")
-        ));
-    }
-    if let Some(icon_name) = request.icon_names.first() {
-        args.push(format!("--icon={}", freedesktop_icon_name(icon_name)));
-    } else if let Some(application_name) = request.application_name.as_deref() {
-        args.push(format!("--icon={application_name}"));
-    }
-    if let Some(urgency) = request.urgency {
-        let urgency = match urgency {
-            NotificationUrgency::Low => "low",
-            NotificationUrgency::Normal => "normal",
-            NotificationUrgency::Critical => "critical",
-        };
-        args.push(format!("--urgency={urgency}"));
-    }
-    args.push(title.into());
-    args.push(request.body.clone());
-    args
 }
 
 fn freedesktop_icon_name(name: &str) -> &str {
@@ -663,7 +606,7 @@ mod tests {
     }
 
     #[test]
-    fn helper_spawn_failures_are_bounded_deduplicated_and_recoverable() {
+    fn audio_helper_failures_are_bounded_deduplicated_and_recoverable() {
         let mut bell = Bell::new(BellConfig {
             visual: false,
             audio: true,
@@ -680,62 +623,44 @@ mod tests {
         assert!(bell.ring().is_none());
         bell.set_audio_command_for_test("/definitely/missing/termeric-audio-helper");
         assert!(bell.ring().is_some());
+    }
 
+    /// Delivery runs on the notification worker, so failures arrive later.
+    fn next_warning(notifications: &mut Notifications) -> Option<String> {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline {
+            for completion in notifications.drain_completions() {
+                if let NotificationCompletion::Warning(warning) = completion {
+                    return Some(warning);
+                }
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        None
+    }
+
+    #[test]
+    fn plain_notification_failures_are_reported_once() {
         let mut notifications = Notifications::new();
-        notifications.set_command_for_test("/definitely/missing/termeric-notify-helper");
-        let first = notifications.notify("title", "body").unwrap();
-        assert!(first.contains("Desktop notification unavailable"));
-        assert!(first.contains("termeric-notify-helper"));
+        notifications.fail_delivery_for_test("synthetic notification service failure");
         assert!(notifications.notify("title", "body").is_none());
+        let warning = next_warning(&mut notifications).unwrap();
+        assert!(warning.contains("Desktop notification unavailable"));
+        assert!(warning.contains("synthetic notification service failure"));
 
-        notifications.set_command_for_test("/bin/true");
         assert!(notifications.notify("title", "body").is_none());
+        assert!(next_warning(&mut notifications).is_none());
     }
 
     #[test]
     fn delivery_errors_have_a_hard_character_ceiling() {
-        let mut notifications = Notifications::new();
-        notifications.set_command_for_test(format!("/missing/{}", "x".repeat(1_024)));
-        let error = notifications.notify("title", "body").unwrap();
-        assert!(error.chars().count() <= MAX_DELIVERY_ERROR_CHARS);
+        let error = bounded_delivery_error("Desktop notification unavailable", &"x".repeat(1_024));
+        assert_eq!(error.chars().count(), MAX_DELIVERY_ERROR_CHARS);
         assert!(error.ends_with('…'));
     }
 
     #[test]
-    fn rich_notification_metadata_becomes_separate_notify_send_arguments() {
-        let request = NotificationRequest {
-            title: Some("Build; $(touch nope)".into()),
-            body: "Finished `without a shell`".into(),
-            application_name: Some("build agent".into()),
-            notification_types: vec!["build.complete".into(), "ci".into()],
-            icon_names: vec!["warning".into(), "unused-second-choice".into()],
-            urgency: Some(NotificationUrgency::Critical),
-            ..NotificationRequest::default()
-        };
-        assert_eq!(
-            notification_args(&request, request.title.as_deref().unwrap()),
-            vec![
-                "--app-name=build agent",
-                "--category=build.complete,ci",
-                "--icon=dialog-warning",
-                "--urgency=critical",
-                "Build; $(touch nope)",
-                "Finished `without a shell`",
-            ]
-        );
-    }
-
-    #[test]
-    fn default_notification_arguments_and_universal_icons_are_stable() {
-        let request = NotificationRequest {
-            title: Some("Title".into()),
-            body: "Body".into(),
-            ..NotificationRequest::default()
-        };
-        assert_eq!(
-            notification_args(&request, "Title"),
-            vec!["--app-name=Termeric", "Title", "Body"]
-        );
+    fn kitty_icon_names_map_to_freedesktop_icons() {
         assert_eq!(freedesktop_icon_name("error"), "dialog-error");
         assert_eq!(freedesktop_icon_name("warn"), "dialog-warning");
         assert_eq!(freedesktop_icon_name("warning"), "dialog-warning");
@@ -752,29 +677,6 @@ mod tests {
             "accessories-text-editor"
         );
         assert_eq!(freedesktop_icon_name("org.example.App"), "org.example.App");
-
-        let application_icon = NotificationRequest {
-            title: Some("Title".into()),
-            application_name: Some("org.example.App".into()),
-            ..NotificationRequest::default()
-        };
-        assert!(
-            notification_args(&application_icon, "Title")
-                .contains(&"--icon=org.example.App".to_string())
-        );
-
-        for (urgency, expected) in [
-            (NotificationUrgency::Low, "--urgency=low"),
-            (NotificationUrgency::Normal, "--urgency=normal"),
-            (NotificationUrgency::Critical, "--urgency=critical"),
-        ] {
-            let request = NotificationRequest {
-                title: Some("Title".into()),
-                urgency: Some(urgency),
-                ..NotificationRequest::default()
-            };
-            assert!(notification_args(&request, "Title").contains(&expected.to_string()));
-        }
     }
 
     #[test]

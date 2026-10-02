@@ -4153,9 +4153,8 @@ fn native_frame_stats_publish_the_latest_complete_counter_atomically() {
     assert!(!output.with_extension("tmp").exists());
 }
 
-#[cfg(target_os = "linux")]
 #[test]
-fn desktop_helper_spawn_failures_become_deduplicated_visible_toasts() {
+fn desktop_delivery_failures_become_deduplicated_visible_toasts() {
     let mut config = Config::default();
     config.shell.program = Some("/bin/sh".into());
     config.shell.args = vec!["-c".into(), "sleep 2".into()];
@@ -4166,23 +4165,36 @@ fn desktop_helper_spawn_failures_become_deduplicated_visible_toasts() {
     app.bell
         .set_audio_command_for_test("/definitely/missing/termeric-audio-helper");
     app.notifications
-        .set_command_for_test("/definitely/missing/termeric-notify-helper");
+        .fail_delivery_for_test("synthetic notification service failure");
     let origin = TerminalEventOrigin::Tab {
         tab_id: app.tabs.as_ref().unwrap().active_tab_id().unwrap(),
+    };
+    let notify = |app: &mut App, body: &str| {
+        app.handle_terminal_event(RoutedTerminalEvent {
+            origin,
+            event: TerminalEvent::Notification(termeric_core::NotificationRequest {
+                title: Some("Build".into()),
+                body: body.into(),
+                ..termeric_core::NotificationRequest::default()
+            }),
+        });
+    };
+    // Notification failures arrive from the delivery worker, so drain its
+    // completions the way the event loop does.
+    let settle = |app: &mut App, toasts: usize| {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while app.toasts.iter().count() < toasts && Instant::now() < deadline {
+            app.process_pty_events();
+            std::thread::sleep(Duration::from_millis(5));
+        }
     };
 
     app.handle_terminal_event(RoutedTerminalEvent {
         origin,
         event: TerminalEvent::Bell,
     });
-    app.handle_terminal_event(RoutedTerminalEvent {
-        origin,
-        event: TerminalEvent::Notification(termeric_core::NotificationRequest {
-            title: Some("Build".into()),
-            body: "Finished".into(),
-            ..termeric_core::NotificationRequest::default()
-        }),
-    });
+    notify(&mut app, "Finished");
+    settle(&mut app, 2);
     let messages = app
         .toasts
         .iter()
@@ -4194,14 +4206,9 @@ fn desktop_helper_spawn_failures_become_deduplicated_visible_toasts() {
 
     // The manager suppresses repeats of the same integration failure instead
     // of letting a hostile terminal fill the bounded toast stack.
-    app.handle_terminal_event(RoutedTerminalEvent {
-        origin,
-        event: TerminalEvent::Notification(termeric_core::NotificationRequest {
-            title: Some("Build".into()),
-            body: "Again".into(),
-            ..termeric_core::NotificationRequest::default()
-        }),
-    });
+    notify(&mut app, "Again");
+    std::thread::sleep(Duration::from_millis(100));
+    app.process_pty_events();
     assert_eq!(app.toasts.iter().count(), 2);
 }
 
