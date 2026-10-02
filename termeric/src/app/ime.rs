@@ -496,7 +496,9 @@ impl App {
             );
         }
         let terminal = self.active_terminal()?;
-        let cursor = terminal.grid().cursor();
+        // The cursor that is drawn: synchronized output freezes the
+        // presentation grid while the live one moves on.
+        let cursor = terminal.presentation_grid().cursor();
         let content_top = renderer.content_top();
         let content_left = renderer.tab_bar_width();
         let focused_pane = panes.iter().find(|pane| pane.is_focused);
