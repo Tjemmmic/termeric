@@ -373,7 +373,7 @@ impl Application {
         &mut self,
         event_loop: &ActiveEventLoop,
     ) -> Vec<std::result::Result<CreatedWindow, String>> {
-        self.start_pending_windows(|window| ApplicationHandler::resumed(window, event_loop))
+        self.start_pending_windows(|window| window.resumed(event_loop))
     }
 
     /// Start every pending window with `start` (native window creation) and
@@ -3440,7 +3440,7 @@ impl ApplicationHandler<AppEvent> for Application {
             self.drop_tab_into(drop, window_id, (position.x, position.y));
         }
         if let Some(window) = self.windows.get_mut(&window_id) {
-            ApplicationHandler::window_event(window, event_loop, window_id, event);
+            window.window_event(event_loop, window_id, event);
             window.sync_tab_drag_pointer(event_loop);
             create_window = std::mem::take(&mut window.request_new_window);
             requested_window_launch = window.requested_window_launch.take();
