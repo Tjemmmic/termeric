@@ -1,7 +1,7 @@
 //! Git repository integration
 //!
-//! Provides git-aware features: branch detection, auto-completion,
-//! and status tracking. Uses libgit2 via the `git2` crate.
+//! Provides git-aware features: branch detection and branch-name completion.
+//! Uses libgit2 via the `git2` crate.
 
 mod completion;
 mod completion_list;
@@ -40,19 +40,6 @@ pub struct GitRepo {
     repo: Repository,
 }
 
-/// Compact git status for display
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct GitStatus {
-    /// Current HEAD branch name (None if detached)
-    pub branch: Option<String>,
-    /// Working tree has uncommitted changes
-    pub dirty: bool,
-    /// Number of commits ahead of upstream
-    pub ahead: usize,
-    /// Number of commits behind upstream
-    pub behind: usize,
-}
-
 impl GitRepo {
     /// Discover a repository containing the path, distinguishing a normal
     /// non-repository directory from an actionable libgit2 failure.
@@ -74,44 +61,6 @@ impl GitRepo {
             let oid = head.target()?;
             Some(format!("{:.7}", oid))
         }
-    }
-
-    /// Check if the working tree has any changes (modified, staged, or untracked)
-    fn is_dirty(&self) -> Result<bool, git2::Error> {
-        let mut opts = git2::StatusOptions::new();
-        opts.include_untracked(true)
-            .recurse_untracked_dirs(false)
-            .exclude_submodules(true);
-
-        self.repo
-            .statuses(Some(&mut opts))
-            .map(|statuses| !statuses.is_empty())
-    }
-
-    /// Get full git status (branch, dirty, ahead/behind)
-    pub(crate) fn status(&self) -> Result<GitStatus, git2::Error> {
-        let branch = self.current_branch();
-        let dirty = self.is_dirty()?;
-        let (ahead, behind) = self.ahead_behind().unwrap_or((0, 0));
-        Ok(GitStatus {
-            branch,
-            dirty,
-            ahead,
-            behind,
-        })
-    }
-
-    /// Calculate ahead/behind counts relative to upstream
-    fn ahead_behind(&self) -> Option<(usize, usize)> {
-        let head = self.repo.head().ok()?;
-        let local_oid = head.target()?;
-
-        let branch_name = head.shorthand()?;
-        let upstream_name = format!("refs/remotes/origin/{}", branch_name);
-        let upstream_ref = self.repo.find_reference(&upstream_name).ok()?;
-        let upstream_oid = upstream_ref.target()?;
-
-        self.repo.graph_ahead_behind(local_oid, upstream_oid).ok()
     }
 
     /// List all local branch names
@@ -144,8 +93,8 @@ impl GitRepo {
             if let Some(name) = branch.name()? {
                 // Strip "origin/" prefix for cleaner display
                 let short = name.strip_prefix("origin/").unwrap_or(name);
-                // Skip HEAD pointer
-                if short != "HEAD" {
+                // Skip every remote's HEAD pointer
+                if !name.ends_with("/HEAD") {
                     let Some(name) = budget.copy_name(short) else {
                         return Ok(None);
                     };
@@ -354,13 +303,13 @@ mod tests {
         ] {
             repo.reference(reference, commit, false, "fixture").unwrap();
         }
-        repo.reference_symbolic(
-            "refs/remotes/origin/HEAD",
-            "refs/remotes/origin/main",
-            false,
-            "fixture",
-        )
-        .unwrap();
+        for (head, target) in [
+            ("refs/remotes/origin/HEAD", "refs/remotes/origin/main"),
+            ("refs/remotes/upstream/HEAD", "refs/remotes/upstream/other"),
+        ] {
+            repo.reference_symbolic(head, target, false, "fixture")
+                .unwrap();
+        }
         drop(tree);
         let git = GitRepo { repo };
         let names = git.branch_names().unwrap().unwrap();
