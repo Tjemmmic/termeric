@@ -797,7 +797,7 @@ fn legacy_session_entries(now: u64) -> Vec<SessionEntry> {
             };
             let last_modified = session
                 .as_ref()
-                .and_then(|session| super::describe_age(&session.created_at, now))
+                .and_then(|session| super::describe_age(&session.updated_at, now))
                 .unwrap_or_default();
             SessionEntry {
                 id: name,
@@ -831,6 +831,22 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].display_name, "oversized-fixture");
         assert!(entries[0].subtitle.is_empty());
+    }
+
+    #[test]
+    fn a_resaved_snapshot_shows_when_it_was_last_saved() {
+        let root = tempfile::tempdir().unwrap();
+        let mut first = super::super::Session::new("first".into(), None);
+        first.created_at = "2020-01-01T00:00:00.000Z".into();
+        let dir = root.path().join(&first.id);
+        super::super::snapshot::save(&first, &dir, &[]).unwrap();
+        let update = super::super::Session::with_id(first.id.clone(), "second".into(), None);
+        super::super::snapshot::save(&update, &dir, &[]).unwrap();
+        super::super::set_test_sessions_base_dir(Some(root.path().to_owned()));
+        let entries = legacy_session_entries(super::super::unix_now());
+        super::super::set_test_sessions_base_dir(None);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].last_modified, "Just now");
     }
 
     #[test]
