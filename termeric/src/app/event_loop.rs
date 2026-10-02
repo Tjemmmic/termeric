@@ -7,7 +7,7 @@ use winit::{
     dpi::{LogicalSize, PhysicalPosition, PhysicalSize},
     event::WindowEvent,
     event_loop::ActiveEventLoop,
-    window::{Window, WindowId},
+    window::Window,
 };
 
 use crate::input::keybindings::KeyChord;
@@ -128,9 +128,6 @@ impl App {
                     }
                     self.startup_error = Some(error);
                     self.should_exit = true;
-                    if !self.managed_window {
-                        event_loop.exit();
-                    }
                     return;
                 }
 
@@ -144,9 +141,6 @@ impl App {
                     }
                     self.startup_error = Some(error);
                     self.should_exit = true;
-                    if !self.managed_window {
-                        event_loop.exit();
-                    }
                     return;
                 }
 
@@ -174,19 +168,11 @@ impl App {
                 }
                 self.startup_error = Some(error);
                 self.should_exit = true;
-                if !self.managed_window {
-                    event_loop.exit();
-                }
             }
         }
     }
 
-    pub(super) fn window_event(
-        &mut self,
-        event_loop: &ActiveEventLoop,
-        _window_id: WindowId,
-        event: WindowEvent,
-    ) {
+    pub(super) fn window_event(&mut self, event: WindowEvent) {
         self.finish_obscured_native_pointer_gesture();
         if let (Some(adapter), Some(window)) = (&mut self.accessibility_adapter, &self.window) {
             adapter.process_event(window, &event);
@@ -217,9 +203,6 @@ impl App {
             WindowEvent::CloseRequested => {
                 log::info!("Close requested");
                 self.should_exit = true;
-                if !self.managed_window {
-                    event_loop.exit();
-                }
             }
 
             WindowEvent::Resized(size) => {
@@ -1661,9 +1644,6 @@ impl App {
                 }
 
                 if self.should_exit {
-                    if !self.managed_window {
-                        event_loop.exit();
-                    }
                     return;
                 }
                 if self.window_occluded {

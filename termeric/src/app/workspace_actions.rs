@@ -458,9 +458,9 @@ impl App {
     }
 
     pub(super) fn request_move_pane_to_next_window(&mut self) {
-        if !self.managed_window || self.window.is_none() {
+        if self.window.is_none() {
             self.toasts
-                .warning("Pane was not moved: A managed native window is required");
+                .warning("Pane was not moved: a native window is required");
             return;
         }
         let result = self
@@ -477,9 +477,9 @@ impl App {
     }
 
     pub(super) fn request_move_tab_to_next_window(&mut self) {
-        if !self.managed_window || self.window.is_none() {
+        if self.window.is_none() {
             self.toasts
-                .warning("Tab was not moved: A managed native window is required");
+                .warning("Tab was not moved: a native window is required");
             return;
         }
         let result = self

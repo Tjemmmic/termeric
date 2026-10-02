@@ -1020,7 +1020,6 @@ pub struct App {
     /// that joined this process, so it takes focus.
     activation_token: Option<String>,
     /// True when the process-level application owns event-loop exit policy.
-    managed_window: bool,
     /// Set by the New Window command and drained by the process controller.
     request_new_window: bool,
     /// Set by the cross-window pane command and drained atomically by the
@@ -1409,7 +1408,6 @@ impl App {
         let result: Result<Self> = Ok(Self {
             launch: crate::cli::WindowLaunch::default(),
             activation_token: None,
-            managed_window: false,
             request_new_window: false,
             request_move_pane_to_next_window: false,
             request_move_tab_to_next_window: false,

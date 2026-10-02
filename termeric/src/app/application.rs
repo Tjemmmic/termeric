@@ -343,7 +343,6 @@ impl Application {
             }
             let mut window = App::from_config(window_config, warning.take(), true)?;
             window.launch = window_launch;
-            window.managed_window = true;
             window.allow_auto_restore = sole_default;
             if quick_access {
                 window.allow_auto_restore = false;
@@ -445,7 +444,6 @@ impl Application {
         let mut window = App::from_config(config, None, true)?;
         window.set_system_accessibility_preferences(self.system_accessibility);
         window.launch = launch;
-        window.managed_window = true;
         window.allow_auto_restore = false;
         self.pending.push(window);
         Ok(())
@@ -3440,7 +3438,7 @@ impl ApplicationHandler<AppEvent> for Application {
             self.drop_tab_into(drop, window_id, (position.x, position.y));
         }
         if let Some(window) = self.windows.get_mut(&window_id) {
-            window.window_event(event_loop, window_id, event);
+            window.window_event(event);
             window.sync_tab_drag_pointer(event_loop);
             create_window = std::mem::take(&mut window.request_new_window);
             requested_window_launch = window.requested_window_launch.take();
@@ -4815,7 +4813,6 @@ mod tests {
         assert_eq!(application.pending.len(), 1);
         let prepared = &application.pending[0];
         assert_eq!(prepared.config.font.size, 19.0);
-        assert!(prepared.managed_window);
         assert!(!prepared.allow_auto_restore);
         assert!(prepared.redact_startup_error_log);
         assert!(prepared.launch.force_new);
@@ -5571,7 +5568,7 @@ mod tests {
             application
                 .pending
                 .iter()
-                .all(|window| !window.allow_auto_restore && window.managed_window)
+                .all(|window| !window.allow_auto_restore)
         );
     }
 
@@ -7581,7 +7578,6 @@ mod tests {
         assert_eq!(application.pending.len(), 1);
         assert_eq!(application.pending[0].launch.domain, Some(target));
         assert!(!application.pending[0].allow_auto_restore);
-        assert!(application.pending[0].managed_window);
     }
 
     #[cfg(unix)]
