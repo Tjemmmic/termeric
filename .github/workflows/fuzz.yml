@@ -1,0 +1,59 @@
+# Fuzzes the parsers every Monday against the default branch, and on demand from the Actions tab.
+name: Fuzz
+
+on:
+  schedule:
+    - cron: "23 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    name: Fuzzing
+    runs-on: ubuntu-24.04
+    # The three targets run for seven minutes in total; the rest covers the
+    # cargo-fuzz install, the build, and minimizing any crash.
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: cargo install cargo-fuzz --locked --version 0.13.2
+      - name: Build the parser seed corpus
+        run: python3 scripts/materialize_fuzz_corpus.py /tmp/termeric-fuzz-corpus
+      - name: Terminal parser and grid
+        run: >-
+          cargo fuzz run terminal_bytes /tmp/termeric-fuzz-corpus --
+          -dict=fuzz/terminal.dict -max_len=65536 -timeout=5 -max_total_time=180
+      - name: Live-domain protocol
+        run: >-
+          cargo fuzz run domain_protocol fuzz/corpus/domain_protocol --
+          -max_len=1048576 -timeout=5 -max_total_time=60
+      - name: Graphics protocols
+        run: >-
+          cargo fuzz run graphics_protocols fuzz/corpus/graphics_protocols --
+          -max_len=1048576 -timeout=5 -max_total_time=180
+      - name: Minimize crashes
+        if: failure()
+        shell: bash
+        run: |
+          shopt -s nullglob
+          for target in terminal_bytes domain_protocol graphics_protocols; do
+            for artifact in "fuzz/artifacts/$target"/*; do
+              cargo fuzz tmin "$target" "$artifact" -- -max_total_time=60 || true
+            done
+          done
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fuzz-crashes
+          path: fuzz/artifacts/
+          if-no-files-found: ignore

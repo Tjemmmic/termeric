@@ -1,6 +1,4 @@
-# Fast checks for every pull request and every push to main. The slower
-# suites (packages, native GUI, soak, benchmarks, fuzzing) live in
-# extended.yml and run weekly or on demand.
+# Fast checks for every pull request and every push to main.
 name: CI
 
 on:
@@ -12,7 +10,6 @@ on:
 permissions:
   contents: read
 
-# A newer push to the same pull request or branch cancels the older run.
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -23,24 +20,31 @@ env:
 jobs:
   check:
     name: Format, lint, and test
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    runs-on: ubuntu-24.04
+    # A run without a warm cache compiles everything twice (Clippy, then tests) and takes about 25 minutes.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Keep the compiled dependencies when a check fails, so the next push doesn't rebuild them.
+          cache-on-failure: true
       - name: Install build and test dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y pkg-config libfontconfig1-dev libwayland-dev \
             libxkbcommon-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libvulkan-dev mesa-vulkan-drivers \
-            ncurses-bin vim less tmux zsh fish
+            ncurses-bin vim less tmux zsh fish python3-pil
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+        env:
+          # Fail, rather than skip, the Bash, Zsh, and Fish integration tests if a shell is missing.
+          TERMERIC_REQUIRE_SHELL_ACCEPTANCE: "1"
       - name: Test the helper scripts
         run: python3 -m unittest $(git ls-files 'scripts/test_*.py' | sed 's|/|.|; s|\.py$||')
       - name: Check Markdown links

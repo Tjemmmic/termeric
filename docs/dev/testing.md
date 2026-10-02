@@ -1,6 +1,6 @@
 # Testing
 
-Most of Termeric's tests are ordinary Rust unit and integration tests that run anywhere. A smaller set needs a real GPU, a compositor, or several minutes, and runs in the weekly CI workflow or by hand. Helper scripts in `scripts/` drive those.
+Most of Termeric's tests are ordinary Rust unit and integration tests that run anywhere. A smaller set needs a real GPU, a compositor, or several minutes, and runs by hand. Helper scripts in `scripts/` drive those.
 
 ## Everyday checks
 
@@ -21,19 +21,11 @@ To build the user guide, install [mdBook](https://rust-lang.github.io/mdBook/) a
 
 ## CI
 
-`.github/workflows/ci.yml` runs the everyday checks above on pull requests and pushes to `main`.
+`.github/workflows/ci.yml` runs the everyday checks above, plus the user-guide build, on pull requests and pushes to `main`. It sets `TERMERIC_REQUIRE_SHELL_ACCEPTANCE=1`, so the Bash, Zsh, and Fish integration tests fail instead of skipping when one of those shells is missing; set it locally to match.
 
-`.github/workflows/extended.yml` runs the slower suites every Monday and whenever it's started from the Actions tab:
+`.github/workflows/fuzz.yml` runs the three fuzz targets (see [Fuzzing](#fuzzing)) every Monday against `main`, and whenever it's started from the Actions tab.
 
-| Job | What it checks |
-|---|---|
-| Debian package | Builds the `.deb` with `cargo deb`, inspects its contents, then installs, upgrades, and removes it on the runner |
-| Arch package | Builds the package from `packaging/arch/PKGBUILD` in an Arch container, inspects it, then installs and removes it |
-| Native GUI | Drives the real application under Xvfb (X11), Weston, and headless Sway (Wayland): input, panes, tabs, clipboard, renderer recovery, and a headless render compared against a visual baseline |
-| Shell and agent integration | Runs the Bash, Zsh, and Fish integration test in real PTYs, and every agent command against fake agent executables |
-| Resource soaks | Runs the headless and displayed workloads for ten minutes each, checking memory, thread, file-descriptor, and child-process growth |
-| Performance budgets | Runs the benchmark suite and compares it against `benchmarks/budgets.toml` |
-| Fuzzing | Fuzzes the terminal parser, the live-domain protocol, and the graphics protocols for a few minutes each |
+The native GUI tests, soaks, benchmarks, and package checks don't run in CI. Run them by hand before a release.
 
 ## Native GUI tests
 
@@ -47,6 +39,14 @@ WGPU_BACKEND=gl python3 scripts/gui_acceptance.py --backend wayland --start-sway
 ```
 
 Repeat `--scenario` to run several; run the script with `--help` for the full list. The default font family is DejaVu Sans Mono; pass `--font-family` with an installed family otherwise. Logs, PTY transcripts, and screenshots land in the artifacts directory, and `results.json` records each scenario's result.
+
+The headless render smoke runs the renderer's offscreen checks (text, emoji, ligatures, inline images, themes, background images, and a glyph-atlas stress test) on a software adapter (Mesa llvmpipe, `mesa-vulkan-drivers` on Debian and Ubuntu), then compares the frame with Termeric's visual signature:
+
+```bash
+TERMERIC_GPU_SMOKE=1 TERMERIC_GUI_VISUAL_OUTPUT=$PWD/target/gui-acceptance/renderer.png WGPU_BACKEND=vulkan \
+  cargo test -p termeric --locked linux_headless_gpu_render_smoke_when_requested -- --nocapture
+python3 scripts/check_gui_visual.py target/gui-acceptance/renderer.png
+```
 
 ## Soaks
 
