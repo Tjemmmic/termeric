@@ -278,7 +278,7 @@ mod tests {
         let rebound = Key::Named(NamedKey::F8);
         app.shortcut_registry.set_binding(
             BindableAction::Paste,
-            KeyChord::from_key_lookup(&rebound, ModifiersState::empty()),
+            KeyChord::from_key_event(&rebound, ModifiersState::empty()),
         );
         assert!(!app.handle_query_paste_key(&default));
         app.modifiers = ModifiersState::empty();
@@ -394,7 +394,7 @@ mod tests {
         let rebound = Key::Named(NamedKey::F8);
         app.shortcut_registry.set_binding(
             BindableAction::Paste,
-            KeyChord::from_key_lookup(&rebound, ModifiersState::empty()),
+            KeyChord::from_key_event(&rebound, ModifiersState::empty()),
         );
         assert!(!app.handle_query_paste_key(&default));
         app.modifiers = ModifiersState::empty();
@@ -555,7 +555,7 @@ mod tests {
         let rebound = Key::Named(NamedKey::F8);
         app.shortcut_registry.set_binding(
             BindableAction::Paste,
-            KeyChord::from_key_lookup(&rebound, ModifiersState::empty()),
+            KeyChord::from_key_event(&rebound, ModifiersState::empty()),
         );
         assert!(!app.handle_query_paste_key(&default));
         app.modifiers = ModifiersState::empty();
@@ -685,7 +685,7 @@ mod tests {
         let rebound = Key::Named(NamedKey::F8);
         app.shortcut_registry.set_binding(
             BindableAction::Paste,
-            KeyChord::from_key_lookup(&rebound, ModifiersState::empty()),
+            KeyChord::from_key_event(&rebound, ModifiersState::empty()),
         );
         assert!(!app.handle_query_paste_key(&default));
         app.modifiers = ModifiersState::empty();
@@ -764,7 +764,7 @@ mod tests {
         let rebound = Key::Named(NamedKey::F8);
         app.shortcut_registry.set_binding(
             BindableAction::Paste,
-            KeyChord::from_key_lookup(&rebound, ModifiersState::empty()),
+            KeyChord::from_key_event(&rebound, ModifiersState::empty()),
         );
         assert!(!app.handle_query_paste_key(&Key::Character("v".into())));
         app.modifiers = ModifiersState::empty();
@@ -840,7 +840,7 @@ mod tests {
         let rebound = Key::Named(NamedKey::F8);
         app.shortcut_registry.set_binding(
             BindableAction::Paste,
-            KeyChord::from_key_lookup(&rebound, ModifiersState::empty()),
+            KeyChord::from_key_event(&rebound, ModifiersState::empty()),
         );
         assert!(!app.handle_query_paste_key(&default));
         app.modifiers = ModifiersState::empty();

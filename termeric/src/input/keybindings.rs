@@ -649,8 +649,11 @@ pub struct KeyChord {
 }
 
 impl KeyChord {
-    /// Construct from parts.
+    /// Construct from parts. Every chord is built here, so recorded,
+    /// configured, and pressed keys normalize the same way: lowercase, and
+    /// `+` as `=`, which share a physical key on most layouts.
     pub fn new(key: &str, ctrl: bool, alt: bool, shift: bool, super_key: bool) -> Self {
+        let key = if key == "+" { "=" } else { key };
         Self {
             key: key.to_lowercase(),
             ctrl,
@@ -660,33 +663,16 @@ impl KeyChord {
         }
     }
 
-    /// Build from a winit key event + modifier state (used for recording mode).
+    /// Build from a winit key event + modifier state, for recording a
+    /// shortcut or looking one up.
     pub fn from_key_event(key: &Key, modifiers: ModifiersState) -> Option<Self> {
-        let key_name = key_to_string(key)?;
-        Some(Self {
-            key: key_name.to_lowercase(),
-            ctrl: modifiers.control_key(),
-            alt: modifiers.alt_key(),
-            shift: modifiers.shift_key(),
-            super_key: modifiers.super_key(),
-        })
-    }
-
-    /// Build from a winit `Key` + current `ModifiersState` for lookup.
-    /// Normalizes `+` to `=` so both physical keys match `IncreaseFontSize`.
-    pub fn from_key_lookup(key: &Key, modifiers: ModifiersState) -> Option<Self> {
-        let mut key_name = key_to_string(key)?;
-        // Normalize: `+` and `=` are the same physical key on most layouts
-        if key_name == "+" {
-            key_name = "=".to_string();
-        }
-        Some(Self {
-            key: key_name.to_lowercase(),
-            ctrl: modifiers.control_key(),
-            alt: modifiers.alt_key(),
-            shift: modifiers.shift_key(),
-            super_key: modifiers.super_key(),
-        })
+        Some(Self::new(
+            &key_to_string(key)?,
+            modifiers.control_key(),
+            modifiers.alt_key(),
+            modifiers.shift_key(),
+            modifiers.super_key(),
+        ))
     }
 
     /// Human-readable string for settings UI: "Ctrl+Shift+C"
@@ -773,13 +759,10 @@ impl ShortcutOverride {
     /// Convert to a `(BindableAction, Option<KeyChord>)` pair.
     pub fn to_binding(&self) -> Option<(BindableAction, Option<KeyChord>)> {
         let action = BindableAction::from_id(&self.action)?;
-        let chord = self.key.as_ref().map(|k| KeyChord {
-            key: k.to_lowercase(),
-            ctrl: self.ctrl,
-            alt: self.alt,
-            shift: self.shift,
-            super_key: self.super_key,
-        });
+        let chord = self
+            .key
+            .as_ref()
+            .map(|key| KeyChord::new(key, self.ctrl, self.alt, self.shift, self.super_key));
         Some((action, chord))
     }
 }
@@ -848,7 +831,7 @@ impl ShortcutRegistry {
 
     /// O(1) lookup — the hot path called on every keypress.
     pub fn check(&self, key: &Key, modifiers: ModifiersState) -> Option<BindableAction> {
-        let chord = KeyChord::from_key_lookup(key, modifiers)?;
+        let chord = KeyChord::from_key_event(key, modifiers)?;
         self.key_map.get(&chord).copied()
     }
 
@@ -1114,6 +1097,38 @@ fn named_key_to_string(key: &NamedKey) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_shortcut_on_plus_fires_however_it_was_set() {
+        let plus = Key::Character("+".into());
+        let ctrl = ModifiersState::CONTROL;
+
+        let mut recorded = ShortcutRegistry::new();
+        let chord = KeyChord::from_key_event(&plus, ctrl).unwrap();
+        recorded.set_binding(BindableAction::ToggleFullscreen, Some(chord));
+        assert_eq!(
+            recorded.check(&plus, ctrl),
+            Some(BindableAction::ToggleFullscreen)
+        );
+
+        let mut configured = ShortcutRegistry::new();
+        configured.apply_overrides(&[ShortcutOverride {
+            action: BindableAction::ToggleFullscreen.meta().id.into(),
+            key: Some("+".into()),
+            ctrl: true,
+            alt: false,
+            shift: false,
+            super_key: false,
+        }]);
+        assert_eq!(
+            configured.check(&plus, ctrl),
+            Some(BindableAction::ToggleFullscreen)
+        );
+        assert_eq!(
+            configured.check(&Key::Character("=".into()), ctrl),
+            Some(BindableAction::ToggleFullscreen)
+        );
+    }
 
     #[test]
     fn test_registry_defaults() {
