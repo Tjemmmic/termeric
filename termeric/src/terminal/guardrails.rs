@@ -186,53 +186,138 @@ impl GuardrailLayout {
     }
 }
 
-/// Known destructive command patterns
-static PATTERNS: &[(&str, &str, Severity)] = &[
+/// Where a pattern may match.
+#[derive(Clone, Copy)]
+enum Extent {
+    /// Anywhere in the input.
+    Anywhere,
+    /// Only where its last argument ends: `rm -rf /` matches `rm -rf /` and
+    /// `rm -rf /*`, but not `rm -rf /tmp/build`.
+    WholeArgument,
+}
+
+/// Known destructive command patterns, lowercase because input is lowercased
+/// before matching.
+static PATTERNS: &[(&str, &str, Severity, Extent)] = &[
     // Critical: system-level destructive commands
     (
         "rm -rf /",
         "Recursive force-delete from root",
         Severity::Critical,
+        Extent::WholeArgument,
+    ),
+    (
+        "rm -fr /",
+        "Recursive force-delete from root",
+        Severity::Critical,
+        Extent::WholeArgument,
     ),
     (
         "rm -rf ~",
         "Recursive force-delete home directory",
         Severity::Critical,
+        Extent::WholeArgument,
     ),
     (
-        "rm -rf /*",
-        "Recursive force-delete root contents",
+        "rm -rf ~/",
+        "Recursive force-delete home directory",
         Severity::Critical,
+        Extent::WholeArgument,
     ),
-    ("> /dev/sd", "Overwrite raw disk device", Severity::Critical),
-    ("dd if=", "Raw disk write (dd)", Severity::Critical),
-    ("mkfs.", "Format filesystem", Severity::Critical),
     (
-        "chmod -R 777 /",
+        "rm -fr ~",
+        "Recursive force-delete home directory",
+        Severity::Critical,
+        Extent::WholeArgument,
+    ),
+    (
+        "rm -fr ~/",
+        "Recursive force-delete home directory",
+        Severity::Critical,
+        Extent::WholeArgument,
+    ),
+    (
+        "> /dev/sd",
+        "Overwrite raw disk device",
+        Severity::Critical,
+        Extent::Anywhere,
+    ),
+    (
+        "dd if=",
+        "Raw disk write (dd)",
+        Severity::Critical,
+        Extent::Anywhere,
+    ),
+    (
+        "mkfs.",
+        "Format filesystem",
+        Severity::Critical,
+        Extent::Anywhere,
+    ),
+    (
+        "chmod -r 777 /",
         "Open all permissions from root",
         Severity::Critical,
+        Extent::WholeArgument,
     ),
-    (":(){ :|:& };:", "Fork bomb", Severity::Critical),
-    // Warning: potentially dangerous commands
-    ("rm -rf", "Recursive force-delete", Severity::Warning),
-    ("sudo rm", "Deleting files as root", Severity::Warning),
     (
-        "chmod -R 777",
+        ":(){ :|:& };:",
+        "Fork bomb",
+        Severity::Critical,
+        Extent::Anywhere,
+    ),
+    // Warning: potentially dangerous commands
+    (
+        "rm -rf",
+        "Recursive force-delete",
+        Severity::Warning,
+        Extent::Anywhere,
+    ),
+    (
+        "rm -fr",
+        "Recursive force-delete",
+        Severity::Warning,
+        Extent::Anywhere,
+    ),
+    (
+        "sudo rm",
+        "Deleting files as root",
+        Severity::Warning,
+        Extent::Anywhere,
+    ),
+    (
+        "chmod -r 777",
         "Opening all permissions recursively",
         Severity::Warning,
+        Extent::Anywhere,
     ),
     (
-        "chown -R",
+        "chown -r",
         "Changing ownership recursively",
         Severity::Warning,
+        Extent::Anywhere,
     ),
-    ("> /dev/null", "Redirecting to /dev/null", Severity::Warning),
     (
         "truncate -s 0",
         "Truncating file to zero",
         Severity::Warning,
+        Extent::Anywhere,
     ),
 ];
+
+/// Whether `pattern` occurs in `input` within its allowed extent.
+fn matches_pattern(input: &str, pattern: &str, extent: Extent) -> bool {
+    match extent {
+        Extent::Anywhere => input.contains(pattern),
+        Extent::WholeArgument => input.match_indices(pattern).any(|(start, _)| {
+            let rest = &input[start + pattern.len()..];
+            let rest = rest.strip_prefix('*').unwrap_or(rest);
+            rest.chars()
+                .next()
+                .is_none_or(|next| next.is_whitespace() || matches!(next, ';' | '&' | '|' | ')'))
+        }),
+    }
+}
 
 /// Check an input line against destructive patterns.
 ///
@@ -248,8 +333,8 @@ pub fn check_command(input: &str) -> Option<GuardrailMatch> {
     // Check critical patterns first, then warnings
     let mut best_match: Option<GuardrailMatch> = None;
 
-    for &(pattern, reason, severity) in PATTERNS {
-        if lower.contains(pattern) {
+    for &(pattern, reason, severity, extent) in PATTERNS {
+        if matches_pattern(&lower, pattern, extent) {
             let is_better = match (&best_match, severity) {
                 (None, _) => true,
                 (Some(existing), Severity::Critical) if existing.severity != Severity::Critical => {
@@ -448,6 +533,55 @@ mod tests {
         // Patterns are checked lowercase
         let m = check_command("RM -RF /").unwrap();
         assert_eq!(m.severity, Severity::Critical);
+    }
+
+    #[test]
+    fn every_pattern_is_lowercase_like_the_input_it_is_matched_against() {
+        for &(pattern, ..) in PATTERNS {
+            assert_eq!(pattern, pattern.to_lowercase(), "{pattern}");
+        }
+    }
+
+    #[test]
+    fn recursive_chmod_and_chown_match_in_either_case() {
+        let m = check_command("chmod -R 777 /").unwrap();
+        assert_eq!(m.severity, Severity::Critical);
+        let m = check_command("chmod -R 777 ./site").unwrap();
+        assert_eq!(m.severity, Severity::Warning);
+        let m = check_command("chown -R user:group /srv").unwrap();
+        assert_eq!(m.severity, Severity::Warning);
+    }
+
+    #[test]
+    fn root_and_home_deletion_match_only_whole_arguments() {
+        for command in [
+            "rm -rf /",
+            "rm -rf /*",
+            "rm -fr /",
+            "rm -rf / && echo done",
+            "rm -rf ~",
+            "rm -rf ~/",
+            "rm -rf ~/*",
+            "rm -rf ~;ls",
+            "rm -rf /tmp/build; rm -rf /",
+        ] {
+            let m = check_command(command).unwrap();
+            assert_eq!(m.severity, Severity::Critical, "{command}");
+        }
+        for command in [
+            "rm -rf /tmp/build",
+            "rm -rf ~/projects/old",
+            "rm -fr ./target",
+        ] {
+            let m = check_command(command).unwrap();
+            assert_eq!(m.severity, Severity::Warning, "{command}");
+        }
+    }
+
+    #[test]
+    fn discarding_output_is_not_flagged() {
+        assert!(check_command("make > /dev/null").is_none());
+        assert!(check_command("command -v git >/dev/null 2>&1").is_none());
     }
 
     #[test]
