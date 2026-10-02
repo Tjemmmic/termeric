@@ -3,7 +3,7 @@ use std::ffi::OsStr;
 use std::process::Command;
 
 fn report(path: impl AsRef<OsStr>) -> Option<Vec<u8>> {
-    let program = super::tests::executable_on_path("bash")?;
+    let program = super::tests::test_shell("bash")?;
     let home = tempfile::tempdir().unwrap();
     let script = format!(
         "{}\nPWD=$TEST_DIRECTORY\n__termeric_after_prompt\n[[ $LC_ALL == POSIX ]]\n",
@@ -26,7 +26,6 @@ fn report(path: impl AsRef<OsStr>) -> Option<Vec<u8>> {
 fn bash_cwd_cannot_inject_terminal_commands() {
     let path = "/tmp/control\x07\x1b]2;INJECTED_TITLE\x07suffix";
     let Some(bytes) = report(path) else {
-        eprintln!("skipping Bash cwd emission: bash unavailable");
         return;
     };
     let mut terminal = termeric_core::Terminal::new(80, 24);
@@ -49,7 +48,6 @@ fn bash_cwd_cannot_inject_terminal_commands() {
 fn bash_cwd_encoding_round_trips_printable_utf8_and_uri_characters() {
     let path = "/tmp/space %2F #?;quote'\"/界/é/👩\u{200d}💻";
     let Some(bytes) = report(path) else {
-        eprintln!("skipping Bash cwd emission: bash unavailable");
         return;
     };
     assert!(
@@ -73,7 +71,6 @@ fn bash_cwd_encodes_every_nonzero_byte_without_leaking_protocol_controls() {
     use std::os::unix::ffi::OsStringExt;
     let path = std::ffi::OsString::from_vec(b"/bytes/".iter().copied().chain(1..=255).collect());
     let Some(bytes) = report(path) else {
-        eprintln!("skipping Bash cwd emission: bash unavailable");
         return;
     };
     let mut expected = String::from("\x1b]7;file:///bytes/");
@@ -108,7 +105,6 @@ fn bash_cwd_bounds_encoded_reports_without_truncating_or_losing_prompt_marks() {
         (String::from("relative"), false),
     ] {
         let Some(bytes) = report(&path) else {
-            eprintln!("skipping Bash cwd emission: bash unavailable");
             return;
         };
         assert!(bytes.ends_with(b"\x1b]133;A\x07\x1b]133;B\x07"));

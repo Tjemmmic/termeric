@@ -1004,7 +1004,6 @@ mod tests {
 
     #[test]
     fn supported_shells_preserve_user_rc_and_emit_multiline_exit_regions() {
-        let require_all = std::env::var("TERMERIC_REQUIRE_SHELL_ACCEPTANCE").as_deref() == Ok("1");
         let candidates = [
             ("bash", ".bashrc", "printf 'CUSTOM_RC_BASH\\n'\n"),
             ("zsh", ".zshrc", "printf 'CUSTOM_RC_ZSH\\n'\n"),
@@ -1016,12 +1015,7 @@ mod tests {
         ];
 
         for (shell_name, rc_path, rc_contents) in candidates {
-            let Some(program) = executable_on_path(shell_name) else {
-                assert!(
-                    !require_all,
-                    "{shell_name} is required by TERMERIC_REQUIRE_SHELL_ACCEPTANCE=1"
-                );
-                eprintln!("skipping {shell_name} OSC 133 acceptance: executable unavailable");
+            let Some(program) = test_shell(shell_name) else {
                 continue;
             };
             run_shell_semantics_probe(
@@ -1036,13 +1030,7 @@ mod tests {
 
     #[test]
     fn nushell_native_integration_preserves_user_config_and_emits_regions_when_available() {
-        let required = std::env::var("TERMERIC_REQUIRE_NUSHELL_ACCEPTANCE").as_deref() == Ok("1");
-        let Some(program) = executable_on_path("nu") else {
-            assert!(
-                !required,
-                "nu is required by TERMERIC_REQUIRE_NUSHELL_ACCEPTANCE=1"
-            );
-            eprintln!("skipping Nushell OSC 133 acceptance: executable unavailable");
+        let Some(program) = test_shell("nu") else {
             return;
         };
         run_shell_semantics_probe(
@@ -1056,13 +1044,7 @@ mod tests {
 
     #[test]
     fn elvish_module_preserves_user_config_and_emits_regions_when_available() {
-        let required = std::env::var("TERMERIC_REQUIRE_ELVISH_ACCEPTANCE").as_deref() == Ok("1");
-        let Some(program) = executable_on_path("elvish") else {
-            assert!(
-                !required,
-                "elvish is required by TERMERIC_REQUIRE_ELVISH_ACCEPTANCE=1"
-            );
-            eprintln!("skipping Elvish OSC 133 acceptance: executable unavailable");
+        let Some(program) = test_shell("elvish") else {
             return;
         };
         run_shell_semantics_probe(
@@ -1077,12 +1059,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn elvish_custom_rc_and_boolean_options_preserve_prompt_regions() {
-        let Some(program) = executable_on_path("elvish") else {
-            assert_ne!(
-                std::env::var("TERMERIC_REQUIRE_ELVISH_ACCEPTANCE").as_deref(),
-                Ok("1")
-            );
-            eprintln!("skipping Elvish launch-option PTY acceptance: executable unavailable");
+        let Some(program) = test_shell("elvish") else {
             return;
         };
         for (args, path) in [
@@ -1144,12 +1121,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn elvish_rc_environment_changes_survive_module_import_and_child_launch() {
-        let Some(program) = executable_on_path("elvish") else {
-            assert_ne!(
-                std::env::var("TERMERIC_REQUIRE_ELVISH_ACCEPTANCE").as_deref(),
-                Ok("1")
-            );
-            eprintln!("skipping Elvish environment PTY acceptance: executable unavailable");
+        let Some(program) = test_shell("elvish") else {
             return;
         };
         for (mutation, expected) in [
@@ -1174,6 +1146,28 @@ mod tests {
                 ShellIntegrationSupport::Unavailable(ELVISH_MANUAL_INSTRUCTIONS.into()),
             );
         }
+    }
+
+    /// The shell a test needs, or `None` to skip the test. CI installs Bash,
+    /// Zsh, and Fish and sets `TERMERIC_REQUIRE_SHELL_ACCEPTANCE=1`, so there a
+    /// missing one fails instead of skipping. Nushell and Elvish aren't in CI
+    /// and have their own variables.
+    pub(super) fn test_shell(name: &str) -> Option<String> {
+        let found = executable_on_path(name);
+        if found.is_none() {
+            let variable = match name {
+                "nu" => "TERMERIC_REQUIRE_NUSHELL_ACCEPTANCE",
+                "elvish" => "TERMERIC_REQUIRE_ELVISH_ACCEPTANCE",
+                _ => "TERMERIC_REQUIRE_SHELL_ACCEPTANCE",
+            };
+            assert_ne!(
+                std::env::var(variable).as_deref(),
+                Ok("1"),
+                "{name} is required by {variable}=1"
+            );
+            eprintln!("skipping: {name} is unavailable");
+        }
+        found
     }
 
     pub(super) fn executable_on_path(name: &str) -> Option<String> {
@@ -1227,12 +1221,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn nushell_native_cwd_is_available_at_first_prompt_after_user_disables_it() {
-        let Some(program) = executable_on_path("nu") else {
-            assert_ne!(
-                std::env::var("TERMERIC_REQUIRE_NUSHELL_ACCEPTANCE").as_deref(),
-                Ok("1")
-            );
-            eprintln!("skipping Nushell first-prompt cwd: nu unavailable");
+        let Some(program) = test_shell("nu") else {
             return;
         };
         run_shell_semantics_probe_with_options(
@@ -1251,12 +1240,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn nushell_repl_launch_options_preserve_custom_config_and_command_lifecycle() {
-        let Some(program) = executable_on_path("nu") else {
-            assert_ne!(
-                std::env::var("TERMERIC_REQUIRE_NUSHELL_ACCEPTANCE").as_deref(),
-                Ok("1")
-            );
-            eprintln!("skipping Nushell launch-options acceptance: nu unavailable");
+        let Some(program) = test_shell("nu") else {
             return;
         };
         for args in [
@@ -1282,12 +1266,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn zsh_login_profile_emits_prompt_regions_with_nounset_when_available() {
-        let Some(program) = executable_on_path("zsh") else {
-            assert_ne!(
-                std::env::var("TERMERIC_REQUIRE_ZSH_CWD_TESTS").as_deref(),
-                Ok("1")
-            );
-            eprintln!("skipping Zsh login startup acceptance: zsh unavailable");
+        let Some(program) = test_shell("zsh") else {
             return;
         };
         run_shell_semantics_probe_with_options(
@@ -1306,12 +1285,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn zsh_reenabled_startup_and_stdin_arguments_preserve_prompt_regions() {
-        let Some(program) = executable_on_path("zsh") else {
-            assert_ne!(
-                std::env::var("TERMERIC_REQUIRE_ZSH_CWD_TESTS").as_deref(),
-                Ok("1")
-            );
-            eprintln!("skipping Zsh launch-option PTY acceptance: zsh unavailable");
+        let Some(program) = test_shell("zsh") else {
             return;
         };
         for args in [
@@ -1343,12 +1317,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn bash_custom_rc_and_stdin_arguments_preserve_prompt_regions() {
-        let Some(program) = executable_on_path("bash") else {
-            assert_ne!(
-                std::env::var("TERMERIC_REQUIRE_SHELL_ACCEPTANCE").as_deref(),
-                Ok("1")
-            );
-            eprintln!("skipping Bash launch-option PTY acceptance: bash unavailable");
+        let Some(program) = test_shell("bash") else {
             return;
         };
         for args in [
@@ -1397,12 +1366,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn fish_init_commands_and_launch_options_preserve_prompt_regions() {
-        let Some(program) = executable_on_path("fish") else {
-            assert_ne!(
-                std::env::var("TERMERIC_REQUIRE_SHELL_ACCEPTANCE").as_deref(),
-                Ok("1")
-            );
-            eprintln!("skipping Fish launch-option PTY acceptance: fish unavailable");
+        let Some(program) = test_shell("fish") else {
             return;
         };
         let first = "set -a startup_order first # trailing comment";
@@ -1450,11 +1414,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn bash_login_profiles_preserve_first_cwd_and_multiline_command_regions() {
-        let Some(program) = executable_on_path("bash") else {
-            assert_ne!(
-                std::env::var("TERMERIC_REQUIRE_SHELL_ACCEPTANCE").as_deref(),
-                Ok("1")
-            );
+        let Some(program) = test_shell("bash") else {
             return;
         };
         for (args, profile) in [

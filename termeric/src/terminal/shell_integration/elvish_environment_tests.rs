@@ -124,12 +124,7 @@ fn elvish_empty_search_environment_keeps_native_default_roots() {
 
 #[test]
 fn elvish_module_restores_only_unchanged_transport_and_cleans_child_environment() {
-    let Some(program) = super::tests::executable_on_path("elvish") else {
-        assert_ne!(
-            std::env::var("TERMERIC_REQUIRE_ELVISH_ACCEPTANCE").as_deref(),
-            Ok("1")
-        );
-        eprintln!("skipping Elvish module environment test: executable unavailable");
+    let Some(program) = super::tests::test_shell("elvish") else {
         return;
     };
     for (original, mutation, prepared) in [

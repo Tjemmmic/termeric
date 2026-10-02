@@ -52,12 +52,7 @@ fn bash_repreparing_a_launch_preserves_the_original_rc_without_recursion() {
 #[cfg(unix)]
 #[test]
 fn bash_custom_rc_startup_matches_native_file_selection_and_child_environment() {
-    let Some(program) = super::tests::executable_on_path("bash") else {
-        assert_ne!(
-            std::env::var("TERMERIC_REQUIRE_SHELL_ACCEPTANCE").as_deref(),
-            Ok("1")
-        );
-        eprintln!("skipping Bash custom rc startup comparison: bash unavailable");
+    let Some(program) = super::tests::test_shell("bash") else {
         return;
     };
     for requested in [

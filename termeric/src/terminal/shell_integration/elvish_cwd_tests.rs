@@ -4,15 +4,7 @@ use std::process::Command;
 use termeric_core::{Terminal, TerminalEvent};
 
 fn report(path: impl AsRef<OsStr>, before_readline: bool) -> Option<Vec<u8>> {
-    let Some(program) = super::tests::executable_on_path("elvish") else {
-        assert_ne!(
-            std::env::var("TERMERIC_REQUIRE_ELVISH_CWD_TESTS").as_deref(),
-            Ok("1"),
-            "Elvish cwd tests required, but elvish is unavailable"
-        );
-        eprintln!("skipping Elvish cwd emission: elvish unavailable");
-        return None;
-    };
+    let program = super::tests::test_shell("elvish")?;
     let home = tempfile::tempdir().unwrap();
     // Elvish only supplies edit: in interactive mode. Stub its hook registry,
     // not the encoder, and lexically shadow the filesystem-backed builtin pwd

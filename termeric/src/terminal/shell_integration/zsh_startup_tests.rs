@@ -84,12 +84,7 @@ fn zsh_launch_eligibility_respects_option_order_and_stdin_operands() {
 #[cfg(unix)]
 #[test]
 fn zsh_user_startup_chain_matches_native_order_scope_and_directory_changes() {
-    let Some(program) = super::tests::executable_on_path("zsh") else {
-        assert_ne!(
-            std::env::var("TERMERIC_REQUIRE_ZSH_CWD_TESTS").as_deref(),
-            Ok("1")
-        );
-        eprintln!("skipping Zsh startup-chain comparison: zsh unavailable");
+    let Some(program) = super::tests::test_shell("zsh") else {
         return;
     };
     for case in [
@@ -324,12 +319,7 @@ fn zsh_legacy_transport_does_not_recursively_source_its_own_rc() {
 #[cfg(unix)]
 #[test]
 fn zsh_startup_restores_user_directory_before_rc_and_nested_shells() {
-    let Some(program) = super::tests::executable_on_path("zsh") else {
-        assert_ne!(
-            std::env::var("TERMERIC_REQUIRE_ZSH_CWD_TESTS").as_deref(),
-            Ok("1")
-        );
-        eprintln!("skipping Zsh startup handoff: zsh unavailable");
+    let Some(program) = super::tests::test_shell("zsh") else {
         return;
     };
     for case in ["custom", "missing", "redirect", "unset"] {

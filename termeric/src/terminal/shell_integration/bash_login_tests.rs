@@ -2,11 +2,7 @@ use super::*;
 
 #[test]
 fn bash_login_bootstrap_ignores_unprepared_manual_sources() {
-    let Some(program) = super::tests::executable_on_path("bash") else {
-        assert_ne!(
-            std::env::var("TERMERIC_REQUIRE_SHELL_ACCEPTANCE").as_deref(),
-            Ok("1")
-        );
+    let Some(program) = super::tests::test_shell("bash") else {
         return;
     };
     let temp = tempfile::tempdir().unwrap();
@@ -73,11 +69,7 @@ fn bash_login_routing_and_repreparation_preserve_original_environment() {
 
 #[test]
 fn bash_login_preserves_exported_history_and_inherited_errexit_option() {
-    let Some(program) = super::tests::executable_on_path("bash") else {
-        assert_ne!(
-            std::env::var("TERMERIC_REQUIRE_SHELL_ACCEPTANCE").as_deref(),
-            Ok("1")
-        );
+    let Some(program) = super::tests::test_shell("bash") else {
         return;
     };
     for history in [None, Some(""), Some("/dev/null")] {
@@ -116,11 +108,7 @@ fn bash_login_preserves_exported_history_and_inherited_errexit_option() {
 
 #[test]
 fn bash_login_bootstrap_matches_native_profiles_environment_and_logout() {
-    let Some(program) = super::tests::executable_on_path("bash") else {
-        assert_ne!(
-            std::env::var("TERMERIC_REQUIRE_SHELL_ACCEPTANCE").as_deref(),
-            Ok("1")
-        );
+    let Some(program) = super::tests::test_shell("bash") else {
         return;
     };
     for (profile, no_profile) in [

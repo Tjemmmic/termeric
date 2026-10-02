@@ -12,14 +12,7 @@ fn report(path: &str) -> Option<Vec<u8>> {
 }
 
 fn run(script: &str, path: &str) -> Option<Vec<u8>> {
-    let Some(program) = super::tests::executable_on_path("nu") else {
-        assert_ne!(
-            std::env::var("TERMERIC_REQUIRE_NUSHELL_ACCEPTANCE").as_deref(),
-            Ok("1")
-        );
-        eprintln!("skipping Nushell initial cwd encoder: nu unavailable");
-        return None;
-    };
+    let program = super::tests::test_shell("nu")?;
     let home = tempfile::tempdir().unwrap();
     let output = Command::new(program)
         .args(["--no-config-file", "-c", script])

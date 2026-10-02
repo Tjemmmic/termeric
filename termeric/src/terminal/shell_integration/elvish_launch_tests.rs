@@ -132,12 +132,7 @@ fn elvish_repl_options_follow_boolean_order_and_opaque_value_boundaries() {
 #[cfg(unix)]
 #[test]
 fn elvish_typed_option_values_match_the_native_parser() {
-    let Some(program) = super::tests::executable_on_path("elvish") else {
-        assert_ne!(
-            std::env::var("TERMERIC_REQUIRE_ELVISH_ACCEPTANCE").as_deref(),
-            Ok("1")
-        );
-        eprintln!("skipping Elvish native flag parsing: executable unavailable");
+    let Some(program) = super::tests::test_shell("elvish") else {
         return;
     };
     let temp = tempfile::tempdir().unwrap();

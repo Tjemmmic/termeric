@@ -4,15 +4,7 @@ use std::process::Command;
 use termeric_core::{Terminal, TerminalEvent};
 
 fn report(path: impl AsRef<OsStr>, options: &str) -> Option<Vec<u8>> {
-    let Some(program) = super::tests::executable_on_path("zsh") else {
-        assert_ne!(
-            std::env::var("TERMERIC_REQUIRE_ZSH_CWD_TESTS").as_deref(),
-            Ok("1"),
-            "Zsh cwd tests were required, but zsh is unavailable"
-        );
-        eprintln!("skipping Zsh cwd emission: zsh unavailable");
-        return None;
-    };
+    let program = super::tests::test_shell("zsh")?;
     let home = tempfile::tempdir().unwrap();
     let script = format!(
         "{ZSH_RC}\nPWD=$TEST_DIRECTORY\n{options}\n__termeric_test_options=$(setopt)\n__termeric_precmd\n[[ $LC_ALL == C.UTF-8 && $(setopt) == $__termeric_test_options ]]\n"

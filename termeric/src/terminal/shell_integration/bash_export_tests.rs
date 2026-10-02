@@ -4,12 +4,7 @@ use std::process::Command;
 
 #[test]
 fn bash_allexport_does_not_export_private_hooks_or_change_prompt_export_choices() {
-    let Some(program) = super::tests::executable_on_path("bash") else {
-        assert_ne!(
-            std::env::var("TERMERIC_REQUIRE_SHELL_ACCEPTANCE").as_deref(),
-            Ok("1")
-        );
-        eprintln!("skipping Bash export isolation: bash unavailable");
+    let Some(program) = super::tests::test_shell("bash") else {
         return;
     };
     for setup in [

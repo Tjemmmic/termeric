@@ -6,15 +6,7 @@ use termeric_core::{Terminal, TerminalEvent};
 const AFTER_REPORT: &[u8] = b"<after-report>";
 
 fn report(cwd: &Path, synthetic_path: Option<&OsStr>) -> Option<Vec<u8>> {
-    let Some(program) = super::tests::executable_on_path("fish") else {
-        assert_ne!(
-            std::env::var("TERMERIC_REQUIRE_FISH_CWD_TESTS").as_deref(),
-            Ok("1"),
-            "Fish cwd tests were required, but fish is unavailable"
-        );
-        eprintln!("skipping Fish cwd emission: fish unavailable");
-        return None;
-    };
+    let program = super::tests::test_shell("fish")?;
     let home = tempfile::tempdir().unwrap();
     let invocation = if synthetic_path.is_some() {
         "__termeric_report_cwd \"$TEST_DIRECTORY\"; printf '<after-report>'"

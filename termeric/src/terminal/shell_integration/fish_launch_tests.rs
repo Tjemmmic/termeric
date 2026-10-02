@@ -95,12 +95,7 @@ fn fish_repl_options_preserve_user_words_before_separate_integration() {
 #[cfg(unix)]
 #[test]
 fn fish_startup_commands_preserve_native_order_status_and_user_hooks() {
-    let Some(program) = super::tests::executable_on_path("fish") else {
-        assert_ne!(
-            std::env::var("TERMERIC_REQUIRE_SHELL_ACCEPTANCE").as_deref(),
-            Ok("1")
-        );
-        eprintln!("skipping Fish startup comparison: fish unavailable");
+    let Some(program) = super::tests::test_shell("fish") else {
         return;
     };
     for final_status in [0, 1, 23] {

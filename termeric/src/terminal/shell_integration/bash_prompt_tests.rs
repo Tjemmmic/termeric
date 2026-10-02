@@ -4,7 +4,7 @@ use termeric_core::Pty;
 use termeric_core::pty::{PtyEvent, spawn_reader_thread};
 
 fn probe(prompt_command: &str, integrated: bool) -> Option<(String, Vec<u8>)> {
-    let program = super::tests::executable_on_path("bash")?;
+    let program = super::tests::test_shell("bash")?;
     // Indexed PROMPT_COMMAND semantics were added in Bash 5.1. Do not compare
     // the array fixture against a shell that never supported that contract.
     let modern = std::process::Command::new(&program)
@@ -114,7 +114,6 @@ second_hook() {{
 
 fn assert_prompt_preserved(command: &str) {
     let Some((baseline_hooks, baseline_bytes)) = probe(command, false) else {
-        eprintln!("skipping Bash prompt composition: Bash 5.1+ unavailable");
         return;
     };
     let (hooks, bytes) = probe(command, true).unwrap();
@@ -205,7 +204,6 @@ fn bash_nounset_with_empty_prompt_array_still_emits_command_regions() {
 
 fn assert_nounset_without_user_hooks(rc_commands: &str) {
     let Some((hooks, bytes)) = probe(rc_commands, true) else {
-        eprintln!("skipping Bash prompt composition: Bash 5.1+ unavailable");
         return;
     };
     assert!(hooks.is_empty());
