@@ -74,6 +74,7 @@ use crate::harvest::HarvestMode;
 use crate::input::keybindings::{KeyAction, KeyBindingManager};
 use crate::input::{Action, MouseReportButton, MouseState, ShortcutRegistry, screen_to_grid};
 use crate::notifications::{Bell, BellConfig, Notifications};
+use crate::panes::PaneRenderInfo;
 use crate::panes::{PaneId, PaneManager, SplitDirection};
 use crate::plugin::{PluginContext, PluginManager};
 use crate::renderer::types::{
@@ -82,7 +83,6 @@ use crate::renderer::types::{
 };
 use crate::renderer::{Renderer, TextBlinkPhases, VisibleTextBlink};
 use crate::tabs::{RoutedTerminalEvent, TabManager};
-use crate::terminal::container::{PaneRenderInfo, TerminalContainer};
 use crate::terminal::copy_mode::CopyMode;
 use crate::terminal::guardrails::GuardrailOverlay;
 use crate::terminal::search::Search;
@@ -2158,9 +2158,6 @@ impl App {
                 pi.is_focused
             );
         }
-
-        // Verify container trait access (before renderer borrow)
-        let _has_terminal = self.focused_terminal_via_container().is_some();
 
         // Get cursor target position and calculate animations before borrowing
         let (cursor_style, _) = self.cursor_presentation();

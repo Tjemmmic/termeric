@@ -380,7 +380,7 @@ impl App {
     /// input's shared geometry, not the terminal cursor behind a palette.
     pub(super) fn ime_preedit_render_info(
         &self,
-        panes: &[crate::terminal::container::PaneRenderInfo],
+        panes: &[crate::panes::PaneRenderInfo],
     ) -> Option<crate::renderer::ImePreeditRenderInfo> {
         if !self.accepts_ime_text() {
             return None;

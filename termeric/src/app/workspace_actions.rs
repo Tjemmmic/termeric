@@ -1043,14 +1043,6 @@ impl App {
             .collect()
     }
 
-    /// Access the focused terminal through the TerminalContainer trait
-    pub(super) fn focused_terminal_via_container(&self) -> Option<&termeric_core::Terminal> {
-        let tabs = self.tabs.as_ref()?;
-        let tab = tabs.active_tab()?;
-        let tc: &dyn TerminalContainer = tab;
-        tc.focused_terminal()
-    }
-
     /// Split the current tab into panes
     pub(super) fn split_pane(&mut self, direction: SplitDirection) {
         let live_route = self

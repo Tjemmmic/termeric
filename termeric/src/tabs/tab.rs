@@ -7,7 +7,6 @@ use crate::session::Session;
 use crate::session::terminal_state::TerminalSession;
 #[cfg(test)]
 use crate::session::transcript::TranscriptRecorder;
-use crate::terminal::container::TerminalContainer;
 use crate::terminal::events::{MAX_FORWARDED_TERMINAL_EVENTS_PER_POLL, drain_terminal_events};
 use crate::terminal::geometry::TerminalGeometry;
 use crate::terminal::shell_integration::{ShellIntegrationSupport, prepare_shell_launch};
@@ -1641,35 +1640,5 @@ impl Tab {
     /// Check if close animation is complete and tab should be removed
     pub fn is_close_complete(&self) -> bool {
         self.close_progress() >= 1.0
-    }
-}
-
-/// Single-terminal tab implements TerminalContainer for uniform access.
-impl TerminalContainer for Tab {
-    fn focused_terminal(&self) -> Option<&Terminal> {
-        Tab::focused_terminal(self)
-    }
-
-    fn focused_terminal_mut(&mut self) -> Option<&mut Terminal> {
-        Tab::focused_terminal_mut(self)
-    }
-
-    fn write_input(&mut self, data: &[u8]) -> std::io::Result<()> {
-        self.write(data)
-    }
-
-    fn resize(&mut self, cols: usize, rows: usize) -> anyhow::Result<()> {
-        let cell_width = f32::from(self.geometry.pixel_width) / self.geometry.cols as f32;
-        let cell_height = f32::from(self.geometry.pixel_height) / self.geometry.rows as f32;
-        self.resize_geometry(TerminalGeometry::from_cells(
-            cols,
-            rows,
-            cell_width,
-            cell_height,
-        ))
-    }
-
-    fn is_closed(&self) -> bool {
-        self.closed
     }
 }

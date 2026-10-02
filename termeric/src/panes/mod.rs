@@ -38,7 +38,6 @@ pub(crate) struct CollapsedPaneOwner {
 }
 
 use crate::config::ShellConfig;
-use crate::terminal::container::{SplitContainer, TerminalContainer};
 use crate::terminal::events::{MAX_FORWARDED_TERMINAL_EVENTS_PER_POLL, drain_terminal_events};
 use crate::terminal::geometry::TerminalGeometry;
 use crate::terminal::shell_integration::{
@@ -1909,78 +1908,15 @@ impl PaneManager {
     }
 }
 
-/// Implement TerminalContainer for PaneManager
-impl TerminalContainer for PaneManager {
-    fn focused_terminal(&self) -> Option<&Terminal> {
-        self.focused_pane().map(|p| &p.terminal)
-    }
-
-    fn focused_terminal_mut(&mut self) -> Option<&mut Terminal> {
-        self.focused_pane_mut().map(|p| &mut p.terminal)
-    }
-
-    fn write_input(&mut self, data: &[u8]) -> io::Result<()> {
-        if let Some(pane) = self.focused_pane_mut() {
-            pane.write(data)
-        } else {
-            Ok(())
-        }
-    }
-
-    fn resize(&mut self, _cols: usize, _rows: usize) -> anyhow::Result<()> {
-        // PaneManager handles resize differently - via resize() method with pixel dimensions
-        // This is called with cols/rows but PaneManager needs pixel dimensions
-        // Recalculate all pane sizes based on current total dimensions
-        self.recalculate_sizes();
-        Ok(())
-    }
-
-    fn is_closed(&self) -> bool {
-        self.all_closed()
-    }
-}
-
-/// Implement SplitContainer for PaneManager
-impl SplitContainer for PaneManager {
-    fn split(&mut self, direction: SplitDirection) -> anyhow::Result<PaneId> {
-        PaneManager::split(self, direction)
-    }
-
-    fn close_focused_pane(&mut self) -> bool {
-        self.close_focused()
-    }
-
-    fn navigate(&mut self, dir: PaneDir) -> bool {
-        PaneManager::navigate(self, dir)
-    }
-
-    fn pane_count(&self) -> usize {
-        PaneManager::pane_count(self)
-    }
-
-    fn pane_layout(&self) -> HashMap<PaneId, PaneRect> {
-        self.calculate_layout()
-    }
-
-    fn dividers(&self) -> Vec<Divider> {
-        self.get_dividers()
-    }
-
-    fn focused_pane_id(&self) -> PaneId {
-        self.focused_id()
-    }
-
-    fn iter_panes(&self) -> Vec<(&Terminal, PaneRect, bool)> {
-        let layout = self.calculate_layout();
-        self.panes
-            .values()
-            .filter_map(|pane| {
-                layout
-                    .get(&pane.id)
-                    .map(|&rect| (&pane.terminal, rect, pane.id == self.focused))
-            })
-            .collect()
-    }
+/// Render information for a pane
+#[derive(Debug, Clone)]
+pub struct PaneRenderInfo {
+    /// The pane's layout rectangle
+    pub rect: PaneRect,
+    /// Whether this pane is focused
+    pub is_focused: bool,
+    /// Pane ID
+    pub id: PaneId,
 }
 
 /// A divider between panes

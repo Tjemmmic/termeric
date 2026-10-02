@@ -5,7 +5,6 @@
 //! - Splash screen
 //! - Diff detection in terminal output
 
-pub mod container;
 pub mod copy_mode;
 pub mod diff_detector;
 pub(crate) mod events;
