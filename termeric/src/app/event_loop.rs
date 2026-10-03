@@ -123,27 +123,19 @@ impl App {
 
                 // Initialize renderer
                 if let Err(e) = self.init_renderer(window.clone()) {
-                    let error = format!("Failed to initialize renderer: {e:#}");
-                    if self.redact_startup_error_log {
-                        log::error!("Private GUI-control window renderer initialization failed");
-                    } else {
-                        log::error!("{error}");
-                    }
-                    self.startup_error = Some(error);
-                    self.should_exit = true;
+                    self.fail_startup(
+                        format!("Failed to initialize renderer: {e:#}"),
+                        "window renderer initialization",
+                    );
                     return;
                 }
 
                 // Initialize tabs with first tab
                 if let Err(e) = self.init_tabs() {
-                    let error = format!("Failed to initialize tabs: {e:#}");
-                    if self.redact_startup_error_log {
-                        log::error!("Private GUI-control window tab initialization failed");
-                    } else {
-                        log::error!("{error}");
-                    }
-                    self.startup_error = Some(error);
-                    self.should_exit = true;
+                    self.fail_startup(
+                        format!("Failed to initialize tabs: {e:#}"),
+                        "window tab initialization",
+                    );
                     return;
                 }
 
@@ -160,17 +152,24 @@ impl App {
                 self.render();
                 self.redraw_scheduler.finish_frame();
             }
-            Err(e) => {
-                let error = format!("Failed to create window: {e:#}");
-                if self.redact_startup_error_log {
-                    log::error!("Private GUI-control native window creation failed");
-                } else {
-                    log::error!("{error}");
-                }
-                self.startup_error = Some(error);
-                self.should_exit = true;
-            }
+            Err(e) => self.fail_startup(
+                format!("Failed to create window: {e:#}"),
+                "native window creation",
+            ),
         }
+    }
+
+    /// End a window that could not start, keeping `error` for the requester.
+    /// A private GUI-control window logs only which `stage` failed, never the
+    /// error's details.
+    fn fail_startup(&mut self, error: String, stage: &str) {
+        if self.redact_startup_error_log {
+            log::error!("Private GUI-control {stage} failed");
+        } else {
+            log::error!("{error}");
+        }
+        self.startup_error = Some(error);
+        self.should_exit = true;
     }
 
     pub(super) fn window_event(&mut self, event: WindowEvent) {
