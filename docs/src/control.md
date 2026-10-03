@@ -6,6 +6,8 @@
 
 Every running Termeric listens on a private socket in your runtime directory (`$XDG_RUNTIME_DIR/termeric`, or `/tmp/termeric-UID` without one). Only programs running as your user can connect. The `termeric control` commands find it on their own and never open a window.
 
+Every command takes `--json` to print its result as JSON for scripts, and every command that changes something takes `--request-id ID` (see [Retrying safely](#retrying-safely)).
+
 ## Finding windows, tabs, and panes
 
 ```console
@@ -78,7 +80,9 @@ termeric control launch-window 48213 1 --cwd /srv/logs -- tail -f app.log
 | `--unset-env NAME` | Remove an inherited variable. Repeatable. |
 | `--clear-env` | Start from a minimal environment instead of Termeric's. |
 | `--env-stdin` | Read variables from standard input as a JSON object. |
-| `--wait [--timeout SECONDS]` | Wait for the program to exit, then exit with its code. |
+| `--wait [--timeout SECONDS]` | Wait for the program to exit, then exit with its code. `--timeout` gives up after 1 to 86400 seconds; without it, the wait has no limit. |
+| `--request-id ID` | Use your own request ID, so the launch can be retried safely. |
+| `--json` | Print the result as JSON. |
 
 `launch-tab` is refused while the window's selected tab belongs to a [live domain](live-domains.md); use `termeric domain spawn` to run a program there.
 
@@ -124,7 +128,7 @@ A few things to know about waiting:
 | Command | What it does |
 | --- | --- |
 | `new-window PROCESS SOURCE_WINDOW` | Open a window like the source window, in its focused tab's directory. |
-| `new-tab PROCESS WINDOW` | Open a shell tab and print its ID. |
+| `new-tab PROCESS WINDOW` | Open a shell tab and print its ID. Refused while the window's selected tab belongs to a live domain. |
 | `split-pane PROCESS WINDOW TAB PANE horizontal\|vertical` | Split a pane (`horizontal` adds one below, `vertical` to the right) and print the new pane's ID. |
 | `select-tab PROCESS WINDOW TAB` | Select a tab, without raising its window. |
 | `focus-pane PROCESS WINDOW TAB PANE` | Select a tab and focus a pane. |
