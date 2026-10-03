@@ -30,13 +30,6 @@ pub enum TerminalEvent {
     /// A terminal-local xterm dynamic color operation.
     DynamicColor(DynamicColorOperation),
 
-    /// UI-originated hyperlink activation. Terminal output must not be treated
-    /// as an activation request; the parser does not produce this event.
-    HyperlinkActivated(String),
-
-    /// The cursor visibility changed
-    CursorVisibilityChanged(bool),
-
     /// The active screen's OSC 22 mouse pointer shape changed.
     PointerShapeChanged,
 
@@ -58,9 +51,6 @@ pub enum TerminalEvent {
 
     /// Data that should be written back to the PTY (e.g., DSR responses)
     PtyWrite(Vec<u8>),
-
-    /// The terminal exited
-    Exit,
 }
 
 /// Desktop notification urgency from Kitty OSC 99.

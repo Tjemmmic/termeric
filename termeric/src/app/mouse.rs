@@ -644,15 +644,11 @@ impl App {
                 if self.modifiers.control_key() {
                     if let Some((url, directory)) = self.focused_hyperlink_open_context(grid_pos) {
                         log::info!("Opening hyperlink: {}", url);
-                        if let Err(error) = self.open_hyperlink_for_origin(
+                        self.activate_hyperlink(
                             self.active_terminal_origin(),
                             &url,
                             directory.as_deref(),
-                        ) {
-                            log::error!("Failed to open URL: {}", error);
-                            let message = format!("Could not open {url:?}: {error}");
-                            self.toasts.error(message);
-                        }
+                        );
                         return;
                     }
                 }

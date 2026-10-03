@@ -5,10 +5,11 @@ use crate::plugin::hooks::{Plugin, PluginCommand};
 fn stale_hyperlink_activation_is_rejected_before_opener_validation() {
     let mut app = App::new_headless(Config::default()).unwrap();
     // An option-shaped target makes this pre-fix reproduction side-effect-free.
-    app.handle_terminal_event(RoutedTerminalEvent {
-        origin: TerminalEventOrigin::Tab { tab_id: usize::MAX },
-        event: TerminalEvent::HyperlinkActivated("--help".into()),
-    });
+    assert!(!app.activate_hyperlink(
+        Some(TerminalEventOrigin::Tab { tab_id: usize::MAX }),
+        "--help",
+        None,
+    ));
     assert!(
         app.toasts
             .iter()
@@ -87,10 +88,7 @@ fn hyperlink_owner_gate_rejects_closed_routes_but_allows_live_inactive_read_only
                 .kind(),
             std::io::ErrorKind::NotFound
         );
-        app.handle_terminal_event(RoutedTerminalEvent {
-            origin,
-            event: TerminalEvent::HyperlinkActivated("--help".into()),
-        });
+        assert!(!app.activate_hyperlink(Some(origin), "--help", None));
         assert!(
             app.toasts
                 .iter()
@@ -143,18 +141,6 @@ fn hyperlink_owner_gate_rejects_closed_panes_and_obsolete_collapse_routes() {
     assert!(
         app.validate_hyperlink_origin(Some(TerminalEventOrigin::Tab { tab_id }))
             .is_ok()
-    );
-}
-
-#[test]
-fn osc8_metadata_never_requests_desktop_activation() {
-    let mut terminal = termeric_core::Terminal::new(40, 3);
-    terminal.process(b"\x1b]8;;https://example.invalid\x1b\\link\x1b]8;;\x1b\\\x1b]8;open=1;file:///tmp/example\x07file\x1b]8;;\x07");
-    assert!(
-        !terminal
-            .drain_events()
-            .iter()
-            .any(|event| matches!(event, TerminalEvent::HyperlinkActivated(_)))
     );
 }
 
@@ -249,10 +235,8 @@ fn relative_hyperlink_without_trusted_directory_is_refused_before_launch() {
     let mut app = scrollbar_owner_fixture();
     *app.active_terminal_mut().unwrap() = termeric_core::Terminal::new(8, 3);
     let origin = app.active_terminal_origin().unwrap();
-    app.handle_terminal_event(RoutedTerminalEvent {
-        origin,
-        event: TerminalEvent::HyperlinkActivated("./file.txt".into()),
-    });
+    let directory = app.hyperlink_open_directory(origin);
+    assert!(!app.activate_hyperlink(Some(origin), "./file.txt", directory.as_deref()));
     let toast = app.toasts.iter().last().unwrap();
     assert_eq!(toast.severity, crate::ui::toast::ToastSeverity::Error);
     assert!(toast.message.contains("trusted local terminal directory"));
@@ -2069,10 +2053,7 @@ fn focused_url_refresh_uses_the_synchronized_presentation() {
 fn option_shaped_hyperlink_activation_is_refused_with_visible_feedback() {
     let mut app = scrollbar_owner_fixture();
     let origin = app.active_terminal_origin().unwrap();
-    app.handle_terminal_event(RoutedTerminalEvent {
-        origin,
-        event: TerminalEvent::HyperlinkActivated("--help".into()),
-    });
+    assert!(!app.activate_hyperlink(Some(origin), "--help", None));
     let toast = app.toasts.iter().last().unwrap();
     assert_eq!(toast.severity, crate::ui::toast::ToastSeverity::Error);
     assert!(

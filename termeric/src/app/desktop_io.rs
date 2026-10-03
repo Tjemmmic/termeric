@@ -727,6 +727,25 @@ impl App {
             .and_then(crate::tabs::presentation_working_directory)
     }
 
+    /// Opens a hyperlink on behalf of its terminal and reports a refusal or
+    /// launch failure as an error toast. Returns whether the opener started.
+    pub(super) fn activate_hyperlink(
+        &mut self,
+        origin: Option<crate::tabs::TerminalEventOrigin>,
+        url: &str,
+        directory: Option<&str>,
+    ) -> bool {
+        match self.open_hyperlink_for_origin(origin, url, directory) {
+            Ok(()) => true,
+            Err(error) => {
+                log::error!("Failed to open {url:?}: {error}");
+                self.toasts
+                    .error(format!("Could not open {url:?}: {error}"));
+                false
+            }
+        }
+    }
+
     /// Handle a terminal event.
     pub(super) fn handle_terminal_event(&mut self, routed: RoutedTerminalEvent) {
         let RoutedTerminalEvent { origin, event } = routed;
@@ -889,18 +908,6 @@ impl App {
                     }
                 }
             }
-            TerminalEvent::HyperlinkActivated(url) => {
-                let directory = self.hyperlink_open_directory(origin);
-                if let Err(e) =
-                    self.open_hyperlink_for_origin(Some(origin), &url, directory.as_deref())
-                {
-                    log::error!("Failed to open URL: {}", e);
-                    self.toasts.error(format!("Could not open {url:?}: {e}"));
-                }
-            }
-            TerminalEvent::CursorVisibilityChanged(_) => {
-                // Cursor visibility is handled in render
-            }
             TerminalEvent::PointerShapeChanged => {
                 if self.active_terminal_origin() == Some(origin) {
                     self.refresh_terminal_pointer_cursor();
@@ -913,9 +920,6 @@ impl App {
                     "Terminal protocol reply escaped its PTY owner: {:?}",
                     origin
                 );
-            }
-            TerminalEvent::Exit => {
-                // Individual process exit is handled by its owning poller.
             }
         }
     }

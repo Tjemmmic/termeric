@@ -300,14 +300,11 @@ impl App {
         match action {
             HintAction::Copy => self.copy_to_clipboard(value, "Copied quick-select match"),
             HintAction::Open => {
-                if let Err(error) = self.open_hyperlink_for_origin(
+                if self.activate_hyperlink(
                     self.active_terminal_origin(),
                     &value,
                     working_directory.as_deref(),
                 ) {
-                    self.toasts
-                        .error(format!("Could not open {value:?}: {error}"));
-                } else {
                     self.toasts.success(format!("Opened {value}"));
                 }
             }
