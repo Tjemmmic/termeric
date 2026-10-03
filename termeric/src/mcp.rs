@@ -23,7 +23,7 @@ const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 const INSTRUCTIONS: &str = "Termeric is the terminal these agents run in. \
 list_agents shows every coding agent in Termeric with its state (working, needs_input, \
 finished, failed) and where it is: window_id, tab_id, and pane_id for an agent in a terminal, \
-or window_id and session_id for a session in Termeric's agent view (Claude Code or Codex). \
+or window_id and session_id for a session in Termeric's agent view. \
 read_terminal reads a pane's recent screen and scrollback; read_conversation reads an agent \
 view session, ending with any approvals it waits for. send_to_agent gives an agent in a \
 terminal a prompt, as if typed and submitted; send_to_session gives an agent view session its \
