@@ -303,19 +303,6 @@ impl AgentSummary {
     }
 }
 
-/// `text` without control characters, cut on a character boundary to fit
-/// `limit` bytes, for summary fields with protocol bounds.
-pub fn printable_within(text: &str, limit: usize) -> String {
-    let mut output = String::with_capacity(text.len().min(limit));
-    for character in text.chars().filter(|character| !character.is_control()) {
-        if output.len() + character.len_utf8() > limit {
-            break;
-        }
-        output.push(character);
-    }
-    output
-}
-
 /// Room kept in an agent list frame for everything but the summaries.
 const AGENT_LIST_ENVELOPE_BYTES: usize = 1024;
 
@@ -1711,7 +1698,7 @@ fn validate_metadata(value: Option<&str>, total: &mut usize) -> anyhow::Result<(
     let Some(value) = value else {
         return Ok(());
     };
-    if value.len() > MAX_FIELD_BYTES || value.chars().any(char::is_control) {
+    if value.len() > MAX_FIELD_BYTES || value.chars().any(unsafe_control_metadata_character) {
         anyhow::bail!("GUI inventory contains unsafe or oversized metadata");
     }
     *total = total
@@ -1752,14 +1739,6 @@ pub fn read_frame<T: DeserializeOwned>(reader: &mut impl Read) -> anyhow::Result
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn printable_within_strips_controls_and_cuts_on_characters() {
-        use super::*;
-        assert_eq!(printable_within("a\u{1b}[31mb\nc", 64), "a[31mbc");
-        assert_eq!(printable_within("ééé", 5), "éé");
-        assert_eq!(printable_within("", 5), "");
-    }
-
     #[test]
     fn agent_lists_are_cut_to_fit_one_frame() {
         use super::*;

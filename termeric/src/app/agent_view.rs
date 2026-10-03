@@ -1411,7 +1411,7 @@ impl App {
     ) -> Vec<crate::control::protocol::AgentSummary> {
         use crate::control::protocol::{
             AgentState, AgentSummary, MAX_AGENT_EVENT_DETAIL_BYTES,
-            MAX_AGENT_SUMMARY_MESSAGE_BYTES, MAX_METADATA_BYTES, printable_within,
+            MAX_AGENT_SUMMARY_MESSAGE_BYTES, MAX_METADATA_BYTES,
         };
         self.agent_view
             .conversations()
@@ -1431,20 +1431,23 @@ impl App {
                     session_id: Some(session.id().control_id()),
                     agent_id: session.agent().catalog_id().to_owned(),
                     name: session.agent().name().to_owned(),
-                    tab_title: printable_within(
+                    tab_title: crate::safe_text::single_line_within(
                         &format!("Agent view: {}", session.title()),
                         MAX_METADATA_BYTES,
                     ),
                     state: Some(state),
                     detail: (session.activity() == Activity::NeedsYou).then(|| {
-                        printable_within(
+                        crate::safe_text::single_line_within(
                             &crate::ui::agent_view::layout::session_summary(session),
                             MAX_AGENT_EVENT_DETAIL_BYTES,
                         )
                     }),
-                    last_message: transcript
-                        .last_answer()
-                        .map(|answer| printable_within(answer, MAX_AGENT_SUMMARY_MESSAGE_BYTES)),
+                    last_message: transcript.last_answer().map(|answer| {
+                        crate::safe_text::single_line_within(
+                            answer,
+                            MAX_AGENT_SUMMARY_MESSAGE_BYTES,
+                        )
+                    }),
                     seconds_in_state: Some(session.last_change().elapsed().as_secs()),
                 }
             })

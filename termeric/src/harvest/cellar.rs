@@ -619,15 +619,7 @@ fn bounded_command(command: String) -> String {
     if normalized.is_empty() {
         return UNAVAILABLE_COMMAND_TEXT.to_string();
     }
-    if normalized.chars().count() <= MAX_HARVEST_COMMAND_CHARS {
-        return normalized;
-    }
-    let mut bounded = normalized
-        .chars()
-        .take(MAX_HARVEST_COMMAND_CHARS.saturating_sub(1))
-        .collect::<String>();
-    bounded.push('…');
-    bounded
+    crate::safe_text::truncate_with_ellipsis(&normalized, MAX_HARVEST_COMMAND_CHARS)
 }
 
 fn bounded_output(mut output: String) -> (String, bool) {

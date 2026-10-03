@@ -1223,13 +1223,7 @@ fn validate_text(label: &str, value: &str, max: usize) -> Result<(), String> {
 }
 
 fn bounded_error(value: &str) -> String {
-    let mut output = String::new();
-    for character in value.chars().filter(|character| !character.is_control()) {
-        if output.len() + character.len_utf8() > 1024 {
-            break;
-        }
-        output.push(character);
-    }
+    let output = crate::safe_text::single_line_within(value, 1_024);
     if output.is_empty() {
         "structured plugin handler failed".into()
     } else {

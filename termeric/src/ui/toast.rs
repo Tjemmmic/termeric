@@ -278,15 +278,7 @@ impl ToastManager {
 }
 
 fn bound_message(message: String) -> String {
-    if message.chars().count() <= MAX_TOAST_MESSAGE_CHARS {
-        return message;
-    }
-    let mut bounded = message
-        .chars()
-        .take(MAX_TOAST_MESSAGE_CHARS.saturating_sub(1))
-        .collect::<String>();
-    bounded.push('…');
-    bounded
+    crate::safe_text::truncate_with_ellipsis(&message, MAX_TOAST_MESSAGE_CHARS)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

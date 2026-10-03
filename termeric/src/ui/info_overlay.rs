@@ -290,7 +290,7 @@ impl InfoOverlay {
         choices: Vec<InfoOverlayChoice>,
     ) -> u64 {
         self.request_id = self.request_id.wrapping_add(1).max(1);
-        self.title = bounded_text(&title.into(), MAX_INFO_TITLE_CHARS);
+        self.title = crate::safe_text::display_line(&title.into(), MAX_INFO_TITLE_CHARS, 1);
         if self.title.is_empty() {
             self.title = "Notice".into();
         }
@@ -327,11 +327,11 @@ impl InfoOverlay {
         if source_line >= self.lines.len() {
             return request_id;
         }
-        let label = bounded_text(&label.into(), 128);
+        let label = crate::safe_text::display_line(&label.into(), 128, 1);
         let max_bytes = max_bytes
             .clamp(1, MAX_INFO_INPUT_BYTES)
             .min(MAX_INFO_LINE_CHARS.saturating_sub(label.len()).max(1));
-        let value = sanitize_input(&value.into(), max_bytes);
+        let value = crate::safe_text::single_line_within(&value.into(), max_bytes);
         let mut input = TextInput::new();
         input.replace(value);
         self.input = Some(InfoOverlayInput {
@@ -801,38 +801,6 @@ impl InfoOverlay {
     }
 }
 
-fn sanitize_input(value: &str, max_bytes: usize) -> String {
-    let mut output = String::new();
-    for character in value.chars().filter(|character| !character.is_control()) {
-        if output.len().saturating_add(character.len_utf8()) > max_bytes {
-            break;
-        }
-        output.push(character);
-    }
-    output
-}
-
-fn bounded_text(text: &str, limit: usize) -> String {
-    let mut output = String::new();
-    let mut truncated = false;
-    for (count, character) in text.chars().enumerate() {
-        if count >= limit {
-            truncated = true;
-            break;
-        }
-        match character {
-            '\t' => output.push(' '),
-            character if character.is_control() => output.push('\u{fffd}'),
-            character => output.push(character),
-        }
-    }
-    if truncated && limit > 0 {
-        output.pop();
-        output.push('…');
-    }
-    output
-}
-
 fn bounded_lines(lines: Vec<String>) -> Vec<String> {
     let mut output = Vec::new();
     let mut omitted = false;
@@ -842,9 +810,10 @@ fn bounded_lines(lines: Vec<String>) -> Vec<String> {
                 omitted = true;
                 break 'sources;
             }
-            output.push(bounded_text(
+            output.push(crate::safe_text::display_line(
                 line.trim_end_matches('\r'),
                 MAX_INFO_LINE_CHARS,
+                1,
             ));
         }
     }
@@ -868,8 +837,8 @@ fn bounded_choices(choices: Vec<InfoOverlayChoice>, line_count: usize) -> Vec<In
         {
             continue;
         }
-        choice.id = bounded_text(&choice.id, 256);
-        choice.label = bounded_text(&choice.label, 512);
+        choice.id = crate::safe_text::display_line(&choice.id, 256, 1);
+        choice.label = crate::safe_text::display_line(&choice.label, 512, 1);
         if choice.id.is_empty() || choice.label.is_empty() {
             continue;
         }

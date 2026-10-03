@@ -193,15 +193,10 @@ fn spawn_desktop_command(
 }
 
 fn bounded_delivery_error(prefix: &str, detail: &str) -> String {
-    let message = format!("{prefix}: {detail}");
-    if message.chars().count() <= MAX_DELIVERY_ERROR_CHARS {
-        return message;
-    }
-    message
-        .chars()
-        .take(MAX_DELIVERY_ERROR_CHARS.saturating_sub(1))
-        .chain(std::iter::once('…'))
-        .collect()
+    crate::safe_text::truncate_with_ellipsis(
+        &format!("{prefix}: {detail}"),
+        MAX_DELIVERY_ERROR_CHARS,
+    )
 }
 
 fn report_new_failure(slot: &mut Option<String>, message: String) -> Option<String> {

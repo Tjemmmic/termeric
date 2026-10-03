@@ -3076,17 +3076,10 @@ fn platform_fallback_route(
 }
 
 fn bounded_font_coverage_family(name: &str) -> (String, bool) {
-    let mut characters = name.chars();
-    let mut value = characters
-        .by_ref()
-        .take(MAX_FONT_COVERAGE_FAMILY_CHARS)
-        .collect::<String>();
-    let truncated = characters.next().is_some();
-    if truncated {
-        value.pop();
-        value.push('…');
-    }
-    (value, truncated)
+    (
+        crate::safe_text::truncate_with_ellipsis(name, MAX_FONT_COVERAGE_FAMILY_CHARS),
+        name.chars().nth(MAX_FONT_COVERAGE_FAMILY_CHARS).is_some(),
+    )
 }
 
 fn configured_family_spans(

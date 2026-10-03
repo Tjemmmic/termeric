@@ -315,7 +315,7 @@ impl DiffReviewOverlay {
         pane_id: crate::panes::PaneId,
     ) -> u64 {
         self.request_id = self.request_id.wrapping_add(1).max(1);
-        self.filename = bounded_text(&diff.filename, MAX_DIFF_FILENAME_CHARS);
+        self.filename = crate::safe_text::display_line(&diff.filename, MAX_DIFF_FILENAME_CHARS, 4);
         self.rows = bounded_rows(diff);
         self.target = Some(DiffReviewTarget {
             tab_id,
@@ -330,7 +330,11 @@ impl DiffReviewOverlay {
     /// Review one file an agent changed, given its unified diff.
     pub fn show_change(&mut self, unified: &str, change: ChangeReviewTarget) -> u64 {
         self.request_id = self.request_id.wrapping_add(1).max(1);
-        self.filename = bounded_text(&change.path.to_string_lossy(), MAX_DIFF_FILENAME_CHARS);
+        self.filename = crate::safe_text::display_line(
+            &change.path.to_string_lossy(),
+            MAX_DIFF_FILENAME_CHARS,
+            4,
+        );
         self.rows = rows_from_unified(unified);
         self.target = None;
         self.change = Some(change);
@@ -545,23 +549,30 @@ fn bounded_rows(diff: &DetectedDiff) -> Vec<DiffReviewRow> {
     'hunks: for (hunk_index, hunk) in diff.hunks.iter().enumerate() {
         if !push_bounded_row(
             &mut rows,
-            DiffReviewRow::Header(bounded_text(&hunk.header, MAX_DIFF_REVIEW_LINE_CHARS)),
+            DiffReviewRow::Header(crate::safe_text::display_line(
+                &hunk.header,
+                MAX_DIFF_REVIEW_LINE_CHARS,
+                4,
+            )),
         ) {
             break;
         }
         for line in &hunk.lines {
             let row = match line {
-                DiffLine::Context(text) => DiffReviewRow::Context(bounded_text(
+                DiffLine::Context(text) => DiffReviewRow::Context(crate::safe_text::display_line(
                     text,
                     MAX_DIFF_REVIEW_LINE_CHARS.saturating_sub(2),
+                    4,
                 )),
-                DiffLine::Added(text) => DiffReviewRow::Added(bounded_text(
+                DiffLine::Added(text) => DiffReviewRow::Added(crate::safe_text::display_line(
                     text,
                     MAX_DIFF_REVIEW_LINE_CHARS.saturating_sub(2),
+                    4,
                 )),
-                DiffLine::Removed(text) => DiffReviewRow::Removed(bounded_text(
+                DiffLine::Removed(text) => DiffReviewRow::Removed(crate::safe_text::display_line(
                     text,
                     MAX_DIFF_REVIEW_LINE_CHARS.saturating_sub(2),
+                    4,
                 )),
             };
             if !push_bounded_row(&mut rows, row) {
@@ -581,7 +592,9 @@ fn bounded_rows(diff: &DetectedDiff) -> Vec<DiffReviewRow> {
 /// Rows for a unified diff as Git prints it. The file headers are dropped:
 /// the title already names the file.
 fn rows_from_unified(text: &str) -> Vec<DiffReviewRow> {
-    let body = |line: &str| bounded_text(&line[1..], MAX_DIFF_REVIEW_LINE_CHARS.saturating_sub(2));
+    let body = |line: &str| {
+        crate::safe_text::display_line(&line[1..], MAX_DIFF_REVIEW_LINE_CHARS.saturating_sub(2), 4)
+    };
     let mut rows = Vec::new();
     let mut in_hunk = false;
     for line in text.lines() {
@@ -590,7 +603,11 @@ fn rows_from_unified(text: &str) -> Vec<DiffReviewRow> {
                 break;
             }
             in_hunk = true;
-            DiffReviewRow::Header(bounded_text(line, MAX_DIFF_REVIEW_LINE_CHARS))
+            DiffReviewRow::Header(crate::safe_text::display_line(
+                line,
+                MAX_DIFF_REVIEW_LINE_CHARS,
+                4,
+            ))
         } else if !in_hunk {
             if line.starts_with("Binary files") {
                 DiffReviewRow::Omitted("Binary file; its content is not shown".into())
@@ -605,7 +622,11 @@ fn rows_from_unified(text: &str) -> Vec<DiffReviewRow> {
             DiffReviewRow::Context(body(line))
         } else {
             // "\ No newline at end of file" and similar notes.
-            DiffReviewRow::Omitted(bounded_text(line, MAX_DIFF_REVIEW_LINE_CHARS))
+            DiffReviewRow::Omitted(crate::safe_text::display_line(
+                line,
+                MAX_DIFF_REVIEW_LINE_CHARS,
+                4,
+            ))
         };
         if !push_bounded_row(&mut rows, row) {
             break;
@@ -630,43 +651,6 @@ fn push_bounded_row(rows: &mut Vec<DiffReviewRow>, row: DiffReviewRow) -> bool {
         ));
     }
     false
-}
-
-fn bounded_text(text: &str, limit: usize) -> String {
-    let mut output = String::new();
-    let mut count = 0;
-    let mut truncated = false;
-    for character in text.chars() {
-        if count >= limit {
-            truncated = true;
-            break;
-        }
-        match character {
-            '\t' => {
-                for _ in 0..4 {
-                    if count >= limit {
-                        truncated = true;
-                        break;
-                    }
-                    output.push(' ');
-                    count += 1;
-                }
-            }
-            character if character.is_control() => {
-                output.push('\u{fffd}');
-                count += 1;
-            }
-            character => {
-                output.push(character);
-                count += 1;
-            }
-        }
-    }
-    if truncated && limit > 0 {
-        output.pop();
-        output.push('…');
-    }
-    output
 }
 
 #[cfg(test)]

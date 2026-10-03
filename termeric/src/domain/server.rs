@@ -2443,7 +2443,7 @@ fn publish_output(state: &SharedState, domain_id: &str, pane_id: u32, data: &[u8
 fn sanitize_runtime_title(title: &str) -> String {
     let title: String = title
         .chars()
-        .filter(|character| !character.is_control())
+        .filter(|character| !crate::safe_text::is_unsafe_display_char(*character))
         .take(128)
         .collect();
     if title.is_empty() {

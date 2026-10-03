@@ -4980,12 +4980,12 @@ impl App {
             },
             |matched| {
                 (
-                    bounded_semantic_text(&matched.command, 1024),
-                    bounded_semantic_text(&matched.reason, 512),
+                    crate::safe_text::truncate_with_ellipsis(&matched.command, 1024),
+                    crate::safe_text::truncate_with_ellipsis(&matched.reason, 512),
                     format!(
                         "Where: {}; As: {}",
-                        bounded_semantic_text(&matched.target, 256),
-                        bounded_semantic_text(&matched.user, 128)
+                        crate::safe_text::truncate_with_ellipsis(&matched.target, 256),
+                        crate::safe_text::truncate_with_ellipsis(&matched.user, 128)
                     ),
                     matched.severity == crate::terminal::guardrails::Severity::Critical,
                 )
@@ -6253,15 +6253,6 @@ fn diff_rect(rectangle: crate::ui::diff_review::DiffReviewRect) -> Rect {
 
 fn context_rect(rectangle: crate::ui::context_picker::ContextPickerRect) -> Rect {
     rect(rectangle.x, rectangle.y, rectangle.width, rectangle.height)
-}
-
-fn bounded_semantic_text(value: &str, max_chars: usize) -> String {
-    let mut characters = value.chars();
-    let mut bounded = characters.by_ref().take(max_chars).collect::<String>();
-    if characters.next().is_some() {
-        bounded.push('…');
-    }
-    bounded
 }
 
 fn agents_rect(rectangle: crate::ui::agents_panel::AgentsPanelRect) -> Rect {

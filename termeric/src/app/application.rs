@@ -269,14 +269,7 @@ impl ControlReplayCache {
 }
 
 fn bounded_control_error(error: &str) -> String {
-    const MAX_ERROR_BYTES: usize = 1_024;
-    let mut output = String::with_capacity(error.len().min(MAX_ERROR_BYTES));
-    for character in error.chars().filter(|character| !character.is_control()) {
-        if output.len() + character.len_utf8() > MAX_ERROR_BYTES {
-            break;
-        }
-        output.push(character);
-    }
+    let output = crate::safe_text::single_line_within(error, 1_024);
     if output.is_empty() {
         "GUI control action failed".into()
     } else {

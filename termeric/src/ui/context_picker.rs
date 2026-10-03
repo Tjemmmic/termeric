@@ -508,7 +508,10 @@ impl ContextPicker {
             ContextPickerAction::SetFileInput { value, .. }
                 if self.phase == ContextPickerPhase::FilePaths =>
             {
-                self.file_input = bounded_text(&value, MAX_CONTEXT_PATH_CHARS * MAX_CONTEXT_FILES);
+                self.file_input = crate::safe_text::truncate_with_ellipsis(
+                    &value,
+                    MAX_CONTEXT_PATH_CHARS * MAX_CONTEXT_FILES,
+                );
                 self.status = None;
             }
             ContextPickerAction::AppendFileInput { character, .. }
@@ -562,8 +565,9 @@ impl ContextPicker {
             cwd: self.cwd.clone(),
             selected,
             specific_files: self.specific_files.clone(),
-            terminal_output: terminal_output
-                .map(|text| bounded_text(&text, MAX_CONTEXT_SOURCE_CHARS)),
+            terminal_output: terminal_output.map(|text| {
+                crate::safe_text::truncate_with_ellipsis(&text, MAX_CONTEXT_SOURCE_CHARS)
+            }),
         })
     }
 
@@ -589,7 +593,7 @@ impl ContextPicker {
             }
             Err(error) => {
                 self.phase = ContextPickerPhase::Sources;
-                self.status = Some(bounded_text(&error, 512));
+                self.status = Some(crate::safe_text::truncate_with_ellipsis(&error, 512));
                 ContextPickerCompletion::Failed
             }
         }
@@ -759,7 +763,7 @@ pub fn gather_context(request: ContextGatherRequest) -> Result<String, String> {
                 .map(|text| {
                     format!(
                         "=== Recent Terminal Output ===\n{}",
-                        bounded_text(text, MAX_CONTEXT_SOURCE_CHARS)
+                        crate::safe_text::truncate_with_ellipsis(text, MAX_CONTEXT_SOURCE_CHARS)
                     )
                 }),
             ContextSourceId::TestOutput => request
@@ -769,7 +773,7 @@ pub fn gather_context(request: ContextGatherRequest) -> Result<String, String> {
                 .map(|text| {
                     format!(
                         "=== Test Output ===\n{}",
-                        bounded_text(&text, MAX_CONTEXT_SOURCE_CHARS)
+                        crate::safe_text::truncate_with_ellipsis(&text, MAX_CONTEXT_SOURCE_CHARS)
                     )
                 }),
             ContextSourceId::SpecificFiles => {
@@ -784,7 +788,7 @@ pub fn gather_context(request: ContextGatherRequest) -> Result<String, String> {
     if parts.is_empty() {
         return Err("Selected sources produced no context".into());
     }
-    Ok(bounded_text(
+    Ok(crate::safe_text::truncate_with_ellipsis(
         &parts.join("\n\n"),
         MAX_ASSEMBLED_CONTEXT_CHARS,
     ))
@@ -811,7 +815,7 @@ fn gather_specific_files(root: Option<&Path>, paths: &[PathBuf]) -> Result<Vec<S
         files.push(format!(
             "=== File: {} ===\n{}",
             canonical.display(),
-            bounded_text(&content, MAX_CONTEXT_SOURCE_CHARS)
+            crate::safe_text::truncate_with_ellipsis(&content, MAX_CONTEXT_SOURCE_CHARS)
         ));
     }
     Ok(files)
@@ -830,7 +834,10 @@ fn bounded_file_tree(cwd: Option<&Path>) -> Result<Option<String>, String> {
         run_bounded_command("git", &["ls-files"], cwd, MAX_CONTEXT_SOURCE_CHARS * 4)?
     {
         if !output.trim().is_empty() {
-            return Ok(Some(bounded_text(&output, MAX_CONTEXT_SOURCE_CHARS)));
+            return Ok(Some(crate::safe_text::truncate_with_ellipsis(
+                &output,
+                MAX_CONTEXT_SOURCE_CHARS,
+            )));
         }
     }
     let Some(root) = cwd else {
@@ -838,7 +845,8 @@ fn bounded_file_tree(cwd: Option<&Path>) -> Result<Option<String>, String> {
     };
     let mut files = Vec::new();
     collect_files(root, root, 0, &mut files)?;
-    Ok((!files.is_empty()).then(|| bounded_text(&files.join("\n"), 5_000)))
+    Ok((!files.is_empty())
+        .then(|| crate::safe_text::truncate_with_ellipsis(&files.join("\n"), 5_000)))
 }
 
 fn collect_files(
@@ -981,16 +989,6 @@ pub fn extract_test_output(output: &str) -> Option<String> {
         }
     }
     (!selected.is_empty()).then(|| selected.join("\n"))
-}
-
-fn bounded_text(value: &str, max_chars: usize) -> String {
-    let mut characters = value.chars();
-    let mut bounded: String = characters.by_ref().take(max_chars).collect();
-    if characters.next().is_some() && max_chars > 0 {
-        bounded.pop();
-        bounded.push('…');
-    }
-    bounded
 }
 
 #[cfg(test)]

@@ -613,7 +613,7 @@ fn control_metadata(value: &str, remaining: &mut usize) -> (String, bool) {
     let mut output = String::with_capacity(value.len().min(limit));
     let mut truncated = false;
     for character in value.chars() {
-        if character.is_control() {
+        if crate::safe_text::is_unsafe_display_char(character) {
             truncated = true;
             continue;
         }

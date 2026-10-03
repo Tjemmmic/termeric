@@ -105,12 +105,17 @@ impl DomainPicker {
             .extend(config.ssh_hosts.iter().map(|(name, profile)| {
                 let title = profile.description.as_ref().map_or_else(
                     || name.clone(),
-                    |description| format!("{name} — {}", display_text(description, 40)),
+                    |description| {
+                        format!(
+                            "{name} — {}",
+                            crate::safe_text::truncate_with_ellipsis(description, 40)
+                        )
+                    },
                 );
                 AuthorityEntry {
                     id: format!("domain-picker.authority.ssh.{name}"),
                     title,
-                    detail: display_text(&profile.destination, 48),
+                    detail: crate::safe_text::truncate_with_ellipsis(&profile.destination, 48),
                     authority: DomainAuthority::Ssh {
                         destination: profile.destination.clone(),
                     },
@@ -346,13 +351,16 @@ impl DomainPicker {
         };
         self.actions.clear();
         self.palette.set_presentation(
-            &format!("Connecting to {}…", display_text(&label, 36)),
+            &format!(
+                "Connecting to {}…",
+                crate::safe_text::truncate_with_ellipsis(&label, 36)
+            ),
             "domain",
         );
         self.palette.replace_all_commands(vec![command(
             "domain-picker.loading".into(),
             "Discovering live domains…".into(),
-            display_text(&label, 48),
+            crate::safe_text::truncate_with_ellipsis(&label, 48),
         )]);
         self.palette.open();
         DomainPickerCommand::Discover {
@@ -397,10 +405,10 @@ impl DomainPicker {
                     ));
                     command(
                         id,
-                        display_text(&domain.name, 48),
+                        crate::safe_text::truncate_with_ellipsis(&domain.name, 48),
                         format!(
                             "{} · {} tabs · {} panes · {} attached",
-                            display_text(&domain.id, 28),
+                            crate::safe_text::truncate_with_ellipsis(&domain.id, 28),
                             domain.tabs,
                             domain.panes,
                             domain.attachments
@@ -410,7 +418,10 @@ impl DomainPicker {
                 .collect()
         };
         self.palette.set_presentation(
-            &format!("Search domains on {}…", display_text(&label, 30)),
+            &format!(
+                "Search domains on {}…",
+                crate::safe_text::truncate_with_ellipsis(&label, 30)
+            ),
             "domain",
         );
         self.palette.replace_all_commands(commands);
@@ -424,13 +435,16 @@ impl DomainPicker {
         };
         self.actions.clear();
         self.palette.set_presentation(
-            &format!("Could not reach {}", display_text(&label, 36)),
+            &format!(
+                "Could not reach {}",
+                crate::safe_text::truncate_with_ellipsis(&label, 36)
+            ),
             "result",
         );
         self.palette.replace_all_commands(vec![command(
             "domain-picker.error".into(),
             "Domain discovery failed".into(),
-            display_text(error, 64),
+            crate::safe_text::truncate_with_ellipsis(error, 64),
         )]);
         self.palette.open();
     }
@@ -445,13 +459,16 @@ impl DomainPicker {
         };
         self.actions.clear();
         self.palette.set_presentation(
-            &format!("Preparing {}…", display_text(&label, 40)),
+            &format!(
+                "Preparing {}…",
+                crate::safe_text::truncate_with_ellipsis(&label, 40)
+            ),
             "domain",
         );
         self.palette.replace_all_commands(vec![command(
             "domain-picker.preparing".into(),
             "Loading authoritative domain state…".into(),
-            display_text(&target.domain_id, 48),
+            crate::safe_text::truncate_with_ellipsis(&target.domain_id, 48),
         )]);
         self.palette.open();
         DomainPickerCommand::PrepareWindow { generation, target }
@@ -493,16 +510,6 @@ fn command(id: String, title: String, category: String) -> RegisteredCommand {
         icon: None,
         source: CommandSource::Core,
         destructive: false,
-    }
-}
-
-fn display_text(value: &str, max_chars: usize) -> String {
-    let mut chars = value.chars();
-    let prefix: String = chars.by_ref().take(max_chars).collect();
-    if chars.next().is_some() {
-        format!("{prefix}…")
-    } else {
-        prefix
     }
 }
 
