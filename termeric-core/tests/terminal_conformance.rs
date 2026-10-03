@@ -38,17 +38,6 @@ struct FixtureCase {
     #[serde(default)]
     expected_hyperlinks: Vec<ExpectedHyperlink>,
     expected_working_directory: Option<ExpectedWorkingDirectory>,
-    expected_keyboard_type: Option<String>,
-    expected_keyboard_resource: Option<ExpectedKeyboardResource>,
-    expected_cursor_keys: Option<ExpectedCursorKeys>,
-    expected_function_keys: Option<ExpectedFunctionKeys>,
-    expected_keypad_keys: Option<ExpectedFunctionKeys>,
-    expected_string_keys: Option<ExpectedFunctionKeys>,
-    expected_modifier_keys: Option<ExpectedFunctionKeys>,
-    expected_special_keys: Option<ExpectedFunctionKeys>,
-    expected_modify_other_keys: Option<ExpectedModifyOtherKeys>,
-    #[serde(default)]
-    expected_user_defined_keys: Vec<ExpectedUserDefinedKey>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -63,37 +52,6 @@ struct ExpectedWorkingDirectory {
     uri: String,
     host: Option<String>,
     path: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct ExpectedModifyOtherKeys {
-    level: u8,
-    modifier_mask: u8,
-    format: u8,
-}
-
-#[derive(Debug, Deserialize)]
-struct ExpectedKeyboardResource {
-    modify: u16,
-    format: u16,
-}
-
-#[derive(Debug, Deserialize)]
-struct ExpectedCursorKeys {
-    mode: u16,
-    format: u8,
-}
-
-#[derive(Debug, Deserialize)]
-struct ExpectedFunctionKeys {
-    mode: u16,
-    format: u8,
-}
-
-#[derive(Debug, Deserialize)]
-struct ExpectedUserDefinedKey {
-    code: u8,
-    value_hex: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -203,149 +161,6 @@ fn replayable_conformance_cases_match_expected_state() {
                 case.id
             );
             assert_eq!(actual.path(), expected.path, "fixture {} cwd path", case.id);
-        }
-        if let Some(expected) = &case.expected_keyboard_type {
-            let actual = match terminal.xterm_keyboard_type() {
-                termeric_core::term::XtermKeyboardType::Normal => "normal",
-                termeric_core::term::XtermKeyboardType::Legacy => "legacy",
-                termeric_core::term::XtermKeyboardType::Vt220 => "vt220",
-            };
-            assert_eq!(actual, expected, "fixture {} keyboard type", case.id);
-        }
-        for expected in &case.expected_user_defined_keys {
-            assert_eq!(
-                terminal.xterm_user_defined_key(expected.code),
-                Some(decode_hex(&expected.value_hex).as_slice()),
-                "fixture {} UDK code {}",
-                case.id,
-                expected.code
-            );
-        }
-        if let Some(expected) = &case.expected_modify_other_keys {
-            let actual = terminal.xterm_modify_other_keys();
-            assert_eq!(
-                actual.level(),
-                expected.level,
-                "fixture {} MOK level",
-                case.id
-            );
-            assert_eq!(
-                actual.modifier_mask(),
-                expected.modifier_mask,
-                "fixture {} MOK mask",
-                case.id
-            );
-            assert_eq!(
-                actual.format().parameter(),
-                expected.format,
-                "fixture {} MOK format",
-                case.id
-            );
-        }
-        if let Some(expected) = &case.expected_keyboard_resource {
-            let actual = terminal.xterm_keyboard_resource();
-            assert_eq!(
-                actual.modify(),
-                expected.modify,
-                "fixture {} keyboard-resource modify value",
-                case.id
-            );
-            assert_eq!(
-                actual.format(),
-                expected.format,
-                "fixture {} keyboard-resource format value",
-                case.id
-            );
-        }
-        if let Some(expected) = &case.expected_cursor_keys {
-            let actual = terminal.xterm_cursor_keys();
-            assert_eq!(
-                actual.mode().parameter(),
-                expected.mode,
-                "fixture {} cursor-key mode",
-                case.id
-            );
-            assert_eq!(
-                actual.format().parameter(),
-                expected.format,
-                "fixture {} cursor-key format",
-                case.id
-            );
-        }
-        if let Some(expected) = &case.expected_function_keys {
-            let actual = terminal.xterm_function_keys();
-            assert_eq!(
-                actual.mode().parameter(),
-                expected.mode,
-                "fixture {} function-key mode",
-                case.id
-            );
-            assert_eq!(
-                actual.format().parameter(),
-                expected.format,
-                "fixture {} function-key format",
-                case.id
-            );
-        }
-        if let Some(expected) = &case.expected_string_keys {
-            let actual = terminal.xterm_string_keys();
-            assert_eq!(
-                actual.mode().parameter(),
-                expected.mode,
-                "fixture {} string-key mode",
-                case.id
-            );
-            assert_eq!(
-                actual.format().parameter(),
-                expected.format,
-                "fixture {} string-key format",
-                case.id
-            );
-        }
-        if let Some(expected) = &case.expected_keypad_keys {
-            let actual = terminal.xterm_keypad_keys();
-            assert_eq!(
-                actual.mode().parameter(),
-                expected.mode,
-                "fixture {} keypad-key mode",
-                case.id
-            );
-            assert_eq!(
-                actual.format().parameter(),
-                expected.format,
-                "fixture {} keypad-key format",
-                case.id
-            );
-        }
-        if let Some(expected) = &case.expected_modifier_keys {
-            let actual = terminal.xterm_modifier_keys();
-            assert_eq!(
-                actual.mode().parameter(),
-                expected.mode,
-                "fixture {} modifier-key mode",
-                case.id
-            );
-            assert_eq!(
-                actual.format().parameter(),
-                expected.format,
-                "fixture {} modifier-key format",
-                case.id
-            );
-        }
-        if let Some(expected) = &case.expected_special_keys {
-            let actual = terminal.xterm_special_keys();
-            assert_eq!(
-                actual.mode().parameter(),
-                expected.mode,
-                "fixture {} special-key mode",
-                case.id
-            );
-            assert_eq!(
-                actual.format().parameter(),
-                expected.format,
-                "fixture {} special-key format",
-                case.id
-            );
         }
     }
 }

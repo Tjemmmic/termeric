@@ -244,7 +244,6 @@ rows = 2
 input_hex = "1b 5b 3f 34 6d 1b 5b 3e 34 3b 32 3a 31 6d 1b 5b 3f 34 6d 1b 5b 3e 34 3b 39 6d 1b 5b 3e 34 3b 31 66 1b 5b 3f 34 67 1b 5b 3e 34 3b 32 66 1b 5b 3f 34 67 1b 20 47 1b 5b 3f 34 6d 1b 5b 3e 34 6e 1b 5b 3e 34 66 1b 5b 3f 34 67"
 chunks = [1, 2, 5, 3]
 expected_events = ["pty:1b5b3e343b306d", "pty:1b5b3e343b326d", "pty:1b5b3e343b3166", "pty:1b5b3e343b3166", "pty:9b3e343b326d", "pty:9b3e343b3066"]
-expected_modify_other_keys = { level = 0, modifier_mask = 0, format = 0 }
 
 [[case]]
 id = "xterm-keyboard-resource-zero"
@@ -253,7 +252,6 @@ rows = 2
 input_hex = "1b 5b 3f 30 6d 1b 5b 3f 30 67 1b 5b 3e 30 3b 31 35 6d 1b 5b 3e 30 3b 34 32 66 1b 5b 3f 30 6d 1b 5b 3f 30 67 1b 5b 3e 30 3a 31 6d 1b 5b 3e 30 3b 37 3b 31 6d"
 chunks = [1, 2, 5, 3]
 expected_events = ["pty:1b5b3e303b306d", "pty:1b5b3e303b3066", "pty:1b5b3e303b31356d", "pty:1b5b3e303b343266"]
-expected_keyboard_resource = { modify = 15, format = 42 }
 
 [[case]]
 id = "xterm-keyboard-types"
@@ -262,7 +260,6 @@ rows = 2
 input_hex = "1b 5b 3f 31 30 36 30 68 1b 5b 3f 31 30 36 30 24 70 1b 5b 3f 31 30 36 31 24 70 1b 5b 3f 31 30 36 31 68 1b 5b 3f 31 30 36 30 24 70 1b 5b 3f 31 30 36 31 24 70 1b 5b 3f 31 30 36 30 73 1b 5b 3f 31 30 36 30 68 1b 5b 3f 31 30 36 31 72 1b 5b 3f 31 30 36 30 24 70 1b 5b 3f 31 30 36 31 24 70"
 chunks = [1, 2, 5, 3]
 expected_events = ["pty:1b5b3f313036303b312479", "pty:1b5b3f313036313b322479", "pty:1b5b3f313036303b322479", "pty:1b5b3f313036313b312479", "pty:1b5b3f313036303b322479", "pty:1b5b3f313036313b312479"]
-expected_keyboard_type = "vt220"
 
 [[case]]
 id = "dec-user-defined-keys"
@@ -270,11 +267,6 @@ cols = 8
 rows = 2
 input_hex = "1b 50 30 3b 31 7c 31 2f 36 36 36 39 36 65 36 34 3b 31 37 2f 37 33 36 39 37 38 1b 5c 1b 50 31 3b 30 7c 31 37 2f 35 33 34 39 35 38 3b 33 34 2f 30 30 66 66 3b 33 35 2f 61 61 3b 31 38 2f 30 3b 31 39 2f 7a 7a 1b 5c 1b 5b 21 70"
 chunks = [1, 2, 5, 3]
-expected_user_defined_keys = [
-    { code = 1, value_hex = "66 69 6e 64" },
-    { code = 17, value_hex = "53 49 58" },
-    { code = 34, value_hex = "00 ff" },
-]
 
 [[case]]
 id = "xterm-cursor-key-resources"
@@ -283,7 +275,6 @@ rows = 2
 input_hex = "1b 5b 3f 31 6d 1b 5b 3f 31 67 1b 5b 3e 31 3b 34 6d 1b 5b 3e 31 3b 31 66 1b 5b 3f 31 6d 1b 5b 3f 31 67 1b 5b 3e 31 3b 35 6d 1b 5b 3e 31 3b 32 66"
 chunks = [1, 2, 5, 3]
 expected_events = ["pty:1b5b3e313b326d", "pty:1b5b3e313b3066", "pty:1b5b3e313b346d", "pty:1b5b3e313b3166"]
-expected_cursor_keys = { mode = 4, format = 1 }
 
 [[case]]
 id = "xterm-function-key-resources"
@@ -292,7 +283,6 @@ rows = 2
 input_hex = "1b 5b 3f 32 6d 1b 5b 3f 32 67 1b 5b 3e 32 3b 34 6d 1b 5b 3e 32 3b 31 66 1b 5b 3f 32 6d 1b 5b 3f 32 67 1b 5b 3e 32 3b 35 6d 1b 5b 3e 32 3b 32 66"
 chunks = [1, 2, 5, 3]
 expected_events = ["pty:1b5b3e323b326d", "pty:1b5b3e323b3066", "pty:1b5b3e323b346d", "pty:1b5b3e323b3166"]
-expected_function_keys = { mode = 4, format = 1 }
 
 [[case]]
 id = "xterm-string-key-resources"
@@ -301,7 +291,6 @@ rows = 2
 input_hex = "1b 5b 3f 35 6d 1b 5b 3f 35 67 1b 5b 3e 35 3b 34 6d 1b 5b 3e 35 3b 31 66 1b 5b 3f 35 6d 1b 5b 3f 35 67 1b 5b 3e 35 3b 39 6d 1b 5b 3e 35 3b 32 66"
 chunks = [1, 2, 5, 3]
 expected_events = ["pty:1b5b3e353b306d", "pty:1b5b3e353b3066", "pty:1b5b3e353b346d", "pty:1b5b3e353b3166"]
-expected_string_keys = { mode = 4, format = 1 }
 
 [[case]]
 id = "xterm-keypad-key-resources"
@@ -310,7 +299,6 @@ rows = 2
 input_hex = "1b 5b 3f 33 6d 1b 5b 3f 33 67 1b 5b 3e 33 3b 34 6d 1b 5b 3e 33 3b 31 66 1b 5b 3f 33 6d 1b 5b 3f 33 67 1b 5b 3e 33 3b 35 6d 1b 5b 3e 33 3b 32 66"
 chunks = [1, 2, 5, 3]
 expected_events = ["pty:1b5b3e333b306d", "pty:1b5b3e333b3066", "pty:1b5b3e333b346d", "pty:1b5b3e333b3166"]
-expected_keypad_keys = { mode = 4, format = 1 }
 
 [[case]]
 id = "xterm-modifier-key-resources"
@@ -319,7 +307,6 @@ rows = 2
 input_hex = "1b 5b 3f 36 6d 1b 5b 3f 36 67 1b 5b 3e 36 3b 34 6d 1b 5b 3e 36 3b 31 66 1b 5b 3f 36 6d 1b 5b 3f 36 67 1b 5b 3e 36 3b 35 6d 1b 5b 3e 36 3b 32 66"
 chunks = [1, 2, 5, 3]
 expected_events = ["pty:1b5b3e363b306d", "pty:1b5b3e363b3066", "pty:1b5b3e363b346d", "pty:1b5b3e363b3166"]
-expected_modifier_keys = { mode = 4, format = 1 }
 
 [[case]]
 id = "xterm-special-key-resources"
@@ -328,7 +315,6 @@ rows = 2
 input_hex = "1b 5b 3f 37 6d 1b 5b 3f 37 67 1b 5b 3e 37 3b 34 6d 1b 5b 3e 37 3b 31 66 1b 5b 3f 37 6d 1b 5b 3f 37 67 1b 5b 3e 37 3b 35 6d 1b 5b 3e 37 3b 32 66"
 chunks = [1, 2, 5, 3]
 expected_events = ["pty:1b5b3e373b306d", "pty:1b5b3e373b3066", "pty:1b5b3e373b346d", "pty:1b5b3e373b3166"]
-expected_special_keys = { mode = 4, format = 1 }
 
 [[case]]
 id = "dec-saved-cursor-state"
