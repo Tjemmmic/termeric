@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use termeric_core::{ImageId, PresentationImage, StoredImage};
 use wgpu::*;
 
-use super::buffer::{BufferStats, GrowableBuffer};
+use super::buffer::GrowableBuffer;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct PlacementGeometry {
@@ -528,10 +528,6 @@ impl ImagePipeline {
             .upload(device, queue, bytemuck::cast_slice(&self.vertices));
         self.index_buffer
             .upload(device, queue, bytemuck::cast_slice(&self.indices));
-    }
-
-    pub(super) fn buffer_stats(&self) -> (BufferStats, BufferStats) {
-        (self.vertex_buffer.stats(), self.index_buffer.stats())
     }
 
     /// Remove an image from the GPU

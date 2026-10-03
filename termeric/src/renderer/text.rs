@@ -4,7 +4,7 @@ use anyhow::Result;
 use bytemuck::{Pod, Zeroable};
 use wgpu::*;
 
-use super::buffer::{BufferStats, GrowableBuffer};
+use super::buffer::GrowableBuffer;
 use super::glyph_cache::{FontStyle, GlyphCache, GlyphEntry};
 
 /// Vertex for text rendering
@@ -896,8 +896,9 @@ impl TextPipeline {
         }
     }
 
-    pub(super) fn buffer_stats(&self) -> (BufferStats, BufferStats) {
-        (self.vertex_buffer.stats(), self.index_buffer.stats())
+    #[cfg(test)]
+    pub(super) fn buffer_allocations(&self) -> u64 {
+        self.vertex_buffer.allocations() + self.index_buffer.allocations()
     }
 
     /// Upload queued characters, graphemes, and shaped row runs.

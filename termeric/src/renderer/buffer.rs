@@ -4,19 +4,14 @@ use wgpu::{Buffer, BufferDescriptor, BufferUsages, Device, Queue};
 
 const MIN_BUFFER_CAPACITY: u64 = 4 * 1024;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(super) struct BufferStats {
-    pub allocations: u64,
-    pub writes: u64,
-    pub bytes_written: u64,
-    pub capacity_bytes: u64,
-}
-
 pub(super) struct GrowableBuffer {
     label: &'static str,
     usage: BufferUsages,
     buffer: Option<Buffer>,
-    stats: BufferStats,
+    capacity_bytes: u64,
+    /// Buffers created so far; the benchmark checks steady frames add none.
+    #[cfg(test)]
+    allocations: u64,
 }
 
 impl GrowableBuffer {
@@ -25,7 +20,9 @@ impl GrowableBuffer {
             label,
             usage,
             buffer: None,
-            stats: BufferStats::default(),
+            capacity_bytes: 0,
+            #[cfg(test)]
+            allocations: 0,
         }
     }
 
@@ -34,7 +31,7 @@ impl GrowableBuffer {
             return;
         }
         let required = bytes.len() as u64;
-        if required > self.stats.capacity_bytes {
+        if required > self.capacity_bytes {
             let capacity = required
                 .max(MIN_BUFFER_CAPACITY)
                 .checked_next_power_of_two()
@@ -45,8 +42,11 @@ impl GrowableBuffer {
                 usage: self.usage | BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }));
-            self.stats.capacity_bytes = capacity;
-            self.stats.allocations += 1;
+            self.capacity_bytes = capacity;
+            #[cfg(test)]
+            {
+                self.allocations += 1;
+            }
         }
 
         if let Some(buffer) = &self.buffer {
@@ -54,8 +54,6 @@ impl GrowableBuffer {
             // consumes them; WGPU retains staging memory until the copy is
             // complete, so an in-flight frame never observes host mutation.
             queue.write_buffer(buffer, 0, bytes);
-            self.stats.writes += 1;
-            self.stats.bytes_written += required;
         }
     }
 
@@ -63,8 +61,9 @@ impl GrowableBuffer {
         self.buffer.as_ref()
     }
 
-    pub(super) fn stats(&self) -> BufferStats {
-        self.stats
+    #[cfg(test)]
+    pub(super) fn allocations(&self) -> u64 {
+        self.allocations
     }
 }
 
@@ -75,7 +74,7 @@ mod tests {
     #[test]
     fn empty_upload_does_not_change_accounting() {
         let buffer = GrowableBuffer::new("test", BufferUsages::VERTEX);
-        assert_eq!(buffer.stats(), BufferStats::default());
+        assert_eq!(buffer.allocations(), 0);
         assert!(buffer.buffer().is_none());
     }
 }

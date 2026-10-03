@@ -75,21 +75,13 @@ use wgpu::*;
 use winit::window::Window;
 
 use rect::RectPipeline;
-use row_cache::{RowCacheKey, RowCacheMetrics, TerminalRowCache};
+use row_cache::{RowCacheKey, TerminalRowCache};
 use style::ResolvedCellStyle;
 use text::{TextClip, TextPipeline, TextRunAccumulator};
 
 use crate::tabs::TabInfo;
 use crate::ui::command_palette::PaletteInfo;
 use crate::ui::shortcuts_panel::ShortcutsPanelInfo;
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct RendererBufferStats {
-    pub allocations: u64,
-    pub writes: u64,
-    pub bytes_written: u64,
-    pub capacity_bytes: u64,
-}
 
 fn hash_text_clip<H: Hasher>(clip: TextClip, hasher: &mut H) {
     clip.left.to_bits().hash(hasher);
@@ -606,7 +598,6 @@ pub struct Renderer {
     image_pipeline: ImagePipeline,
     background_image: background_image::BackgroundImageState,
     terminal_row_cache: TerminalRowCache,
-    render_cache_generation: u64,
     // Glyph cache
     glyph_cache: GlyphCache,
     // Cell dimensions
@@ -659,25 +650,6 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    fn buffer_stats(&self) -> RendererBufferStats {
-        let pipeline_stats = [
-            self.text_pipeline.buffer_stats(),
-            self.rect_pipeline.buffer_stats(),
-            self.background_image_pipeline.buffer_stats(),
-            self.image_pipeline.buffer_stats(),
-        ];
-        let mut total = RendererBufferStats::default();
-        for (vertices, indices) in pipeline_stats {
-            for stats in [vertices, indices] {
-                total.allocations += stats.allocations;
-                total.writes += stats.writes;
-                total.bytes_written += stats.bytes_written;
-                total.capacity_bytes += stats.capacity_bytes;
-            }
-        }
-        total
-    }
-
     /// Create a new renderer for the given window
     pub fn new(
         window: Arc<Window>,
@@ -845,7 +817,6 @@ impl Renderer {
             image_pipeline,
             background_image: background_image::BackgroundImageState::default(),
             terminal_row_cache: TerminalRowCache::default(),
-            render_cache_generation: 0,
             glyph_cache,
             cell_width,
             cell_height,
@@ -1101,12 +1072,7 @@ impl Renderer {
     }
 
     fn invalidate_terminal_rows(&mut self) {
-        self.render_cache_generation = self.render_cache_generation.wrapping_add(1);
         self.terminal_row_cache.clear();
-    }
-
-    pub(crate) fn row_cache_metrics(&self) -> RowCacheMetrics {
-        self.terminal_row_cache.metrics()
     }
 
     /// Update tab bar hover state for icon animations
@@ -1312,17 +1278,12 @@ impl Renderer {
             .upload(&self.device, &self.queue);
         self.image_pipeline.upload(&self.device, &self.queue);
         self.terminal_row_cache.finish_frame();
-        log::trace!("Terminal row cache: {:?}", self.row_cache_metrics());
-        log::trace!("Glyph atlas: {:?}", self.glyph_cache.atlas_metrics());
         log::trace!(
-            "Glyph rasterizer: {:?}",
-            self.glyph_cache.rasterizer_metrics()
-        );
-        log::trace!(
-            "Shaped runs: {:?}",
+            "Glyph cache: atlas {:?}; rasterizer {:?}; shaped runs {:?}",
+            self.glyph_cache.atlas_metrics(),
+            self.glyph_cache.rasterizer_metrics(),
             self.glyph_cache.shaping_cache_metrics()
         );
-        log::trace!("GPU upload buffers: {:?}", self.buffer_stats());
 
         {
             let mut render_pass = encoder.begin_render_pass(&RenderPassDescriptor {
@@ -1960,7 +1921,6 @@ impl Renderer {
             let cursor_break_col =
                 cursor_cell.and_then(|(row, col)| (row == visual_row).then_some(col));
             let mut hasher = DefaultHasher::new();
-            self.render_cache_generation.hash(&mut hasher);
             dynamic_colors.generation().hash(&mut hasher);
             grid_row.hash(&mut hasher);
             pane_cols.hash(&mut hasher);
@@ -2434,16 +2394,7 @@ pub(crate) struct HeadlessRendererBenchmark {
     pub frame_ms: Vec<f64>,
     pub glyph_warm_ms: Vec<f64>,
     pub glyph_cache_hit_percent: Vec<f64>,
-    pub key_to_submit_ms: Vec<f64>,
     pub steady_frame_buffer_allocations: u64,
-    pub row_cache_static_ms: Vec<f64>,
-    pub row_cache_one_row_ms: Vec<f64>,
-    pub row_cache_scroll_ms: Vec<f64>,
-    pub row_cache_search_heavy_ms: Vec<f64>,
-    pub row_cache_unicode_ms: Vec<f64>,
-    pub row_cache_multi_pane_ms: Vec<f64>,
-    pub row_cache_one_row_rebuilds: Vec<f64>,
-    pub row_cache_steady_allocations: Vec<f64>,
     pub ligature_code_ms: Vec<f64>,
     pub ligature_cache_hit_percent: Vec<f64>,
     pub shaping_pressure: glyph_cache::pressure_benchmark::PressureBenchmark,
@@ -4153,10 +4104,7 @@ pub(crate) fn benchmark_headless_renderer() -> Result<Option<HeadlessRendererBen
         };
 
     let _ = submit_frame(&mut text, &mut rect, &mut glyph_cache);
-    let allocations_after_warmup = text.buffer_stats().0.allocations
-        + text.buffer_stats().1.allocations
-        + rect.buffer_stats().0.allocations
-        + rect.buffer_stats().1.allocations;
+    let allocations_after_warmup = text.buffer_allocations() + rect.buffer_allocations();
     let mut frame_ms = Vec::with_capacity(SAMPLES);
     for _ in 0..SAMPLES {
         let started = Instant::now();
@@ -4165,251 +4113,10 @@ pub(crate) fn benchmark_headless_renderer() -> Result<Option<HeadlessRendererBen
         }
         frame_ms.push(started.elapsed().as_secs_f64() * 1_000.0 / FRAMES_PER_SAMPLE as f64);
     }
-    let allocations_after_steady_frames = text.buffer_stats().0.allocations
-        + text.buffer_stats().1.allocations
-        + rect.buffer_stats().0.allocations
-        + rect.buffer_stats().1.allocations;
+    let allocations_after_steady_frames = text.buffer_allocations() + rect.buffer_allocations();
     let steady_frame_buffer_allocations =
         allocations_after_steady_frames - allocations_after_warmup;
     assert_eq!(steady_frame_buffer_allocations, 0);
-
-    let mut key_to_submit_ms = Vec::with_capacity(SAMPLES);
-    for _ in 0..SAMPLES {
-        let started = Instant::now();
-        let mut terminal = termeric_core::Terminal::new(COLS, ROWS);
-        terminal.process(b"x");
-        assert_eq!(
-            terminal.grid().cell(0, 0).map(|cell| &cell.content),
-            Some(&CellContent::Char('x'))
-        );
-        let _ = submit_frame(&mut text, &mut rect, &mut glyph_cache);
-        key_to_submit_ms.push(started.elapsed().as_secs_f64() * 1_000.0);
-    }
-
-    // Exercise the persistent row cache independently of surface presentation.
-    // These workloads include cache lookup and changed-row queue writes; the
-    // existing frame metric above remains the full build/upload/draw/submit path.
-    let mut row_cache = TerminalRowCache::default();
-    let mut build_cached_row = |row: usize, variant: usize| {
-        let rect_checkpoint = rect.checkpoint();
-        let text_checkpoint = text.queued_checkpoint();
-        for col in 0..COLS {
-            let character = glyphs[(row * COLS + col + variant) % glyphs.len()];
-            text.push_char(
-                character,
-                col as f32 * cell_width,
-                row as f32 * cell_height,
-                [0.92, 0.88, 0.78, 1.0],
-            );
-            if (row + col + variant).is_multiple_of(23) {
-                rect.push_rect(
-                    col as f32 * cell_width,
-                    row as f32 * cell_height,
-                    cell_width,
-                    cell_height,
-                    [0.18, 0.12, 0.08, 1.0],
-                );
-            }
-        }
-        let rects = rect.take_since(rect_checkpoint);
-        let queued = text.take_queued_since(text_checkpoint);
-        let text_batch = TextPipeline::build_batch(queued, &queue, &mut glyph_cache);
-        (rects, text_batch)
-    };
-
-    let mut signatures: Vec<u64> = (0..ROWS as u64).collect();
-    row_cache.begin_frame();
-    for (row, &signature) in signatures.iter().enumerate() {
-        let key = RowCacheKey {
-            grid_id: 1,
-            visual_row: row,
-        };
-        assert!(!row_cache.reuse(key, signature));
-        let (rects, text_batch) = build_cached_row(row, 0);
-        row_cache.replace(key, signature, rects, text_batch, &device, &queue);
-    }
-    row_cache.finish_frame();
-
-    // Golden geometry check: a forced full CPU rebuild of the same styled row
-    // must exactly match the rectangle/text batches retained by the cache.
-    let (forced_rects, forced_text) = build_cached_row(0, 0);
-    assert!(row_cache.cpu_batches_match(
-        RowCacheKey {
-            grid_id: 1,
-            visual_row: 0,
-        },
-        &forced_rects,
-        &forced_text,
-    ));
-
-    let initial_allocations = row_cache.metrics().buffer_allocations;
-    let mut row_cache_static_ms = Vec::with_capacity(SAMPLES);
-    let mut row_cache_steady_allocations = Vec::with_capacity(SAMPLES);
-    for _ in 0..SAMPLES {
-        let before_allocations = row_cache.metrics().buffer_allocations;
-        let started = Instant::now();
-        row_cache.begin_frame();
-        for (row, &signature) in signatures.iter().enumerate() {
-            assert!(row_cache.reuse(
-                RowCacheKey {
-                    grid_id: 1,
-                    visual_row: row,
-                },
-                signature,
-            ));
-        }
-        row_cache.finish_frame();
-        row_cache_static_ms.push(started.elapsed().as_secs_f64() * 1_000.0);
-        row_cache_steady_allocations
-            .push((row_cache.metrics().buffer_allocations - before_allocations) as f64);
-    }
-    assert_eq!(row_cache.metrics().buffer_allocations, initial_allocations);
-
-    let mut row_cache_one_row_ms = Vec::with_capacity(SAMPLES);
-    let mut row_cache_one_row_rebuilds = Vec::with_capacity(SAMPLES);
-    for sample in 0..SAMPLES {
-        let changed_row = sample % ROWS;
-        signatures[changed_row] = signatures[changed_row].wrapping_add(10_000);
-        let started = Instant::now();
-        row_cache.begin_frame();
-        for (row, &signature) in signatures.iter().enumerate() {
-            let key = RowCacheKey {
-                grid_id: 1,
-                visual_row: row,
-            };
-            if !row_cache.reuse(key, signature) {
-                let (rects, text_batch) = build_cached_row(row, sample + 1);
-                row_cache.replace(key, signature, rects, text_batch, &device, &queue);
-            }
-        }
-        row_cache.finish_frame();
-        row_cache_one_row_ms.push(started.elapsed().as_secs_f64() * 1_000.0);
-        row_cache_one_row_rebuilds.push(row_cache.metrics().frame_misses as f64);
-        assert_eq!(row_cache.metrics().frame_misses, 1);
-    }
-
-    let mut row_cache_scroll_ms = Vec::with_capacity(SAMPLES);
-    for sample in 0..SAMPLES {
-        let started = Instant::now();
-        row_cache.begin_frame();
-        for (row, signature) in signatures.iter_mut().enumerate() {
-            *signature = signature.wrapping_add(100_000);
-            let key = RowCacheKey {
-                grid_id: 1,
-                visual_row: row,
-            };
-            assert!(!row_cache.reuse(key, *signature));
-            let (rects, text_batch) = build_cached_row(row, sample + ROWS);
-            row_cache.replace(key, *signature, rects, text_batch, &device, &queue);
-        }
-        row_cache.finish_frame();
-        row_cache_scroll_ms.push(started.elapsed().as_secs_f64() * 1_000.0);
-    }
-
-    let mut row_cache_search_heavy_ms = Vec::with_capacity(SAMPLES);
-    for sample in 0..SAMPLES {
-        let started = Instant::now();
-        row_cache.begin_frame();
-        for (row, signature) in signatures.iter_mut().enumerate() {
-            if row % 2 == 0 {
-                *signature = signature.wrapping_add(1_000_000);
-            }
-            let key = RowCacheKey {
-                grid_id: 1,
-                visual_row: row,
-            };
-            if !row_cache.reuse(key, *signature) {
-                let (rects, text_batch) = build_cached_row(row, sample + ROWS * 2);
-                row_cache.replace(key, *signature, rects, text_batch, &device, &queue);
-            }
-        }
-        row_cache.finish_frame();
-        row_cache_search_heavy_ms.push(started.elapsed().as_secs_f64() * 1_000.0);
-        assert_eq!(row_cache.metrics().frame_misses, (ROWS / 2) as u64);
-    }
-
-    let mut row_cache_unicode_ms = Vec::with_capacity(SAMPLES);
-    for sample in 0..SAMPLES {
-        let started = Instant::now();
-        row_cache.begin_frame();
-        for (row, signature) in signatures.iter_mut().enumerate() {
-            *signature = signature.wrapping_add(10_000_000);
-            let key = RowCacheKey {
-                grid_id: 1,
-                visual_row: row,
-            };
-            assert!(!row_cache.reuse(key, *signature));
-            let (rects, text_batch) = build_cached_row(row, sample + ROWS * 3 + 7);
-            row_cache.replace(key, *signature, rects, text_batch, &device, &queue);
-        }
-        row_cache.finish_frame();
-        row_cache_unicode_ms.push(started.elapsed().as_secs_f64() * 1_000.0);
-    }
-
-    // Populate seven additional pane identities, then measure the unchanged
-    // 8x40-row lookup path.
-    for pane in 2..=8 {
-        row_cache.begin_frame();
-        for row in 0..ROWS {
-            let key = RowCacheKey {
-                grid_id: pane,
-                visual_row: row,
-            };
-            let signature = (pane as u64) << 32 | row as u64;
-            let (rects, text_batch) = build_cached_row(row, pane);
-            row_cache.replace(key, signature, rects, text_batch, &device, &queue);
-        }
-        row_cache.finish_frame();
-    }
-    let mut row_cache_multi_pane_ms = Vec::with_capacity(SAMPLES);
-    for _ in 0..SAMPLES {
-        let started = Instant::now();
-        row_cache.begin_frame();
-        for pane in 1..=8 {
-            for (row, &first_pane_signature) in signatures.iter().enumerate() {
-                let signature = if pane == 1 {
-                    first_pane_signature
-                } else {
-                    (pane as u64) << 32 | row as u64
-                };
-                assert!(row_cache.reuse(
-                    RowCacheKey {
-                        grid_id: pane,
-                        visual_row: row,
-                    },
-                    signature,
-                ));
-            }
-        }
-        row_cache.finish_frame();
-        row_cache_multi_pane_ms.push(started.elapsed().as_secs_f64() * 1_000.0);
-    }
-
-    // Validate that independently cached row buffers are accepted by the real
-    // pipelines and can be drawn together.
-    let mut cache_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
-        label: Some("Termeric row-cache validation encoder"),
-    });
-    {
-        let mut pass = cache_encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("Termeric row-cache validation pass"),
-            color_attachments: &[Some(RenderPassColorAttachment {
-                view: &view,
-                resolve_target: None,
-                ops: Operations {
-                    load: LoadOp::Clear(Color::BLACK),
-                    store: StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        });
-        row_cache.draw_rects(&rect, &mut pass);
-        row_cache.draw_text(&text, &mut pass);
-    }
-    let submission = queue.submit([cache_encoder.finish()]);
-    let _ = device.poll(Maintain::wait_for(submission));
 
     // Measure the row-run path on code-heavy tokens after warming every
     // distinct content key. This isolates shaping/cache cost from GPU submit.
@@ -4455,16 +4162,7 @@ pub(crate) fn benchmark_headless_renderer() -> Result<Option<HeadlessRendererBen
         frame_ms,
         glyph_warm_ms,
         glyph_cache_hit_percent,
-        key_to_submit_ms,
         steady_frame_buffer_allocations,
-        row_cache_static_ms,
-        row_cache_one_row_ms,
-        row_cache_scroll_ms,
-        row_cache_search_heavy_ms,
-        row_cache_unicode_ms,
-        row_cache_multi_pane_ms,
-        row_cache_one_row_rebuilds,
-        row_cache_steady_allocations,
         ligature_code_ms,
         ligature_cache_hit_percent,
         shaping_pressure,

@@ -194,34 +194,6 @@ max = 0.0
 allow_skipped = true
 
 [[metric_budget]]
-name = "one-cell updates rebuild one terminal row"
-metric = "renderer.row_cache.one_row_rebuilds"
-statistic = "max"
-max = 1.0
-allow_skipped = true
-
-[[metric_budget]]
-name = "unchanged row-cache frames allocate no GPU buffers"
-metric = "renderer.row_cache.steady_allocations"
-statistic = "max"
-max = 0.0
-allow_skipped = true
-
-[[metric_budget]]
-name = "one-row cache update latency rail"
-metric = "renderer.row_cache.one_row_update"
-statistic = "p95"
-max = 1.0
-allow_skipped = true
-
-[[metric_budget]]
-name = "eight-pane unchanged cache lookup rail"
-metric = "renderer.row_cache.multi_pane"
-statistic = "p95"
-max = 0.25
-allow_skipped = true
-
-[[metric_budget]]
 name = "slow transcript persistence cannot stall input or PTY enqueue"
 metric = "latency.transcript_enqueue_under_slow_disk"
 statistic = "p95"

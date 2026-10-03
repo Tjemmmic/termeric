@@ -4,7 +4,7 @@ use anyhow::Result;
 use bytemuck::{Pod, Zeroable};
 use wgpu::*;
 
-use super::buffer::{BufferStats, GrowableBuffer};
+use super::buffer::GrowableBuffer;
 use super::text::TextClip;
 
 /// Vertex for rectangle rendering (with rounded-corner metadata)
@@ -414,8 +414,9 @@ impl RectPipeline {
         self.index_buffer.upload(device, queue, index_data);
     }
 
-    pub(super) fn buffer_stats(&self) -> (BufferStats, BufferStats) {
-        (self.vertex_buffer.stats(), self.index_buffer.stats())
+    #[cfg(test)]
+    pub(super) fn buffer_allocations(&self) -> u64 {
+        self.vertex_buffer.allocations() + self.index_buffer.allocations()
     }
 
     /// Draw only the rectangles belonging to a specific layer.

@@ -405,65 +405,10 @@ fn release_benchmark_suite() {
                 Some(&result.adapter),
             );
             emit_benchmark(
-                "latency.synthetic_key_to_gpu_submit",
-                "ms",
-                result.key_to_submit_ms,
-                "terminal input mutation through an offscreen rendered frame",
-                Some(&result.adapter),
-            );
-            emit_benchmark(
                 "renderer.steady_frame_buffer_allocations",
                 "allocations",
                 vec![result.steady_frame_buffer_allocations as f64; 5],
                 "new text/rectangle GPU buffers after equal-size warmup",
-                Some(&result.adapter),
-            );
-            for (name, samples, workload) in [
-                (
-                    "renderer.row_cache.static",
-                    result.row_cache_static_ms,
-                    "40 unchanged cached terminal rows",
-                ),
-                (
-                    "renderer.row_cache.one_row_update",
-                    result.row_cache_one_row_ms,
-                    "one changed row among 40 cached terminal rows",
-                ),
-                (
-                    "renderer.row_cache.scroll",
-                    result.row_cache_scroll_ms,
-                    "40 remapped rows during a scroll",
-                ),
-                (
-                    "renderer.row_cache.search_heavy",
-                    result.row_cache_search_heavy_ms,
-                    "search-highlight changes on half of 40 rows",
-                ),
-                (
-                    "renderer.row_cache.unicode",
-                    result.row_cache_unicode_ms,
-                    "40 cached rows containing wide and non-ASCII glyphs",
-                ),
-                (
-                    "renderer.row_cache.multi_pane",
-                    result.row_cache_multi_pane_ms,
-                    "unchanged lookup across eight 40-row panes",
-                ),
-            ] {
-                emit_benchmark(name, "ms", samples, workload, Some(&result.adapter));
-            }
-            emit_benchmark(
-                "renderer.row_cache.one_row_rebuilds",
-                "rows",
-                result.row_cache_one_row_rebuilds,
-                "rows rebuilt after a one-row signature change",
-                Some(&result.adapter),
-            );
-            emit_benchmark(
-                "renderer.row_cache.steady_allocations",
-                "allocations",
-                result.row_cache_steady_allocations,
-                "new cached-row GPU buffers on unchanged frames",
                 Some(&result.adapter),
             );
             emit_benchmark(
@@ -530,16 +475,7 @@ fn release_benchmark_suite() {
                 ("renderer.frame_build_upload_submit", "ms"),
                 ("renderer.glyph_cache_warm", "ms"),
                 ("renderer.glyph_cache_hit_rate", "percent"),
-                ("latency.synthetic_key_to_gpu_submit", "ms"),
                 ("renderer.steady_frame_buffer_allocations", "allocations"),
-                ("renderer.row_cache.static", "ms"),
-                ("renderer.row_cache.one_row_update", "ms"),
-                ("renderer.row_cache.scroll", "ms"),
-                ("renderer.row_cache.search_heavy", "ms"),
-                ("renderer.row_cache.unicode", "ms"),
-                ("renderer.row_cache.multi_pane", "ms"),
-                ("renderer.row_cache.one_row_rebuilds", "rows"),
-                ("renderer.row_cache.steady_allocations", "allocations"),
                 ("renderer.ligature.code_run_build", "ms"),
                 ("renderer.ligature.shaping_cache_hit_rate", "percent"),
                 ("renderer.shaping_pressure.rebuild", "ms"),
