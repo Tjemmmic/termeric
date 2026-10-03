@@ -1634,7 +1634,7 @@ impl GlyphCache {
             placement,
             TextFace::Terminal,
         );
-        self.shape_keyed(key, text, style, metrics, queue)
+        Some(self.shape_keyed(key, text, style, metrics, queue))
     }
 
     /// Shape application-chrome text in a desktop UI face at an explicit
@@ -1673,7 +1673,7 @@ impl GlyphCache {
                 TextFace::UiSans
             },
         );
-        self.shape_keyed(key, text, style, metrics, queue)
+        Some(self.shape_keyed(key, text, style, metrics, queue))
     }
 
     /// Advance width of UI text without rasterizing it.
@@ -1834,14 +1834,14 @@ impl GlyphCache {
         style: FontStyle,
         metrics: Metrics,
         queue: &Queue,
-    ) -> Option<LigatureRun> {
+    ) -> LigatureRun {
         if let Some(run) = self.ligature_cache.get(&key).cloned() {
             self.shaping_cache_metrics.hits += 1;
             self.atlas_hits += run.glyphs.len() as u64;
             for glyph in &run.glyphs {
                 self.pin_entry(glyph.entry);
             }
-            return Some(run);
+            return run;
         }
         if let Some(run) = self.deferred_ligature_cache.get(&key).cloned() {
             self.shaping_cache_metrics.hits += 1;
@@ -1849,11 +1849,11 @@ impl GlyphCache {
             for glyph in &run.glyphs {
                 self.pin_entry(glyph.entry);
             }
-            return Some(run);
+            return run;
         }
         self.shaping_cache_metrics.misses += 1;
         let (run, retry_next_frame) =
-            self.shape_text_internal(text, style, metrics, key.placement, key.face, queue)?;
+            self.shape_text_internal(text, style, metrics, key.placement, key.face, queue);
         if retry_next_frame {
             self.shaping_cache_metrics.evictions +=
                 self.deferred_ligature_cache.insert(key, &run) as u64;
@@ -1861,7 +1861,7 @@ impl GlyphCache {
             self.shaping_cache_metrics.evictions += self.ligature_cache.insert(key, &run) as u64;
             self.shaping_cache_metrics.entries = self.ligature_cache.len();
         }
-        Some(run)
+        run
     }
 
     pub(crate) fn shaping_cache_metrics(&self) -> ShapingCacheMetrics {
@@ -1926,7 +1926,7 @@ impl GlyphCache {
         placement: GlyphPlacement,
         face: TextFace,
         queue: &Queue,
-    ) -> Option<(LigatureRun, bool)> {
+    ) -> (LigatureRun, bool) {
         let mut placed = Vec::new();
 
         if matches!(face, TextFace::UiSans | TextFace::UiMono) {
@@ -2014,7 +2014,18 @@ impl GlyphCache {
                 let img_left = image.placement.left;
                 let img_top = image.placement.top;
                 let pixel_count = source_width as usize * img_height as usize;
-                let pixels = glyph_pixels(image.content, &image.data, pixel_count)?;
+                let Some(pixels) = glyph_pixels(image.content, &image.data, pixel_count) else {
+                    // A malformed raster won't improve on retry. Draw it like
+                    // a glyph the rasterizer can't produce, keeping the run.
+                    self.pin_entry(self.fallback_entry);
+                    self.shaped_entries.insert(shaped_key, self.fallback_entry);
+                    glyphs.push(ShapedGlyph {
+                        entry: self.fallback_entry,
+                        cell,
+                        x_offset,
+                    });
+                    continue;
+                };
                 if !pixels.is_color() {
                     self.report_synthetic_style(font_id, style, synthesize_bold);
                 }
@@ -2097,7 +2108,7 @@ impl GlyphCache {
             });
         }
 
-        Some((LigatureRun { glyphs }, retry_next_frame))
+        (LigatureRun { glyphs }, retry_next_frame)
     }
 
     fn effective_weight(&self, style: FontStyle) -> Weight {
