@@ -78,7 +78,6 @@ fn file_name(arg: &str) -> Option<String> {
 
 /// Whether `process` is `ancestor` or was started, directly or through
 /// other processes, by it.
-#[cfg(target_os = "linux")]
 pub fn descends_from(process: u32, ancestor: u32) -> bool {
     // Deep enough for any real launcher chain, and bounded against a
     // pathological one.
@@ -96,15 +95,9 @@ pub fn descends_from(process: u32, ancestor: u32) -> bool {
     false
 }
 
-#[cfg(not(target_os = "linux"))]
-pub fn descends_from(_process: u32, _ancestor: u32) -> bool {
-    false
-}
-
 /// The parent of `process`, from the field after its name in
 /// `/proc/PID/stat`. The name may itself hold spaces and parentheses, so the
 /// fields are read after its last closing parenthesis.
-#[cfg(target_os = "linux")]
 fn parent_process(process: u32) -> Option<u32> {
     let stat = std::fs::read_to_string(format!("/proc/{process}/stat")).ok()?;
     let fields = &stat[stat.rfind(')')? + 1..];
@@ -113,7 +106,6 @@ fn parent_process(process: u32) -> Option<u32> {
 
 /// The argument vector of the process leading the terminal's foreground
 /// process group.
-#[cfg(target_os = "linux")]
 pub fn foreground_argv(process_group: i32) -> Option<Vec<String>> {
     if process_group <= 0 {
         return None;
@@ -125,11 +117,6 @@ pub fn foreground_argv(process_group: i32) -> Option<Vec<String>> {
         .map(|part| String::from_utf8_lossy(part).into_owned())
         .collect();
     (!argv.is_empty()).then_some(argv)
-}
-
-#[cfg(not(target_os = "linux"))]
-pub fn foreground_argv(_process_group: i32) -> Option<Vec<String>> {
-    None
 }
 
 #[cfg(test)]
@@ -203,7 +190,6 @@ mod tests {
         assert_eq!(package(&["/usr/lib/node_modules/x/bin/tool"]), None);
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn ancestry_follows_parents_to_the_terminal_child() {
         /// Stops the child however the test ends.
@@ -227,7 +213,6 @@ mod tests {
         assert!(!descends_from(u32::MAX, me));
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn foreground_argv_reads_this_process() {
         let argv = foreground_argv(std::process::id() as i32).unwrap();

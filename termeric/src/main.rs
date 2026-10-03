@@ -55,7 +55,6 @@ fn main() -> Result<std::process::ExitCode> {
     // local-domain execution.
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    #[cfg(unix)]
     let mut _quick_access_guard = None;
     // Recorded before anything can rebuild the executable, so a launch of a
     // newer build never joins this process.
@@ -87,10 +86,7 @@ fn main() -> Result<std::process::ExitCode> {
                 println!("{output}");
                 return Ok(std::process::ExitCode::SUCCESS);
             }
-            #[cfg(unix)]
-            {
-                _quick_access_guard = Some(control::QuickAccessGuard::acquire()?);
-            }
+            _quick_access_guard = Some(control::QuickAccessGuard::acquire()?);
             launch
         }
         cli::ParseOutcome::Control(command) => {
@@ -136,7 +132,6 @@ fn main() -> Result<std::process::ExitCode> {
     let event_loop = EventLoop::<app::AppEvent>::with_user_event().build()?;
     let proxy = event_loop.create_proxy();
     app::install_event_loop_proxy(proxy.clone());
-    #[cfg(unix)]
     let _control_server = match control::ControlServer::start(proxy) {
         Ok(server) => Some(server),
         Err(error) => {

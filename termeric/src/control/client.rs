@@ -1560,7 +1560,7 @@ struct DividerResizeOutput {
 }
 
 /// Every running GUI process, by process ID.
-pub(super) fn running_processes() -> anyhow::Result<Vec<u32>> {
+pub fn running_processes() -> anyhow::Result<Vec<u32>> {
     Ok(ControlPaths::discover_all()?
         .into_iter()
         .map(|endpoint| endpoint.process_id)
@@ -1576,7 +1576,7 @@ fn endpoint_for(process_id: u32) -> anyhow::Result<ControlPaths> {
 
 /// Every terminal running an agent in GUI process `process_id`, and whether
 /// the list was cut short.
-pub(super) fn list_agents(
+pub fn list_agents(
     process_id: u32,
     supervisor: Option<&str>,
 ) -> anyhow::Result<(Vec<protocol::AgentSummary>, bool)> {
@@ -1602,7 +1602,7 @@ pub(super) fn list_agents(
 /// Paste `text` into the agent in one pane and submit it, as the supervisor
 /// when `supervisor` carries its token. Returns whether it waits for the
 /// person's approval.
-pub(super) fn submit_to_agent(
+pub fn submit_to_agent(
     process_id: u32,
     window_id: u64,
     tab_id: u64,
@@ -1645,7 +1645,7 @@ pub(super) fn submit_to_agent(
 
 /// One agent view session's recent conversation, and whether older parts
 /// were left out.
-pub(super) fn read_conversation(
+pub fn read_conversation(
     process_id: u32,
     window_id: u64,
     session_id: u64,
@@ -1676,7 +1676,7 @@ pub(super) fn read_conversation(
 
 /// Answer one pending approval in an agent view session. Returns whether it
 /// was answered, rather than kept as a suggestion for the person.
-pub(super) fn answer_approval(
+pub fn answer_approval(
     process_id: u32,
     window_id: u64,
     session_id: u64,
@@ -1718,7 +1718,7 @@ pub(super) fn answer_approval(
 
 /// Send a message to an agent view session. Returns whether it waits for the
 /// person's approval.
-pub(super) fn submit_to_session(
+pub fn submit_to_session(
     process_id: u32,
     window_id: u64,
     session_id: u64,
@@ -1759,7 +1759,7 @@ pub(super) fn submit_to_session(
 const AGENT_EVENT_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Deliver one agent hook report to the GUI process that owns its terminal.
-pub(super) fn report_agent_event(process_id: u32, report: Request) -> anyhow::Result<()> {
+pub fn report_agent_event(process_id: u32, report: Request) -> anyhow::Result<()> {
     report.validate().map_err(anyhow::Error::msg)?;
     let endpoint = ControlPaths::from_directory(
         crate::domain::paths::discover_runtime_directory(),
@@ -1862,7 +1862,6 @@ pub(super) fn generate_request_id() -> anyhow::Result<String> {
     termeric_core::hex::random(16).context("generate GUI control request ID")
 }
 
-#[cfg(target_os = "linux")]
 pub(super) fn validate_peer(stream: &UnixStream) -> anyhow::Result<()> {
     let mut credentials = libc::ucred {
         pid: 0,
@@ -1885,23 +1884,6 @@ pub(super) fn validate_peer(stream: &UnixStream) -> anyhow::Result<()> {
         return Err(std::io::Error::last_os_error()).context("authenticate GUI control server");
     }
     if credentials.uid != crate::domain::paths::effective_uid() {
-        anyhow::bail!("GUI control server belongs to a different user");
-    }
-    Ok(())
-}
-
-#[cfg(all(unix, not(target_os = "linux")))]
-pub(super) fn validate_peer(stream: &UnixStream) -> anyhow::Result<()> {
-    let mut uid: libc::uid_t = 0;
-    let mut gid: libc::gid_t = 0;
-    // SAFETY: getpeereid receives a connected descriptor and valid output
-    // pointers and retains neither.
-    let result =
-        unsafe { libc::getpeereid(std::os::fd::AsRawFd::as_raw_fd(stream), &mut uid, &mut gid) };
-    if result != 0 {
-        return Err(std::io::Error::last_os_error()).context("authenticate GUI control server");
-    }
-    if uid != crate::domain::paths::effective_uid() {
         anyhow::bail!("GUI control server belongs to a different user");
     }
     Ok(())

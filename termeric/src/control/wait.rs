@@ -300,16 +300,6 @@ impl DeadlineStream {
         }
         let length = (std::mem::offset_of!(libc::sockaddr_un, sun_path) + bytes.len() + 1)
             as libc::socklen_t;
-        #[cfg(any(
-            target_os = "macos",
-            target_os = "freebsd",
-            target_os = "openbsd",
-            target_os = "netbsd",
-            target_os = "dragonfly"
-        ))]
-        {
-            address.sun_len = length as u8;
-        }
         // SAFETY: socket takes no pointers and returns a uniquely owned descriptor.
         let fd = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0) };
         if fd < 0 {

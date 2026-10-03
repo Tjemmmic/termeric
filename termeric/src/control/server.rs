@@ -788,9 +788,8 @@ fn prepare_endpoint(paths: &ControlPaths) -> anyhow::Result<()> {
     remove_safe_file(&paths.token, false)
 }
 
-/// Refuses a peer of another user, and returns the peer's process ID where
-/// the platform reports it.
-#[cfg(target_os = "linux")]
+/// Refuses a peer of another user, and returns the peer's process ID when
+/// the kernel reports one (a peer in another PID namespace reads as 0).
 fn validate_peer(stream: &UnixStream) -> anyhow::Result<Option<u32>> {
     let mut credentials = libc::ucred {
         pid: 0,
@@ -816,23 +815,6 @@ fn validate_peer(stream: &UnixStream) -> anyhow::Result<Option<u32>> {
         anyhow::bail!("GUI control peer belongs to a different user");
     }
     Ok(u32::try_from(credentials.pid).ok().filter(|pid| *pid > 0))
-}
-
-#[cfg(all(unix, not(target_os = "linux")))]
-fn validate_peer(stream: &UnixStream) -> anyhow::Result<Option<u32>> {
-    let mut uid: libc::uid_t = 0;
-    let mut gid: libc::gid_t = 0;
-    // SAFETY: getpeereid receives a connected descriptor and valid output
-    // pointers and retains neither.
-    let result =
-        unsafe { libc::getpeereid(std::os::fd::AsRawFd::as_raw_fd(stream), &mut uid, &mut gid) };
-    if result != 0 {
-        return Err(std::io::Error::last_os_error()).context("authenticate GUI control peer");
-    }
-    if uid != crate::domain::paths::effective_uid() {
-        anyhow::bail!("GUI control peer belongs to a different user");
-    }
-    Ok(None)
 }
 
 #[cfg(test)]

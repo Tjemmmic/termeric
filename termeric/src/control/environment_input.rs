@@ -9,7 +9,6 @@ use serde::de::{self, MapAccess, Visitor};
 use std::fmt;
 
 const MAX_INPUT_BYTES: usize = 256 * 1024;
-#[cfg(target_os = "linux")]
 const INPUT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 pub(super) fn prepare(command: &mut ControlCommand) -> anyhow::Result<()> {
@@ -102,12 +101,6 @@ fn parse(input: &[u8]) -> anyhow::Result<Vec<EnvironmentVariable>> {
     Ok(entries)
 }
 
-#[cfg(not(target_os = "linux"))]
-fn read_stdin() -> anyhow::Result<Vec<u8>> {
-    anyhow::bail!("--env-stdin currently requires Linux");
-}
-
-#[cfg(target_os = "linux")]
 fn read_stdin() -> anyhow::Result<Vec<u8>> {
     use std::os::fd::AsFd;
     let input = std::io::stdin()
@@ -117,7 +110,6 @@ fn read_stdin() -> anyhow::Result<Vec<u8>> {
     read_file(std::fs::File::from(input), INPUT_TIMEOUT)
 }
 
-#[cfg(target_os = "linux")]
 fn read_file(mut input: std::fs::File, timeout: std::time::Duration) -> anyhow::Result<Vec<u8>> {
     use std::io::{IsTerminal, Read};
     use std::os::{
@@ -205,7 +197,6 @@ fn read_file(mut input: std::fs::File, timeout: std::time::Duration) -> anyhow::
 mod tests {
     use super::*;
 
-    #[cfg(target_os = "linux")]
     fn pipe() -> (std::fs::File, std::fs::File) {
         use std::os::fd::FromRawFd;
         let mut fds = [-1; 2];
@@ -220,7 +211,6 @@ mod tests {
         }
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn pipe_eof_deadline_and_open_flags_are_bounded_and_local() {
         use std::{
@@ -257,7 +247,6 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn regular_file_offset_limits_and_special_input_refusal() {
         use std::{
@@ -297,7 +286,6 @@ mod tests {
         assert!(read_file(std::fs::File::from(descriptor), Duration::from_secs(1)).is_err());
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn interactive_terminal_is_refused_before_reading() {
         use std::os::fd::FromRawFd;

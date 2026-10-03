@@ -74,7 +74,7 @@ impl LaunchLedger {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use termeric_core::Pty;
