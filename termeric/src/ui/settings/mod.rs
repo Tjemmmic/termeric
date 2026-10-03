@@ -37,12 +37,6 @@ const FONT_FALLBACK_LABELS: [&str; crate::config::MAX_FONT_FALLBACKS] = [
     "Fallback 16",
 ];
 
-fn font_fallback_index(label: &str) -> Option<usize> {
-    FONT_FALLBACK_LABELS
-        .iter()
-        .position(|candidate| *candidate == label)
-}
-
 /// Geometry for the centered settings dialog — single source of truth shared
 /// by the renderer, hit-testing, scroll, hover, IME, and accessibility.
 ///
@@ -510,20 +504,94 @@ pub struct SettingItem {
 /// The type of a setting value, determines how ←→ adjusts it
 #[derive(Debug, Clone)]
 pub enum SettingKind {
-    /// Numeric value with min, max, step
-    Numeric { min: f32, max: f32, step: f32 },
-    /// Dropdown with a list of options and current index
+    /// A number stepped within its range; `set` makes the change.
+    Numeric {
+        value: f32,
+        min: f32,
+        max: f32,
+        step: f32,
+        set: fn(f32) -> SettingsAction,
+    },
+    /// Dropdown with a list of options, the current index, and what picking
+    /// an option does.
     Dropdown {
         options: Vec<String>,
         selected: usize,
+        choose: Choose,
     },
     /// Predefined list of numeric values (for logarithmic-style stepping)
-    SteppedList { values: Vec<usize>, selected: usize },
+    SteppedList {
+        values: Vec<usize>,
+        selected: usize,
+        set: fn(usize) -> SettingsAction,
+    },
     /// A row that invokes a bounded application action instead of changing a
     /// persisted configuration value.
     Action { action: SettingsAction },
     /// Read-only display value
     ReadOnly,
+}
+
+/// How a picked dropdown option becomes an action.
+#[derive(Debug, Clone, Copy)]
+pub enum Choose {
+    /// The option's text is the value: a theme, font family, or cursor style.
+    Text(fn(String) -> SettingsAction),
+    /// The options are On and Off, in that order.
+    Toggle(fn(bool) -> SettingsAction),
+    /// The options list a fixed set of values in order; the position picks one.
+    Index(fn(usize) -> SettingsAction),
+    /// One position in the font fallback chain; the "None" option removes it.
+    FontFallback(usize),
+    /// Offer or hide this built-in agent; the options are On and Off.
+    Agent(&'static str),
+}
+
+impl Choose {
+    fn action(self, options: &[String], index: usize) -> SettingsAction {
+        let Some(option) = options.get(index) else {
+            return SettingsAction::None;
+        };
+        match self {
+            Self::Text(set) => set(option.clone()),
+            Self::Toggle(set) => set(index == 0),
+            Self::Index(set) => set(index),
+            Self::FontFallback(index) => SettingsAction::SetFontFallback {
+                index,
+                family: (option != NO_FONT_FALLBACK).then(|| option.clone()),
+            },
+            Self::Agent(agent_id) => SettingsAction::SetAgentEnabled {
+                agent_id: agent_id.into(),
+                enabled: index == 0,
+            },
+        }
+    }
+}
+
+fn on_off(on: bool) -> &'static str {
+    if on { "On" } else { "Off" }
+}
+
+fn on_off_options() -> Vec<String> {
+    vec!["On".into(), "Off".into()]
+}
+
+/// An On/Off setting.
+fn toggle(label: &'static str, on: bool, set: fn(bool) -> SettingsAction) -> SettingItem {
+    SettingItem {
+        label,
+        value: on_off(on).into(),
+        kind: SettingKind::Dropdown {
+            options: on_off_options(),
+            selected: usize::from(!on),
+            choose: Choose::Toggle(set),
+        },
+    }
+}
+
+/// The `index`th of `values`, as `set` turns it into an action.
+fn pick<T: Copy>(values: &[T], index: usize, set: fn(T) -> SettingsAction) -> SettingsAction {
+    values.get(index).copied().map_or(SettingsAction::None, set)
 }
 
 /// A flat entry for the settings modal list (item or category header)
@@ -888,6 +956,8 @@ impl SettingsPanel {
                     label: "Size",
                     value: format!("{:.1}", config.font.size),
                     kind: SettingKind::Numeric {
+                        value: config.font.size,
+                        set: SettingsAction::SetFontSize,
                         min: 8.0,
                         max: 72.0,
                         step: 1.0,
@@ -897,6 +967,7 @@ impl SettingsPanel {
                     label: "Family",
                     value: config.font.family.clone(),
                     kind: SettingKind::Dropdown {
+                        choose: Choose::Text(SettingsAction::SetFontFamily),
                         options: font_options.clone(),
                         selected: font_selected,
                     },
@@ -905,6 +976,8 @@ impl SettingsPanel {
                     label: "Normal Weight",
                     value: config.font.weight.to_string(),
                     kind: SettingKind::Numeric {
+                        value: f32::from(config.font.weight),
+                        set: |weight| SettingsAction::SetFontWeight(weight as u16),
                         min: crate::config::MIN_FONT_WEIGHT as f32,
                         max: config.font.bold_weight as f32,
                         step: 25.0,
@@ -914,6 +987,8 @@ impl SettingsPanel {
                     label: "Bold Weight",
                     value: config.font.bold_weight.to_string(),
                     kind: SettingKind::Numeric {
+                        value: f32::from(config.font.bold_weight),
+                        set: |weight| SettingsAction::SetBoldFontWeight(weight as u16),
                         min: config.font.weight as f32,
                         max: crate::config::MAX_FONT_WEIGHT as f32,
                         step: 25.0,
@@ -968,7 +1043,11 @@ impl SettingsPanel {
                     value: current
                         .cloned()
                         .unwrap_or_else(|| NO_FONT_FALLBACK.to_string()),
-                    kind: SettingKind::Dropdown { options, selected },
+                    kind: SettingKind::Dropdown {
+                        options,
+                        selected,
+                        choose: Choose::FontFallback(index),
+                    },
                 });
             }
 
@@ -1001,32 +1080,23 @@ impl SettingsPanel {
                     label: "Line Height",
                     value: format!("{:.2}", config.font.line_height),
                     kind: SettingKind::Numeric {
+                        value: config.font.line_height,
+                        set: SettingsAction::SetLineHeight,
                         min: 0.8,
                         max: 3.0,
                         step: 0.05,
                     },
                 },
-                SettingItem {
-                    label: "Ligatures",
-                    value: if config.font.ligatures { "On" } else { "Off" }.into(),
-                    kind: SettingKind::Dropdown {
-                        options: vec!["On".into(), "Off".into()],
-                        selected: if config.font.ligatures { 0 } else { 1 },
-                    },
-                },
-                SettingItem {
-                    label: "Bold Is Bright",
-                    value: if config.font.bold_is_bright {
-                        "On"
-                    } else {
-                        "Off"
-                    }
-                    .into(),
-                    kind: SettingKind::Dropdown {
-                        options: vec!["On".into(), "Off".into()],
-                        selected: if config.font.bold_is_bright { 0 } else { 1 },
-                    },
-                },
+                toggle(
+                    "Ligatures",
+                    config.font.ligatures,
+                    SettingsAction::SetFontLigatures,
+                ),
+                toggle(
+                    "Bold Is Bright",
+                    config.font.bold_is_bright,
+                    SettingsAction::SetBoldIsBright,
+                ),
             ]);
             result.push((SettingsSection::Font, items));
         }
@@ -1041,7 +1111,11 @@ impl SettingsPanel {
             let mut items = vec![SettingItem {
                 label: "Theme",
                 value: config.theme.name.clone(),
-                kind: SettingKind::Dropdown { options, selected },
+                kind: SettingKind::Dropdown {
+                    options,
+                    selected,
+                    choose: Choose::Text(SettingsAction::SetTheme),
+                },
             }];
             if let Some(meta) = &self.theme_meta {
                 if !meta.name.is_empty() {
@@ -1077,6 +1151,8 @@ impl SettingsPanel {
                     label: "Padding",
                     value: format!("{}", config.window.padding),
                     kind: SettingKind::Numeric {
+                        value: config.window.padding as f32,
+                        set: |padding| SettingsAction::SetPadding(padding as u32),
                         min: 0.0,
                         max: 64.0,
                         step: 2.0,
@@ -1086,6 +1162,8 @@ impl SettingsPanel {
                     label: "Opacity",
                     value: format!("{:.2}", config.window.opacity),
                     kind: SettingKind::Numeric {
+                        value: config.window.opacity,
+                        set: SettingsAction::SetOpacity,
                         min: 0.1,
                         max: 1.0,
                         step: 0.05,
@@ -1103,6 +1181,8 @@ impl SettingsPanel {
                     label: "Background Image Opacity",
                     value: format!("{:.2}", config.window.background_image.opacity),
                     kind: SettingKind::Numeric {
+                        value: config.window.background_image.opacity,
+                        set: SettingsAction::SetBackgroundImageOpacity,
                         min: 0.0,
                         max: 1.0,
                         step: 0.05,
@@ -1112,6 +1192,13 @@ impl SettingsPanel {
                     label: "Background Image Fit",
                     value: config.window.background_image.fit.label().into(),
                     kind: SettingKind::Dropdown {
+                        choose: Choose::Index(|index| {
+                            pick(
+                                BackgroundImageFit::ALL,
+                                index,
+                                SettingsAction::SetBackgroundImageFit,
+                            )
+                        }),
                         options: BackgroundImageFit::ALL
                             .iter()
                             .map(|fit| fit.label().to_string())
@@ -1122,22 +1209,22 @@ impl SettingsPanel {
                             .unwrap_or(0),
                     },
                 },
-                SettingItem {
-                    label: "Decorations",
-                    value: if config.window.decorations {
-                        "On".into()
-                    } else {
-                        "Off".into()
-                    },
-                    kind: SettingKind::Dropdown {
-                        options: vec!["On".into(), "Off".into()],
-                        selected: if config.window.decorations { 0 } else { 1 },
-                    },
-                },
+                toggle(
+                    "Decorations",
+                    config.window.decorations,
+                    SettingsAction::SetDecorations,
+                ),
                 SettingItem {
                     label: "Window Level",
                     value: config.window.level.label().into(),
                     kind: SettingKind::Dropdown {
+                        choose: Choose::Index(|index| {
+                            pick(
+                                WindowLevelConfig::ALL,
+                                index,
+                                SettingsAction::SetWindowLevel,
+                            )
+                        }),
                         options: WindowLevelConfig::ALL
                             .iter()
                             .map(|level| level.label().to_string())
@@ -1152,6 +1239,13 @@ impl SettingsPanel {
                     label: "Tab Bar Position",
                     value: config.window.tab_bar_position.label().into(),
                     kind: SettingKind::Dropdown {
+                        choose: Choose::Index(|index| {
+                            pick(
+                                TabBarPosition::ALL,
+                                index,
+                                SettingsAction::SetTabBarPosition,
+                            )
+                        }),
                         options: TabBarPosition::ALL
                             .iter()
                             .map(|position| position.label().to_string())
@@ -1183,26 +1277,18 @@ impl SettingsPanel {
                         label: "Style",
                         value: config.cursor.style.label().into(),
                         kind: SettingKind::Dropdown {
+                            choose: Choose::Text(SettingsAction::SetCursorStyle),
                             options: style_options,
                             selected: style_selected,
                         },
                     },
-                    SettingItem {
-                        label: "Blink",
-                        value: if config.cursor.blink {
-                            "On".into()
-                        } else {
-                            "Off".into()
-                        },
-                        kind: SettingKind::Dropdown {
-                            options: vec!["On".into(), "Off".into()],
-                            selected: if config.cursor.blink { 0 } else { 1 },
-                        },
-                    },
+                    toggle("Blink", config.cursor.blink, SettingsAction::SetCursorBlink),
                     SettingItem {
                         label: "Blink Rate",
                         value: format!("{}ms", config.cursor.blink_rate),
                         kind: SettingKind::Numeric {
+                            value: config.cursor.blink_rate as f32,
+                            set: |rate| SettingsAction::SetCursorBlinkRate(rate as u32),
                             min: 100.0,
                             max: 2000.0,
                             step: 50.0,
@@ -1216,34 +1302,14 @@ impl SettingsPanel {
         result.push((
             SettingsSection::Bell,
             vec![
-                SettingItem {
-                    label: "Visual",
-                    value: if config.bell.visual {
-                        "On".into()
-                    } else {
-                        "Off".into()
-                    },
-                    kind: SettingKind::Dropdown {
-                        options: vec!["On".into(), "Off".into()],
-                        selected: if config.bell.visual { 0 } else { 1 },
-                    },
-                },
-                SettingItem {
-                    label: "Audio",
-                    value: if config.bell.audio {
-                        "On".into()
-                    } else {
-                        "Off".into()
-                    },
-                    kind: SettingKind::Dropdown {
-                        options: vec!["On".into(), "Off".into()],
-                        selected: if config.bell.audio { 0 } else { 1 },
-                    },
-                },
+                toggle("Visual", config.bell.visual, SettingsAction::SetVisualBell),
+                toggle("Audio", config.bell.audio, SettingsAction::SetAudioBell),
                 SettingItem {
                     label: "Flash Duration",
                     value: format!("{}ms", config.bell.visual_duration_ms),
                     kind: SettingKind::Numeric {
+                        value: config.bell.visual_duration_ms as f32,
+                        set: |duration| SettingsAction::SetBellDuration(duration as u64),
                         min: 50.0,
                         max: 1000.0,
                         step: 50.0,
@@ -1278,6 +1344,7 @@ impl SettingsPanel {
                         label: "Lines",
                         value: format!("{}", config.scrollback.lines),
                         kind: SettingKind::SteppedList {
+                            set: SettingsAction::SetScrollback,
                             values: steps,
                             selected,
                         },
@@ -1286,6 +1353,7 @@ impl SettingsPanel {
                         label: "Scroll Speed",
                         value: format!("{}", config.scrollback.scroll_speed as usize),
                         kind: SettingKind::SteppedList {
+                            set: |speed| SettingsAction::SetScrollSpeed(speed as f64),
                             values: speed_steps,
                             selected: speed_selected,
                         },
@@ -1294,6 +1362,7 @@ impl SettingsPanel {
                         label: "Memory Limit",
                         value: format!("{} MiB", config.scrollback.max_memory_mib),
                         kind: SettingKind::SteppedList {
+                            set: SettingsAction::SetScrollbackMemory,
                             values: memory_steps,
                             selected: memory_selected,
                         },
@@ -1318,6 +1387,9 @@ impl SettingsPanel {
                     label: "Splash",
                     value: config.splash.mode.label().to_string(),
                     kind: SettingKind::Dropdown {
+                        choose: Choose::Index(|index| {
+                            pick(SplashMode::ALL, index, SettingsAction::SetSplashMode)
+                        }),
                         options: splash_options,
                         selected: splash_selected,
                     },
@@ -1375,46 +1447,24 @@ impl SettingsPanel {
 
         // Sessions
         {
-            let on_off = vec!["On".into(), "Off".into()];
             result.push((
                 SettingsSection::Sessions,
                 vec![
-                    SettingItem {
-                        label: "Auto Save Workspace",
-                        value: if config.session.auto_save {
-                            "On".into()
-                        } else {
-                            "Off".into()
-                        },
-                        kind: SettingKind::Dropdown {
-                            options: on_off.clone(),
-                            selected: if config.session.auto_save { 0 } else { 1 },
-                        },
-                    },
-                    SettingItem {
-                        label: "Auto Restore Workspace",
-                        value: if config.session.auto_restore {
-                            "On".into()
-                        } else {
-                            "Off".into()
-                        },
-                        kind: SettingKind::Dropdown {
-                            options: on_off.clone(),
-                            selected: if config.session.auto_restore { 0 } else { 1 },
-                        },
-                    },
-                    SettingItem {
-                        label: "Save Scrollback",
-                        value: if config.session.save_scrollback {
-                            "On".into()
-                        } else {
-                            "Off".into()
-                        },
-                        kind: SettingKind::Dropdown {
-                            options: on_off,
-                            selected: if config.session.save_scrollback { 0 } else { 1 },
-                        },
-                    },
+                    toggle(
+                        "Auto Save Workspace",
+                        config.session.auto_save,
+                        SettingsAction::SetSessionAutoSave,
+                    ),
+                    toggle(
+                        "Auto Restore Workspace",
+                        config.session.auto_restore,
+                        SettingsAction::SetSessionAutoRestore,
+                    ),
+                    toggle(
+                        "Save Scrollback",
+                        config.session.save_scrollback,
+                        SettingsAction::SetSessionSaveScrollback,
+                    ),
                 ],
             ));
 
@@ -1426,31 +1476,22 @@ impl SettingsPanel {
                         value: "Experimental beta".into(),
                         kind: SettingKind::ReadOnly,
                     },
-                    SettingItem {
-                        label: "Enabled",
-                        value: if config.harvest.enabled { "On" } else { "Off" }.into(),
-                        kind: SettingKind::Dropdown {
-                            options: vec!["On".into(), "Off".into()],
-                            selected: if config.harvest.enabled { 0 } else { 1 },
-                        },
-                    },
-                    SettingItem {
-                        label: "Growth Indicators",
-                        value: if config.harvest.show_indicators {
-                            "On"
-                        } else {
-                            "Off"
-                        }
-                        .into(),
-                        kind: SettingKind::Dropdown {
-                            options: vec!["On".into(), "Off".into()],
-                            selected: if config.harvest.show_indicators { 0 } else { 1 },
-                        },
-                    },
+                    toggle(
+                        "Enabled",
+                        config.harvest.enabled,
+                        SettingsAction::SetHarvestEnabled,
+                    ),
+                    toggle(
+                        "Growth Indicators",
+                        config.harvest.show_indicators,
+                        SettingsAction::SetHarvestIndicators,
+                    ),
                     SettingItem {
                         label: "History Limit",
                         value: config.harvest.max_history.to_string(),
                         kind: SettingKind::Numeric {
+                            value: config.harvest.max_history as f32,
+                            set: |limit| SettingsAction::SetHarvestMaxHistory(limit as usize),
                             min: 1.0,
                             max: 10_000.0,
                             step: 25.0,
@@ -1468,6 +1509,13 @@ impl SettingsPanel {
                     label: "Reduce Motion",
                     value: config.accessibility.reduce_motion.label().into(),
                     kind: SettingKind::Dropdown {
+                        choose: Choose::Index(|index| {
+                            pick(
+                                &AccessibilityPreference::ALL,
+                                index,
+                                SettingsAction::SetReduceMotion,
+                            )
+                        }),
                         options: AccessibilityPreference::ALL
                             .into_iter()
                             .map(|preference| preference.label().into())
@@ -1484,6 +1532,13 @@ impl SettingsPanel {
                     label: "High Contrast",
                     value: config.accessibility.high_contrast.label().into(),
                     kind: SettingKind::Dropdown {
+                        choose: Choose::Index(|index| {
+                            pick(
+                                &AccessibilityPreference::ALL,
+                                index,
+                                SettingsAction::SetHighContrast,
+                            )
+                        }),
                         options: AccessibilityPreference::ALL
                             .into_iter()
                             .map(|preference| preference.label().into())
@@ -1501,7 +1556,6 @@ impl SettingsPanel {
 
         // Agents: built-in agents by name, then a summary of custom ones.
         {
-            let on_off: Vec<String> = vec!["On".into(), "Off".into()];
             let mut items: Vec<SettingItem> = self
                 .agent_rows
                 .iter()
@@ -1515,10 +1569,11 @@ impl SettingsPanel {
                     }
                     SettingItem {
                         label: row.label,
-                        value: if row.enabled { "On" } else { "Off" }.into(),
+                        value: on_off(row.enabled).into(),
                         kind: SettingKind::Dropdown {
-                            options: on_off.clone(),
+                            options: on_off_options(),
                             selected: usize::from(!row.enabled),
+                            choose: Choose::Agent(row.id),
                         },
                     }
                 })
@@ -1544,6 +1599,13 @@ impl SettingsPanel {
                 label: "Supervisor",
                 value: supervisor_agents[supervisor_index].into(),
                 kind: SettingKind::Dropdown {
+                    choose: Choose::Index(|index| {
+                        pick(
+                            &crate::agents::supervisor::SUPERVISOR_AGENTS,
+                            index,
+                            |agent| SettingsAction::SetSupervisorAgent(agent.into()),
+                        )
+                    }),
                     options: supervisor_agents
                         .iter()
                         .map(|name| (*name).into())
@@ -1556,6 +1618,13 @@ impl SettingsPanel {
                 label: "Supervisor Mode",
                 value: config.supervisor.mode.label().into(),
                 kind: SettingKind::Dropdown {
+                    choose: Choose::Index(|index| {
+                        pick(
+                            &crate::agents::supervisor::SupervisorMode::ALL,
+                            index,
+                            SettingsAction::SetSupervisorMode,
+                        )
+                    }),
                     options: modes.iter().map(|mode| mode.label().into()).collect(),
                     selected: modes
                         .iter()
@@ -1568,6 +1637,13 @@ impl SettingsPanel {
                 label: "Open Agents In",
                 value: config.agent_view.open_agents_in.label().into(),
                 kind: SettingKind::Dropdown {
+                    choose: Choose::Index(|index| {
+                        pick(
+                            &crate::agents::config::OpenAgentsIn::ALL,
+                            index,
+                            SettingsAction::SetOpenAgentsIn,
+                        )
+                    }),
                     options: places.iter().map(|place| place.label().into()).collect(),
                     selected: places
                         .iter()
@@ -1576,27 +1652,16 @@ impl SettingsPanel {
                 },
             });
             let bypass = config.agent_view.allow_bypass_permissions;
-            items.push(SettingItem {
-                label: "Allow Bypass Permissions",
-                value: if bypass { "On" } else { "Off" }.into(),
-                kind: SettingKind::Dropdown {
-                    options: on_off.clone(),
-                    selected: usize::from(!bypass),
-                },
-            });
-            items.push(SettingItem {
-                label: "Notify When Agents Need You",
-                value: if config.agent_status.notify {
-                    "On"
-                } else {
-                    "Off"
-                }
-                .into(),
-                kind: SettingKind::Dropdown {
-                    options: on_off.clone(),
-                    selected: usize::from(!config.agent_status.notify),
-                },
-            });
+            items.push(toggle(
+                "Allow Bypass Permissions",
+                bypass,
+                SettingsAction::SetAllowBypassPermissions,
+            ));
+            items.push(toggle(
+                "Notify When Agents Need You",
+                config.agent_status.notify,
+                SettingsAction::SetAgentNotifications,
+            ));
             result.push((SettingsSection::Agents, items));
         }
 
@@ -1944,8 +2009,6 @@ impl SettingsPanel {
             return SettingsAction::None;
         };
         // Clone what we need before the mutable borrow
-        let entry_section = entry.section;
-        let entry_label = entry.label;
         let entry_kind = entry.kind.clone();
 
         let option_count = match &entry_kind {
@@ -1976,169 +2039,23 @@ impl SettingsPanel {
             }
             SettingsKey::Enter | SettingsKey::Right => {
                 self.dropdown_open = false;
-                self.map_dropdown_action(
-                    entry_section,
-                    entry_label,
-                    &entry_kind,
-                    self.dropdown_highlight,
-                )
+                Self::option_action(&entry_kind, self.dropdown_highlight)
             }
             _ => SettingsAction::None,
         }
     }
 
     /// Map a dropdown option selection to a SettingsAction
-    fn map_dropdown_action(
-        &self,
-        section: SettingsSection,
-        label: &str,
-        kind: &SettingKind,
-        option_idx: usize,
-    ) -> SettingsAction {
+    /// The action picking option `index` of a dropdown or stepped list takes.
+    fn option_action(kind: &SettingKind, index: usize) -> SettingsAction {
         match kind {
-            SettingKind::Dropdown { options, .. } => {
-                let Some(new_val) = options.get(option_idx) else {
-                    return SettingsAction::None;
-                };
-                let new_val = new_val.clone();
-                match (section, label) {
-                    (SettingsSection::Theme, _) => SettingsAction::SetTheme(new_val),
-                    (SettingsSection::Font, "Family") => SettingsAction::SetFontFamily(new_val),
-                    (SettingsSection::Font, "Ligatures") => {
-                        SettingsAction::SetFontLigatures(new_val == "On")
-                    }
-                    (SettingsSection::Font, "Bold Is Bright") => {
-                        SettingsAction::SetBoldIsBright(new_val == "On")
-                    }
-                    (SettingsSection::Font, label) => {
-                        font_fallback_index(label).map_or(SettingsAction::None, |index| {
-                            SettingsAction::SetFontFallback {
-                                index,
-                                family: (new_val != NO_FONT_FALLBACK).then_some(new_val),
-                            }
-                        })
-                    }
-                    (SettingsSection::Window, "Decorations") => {
-                        SettingsAction::SetDecorations(new_val == "On")
-                    }
-                    (SettingsSection::Window, "Window Level") => WindowLevelConfig::ALL
-                        .iter()
-                        .copied()
-                        .find(|level| level.label() == new_val)
-                        .map_or(SettingsAction::None, SettingsAction::SetWindowLevel),
-                    (SettingsSection::Window, "Tab Bar Position") => TabBarPosition::ALL
-                        .iter()
-                        .copied()
-                        .find(|position| position.label() == new_val)
-                        .map_or(SettingsAction::None, SettingsAction::SetTabBarPosition),
-                    (SettingsSection::Window, "Background Image Fit") => BackgroundImageFit::ALL
-                        .iter()
-                        .copied()
-                        .find(|fit| fit.label() == new_val)
-                        .map_or(SettingsAction::None, SettingsAction::SetBackgroundImageFit),
-                    (SettingsSection::Cursor, "Style") => SettingsAction::SetCursorStyle(new_val),
-                    (SettingsSection::Cursor, "Blink") => {
-                        SettingsAction::SetCursorBlink(new_val == "On")
-                    }
-                    (SettingsSection::Bell, "Visual") => {
-                        SettingsAction::SetVisualBell(new_val == "On")
-                    }
-                    (SettingsSection::Bell, "Audio") => {
-                        SettingsAction::SetAudioBell(new_val == "On")
-                    }
-                    (SettingsSection::Startup, "Splash") => {
-                        let mode = SplashMode::ALL
-                            .get(option_idx)
-                            .copied()
-                            .unwrap_or(SplashMode::FirstBoot);
-                        SettingsAction::SetSplashMode(mode)
-                    }
-                    (SettingsSection::Sessions, "Auto Save Workspace") => {
-                        SettingsAction::SetSessionAutoSave(new_val == "On")
-                    }
-                    (SettingsSection::Sessions, "Auto Restore Workspace") => {
-                        SettingsAction::SetSessionAutoRestore(new_val == "On")
-                    }
-                    (SettingsSection::Sessions, "Save Scrollback") => {
-                        SettingsAction::SetSessionSaveScrollback(new_val == "On")
-                    }
-                    (SettingsSection::Harvest, "Enabled") => {
-                        SettingsAction::SetHarvestEnabled(new_val == "On")
-                    }
-                    (SettingsSection::Harvest, "Growth Indicators") => {
-                        SettingsAction::SetHarvestIndicators(new_val == "On")
-                    }
-                    (SettingsSection::Accessibility, "Reduce Motion") => {
-                        SettingsAction::SetReduceMotion(
-                            AccessibilityPreference::ALL
-                                .get(option_idx)
-                                .copied()
-                                .unwrap_or_default(),
-                        )
-                    }
-                    (SettingsSection::Accessibility, "High Contrast") => {
-                        SettingsAction::SetHighContrast(
-                            AccessibilityPreference::ALL
-                                .get(option_idx)
-                                .copied()
-                                .unwrap_or_default(),
-                        )
-                    }
-                    (SettingsSection::Agents, "Open Agents In") => {
-                        crate::agents::config::OpenAgentsIn::ALL
-                            .get(option_idx)
-                            .copied()
-                            .map_or(SettingsAction::None, SettingsAction::SetOpenAgentsIn)
-                    }
-                    (SettingsSection::Agents, "Allow Bypass Permissions") => {
-                        SettingsAction::SetAllowBypassPermissions(new_val == "On")
-                    }
-                    (SettingsSection::Agents, "Notify When Agents Need You") => {
-                        SettingsAction::SetAgentNotifications(new_val == "On")
-                    }
-                    (SettingsSection::Agents, "Supervisor") => {
-                        crate::agents::supervisor::SUPERVISOR_AGENTS
-                            .get(option_idx)
-                            .map_or(SettingsAction::None, |id| {
-                                SettingsAction::SetSupervisorAgent((*id).into())
-                            })
-                    }
-                    (SettingsSection::Agents, "Supervisor Mode") => {
-                        crate::agents::supervisor::SupervisorMode::ALL
-                            .get(option_idx)
-                            .copied()
-                            .map_or(SettingsAction::None, SettingsAction::SetSupervisorMode)
-                    }
-                    (SettingsSection::Agents, label) => self
-                        .agent_rows
-                        .iter()
-                        .find(|row| row.label == label)
-                        .map_or(SettingsAction::None, |row| {
-                            SettingsAction::SetAgentEnabled {
-                                agent_id: row.id.into(),
-                                enabled: new_val == "On",
-                            }
-                        }),
-                    _ => SettingsAction::None,
-                }
-            }
-            SettingKind::SteppedList { values, .. } => {
-                let Some(&new_val) = values.get(option_idx) else {
-                    return SettingsAction::None;
-                };
-                match (section, label) {
-                    (SettingsSection::Scrollback, "Lines") => {
-                        SettingsAction::SetScrollback(new_val)
-                    }
-                    (SettingsSection::Scrollback, "Scroll Speed") => {
-                        SettingsAction::SetScrollSpeed(new_val as f64)
-                    }
-                    (SettingsSection::Scrollback, "Memory Limit") => {
-                        SettingsAction::SetScrollbackMemory(new_val)
-                    }
-                    _ => SettingsAction::None,
-                }
-            }
+            SettingKind::Dropdown {
+                options, choose, ..
+            } => choose.action(options, index),
+            SettingKind::SteppedList { values, set, .. } => values
+                .get(index)
+                .copied()
+                .map_or(SettingsAction::None, *set),
             _ => SettingsAction::None,
         }
     }
@@ -2150,44 +2067,21 @@ impl SettingsPanel {
         };
 
         match &entry.kind {
-            SettingKind::Numeric { min, max, step } => {
-                let clean_val = entry
-                    .value
-                    .trim_end_matches(|c: char| !c.is_ascii_digit() && c != '.');
-                let current: f32 = clean_val.parse().unwrap_or(0.0);
-                let new_val = (current + step * direction as f32).clamp(*min, *max);
-
-                match (entry.section, entry.label) {
-                    (SettingsSection::Font, "Size") => SettingsAction::SetFontSize(new_val),
-                    (SettingsSection::Font, "Normal Weight") => {
-                        SettingsAction::SetFontWeight(new_val as u16)
-                    }
-                    (SettingsSection::Font, "Bold Weight") => {
-                        SettingsAction::SetBoldFontWeight(new_val as u16)
-                    }
-                    (SettingsSection::Font, "Line Height") => {
-                        SettingsAction::SetLineHeight(new_val)
-                    }
-                    (SettingsSection::Window, "Padding") => {
-                        SettingsAction::SetPadding(new_val as u32)
-                    }
-                    (SettingsSection::Window, "Opacity") => SettingsAction::SetOpacity(new_val),
-                    (SettingsSection::Window, "Background Image Opacity") => {
-                        SettingsAction::SetBackgroundImageOpacity(new_val)
-                    }
-                    (SettingsSection::Cursor, "Blink Rate") => {
-                        SettingsAction::SetCursorBlinkRate(new_val as u32)
-                    }
-                    (SettingsSection::Bell, "Flash Duration") => {
-                        SettingsAction::SetBellDuration(new_val as u64)
-                    }
-                    (SettingsSection::Harvest, "History Limit") => {
-                        SettingsAction::SetHarvestMaxHistory(new_val as usize)
-                    }
-                    _ => SettingsAction::None,
-                }
+            SettingKind::Numeric {
+                value,
+                min,
+                max,
+                step,
+                set,
+            } => {
+                // Settle the float noise repeated steps leave (0.05 has no
+                // exact binary form) at a thousandth, finer than any step.
+                let stepped = ((value + step * direction as f32) * 1000.0).round() / 1000.0;
+                set(stepped.clamp(*min, *max))
             }
-            SettingKind::Dropdown { options, selected } => {
+            SettingKind::Dropdown {
+                options, selected, ..
+            } => {
                 if options.is_empty() {
                     return SettingsAction::None;
                 }
@@ -2196,9 +2090,11 @@ impl SettingsPanel {
                 } else {
                     selected.checked_sub(1).unwrap_or(options.len() - 1)
                 };
-                self.map_dropdown_action(entry.section, entry.label, &entry.kind, new_idx)
+                Self::option_action(&entry.kind, new_idx)
             }
-            SettingKind::SteppedList { values, selected } => {
+            SettingKind::SteppedList {
+                values, selected, ..
+            } => {
                 if values.is_empty() {
                     return SettingsAction::None;
                 }
@@ -2207,7 +2103,7 @@ impl SettingsPanel {
                 } else {
                     selected.saturating_sub(1)
                 };
-                self.map_dropdown_action(entry.section, entry.label, &entry.kind, new_idx)
+                Self::option_action(&entry.kind, new_idx)
             }
             SettingKind::Action { action } => {
                 if direction > 0 {
@@ -2306,8 +2202,12 @@ impl SettingsPanel {
             return false;
         };
         let selected = match &entry.kind {
-            SettingKind::Dropdown { selected, options } if !options.is_empty() => *selected,
-            SettingKind::SteppedList { selected, values } if !values.is_empty() => *selected,
+            SettingKind::Dropdown {
+                selected, options, ..
+            } if !options.is_empty() => *selected,
+            SettingKind::SteppedList {
+                selected, values, ..
+            } if !values.is_empty() => *selected,
             _ => return false,
         };
         self.dropdown_highlight = selected;
@@ -2349,7 +2249,7 @@ impl SettingsPanel {
         let Some(option_idx) = option_idx else {
             return SettingsAction::None;
         };
-        let action = self.map_dropdown_action(section, label, &entry.kind, option_idx);
+        let action = Self::option_action(&entry.kind, option_idx);
         self.dropdown_highlight = option_idx;
         self.dropdown_open = false;
         action
@@ -2395,12 +2295,7 @@ impl SettingsPanel {
                         self.dropdown_open = false;
                         if opt_idx < option_count {
                             if let Some(entry) = Self::nth_selectable(&entries, self.selected) {
-                                return self.map_dropdown_action(
-                                    entry.section,
-                                    entry.label,
-                                    &entry.kind,
-                                    opt_idx,
-                                );
+                                return Self::option_action(&entry.kind, opt_idx);
                             }
                         }
                         return SettingsAction::None;
@@ -3067,7 +2962,7 @@ mod tests {
             .expect("scrollback memory setting");
         assert_eq!(memory.value, "64 MiB");
         assert!(matches!(
-            panel.map_dropdown_action(memory.section, memory.label, &memory.kind, 3),
+            SettingsPanel::option_action(&memory.kind, 3),
             SettingsAction::SetScrollbackMemory(128)
         ));
     }
@@ -3125,23 +3020,26 @@ mod tests {
             }
         ));
         assert!(matches!(
-            panel.map_dropdown_action(first.section, first.label, &first.kind, 0),
+            SettingsPanel::option_action(&first.kind, 0),
             SettingsAction::SetFontFallback {
                 index: 0,
                 family: None
             }
         ));
 
-        let off = SettingKind::Dropdown {
-            options: vec!["On".into(), "Off".into()],
-            selected: 0,
+        let kind = |label: &str| {
+            &entries
+                .iter()
+                .find(|entry| entry.label == label)
+                .expect("font toggle row")
+                .kind
         };
         assert!(matches!(
-            panel.map_dropdown_action(SettingsSection::Font, "Ligatures", &off, 1),
+            SettingsPanel::option_action(kind("Ligatures"), 1),
             SettingsAction::SetFontLigatures(false)
         ));
         assert!(matches!(
-            panel.map_dropdown_action(SettingsSection::Font, "Bold Is Bright", &off, 1),
+            SettingsPanel::option_action(kind("Bold Is Bright"), 1),
             SettingsAction::SetBoldIsBright(false)
         ));
 
@@ -3158,6 +3056,34 @@ mod tests {
         assert!(matches!(
             panel.adjust_selected_value(&entries, 1),
             SettingsAction::SetFontWeight(425)
+        ));
+    }
+
+    #[test]
+    fn numeric_steps_start_from_the_configured_value_not_its_display() {
+        let step = |config: &Config, page, label: &str, direction| {
+            let mut panel = SettingsPanel::new();
+            panel.select_page(page);
+            let entries = panel.build_entries(config, &default_registry());
+            panel.selected = entries
+                .iter()
+                .filter(|entry| !entry.is_header)
+                .position(|entry| entry.label == label)
+                .expect("numeric row");
+            panel.adjust_selected_value(&entries, direction)
+        };
+        let mut config = Config::default();
+        // Shown as "0.33", but the step is from 0.333.
+        config.window.opacity = 0.333;
+        assert!(matches!(
+            step(&config, SettingsPage::Appearance, "Opacity", -1),
+            SettingsAction::SetOpacity(value) if value == 0.283
+        ));
+        // Repeated binary steps don't drift.
+        config.font.line_height = 1.1;
+        assert!(matches!(
+            step(&config, SettingsPage::Font, "Line Height", 1),
+            SettingsAction::SetLineHeight(value) if value == 1.15
         ));
     }
 
@@ -3194,7 +3120,7 @@ mod tests {
             .expect("window level row");
         assert_eq!(level.value, "Always on top");
         assert!(matches!(
-            panel.map_dropdown_action(level.section, level.label, &level.kind, 2),
+            SettingsPanel::option_action(&level.kind, 2),
             SettingsAction::SetWindowLevel(WindowLevelConfig::AlwaysOnBottom)
         ));
     }
@@ -3211,7 +3137,7 @@ mod tests {
             .expect("tab bar position row");
         assert_eq!(position.value, "Left");
         assert!(matches!(
-            panel.map_dropdown_action(position.section, position.label, &position.kind, 0),
+            SettingsPanel::option_action(&position.kind, 0),
             SettingsAction::SetTabBarPosition(TabBarPosition::Top)
         ));
     }
@@ -3238,7 +3164,7 @@ mod tests {
             .expect("background image fit row");
         assert_eq!(fit.value, "Center");
         assert!(matches!(
-            panel.map_dropdown_action(fit.section, fit.label, &fit.kind, 1),
+            SettingsPanel::option_action(&fit.kind, 1),
             SettingsAction::SetBackgroundImageFit(BackgroundImageFit::Contain)
         ));
 
@@ -3746,23 +3672,23 @@ mod tests {
     }
 
     #[test]
-    fn workspace_session_toggle_labels_map_to_real_actions() {
-        let panel = SettingsPanel::new();
-        let kind = SettingKind::Dropdown {
-            options: vec!["On".into(), "Off".into()],
-            selected: 0,
+    fn workspace_session_toggles_map_to_real_actions() {
+        let mut panel = SettingsPanel::new();
+        panel.select_page(SettingsPage::Sessions);
+        let entries = panel.build_entries(&Config::default(), &default_registry());
+        let kind = |label: &str| {
+            &entries
+                .iter()
+                .find(|entry| entry.label == label)
+                .expect("session toggle row")
+                .kind
         };
         assert!(matches!(
-            panel.map_dropdown_action(SettingsSection::Sessions, "Auto Save Workspace", &kind, 1,),
+            SettingsPanel::option_action(kind("Auto Save Workspace"), 1),
             SettingsAction::SetSessionAutoSave(false)
         ));
         assert!(matches!(
-            panel.map_dropdown_action(
-                SettingsSection::Sessions,
-                "Auto Restore Workspace",
-                &kind,
-                1,
-            ),
+            SettingsPanel::option_action(kind("Auto Restore Workspace"), 1),
             SettingsAction::SetSessionAutoRestore(false)
         ));
     }
@@ -3786,21 +3712,11 @@ mod tests {
         assert_eq!(reduce_motion.value, "On");
         assert_eq!(high_contrast.value, "System");
         assert!(matches!(
-            panel.map_dropdown_action(
-                reduce_motion.section,
-                reduce_motion.label,
-                &reduce_motion.kind,
-                2,
-            ),
+            SettingsPanel::option_action(&reduce_motion.kind, 2),
             SettingsAction::SetReduceMotion(AccessibilityPreference::Off)
         ));
         assert!(matches!(
-            panel.map_dropdown_action(
-                high_contrast.section,
-                high_contrast.label,
-                &high_contrast.kind,
-                1,
-            ),
+            SettingsPanel::option_action(&high_contrast.kind, 1),
             SettingsAction::SetHighContrast(AccessibilityPreference::On)
         ));
     }

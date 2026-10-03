@@ -5372,14 +5372,18 @@ impl App {
                 selected_setting = Some(node_id);
             }
             let mut node = match &entry.kind {
-                SettingKind::Numeric { min, max, step } => {
+                SettingKind::Numeric {
+                    value,
+                    min,
+                    max,
+                    step,
+                    ..
+                } => {
                     let mut node = Node::new(Role::SpinButton);
                     node.set_label(entry.label);
                     node.set_description(format!("{} setting", entry.section.label()));
                     node.set_value(entry.value.clone());
-                    if let Some(value) = numeric_setting_value(&entry.value) {
-                        node.set_numeric_value(value);
-                    }
+                    node.set_numeric_value(f64::from(*value));
                     node.set_min_numeric_value(f64::from(*min));
                     node.set_max_numeric_value(f64::from(*max));
                     node.set_numeric_value_step(f64::from(*step));
@@ -6299,13 +6303,6 @@ fn command_form_input(
     input.add_action(Action::Focus);
     input.set_bounds(command_rect(bounds));
     input
-}
-
-fn numeric_setting_value(value: &str) -> Option<f64> {
-    value
-        .trim_end_matches(|character: char| !character.is_ascii_digit() && character != '.')
-        .parse()
-        .ok()
 }
 
 #[allow(clippy::too_many_arguments)]
