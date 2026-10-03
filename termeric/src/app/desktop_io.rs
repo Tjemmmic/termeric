@@ -5,6 +5,7 @@ const FILE_UPLOAD_PROGRESS_EVENT_BYTES: u64 = 1024 * 1024;
 
 use super::*;
 use anyhow::Context as _;
+use base64::Engine as _;
 
 enum DroppedPathAction {
     InsertLocal(String),
@@ -825,7 +826,7 @@ impl App {
                     log::debug!("Denied OSC 52 clipboard read from {:?}", origin);
                     String::new()
                 };
-                let encoded = base64_encode_standard(text.as_bytes());
+                let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
                 let canonical = format!("\x1b]52;{};{}\x1b\\", which.osc_code(), encoded);
                 if let Some(tabs) = &mut self.tabs {
                     let reply = termeric_core::Terminal::frame_pty_reply_for_mode(

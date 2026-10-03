@@ -4636,45 +4636,11 @@ fn sprout_menu_render_info(
     }
 }
 
-/// Minimal RFC 4648 base64 encoder (standard alphabet) used for the OSC 52
-/// clipboard reply. Keeps us off an external `base64` dependency.
-fn base64_encode_standard(input: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
-    let (chunks, rem) = input.as_chunks::<3>();
-    for chunk in chunks {
-        let n = ((chunk[0] as u32) << 16) | ((chunk[1] as u32) << 8) | (chunk[2] as u32);
-        out.push(ALPHABET[((n >> 18) & 0x3F) as usize] as char);
-        out.push(ALPHABET[((n >> 12) & 0x3F) as usize] as char);
-        out.push(ALPHABET[((n >> 6) & 0x3F) as usize] as char);
-        out.push(ALPHABET[(n & 0x3F) as usize] as char);
-    }
-    match rem.len() {
-        1 => {
-            let n = (rem[0] as u32) << 16;
-            out.push(ALPHABET[((n >> 18) & 0x3F) as usize] as char);
-            out.push(ALPHABET[((n >> 12) & 0x3F) as usize] as char);
-            out.push('=');
-            out.push('=');
-        }
-        2 => {
-            let n = ((rem[0] as u32) << 16) | ((rem[1] as u32) << 8);
-            out.push(ALPHABET[((n >> 18) & 0x3F) as usize] as char);
-            out.push(ALPHABET[((n >> 12) & 0x3F) as usize] as char);
-            out.push(ALPHABET[((n >> 6) & 0x3F) as usize] as char);
-            out.push('=');
-        }
-        _ => {}
-    }
-    out
-}
-
 #[cfg(test)]
-mod base64_tests {
+mod helper_tests {
     use super::{
-        base64_encode_standard, blink_phase_visible, command_keystrokes, cursor_opacity_at,
-        cursor_state_requires_blink, next_blink_boundary, resolve_cursor_presentation,
-        select_agent_target,
+        blink_phase_visible, command_keystrokes, cursor_opacity_at, cursor_state_requires_blink,
+        next_blink_boundary, resolve_cursor_presentation, select_agent_target,
     };
     use std::time::{Duration, Instant};
 
@@ -4804,27 +4770,5 @@ mod base64_tests {
             command_keystrokes("cargo test\n"),
             [b"\x15".to_vec(), b"cargo test".to_vec(), b"\r".to_vec()]
         );
-    }
-
-    #[test]
-    fn test_base64_empty() {
-        assert_eq!(base64_encode_standard(b""), "");
-    }
-
-    #[test]
-    fn test_base64_rfc_vectors() {
-        assert_eq!(base64_encode_standard(b"f"), "Zg==");
-        assert_eq!(base64_encode_standard(b"fo"), "Zm8=");
-        assert_eq!(base64_encode_standard(b"foo"), "Zm9v");
-        assert_eq!(base64_encode_standard(b"foob"), "Zm9vYg==");
-        assert_eq!(base64_encode_standard(b"fooba"), "Zm9vYmE=");
-        assert_eq!(base64_encode_standard(b"foobar"), "Zm9vYmFy");
-    }
-
-    #[test]
-    fn test_base64_binary() {
-        // 00 FF 80 → AP+A, 7F 01 → fwE=
-        let bytes = [0x00, 0xff, 0x80, 0x7f, 0x01];
-        assert_eq!(base64_encode_standard(&bytes), "AP+AfwE=");
     }
 }

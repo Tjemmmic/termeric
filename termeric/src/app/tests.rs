@@ -3379,22 +3379,6 @@ fn finishing_native_drags_extracts_exact_live_domain_controls_once() {
 }
 
 #[test]
-fn clipboard_base64_preserves_full_groups_and_every_padding_case() {
-    for (input, expected) in [
-        ("", ""),
-        ("f", "Zg=="),
-        ("fo", "Zm8="),
-        ("foo", "Zm9v"),
-        ("foob", "Zm9vYg=="),
-        ("fooba", "Zm9vYmE="),
-        ("foobar", "Zm9vYmFy"),
-    ] {
-        assert_eq!(base64_encode_standard(input.as_bytes()), expected);
-    }
-    assert_eq!(base64_encode_standard(&[0xfb, 0xff, 0xff]), "+///");
-}
-
-#[test]
 fn native_window_title_tracks_the_active_tab_without_losing_product_identity() {
     assert_eq!(native_window_title(false, None), "Termeric");
     assert_eq!(native_window_title(false, Some("  ")), "Termeric");
