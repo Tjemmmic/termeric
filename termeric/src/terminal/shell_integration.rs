@@ -698,7 +698,7 @@ mod tests {
     use std::process::Command;
     use std::time::{Duration, Instant};
     use termeric_core::Pty;
-    use termeric_core::pty::{PtyEvent, spawn_reader_thread};
+    use termeric_core::pty::{PtyCommand, PtyEvent, default_pty_size, spawn_reader_thread};
 
     pub(super) fn shell(program: &str, args: &[&str]) -> ShellConfig {
         ShellConfig {
@@ -941,8 +941,16 @@ mod tests {
         }
         let temp = tempfile::tempdir().unwrap();
         let launch = prepare_shell_launch_in(&shell("bash", &[]), temp.path()).unwrap();
-        let pty = Pty::new_with_env(80, 24, launch.program.as_deref(), &launch.args, &launch.env)
-            .unwrap();
+        let pty = Pty::spawn(
+            default_pty_size(80, 24),
+            PtyCommand {
+                program: launch.program.as_deref(),
+                args: &launch.args,
+                env: &launch.env,
+                ..PtyCommand::default()
+            },
+        )
+        .unwrap();
         let (mut handle, reader) = pty.take_reader();
         let rx = spawn_reader_thread(reader);
         handle
@@ -1472,14 +1480,16 @@ mod tests {
         }
         let launch = prepare_shell_launch_in(&config, &temp.path().join("generated")).unwrap();
         assert_eq!(launch.integration, expected_support);
-        let pty = Pty::new_with_environment_policy(
+        let pty = Pty::spawn(
             termeric_core::pty::default_pty_size(100, 30),
-            launch.program.as_deref(),
-            &launch.args,
-            &launch.env,
-            &termeric_core::pty::EnvironmentPolicy {
-                clear: isolated_login,
-                unset: vec![],
+            PtyCommand {
+                program: launch.program.as_deref(),
+                args: &launch.args,
+                env: &launch.env,
+                policy: Some(&termeric_core::pty::EnvironmentPolicy {
+                    clear: isolated_login,
+                    unset: vec![],
+                }),
             },
         )
         .unwrap();

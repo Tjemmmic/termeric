@@ -1,7 +1,7 @@
 use super::*;
 use std::time::{Duration, Instant};
 use termeric_core::Pty;
-use termeric_core::pty::{PtyEvent, spawn_reader_thread};
+use termeric_core::pty::{PtyCommand, PtyEvent, default_pty_size, spawn_reader_thread};
 
 fn probe(prompt_command: &str, integrated: bool) -> Option<(String, Vec<u8>)> {
     let program = super::tests::test_shell("bash")?;
@@ -58,15 +58,17 @@ second_hook() {{
             "-i".into(),
         ]
     };
-    let pty = Pty::new_with_env(
-        100,
-        30,
-        Some(&program),
-        &args,
-        &[
-            ("HOME".into(), home.display().to_string()),
-            ("LC_ALL".into(), "C".into()),
-        ],
+    let pty = Pty::spawn(
+        default_pty_size(100, 30),
+        PtyCommand {
+            program: Some(&program),
+            args: &args,
+            env: &[
+                ("HOME".into(), home.display().to_string()),
+                ("LC_ALL".into(), "C".into()),
+            ],
+            ..PtyCommand::default()
+        },
     )
     .unwrap();
     let (mut handle, reader) = pty.take_reader();

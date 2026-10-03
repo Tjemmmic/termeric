@@ -14,7 +14,7 @@ use anyhow::Context;
 use std::collections::HashMap;
 use std::sync::mpsc::Receiver;
 use std::time::Instant;
-use termeric_core::pty::{PtyEvent, PtyHandle, spawn_reader_thread_with_waker};
+use termeric_core::pty::{PtyCommand, PtyEvent, PtyHandle, spawn_reader_thread_with_waker};
 use termeric_core::{Pty, Terminal, TerminalEvent};
 
 use super::title::{
@@ -186,11 +186,14 @@ impl Tab {
         terminal.set_pixel_geometry(geometry.pixel_width.into(), geometry.pixel_height.into());
         terminal.set_scrollback_limits(scrollback_lines, scrollback_bytes);
         let launch = prepare_shell_launch(shell);
-        let pty = Pty::new_with_env_and_size(
+        let pty = Pty::spawn(
             geometry.pty_size(),
-            launch.program.as_deref(),
-            &launch.args,
-            &launch.env,
+            PtyCommand {
+                program: launch.program.as_deref(),
+                args: &launch.args,
+                env: &launch.env,
+                ..PtyCommand::default()
+            },
         )?;
         terminal.set_term_name(pty.term_name());
         let (handle, reader) = pty.take_reader();
@@ -322,12 +325,14 @@ impl Tab {
             env.push((key, value));
         }
 
-        let pty = Pty::new_with_environment_policy(
+        let pty = Pty::spawn(
             geometry.pty_size(),
-            Some(program),
-            args,
-            &env,
-            policy,
+            PtyCommand {
+                program: Some(program),
+                args,
+                env: &env,
+                policy: Some(policy),
+            },
         )?;
         terminal.set_term_name(pty.term_name());
         let (handle, reader) = pty.take_reader();
@@ -861,11 +866,14 @@ impl Tab {
             .unwrap_or_default();
         env.append(&mut launch.env);
 
-        let pty = Pty::new_with_env_and_size(
+        let pty = Pty::spawn(
             geometry.pty_size(),
-            launch.program.as_deref(),
-            &launch.args,
-            &env,
+            PtyCommand {
+                program: launch.program.as_deref(),
+                args: &launch.args,
+                env: &env,
+                ..PtyCommand::default()
+            },
         )?;
         terminal.set_term_name(pty.term_name());
         let (handle, reader) = pty.take_reader();

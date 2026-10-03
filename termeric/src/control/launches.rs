@@ -78,14 +78,17 @@ impl LaunchLedger {
 mod tests {
     use super::*;
     use termeric_core::Pty;
+    use termeric_core::pty::{PtyCommand, default_pty_size};
 
     #[test]
     fn ledger_bounds_live_records_then_evicts_only_oldest_completion() {
-        let pty = Pty::new_with_command(
-            80,
-            24,
-            Some("/bin/sh"),
-            &["-c".into(), "read value; exit 9".into()],
+        let pty = Pty::spawn(
+            default_pty_size(80, 24),
+            PtyCommand {
+                program: Some("/bin/sh"),
+                args: &["-c".into(), "read value; exit 9".into()],
+                ..PtyCommand::default()
+            },
         )
         .unwrap();
         let (mut handle, reader) = pty.take_reader();

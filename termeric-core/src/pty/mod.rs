@@ -1,7 +1,5 @@
-//! Pseudo-terminal handling
-//!
-//! This module provides cross-platform PTY creation and management
-//! using the portable-pty crate.
+//! PTY creation and I/O over portable-pty, and the terminal identity exported
+//! to child processes.
 
 pub(crate) mod capabilities;
 mod child;
@@ -57,66 +55,32 @@ pub struct Pty {
     writer: Box<dyn Write + Send>,
 }
 
+/// What a new PTY runs. The default runs the user's shell with the
+/// inherited environment.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PtyCommand<'a> {
+    /// Program to run; `None` runs the user's shell.
+    pub program: Option<&'a str>,
+    pub args: &'a [String],
+    /// Variables set on top of the inherited environment. `PWD` also sets
+    /// the working directory when it names one.
+    pub env: &'a [(String, String)],
+    /// Inherited variables to clear or remove first; `None` keeps them all.
+    /// Unix portable-pty still supplies SHELL, so this is not a sandbox.
+    pub policy: Option<&'a EnvironmentPolicy>,
+}
+
 impl Pty {
-    /// Create a new PTY and spawn a shell process
-    ///
-    /// # Arguments
-    /// * `cols` - Number of columns
-    /// * `rows` - Number of rows
-    ///
-    /// # Returns
-    /// A new PTY instance or an error
-    pub fn new(cols: u16, rows: u16) -> Result<Self, PtyError> {
-        Self::new_with_command(cols, rows, None, &[])
-    }
-
-    /// Create a new PTY and spawn a process with an optional program and args
-    pub fn new_with_command(
-        cols: u16,
-        rows: u16,
-        program: Option<&str>,
-        args: &[String],
-    ) -> Result<Self, PtyError> {
-        Self::new_with_env(cols, rows, program, args, &[])
-    }
-
-    /// Create a new PTY with optional program, args, and environment variables
-    ///
-    /// # Arguments
-    /// * `cols` - Number of columns
-    /// * `rows` - Number of rows
-    /// * `program` - Optional program to run (defaults to user's shell)
-    /// * `args` - Arguments for the program
-    /// * `env` - Additional environment variables as (key, value) pairs
-    pub fn new_with_env(
-        cols: u16,
-        rows: u16,
-        program: Option<&str>,
-        args: &[String],
-        env: &[(String, String)],
-    ) -> Result<Self, PtyError> {
-        Self::new_with_env_and_size(default_pty_size(cols, rows), program, args, env)
-    }
-
-    /// Create a new PTY with complete cell and physical-pixel geometry.
-    pub fn new_with_env_and_size(
-        size: PtySize,
-        program: Option<&str>,
-        args: &[String],
-        env: &[(String, String)],
-    ) -> Result<Self, PtyError> {
-        Self::new_with_environment_policy(size, program, args, env, &EnvironmentPolicy::default())
-    }
-
-    /// Clear/remove inherited values before overlays and host terminal identity.
-    /// Unix portable-pty still supplies SHELL; this is not a zero-variable sandbox.
-    pub fn new_with_environment_policy(
-        size: PtySize,
-        program: Option<&str>,
-        args: &[String],
-        env: &[(String, String)],
-        policy: &EnvironmentPolicy,
-    ) -> Result<Self, PtyError> {
+    /// Open a PTY of `size` and start `command` on it.
+    pub fn spawn(size: PtySize, command: PtyCommand<'_>) -> Result<Self, PtyError> {
+        let PtyCommand {
+            program,
+            args,
+            env,
+            policy,
+        } = command;
+        let inherit = EnvironmentPolicy::default();
+        let policy = policy.unwrap_or(&inherit);
         policy
             .validate()
             .map_err(|error| PtyError::Creation(error.into()))?;
@@ -535,12 +499,14 @@ mod tests {
                     "must-not-override-identity".into(),
                 ),
             ];
-            let pty = Pty::new_with_environment_policy(
+            let pty = Pty::spawn(
                 default_pty_size(80, 24),
-                executable.to_str(),
-                &args,
-                &env,
-                &policy,
+                PtyCommand {
+                    program: executable.to_str(),
+                    args: &args,
+                    env: &env,
+                    policy: Some(&policy),
+                },
             )
             .unwrap();
             let observer = pty.child_observer();
@@ -595,7 +561,15 @@ mod tests {
                 "-c".into(),
                 format!("printf FINAL_CHILD_OUTPUT; exit {code}"),
             ];
-            let mut pty = Pty::new_with_command(80, 24, Some("/bin/sh"), &args).unwrap();
+            let mut pty = Pty::spawn(
+                default_pty_size(80, 24),
+                PtyCommand {
+                    program: Some("/bin/sh"),
+                    args: &args,
+                    ..PtyCommand::default()
+                },
+            )
+            .unwrap();
             let observer = pty.child_observer();
             assert_eq!(pty.wait().unwrap().exit_code(), code);
             assert!(!pty.is_running());
@@ -666,16 +640,18 @@ mod tests {
         for split in [false, true] {
             let directory = tempfile::tempdir().unwrap();
             let submitted = directory.path().join("submitted-input");
-            let mut pty = Pty::new_with_command(
-                80,
-                24,
-                Some("/bin/sh"),
-                &[
-                    "-c".into(),
-                    "printf READY; IFS= read -r value; printf '%s' \"$value\" > \"$1\"".into(),
-                    "shutdown-fixture".into(),
-                    submitted.to_str().unwrap().into(),
-                ],
+            let mut pty = Pty::spawn(
+                default_pty_size(80, 24),
+                PtyCommand {
+                    program: Some("/bin/sh"),
+                    args: &[
+                        "-c".into(),
+                        "printf READY; IFS= read -r value; printf '%s' \"$value\" > \"$1\"".into(),
+                        "shutdown-fixture".into(),
+                        submitted.to_str().unwrap().into(),
+                    ],
+                    ..PtyCommand::default()
+                },
             )
             .unwrap();
             let observer = pty.child_observer();
@@ -728,9 +704,15 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn child_observer_does_not_keep_a_closed_terminal_child_alive() {
-        let pty =
-            Pty::new_with_command(80, 24, Some("/bin/sh"), &["-c".into(), "read value".into()])
-                .unwrap();
+        let pty = Pty::spawn(
+            default_pty_size(80, 24),
+            PtyCommand {
+                program: Some("/bin/sh"),
+                args: &["-c".into(), "read value".into()],
+                ..PtyCommand::default()
+            },
+        )
+        .unwrap();
         let (handle, reader) = pty.take_reader();
         let observer = handle.child_observer();
         assert_eq!(
@@ -767,14 +749,10 @@ mod tests {
     }
 
     #[test]
-    fn test_pty_creation() {
-        // This test may fail in some CI environments without a proper TTY
-        let result = Pty::new(80, 24);
-        // Just verify it doesn't panic; may fail without proper TTY
-        if let Ok(mut pty) = result {
-            assert!(pty.is_running());
-            assert_eq!(pty.size().unwrap(), default_pty_size(80, 24));
-        }
+    fn default_command_runs_the_users_shell_at_the_requested_size() {
+        let mut pty = Pty::spawn(default_pty_size(80, 24), PtyCommand::default()).unwrap();
+        assert!(pty.is_running());
+        assert_eq!(pty.size().unwrap(), default_pty_size(80, 24));
     }
 
     #[cfg(unix)]
@@ -789,7 +767,16 @@ mod tests {
             ("COLORTERM".to_string(), "false".to_string()),
             ("TERMINFO".to_string(), "/untrusted/database".to_string()),
         ];
-        let pty = Pty::new_with_env(80, 24, Some("/bin/sh"), &args, &extra).unwrap();
+        let pty = Pty::spawn(
+            default_pty_size(80, 24),
+            PtyCommand {
+                program: Some("/bin/sh"),
+                args: &args,
+                env: &extra,
+                ..PtyCommand::default()
+            },
+        )
+        .unwrap();
         let term_name = pty.term_name();
         let (_handle, reader) = pty.take_reader();
         let rx = spawn_reader_thread(reader);
@@ -821,8 +808,15 @@ mod tests {
             pixel_height: 513,
         };
         let args = vec!["-c".to_string(), "sleep 1".to_string()];
-        let pty = Pty::new_with_env_and_size(initial, Some("/bin/sh"), &args, &[])
-            .expect("PTY helper should spawn");
+        let pty = Pty::spawn(
+            initial,
+            PtyCommand {
+                program: Some("/bin/sh"),
+                args: &args,
+                ..PtyCommand::default()
+            },
+        )
+        .expect("PTY helper should spawn");
         assert_eq!(pty.size().expect("TIOCGWINSZ at startup"), initial);
 
         let resized = PtySize {
@@ -862,7 +856,15 @@ mod tests {
             pixel_width: 913,
             pixel_height: 513,
         };
-        let pty = Pty::new_with_env_and_size(initial, Some(python), &args, &[]).unwrap();
+        let pty = Pty::spawn(
+            initial,
+            PtyCommand {
+                program: Some(python),
+                args: &args,
+                ..PtyCommand::default()
+            },
+        )
+        .unwrap();
         let (mut handle, reader) = pty.take_reader();
         let rx = spawn_reader_thread(reader);
         let mut output = String::new();

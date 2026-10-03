@@ -47,7 +47,7 @@ use anyhow::Context;
 use std::collections::HashMap;
 use std::io;
 use std::sync::mpsc::Receiver;
-use termeric_core::pty::{PtyEvent, PtyHandle, spawn_reader_thread_with_waker};
+use termeric_core::pty::{PtyCommand, PtyEvent, PtyHandle, spawn_reader_thread_with_waker};
 use termeric_core::{Pty, Terminal, TerminalEvent};
 
 /// Four-way direction for pane navigation.
@@ -191,11 +191,14 @@ impl Pane {
             launch.env.retain(|(key, _)| key != "PWD");
             launch.env.push(("PWD".into(), working_dir.into()));
         }
-        let pty = Pty::new_with_env_and_size(
+        let pty = Pty::spawn(
             geometry.pty_size(),
-            launch.program.as_deref(),
-            &launch.args,
-            &launch.env,
+            PtyCommand {
+                program: launch.program.as_deref(),
+                args: &launch.args,
+                env: &launch.env,
+                ..PtyCommand::default()
+            },
         )?;
         terminal.set_term_name(pty.term_name());
         let (handle, reader) = pty.take_reader();
@@ -237,7 +240,14 @@ impl Pane {
         terminal.set_pixel_geometry(geometry.pixel_width.into(), geometry.pixel_height.into());
         terminal.set_scrollback_limits(scrollback_lines, scrollback_bytes);
         terminal.set_graphics_relay_snapshot_allowed(true);
-        let pty = Pty::new_with_env_and_size(geometry.pty_size(), Some(program), args, &[])?;
+        let pty = Pty::spawn(
+            geometry.pty_size(),
+            PtyCommand {
+                program: Some(program),
+                args,
+                ..PtyCommand::default()
+            },
+        )?;
         terminal.set_term_name(pty.term_name());
         let (handle, reader) = pty.take_reader();
         let rx = spawn_reader_thread_with_waker(reader, crate::app::pty_event_waker());

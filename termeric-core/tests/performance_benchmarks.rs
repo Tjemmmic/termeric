@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use termeric_core::graphics::ImageStorage;
-use termeric_core::pty::{PtyEvent, spawn_reader_thread};
+use termeric_core::pty::{PtyCommand, PtyEvent, default_pty_size, spawn_reader_thread};
 use termeric_core::{ImageId, Pty, StoredImage, Terminal};
 
 const SAMPLE_COUNT: usize = 5;
@@ -411,7 +411,14 @@ fn release_benchmark_suite() {
     if std::path::Path::new("/bin/cat").exists() {
         let mut samples = Vec::with_capacity(SAMPLE_COUNT);
         for index in 0..SAMPLE_COUNT {
-            let pty = Pty::new_with_command(80, 24, Some("/bin/cat"), &[]).unwrap();
+            let pty = Pty::spawn(
+                default_pty_size(80, 24),
+                PtyCommand {
+                    program: Some("/bin/cat"),
+                    ..PtyCommand::default()
+                },
+            )
+            .unwrap();
             let (mut handle, reader) = pty.take_reader();
             let receiver = spawn_reader_thread(reader);
             let payload = format!("termeric-latency-{index}\n");

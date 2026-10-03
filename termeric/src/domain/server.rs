@@ -18,7 +18,7 @@ use std::sync::mpsc::{SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-use termeric_core::pty::{PtyHandle, PtySize, default_pty_size};
+use termeric_core::pty::{PtyCommand, PtyHandle, PtySize, default_pty_size};
 use termeric_core::split::LayoutShape;
 use termeric_core::term::{TerminalMode, XtermKeyboardType};
 use termeric_core::{Pty, Terminal, TerminalEvent};
@@ -2954,11 +2954,14 @@ impl PaneRuntime {
             environment.push(("PWD".to_string(), cwd.clone()));
         }
         let initial_size = default_pty_size(spec.cols, spec.rows);
-        let pty = Pty::new_with_env_and_size(
+        let pty = Pty::spawn(
             initial_size,
-            spec.program.as_deref(),
-            &spec.args,
-            &environment,
+            PtyCommand {
+                program: spec.program.as_deref(),
+                args: &spec.args,
+                env: &environment,
+                ..PtyCommand::default()
+            },
         )?;
         let term_name = pty.term_name();
         let (mut handle, reader) = pty.take_reader();
