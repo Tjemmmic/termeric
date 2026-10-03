@@ -1119,7 +1119,7 @@ impl App {
 
                 // F6 enters the tab-bar focus ring. While it is active, all
                 // navigation and activation keys stay in application chrome.
-                if self.handle_chrome_keyboard(&event) {
+                if self.handle_chrome_keyboard(&event.logical_key, event.state) {
                     return;
                 }
 

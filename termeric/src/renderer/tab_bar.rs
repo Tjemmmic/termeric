@@ -1321,6 +1321,19 @@ fn tab_animation_multiplier(tab: &TabInfo) -> f32 {
 mod tests {
     use super::*;
 
+    #[test]
+    fn moving_tabs_to_the_rail_narrows_the_terminal_grid() {
+        let geometry = |rail: f32| {
+            crate::terminal::geometry::TerminalGeometry::from_window_pixels(
+                1_200, 800, 8.0, rail, 36.0, 10.0, 20.0,
+            )
+        };
+        let top = geometry(0.0);
+        let left = geometry(vertical_tab_bar_width(1_200.0, 1.0));
+        assert!(left.cols < top.cols);
+        assert_eq!(left.rows, top.rows);
+    }
+
     fn tabs(count: usize, active: usize) -> Vec<TabInfo> {
         (0..count)
             .map(|index| TabInfo {

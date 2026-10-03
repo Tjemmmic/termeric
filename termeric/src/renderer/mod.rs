@@ -3363,12 +3363,14 @@ pub(crate) fn headless_glyph_atlas_stress_smoke(device: &Device, queue: &Queue) 
     let mut queued = Vec::with_capacity(GLYPHS);
     for index in 0..GLYPHS {
         // Seed enough installed printable glyph/style identities to fill the
-        // tiny pages, then broaden the workload with non-ASCII scalars (which
-        // may resolve through system fallback or the permanent replacement).
+        // tiny pages, then broaden the workload with CJK ideographs, which
+        // draw through system fallback or the permanent replacement. (A range
+        // with invisible scalars such as Hangul fillers would legitimately
+        // draw nothing for them on systems with those fonts.)
         let scalar = if index < 94 * 4 {
             0x21 + (index % 94) as u32
         } else {
-            0x1000 + (index % 512) as u32
+            0x4E00 + (index % 512) as u32
         };
         let character = char::from_u32(scalar).expect("stress scalar is valid");
         let style_index = (index / 94) % 4;

@@ -770,12 +770,15 @@ impl App {
         self.accessibility.keyboard_focus.render_target()
     }
 
-    pub(super) fn handle_chrome_keyboard(&mut self, event: &winit::event::KeyEvent) -> bool {
-        use winit::event::ElementState;
+    pub(super) fn handle_chrome_keyboard(
+        &mut self,
+        key: &winit::keyboard::Key,
+        state: ElementState,
+    ) -> bool {
         use winit::keyboard::{Key, NamedKey};
 
-        let is_f6 = matches!(event.logical_key, Key::Named(NamedKey::F6));
-        if event.state != ElementState::Pressed {
+        let is_f6 = matches!(key, Key::Named(NamedKey::F6));
+        if state != ElementState::Pressed {
             return self.accessibility.keyboard_focus != ChromeFocus::Terminal && !is_f6;
         }
 
@@ -797,7 +800,7 @@ impl App {
             return false;
         }
 
-        match &event.logical_key {
+        match key {
             Key::Named(NamedKey::Escape) => self.set_chrome_focus(ChromeFocus::Terminal),
             Key::Named(NamedKey::Tab) => {
                 self.move_chrome_focus(&sequence, self.modifiers.shift_key())
@@ -6891,6 +6894,63 @@ mod tests {
                 ChromeFocus::Settings,
             ]
         );
+    }
+
+    #[test]
+    fn f6_walks_the_chrome_and_enter_activates_what_has_focus() {
+        use winit::keyboard::{Key, NamedKey};
+        let mut config = Config::default();
+        config.shell.program = Some("/bin/sh".into());
+        config.shell.args = vec!["-c".into(), "sleep 30".into()];
+        let mut app = App::new_headless(config).unwrap();
+        app.allow_auto_restore = false;
+        app.init_tabs().unwrap();
+        app.handle_action(crate::input::Action::NewTab);
+        let press = |app: &mut App, key: NamedKey| {
+            app.handle_chrome_keyboard(&Key::Named(key), ElementState::Pressed)
+        };
+
+        // Keys belong to the terminal until F6 moves focus into the chrome.
+        assert!(!press(&mut app, NamedKey::ArrowRight));
+        assert!(press(&mut app, NamedKey::F6));
+        assert_eq!(app.accessibility.keyboard_focus, ChromeFocus::Tab(0));
+        assert!(press(&mut app, NamedKey::ArrowRight));
+        assert_eq!(app.accessibility.keyboard_focus, ChromeFocus::CloseTab(0));
+        assert!(press(&mut app, NamedKey::Tab));
+        assert_eq!(app.accessibility.keyboard_focus, ChromeFocus::Tab(1));
+        assert!(press(&mut app, NamedKey::End));
+        assert_eq!(app.accessibility.keyboard_focus, ChromeFocus::Settings);
+        // Releases stay in the chrome too, except F6's own.
+        assert!(app.handle_chrome_keyboard(&Key::Named(NamedKey::Tab), ElementState::Released));
+        assert!(!app.handle_chrome_keyboard(&Key::Named(NamedKey::F6), ElementState::Released));
+        assert!(press(&mut app, NamedKey::Escape));
+        assert_eq!(app.accessibility.keyboard_focus, ChromeFocus::Terminal);
+
+        // Choosing a tab switches to it and leaves focus on it.
+        press(&mut app, NamedKey::F6);
+        press(&mut app, NamedKey::Home);
+        assert!(press(&mut app, NamedKey::Enter));
+        assert_eq!(app.tabs.as_ref().unwrap().active_index(), 0);
+        assert_eq!(app.accessibility.keyboard_focus, ChromeFocus::Tab(0));
+
+        // New Tab and Settings act, then hand the keyboard back.
+        while app.accessibility.keyboard_focus != ChromeFocus::NewTab {
+            press(&mut app, NamedKey::ArrowRight);
+        }
+        assert!(press(&mut app, NamedKey::Space));
+        assert_eq!(app.tabs.as_ref().unwrap().count(), 3);
+        assert_eq!(app.accessibility.keyboard_focus, ChromeFocus::Terminal);
+        press(&mut app, NamedKey::F6);
+        press(&mut app, NamedKey::End);
+        press(&mut app, NamedKey::Enter);
+        assert!(app.settings_panel.is_active());
+        assert_eq!(app.accessibility.keyboard_focus, ChromeFocus::Terminal);
+
+        // Shift+F6 enters from the end of the ring.
+        app.settings_panel.close();
+        app.modifiers = ModifiersState::SHIFT;
+        press(&mut app, NamedKey::F6);
+        assert_eq!(app.accessibility.keyboard_focus, ChromeFocus::Settings);
     }
 
     #[test]

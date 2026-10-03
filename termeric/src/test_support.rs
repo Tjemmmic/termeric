@@ -183,12 +183,8 @@ fn plugin_quick_exit_crosses_pty_tab_and_diagnostic_capture_when_shell_exists() 
 }
 
 #[test]
-fn linux_headless_gpu_render_smoke_when_requested() {
-    if std::env::var("TERMERIC_GPU_SMOKE").as_deref() != Ok("1") {
-        eprintln!("skipping GPU smoke: set TERMERIC_GPU_SMOKE=1 (CI uses Vulkan + llvmpipe)");
-        return;
-    }
-
+#[ignore = "needs a GPU or Mesa's software Vulkan: cargo test -p termeric -- --ignored gpu_render_smoke"]
+fn gpu_render_smoke() {
     let instance_descriptor = wgpu::InstanceDescriptor::from_env_or_default();
     let enabled_backends = instance_descriptor.backends;
     let instance = wgpu::Instance::new(&instance_descriptor);
@@ -216,7 +212,7 @@ fn linux_headless_gpu_render_smoke_when_requested() {
             );
         }
         panic!(
-            "TERMERIC_GPU_SMOKE=1 but no WGPU software fallback adapter was found; \
+            "no WGPU software fallback adapter was found; \
              enabled backends={enabled_backends:?}; enumerated adapters={available:?}. \
              Install a WGPU-compatible CPU implementation such as Mesa llvmpipe/lavapipe \
              (mesa-vulkan-drivers on Debian/Ubuntu)"
@@ -276,6 +272,23 @@ fn linux_headless_gpu_render_smoke_when_requested() {
         image::save_buffer(&output, &pixels, width, height, image::ColorType::Rgba8)
             .expect("save GUI visual artifact");
     }
+    let signature = VisualSignature::of(&pixels, width, height);
+    let baseline = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/renderer/visual_baseline.json"
+    );
+    if std::env::var("TERMERIC_GUI_VISUAL_UPDATE").as_deref() == Ok("1") {
+        let json = serde_json::to_string_pretty(&signature).unwrap();
+        std::fs::write(baseline, json + "\n").expect("write the visual baseline");
+    }
+    let expected: VisualSignature =
+        serde_json::from_str(&std::fs::read_to_string(baseline).unwrap()).unwrap();
+    let differences = signature.differences(&expected);
+    assert!(
+        differences.is_empty(),
+        "GUI visual regression: {differences:?}; if the change is intended, rerun with \
+         TERMERIC_GUI_VISUAL_UPDATE=1"
+    );
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("Termeric headless smoke target"),
         size: wgpu::Extent3d {
@@ -318,6 +331,115 @@ fn linux_headless_gpu_render_smoke_when_requested() {
     queue.submit([encoder.finish()]);
 }
 
+/// Where ink falls in a rendered frame, coarse enough to ignore
+/// antialiasing: the frame is shrunk to 128×32 and compared by how much is
+/// inked, its bounds, its mean color, and its row and column profiles.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct VisualSignature {
+    normalized_size: [u32; 2],
+    ink_pixels: usize,
+    ink_bbox: [u32; 4],
+    mean_ink_rgb: [f64; 3],
+    row_ink: Vec<u32>,
+    column_ink: Vec<u32>,
+}
+
+impl VisualSignature {
+    const SIZE: [u32; 2] = [128, 32];
+
+    fn of(rgba: &[u8], width: u32, height: u32) -> Self {
+        let image = image::RgbaImage::from_raw(width, height, rgba.to_vec())
+            .expect("frame pixels match its size");
+        let [columns, rows] = Self::SIZE;
+        let small =
+            image::imageops::resize(&image, columns, rows, image::imageops::FilterType::Triangle);
+        let mut signature = Self {
+            normalized_size: Self::SIZE,
+            ink_pixels: 0,
+            ink_bbox: [u32::MAX, u32::MAX, 0, 0],
+            mean_ink_rgb: [0.0; 3],
+            row_ink: vec![0; rows as usize],
+            column_ink: vec![0; columns as usize],
+        };
+        for (x, y, pixel) in small.enumerate_pixels() {
+            let [red, green, blue, _] = pixel.0;
+            if red.max(green).max(blue) <= 8 {
+                continue;
+            }
+            signature.ink_pixels += 1;
+            let [left, top, right, bottom] = &mut signature.ink_bbox;
+            (*left, *top, *right, *bottom) = (
+                (*left).min(x),
+                (*top).min(y),
+                (*right).max(x),
+                (*bottom).max(y),
+            );
+            for (sum, channel) in signature.mean_ink_rgb.iter_mut().zip([red, green, blue]) {
+                *sum += f64::from(channel);
+            }
+            signature.row_ink[y as usize] += 1;
+            signature.column_ink[x as usize] += 1;
+        }
+        assert!(signature.ink_pixels > 0, "the frame has no visible pixels");
+        for sum in &mut signature.mean_ink_rgb {
+            *sum /= signature.ink_pixels as f64;
+        }
+        signature
+    }
+
+    fn differences(&self, expected: &Self) -> Vec<String> {
+        let mut differences = Vec::new();
+        let ink_change = self.ink_pixels.abs_diff(expected.ink_pixels) as f64
+            / expected.ink_pixels.max(1) as f64;
+        if ink_change > 0.12 {
+            differences.push(format!(
+                "inked pixels {} vs {}",
+                self.ink_pixels, expected.ink_pixels
+            ));
+        }
+        if self
+            .ink_bbox
+            .iter()
+            .zip(expected.ink_bbox)
+            .any(|(actual, expected)| actual.abs_diff(expected) > 4)
+        {
+            differences.push(format!(
+                "ink bounds {:?} vs {:?}",
+                self.ink_bbox, expected.ink_bbox
+            ));
+        }
+        if self
+            .mean_ink_rgb
+            .iter()
+            .zip(expected.mean_ink_rgb)
+            .any(|(actual, expected)| (actual - expected).abs() > 20.0)
+        {
+            differences.push(format!(
+                "mean ink color {:?} vs {:?}",
+                self.mean_ink_rgb, expected.mean_ink_rgb
+            ));
+        }
+        let profile_distance = |actual: &[u32], expected: &[u32]| {
+            let total: u32 = actual
+                .iter()
+                .zip(expected)
+                .map(|(a, e)| a.abs_diff(*e))
+                .sum();
+            f64::from(total) / f64::from(expected.iter().sum::<u32>().max(1))
+        };
+        for (name, actual, expected) in [
+            ("row", &self.row_ink, &expected.row_ink),
+            ("column", &self.column_ink, &expected.column_ink),
+        ] {
+            let distance = profile_distance(actual, expected);
+            if distance > 0.18 {
+                differences.push(format!("{name} ink profile moved by {distance:.3}"));
+            }
+        }
+        differences
+    }
+}
+
 #[cfg(debug_assertions)]
 fn require_release_profile() {
     panic!("performance suite requires --release");
@@ -326,11 +448,12 @@ fn require_release_profile() {
 #[cfg(not(debug_assertions))]
 fn require_release_profile() {}
 
-/// Scheduled/opt-in process-level resource exercise. `scripts/run_soak.py`
-/// launches this exact ignored test binary and samples its `/proc` resources.
+/// Opt-in process-level resource exercise: repeats terminal, pane, tab,
+/// session, transcript, and diff work, then checks this process's own memory,
+/// threads, open files, and children stayed within bounds.
 #[cfg(target_os = "linux")]
 #[test]
-#[ignore = "run with scripts/run_soak.py"]
+#[ignore = "a resource soak: cargo test -p termeric -- --ignored scheduled_resource_soak_scenario"]
 fn scheduled_resource_soak_scenario() {
     use crate::panes::{PaneManager, SplitDirection};
     use crate::session::Session;
@@ -338,12 +461,9 @@ fn scheduled_resource_soak_scenario() {
     use crate::session::transcript::{TranscriptRecorder, TranscriptWrite};
     use crate::terminal::search::Search;
     use std::fmt::Write as _;
-    use std::path::Path;
     use termeric_core::graphics::ImageStorage;
     use termeric_core::{ImageId, StoredImage};
 
-    assert_eq!(std::env::var("TERMERIC_RUN_SOAK").as_deref(), Ok("1"));
-    assert!(Path::new("/bin/sh").exists(), "Linux soak requires /bin/sh");
     let duration = std::env::var("TERMERIC_SOAK_DURATION_SECONDS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
@@ -359,6 +479,9 @@ fn scheduled_resource_soak_scenario() {
     let mut images = ImageStorage::new(32, 4 * 1024 * 1024);
     let mut diffs = crate::terminal::diff_detector::DiffDetector::new();
     let mut iteration = 0usize;
+    let mut baseline = None;
+    let mut most_children = 0;
+    let mut largest_rss_kib = 0;
 
     while Instant::now() < deadline {
         let mut output = String::with_capacity(32 * 1024);
@@ -468,6 +591,8 @@ fn scheduled_resource_soak_scenario() {
                 }
             }
         }
+        // Every entry is either written or counted as dropped.
+        assert_eq!(accepted_entries + dropped_entries, 68);
         let queued_bytes = transcript.queued_bytes_for_diagnostics();
         let transcript_path = transcript.path().to_path_buf();
         transcript.finish(Duration::from_secs(2)).unwrap();
@@ -475,25 +600,82 @@ fn scheduled_resource_soak_scenario() {
         assert_eq!(drained_queue_bytes, 0, "transcript queue did not drain");
         std::fs::remove_file(transcript_path).unwrap();
 
-        let diff_metrics = soak_diff_history(&mut diffs, iteration);
+        soak_diff_history(&mut diffs, iteration);
+        assert!(
+            queued_bytes <= 2 * 1024 * 1024,
+            "transcript queue grew to {queued_bytes} bytes"
+        );
 
         iteration += 1;
-        println!(
-            "TERMERIC_SOAK {{\"iteration\":{iteration},\"scrollback_bytes\":{},\"image_bytes\":{},\"transcript_queue_bytes\":{queued_bytes},\"transcript_queue_bytes_after_finish\":{drained_queue_bytes},\"transcript_entries_accepted\":{accepted_entries},\"transcript_entries_dropped\":{dropped_entries},\"diff_completed\":{},\"diff_evicted\":{},\"diff_retained\":{},\"diff_history_peak_count\":{},\"diff_history_peak_bytes\":{}}}",
-            terminal.memory_usage().scrollback_bytes,
-            images.memory_usage(),
-            diff_metrics.0,
-            diff_metrics.1,
-            diff_metrics.2,
-            diff_metrics.3,
-            diff_metrics.4,
-        );
+        let sample = ProcessResources::sample();
+        most_children = most_children.max(sample.children);
+        largest_rss_kib = largest_rss_kib.max(sample.rss_kib);
+        // The first iteration warms caches, pools, and worker threads up.
+        baseline.get_or_insert(sample);
         std::thread::sleep(Duration::from_millis(5));
     }
 
-    assert!(iteration > 0);
+    assert!(iteration > 1, "the soak needs at least two iterations");
     assert!(terminal.memory_usage().scrollback_bytes <= 16 * 1024 * 1024);
-    println!("TERMERIC_SOAK {{\"complete\":true,\"iterations\":{iteration}}}");
+    let first = baseline.expect("a sample after the first iteration");
+    let last = ProcessResources::sample();
+    assert!(
+        largest_rss_kib <= 512 * 1024,
+        "RSS peaked at {largest_rss_kib} KiB"
+    );
+    assert!(
+        last.rss_kib.saturating_sub(first.rss_kib) <= 128 * 1024,
+        "RSS grew from {} to {} KiB",
+        first.rss_kib,
+        last.rss_kib
+    );
+    assert!(
+        last.threads <= first.threads + 4,
+        "threads grew {first:?} -> {last:?}"
+    );
+    assert!(
+        last.fds <= first.fds + 8,
+        "file descriptors grew {first:?} -> {last:?}"
+    );
+    assert!(
+        most_children <= 16,
+        "{most_children} child processes at once"
+    );
+}
+
+/// This process's resident memory, threads, open files, and live children.
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug)]
+struct ProcessResources {
+    rss_kib: u64,
+    threads: usize,
+    fds: usize,
+    children: usize,
+}
+
+#[cfg(target_os = "linux")]
+impl ProcessResources {
+    fn sample() -> Self {
+        let status = std::fs::read_to_string("/proc/self/status").unwrap();
+        let rss_kib = status
+            .lines()
+            .find_map(|line| line.strip_prefix("VmRSS:"))
+            .and_then(|value| value.split_whitespace().next()?.parse().ok())
+            .expect("VmRSS in /proc/self/status");
+        let count = |path: &str| std::fs::read_dir(path).unwrap().count();
+        let children = std::fs::read_dir("/proc/self/task")
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter_map(|task| std::fs::read_to_string(task.path().join("children")).ok())
+            .map(|children| children.split_whitespace().count())
+            .sum();
+        Self {
+            rss_kib,
+            threads: count("/proc/self/task"),
+            fds: count("/proc/self/fd"),
+            children,
+        }
+    }
 }
 
 /// Feed one persistent history past both its count and owned-capacity ceilings.
