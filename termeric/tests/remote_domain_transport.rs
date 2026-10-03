@@ -104,9 +104,6 @@ fn protocol_version_probe_is_offline_and_machine_readable() {
 
 #[test]
 fn fake_ssh_controls_a_remote_daemon_without_network_or_token_export() {
-    if !Path::new("/bin/sh").exists() {
-        return;
-    }
     let temporary = tempfile::tempdir().unwrap();
     let probe = temporary.path().join("socket-probe");
     match std::os::unix::net::UnixListener::bind(&probe) {

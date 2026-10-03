@@ -6,24 +6,16 @@
 //! authenticates to the remote user's private socket without exporting its
 //! token.
 
-#[cfg(unix)]
 mod archive;
-#[cfg(unix)]
 mod client;
 pub mod model;
-#[cfg(unix)]
 pub(crate) mod paths;
 pub mod protocol;
-#[cfg(unix)]
 mod server;
 
-#[cfg(unix)]
 pub use client::DomainClient;
-#[cfg(unix)]
 pub use client::request_focus_background;
-#[cfg(unix)]
 use client::run_ssh_stdio_bridge;
-#[cfg(unix)]
 pub use paths::RuntimePaths;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,121 +29,6 @@ pub enum DomainTopologyEvent {
         message: String,
     },
 }
-
-#[cfg(not(unix))]
-pub struct DomainClient;
-
-#[cfg(not(unix))]
-impl DomainClient {
-    pub fn new_upload_id() -> anyhow::Result<String> {
-        anyhow::bail!("persistent local domains currently require Unix-domain sockets")
-    }
-
-    pub fn connect_or_start() -> anyhow::Result<Self> {
-        anyhow::bail!("persistent local domains currently require Unix-domain sockets")
-    }
-
-    pub fn request(&self, _request: Request) -> anyhow::Result<Response> {
-        anyhow::bail!("persistent local domains currently require Unix-domain sockets")
-    }
-
-    pub fn for_ssh(_destination: String) -> anyhow::Result<Self> {
-        anyhow::bail!("SSH domain transport currently requires Unix-domain sockets")
-    }
-
-    pub fn relay(&self, _domain: String, _pane: u32) -> anyhow::Result<()> {
-        anyhow::bail!("persistent local domains currently require Unix-domain sockets")
-    }
-
-    pub fn upload_file(
-        &self,
-        _domain: String,
-        _pane: u32,
-        _source: &std::path::Path,
-        _name: Option<String>,
-    ) -> anyhow::Result<Response> {
-        anyhow::bail!("persistent local domains currently require Unix-domain sockets")
-    }
-
-    pub fn upload_path(
-        &self,
-        _domain: String,
-        _pane: u32,
-        _source: &std::path::Path,
-        _name: Option<String>,
-    ) -> anyhow::Result<Response> {
-        anyhow::bail!("persistent local domains currently require Unix-domain sockets")
-    }
-
-    pub fn upload_path_with_manual_resume(
-        &self,
-        _domain: String,
-        _pane: u32,
-        _source: &std::path::Path,
-        _name: Option<String>,
-        _upload_id: String,
-        _resume_only: bool,
-    ) -> anyhow::Result<Response> {
-        anyhow::bail!("persistent local domains currently require Unix-domain sockets")
-    }
-
-    pub fn upload_directory(
-        &self,
-        _domain: String,
-        _pane: u32,
-        _source: &std::path::Path,
-        _name: Option<String>,
-    ) -> anyhow::Result<Response> {
-        anyhow::bail!("persistent local domains currently require Unix-domain sockets")
-    }
-
-    pub fn upload_directory_with_control(
-        &self,
-        _domain: String,
-        _pane: u32,
-        _source: &std::path::Path,
-        _name: Option<String>,
-        _expected_identity: Option<(u64, u64)>,
-        _cancelled: &std::sync::atomic::AtomicBool,
-        _progress: impl FnMut(u64, u64),
-    ) -> anyhow::Result<Response> {
-        anyhow::bail!("persistent local domains currently require Unix-domain sockets")
-    }
-
-    pub fn upload_open_file(
-        &self,
-        _domain: String,
-        _pane: u32,
-        _file: std::fs::File,
-        _name: String,
-    ) -> anyhow::Result<Response> {
-        anyhow::bail!("persistent local domains currently require Unix-domain sockets")
-    }
-
-    pub fn upload_open_file_with_control(
-        &self,
-        _domain: String,
-        _pane: u32,
-        _file: std::fs::File,
-        _name: String,
-        _cancelled: &std::sync::atomic::AtomicBool,
-        _progress: impl FnMut(u64, u64),
-    ) -> anyhow::Result<Response> {
-        anyhow::bail!("persistent local domains currently require Unix-domain sockets")
-    }
-
-    pub fn subscribe_topology(
-        &self,
-        _domain: String,
-        _alive: &std::sync::atomic::AtomicBool,
-        _receive: impl FnMut(DomainTopologyEvent) -> bool,
-    ) -> anyhow::Result<()> {
-        anyhow::bail!("persistent local domains currently require Unix-domain sockets")
-    }
-}
-
-#[cfg(not(unix))]
-pub fn request_focus_background(_authority: DomainAuthority, _domain: String, _pane: u32) {}
 
 use crate::panes::{PaneLayoutPreset, SplitDirection};
 use model::SpawnSpec;
@@ -593,17 +470,10 @@ fn format_ssh_hosts(
         .join("\n")
 }
 
-#[cfg(unix)]
 fn run_proxy_stdio(start_server: bool) -> anyhow::Result<()> {
     run_ssh_stdio_bridge(start_server)
 }
 
-#[cfg(not(unix))]
-fn run_proxy_stdio(start_server: bool) -> anyhow::Result<()> {
-    anyhow::bail!("the SSH domain bridge currently requires Unix-domain sockets")
-}
-
-#[cfg(unix)]
 fn run_server_foreground() -> anyhow::Result<()> {
     let (config, warning) = crate::config::Config::load_for_startup();
     if let Some(warning) = warning {
@@ -614,11 +484,6 @@ fn run_server_foreground() -> anyhow::Result<()> {
         config.security.allow_screen_checksum_reports,
         config.keyboard.xterm_type.terminal_type(),
     )
-}
-
-#[cfg(not(unix))]
-fn run_server_foreground() -> anyhow::Result<()> {
-    anyhow::bail!("persistent local domains currently require Unix-domain sockets")
 }
 
 fn format_human(response: Response) -> String {

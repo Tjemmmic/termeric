@@ -532,9 +532,6 @@ impl DomainClient {
             );
         }
         if metadata.is_dir() {
-            if !cfg!(target_os = "linux") {
-                anyhow::bail!("atomic directory uploads currently require Linux renameat2");
-            }
             let archive =
                 super::archive::build_directory_archive_with_control(source, &cancelled, None)?;
             let file = archive.file.try_clone()?;
@@ -577,10 +574,6 @@ impl DomainClient {
         cancelled: &AtomicBool,
         progress: impl FnMut(u64, u64),
     ) -> anyhow::Result<Response> {
-        if !cfg!(target_os = "linux") {
-            anyhow::bail!("atomic directory uploads currently require Linux renameat2");
-        }
-
         let archive = match super::archive::build_directory_archive_with_control(
             source,
             cancelled,

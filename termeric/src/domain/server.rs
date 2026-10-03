@@ -1243,7 +1243,6 @@ fn sync_directory(path: &std::path::Path) -> anyhow::Result<()> {
         .with_context(|| format!("sync staged upload directory {}", path.display()))
 }
 
-#[cfg(target_os = "linux")]
 fn publish_staged_directory(
     staging: &mut StagedDirectory,
     target: &std::path::Path,
@@ -1280,14 +1279,6 @@ fn publish_staged_directory(
     Ok(())
 }
 
-#[cfg(not(target_os = "linux"))]
-fn publish_staged_directory(
-    _staging: &mut StagedDirectory,
-    _target: &std::path::Path,
-) -> anyhow::Result<()> {
-    anyhow::bail!("atomic directory upload publication currently requires Linux renameat2")
-}
-
 fn validate_hello(frame: ClientFrame, expected_token: &str) -> Result<(), String> {
     match frame {
         ClientFrame::Hello { version, .. } if version != protocol::PROTOCOL_VERSION => {
@@ -1304,7 +1295,6 @@ fn validate_hello(frame: ClientFrame, expected_token: &str) -> Result<(), String
     }
 }
 
-#[cfg(target_os = "linux")]
 fn validate_peer(stream: &UnixStream) -> anyhow::Result<()> {
     let mut credentials = libc::ucred {
         pid: 0,
@@ -1327,23 +1317,6 @@ fn validate_peer(stream: &UnixStream) -> anyhow::Result<()> {
         return Err(std::io::Error::last_os_error()).context("authenticate domain peer owner");
     }
     if credentials.uid != effective_uid() {
-        anyhow::bail!("domain peer belongs to a different user");
-    }
-    Ok(())
-}
-
-#[cfg(all(unix, not(target_os = "linux")))]
-fn validate_peer(stream: &UnixStream) -> anyhow::Result<()> {
-    let mut uid: libc::uid_t = 0;
-    let mut gid: libc::gid_t = 0;
-    // SAFETY: getpeereid receives a valid connected Unix socket and two valid
-    // output pointers. It does not retain either pointer.
-    let result =
-        unsafe { libc::getpeereid(std::os::fd::AsRawFd::as_raw_fd(stream), &mut uid, &mut gid) };
-    if result != 0 {
-        return Err(std::io::Error::last_os_error()).context("authenticate domain peer owner");
-    }
-    if uid != effective_uid() {
         anyhow::bail!("domain peer belongs to a different user");
     }
     Ok(())
@@ -3904,9 +3877,6 @@ mod tests {
 
     #[test]
     fn domain_panes_inherit_the_server_checksum_policy() {
-        if !std::path::Path::new("/bin/true").exists() {
-            return;
-        }
         let spec = SpawnSpec {
             program: Some("/bin/true".into()),
             ..SpawnSpec::default()
@@ -3942,12 +3912,8 @@ mod tests {
         assert!(error.to_string().contains("does not exist"), "{error}");
     }
 
-    #[cfg(unix)]
     #[test]
     fn domain_panes_spawn_and_resize_with_nonzero_kernel_pixels() {
-        if !std::path::Path::new("/bin/sh").exists() {
-            return;
-        }
         let spec = SpawnSpec {
             program: Some("/bin/sh".into()),
             args: vec!["-c".into(), "sleep 1".into()],
@@ -5298,9 +5264,6 @@ mod tests {
 
     #[test]
     fn slow_subscriber_is_evicted_while_high_output_stays_memory_bounded() {
-        if !std::path::Path::new("/bin/sh").exists() {
-            return;
-        }
         let shutdown = Arc::new(AtomicBool::new(false));
         let state = Arc::new(Mutex::new(ServerState {
             domains: HashMap::new(),
@@ -5488,9 +5451,6 @@ mod tests {
 
     #[test]
     fn exited_nonfinal_tab_is_pruned_and_published_to_topology_subscribers() {
-        if !std::path::Path::new("/bin/sh").exists() {
-            return;
-        }
         let shutdown = Arc::new(AtomicBool::new(false));
         let state = Arc::new(Mutex::new(ServerState {
             domains: HashMap::new(),

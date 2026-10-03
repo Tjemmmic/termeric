@@ -127,7 +127,6 @@ fn build_directory_archive_inner(
     Ok(archive)
 }
 
-#[cfg(target_os = "linux")]
 fn anonymous_archive_file() -> Option<File> {
     OpenOptions::new()
         .read(true)
@@ -136,11 +135,6 @@ fn anonymous_archive_file() -> Option<File> {
         .custom_flags(libc::O_TMPFILE)
         .open(std::env::temp_dir())
         .ok()
-}
-
-#[cfg(not(target_os = "linux"))]
-fn anonymous_archive_file() -> Option<File> {
-    None
 }
 
 fn append_directory(
