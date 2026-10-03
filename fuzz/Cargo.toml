@@ -7,6 +7,12 @@ edition = "2024"
 [package.metadata]
 cargo-fuzz = true
 
+# The domain_protocol target compiles termeric/src/domain/{model,protocol}.rs
+# through #[path], and those files use these crates. Unused-dependency tools
+# scan only this crate's own sources, so they would report them as unused.
+[package.metadata.cargo-machete]
+ignored = ["anyhow", "serde", "serde_json"]
+
 [dependencies]
 libfuzzer-sys = "0.4"
 termeric-core = { path = "../termeric-core" }

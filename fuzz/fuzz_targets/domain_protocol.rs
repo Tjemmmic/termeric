@@ -1,4 +1,6 @@
 #![no_main]
+// The #[path] modules below are the app's full domain model and protocol;
+// this target exercises only frame decoding and encoding.
 #![allow(dead_code)]
 
 use libfuzzer_sys::fuzz_target;
