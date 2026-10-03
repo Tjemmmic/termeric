@@ -199,7 +199,6 @@ impl SessionPanelLayout {
 
     /// Geometry of the panel, which slides in from the right edge and spans
     /// from `top` (below the toolbar) to the bottom of the window.
-    #[allow(clippy::too_many_arguments)]
     pub fn calculate(
         window_width: f32,
         window_height: f32,

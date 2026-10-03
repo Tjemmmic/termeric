@@ -357,7 +357,6 @@ impl RectPipeline {
 
     /// Push the outline of a rounded rectangle, `stroke` pixels wide and
     /// drawn inside its bounds.
-    #[allow(clippy::too_many_arguments)]
     pub fn push_rounded_outline(
         &mut self,
         x: f32,
@@ -373,7 +372,6 @@ impl RectPipeline {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn push_shape(
         &mut self,
         x: f32,

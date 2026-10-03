@@ -25,7 +25,6 @@ impl Renderer {
     /// Draw one line of UI text from `x`, centred vertically in the box from
     /// `top` with `height` pixels and shortened with an ellipsis to fit
     /// `max_width`. Returns the width actually drawn.
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn push_ui_label(
         &mut self,
         text: &str,
@@ -77,7 +76,6 @@ impl Renderer {
 
     /// Draws a laid-out paragraph with its top-left corner at (`x`, `y`).
     /// `paint` gives each span's face and color.
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn push_text_layout(
         &mut self,
         layout: &TextLayout,
@@ -115,7 +113,6 @@ impl Renderer {
     /// indices appear in `highlights` in `highlight` instead of `color`.
     /// Each run is placed at the measured width of the text before it, so
     /// highlighted and plain runs line up with an unhighlighted rendering.
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn push_ui_label_highlighted(
         &mut self,
         text: &str,

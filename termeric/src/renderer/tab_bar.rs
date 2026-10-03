@@ -442,7 +442,6 @@ fn horizontal_tab_bar_element_rect(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn horizontal_tab_bar_hit_test(
     layout: &TabBarLayout,
     tabs: &[TabInfo],

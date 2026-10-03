@@ -269,7 +269,6 @@ impl Tab {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_with_command_geometry(
         id: usize,
         geometry: TerminalGeometry,
@@ -844,7 +843,6 @@ impl Tab {
         self.pinned = pinned;
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_with_cwd_geometry(
         id: usize,
         geometry: TerminalGeometry,

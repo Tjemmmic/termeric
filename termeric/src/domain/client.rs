@@ -741,7 +741,6 @@ impl DomainClient {
         unreachable!("bounded upload retry loop always returns")
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn upload_attempt(
         &self,
         domain: &str,

@@ -145,7 +145,6 @@ pub struct DiffReviewLayout {
 }
 
 impl DiffReviewLayout {
-    #[allow(clippy::too_many_arguments)]
     pub fn calculate(
         window_width: f32,
         window_height: f32,

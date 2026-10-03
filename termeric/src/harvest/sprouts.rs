@@ -346,7 +346,6 @@ pub struct SproutMenuLayout {
 }
 
 impl SproutMenuLayout {
-    #[allow(clippy::too_many_arguments)]
     pub fn calculate(
         row: usize,
         col: usize,

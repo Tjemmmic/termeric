@@ -194,7 +194,6 @@ fn keyboard_protocol(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 fn keyboard_protocol_with_profile(
     kitty_flags: KittyKeyboardFlags,
     xterm_keyboard_type: XtermKeyboardType,
@@ -776,7 +775,6 @@ fn encode_legacy_xterm_with_resources(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 fn encode_legacy_xterm_with_profile(
     logical_key: &Key,
     physical_key: PhysicalKey,
@@ -894,7 +892,6 @@ fn encode_xterm_modify_other_keys(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 fn encode_xterm_with_profile(
     logical_key: &Key,
     physical_key: PhysicalKey,

@@ -417,14 +417,7 @@ fn encode_hex(bytes: &[u8], output: &mut Vec<u8>) {
 }
 
 fn terminal_os_name() -> &'static [u8] {
-    #[cfg(target_os = "linux")]
-    return b"Linux";
-    #[cfg(target_os = "macos")]
-    return b"Darwin";
-    #[cfg(target_os = "windows")]
-    return b"Windows";
-    #[allow(unreachable_code)]
-    b"Unknown"
+    b"Linux"
 }
 
 /// Return only capabilities whose byte strings are part of Termeric's own

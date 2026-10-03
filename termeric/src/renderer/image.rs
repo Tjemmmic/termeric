@@ -441,7 +441,6 @@ impl ImagePipeline {
     }
 
     /// Queue an image for rendering
-    #[allow(clippy::too_many_arguments)]
     pub fn push_image(
         &mut self,
         image_key: ImageKey,

@@ -154,7 +154,6 @@ pub struct AgentsPanelLayout {
 impl AgentsPanelLayout {
     /// Geometry of the panel, which slides in from the right edge below the
     /// toolbar (`top`). `supervisor_entries` is `None` without a supervisor.
-    #[allow(clippy::too_many_arguments)]
     pub fn calculate(
         window_width: f32,
         window_height: f32,

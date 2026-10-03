@@ -1997,7 +1997,6 @@ impl Application {
         Ok(result_index)
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn launch_control_window(
         &mut self,
         event_loop: &ActiveEventLoop,
@@ -2173,7 +2172,6 @@ impl Application {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn launch_control_tab(
         &mut self,
         background: bool,
@@ -2609,7 +2607,6 @@ impl Application {
         Ok((destination_tab_id, source.should_exit))
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn move_control_pane(
         &mut self,
         request_id: &str,
@@ -2684,7 +2681,6 @@ impl Application {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn transfer_control_pane(
         source: &mut App,
         destination: &mut App,
@@ -2835,7 +2831,6 @@ impl Application {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn send_control_text(
         &mut self,
         request_id: &str,
@@ -2868,7 +2863,6 @@ impl Application {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn submit_control_text_to_agent(
         &mut self,
         request_id: &str,
@@ -2904,7 +2898,6 @@ impl Application {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn answer_control_approval(
         &mut self,
         request_id: &str,

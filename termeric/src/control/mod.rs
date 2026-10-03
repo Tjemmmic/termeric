@@ -310,7 +310,6 @@ pub fn list_agents(
 
 /// Paste `text` into one pane's agent and submit it. Returns whether it
 /// waits for the person's approval.
-#[allow(clippy::too_many_arguments)]
 pub fn submit_to_agent(
     process_id: u32,
     window_id: u64,
@@ -355,7 +354,6 @@ pub fn read_conversation(
 
 /// Answer one pending approval in an agent view session. Returns whether it
 /// was answered, rather than kept as a suggestion for the person.
-#[allow(clippy::too_many_arguments)]
 pub fn answer_approval(
     process_id: u32,
     window_id: u64,

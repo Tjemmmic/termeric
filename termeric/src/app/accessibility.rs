@@ -6308,7 +6308,6 @@ fn command_form_input(
     input
 }
 
-#[allow(clippy::too_many_arguments)]
 fn append_terminal_nodes(
     nodes: &mut Vec<(NodeId, Node)>,
     terminal_id: NodeId,

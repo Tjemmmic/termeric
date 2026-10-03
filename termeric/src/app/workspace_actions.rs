@@ -2307,7 +2307,6 @@ impl App {
         u16::try_from(index).map_err(|_| "GUI tab index does not fit the control protocol".into())
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn control_live_domain_move_pane(
         &self,
         source_tab_id: u64,
@@ -3320,7 +3319,6 @@ impl App {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn send_external_text(
         &mut self,
         tab_id: u64,

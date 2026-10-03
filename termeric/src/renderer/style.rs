@@ -111,7 +111,6 @@ impl super::Renderer {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn queue_sgr_decorations(
     rects: &mut super::rect::RectPipeline,
     style: ResolvedCellStyle,

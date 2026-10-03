@@ -113,7 +113,6 @@ impl Builder<'_, '_> {
         (region, y + self.m.pad)
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn item(
         &mut self,
         region: &mut Region,
@@ -385,7 +384,6 @@ impl Builder<'_, '_> {
         cursor - y
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn spans(
         &mut self,
         region: &mut Region,
@@ -492,7 +490,6 @@ impl Builder<'_, '_> {
 
     // ── Rows and cards ───────────────────────────────────────────────────
 
-    #[allow(clippy::too_many_arguments)]
     fn thinking(
         &mut self,
         region: &mut Region,
@@ -564,7 +561,6 @@ impl Builder<'_, '_> {
 
     /// A one-line row: optional chevron, icon, verb, subject, and status.
     /// Returns its height.
-    #[allow(clippy::too_many_arguments)]
     fn row(
         &mut self,
         region: &mut Region,
@@ -730,7 +726,6 @@ impl Builder<'_, '_> {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn explored(
         &mut self,
         region: &mut Region,
@@ -821,7 +816,6 @@ impl Builder<'_, '_> {
         cursor - y
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn tool(
         &mut self,
         region: &mut Region,
@@ -922,7 +916,6 @@ impl Builder<'_, '_> {
         height
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn generic_tool(
         &mut self,
         region: &mut Region,
@@ -1040,7 +1033,6 @@ impl Builder<'_, '_> {
     }
 
     /// One card per file the call changes or proposes to change.
-    #[allow(clippy::too_many_arguments)]
     fn edit_card(
         &mut self,
         region: &mut Region,
@@ -1082,7 +1074,6 @@ impl Builder<'_, '_> {
     }
 
     /// A file's diff under a header; `first` carries the call's error.
-    #[allow(clippy::too_many_arguments)]
     fn file_card(
         &mut self,
         region: &mut Region,
@@ -1402,7 +1393,6 @@ impl Builder<'_, '_> {
         cursor
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn command_card(
         &mut self,
         region: &mut Region,
@@ -1689,7 +1679,6 @@ impl Builder<'_, '_> {
         bounds.height
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn sub_agent(
         &mut self,
         region: &mut Region,

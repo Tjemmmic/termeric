@@ -4,7 +4,6 @@ use super::*;
 use termeric_core::{ExtraCursorColor, ExtraCursorShape, ExtraCursorState};
 
 impl Renderer {
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn build_extra_cursors(
         &mut self,
         grid: &Grid,
@@ -92,7 +91,6 @@ impl Renderer {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn draw_cursor_at(
         &mut self,
         grid: &Grid,

@@ -234,7 +234,6 @@ impl Pane {
     /// Create a pane backed by a direct command instead of the configured
     /// shell. Persistent-domain GUI attachments use this for one authenticated
     /// relay process per remote pane.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_with_command(
         id: PaneId,
         geometry: TerminalGeometry,
@@ -647,7 +646,6 @@ impl PaneManager {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_workspace(
         owner: crate::tabs::TabTerminalOwner,
         shell: ShellConfig,
@@ -758,7 +756,6 @@ impl PaneManager {
         Ok((manager, warnings))
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_domain(
         owner: crate::tabs::TabTerminalOwner,
         shell: ShellConfig,

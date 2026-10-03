@@ -1923,7 +1923,6 @@ impl Renderer {
     /// This method handles cell rendering, cursor, scrollbar, selection, search
     /// highlights, underlines, and URL detection for one grid. It is called once
     /// in single-grid mode or once per pane in multi-pane mode.
-    #[allow(clippy::too_many_arguments)]
     fn build_pane_grid(
         &mut self,
         grid: &Grid,
@@ -3476,7 +3475,6 @@ pub(crate) fn headless_glyph_atlas_stress_smoke(device: &Device, queue: &Queue) 
 }
 
 #[cfg(test)]
-#[allow(clippy::too_many_arguments)]
 fn queue_styled_test_run(
     text: &mut TextPipeline,
     content: &str,

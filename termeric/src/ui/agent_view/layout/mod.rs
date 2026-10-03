@@ -408,7 +408,6 @@ fn visible(prim: &Prim, viewport: Bounds) -> bool {
     bottom >= viewport.y && top <= viewport.bottom()
 }
 
-#[allow(clippy::too_many_arguments)]
 fn assemble(
     panel: Bounds,
     base: Region,
@@ -578,7 +577,6 @@ impl Builder<'_, '_> {
     }
 
     /// Wrapped text at (`x`, `y`), returning its height.
-    #[allow(clippy::too_many_arguments)]
     fn paragraph(
         &mut self,
         region: &mut Region,
@@ -607,7 +605,6 @@ impl Builder<'_, '_> {
     }
 
     /// Wrapped text that assistive technology also reads.
-    #[allow(clippy::too_many_arguments)]
     fn read_paragraph(
         &mut self,
         region: &mut Region,
@@ -631,7 +628,6 @@ impl Builder<'_, '_> {
 
     /// One line of text, vertically centred in `top..top + height` and
     /// shortened with an ellipsis to `max_width`. Returns its width.
-    #[allow(clippy::too_many_arguments)]
     fn label(
         &mut self,
         region: &mut Region,
@@ -707,7 +703,6 @@ impl Builder<'_, '_> {
     }
 
     /// A labelled button, at most `max_width` wide. Returns its width.
-    #[allow(clippy::too_many_arguments)]
     fn button(
         &mut self,
         region: &mut Region,
@@ -840,7 +835,6 @@ impl Builder<'_, '_> {
     }
 
     /// A small pill. Returns its width.
-    #[allow(clippy::too_many_arguments)]
     fn chip(
         &mut self,
         region: &mut Region,
@@ -1918,7 +1912,6 @@ impl Builder<'_, '_> {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn selection_rects(
         &mut self,
         region: &mut Region,
@@ -2591,7 +2584,6 @@ impl Builder<'_, '_> {
     }
 
     /// One choice in a menu.
-    #[allow(clippy::too_many_arguments)]
     fn menu_row(
         &mut self,
         region: &mut Region,

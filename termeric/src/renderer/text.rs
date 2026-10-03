@@ -125,7 +125,6 @@ pub(super) struct TextRunAccumulator {
 }
 
 impl TextRunAccumulator {
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn push(
         &mut self,
         pipeline: &mut TextPipeline,
@@ -142,7 +141,6 @@ impl TextRunAccumulator {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn accumulate(
         &mut self,
         character: char,
@@ -332,7 +330,6 @@ fn multicell_origin_and_clip(
     (x, y, clip)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn append_glyph_quad(
     vertices: &mut Vec<TextVertex>,
     indices: &mut Vec<u32>,
@@ -724,7 +721,6 @@ impl TextPipeline {
     }
 
     /// Queue UI text in a specific UI face.
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn push_ui_text_in(
         &mut self,
         text: &str,
@@ -755,7 +751,6 @@ impl TextPipeline {
     }
 
     /// Queue a terminal character with resolved SGR face and pane clipping.
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn push_styled_char(
         &mut self,
         c: char,
@@ -821,7 +816,6 @@ impl TextPipeline {
     }
 
     /// Queue a terminal grapheme with resolved SGR face and pane clipping.
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn push_styled_grapheme(
         &mut self,
         grapheme: &str,
@@ -849,7 +843,6 @@ impl TextPipeline {
 
     /// Queue an OSC 66 leader, clipping its scaled glyphs to the occupied
     /// rectangle and aligning a fractional render area within that rectangle.
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn push_styled_multicell(
         &mut self,
         text: &str,

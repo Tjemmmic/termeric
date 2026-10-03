@@ -238,7 +238,6 @@ impl Builder<'_, '_> {
     }
 
     /// A two- or three-line list row. Returns its height.
-    #[allow(clippy::too_many_arguments)]
     fn list_row(
         &mut self,
         region: &mut Region,
@@ -585,7 +584,6 @@ impl Builder<'_, '_> {
     }
 
     /// A choice card: a radio mark, a title, and a description.
-    #[allow(clippy::too_many_arguments)]
     fn option_card(
         &mut self,
         region: &mut Region,

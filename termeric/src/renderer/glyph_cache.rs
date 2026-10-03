@@ -175,7 +175,6 @@ pub struct LigatureKey {
 }
 
 impl LigatureKey {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         text: &str,
         font_size: f32,
@@ -2844,7 +2843,6 @@ fn matching_range_override<'a>(
     Some(rule)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn diagnose_font_coverage(
     font_system: &mut FontSystem,
     metrics: Metrics,

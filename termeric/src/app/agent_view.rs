@@ -1484,7 +1484,6 @@ impl App {
     /// Answers a session's pending approval for another program: the
     /// supervisor, or a person's own tooling when control input is allowed.
     /// Returns whether it was answered rather than suggested.
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn answer_agent_view_approval(
         &mut self,
         session_id: u64,

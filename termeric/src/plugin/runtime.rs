@@ -1481,7 +1481,6 @@ pub(crate) fn execute_admin_at(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn install_manifest(
     registry: &mut PluginRegistry,
     registry_path: &Path,

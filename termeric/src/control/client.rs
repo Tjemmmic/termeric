@@ -178,7 +178,6 @@ fn request_inventory(endpoint: &ControlPaths) -> anyhow::Result<ProcessInventory
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn get_text(
     process_id: u32,
     window_id: u64,
@@ -311,7 +310,6 @@ pub(super) fn format_launch_status(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn send_text(
     process_id: u32,
     window_id: u64,
@@ -463,7 +461,6 @@ pub fn new_window(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn launch_window(
     process_id: u32,
     source_window: u64,
@@ -601,7 +598,6 @@ pub fn new_tab(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn launch_tab(
     background: bool,
     process_id: u32,
@@ -1070,7 +1066,6 @@ pub fn close_pane(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn move_tab(
     process_id: u32,
     source_window_id: u64,
@@ -1144,7 +1139,6 @@ pub fn move_tab(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn move_pane(
     process_id: u32,
     source_window_id: u64,
@@ -1288,7 +1282,6 @@ pub fn resize_window(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn resize_divider(
     process_id: u32,
     window_id: u64,
@@ -1610,7 +1603,6 @@ pub(super) fn list_agents(
 /// Paste `text` into the agent in one pane and submit it, as the supervisor
 /// when `supervisor` carries its token. Returns whether it waits for the
 /// person's approval.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn submit_to_agent(
     process_id: u32,
     window_id: u64,
@@ -1685,7 +1677,6 @@ pub(super) fn read_conversation(
 
 /// Answer one pending approval in an agent view session. Returns whether it
 /// was answered, rather than kept as a suggestion for the person.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn answer_approval(
     process_id: u32,
     window_id: u64,
