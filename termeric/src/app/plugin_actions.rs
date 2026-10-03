@@ -159,13 +159,14 @@ impl App {
     ) -> Result<serde_json::Value, String> {
         match action {
             StructuredResponseAction::SelectTab { tab_id, .. } => {
-                let changed = self.select_plugin_tab(*tab_id)?;
+                let changed = self.select_tab_for(Requester::Plugin, *tab_id)?;
                 Ok(serde_json::json!({ "changed": changed }))
             }
             StructuredResponseAction::FocusPane {
                 tab_id, pane_id, ..
             } => {
-                let (tab_changed, pane_changed) = self.focus_plugin_pane(*tab_id, *pane_id)?;
+                let (tab_changed, pane_changed) =
+                    self.focus_pane_for(Requester::Plugin, *tab_id, *pane_id)?;
                 Ok(serde_json::json!({
                     "tab_changed": tab_changed,
                     "pane_changed": pane_changed,
@@ -180,7 +181,7 @@ impl App {
                 ..
             } => {
                 let (input_bytes, wire_bytes, disposition, confirmation_id) =
-                    self.send_plugin_text(*tab_id, *pane_id, text, *paste, *enter)?;
+                    self.send_text_for(Requester::Plugin, *tab_id, *pane_id, text, *paste, *enter)?;
                 Ok(serde_json::json!({
                     "input_bytes": input_bytes,
                     "wire_bytes": wire_bytes,
@@ -189,12 +190,14 @@ impl App {
                 }))
             }
             StructuredResponseAction::CreateTab { .. } => {
-                let created_tab_id = self.create_plugin_tab()?;
+                let created_tab_id = self.create_tab_for(Requester::Plugin)?;
                 Ok(serde_json::json!({ "created_tab_id": created_tab_id }))
             }
             StructuredResponseAction::CloseTab { tab_id, .. } => {
                 let (remaining_tabs, active_tab_id, active_changed) =
-                    self.close_plugin_tab(*tab_id)?;
+                    self.close_tab_for(Requester::Plugin, *tab_id)?;
+                let active_tab_id = active_tab_id
+                    .expect("last-tab protection leaves one active ordinary or live-domain tab");
                 Ok(serde_json::json!({
                     "scheduled": true,
                     "remaining_tabs": remaining_tabs,
@@ -215,7 +218,7 @@ impl App {
                 tab_id, pane_id, ..
             } => {
                 let (remaining_panes, focused_pane_id) =
-                    self.close_plugin_pane(*tab_id, *pane_id)?;
+                    self.close_pane_for(Requester::Plugin, *tab_id, *pane_id)?;
                 Ok(serde_json::json!({
                     "remaining_panes": remaining_panes,
                     "focused_pane_id": focused_pane_id,

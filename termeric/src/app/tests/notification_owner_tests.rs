@@ -30,18 +30,28 @@ fn delayed_notification_effects_follow_only_the_same_surviving_owner() {
                     .unwrap()
                     .focused_terminal_identity();
                 if transition == "nonzero-collapse" {
-                    app.close_control_pane(identity.tab_id as u64, 0).unwrap();
-                    app.close_control_pane(identity.tab_id as u64, 1).unwrap();
+                    app.close_pane_for(Requester::Control, identity.tab_id as u64, 0)
+                        .unwrap();
+                    app.close_pane_for(Requester::Control, identity.tab_id as u64, 1)
+                        .unwrap();
                 } else {
                     let sibling = split_harvest_capture_owner(&mut app, directory.path());
                     match transition {
                         "collapse" => {
-                            app.close_control_pane(identity.tab_id as u64, sibling.0)
-                                .unwrap();
+                            app.close_pane_for(
+                                Requester::Control,
+                                identity.tab_id as u64,
+                                sibling.0,
+                            )
+                            .unwrap();
                         }
                         "removed" | "resplit-replacement" => {
-                            app.close_control_pane(identity.tab_id as u64, identity.pane_id.0)
-                                .unwrap();
+                            app.close_pane_for(
+                                Requester::Control,
+                                identity.tab_id as u64,
+                                identity.pane_id.0,
+                            )
+                            .unwrap();
                             if transition == "resplit-replacement" {
                                 split_harvest_capture_owner(&mut app, directory.path());
                             }
@@ -201,7 +211,7 @@ fn notification_show_close_and_alive_commands_capture_stable_owner_keys() {
         },
     );
     assert_eq!(capture(), expected(sibling_identity));
-    app.close_control_pane(owner.tab_id as u64, sibling.0)
+    app.close_pane_for(Requester::Control, owner.tab_id as u64, sibling.0)
         .unwrap();
     issue(&mut app, single);
     assert_eq!(capture(), expected(owner));
@@ -209,7 +219,7 @@ fn notification_show_close_and_alive_commands_capture_stable_owner_keys() {
     assert!(capture().is_empty());
     // Removing pane zero must change even a single-tab command's owner key.
     let replacement = split_harvest_capture_owner(&mut app, directory.path());
-    app.close_control_pane(owner.tab_id as u64, owner.pane_id.0)
+    app.close_pane_for(Requester::Control, owner.tab_id as u64, owner.pane_id.0)
         .unwrap();
     current_harvest_capture_routes(&mut app, directory.path());
     issue(&mut app, single);

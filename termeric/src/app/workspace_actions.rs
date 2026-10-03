@@ -3,6 +3,49 @@
 use super::redraw_scheduler::RedrawReason;
 use super::*;
 
+/// Who asked for a tab or pane change from outside the window's own input:
+/// the running-GUI control plane or a declarative plugin. Internal automation
+/// picks the policy it matches — notification activation acts like a control
+/// client, the supervisor like a plugin.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Requester {
+    Control,
+    Plugin,
+}
+
+impl Requester {
+    /// Whether the change dispatches its derived lifecycle hooks. A plugin's
+    /// correlated action result is its only follow-up event, so it never hears
+    /// its own change again as a hook, which would allow hook-driven loops.
+    fn dispatches_hooks(self) -> bool {
+        self == Self::Control
+    }
+
+    /// Plugins may not close a window's last tab; window closure needs
+    /// separate authority.
+    fn may_close_last_tab(self) -> bool {
+        self == Self::Control
+    }
+
+    /// Plugin text always passes destructive-command guardrails.
+    fn always_guards_destructive_input(self) -> bool {
+        self == Self::Plugin
+    }
+
+    /// A plugin may target a window other than the focused one, so its
+    /// guardrail confirmation names the window.
+    fn names_target_window(self) -> bool {
+        self == Self::Plugin
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Control => "Control-requested",
+            Self::Plugin => "Plugin-requested",
+        }
+    }
+}
+
 const MAX_COMMAND_REGION_COMMAND_BYTES: usize = crate::harvest::MAX_HARVEST_COMMAND_BYTES;
 const MAX_COMMAND_REGION_OUTPUT_BYTES: usize = 64 * 1024;
 
@@ -2687,17 +2730,9 @@ impl App {
             self.queue_live_domain_control(LiveDomainControl::SpawnTab { domain_id, spawn });
             return;
         }
-        if let Err(error) = self.create_ordinary_tab(true) {
+        if let Err(error) = self.create_tab_for(Requester::Control) {
             log::error!("Failed to create new tab: {error}");
         }
-    }
-
-    /// Create a tab synchronously for the private running-GUI control plane.
-    /// Live-domain tabs use an asynchronous topology round trip, so they are
-    /// rejected until the control protocol can acknowledge the resulting
-    /// stable local ID without blocking the event loop.
-    pub(super) fn create_control_tab(&mut self) -> std::result::Result<u64, String> {
-        self.create_ordinary_tab(true)
     }
 
     /// Launch exact argv in an ordinary local tab for the private running-GUI
@@ -2762,19 +2797,14 @@ impl App {
         u64::try_from(id).map_err(|_| "Created tab ID does not fit the control protocol".into())
     }
 
-    /// Create one ordinary tab for a declarative plugin without redispatching
-    /// the derived tab-created hook. The correlated action result is the only
-    /// follow-up event, preventing lifecycle-driven creation loops.
-    pub(super) fn create_plugin_tab(&mut self) -> std::result::Result<u64, String> {
-        self.create_ordinary_tab(false)
-    }
-
-    fn create_ordinary_tab(
+    /// Create one ordinary local tab synchronously. Live-domain tabs use an
+    /// asynchronous topology round trip, so they are rejected until the
+    /// requester can be acknowledged with the resulting stable local ID
+    /// without blocking the event loop.
+    pub(super) fn create_tab_for(
         &mut self,
-        dispatch_plugin_hook: bool,
+        requester: Requester,
     ) -> std::result::Result<u64, String> {
-        let tab_count = self.tabs.as_ref().map_or(0, TabManager::count);
-        validate_ordinary_tab_creation_capacity(tab_count)?;
         if self
             .tabs
             .as_ref()
@@ -2786,7 +2816,7 @@ impl App {
                     .into(),
             );
         }
-        let id = self.create_local_tab_in(dispatch_plugin_hook, None)?;
+        let id = self.create_local_tab_in(requester.dispatches_hooks(), None)?;
         u64::try_from(id).map_err(|_| "Created tab ID does not fit the control protocol".into())
     }
 
@@ -2816,21 +2846,10 @@ impl App {
         Ok(id)
     }
 
-    pub(super) fn select_control_tab(&mut self, tab_id: u64) -> std::result::Result<bool, String> {
-        self.select_tab_by_stable_id(tab_id, true)
-    }
-
-    /// Select a stable tab for a declarative plugin without redispatching the
-    /// derived tab-switched hook. The correlated action-result is
-    /// the only follow-up event, preventing hook-driven navigation loops.
-    pub(super) fn select_plugin_tab(&mut self, tab_id: u64) -> std::result::Result<bool, String> {
-        self.select_tab_by_stable_id(tab_id, false)
-    }
-
-    pub(super) fn select_tab_by_stable_id(
+    pub(super) fn select_tab_for(
         &mut self,
+        requester: Requester,
         tab_id: u64,
-        dispatch_hook: bool,
     ) -> std::result::Result<bool, String> {
         let tab_id = usize::try_from(tab_id)
             .map_err(|_| "Target tab ID does not fit this platform".to_string())?;
@@ -2858,7 +2877,7 @@ impl App {
                 .expect("validated tab manager disappeared")
                 .switch_to(index);
             self.refresh_focused_terminal_surfaces();
-            if dispatch_hook {
+            if requester.dispatches_hooks() {
                 self.dispatch_plugin_hook(crate::plugin::Hook::TabSwitched { from, to: index });
             }
             self.request_redraw(RedrawReason::Action);
@@ -3102,64 +3121,15 @@ impl App {
         ))
     }
 
-    pub(super) fn send_control_text(
+    /// Send bounded external text to an exact terminal in this window.
+    pub(super) fn send_text_for(
         &mut self,
+        requester: Requester,
         tab_id: u64,
         pane_id: u32,
         text: &str,
         paste: bool,
         enter: bool,
-    ) -> std::result::Result<
-        (
-            u32,
-            u32,
-            crate::control::protocol::InputDisposition,
-            Option<u64>,
-        ),
-        String,
-    > {
-        self.send_external_text(tab_id, pane_id, text, paste, enter, false, None)
-    }
-
-    /// Send bounded plugin text to an exact terminal in this window. Plugin
-    /// input always passes destructive-command guardrails, which name the
-    /// window because a plugin may target a window other than the focused one.
-    pub(super) fn send_plugin_text(
-        &mut self,
-        tab_id: u64,
-        pane_id: u32,
-        text: &str,
-        paste: bool,
-        enter: bool,
-    ) -> std::result::Result<
-        (
-            u32,
-            u32,
-            crate::control::protocol::InputDisposition,
-            Option<u64>,
-        ),
-        String,
-    > {
-        self.send_external_text(
-            tab_id,
-            pane_id,
-            text,
-            paste,
-            enter,
-            true,
-            Some(self.control_window_id),
-        )
-    }
-
-    fn send_external_text(
-        &mut self,
-        tab_id: u64,
-        pane_id: u32,
-        text: &str,
-        paste: bool,
-        enter: bool,
-        always_guard_destructive: bool,
-        target_window_id: Option<u64>,
     ) -> std::result::Result<
         (
             u32,
@@ -3224,7 +3194,7 @@ impl App {
             (
                 origin.0,
                 origin.1,
-                always_guard_destructive
+                requester.always_guards_destructive_input()
                     || matches!(tab.tab_type, crate::tabs::TabType::Plugin { .. }),
                 origin.2,
             )
@@ -3247,10 +3217,14 @@ impl App {
         let wire_bytes = u32::try_from(wire.len()).expect("bounded control wire input fits u32");
 
         if guarded && let Some(mut matched) = crate::terminal::guardrails::check_command(text) {
-            matched.target = target_window_id.map_or_else(
-                || format!("GUI tab {tab_id}, pane {pane_id}"),
-                |window_id| format!("GUI window {window_id}, tab {tab_id}, pane {pane_id}"),
-            );
+            matched.target = if requester.names_target_window() {
+                format!(
+                    "GUI window {}, tab {tab_id}, pane {pane_id}",
+                    self.control_window_id
+                )
+            } else {
+                format!("GUI tab {tab_id}, pane {pane_id}")
+            };
             let confirmation_id = self.guardrail.show(
                 matched,
                 vec![crate::terminal::guardrails::GuardedWrite::for_pane(
@@ -3283,29 +3257,11 @@ impl App {
 
     /// Select an exact tab and focus one exact stable pane within it. The
     /// complete path is validated before either focus component changes.
-    pub(super) fn focus_control_pane(
+    pub(super) fn focus_pane_for(
         &mut self,
+        requester: Requester,
         tab_id: u64,
         pane_id: u32,
-    ) -> std::result::Result<(bool, bool), String> {
-        self.focus_pane_by_stable_id(tab_id, pane_id, true)
-    }
-
-    /// Focus a stable pane for a declarative plugin without recursively
-    /// emitting a tab-switched subscription when the containing tab changes.
-    pub(super) fn focus_plugin_pane(
-        &mut self,
-        tab_id: u64,
-        pane_id: u32,
-    ) -> std::result::Result<(bool, bool), String> {
-        self.focus_pane_by_stable_id(tab_id, pane_id, false)
-    }
-
-    fn focus_pane_by_stable_id(
-        &mut self,
-        tab_id: u64,
-        pane_id: u32,
-        dispatch_hook: bool,
     ) -> std::result::Result<(bool, bool), String> {
         let tab_id = usize::try_from(tab_id)
             .map_err(|_| "Target tab ID does not fit this platform".to_string())?;
@@ -3374,7 +3330,7 @@ impl App {
         }
         if tab_changed || pane_changed {
             self.refresh_focused_terminal_surfaces();
-            if tab_changed && dispatch_hook {
+            if tab_changed && requester.dispatches_hooks() {
                 self.dispatch_plugin_hook(crate::plugin::Hook::TabSwitched { from, to: index });
             }
             self.request_redraw(RedrawReason::Action);
@@ -3382,30 +3338,13 @@ impl App {
         Ok((tab_changed, pane_changed))
     }
 
-    pub(super) fn close_control_tab(&mut self, tab_id: u64) -> std::result::Result<(), String> {
-        self.close_ordinary_tab(tab_id, "Control-requested", true, true)
-            .map(|_| ())
-    }
-
-    pub(super) fn close_plugin_tab(
+    /// Begin closing an ordinary tab. Returns the remaining tab count, the
+    /// newly active tab (always present when the requester may not close the
+    /// last tab), and whether the active tab changed.
+    pub(super) fn close_tab_for(
         &mut self,
+        requester: Requester,
         tab_id: u64,
-    ) -> std::result::Result<(u16, u64, bool), String> {
-        let (remaining, active, active_changed) =
-            self.close_ordinary_tab(tab_id, "Plugin-requested", false, false)?;
-        Ok((
-            remaining,
-            active.expect("last-tab protection leaves one active ordinary or live-domain tab"),
-            active_changed,
-        ))
-    }
-
-    fn close_ordinary_tab(
-        &mut self,
-        tab_id: u64,
-        request_origin: &str,
-        dispatch_plugin_hook: bool,
-        allow_last_tab: bool,
     ) -> std::result::Result<(u16, Option<u64>, bool), String> {
         let tab_id = usize::try_from(tab_id)
             .map_err(|_| "Target tab ID does not fit this platform".to_string())?;
@@ -3422,14 +3361,15 @@ impl App {
         }
         if tab.live_domain_tab_route().is_some() {
             return Err(format!(
-                "{request_origin} tab closure is not yet supported for live-domain tabs"
+                "{} tab closure is not yet supported for live-domain tabs",
+                requester.label()
             ));
         }
         let non_closing_tabs = tabs
             .iter()
             .filter(|(_, tab)| !tab.closed && tab.closing_at.is_none())
             .count();
-        if !allow_last_tab && non_closing_tabs <= 1 {
+        if !requester.may_close_last_tab() && non_closing_tabs <= 1 {
             return Err(format!(
                 "Cannot close the final non-closing tab {tab_id}; window closure requires separate authority"
             ));
@@ -3449,7 +3389,7 @@ impl App {
         if close_copy_mode {
             self.leave_copy_mode(false);
         }
-        if dispatch_plugin_hook {
+        if requester.dispatches_hooks() {
             self.dispatch_plugin_hook(crate::plugin::Hook::TabClosed { tab_id });
         }
         self.refresh_focused_terminal_surfaces();
@@ -3468,27 +3408,11 @@ impl App {
         ))
     }
 
-    pub(super) fn close_control_pane(
+    pub(super) fn close_pane_for(
         &mut self,
+        requester: Requester,
         tab_id: u64,
         pane_id: u32,
-    ) -> std::result::Result<(u16, u32), String> {
-        self.close_ordinary_pane(tab_id, pane_id, "Control-requested")
-    }
-
-    pub(super) fn close_plugin_pane(
-        &mut self,
-        tab_id: u64,
-        pane_id: u32,
-    ) -> std::result::Result<(u16, u32), String> {
-        self.close_ordinary_pane(tab_id, pane_id, "Plugin-requested")
-    }
-
-    fn close_ordinary_pane(
-        &mut self,
-        tab_id: u64,
-        pane_id: u32,
-        request_origin: &str,
     ) -> std::result::Result<(u16, u32), String> {
         let tab_id = usize::try_from(tab_id)
             .map_err(|_| "Target tab ID does not fit this platform".to_string())?;
@@ -3505,7 +3429,8 @@ impl App {
         }
         if tab.live_domain_tab_route().is_some() {
             return Err(format!(
-                "{request_origin} pane closure is not yet supported for live-domain tabs"
+                "{} pane closure is not yet supported for live-domain tabs",
+                requester.label()
             ));
         }
         if !tab.allows_pane_splits() {

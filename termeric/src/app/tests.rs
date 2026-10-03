@@ -3865,7 +3865,7 @@ fn kitty_transfer_confirmation_never_replies_to_a_replacement_owner() {
     let request_id = app.info_overlay.request_id();
     assert!(app.kitty_file_transfers.pending.is_some());
     split_harvest_capture_owner(&mut app, directory.path());
-    app.close_control_pane(entry.source.tab_id as u64, 0)
+    app.close_pane_for(Requester::Control, entry.source.tab_id as u64, 0)
         .unwrap();
     let captures = current_harvest_capture_routes(&mut app, directory.path());
     app.handle_kitty_download_choice(request_id, "kitty-download-allow");
@@ -4513,14 +4513,20 @@ fn control_selection_validates_complete_stable_paths_before_changing_focus() {
     assert!(!app.guardrail.is_awaiting_current());
 
     assert!(matches!(
-        app.send_control_text(first as u64, 0, "x", false, false),
+        app.send_text_for(Requester::Control, first as u64, 0, "x", false, false),
         Ok((1, 1, crate::control::protocol::InputDisposition::Sent, None))
     ));
     assert_eq!(app.tabs.as_ref().unwrap().active_tab_id(), Some(second));
-    assert!(app.focus_control_pane(first as u64, 99).is_err());
+    assert!(
+        app.focus_pane_for(Requester::Control, first as u64, 99)
+            .is_err()
+    );
     assert_eq!(app.tabs.as_ref().unwrap().active_tab_id(), Some(second));
 
-    assert_eq!(app.focus_control_pane(first as u64, 0), Ok((true, true)));
+    assert_eq!(
+        app.focus_pane_for(Requester::Control, first as u64, 0),
+        Ok((true, true))
+    );
     let tabs = app.tabs.as_ref().unwrap();
     assert_eq!(tabs.active_tab_id(), Some(first));
     assert_eq!(
@@ -4532,10 +4538,19 @@ fn control_selection_validates_complete_stable_paths_before_changing_focus() {
             .focused_id(),
         PaneId(0)
     );
-    assert_eq!(app.focus_control_pane(first as u64, 0), Ok((false, false)));
-    assert_eq!(app.select_control_tab(second as u64), Ok(true));
-    assert_eq!(app.select_control_tab(second as u64), Ok(false));
-    assert!(app.select_control_tab(u64::MAX).is_err());
+    assert_eq!(
+        app.focus_pane_for(Requester::Control, first as u64, 0),
+        Ok((false, false))
+    );
+    assert_eq!(
+        app.select_tab_for(Requester::Control, second as u64),
+        Ok(true)
+    );
+    assert_eq!(
+        app.select_tab_for(Requester::Control, second as u64),
+        Ok(false)
+    );
+    assert!(app.select_tab_for(Requester::Control, u64::MAX).is_err());
     assert_eq!(app.tabs.as_ref().unwrap().active_tab_id(), Some(second));
 
     // Plugin tab moves share the control path, which reorders without
@@ -4655,7 +4670,10 @@ fn control_selection_validates_complete_stable_paths_before_changing_focus() {
         .unwrap()
         .live_domain = None;
 
-    assert_eq!(app.close_control_pane(first as u64, 0), Ok((1, 1)));
+    assert_eq!(
+        app.close_pane_for(Requester::Control, first as u64, 0),
+        Ok((1, 1))
+    );
     let tabs = app.tabs.as_ref().unwrap();
     assert_eq!(tabs.active_tab_id(), Some(second));
     assert!(
@@ -4676,8 +4694,11 @@ fn control_selection_validates_complete_stable_paths_before_changing_focus() {
     );
     assert!(app.read_control_text(first as u64, 1, 0, 64).is_ok());
     assert!(app.read_control_text(first as u64, 0, 0, 64).is_err());
-    assert!(app.close_control_pane(first as u64, 1).is_err());
-    app.close_control_tab(first as u64).unwrap();
+    assert!(
+        app.close_pane_for(Requester::Control, first as u64, 1)
+            .is_err()
+    );
+    app.close_tab_for(Requester::Control, first as u64).unwrap();
     assert!(
         app.tabs
             .as_ref()
@@ -4689,7 +4710,7 @@ fn control_selection_validates_complete_stable_paths_before_changing_focus() {
             .closing_at
             .is_some()
     );
-    assert!(app.close_control_tab(first as u64).is_err());
+    assert!(app.close_tab_for(Requester::Control, first as u64).is_err());
 }
 
 #[cfg(unix)]
@@ -5906,7 +5927,8 @@ fn control_tab_closure_retains_final_tab_authority() {
         ))
         .unwrap();
 
-    app.close_control_tab(tab_id as u64).unwrap();
+    app.close_tab_for(Requester::Control, tab_id as u64)
+        .unwrap();
     assert!(
         app.tabs
             .as_ref()
@@ -5961,7 +5983,7 @@ fn plugin_tab_creation_returns_stable_identity_without_lifecycle_redispatch() {
     );
     assert_eq!(observed.load(std::sync::atomic::Ordering::SeqCst), 0);
 
-    let control_tab_id = app.create_control_tab().unwrap() as usize;
+    let control_tab_id = app.create_tab_for(Requester::Control).unwrap() as usize;
     assert_eq!(app.tabs.as_ref().unwrap().count(), 3);
     assert_eq!(
         app.tabs.as_ref().unwrap().active_tab().unwrap().id,
@@ -6074,13 +6096,13 @@ fn control_input_is_opt_in_exact_paste_aware_and_guarded_without_provider_execut
     let mut app = App::new_headless(Config::default()).unwrap();
     app.tabs = Some(tabs);
     assert!(
-        app.send_control_text(tab_id as u64, 0, "safe", true, true)
+        app.send_text_for(Requester::Control, tab_id as u64, 0, "safe", true, true)
             .unwrap_err()
             .contains("disabled")
     );
     app.config.security.allow_gui_control_input = true;
     assert!(
-        app.send_control_text(tab_id as u64, 99, "wrong", false, false)
+        app.send_text_for(Requester::Control, tab_id as u64, 99, "wrong", false, false)
             .is_err()
     );
 
@@ -6100,7 +6122,7 @@ fn control_input_is_opt_in_exact_paste_aware_and_guarded_without_provider_execut
         std::thread::sleep(Duration::from_millis(2));
     }
     assert_eq!(
-        app.send_plugin_text(tab_id as u64, 0, "safe", true, true),
+        app.send_text_for(Requester::Plugin, tab_id as u64, 0, "safe", true, true),
         Ok((
             5,
             17,
@@ -6148,7 +6170,14 @@ fn control_input_is_opt_in_exact_paste_aware_and_guarded_without_provider_execut
         plugin_id: "hermetic-fixture".into(),
     };
     let (_, _, disposition, confirmation_id) = app
-        .send_control_text(tab_id as u64, 0, "rm -rf /", false, true)
+        .send_text_for(
+            Requester::Control,
+            tab_id as u64,
+            0,
+            "rm -rf /",
+            false,
+            true,
+        )
         .unwrap();
     assert_eq!(
         disposition,
@@ -6611,7 +6640,7 @@ fn harvest_source_survives_single_split_and_collapse() {
             SproutAction::Rerun,
         ] {
             assert!(availability.action_enabled(action));
-            app.focus_control_pane(source.tab_id as u64, sibling.0)
+            app.focus_pane_for(Requester::Control, source.tab_id as u64, sibling.0)
                 .unwrap();
             app.execute_sprout_action(action, Some(entry.clone()));
             assert_eq!(app.active_harvest_source(), Some(source));
@@ -6634,7 +6663,7 @@ fn harvest_source_survives_single_split_and_collapse() {
             cycle + 1,
             "adoption must not duplicate completed regions"
         );
-        app.close_control_pane(source.tab_id as u64, sibling.0)
+        app.close_pane_for(Requester::Control, source.tab_id as u64, sibling.0)
             .unwrap();
         assert_eq!(app.active_harvest_source(), Some(source));
         assert!(
@@ -6675,8 +6704,10 @@ fn harvest_nonzero_survivor_keeps_live_regions_and_rerun_after_collapse() {
         .latest_for_source(source)
         .unwrap()
         .clone();
-    app.close_control_pane(source.tab_id as u64, 0).unwrap();
-    app.close_control_pane(source.tab_id as u64, 1).unwrap();
+    app.close_pane_for(Requester::Control, source.tab_id as u64, 0)
+        .unwrap();
+    app.close_pane_for(Requester::Control, source.tab_id as u64, 1)
+        .unwrap();
     assert_eq!(app.active_harvest_source(), Some(source));
     assert!(
         app.sprout_availability_for_entry(&entry)
@@ -7048,7 +7079,8 @@ fn external_confirmation_never_targets_a_replacement_single_owner() {
     let (mut app, directory, entry, _) = harvest_rerun_capture_fixture_in(false);
     app.config.security.allow_gui_control_input = true;
     let result = app
-        .send_plugin_text(
+        .send_text_for(
+            Requester::Plugin,
             entry.source.tab_id as u64,
             0,
             "rm -rf /synthetic-never-executed",
@@ -7058,7 +7090,7 @@ fn external_confirmation_never_targets_a_replacement_single_owner() {
         .unwrap();
     let request_id = result.3.unwrap();
     split_harvest_capture_owner(&mut app, directory.path());
-    app.close_control_pane(entry.source.tab_id as u64, 0)
+    app.close_pane_for(Requester::Control, entry.source.tab_id as u64, 0)
         .unwrap();
     let captures = current_harvest_capture_routes(&mut app, directory.path());
     app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
@@ -7101,14 +7133,16 @@ fn guarded_input_producers_follow_only_the_original_owner_through_topology_chang
             app.active_terminal_mut().unwrap().process(b"\x1b[?2004h");
             let expected_wire = {
                 let result = match producer {
-                    "control" => app.send_control_text(
+                    "control" => app.send_text_for(
+                        Requester::Control,
                         source.tab_id as u64,
                         source.pane_id,
                         COMMAND,
                         true,
                         true,
                     ),
-                    "plugin" => app.send_plugin_text(
+                    "plugin" => app.send_text_for(
+                        Requester::Plugin,
                         source.tab_id as u64,
                         source.pane_id,
                         COMMAND,
@@ -7132,21 +7166,23 @@ fn guarded_input_producers_follow_only_the_original_owner_through_topology_chang
                     .all(Vec::is_empty)
             );
             if transition == "nonzero-collapse" {
-                app.close_control_pane(source.tab_id as u64, 0).unwrap();
-                app.close_control_pane(source.tab_id as u64, 1).unwrap();
+                app.close_pane_for(Requester::Control, source.tab_id as u64, 0)
+                    .unwrap();
+                app.close_pane_for(Requester::Control, source.tab_id as u64, 1)
+                    .unwrap();
             } else {
                 let sibling = split_harvest_capture_owner(&mut app, directory.path());
                 if transition == "collapse" {
-                    app.close_control_pane(source.tab_id as u64, sibling.0)
+                    app.close_pane_for(Requester::Control, source.tab_id as u64, sibling.0)
                         .unwrap();
                 } else if transition == "removed" {
-                    app.close_control_pane(source.tab_id as u64, source.pane_id)
+                    app.close_pane_for(Requester::Control, source.tab_id as u64, source.pane_id)
                         .unwrap();
                 }
             }
             let captures = current_harvest_capture_routes(&mut app, directory.path());
             if transition == "read-only" {
-                app.focus_control_pane(source.tab_id as u64, source.pane_id)
+                app.focus_pane_for(Requester::Control, source.tab_id as u64, source.pane_id)
                     .unwrap();
                 app.toggle_focused_pane_read_only();
             }
@@ -7444,7 +7480,7 @@ fn unicode_picker_never_inserts_into_a_replacement_single_owner() {
     let (mut app, directory, entry, _) = harvest_rerun_capture_fixture_in(false);
     app.open_unicode_picker();
     split_harvest_capture_owner(&mut app, directory.path());
-    app.close_control_pane(entry.source.tab_id as u64, 0)
+    app.close_pane_for(Requester::Control, entry.source.tab_id as u64, 0)
         .unwrap();
     let captures = current_harvest_capture_routes(&mut app, directory.path());
     assert!(
@@ -7603,22 +7639,24 @@ fn unicode_picker_tracks_only_the_same_focused_owner_through_topology_changes() 
         let source = app.active_harvest_source().unwrap();
         app.open_unicode_picker();
         if transition == "nonzero-collapse" {
-            app.close_control_pane(source.tab_id as u64, 0).unwrap();
-            app.close_control_pane(source.tab_id as u64, 1).unwrap();
+            app.close_pane_for(Requester::Control, source.tab_id as u64, 0)
+                .unwrap();
+            app.close_pane_for(Requester::Control, source.tab_id as u64, 1)
+                .unwrap();
         } else {
             let sibling = split_harvest_capture_owner(&mut app, directory.path());
             match transition {
                 "removed" => {
-                    app.close_control_pane(source.tab_id as u64, source.pane_id)
+                    app.close_pane_for(Requester::Control, source.tab_id as u64, source.pane_id)
                         .unwrap();
                 }
                 "collapse" => {
-                    app.close_control_pane(source.tab_id as u64, sibling.0)
+                    app.close_pane_for(Requester::Control, source.tab_id as u64, sibling.0)
                         .unwrap();
                 }
                 "unfocused" => {}
                 _ => {
-                    app.focus_control_pane(source.tab_id as u64, source.pane_id)
+                    app.focus_pane_for(Requester::Control, source.tab_id as u64, source.pane_id)
                         .unwrap();
                 }
             }
@@ -7788,17 +7826,19 @@ fn context_picker_completion_preserves_plugin_owner_across_topology_changes() {
                 .is_some()
         );
         if transition == "nonzero-collapse" {
-            app.close_control_pane(source.tab_id as u64, 0).unwrap();
-            app.close_control_pane(source.tab_id as u64, 1).unwrap();
+            app.close_pane_for(Requester::Control, source.tab_id as u64, 0)
+                .unwrap();
+            app.close_pane_for(Requester::Control, source.tab_id as u64, 1)
+                .unwrap();
         } else {
             let sibling = split_harvest_capture_owner(&mut app, directory.path());
             match transition {
                 "collapse" => {
-                    app.close_control_pane(source.tab_id as u64, sibling.0)
+                    app.close_pane_for(Requester::Control, source.tab_id as u64, sibling.0)
                         .unwrap();
                 }
                 "removed" | "replacement-plugin" => {
-                    app.close_control_pane(source.tab_id as u64, source.pane_id)
+                    app.close_pane_for(Requester::Control, source.tab_id as u64, source.pane_id)
                         .unwrap();
                 }
                 _ => {}
@@ -7815,7 +7855,7 @@ fn context_picker_completion_preserves_plugin_owner_across_topology_changes() {
         );
         match transition {
             "read-only" => {
-                app.focus_control_pane(source.tab_id as u64, source.pane_id)
+                app.focus_pane_for(Requester::Control, source.tab_id as u64, source.pane_id)
                     .unwrap();
                 app.toggle_focused_pane_read_only();
             }
@@ -10116,8 +10156,16 @@ fn collapsed_tab_rejects_retired_pane_and_divider_requests_after_resplit() {
         .unwrap()
         .pty
         .child_id();
-    assert_eq!(app.close_control_pane(tab_id as u64, 2).unwrap(), (2, 1));
-    assert_eq!(app.close_control_pane(tab_id as u64, 1).unwrap(), (1, 0));
+    assert_eq!(
+        app.close_pane_for(Requester::Control, tab_id as u64, 2)
+            .unwrap(),
+        (2, 1)
+    );
+    assert_eq!(
+        app.close_pane_for(Requester::Control, tab_id as u64, 1)
+            .unwrap(),
+        (1, 0)
+    );
     let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
     assert!(tab.pane_manager.is_none());
     assert_eq!(tab.single_child_id(), original_pid);
@@ -10195,17 +10243,24 @@ fn collapsed_tab_rejects_retired_pane_and_divider_requests_after_resplit() {
     }
     for retired in [1, 2] {
         assert!(
-            app.send_control_text(tab_id as u64, retired, "must not arrive", false, true)
+            app.send_text_for(
+                Requester::Control,
+                tab_id as u64,
+                retired,
+                "must not arrive",
+                false,
+                true
+            )
+            .unwrap_err()
+            .contains("does not exist")
+        );
+        assert!(
+            app.focus_pane_for(Requester::Control, tab_id as u64, retired)
                 .unwrap_err()
                 .contains("does not exist")
         );
         assert!(
-            app.focus_control_pane(tab_id as u64, retired)
-                .unwrap_err()
-                .contains("does not exist")
-        );
-        assert!(
-            app.close_control_pane(tab_id as u64, retired)
+            app.close_pane_for(Requester::Control, tab_id as u64, retired)
                 .unwrap_err()
                 .contains("does not exist")
         );
@@ -10238,8 +10293,15 @@ fn collapsed_tab_rejects_retired_pane_and_divider_requests_after_resplit() {
             .all(Vec::is_empty)
     );
     // Fresh IDs still route successfully; the fixture captures, never executes.
-    app.send_control_text(tab_id as u64, replacement.0, "fresh", false, false)
-        .unwrap();
+    app.send_text_for(
+        Requester::Control,
+        tab_id as u64,
+        replacement.0,
+        "fresh",
+        false,
+        false,
+    )
+    .unwrap();
     assert_eq!(
         fenced_harvest_capture(&mut app, &captures),
         vec![b"\0".to_vec(), b"\0fresh".to_vec()]
@@ -10435,11 +10497,18 @@ fn read_only_focused_pane_rejects_keyboard_and_running_gui_control_input() {
     assert!(!app.write_paste_text("rm -rf /\n"));
     assert!(!app.guardrail.is_awaiting_current());
     let error = app
-        .send_control_text(tab_id, pane_id, "rm -rf /", false, true)
+        .send_text_for(Requester::Control, tab_id, pane_id, "rm -rf /", false, true)
         .unwrap_err();
     assert!(error.contains("read-only"), "{error}");
     let error = app
-        .send_plugin_text(tab_id, pane_id, "cargo test", false, false)
+        .send_text_for(
+            Requester::Plugin,
+            tab_id,
+            pane_id,
+            "cargo test",
+            false,
+            false,
+        )
         .unwrap_err();
     assert!(error.contains("read-only"), "{error}");
     assert!(!app.guardrail.is_awaiting_current());
@@ -11140,7 +11209,10 @@ fn structured_workspace_query_is_current_window_bounded_and_control_safe() {
 
     // The ordinary authenticated control route still emits the lifecycle hook;
     // only plugin-origin navigation is suppressed to prevent action loops.
-    assert_eq!(app.select_control_tab(last_tab_id as u64), Ok(true));
+    assert_eq!(
+        app.select_tab_for(Requester::Control, last_tab_id as u64),
+        Ok(true)
+    );
     assert_eq!(
         observed_switches.load(std::sync::atomic::Ordering::SeqCst),
         1
@@ -12538,7 +12610,7 @@ fn delayed_notification_completion_does_not_alias_a_replacement_single_owner() {
         protocol_reply: Some(b"\x1b]99;i=fixture;1\x1b\\".to_vec()),
     };
     split_harvest_capture_owner(&mut app, directory.path());
-    app.close_control_pane(entry.source.tab_id as u64, 0)
+    app.close_pane_for(Requester::Control, entry.source.tab_id as u64, 0)
         .unwrap();
     let captures = current_harvest_capture_routes(&mut app, directory.path());
     assert!(
@@ -12757,7 +12829,10 @@ fn notification_activation_selects_the_exact_origin_and_stale_origins_fail_close
         origin.pane_id
     );
 
-    assert_eq!(app.select_control_tab(active_tab as u64), Ok(true));
+    assert_eq!(
+        app.select_tab_for(Requester::Control, active_tab as u64),
+        Ok(true)
+    );
     let stale = crate::tabs::TerminalIdentity {
         tab_id: origin_tab,
         pane_id: PaneId(u32::MAX),

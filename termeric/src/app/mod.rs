@@ -69,6 +69,7 @@ use termeric_core::TerminalEvent;
 
 use self::redraw_scheduler::{RedrawReason, RedrawScheduler};
 use self::state::AppState;
+use self::workspace_actions::Requester;
 use crate::config::theme::Theme;
 use crate::config::{Config, SplashMode};
 use crate::harvest::HarvestMode;

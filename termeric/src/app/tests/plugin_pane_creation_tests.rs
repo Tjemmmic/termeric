@@ -196,7 +196,7 @@ fn created_plugin_owner_survives_close_collapse_and_resplit_with_its_exact_profi
         .unwrap()
         .pty
         .child_id();
-    app.close_plugin_pane(target.tab_id as u64, target.pane_id.0)
+    app.close_pane_for(Requester::Plugin, target.tab_id as u64, target.pane_id.0)
         .unwrap();
     let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
     assert!(tab.pane_manager.is_none());

@@ -1,8 +1,8 @@
 //! Process-level ownership for independent native windows.
 
 use super::{
-    App, AppEvent, PendingPluginWindowClose, clear_agent_view_wake_pending, clear_pty_wake_pending,
-    clear_transcript_wake_pending, redraw_scheduler::RedrawReason,
+    App, AppEvent, PendingPluginWindowClose, Requester, clear_agent_view_wake_pending,
+    clear_pty_wake_pending, clear_transcript_wake_pending, redraw_scheduler::RedrawReason,
 };
 use crate::cli::{LaunchPlan, WindowLaunch};
 use crate::config::Config;
@@ -2102,7 +2102,7 @@ impl Application {
             .windows
             .get_mut(&native_id)
             .expect("validated control window disappeared")
-            .create_control_tab()?;
+            .create_tab_for(Requester::Control)?;
         Ok(crate::control::protocol::Response::TabCreated {
             process_id: std::process::id(),
             request_id: request_id.to_string(),
@@ -2278,7 +2278,7 @@ impl Application {
         let native_id = self.control_native_window_id(window_id)?;
         let changed = self
             .live_window_mut(native_id, window_id)?
-            .select_control_tab(tab_id)?;
+            .select_tab_for(Requester::Control, tab_id)?;
         Ok(crate::control::protocol::Response::TabSelected {
             process_id: std::process::id(),
             request_id: request_id.to_string(),
@@ -2298,7 +2298,7 @@ impl Application {
         let native_id = self.control_native_window_id(window_id)?;
         let (tab_changed, pane_changed) = self
             .live_window_mut(native_id, window_id)?
-            .focus_control_pane(tab_id, pane_id)?;
+            .focus_pane_for(Requester::Control, tab_id, pane_id)?;
         Ok(crate::control::protocol::Response::PaneFocused {
             process_id: std::process::id(),
             request_id: request_id.to_string(),
@@ -2337,7 +2337,7 @@ impl Application {
     ) -> std::result::Result<crate::control::protocol::Response, String> {
         let native_id = self.control_native_window_id(window_id)?;
         self.live_window_mut(native_id, window_id)?
-            .close_control_tab(tab_id)?;
+            .close_tab_for(Requester::Control, tab_id)?;
         Ok(crate::control::protocol::Response::TabCloseRequested {
             process_id: std::process::id(),
             request_id: request_id.to_string(),
@@ -2356,7 +2356,7 @@ impl Application {
         let native_id = self.control_native_window_id(window_id)?;
         let (remaining_panes, focused_pane_id) = self
             .live_window_mut(native_id, window_id)?
-            .close_control_pane(tab_id, pane_id)?;
+            .close_pane_for(Requester::Control, tab_id, pane_id)?;
         Ok(crate::control::protocol::Response::PaneClosed {
             process_id: std::process::id(),
             request_id: request_id.to_string(),
@@ -2703,7 +2703,7 @@ impl Application {
         let native_id = self.control_native_window_id(window_id)?;
         let (input_bytes, wire_bytes, disposition, confirmation_id) = self
             .live_window_mut(native_id, window_id)?
-            .send_control_text(tab_id, pane_id, text, paste, enter)?;
+            .send_text_for(Requester::Control, tab_id, pane_id, text, paste, enter)?;
         Ok(crate::control::protocol::Response::InputAccepted {
             process_id: std::process::id(),
             request_id: request_id.to_string(),

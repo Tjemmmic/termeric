@@ -105,10 +105,10 @@ impl App {
 
         let selected = match origin {
             crate::tabs::TerminalEventOrigin::Tab { tab_id } => self
-                .select_control_tab(tab_id as u64)
+                .select_tab_for(Requester::Control, tab_id as u64)
                 .map(|changed| (changed, false)),
             crate::tabs::TerminalEventOrigin::Pane { tab_id, pane_id } => {
-                self.focus_control_pane(tab_id as u64, pane_id.0)
+                self.focus_pane_for(Requester::Control, tab_id as u64, pane_id.0)
             }
         };
         if let Err(error) = selected {

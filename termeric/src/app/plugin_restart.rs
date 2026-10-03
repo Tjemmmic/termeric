@@ -1,5 +1,5 @@
 //! Launch-first restart of an exact plugin owner; unrelated panes survive.
-use super::App;
+use super::{App, Requester};
 use crate::plugin::{Hook, PluginAction};
 use crate::tabs::{TabType, TerminalIdentity};
 
@@ -176,7 +176,11 @@ impl App {
             .as_ref()
             .is_some_and(|panes| panes.pane_count() > 1)
         {
-            self.close_plugin_pane(identity.tab_id as u64, identity.pane_id.0)?;
+            self.close_pane_for(
+                Requester::Plugin,
+                identity.tab_id as u64,
+                identity.pane_id.0,
+            )?;
         } else {
             let index = tabs
                 .iter()

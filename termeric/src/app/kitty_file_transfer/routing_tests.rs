@@ -1,5 +1,6 @@
 //! Raw PTYs and synthetic worker events only: no GUI, file workers, or providers.
 use super::*;
+use crate::app::Requester;
 use crate::app::tests::{
     current_harvest_capture_routes, fenced_harvest_capture, harvest_rerun_capture_fixture_in,
     kitty_capture_command, split_harvest_capture_owner,
@@ -29,17 +30,19 @@ fn change_owner_layout(
     // can exercise a queued callback/choice *before* the next normal prune.
     let transfers = std::mem::take(&mut app.kitty_file_transfers);
     if transition == "nonzero-collapse" {
-        app.close_control_pane(owner.tab_id as u64, 0).unwrap();
-        app.close_control_pane(owner.tab_id as u64, 1).unwrap();
+        app.close_pane_for(Requester::Control, owner.tab_id as u64, 0)
+            .unwrap();
+        app.close_pane_for(Requester::Control, owner.tab_id as u64, 1)
+            .unwrap();
     } else {
         let sibling = split_harvest_capture_owner(app, directory);
         match transition {
             "collapse" => {
-                app.close_control_pane(owner.tab_id as u64, sibling.0)
+                app.close_pane_for(Requester::Control, owner.tab_id as u64, sibling.0)
                     .unwrap();
             }
             "removed" | "resplit-replacement" => {
-                app.close_control_pane(owner.tab_id as u64, owner.pane_id.0)
+                app.close_pane_for(Requester::Control, owner.tab_id as u64, owner.pane_id.0)
                     .unwrap();
                 if transition == "resplit-replacement" {
                     split_harvest_capture_owner(app, directory);
@@ -326,7 +329,7 @@ fn path_collection_and_active_commands_match_across_split_and_collapse() {
     assert!(!app.prune_stale_kitty_file_transfers());
     for index in 0..2 {
         if index == 1 {
-            app.close_control_pane(owner.tab_id as u64, sibling.0)
+            app.close_pane_for(Requester::Control, owner.tab_id as u64, sibling.0)
                 .unwrap();
         }
         let mut path = kitty_capture_command(KittyFileTransferAction::File);
@@ -390,7 +393,7 @@ fn path_collection_and_active_commands_match_across_split_and_collapse() {
         kitty_capture_command(KittyFileTransferAction::Cancel),
     );
     assert!(!download_cancel.load(Ordering::Acquire));
-    app.close_control_pane(owner.tab_id as u64, sibling.0)
+    app.close_pane_for(Requester::Control, owner.tab_id as u64, sibling.0)
         .unwrap();
     app.handle_kitty_file_transfer(
         app.kitty_transfer_origin(owner).unwrap(),
@@ -407,7 +410,7 @@ fn path_collection_and_active_commands_match_across_split_and_collapse() {
     path.name = Some(directory.path().join("fixture").display().to_string());
     app.handle_kitty_file_transfer(app.kitty_transfer_origin(owner).unwrap(), path);
     assert_eq!(upload.try_recv().unwrap().command.file_id, "fixture");
-    app.close_control_pane(owner.tab_id as u64, sibling.0)
+    app.close_pane_for(Requester::Control, owner.tab_id as u64, sibling.0)
         .unwrap();
     app.handle_kitty_file_transfer(
         app.kitty_transfer_origin(owner).unwrap(),

@@ -294,7 +294,7 @@ impl App {
             self.end_agent_session(id);
         }
         if let Some(tab) = tab
-            && let Err(error) = self.close_plugin_tab(tab as u64)
+            && let Err(error) = self.close_tab_for(Requester::Plugin, tab as u64)
         {
             self.toasts
                 .warning(format!("The supervisor's tab stayed open: {error}"));

@@ -203,9 +203,9 @@ fn successful_restart_retires_only_source_and_preserves_cwd_profile_and_siblings
             }
         }
         if mode == "nonzero-single" {
-            app.close_control_pane(entry.source.tab_id as u64, 0)
+            app.close_pane_for(Requester::Control, entry.source.tab_id as u64, 0)
                 .unwrap();
-            app.close_control_pane(entry.source.tab_id as u64, 1)
+            app.close_pane_for(Requester::Control, entry.source.tab_id as u64, 1)
                 .unwrap();
         }
         let captures = current_harvest_capture_routes(&mut app, directory.path());

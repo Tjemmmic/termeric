@@ -73,7 +73,7 @@ fn transcript_utf8_carry_follows_owner_through_split_collapse_and_sibling_close(
             .unwrap()
             .read_only = false;
     }
-    app.close_control_pane(entry.source.tab_id as u64, sibling.0)
+    app.close_pane_for(Requester::Control, entry.source.tab_id as u64, sibling.0)
         .unwrap();
     let read = |path: &std::path::Path, kind: EntryKind| -> String {
         std::fs::read_to_string(path)
@@ -363,8 +363,12 @@ fn split_transcript_records_only_its_original_terminal() {
             tabs.write_user_to_origin(origin, data).unwrap();
         }
     }
-    app.focus_control_pane(entry.source.tab_id as u64, entry.source.pane_id)
-        .unwrap();
+    app.focus_pane_for(
+        Requester::Control,
+        entry.source.tab_id as u64,
+        entry.source.pane_id,
+    )
+    .unwrap();
     let mut recorder = app
         .tabs
         .as_mut()
@@ -453,9 +457,9 @@ fn transcript_controls_and_close_keep_independent_owner_state() {
     }
     // Closing the source drops/flushed its recorder, without touching another
     // recorder; collapse then transfers the complete surviving session.
-    app.close_control_pane(entry.source.tab_id as u64, 0)
+    app.close_pane_for(Requester::Control, entry.source.tab_id as u64, 0)
         .unwrap();
-    app.close_control_pane(entry.source.tab_id as u64, 1)
+    app.close_pane_for(Requester::Control, entry.source.tab_id as u64, 1)
         .unwrap();
     let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
     assert!(tab.pane_manager.is_none());
@@ -517,7 +521,7 @@ fn diff_observation_and_delayed_review_are_terminal_local() {
         app.diff_review.target(request_id).unwrap().pane_id,
         PaneId(0)
     );
-    app.focus_control_pane(entry.source.tab_id as u64, 1)
+    app.focus_pane_for(Requester::Control, entry.source.tab_id as u64, 1)
         .unwrap();
     app.apply_diff_review_action(crate::ui::diff_review::DiffReviewAction::Dismiss { request_id });
     let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
@@ -540,9 +544,9 @@ fn diff_observation_and_delayed_review_are_terminal_local() {
         pane_id: PaneId(1),
     });
     let request_id = app.diff_review.request_id();
-    app.close_control_pane(entry.source.tab_id as u64, 1)
+    app.close_pane_for(Requester::Control, entry.source.tab_id as u64, 1)
         .unwrap();
-    app.close_control_pane(entry.source.tab_id as u64, 2)
+    app.close_pane_for(Requester::Control, entry.source.tab_id as u64, 2)
         .unwrap();
     let replacement = split_harvest_capture_owner(&mut app, directory.path());
     mark_capture_plugin_owner(&mut app, replacement, "claude-code");

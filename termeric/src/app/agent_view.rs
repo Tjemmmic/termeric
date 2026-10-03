@@ -1083,7 +1083,7 @@ impl App {
         self.bind_agent_view_to_active_tab();
         if let Some(tab) = self.agent_session_tab(id)
             && Some(tab) != self.agent_view.state.tab
-            && let Err(error) = self.select_tab_by_stable_id(tab as u64, true)
+            && let Err(error) = self.select_tab_for(Requester::Control, tab as u64)
         {
             self.toasts.error(error);
             return;
