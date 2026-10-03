@@ -19,6 +19,52 @@ pub struct InfoOverlayChoice {
     pub shortcut: Option<char>,
 }
 
+/// One page of a list paged through in the overlay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OverlayPage {
+    pub index: usize,
+    pub count: usize,
+    /// The page's items are `start..end` of the list.
+    pub start: usize,
+    pub end: usize,
+}
+
+impl OverlayPage {
+    /// Page `requested`, or the last page if it is past the end, of `len`
+    /// items `size` to a page. An empty list has one empty page.
+    pub fn of(len: usize, size: usize, requested: usize) -> Self {
+        let size = size.max(1);
+        let count = len.div_ceil(size).max(1);
+        let index = requested.min(count - 1);
+        let start = index * size;
+        Self {
+            index,
+            count,
+            start,
+            end: (start + size).min(len),
+        }
+    }
+}
+
+/// Append a line reading "[K] label" and a choice on it picked by `key`,
+/// which shows upper-case.
+pub fn push_key_choice(
+    lines: &mut Vec<String>,
+    choices: &mut Vec<InfoOverlayChoice>,
+    id: impl Into<String>,
+    key: char,
+    label: impl Into<String>,
+) {
+    let label = label.into();
+    lines.push(format!("[{}] {label}", key.to_ascii_uppercase()));
+    choices.push(InfoOverlayChoice::new(
+        id,
+        label,
+        lines.len() - 1,
+        Some(key),
+    ));
+}
+
 impl InfoOverlayChoice {
     pub fn new(
         id: impl Into<String>,

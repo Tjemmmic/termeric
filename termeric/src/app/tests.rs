@@ -3688,7 +3688,7 @@ fn live_domain_drop_requires_request_scoped_confirmation_without_reading_content
     assert!(app.handle_dropped_path(&source));
     let first_request = app.info_overlay.request_id();
     assert!(app.info_overlay.is_awaiting(first_request));
-    assert!(app.pending_file_upload.as_ref().is_some_and(|pending| {
+    assert!(app.pending_file_upload().is_some_and(|pending| {
         pending.request_id == first_request
             && pending.domain_id == "domain-upload"
             && pending.pane_id == 42
@@ -3699,7 +3699,7 @@ fn live_domain_drop_requires_request_scoped_confirmation_without_reading_content
         request_id: first_request,
         choice_id: "file-upload-cancel".into(),
     });
-    assert!(app.pending_file_upload.is_none());
+    assert!(app.pending_file_upload().is_none());
     assert!(app.active_file_upload.is_none());
     std::thread::sleep(Duration::from_millis(250));
     app.info_overlay.update_animation();
@@ -3711,14 +3711,14 @@ fn live_domain_drop_requires_request_scoped_confirmation_without_reading_content
         choice_id: "file-upload-confirm".into(),
     });
     assert!(
-        app.pending_file_upload.is_some(),
+        app.pending_file_upload().is_some(),
         "stale confirmation acted"
     );
     app.apply_info_overlay_action(crate::ui::info_overlay::InfoOverlayAction::Choose {
         request_id: second_request,
         choice_id: "file-upload-confirm".into(),
     });
-    assert!(app.pending_file_upload.is_none());
+    assert!(app.pending_file_upload().is_none());
     assert!(app.active_file_upload.is_none());
     assert!(latest_toast(&app).is_some_and(|message| message.contains("native window")));
 
@@ -3728,7 +3728,7 @@ fn live_domain_drop_requires_request_scoped_confirmation_without_reading_content
     std::fs::create_dir(&directory).unwrap();
     assert!(app.handle_dropped_path(&directory));
     let directory_request = app.info_overlay.request_id();
-    assert!(app.pending_file_upload.as_ref().is_some_and(|pending| {
+    assert!(app.pending_file_upload().is_some_and(|pending| {
         pending.request_id == directory_request
             && pending.name == "project λ"
             && pending.source_kind == FileUploadSourceKind::Directory
@@ -3737,7 +3737,7 @@ fn live_domain_drop_requires_request_scoped_confirmation_without_reading_content
         request_id: directory_request,
         choice_id: "file-upload-cancel".into(),
     });
-    assert!(app.pending_file_upload.is_none());
+    assert!(app.pending_file_upload().is_none());
 }
 
 #[cfg(unix)]

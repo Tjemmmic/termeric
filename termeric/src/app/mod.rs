@@ -809,6 +809,19 @@ struct PendingUnicodePicker {
     terminal: crate::tabs::TerminalIdentity,
 }
 
+/// A multi-step flow in the info overlay. There is at most one, so starting
+/// a flow ends whichever ran before.
+enum OverlayFlow {
+    /// Navigation and confirmation for installed third-party plugins.
+    RuntimePlugins(PendingRuntimePluginManagement),
+    /// Navigation and edits of Unicode-range font overrides.
+    FontRanges(font_range_editor::PendingFontRangeManagement),
+    /// Navigation and edits of OpenType feature overrides.
+    FontFeatures(font_feature_editor::PendingFontFeatureManagement),
+    /// An exact source and live-domain destination awaiting upload consent.
+    FileUpload(PendingFileUpload),
+}
+
 #[derive(Debug, Clone)]
 struct PendingRuntimePluginManagement {
     request_id: u64,
@@ -1219,21 +1232,11 @@ pub struct App {
     context_picker: ContextPicker,
     /// Guardrail confirmation overlay
     guardrail: GuardrailOverlay,
-    /// Request-scoped action context for an info-overlay profile choice.
-    /// Request-scoped navigation and confirmation state for management of
-    /// installed third-party plugins.
-    pending_runtime_plugin_management: Option<PendingRuntimePluginManagement>,
-    /// Request-scoped navigation and mutation authority for Unicode-range
-    /// font overrides managed through the shared information overlay.
-    pending_font_range_management: Option<font_range_editor::PendingFontRangeManagement>,
-    /// Request-scoped navigation and mutation authority for OpenType feature
-    /// overrides managed through the shared information overlay.
-    pending_font_feature_management: Option<font_feature_editor::PendingFontFeatureManagement>,
+    /// The multi-step flow the info overlay is running, if any.
+    overlay_flow: Option<OverlayFlow>,
     /// Temporary registry and installation roots used only by hermetic tests.
     #[cfg(test)]
     runtime_plugin_test_paths: Option<(PathBuf, PathBuf)>,
-    /// Exact source and live-domain destination awaiting explicit upload consent.
-    pending_file_upload: Option<PendingFileUpload>,
     /// Agent status hooks awaiting the person's confirmation.
     pending_hook_change: Option<agent_hooks::PendingHookChange>,
     /// Git work comparing an agent's changes, running on a worker thread.
@@ -1477,12 +1480,9 @@ impl App {
             context_picker: ContextPicker::new(),
             guardrail: GuardrailOverlay::new(),
 
-            pending_runtime_plugin_management: None,
-            pending_font_range_management: None,
-            pending_font_feature_management: None,
+            overlay_flow: None,
             #[cfg(test)]
             runtime_plugin_test_paths: None,
-            pending_file_upload: None,
             pending_hook_change: None,
             agent_change_job: None,
             agent_change_list: None,
@@ -2014,6 +2014,48 @@ impl App {
             tabs.resize_active_geometry(geometry, content, cell);
         }
         self.finish_copy_mode_reflow();
+    }
+
+    fn pending_runtime_plugin_management(&self) -> Option<&PendingRuntimePluginManagement> {
+        match &self.overlay_flow {
+            Some(OverlayFlow::RuntimePlugins(pending)) => Some(pending),
+            _ => None,
+        }
+    }
+
+    fn pending_font_range_management(
+        &self,
+    ) -> Option<&font_range_editor::PendingFontRangeManagement> {
+        match &self.overlay_flow {
+            Some(OverlayFlow::FontRanges(pending)) => Some(pending),
+            _ => None,
+        }
+    }
+
+    fn pending_font_feature_management(
+        &self,
+    ) -> Option<&font_feature_editor::PendingFontFeatureManagement> {
+        match &self.overlay_flow {
+            Some(OverlayFlow::FontFeatures(pending)) => Some(pending),
+            _ => None,
+        }
+    }
+
+    fn pending_file_upload(&self) -> Option<&PendingFileUpload> {
+        match &self.overlay_flow {
+            Some(OverlayFlow::FileUpload(pending)) => Some(pending),
+            _ => None,
+        }
+    }
+
+    fn take_pending_file_upload(&mut self) -> Option<PendingFileUpload> {
+        match self.overlay_flow.take() {
+            Some(OverlayFlow::FileUpload(pending)) => Some(pending),
+            other => {
+                self.overlay_flow = other;
+                None
+            }
+        }
     }
 
     /// Record why this window must be redrawn and ask for a frame.

@@ -6,7 +6,9 @@ use crate::renderer::{
     FontCoverageReport, FontCoverageRoute, FontCoverageSource, MAX_FONT_COVERAGE_GRAPHEMES,
     MAX_FONT_COVERAGE_INPUT_BYTES,
 };
-use crate::ui::info_overlay::{InfoOverlayChoice, MAX_INFO_INPUT_BYTES};
+use crate::ui::info_overlay::{
+    InfoOverlayChoice, MAX_INFO_INPUT_BYTES, OverlayPage, push_key_choice,
+};
 
 const RANGE_PAGE_SIZE: usize = 8;
 const RANGE_INPUT_BYTES: usize = MAX_FONT_FAMILY_BYTES + 32;
@@ -48,9 +50,7 @@ enum FontRangeManagerView {
 impl App {
     pub(super) fn open_font_range_manager(&mut self) {
         self.settings_panel.close();
-        self.pending_runtime_plugin_management = None;
-        self.pending_font_feature_management = None;
-        self.pending_file_upload = None;
+        self.overlay_flow = None;
         self.show_font_range_list(0);
     }
 
@@ -63,10 +63,12 @@ impl App {
                 right.family.to_ascii_lowercase(),
             ))
         });
-        let page_count = rules.len().div_ceil(RANGE_PAGE_SIZE).max(1);
-        let page = requested_page.min(page_count - 1);
-        let start = page * RANGE_PAGE_SIZE;
-        let end = (start + RANGE_PAGE_SIZE).min(rules.len());
+        let OverlayPage {
+            index: page,
+            count: page_count,
+            start,
+            end,
+        } = OverlayPage::of(rules.len(), RANGE_PAGE_SIZE, requested_page);
         let visible_rules = rules[start..end].to_vec();
 
         let mut lines = vec![
@@ -82,23 +84,15 @@ impl App {
             String::new(),
         ];
         let mut choices = Vec::new();
-        let inspect_line = lines.len();
-        lines.push("[I] Inspect glyph coverage".into());
-        choices.push(InfoOverlayChoice::new(
+        push_key_choice(
+            &mut lines,
+            &mut choices,
             "inspect",
+            'i',
             "Inspect glyph coverage",
-            inspect_line,
-            Some('i'),
-        ));
+        );
         if rules.len() < MAX_FONT_RANGE_OVERRIDES {
-            let source_line = lines.len();
-            lines.push("[A] Add override".into());
-            choices.push(InfoOverlayChoice::new(
-                "add",
-                "Add override",
-                source_line,
-                Some('a'),
-            ));
+            push_key_choice(&mut lines, &mut choices, "add", 'a', "Add override");
         } else {
             lines.push(format!(
                 "Add unavailable: the maximum of {MAX_FONT_RANGE_OVERRIDES} rules is configured."
@@ -107,59 +101,43 @@ impl App {
         lines.push(String::new());
 
         for (index, rule) in visible_rules.iter().enumerate() {
-            let source_line = lines.len();
             let label = format_range_rule(rule);
             let shortcut = RANGE_SHORTCUTS[index];
-            lines.push(format!("[{}] {label}", shortcut));
-            choices.push(InfoOverlayChoice::new(
+            push_key_choice(
+                &mut lines,
+                &mut choices,
                 format!("rule:{index}"),
+                shortcut,
                 label,
-                source_line,
-                Some(shortcut),
-            ));
+            );
         }
         if rules.is_empty() {
             lines.push("No Unicode-range font overrides are configured.".into());
         }
         if page > 0 {
-            let source_line = lines.len();
-            lines.push("[P] Previous page".into());
-            choices.push(InfoOverlayChoice::new(
+            push_key_choice(
+                &mut lines,
+                &mut choices,
                 "previous-page",
+                'p',
                 "Previous page",
-                source_line,
-                Some('p'),
-            ));
+            );
         }
         if page + 1 < page_count {
-            let source_line = lines.len();
-            lines.push("[N] Next page".into());
-            choices.push(InfoOverlayChoice::new(
-                "next-page",
-                "Next page",
-                source_line,
-                Some('n'),
-            ));
+            push_key_choice(&mut lines, &mut choices, "next-page", 'n', "Next page");
         }
-        let source_line = lines.len();
-        lines.push("[B] Back to Settings".into());
-        choices.push(InfoOverlayChoice::new(
-            "back",
-            "Back to Settings",
-            source_line,
-            Some('b'),
-        ));
+        push_key_choice(&mut lines, &mut choices, "back", 'b', "Back to Settings");
 
         let request_id = self
             .info_overlay
             .show_choices("Font Range Overrides", lines, choices);
-        self.pending_font_range_management = Some(PendingFontRangeManagement {
+        self.overlay_flow = Some(OverlayFlow::FontRanges(PendingFontRangeManagement {
             request_id,
             view: FontRangeManagerView::List {
                 page,
                 visible_rules,
             },
-        });
+        }));
     }
 
     fn show_font_range_detail(&mut self, page: usize, rule: FontRangeOverride) {
@@ -173,25 +151,17 @@ impl App {
             "The primary font still owns cell metrics. A missing or incomplete mapped family falls through safely.".into(),
             String::new(),
         ];
-        let edit_line = lines.len();
-        lines.push("[E] Edit override".into());
-        let delete_line = lines.len();
-        lines.push("[D] Delete override".into());
-        let back_line = lines.len();
-        lines.push("[B] Back to list".into());
-        let request_id = self.info_overlay.show_choices(
-            "Font Range Override",
-            lines,
-            vec![
-                InfoOverlayChoice::new("edit", "Edit override", edit_line, Some('e')),
-                InfoOverlayChoice::new("delete", "Delete override", delete_line, Some('d')),
-                InfoOverlayChoice::new("back", "Back to list", back_line, Some('b')),
-            ],
-        );
-        self.pending_font_range_management = Some(PendingFontRangeManagement {
+        let mut choices = Vec::new();
+        push_key_choice(&mut lines, &mut choices, "edit", 'e', "Edit override");
+        push_key_choice(&mut lines, &mut choices, "delete", 'd', "Delete override");
+        push_key_choice(&mut lines, &mut choices, "back", 'b', "Back to list");
+        let request_id = self
+            .info_overlay
+            .show_choices("Font Range Override", lines, choices);
+        self.overlay_flow = Some(OverlayFlow::FontRanges(PendingFontRangeManagement {
             request_id,
             view: FontRangeManagerView::Detail { page, rule },
-        });
+        }));
     }
 
     fn show_font_range_edit(
@@ -241,10 +211,10 @@ impl App {
                 None,
             )],
         );
-        self.pending_font_range_management = Some(PendingFontRangeManagement {
+        self.overlay_flow = Some(OverlayFlow::FontRanges(PendingFontRangeManagement {
             request_id,
             view: FontRangeManagerView::Edit { page, original },
-        });
+        }));
     }
 
     fn show_font_coverage_input(&mut self, page: usize, value: String, error: Option<&str>) {
@@ -279,10 +249,10 @@ impl App {
                 None,
             )],
         );
-        self.pending_font_range_management = Some(PendingFontRangeManagement {
+        self.overlay_flow = Some(OverlayFlow::FontRanges(PendingFontRangeManagement {
             request_id,
             view: FontRangeManagerView::InspectInput { page },
-        });
+        }));
     }
 
     fn inspect_font_coverage(&mut self, page: usize, submitted: String) {
@@ -320,30 +290,31 @@ impl App {
         lines.insert(0, format!("Query: {}", format_grapheme(query)));
         lines.insert(1, String::new());
         lines.push(String::new());
-        let retry_line = lines.len();
-        lines.push("[R] Retry or inspect different text".into());
-        let back_line = lines.len();
-        lines.push("[B] Back to range manager".into());
-        let request_id = self.info_overlay.show_choices(
-            "Glyph Coverage Report",
-            lines,
-            vec![
-                InfoOverlayChoice::new(
-                    "retry",
-                    "Retry or inspect different text",
-                    retry_line,
-                    Some('r'),
-                ),
-                InfoOverlayChoice::new("back", "Back to range manager", back_line, Some('b')),
-            ],
+        let mut choices = Vec::new();
+        push_key_choice(
+            &mut lines,
+            &mut choices,
+            "retry",
+            'r',
+            "Retry or inspect different text",
         );
-        self.pending_font_range_management = Some(PendingFontRangeManagement {
+        push_key_choice(
+            &mut lines,
+            &mut choices,
+            "back",
+            'b',
+            "Back to range manager",
+        );
+        let request_id = self
+            .info_overlay
+            .show_choices("Glyph Coverage Report", lines, choices);
+        self.overlay_flow = Some(OverlayFlow::FontRanges(PendingFontRangeManagement {
             request_id,
             view: FontRangeManagerView::CoverageReport {
                 page,
                 query: submitted,
             },
-        });
+        }));
     }
 
     fn show_font_range_delete_confirmation(&mut self, page: usize, rule: FontRangeOverride) {
@@ -370,10 +341,10 @@ impl App {
                 InfoOverlayChoice::new("cancel", "Keep override", cancel_line, Some('b')),
             ],
         );
-        self.pending_font_range_management = Some(PendingFontRangeManagement {
+        self.overlay_flow = Some(OverlayFlow::FontRanges(PendingFontRangeManagement {
             request_id,
             view: FontRangeManagerView::ConfirmDelete { page, rule },
-        });
+        }));
     }
 
     pub(super) fn handle_font_range_manager_choice(
@@ -382,15 +353,14 @@ impl App {
         choice_id: &str,
     ) -> bool {
         let Some(pending) = self
-            .pending_font_range_management
-            .as_ref()
+            .pending_font_range_management()
             .filter(|pending| pending.request_id == request_id)
             .cloned()
         else {
             return false;
         };
         self.info_overlay.dismiss(request_id);
-        self.pending_font_range_management = None;
+        self.overlay_flow = None;
         match pending.view {
             FontRangeManagerView::List {
                 page,
@@ -461,8 +431,7 @@ impl App {
 
     pub(super) fn submit_font_range_manager_input(&mut self, request_id: u64) -> bool {
         let Some(pending) = self
-            .pending_font_range_management
-            .as_ref()
+            .pending_font_range_management()
             .filter(|pending| pending.request_id == request_id)
             .cloned()
         else {
@@ -482,7 +451,7 @@ impl App {
             return false;
         };
         self.info_overlay.dismiss(request_id);
-        self.pending_font_range_management = None;
+        self.overlay_flow = None;
 
         let (page, original) = match pending.view {
             FontRangeManagerView::Edit { page, original } => (page, original),
@@ -554,8 +523,7 @@ impl App {
 
     pub(super) fn cancel_font_range_manager_input(&mut self, request_id: u64) -> bool {
         let Some(pending) = self
-            .pending_font_range_management
-            .as_ref()
+            .pending_font_range_management()
             .filter(|pending| pending.request_id == request_id)
             .cloned()
         else {
@@ -565,7 +533,7 @@ impl App {
             FontRangeManagerView::Edit { page, original } => Some((page, original)),
             FontRangeManagerView::InspectInput { page } => {
                 self.info_overlay.dismiss(request_id);
-                self.pending_font_range_management = None;
+                self.overlay_flow = None;
                 self.show_font_range_list(page);
                 return true;
             }
@@ -575,7 +543,7 @@ impl App {
             return false;
         };
         self.info_overlay.dismiss(request_id);
-        self.pending_font_range_management = None;
+        self.overlay_flow = None;
         self.return_from_font_range_edit(page, original);
         true
     }
@@ -1125,7 +1093,7 @@ mod tests {
         app.apply_info_overlay_action(InfoOverlayAction::Dismiss {
             request_id: replacement,
         });
-        assert!(app.pending_font_range_management.is_none());
+        assert!(app.pending_font_range_management().is_none());
     }
 
     #[test]

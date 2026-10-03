@@ -6,7 +6,7 @@ use crate::plugin::runtime::{
     DeclarativeSetting, PluginAdminCommand, PluginConfigurationChange, PluginInstallPreview,
     PluginSettingValue, PluginUpdatePreview, RuntimePluginStatus, preview_install, preview_update,
 };
-use crate::ui::info_overlay::InfoOverlayChoice;
+use crate::ui::info_overlay::{InfoOverlayChoice, OverlayPage, push_key_choice};
 
 const PLUGIN_MANAGER_PAGE_SIZE: usize = 24;
 const PLUGIN_SETTINGS_PAGE_SIZE: usize = 24;
@@ -73,9 +73,7 @@ impl App {
 
     pub(super) fn open_runtime_plugin_manager(&mut self) {
         self.settings_panel.close();
-        self.pending_font_range_management = None;
-        self.pending_font_feature_management = None;
-        self.pending_file_upload = None;
+        self.overlay_flow = None;
         self.show_runtime_plugin_list(0);
     }
 
@@ -91,10 +89,12 @@ impl App {
                 return;
             }
         };
-        let page_count = statuses.len().div_ceil(PLUGIN_MANAGER_PAGE_SIZE).max(1);
-        let page = requested_page.min(page_count - 1);
-        let start = page * PLUGIN_MANAGER_PAGE_SIZE;
-        let end = (start + PLUGIN_MANAGER_PAGE_SIZE).min(statuses.len());
+        let OverlayPage {
+            index: page,
+            count: page_count,
+            start,
+            end,
+        } = OverlayPage::of(statuses.len(), PLUGIN_MANAGER_PAGE_SIZE, requested_page);
         let mut lines = vec![
             format!(
                 "Installed third-party plugins: {} · page {}/{}",
@@ -115,7 +115,6 @@ impl App {
             Some('i'),
         )];
         for (index, status) in statuses[start..end].iter().enumerate() {
-            let source_line = lines.len();
             let health = if status.diagnostic.is_some() {
                 "error"
             } else if status.enabled {
@@ -128,44 +127,38 @@ impl App {
                 status.name, status.id, status.version
             );
             let shortcut = PLUGIN_LIST_SHORTCUTS[index];
-            lines.push(format!("[{}] {label}", shortcut.to_ascii_uppercase()));
-            choices.push(InfoOverlayChoice::new(
+            push_key_choice(
+                &mut lines,
+                &mut choices,
                 format!("plugin:{}", status.id),
+                shortcut,
                 label,
-                source_line,
-                Some(shortcut),
-            ));
+            );
         }
         if statuses.is_empty() {
             lines.push("No third-party plugins are installed.".into());
         }
         if page > 0 {
-            let source_line = lines.len();
-            lines.push("[P] Previous page".into());
-            choices.push(InfoOverlayChoice::new(
+            push_key_choice(
+                &mut lines,
+                &mut choices,
                 "previous-page",
+                'p',
                 "Previous page",
-                source_line,
-                Some('p'),
-            ));
+            );
         }
         if page + 1 < page_count {
-            let source_line = lines.len();
-            lines.push("[N] Next page".into());
-            choices.push(InfoOverlayChoice::new(
-                "next-page",
-                "Next page",
-                source_line,
-                Some('n'),
-            ));
+            push_key_choice(&mut lines, &mut choices, "next-page", 'n', "Next page");
         }
         let request_id =
             self.info_overlay
                 .show_choices("Third-party Plugin Manager", lines, choices);
-        self.pending_runtime_plugin_management = Some(PendingRuntimePluginManagement {
-            request_id,
-            view: RuntimePluginManagerView::List { page },
-        });
+        self.overlay_flow = Some(OverlayFlow::RuntimePlugins(
+            PendingRuntimePluginManagement {
+                request_id,
+                view: RuntimePluginManagerView::List { page },
+            },
+        ));
     }
 
     fn show_runtime_plugin_install_path(
@@ -205,10 +198,12 @@ impl App {
                 None,
             )],
         );
-        self.pending_runtime_plugin_management = Some(PendingRuntimePluginManagement {
-            request_id,
-            view: RuntimePluginManagerView::InstallPath { page },
-        });
+        self.overlay_flow = Some(OverlayFlow::RuntimePlugins(
+            PendingRuntimePluginManagement {
+                request_id,
+                view: RuntimePluginManagerView::InstallPath { page },
+            },
+        ));
     }
 
     fn show_runtime_plugin_install_review(
@@ -259,67 +254,58 @@ impl App {
         }
         lines.push(String::new());
         if grants != preview.permissions {
-            let source_line = lines.len();
-            lines.push("[G] Grant all requested permissions".into());
-            choices.push(InfoOverlayChoice::new(
+            push_key_choice(
+                &mut lines,
+                &mut choices,
                 "grant-all",
+                'g',
                 "Grant all requested permissions",
-                source_line,
-                Some('g'),
-            ));
+            );
         }
         if !grants.is_empty() {
-            let source_line = lines.len();
-            lines.push("[R] Clear all grants".into());
-            choices.push(InfoOverlayChoice::new(
+            push_key_choice(
+                &mut lines,
+                &mut choices,
                 "clear-grants",
+                'r',
                 "Clear all grants",
-                source_line,
-                Some('r'),
-            ));
+            );
         }
-        let disabled_line = lines.len();
-        lines.push("[D] Install disabled".into());
-        choices.push(InfoOverlayChoice::new(
+        push_key_choice(
+            &mut lines,
+            &mut choices,
             "install-disabled",
+            'd',
             "Install disabled",
-            disabled_line,
-            Some('d'),
-        ));
+        );
         if grants == preview.permissions {
-            let enabled_line = lines.len();
-            lines.push("[E] Install and enable".into());
-            choices.push(InfoOverlayChoice::new(
+            push_key_choice(
+                &mut lines,
+                &mut choices,
                 "install-enabled",
+                'e',
                 "Install and enable",
-                enabled_line,
-                Some('e'),
-            ));
+            );
         } else {
             lines.push("Install and enable requires every requested permission.".into());
         }
-        let back_line = lines.len();
-        lines.push("[B] Back to directory".into());
-        choices.push(InfoOverlayChoice::new(
-            "back",
-            "Back to directory",
-            back_line,
-            Some('b'),
-        ));
+        push_key_choice(&mut lines, &mut choices, "back", 'b', "Back to directory");
 
         let request_id = self.info_overlay.show_choices(
             format!("Review Plugin: {}", preview.name),
             lines,
             choices,
         );
-        self.pending_runtime_plugin_management = Some(PendingRuntimePluginManagement {
-            request_id,
-            view: RuntimePluginManagerView::ReviewInstall {
-                page,
-                preview,
-                grants,
+        self.overlay_flow = Some(OverlayFlow::RuntimePlugins(
+            PendingRuntimePluginManagement {
+                request_id,
+                view: RuntimePluginManagerView::ReviewInstall {
+                    page,
+                    preview,
+                    grants,
+                },
             },
-        });
+        ));
     }
 
     fn open_runtime_plugin_update_review(&mut self, plugin_id: String, page: usize) {
@@ -429,77 +415,74 @@ impl App {
         }
         lines.push(String::new());
         if grants != preview.candidate_permissions {
-            let source_line = lines.len();
-            lines.push("[G] Grant all requested permissions".into());
-            choices.push(InfoOverlayChoice::new(
+            push_key_choice(
+                &mut lines,
+                &mut choices,
                 "grant-all",
+                'g',
                 "Grant all requested permissions",
-                source_line,
-                Some('g'),
-            ));
+            );
         }
         if !grants.is_empty() {
-            let source_line = lines.len();
-            lines.push("[R] Clear all grants".into());
-            choices.push(InfoOverlayChoice::new(
+            push_key_choice(
+                &mut lines,
+                &mut choices,
                 "clear-grants",
+                'r',
                 "Clear all grants",
-                source_line,
-                Some('r'),
-            ));
+            );
         }
         let disabled_label = if preview.enabled {
             "Update and disable"
         } else {
             "Update disabled"
         };
-        let disabled_line = lines.len();
-        lines.push(format!("[D] {disabled_label}"));
-        choices.push(InfoOverlayChoice::new(
+        push_key_choice(
+            &mut lines,
+            &mut choices,
             "update-disabled",
+            'd',
             disabled_label,
-            disabled_line,
-            Some('d'),
-        ));
+        );
         if grants == preview.candidate_permissions {
             let enabled_label = if preview.enabled {
                 "Update and keep enabled"
             } else {
                 "Update and enable"
             };
-            let enabled_line = lines.len();
-            lines.push(format!("[E] {enabled_label}"));
-            choices.push(InfoOverlayChoice::new(
+            push_key_choice(
+                &mut lines,
+                &mut choices,
                 "update-enabled",
+                'e',
                 enabled_label,
-                enabled_line,
-                Some('e'),
-            ));
+            );
         } else {
             lines.push("Enabling after the update requires every requested permission.".into());
         }
-        let back_line = lines.len();
-        lines.push("[B] Back to plugin details".into());
-        choices.push(InfoOverlayChoice::new(
+        push_key_choice(
+            &mut lines,
+            &mut choices,
             "back",
+            'b',
             "Back to plugin details",
-            back_line,
-            Some('b'),
-        ));
+        );
 
         let request_id = self.info_overlay.show_choices(
             format!("Review Plugin Update: {}", preview.name),
             lines,
             choices,
         );
-        self.pending_runtime_plugin_management = Some(PendingRuntimePluginManagement {
-            request_id,
-            view: RuntimePluginManagerView::ReviewUpdate {
-                page,
-                preview,
-                grants,
+        self.overlay_flow = Some(OverlayFlow::RuntimePlugins(
+            PendingRuntimePluginManagement {
+                request_id,
+                view: RuntimePluginManagerView::ReviewUpdate {
+                    page,
+                    preview,
+                    grants,
+                },
             },
-        });
+        ));
     }
 
     fn show_runtime_plugin_detail(&mut self, plugin_id: String, page: usize) {
@@ -576,76 +559,59 @@ impl App {
 
         let mut choices = Vec::new();
         if status.diagnostic.is_none() && !status.profiles.is_empty() {
-            let source_line = lines.len();
-            lines.push("[P] Choose default profile".into());
-            choices.push(InfoOverlayChoice::new(
+            push_key_choice(
+                &mut lines,
+                &mut choices,
                 "choose-default-profile",
+                'p',
                 "Choose default profile",
-                source_line,
-                Some('p'),
-            ));
+            );
         }
         if status.diagnostic.is_none() && !status.setting_definitions.is_empty() {
-            let source_line = lines.len();
-            lines.push("[S] Configure settings".into());
-            choices.push(InfoOverlayChoice::new(
+            push_key_choice(
+                &mut lines,
+                &mut choices,
                 "configure-settings",
+                's',
                 "Configure settings",
-                source_line,
-                Some('s'),
-            ));
+            );
         }
         let toggle_label = if status.enabled { "Disable" } else { "Enable" };
-        let source_line = lines.len();
-        lines.push(format!("[E] {toggle_label}"));
-        choices.push(InfoOverlayChoice::new(
-            "toggle",
-            toggle_label,
-            source_line,
-            Some('e'),
-        ));
-        let source_line = lines.len();
-        lines.push("[U] Update from source".into());
-        choices.push(InfoOverlayChoice::new(
+        push_key_choice(&mut lines, &mut choices, "toggle", 'e', toggle_label);
+        push_key_choice(
+            &mut lines,
+            &mut choices,
             "update",
+            'u',
             "Update from source",
-            source_line,
-            Some('u'),
-        ));
+        );
         if status.configured_setting_count > 0 {
-            let source_line = lines.len();
-            lines.push("[R] Reset settings to defaults".into());
-            choices.push(InfoOverlayChoice::new(
+            push_key_choice(
+                &mut lines,
+                &mut choices,
                 "reset-settings",
+                'r',
                 "Reset settings to defaults",
-                source_line,
-                Some('r'),
-            ));
+            );
         }
-        let source_line = lines.len();
-        lines.push("[X] Remove installed copy".into());
-        choices.push(InfoOverlayChoice::new(
+        push_key_choice(
+            &mut lines,
+            &mut choices,
             "remove",
+            'x',
             "Remove installed copy",
-            source_line,
-            Some('x'),
-        ));
-        let source_line = lines.len();
-        lines.push("[B] Back to plugin list".into());
-        choices.push(InfoOverlayChoice::new(
-            "back",
-            "Back to plugin list",
-            source_line,
-            Some('b'),
-        ));
+        );
+        push_key_choice(&mut lines, &mut choices, "back", 'b', "Back to plugin list");
 
         let request_id =
             self.info_overlay
                 .show_choices(format!("Plugin: {}", status.name), lines, choices);
-        self.pending_runtime_plugin_management = Some(PendingRuntimePluginManagement {
-            request_id,
-            view: RuntimePluginManagerView::Detail { plugin_id, page },
-        });
+        self.overlay_flow = Some(OverlayFlow::RuntimePlugins(
+            PendingRuntimePluginManagement {
+                request_id,
+                view: RuntimePluginManagerView::Detail { plugin_id, page },
+            },
+        ));
     }
 
     fn show_runtime_plugin_default_profiles(
@@ -661,14 +627,16 @@ impl App {
             self.show_runtime_plugin_detail(plugin_id, page);
             return;
         }
-        let page_count = status
-            .profiles
-            .len()
-            .div_ceil(PLUGIN_PROFILE_PAGE_SIZE)
-            .max(1);
-        let profile_page = requested_profile_page.min(page_count - 1);
-        let start = profile_page * PLUGIN_PROFILE_PAGE_SIZE;
-        let end = (start + PLUGIN_PROFILE_PAGE_SIZE).min(status.profiles.len());
+        let OverlayPage {
+            index: profile_page,
+            count: page_count,
+            start,
+            end,
+        } = OverlayPage::of(
+            status.profiles.len(),
+            PLUGIN_PROFILE_PAGE_SIZE,
+            requested_profile_page,
+        );
         let effective_id = status
             .configured_default_profile
             .as_deref()
@@ -717,56 +685,48 @@ impl App {
             ));
         }
         if profile_page > 0 {
-            let source_line = lines.len();
-            lines.push("[P] Previous profiles".into());
-            choices.push(InfoOverlayChoice::new(
+            push_key_choice(
+                &mut lines,
+                &mut choices,
                 "previous-page",
+                'p',
                 "Previous profiles",
-                source_line,
-                Some('p'),
-            ));
+            );
         }
         if profile_page + 1 < page_count {
-            let source_line = lines.len();
-            lines.push("[N] Next profiles".into());
-            choices.push(InfoOverlayChoice::new(
-                "next-page",
-                "Next profiles",
-                source_line,
-                Some('n'),
-            ));
+            push_key_choice(&mut lines, &mut choices, "next-page", 'n', "Next profiles");
         }
         if status.configured_default_profile.is_some() {
-            let source_line = lines.len();
-            lines.push("[D] Use manifest order".into());
-            choices.push(InfoOverlayChoice::new(
+            push_key_choice(
+                &mut lines,
+                &mut choices,
                 "manifest-order",
+                'd',
                 "Use manifest order",
-                source_line,
-                Some('d'),
-            ));
+            );
         }
-        let source_line = lines.len();
-        lines.push("[B] Back to plugin details".into());
-        choices.push(InfoOverlayChoice::new(
+        push_key_choice(
+            &mut lines,
+            &mut choices,
             "back",
+            'b',
             "Back to plugin details",
-            source_line,
-            Some('b'),
-        ));
+        );
         let request_id = self.info_overlay.show_choices(
             format!("Default Profile: {}", status.name),
             lines,
             choices,
         );
-        self.pending_runtime_plugin_management = Some(PendingRuntimePluginManagement {
-            request_id,
-            view: RuntimePluginManagerView::DefaultProfile {
-                plugin_id,
-                page,
-                profile_page,
+        self.overlay_flow = Some(OverlayFlow::RuntimePlugins(
+            PendingRuntimePluginManagement {
+                request_id,
+                view: RuntimePluginManagerView::DefaultProfile {
+                    plugin_id,
+                    page,
+                    profile_page,
+                },
             },
-        });
+        ));
     }
 
     fn show_runtime_plugin_settings(
@@ -782,14 +742,16 @@ impl App {
             self.show_runtime_plugin_detail(plugin_id, page);
             return;
         }
-        let page_count = status
-            .setting_definitions
-            .len()
-            .div_ceil(PLUGIN_SETTINGS_PAGE_SIZE)
-            .max(1);
-        let settings_page = requested_settings_page.min(page_count - 1);
-        let start = settings_page * PLUGIN_SETTINGS_PAGE_SIZE;
-        let end = (start + PLUGIN_SETTINGS_PAGE_SIZE).min(status.setting_definitions.len());
+        let OverlayPage {
+            index: settings_page,
+            count: page_count,
+            start,
+            end,
+        } = OverlayPage::of(
+            status.setting_definitions.len(),
+            PLUGIN_SETTINGS_PAGE_SIZE,
+            requested_settings_page,
+        );
         let mut lines = vec![
             format!("{} ({})", status.name, status.id),
             format!(
@@ -803,7 +765,6 @@ impl App {
         ];
         let mut choices = Vec::new();
         for (index, setting) in status.setting_definitions[start..end].iter().enumerate() {
-            let source_line = lines.len();
             let id = setting.id();
             let value = status
                 .settings
@@ -817,58 +778,51 @@ impl App {
             };
             let shortcut = PLUGIN_LIST_SHORTCUTS[index];
             let label = format!("{} ({id}) = {value} · {origin}", setting.name());
-            lines.push(format!("[{}] {label}", shortcut.to_ascii_uppercase()));
-            choices.push(InfoOverlayChoice::new(
+            push_key_choice(
+                &mut lines,
+                &mut choices,
                 format!("setting:{id}"),
+                shortcut,
                 label,
-                source_line,
-                Some(shortcut),
-            ));
+            );
         }
         if status.setting_definitions.is_empty() {
             lines.push("This plugin does not declare any settings.".into());
         }
         if settings_page > 0 {
-            let source_line = lines.len();
-            lines.push("[P] Previous page".into());
-            choices.push(InfoOverlayChoice::new(
+            push_key_choice(
+                &mut lines,
+                &mut choices,
                 "previous-page",
+                'p',
                 "Previous page",
-                source_line,
-                Some('p'),
-            ));
+            );
         }
         if settings_page + 1 < page_count {
-            let source_line = lines.len();
-            lines.push("[N] Next page".into());
-            choices.push(InfoOverlayChoice::new(
-                "next-page",
-                "Next page",
-                source_line,
-                Some('n'),
-            ));
+            push_key_choice(&mut lines, &mut choices, "next-page", 'n', "Next page");
         }
-        let source_line = lines.len();
-        lines.push("[B] Back to plugin details".into());
-        choices.push(InfoOverlayChoice::new(
+        push_key_choice(
+            &mut lines,
+            &mut choices,
             "back",
+            'b',
             "Back to plugin details",
-            source_line,
-            Some('b'),
-        ));
+        );
         let request_id = self.info_overlay.show_choices(
             format!("Plugin Settings: {}", status.name),
             lines,
             choices,
         );
-        self.pending_runtime_plugin_management = Some(PendingRuntimePluginManagement {
-            request_id,
-            view: RuntimePluginManagerView::Settings {
-                plugin_id,
-                page,
-                settings_page,
+        self.overlay_flow = Some(OverlayFlow::RuntimePlugins(
+            PendingRuntimePluginManagement {
+                request_id,
+                view: RuntimePluginManagerView::Settings {
+                    plugin_id,
+                    page,
+                    settings_page,
+                },
             },
-        });
+        ));
     }
 
     fn show_runtime_plugin_setting(
@@ -983,15 +937,17 @@ impl App {
                     max_bytes,
                     choices,
                 );
-                self.pending_runtime_plugin_management = Some(PendingRuntimePluginManagement {
-                    request_id,
-                    view: RuntimePluginManagerView::EditSetting {
-                        plugin_id,
-                        page,
-                        settings_page,
-                        setting,
+                self.overlay_flow = Some(OverlayFlow::RuntimePlugins(
+                    PendingRuntimePluginManagement {
+                        request_id,
+                        view: RuntimePluginManagerView::EditSetting {
+                            plugin_id,
+                            page,
+                            settings_page,
+                            setting,
+                        },
                     },
-                });
+                ));
             }
             DeclarativeSetting::Boolean { .. } => {
                 let true_line = lines.len();
@@ -1016,24 +972,26 @@ impl App {
             DeclarativeSetting::Choice {
                 choices: values, ..
             } => {
-                let page_count = values
-                    .len()
-                    .div_ceil(PLUGIN_SETTING_VALUES_PAGE_SIZE)
-                    .max(1);
-                let value_page = requested_value_page.min(page_count - 1);
-                let start = value_page * PLUGIN_SETTING_VALUES_PAGE_SIZE;
-                let end = (start + PLUGIN_SETTING_VALUES_PAGE_SIZE).min(values.len());
+                let OverlayPage {
+                    index: value_page,
+                    count: page_count,
+                    start,
+                    end,
+                } = OverlayPage::of(
+                    values.len(),
+                    PLUGIN_SETTING_VALUES_PAGE_SIZE,
+                    requested_value_page,
+                );
                 let mut overlay_choices = Vec::new();
                 for (local_index, value) in values[start..end].iter().enumerate() {
-                    let source_line = lines.len();
                     let shortcut = PLUGIN_LIST_SHORTCUTS[local_index];
-                    lines.push(format!("[{}] {value}", shortcut.to_ascii_uppercase()));
-                    overlay_choices.push(InfoOverlayChoice::new(
+                    push_key_choice(
+                        &mut lines,
+                        &mut overlay_choices,
                         format!("value:{}", start + local_index),
+                        shortcut,
                         value,
-                        source_line,
-                        Some(shortcut),
-                    ));
+                    );
                 }
                 add_setting_navigation_choices(
                     &mut lines,
@@ -1070,16 +1028,18 @@ impl App {
             lines,
             choices,
         );
-        self.pending_runtime_plugin_management = Some(PendingRuntimePluginManagement {
-            request_id,
-            view: RuntimePluginManagerView::Setting {
-                plugin_id,
-                page,
-                settings_page,
-                value_page,
-                setting,
+        self.overlay_flow = Some(OverlayFlow::RuntimePlugins(
+            PendingRuntimePluginManagement {
+                request_id,
+                view: RuntimePluginManagerView::Setting {
+                    plugin_id,
+                    page,
+                    settings_page,
+                    value_page,
+                    setting,
+                },
             },
-        });
+        ));
     }
 
     fn current_runtime_plugin_status(
@@ -1137,14 +1097,16 @@ impl App {
             InfoOverlayChoice::new("cancel", "Cancel", 4, Some('n')),
         ];
         let request_id = self.info_overlay.show_choices(title, lines, choices);
-        self.pending_runtime_plugin_management = Some(PendingRuntimePluginManagement {
-            request_id,
-            view: RuntimePluginManagerView::Confirm {
-                plugin_id,
-                page,
-                operation,
+        self.overlay_flow = Some(OverlayFlow::RuntimePlugins(
+            PendingRuntimePluginManagement {
+                request_id,
+                view: RuntimePluginManagerView::Confirm {
+                    plugin_id,
+                    page,
+                    operation,
+                },
             },
-        });
+        ));
     }
 
     fn show_runtime_plugin_error(
@@ -1183,12 +1145,14 @@ impl App {
             lines,
             vec![InfoOverlayChoice::new("back", "Back", 2, Some('b'))],
         );
-        self.pending_runtime_plugin_management = Some(PendingRuntimePluginManagement {
-            request_id,
-            view: plugin_id.map_or(RuntimePluginManagerView::List { page }, |plugin_id| {
-                RuntimePluginManagerView::Detail { plugin_id, page }
-            }),
-        });
+        self.overlay_flow = Some(OverlayFlow::RuntimePlugins(
+            PendingRuntimePluginManagement {
+                request_id,
+                view: plugin_id.map_or(RuntimePluginManagerView::List { page }, |plugin_id| {
+                    RuntimePluginManagerView::Detail { plugin_id, page }
+                }),
+            },
+        ));
     }
 
     pub(super) fn handle_runtime_plugin_manager_choice(
@@ -1197,15 +1161,14 @@ impl App {
         choice_id: &str,
     ) -> bool {
         let Some(pending) = self
-            .pending_runtime_plugin_management
-            .as_ref()
+            .pending_runtime_plugin_management()
             .filter(|pending| pending.request_id == request_id)
             .cloned()
         else {
             return false;
         };
         self.info_overlay.dismiss(request_id);
-        self.pending_runtime_plugin_management = None;
+        self.overlay_flow = None;
         match pending.view {
             RuntimePluginManagerView::List { page } => match choice_id {
                 "install" => self.show_runtime_plugin_install_path(page, String::new(), None),
@@ -1541,8 +1504,7 @@ impl App {
 
     pub(super) fn submit_runtime_plugin_manager_input(&mut self, request_id: u64) -> bool {
         let Some(pending) = self
-            .pending_runtime_plugin_management
-            .as_ref()
+            .pending_runtime_plugin_management()
             .filter(|pending| pending.request_id == request_id)
             .cloned()
         else {
@@ -1558,7 +1520,7 @@ impl App {
         match pending.view {
             RuntimePluginManagerView::InstallPath { page } => {
                 self.info_overlay.dismiss(request_id);
-                self.pending_runtime_plugin_management = None;
+                self.overlay_flow = None;
                 let directory = PathBuf::from(&value);
                 let preview = if value.is_empty() {
                     Err(anyhow::anyhow!("plugin directory cannot be empty"))
@@ -1619,7 +1581,7 @@ impl App {
                     return true;
                 }
                 self.info_overlay.dismiss(request_id);
-                self.pending_runtime_plugin_management = None;
+                self.overlay_flow = None;
                 self.apply_runtime_plugin_setting_change(
                     plugin_id,
                     page,
@@ -1638,8 +1600,7 @@ impl App {
 
     pub(super) fn cancel_runtime_plugin_manager_input(&mut self, request_id: u64) -> bool {
         let Some(pending) = self
-            .pending_runtime_plugin_management
-            .as_ref()
+            .pending_runtime_plugin_management()
             .filter(|pending| pending.request_id == request_id)
             .cloned()
         else {
@@ -1648,7 +1609,7 @@ impl App {
         match pending.view {
             RuntimePluginManagerView::InstallPath { page } => {
                 self.info_overlay.dismiss(request_id);
-                self.pending_runtime_plugin_management = None;
+                self.overlay_flow = None;
                 self.show_runtime_plugin_list(page);
                 true
             }
@@ -1659,7 +1620,7 @@ impl App {
                 setting: _,
             } => {
                 self.info_overlay.dismiss(request_id);
-                self.pending_runtime_plugin_management = None;
+                self.overlay_flow = None;
                 self.show_runtime_plugin_settings(plugin_id, page, settings_page);
                 true
             }
@@ -1867,43 +1828,15 @@ fn add_setting_navigation_choices(
     has_next: bool,
 ) {
     if configured {
-        let source_line = lines.len();
-        lines.push("[D] Use manifest default".into());
-        choices.push(InfoOverlayChoice::new(
-            "unset",
-            "Use manifest default",
-            source_line,
-            Some('d'),
-        ));
+        push_key_choice(lines, choices, "unset", 'd', "Use manifest default");
     }
     if has_previous {
-        let source_line = lines.len();
-        lines.push("[P] Previous values".into());
-        choices.push(InfoOverlayChoice::new(
-            "previous-page",
-            "Previous values",
-            source_line,
-            Some('p'),
-        ));
+        push_key_choice(lines, choices, "previous-page", 'p', "Previous values");
     }
     if has_next {
-        let source_line = lines.len();
-        lines.push("[N] Next values".into());
-        choices.push(InfoOverlayChoice::new(
-            "next-page",
-            "Next values",
-            source_line,
-            Some('n'),
-        ));
+        push_key_choice(lines, choices, "next-page", 'n', "Next values");
     }
-    let source_line = lines.len();
-    lines.push("[B] Back to settings".into());
-    choices.push(InfoOverlayChoice::new(
-        "back",
-        "Back to settings",
-        source_line,
-        Some('b'),
-    ));
+    push_key_choice(lines, choices, "back", 'b', "Back to settings");
 }
 
 fn setting_kind(setting: &DeclarativeSetting) -> &'static str {
@@ -2827,7 +2760,7 @@ program = "termeric-test-fixture-must-not-run"
         app.apply_info_overlay_action(InfoOverlayAction::Dismiss {
             request_id: dismissed_request,
         });
-        assert!(app.pending_runtime_plugin_management.is_none());
+        assert!(app.pending_runtime_plugin_management().is_none());
 
         app.open_runtime_plugin_manager();
         let list_request = app.info_overlay.request_id();
@@ -2837,8 +2770,7 @@ program = "termeric-test-fixture-must-not-run"
         });
         assert_eq!(app.info_overlay.request_id(), list_request);
         assert!(matches!(
-            app.pending_runtime_plugin_management
-                .as_ref()
+            app.pending_runtime_plugin_management()
                 .map(|pending| &pending.view),
             Some(RuntimePluginManagerView::List { page: 0 })
         ));

@@ -2,7 +2,9 @@
 
 use super::*;
 use crate::config::MAX_FONT_FEATURES;
-use crate::ui::info_overlay::{InfoOverlayChoice, MAX_INFO_INPUT_BYTES};
+use crate::ui::info_overlay::{
+    InfoOverlayChoice, MAX_INFO_INPUT_BYTES, OverlayPage, push_key_choice,
+};
 
 const FEATURE_PAGE_SIZE: usize = 8;
 const FEATURE_INPUT_BYTES: usize = 32;
@@ -39,9 +41,7 @@ enum FontFeatureManagerView {
 impl App {
     pub(super) fn open_font_feature_manager(&mut self) {
         self.settings_panel.close();
-        self.pending_runtime_plugin_management = None;
-        self.pending_font_range_management = None;
-        self.pending_file_upload = None;
+        self.overlay_flow = None;
         self.show_font_feature_list(0);
     }
 
@@ -53,10 +53,12 @@ impl App {
             .iter()
             .map(|(tag, value)| (tag.clone(), *value))
             .collect::<Vec<_>>();
-        let page_count = entries.len().div_ceil(FEATURE_PAGE_SIZE).max(1);
-        let page = requested_page.min(page_count - 1);
-        let start = page * FEATURE_PAGE_SIZE;
-        let end = (start + FEATURE_PAGE_SIZE).min(entries.len());
+        let OverlayPage {
+            index: page,
+            count: page_count,
+            start,
+            end,
+        } = OverlayPage::of(entries.len(), FEATURE_PAGE_SIZE, requested_page);
         let visible = entries[start..end].to_vec();
         let mut lines = vec![
             format!(
@@ -73,14 +75,7 @@ impl App {
         ];
         let mut choices = Vec::new();
         if entries.len() < MAX_FONT_FEATURES {
-            let source_line = lines.len();
-            lines.push("[A] Add feature override".into());
-            choices.push(InfoOverlayChoice::new(
-                "add",
-                "Add feature override",
-                source_line,
-                Some('a'),
-            ));
+            push_key_choice(&mut lines, &mut choices, "add", 'a', "Add feature override");
         } else {
             lines.push(format!(
                 "Add unavailable: the maximum of {MAX_FONT_FEATURES} overrides is configured."
@@ -88,55 +83,39 @@ impl App {
         }
         lines.push(String::new());
         for (index, (tag, value)) in visible.iter().enumerate() {
-            let source_line = lines.len();
             let label = format_feature(tag, *value);
             let shortcut = FEATURE_SHORTCUTS[index];
-            lines.push(format!("[{shortcut}] {label}"));
-            choices.push(InfoOverlayChoice::new(
+            push_key_choice(
+                &mut lines,
+                &mut choices,
                 format!("feature:{index}"),
+                shortcut,
                 label,
-                source_line,
-                Some(shortcut),
-            ));
+            );
         }
         if entries.is_empty() {
             lines.push("No explicit OpenType feature overrides are configured.".into());
         }
         if page > 0 {
-            let source_line = lines.len();
-            lines.push("[P] Previous page".into());
-            choices.push(InfoOverlayChoice::new(
+            push_key_choice(
+                &mut lines,
+                &mut choices,
                 "previous-page",
+                'p',
                 "Previous page",
-                source_line,
-                Some('p'),
-            ));
+            );
         }
         if page + 1 < page_count {
-            let source_line = lines.len();
-            lines.push("[N] Next page".into());
-            choices.push(InfoOverlayChoice::new(
-                "next-page",
-                "Next page",
-                source_line,
-                Some('n'),
-            ));
+            push_key_choice(&mut lines, &mut choices, "next-page", 'n', "Next page");
         }
-        let source_line = lines.len();
-        lines.push("[B] Back to Settings".into());
-        choices.push(InfoOverlayChoice::new(
-            "back",
-            "Back to Settings",
-            source_line,
-            Some('b'),
-        ));
+        push_key_choice(&mut lines, &mut choices, "back", 'b', "Back to Settings");
         let request_id =
             self.info_overlay
                 .show_choices("OpenType Feature Overrides", lines, choices);
-        self.pending_font_feature_management = Some(PendingFontFeatureManagement {
+        self.overlay_flow = Some(OverlayFlow::FontFeatures(PendingFontFeatureManagement {
             request_id,
             view: FontFeatureManagerView::List { page, visible },
-        });
+        }));
     }
 
     fn show_font_feature_detail(&mut self, page: usize, tag: String, value: u32) {
@@ -151,25 +130,17 @@ impl App {
             "A font may ignore a feature it does not implement.".into(),
             String::new(),
         ];
-        let edit_line = lines.len();
-        lines.push("[E] Edit override".into());
-        let delete_line = lines.len();
-        lines.push("[D] Delete override".into());
-        let back_line = lines.len();
-        lines.push("[B] Back to list".into());
-        let request_id = self.info_overlay.show_choices(
-            "OpenType Feature Override",
-            lines,
-            vec![
-                InfoOverlayChoice::new("edit", "Edit override", edit_line, Some('e')),
-                InfoOverlayChoice::new("delete", "Delete override", delete_line, Some('d')),
-                InfoOverlayChoice::new("back", "Back to list", back_line, Some('b')),
-            ],
-        );
-        self.pending_font_feature_management = Some(PendingFontFeatureManagement {
+        let mut choices = Vec::new();
+        push_key_choice(&mut lines, &mut choices, "edit", 'e', "Edit override");
+        push_key_choice(&mut lines, &mut choices, "delete", 'd', "Delete override");
+        push_key_choice(&mut lines, &mut choices, "back", 'b', "Back to list");
+        let request_id =
+            self.info_overlay
+                .show_choices("OpenType Feature Override", lines, choices);
+        self.overlay_flow = Some(OverlayFlow::FontFeatures(PendingFontFeatureManagement {
             request_id,
             view: FontFeatureManagerView::Detail { page, tag, value },
-        });
+        }));
     }
 
     fn show_font_feature_edit(
@@ -220,10 +191,10 @@ impl App {
                 None,
             )],
         );
-        self.pending_font_feature_management = Some(PendingFontFeatureManagement {
+        self.overlay_flow = Some(OverlayFlow::FontFeatures(PendingFontFeatureManagement {
             request_id,
             view: FontFeatureManagerView::Edit { page, original },
-        });
+        }));
     }
 
     fn show_font_feature_delete_confirmation(&mut self, page: usize, tag: String, value: u32) {
@@ -251,10 +222,10 @@ impl App {
                 InfoOverlayChoice::new("cancel", "Keep override", cancel_line, Some('b')),
             ],
         );
-        self.pending_font_feature_management = Some(PendingFontFeatureManagement {
+        self.overlay_flow = Some(OverlayFlow::FontFeatures(PendingFontFeatureManagement {
             request_id,
             view: FontFeatureManagerView::ConfirmDelete { page, tag, value },
-        });
+        }));
     }
 
     pub(super) fn handle_font_feature_manager_choice(
@@ -263,15 +234,14 @@ impl App {
         choice_id: &str,
     ) -> bool {
         let Some(pending) = self
-            .pending_font_feature_management
-            .as_ref()
+            .pending_font_feature_management()
             .filter(|pending| pending.request_id == request_id)
             .cloned()
         else {
             return false;
         };
         self.info_overlay.dismiss(request_id);
-        self.pending_font_feature_management = None;
+        self.overlay_flow = None;
         match pending.view {
             FontFeatureManagerView::List { page, visible } => match choice_id {
                 "add" if self.config.font.features.len() < MAX_FONT_FEATURES => {
@@ -327,8 +297,7 @@ impl App {
 
     pub(super) fn submit_font_feature_manager_input(&mut self, request_id: u64) -> bool {
         let Some(pending) = self
-            .pending_font_feature_management
-            .as_ref()
+            .pending_font_feature_management()
             .filter(|pending| pending.request_id == request_id)
             .cloned()
         else {
@@ -345,7 +314,7 @@ impl App {
             return false;
         };
         self.info_overlay.dismiss(request_id);
-        self.pending_font_feature_management = None;
+        self.overlay_flow = None;
         if let Some((tag, value)) = original.as_ref()
             && !self.font_feature_is_current(tag, *value)
         {
@@ -404,8 +373,7 @@ impl App {
 
     pub(super) fn cancel_font_feature_manager_input(&mut self, request_id: u64) -> bool {
         let Some(pending) = self
-            .pending_font_feature_management
-            .as_ref()
+            .pending_font_feature_management()
             .filter(|pending| pending.request_id == request_id)
             .cloned()
         else {
@@ -415,7 +383,7 @@ impl App {
             return false;
         };
         self.info_overlay.dismiss(request_id);
-        self.pending_font_feature_management = None;
+        self.overlay_flow = None;
         self.return_from_font_feature_edit(page, original);
         true
     }
@@ -622,6 +590,6 @@ mod tests {
         app.apply_info_overlay_action(InfoOverlayAction::Dismiss {
             request_id: current,
         });
-        assert!(app.pending_font_feature_management.is_none());
+        assert!(app.pending_font_feature_management().is_none());
     }
 }

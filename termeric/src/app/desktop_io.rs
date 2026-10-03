@@ -198,7 +198,7 @@ impl App {
             return Err("The focused pane is read-only".into());
         }
         if let Some((domain_id, pane_id)) = tab.live_domain_focus_route() {
-            if self.active_file_upload.is_some() || self.pending_file_upload.is_some() {
+            if self.active_file_upload.is_some() || self.pending_file_upload().is_some() {
                 return Err("Another file upload is already pending for this window".into());
             }
             let authority = self
@@ -301,7 +301,7 @@ impl App {
                         ),
                     ],
                 );
-                self.pending_file_upload = Some(PendingFileUpload {
+                self.overlay_flow = Some(OverlayFlow::FileUpload(PendingFileUpload {
                     request_id,
                     source,
                     authority,
@@ -310,7 +310,7 @@ impl App {
                     name,
                     source_kind,
                     source_identity,
-                });
+                }));
                 true
             }
         }
