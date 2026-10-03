@@ -2025,7 +2025,7 @@ fn encode_settings_document(
     values: &BTreeMap<String, PluginSettingValue>,
 ) -> Result<String> {
     let encoded = serde_json::to_string(&serde_json::json!({
-        "schema_version": 1,
+        "schema_version": ENVIRONMENT_DOCUMENT_SCHEMA_VERSION,
         "plugin_id": manifest.id,
         "values": values,
     }))?;

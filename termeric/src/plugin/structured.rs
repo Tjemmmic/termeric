@@ -697,7 +697,6 @@ fn handler_command(invocation: &StructuredHandlerInvocation) -> Command {
         .args(&invocation.args)
         .env_clear()
         .env("TERMERIC_PLUGIN_ID", &invocation.plugin_id)
-        .env("TERMERIC_PLUGIN_EVENT_SCHEMA", SCHEMA_VERSION.to_string())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -2010,7 +2009,7 @@ done"#,
     fn local_stdio_handler_round_trip_is_argv_preserving_and_bounded() {
         let invocation = process_fixture(
             "fixture",
-            "test \"$TERMERIC_PLUGIN_EVENT_SCHEMA\" = 1 || exit 9; cat >/dev/null; printf '%s' '{\"schema_version\":1,\"actions\":[{\"type\":\"show-message\",\"message\":\"handled\"}]}'",
+            "cat >/dev/null; printf '%s' '{\"schema_version\":1,\"actions\":[{\"type\":\"show-message\",\"message\":\"handled\"}]}'",
         );
         assert_eq!(
             run_fixture(&invocation).unwrap(),

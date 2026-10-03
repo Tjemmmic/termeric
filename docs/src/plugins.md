@@ -216,7 +216,7 @@ The `[event_handler]` table names one program that receives every event the plug
 | `mode` | no | `process-per-event` (default) or `persistent`. |
 | `events` | yes | One or more of the events below. |
 
-Termeric starts the handler with an empty environment except `PATH`, `TERMERIC_PLUGIN_ID` (the plugin's ID), and `TERMERIC_PLUGIN_EVENT_SCHEMA` (`1`), in Termeric's own working directory. Only the manifest is installed, so give a handler script as an absolute path, or put the code in `args` as the examples do.
+Termeric starts the handler with an empty environment except `PATH` and `TERMERIC_PLUGIN_ID` (the plugin's ID), in Termeric's own working directory. Only the manifest is installed, so give a handler script as an absolute path, or put the code in `args` as the examples do.
 
 Each window runs its handlers separately: in `persistent` mode, every window that has sent the plugin an event has its own handler process, with its own memory. A window runs one handler request at a time, across all plugins, and queues up to 32 more.
 
