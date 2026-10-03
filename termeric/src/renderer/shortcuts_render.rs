@@ -17,8 +17,8 @@ impl Renderer {
         window_height: f32,
     ) {
         let anim = info.animation;
-        let cell_width = self.cell_width;
-        let cell_height = self.cell_height;
+        let cell_width = self.cell_width();
+        let cell_height = self.cell_height();
         let scale = self.scale_factor;
         let px = |logical: f32| (logical * scale).round().max(1.0);
         let fade = |color: [f32; 4], alpha: f32| scale_alpha(color, alpha * anim);

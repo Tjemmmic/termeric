@@ -67,7 +67,7 @@ impl Renderer {
         let preedit = preedit_box(
             info,
             (width as f32, height as f32),
-            (self.cell_width, self.cell_height),
+            (self.cell_width(), self.cell_height()),
         );
         [preedit.x, preedit.y, preedit.width, preedit.height]
     }
@@ -88,7 +88,7 @@ impl Renderer {
         } = preedit_box(
             info,
             (window_width, window_height),
-            (self.cell_width, self.cell_height),
+            (self.cell_width(), self.cell_height()),
         );
 
         self.rect_pipeline.push_rounded_rect(
@@ -114,7 +114,7 @@ impl Renderer {
             text_x,
             text_y,
             self.ui.palette_text,
-            self.cell_width,
+            self.cell_width(),
             super::text::TextClip {
                 left: x,
                 top: y,
@@ -129,20 +129,20 @@ impl Renderer {
             let end = end.min(visible_text.len());
             let prefix_columns = display_columns(&visible_text[..start]);
             let selected_columns = display_columns(&visible_text[start..end]);
-            let cursor_x = text_x + prefix_columns as f32 * self.cell_width;
+            let cursor_x = text_x + prefix_columns as f32 * self.cell_width();
             if start == end {
                 self.rect_pipeline.push_rect(
                     cursor_x.min(x + width - 2.0),
                     text_y,
                     2.0,
-                    self.cell_height,
+                    self.cell_height(),
                     self.ui.palette_accent,
                 );
             } else {
                 self.rect_pipeline.push_rect(
                     cursor_x,
                     y + height - 3.0,
-                    (selected_columns.max(1) as f32 * self.cell_width)
+                    (selected_columns.max(1) as f32 * self.cell_width())
                         .min((x + width - cursor_x).max(1.0)),
                     2.0,
                     self.ui.palette_accent,

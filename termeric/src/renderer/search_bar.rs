@@ -20,8 +20,8 @@ impl Renderer {
             content_left,
             content_width,
             content_top,
-            self.cell_width,
-            self.cell_height,
+            self.cell_width(),
+            self.cell_height(),
         );
         if layout.bar.width <= 0.0 {
             return;
@@ -62,7 +62,7 @@ impl Renderer {
         );
 
         // ── Query ──
-        if let Some(view) = layout.input_viewport(info, self.cell_width) {
+        if let Some(view) = layout.input_viewport(info, self.cell_width()) {
             let clip = super::text::TextClip {
                 left: view.text_x,
                 top: layout.input.y,
@@ -77,14 +77,14 @@ impl Renderer {
                     view.text_x,
                     view.text_y,
                     view.right,
-                    self.cell_width,
+                    self.cell_width(),
                 ) {
                     self.text_pipeline.push_ui_run(
                         &hint[hint_view.text_range],
                         view.text_x,
                         view.text_y,
                         scale_alpha(dim, 0.7),
-                        self.cell_width,
+                        self.cell_width(),
                         clip,
                     );
                 }
@@ -94,7 +94,7 @@ impl Renderer {
                     view.text_x,
                     view.text_y,
                     text,
-                    self.cell_width,
+                    self.cell_width(),
                     clip,
                 );
             }
@@ -103,7 +103,7 @@ impl Renderer {
                     view.cursor_x,
                     view.text_y,
                     px(2.0).min(view.right - view.cursor_x),
-                    self.cell_height,
+                    self.cell_height(),
                     accent,
                 );
             }
@@ -216,8 +216,8 @@ impl Renderer {
             self.tab_bar_width_for(window_width),
             self.content_width_for(window_width),
             self.content_top(),
-            self.cell_width,
-            self.cell_height,
+            self.cell_width(),
+            self.cell_height(),
         )
     }
 
@@ -230,7 +230,7 @@ impl Renderer {
         info: &SearchBarInfo,
     ) -> SearchBarClick {
         let layout = self.search_bar_layout(info, window_width);
-        search_bar_click(&layout, info, self.cell_width, x, y)
+        search_bar_click(&layout, info, self.cell_width(), x, y)
     }
 }
 

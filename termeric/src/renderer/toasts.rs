@@ -18,8 +18,8 @@ impl Renderer {
             return;
         }
 
-        let cell_width = self.cell_width;
-        let cell_height = self.cell_height;
+        let cell_width = self.cell_width();
+        let cell_height = self.cell_height();
         let padding = cell_width;
         for placement in toast_layout(toasts, window_width, window_height, cell_width, cell_height)
         {

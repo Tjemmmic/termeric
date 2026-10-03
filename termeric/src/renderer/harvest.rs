@@ -26,8 +26,8 @@ impl Renderer {
         indicators: &[IndicatorRenderInfo],
         content_y: f32,
     ) {
-        let cell_width = self.cell_width;
-        let cell_height = self.cell_height;
+        let cell_width = self.cell_width();
+        let cell_height = self.cell_height();
         // Position indicators in the left padding, one cell-width left of the grid
         let gutter_x = self.tab_bar_width() + (self.padding - cell_width).max(0.0);
 
@@ -60,8 +60,8 @@ impl Renderer {
         }
 
         let anim = cellar.animation_progress;
-        let cell_width = self.cell_width;
-        let cell_height = self.cell_height;
+        let cell_width = self.cell_width();
+        let cell_height = self.cell_height();
         let layout = &cellar.layout;
         let panel_x = layout.panel.x;
         let panel_y = layout.panel.y;
@@ -209,8 +209,8 @@ impl Renderer {
             return;
         }
 
-        let cell_width = self.cell_width;
-        let cell_height = self.cell_height;
+        let cell_width = self.cell_width();
+        let cell_height = self.cell_height();
         let anim = menu.opacity;
 
         let bg = with_alpha(self.ui.palette_bg, 0.95 * anim);

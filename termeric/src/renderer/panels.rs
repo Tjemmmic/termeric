@@ -21,8 +21,8 @@ impl Renderer {
         if anim <= 0.0 {
             return;
         }
-        let cell_width = self.cell_width;
-        let cell_height = self.cell_height;
+        let cell_width = self.cell_width();
+        let cell_height = self.cell_height();
         let layout = CommandsPanelLayout::calculate(
             window_width,
             window_height,
@@ -289,12 +289,12 @@ impl Renderer {
         if anim <= 0.0 {
             return;
         }
-        let cell_height = self.cell_height;
+        let cell_height = self.cell_height();
         let layout = AgentsPanelLayout::calculate(
             window_width,
             window_height,
             self.tab_bar_height(),
-            self.cell_width,
+            self.cell_width(),
             cell_height,
             anim,
             info.rows.len(),
@@ -600,8 +600,8 @@ impl Renderer {
     ) -> crate::ui::commands::panel::CommandsPanelAction {
         use crate::ui::commands::panel::{CommandsPanelAction, CommandsPanelLayout, EditMode};
 
-        let ui_cw = self.cell_width;
-        let cell_height = self.cell_height;
+        let ui_cw = self.cell_width();
+        let cell_height = self.cell_height();
 
         let layout = CommandsPanelLayout::calculate(
             window_width,
@@ -663,12 +663,12 @@ impl Renderer {
         if anim <= 0.0 {
             return;
         }
-        let cell_height = self.cell_height;
+        let cell_height = self.cell_height();
         let layout = SessionPanelLayout::calculate(
             window_width,
             window_height,
             self.tab_bar_height(),
-            self.cell_width,
+            self.cell_width(),
             cell_height,
             anim,
             info.rename_text.is_some(),
@@ -749,7 +749,7 @@ impl Renderer {
                     view.text_x,
                     view.text_y,
                     text,
-                    self.cell_width,
+                    self.cell_width(),
                     super::text::TextClip {
                         left: view.text_x,
                         top: input.y,
@@ -940,8 +940,8 @@ impl Renderer {
     ) -> crate::session::panel::SessionPanelAction {
         use crate::session::panel::{SessionPanelAction, SessionPanelControl, SessionPanelLayout};
 
-        let ui_cw = self.cell_width;
-        let cell_height = self.cell_height;
+        let ui_cw = self.cell_width();
+        let cell_height = self.cell_height();
 
         let layout = SessionPanelLayout::calculate(
             window_width,

@@ -99,13 +99,14 @@ impl super::Renderer {
         brightness: f32,
         override_color: Option<([f32; 4], f32)>,
     ) {
+        let cell_height = self.cell_height();
         queue_sgr_decorations(
             &mut self.rect_pipeline,
             style,
             x,
             y,
             width,
-            self.cell_height,
+            cell_height,
             brightness,
             override_color,
         );

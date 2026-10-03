@@ -110,10 +110,10 @@ impl Renderer {
     ) {
         let (cursor_top, cursor_left, cursor_rows, cursor_columns) =
             cursor_cell_geometry(grid, row, col);
-        let x = offset_x + cursor_left as f32 * self.cell_width;
-        let y = offset_y + cursor_top as f32 * self.cell_height;
-        let cursor_width = cursor_columns as f32 * self.cell_width;
-        let cursor_height = cursor_rows as f32 * self.cell_height;
+        let x = offset_x + cursor_left as f32 * self.cell_width();
+        let y = offset_y + cursor_top as f32 * self.cell_height();
+        let cursor_width = cursor_columns as f32 * self.cell_width();
+        let cursor_height = cursor_rows as f32 * self.cell_height();
         if y + cursor_height > max_grid_y {
             return;
         }
@@ -153,8 +153,8 @@ impl Renderer {
                         color,
                         style.font,
                         pane_clip,
-                        self.cell_width,
-                        self.cell_height,
+                        self.cell_width(),
+                        self.cell_height(),
                         cell.multicell,
                     );
                 } else {
@@ -186,7 +186,7 @@ impl Renderer {
                 );
             }
             CursorStyle::Underline => {
-                let height = 2.0_f32.max(self.cell_height * 0.1);
+                let height = 2.0_f32.max(self.cell_height() * 0.1);
                 self.rect_pipeline.push_rect(
                     x,
                     y + cursor_height - height,
@@ -196,7 +196,7 @@ impl Renderer {
                 );
             }
             CursorStyle::Beam => {
-                let width = 2.0_f32.max(self.cell_width * 0.1);
+                let width = 2.0_f32.max(self.cell_width() * 0.1);
                 self.rect_pipeline
                     .push_rect(x, y, width, cursor_height, painted_cursor);
             }

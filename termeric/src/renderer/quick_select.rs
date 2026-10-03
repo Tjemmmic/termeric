@@ -21,8 +21,8 @@ impl Renderer {
         pane_rows: usize,
         window_height: f32,
     ) {
-        let cell_width = self.cell_width;
-        let cell_height = self.cell_height;
+        let cell_width = self.cell_width();
+        let cell_height = self.cell_height();
         let visible_rows = (((window_height - self.padding - offset_y).max(cell_height)
             / cell_height)
             .floor() as usize)

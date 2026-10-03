@@ -23,8 +23,8 @@ impl Renderer {
         if anim <= 0.0 {
             return;
         }
-        let cell_width = self.cell_width;
-        let cell_height = self.cell_height;
+        let cell_width = self.cell_width();
+        let cell_height = self.cell_height();
         let scale = self.scale_factor;
         let px = |logical: f32| (logical * scale).round().max(1.0);
         let fade = |color: [f32; 4], alpha: f32| scale_alpha(color, alpha * anim);
@@ -411,8 +411,8 @@ impl Renderer {
             return;
         }
 
-        let cell_width = self.cell_width;
-        let cell_height = self.cell_height;
+        let cell_width = self.cell_width();
+        let cell_height = self.cell_height();
 
         let layout = SettingsModalLayout::calculate(
             window_width,

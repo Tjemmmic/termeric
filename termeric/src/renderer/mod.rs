@@ -600,9 +600,6 @@ pub struct Renderer {
     terminal_row_cache: TerminalRowCache,
     // Glyph cache
     glyph_cache: GlyphCache,
-    // Cell dimensions
-    cell_width: f32,
-    cell_height: f32,
     // Padding around terminal content
     padding: f32,
     padding_logical: f32,
@@ -793,7 +790,6 @@ impl Renderer {
             ligatures,
         )?;
         glyph_cache.set_font_features(font_features);
-        let (cell_width, cell_height) = glyph_cache.cell_size();
 
         // Create pipelines
         let text_pipeline = TextPipeline::new(&device, formats.render, &glyph_cache)?;
@@ -818,8 +814,6 @@ impl Renderer {
             background_image: background_image::BackgroundImageState::default(),
             terminal_row_cache: TerminalRowCache::default(),
             glyph_cache,
-            cell_width,
-            cell_height,
             padding: padding_physical,
             padding_logical: padding,
             scale_factor,
@@ -882,7 +876,7 @@ impl Renderer {
 
     /// Cell width and height in physical pixels.
     pub fn cell_size(&self) -> (f32, f32) {
-        (self.cell_width, self.cell_height)
+        self.glyph_cache.cell_size()
     }
 
     /// Calculate terminal dimensions from the physical window viewport.
@@ -898,8 +892,8 @@ impl Renderer {
             self.tab_bar_width_for(width as f32)
                 + (width as f32 - self.content_right_for(width as f32)),
             self.tab_bar_height(),
-            self.cell_width,
-            self.cell_height,
+            self.cell_width(),
+            self.cell_height(),
         )
     }
 
@@ -925,9 +919,6 @@ impl Renderer {
         self.font_size = font_size;
         let scaled = physical_font_size(font_size, self.scale_factor);
         self.glyph_cache.set_font_size(scaled, &self.queue);
-        let (cell_width, cell_height) = self.glyph_cache.cell_size();
-        self.cell_width = cell_width;
-        self.cell_height = cell_height;
     }
 
     /// Apply a primary font and ordered configured fallbacks.
@@ -940,18 +931,12 @@ impl Renderer {
         self.invalidate_terminal_rows();
         self.glyph_cache
             .set_font_families(primary, fallbacks, range_overrides, &self.queue);
-        let (cell_width, cell_height) = self.glyph_cache.cell_size();
-        self.cell_width = cell_width;
-        self.cell_height = cell_height;
     }
 
     /// Change the configured line-height multiplier.
     pub fn set_line_height(&mut self, multiplier: f32) {
         self.invalidate_terminal_rows();
         self.glyph_cache.set_line_height(multiplier, &self.queue);
-        let (cell_width, cell_height) = self.glyph_cache.cell_size();
-        self.cell_width = cell_width;
-        self.cell_height = cell_height;
     }
 
     /// Apply the normal and SGR-bold OpenType `wght` requests.
@@ -961,9 +946,6 @@ impl Renderer {
             .set_font_weights(font_weight, bold_font_weight, &self.queue)
         {
             self.invalidate_terminal_rows();
-            let (cell_width, cell_height) = self.glyph_cache.cell_size();
-            self.cell_width = cell_width;
-            self.cell_height = cell_height;
         }
     }
 
@@ -1023,12 +1005,12 @@ impl Renderer {
 
     /// Cell width in physical pixels.
     pub fn cell_width(&self) -> f32 {
-        self.cell_width
+        self.glyph_cache.cell_size().0
     }
 
     /// Cell height in physical pixels.
     pub fn cell_height(&self) -> f32 {
-        self.cell_height
+        self.glyph_cache.cell_size().1
     }
 
     /// Change padding
@@ -1044,9 +1026,6 @@ impl Renderer {
         self.scale_factor = scale_factor.max(0.1);
         let scaled = physical_font_size(self.font_size, self.scale_factor);
         self.glyph_cache.set_font_size(scaled, &self.queue);
-        let (cell_width, cell_height) = self.glyph_cache.cell_size();
-        self.cell_width = cell_width;
-        self.cell_height = cell_height;
         self.padding = (self.padding_logical * self.scale_factor).round().max(0.0);
     }
 
@@ -1392,8 +1371,8 @@ impl Renderer {
                 content_top + self.padding,
                 grid.scroll_offset(),
                 Some((
-                    grid.cols() as f32 * self.cell_width,
-                    grid.rows() as f32 * self.cell_height,
+                    grid.cols() as f32 * self.cell_width(),
+                    grid.rows() as f32 * self.cell_height(),
                 )),
             );
         } else {
@@ -1428,8 +1407,8 @@ impl Renderer {
 
             if let Some(geometry) = presentation_geometry(
                 presentation,
-                self.cell_width,
-                self.cell_height,
+                self.cell_width(),
+                self.cell_height(),
                 scroll_offset,
                 viewport,
             ) {
@@ -1484,8 +1463,8 @@ impl Renderer {
         self.text_pipeline.clear();
         self.visible_text_blink = VisibleTextBlink::default();
 
-        let cell_width = self.cell_width;
-        let cell_height = self.cell_height;
+        let cell_width = self.cell_width();
+        let cell_height = self.cell_height();
         let window_width = self.size.0 as f32;
         let window_height = self.size.1 as f32;
         let padding = self.padding;
@@ -1854,8 +1833,8 @@ impl Renderer {
         window_height: f32,
         pane_width: f32,
     ) {
-        let cell_width = self.cell_width;
-        let cell_height = self.cell_height;
+        let cell_width = self.cell_width();
+        let cell_height = self.cell_height();
 
         // Selection highlight color
         let selection_base = self.ui.selection;

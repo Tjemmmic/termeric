@@ -20,8 +20,8 @@ impl Renderer {
         window_height: f32,
     ) {
         let anim = info.animation;
-        let cell_width = self.cell_width;
-        let cell_height = self.cell_height;
+        let cell_width = self.cell_width();
+        let cell_height = self.cell_height();
 
         // ── Scrim ──
         let scrim = scale_alpha(self.ui.palette_scrim, 0.85 * anim);
@@ -487,8 +487,8 @@ impl Renderer {
         use crate::ui::diff_review::DiffReviewRow;
 
         let anim = info.animation;
-        let cell_width = self.cell_width;
-        let cell_height = self.cell_height;
+        let cell_width = self.cell_width();
+        let cell_height = self.cell_height();
         let layout = info.layout;
         let char_scale = layout.char_scale;
 
@@ -686,8 +686,8 @@ impl Renderer {
 
         let snapshot = &info.snapshot;
         let anim = snapshot.animation;
-        let cell_width = self.cell_width;
-        let cell_height = self.cell_height;
+        let cell_width = self.cell_width();
+        let cell_height = self.cell_height();
         let layout = info.layout;
         let char_scale = layout.char_scale;
 
@@ -924,8 +924,8 @@ impl Renderer {
         window_height: f32,
     ) {
         let anim = info.animation;
-        let cell_width = self.cell_width;
-        let cell_height = self.cell_height;
+        let cell_width = self.cell_width();
+        let cell_height = self.cell_height();
         let char_scale = cell_width * CONTENT_CHAR_SCALE;
 
         // Scrim — stronger for dangerous operations (drawn via DrawCtx)

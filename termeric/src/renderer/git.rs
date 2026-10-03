@@ -226,8 +226,8 @@ impl Renderer {
             content_top: self.content_top(),
             content_width: self.content_width_for(self.size.0 as f32),
             window_height: self.size.1 as f32,
-            cell_width: self.cell_width,
-            cell_height: self.cell_height,
+            cell_width: self.cell_width(),
+            cell_height: self.cell_height(),
             padding: self.padding,
         }
         .bounds()
@@ -244,11 +244,11 @@ impl Renderer {
         color: [f32; 4],
         clip: TextClip,
     ) {
-        let cells = ((clip.right - x).max(0.0) / self.cell_width).floor() as usize;
+        let cells = ((clip.right - x).max(0.0) / self.cell_width()).floor() as usize;
         for (column, character) in completion_text_chars(value, cells).enumerate() {
             self.text_pipeline.push_styled_char(
                 character,
-                x + column as f32 * self.cell_width,
+                x + column as f32 * self.cell_width(),
                 y,
                 color,
                 FontStyle::default(),
@@ -274,15 +274,15 @@ impl Renderer {
                 content_top,
                 content_width,
                 window_height,
-                cell_width: self.cell_width,
-                cell_height: self.cell_height,
+                cell_width: self.cell_width(),
+                cell_height: self.cell_height(),
                 padding: self.padding,
             },
         ) else {
             return;
         };
-        let cw = self.cell_width;
-        let cell_h = self.cell_height;
+        let cw = self.cell_width();
+        let cell_h = self.cell_height();
         let accent = self.ui.settings_accent;
         let text_color = self.ui.settings_text;
         let bg = self.ui.settings_bg;
