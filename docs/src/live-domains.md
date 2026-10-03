@@ -148,7 +148,7 @@ The launch options for `create`, `spawn`, and `split` come before any `--`: `--w
 
 ## Limits
 
-- The daemon holds at most 16 domains, 16 tabs per domain, and 16 panes across all domains.
+- The daemon holds at most 16 domains and 16 panes across all of them.
 - Scrollback is limited to 8 MiB per pane.
 - A daemon crash or reboot ends every domain's programs; nothing is saved to disk.
 - Clipboard access, notifications, and bells work only while a window is attached, and nothing from a detached period is replayed. There is no remote clipboard.

@@ -1499,8 +1499,8 @@ fn create_domain(state: &SharedState, name: String, spawn: SpawnSpec) -> anyhow:
         if state_guard.domains.len() >= MAX_DOMAINS {
             anyhow::bail!("domain limit of {MAX_DOMAINS} reached");
         }
-        if state_guard.pane_count() >= MAX_TOTAL_PANES {
-            anyhow::bail!("server pane limit of {MAX_TOTAL_PANES} reached");
+        if state_guard.pane_count() >= MAX_DAEMON_PANES {
+            anyhow::bail!("server pane limit of {MAX_DAEMON_PANES} reached");
         }
         let (pane, reader) = PaneRuntime::spawn(
             0,
@@ -1549,8 +1549,8 @@ fn spawn_tab(state: &SharedState, domain_id: &str, spawn: SpawnSpec) -> anyhow::
     spawn.validate()?;
     let (pane_id, reader) = {
         let mut state_guard = state.lock().unwrap();
-        if state_guard.pane_count() >= MAX_TOTAL_PANES {
-            anyhow::bail!("server pane limit of {MAX_TOTAL_PANES} reached");
+        if state_guard.pane_count() >= MAX_DAEMON_PANES {
+            anyhow::bail!("server pane limit of {MAX_DAEMON_PANES} reached");
         }
         let allow_screen_checksum_reports = state_guard.allow_screen_checksum_reports;
         let xterm_keyboard_type = state_guard.xterm_keyboard_type;
@@ -1558,9 +1558,6 @@ fn spawn_tab(state: &SharedState, domain_id: &str, spawn: SpawnSpec) -> anyhow::
             .domains
             .get_mut(domain_id)
             .context("domain not found")?;
-        if domain.tabs.len() >= MAX_TABS_PER_DOMAIN {
-            anyhow::bail!("tab limit of {MAX_TABS_PER_DOMAIN} reached");
-        }
         let pane_id = domain.next_pane;
         let tab_id = domain.next_tab;
         let (pane, reader) = PaneRuntime::spawn(
@@ -1622,8 +1619,8 @@ fn split_pane(
     validate_id("domain id", domain_id)?;
     let (new_id, reader, tab_id, old_layout, old_focus, old_active) = {
         let mut state_guard = state.lock().unwrap();
-        if state_guard.pane_count() >= MAX_TOTAL_PANES {
-            anyhow::bail!("server pane limit of {MAX_TOTAL_PANES} reached");
+        if state_guard.pane_count() >= MAX_DAEMON_PANES {
+            anyhow::bail!("server pane limit of {MAX_DAEMON_PANES} reached");
         }
         let allow_screen_checksum_reports = state_guard.allow_screen_checksum_reports;
         let xterm_keyboard_type = state_guard.xterm_keyboard_type;
@@ -1631,9 +1628,6 @@ fn split_pane(
             .domains
             .get_mut(domain_id)
             .context("domain not found")?;
-        if domain.pane_count() >= MAX_PANES_PER_DOMAIN {
-            anyhow::bail!("pane limit of {MAX_PANES_PER_DOMAIN} reached");
-        }
         let pane = domain
             .tabs
             .iter()

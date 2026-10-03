@@ -4,9 +4,8 @@ use serde::{Deserialize, Serialize};
 use termeric_core::split::SplitDirection;
 
 pub const MAX_DOMAINS: usize = 16;
-pub const MAX_TABS_PER_DOMAIN: usize = 16;
-pub const MAX_PANES_PER_DOMAIN: usize = 64;
-pub const MAX_TOTAL_PANES: usize = 16;
+/// Panes across every domain of one daemon; it also bounds tabs per domain.
+pub const MAX_DAEMON_PANES: usize = 16;
 pub const MAX_ATTACHMENTS_PER_PANE: usize = 8;
 pub const MAX_TOPOLOGY_SUBSCRIBERS_PER_DOMAIN: usize = 8;
 pub const MAX_PANE_SCROLLBACK_BYTES: usize = 8 * 1024 * 1024;
