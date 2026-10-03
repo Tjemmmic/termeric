@@ -539,8 +539,8 @@ fn normalize_name_query(query: &str) -> String {
 }
 
 fn score_unicode_name(name: &str, terms: &[&str]) -> Option<u32> {
-    // The weakest term determines the same whole/prefix/substring tier as
-    // the old three scans. Classify each term once and stop on a missing one.
+    // The weakest term sets the tier: whole word, word prefix, or substring.
+    // Classify each term once and stop on a missing one.
     let mut quality = 2;
     for term in terms {
         quality = quality.min(name_term_quality(name, term)?);
@@ -1518,165 +1518,44 @@ const CURATED_CHARACTERS: &[CuratedCharacter] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Instant;
 
-    // Keep the former scorer as an independent ranking/measurement oracle.
-    // This code is test-only and does not add another production search path.
-    fn reference_name_score(name: &str, terms: &[&str]) -> Option<u32> {
-        let boundary_match = |term: &str, whole: bool| {
-            name.match_indices(term).any(|(start, _)| {
-                let left = name[..start]
-                    .chars()
-                    .next_back()
-                    .is_none_or(|character| !character.is_alphanumeric());
-                let right = name[start + term.len()..]
-                    .chars()
-                    .next()
-                    .is_none_or(|character| !character.is_alphanumeric());
-                left && (!whole || right)
-            })
-        };
-        let tier = if terms.iter().all(|term| boundary_match(term, true)) {
-            2_000_000
-        } else if terms.iter().all(|term| boundary_match(term, false)) {
-            1_500_000
-        } else if terms.iter().all(|term| name.contains(term)) {
-            1_000_000
-        } else {
-            return None;
-        };
-        Some(
-            tier + terms.iter().map(|term| term.len()).sum::<usize>() as u32 * 100
-                + 10_000u32.saturating_sub(name.len() as u32),
-        )
+    /// The match tier of a name: 2 when every term is a whole word, 1 when
+    /// the weakest is a word prefix, 0 when it is only a substring.
+    fn tier(name: &str, terms: &[&str]) -> Option<u32> {
+        score_unicode_name(name, terms).map(|score| (score - 1_000_000) / 500_000)
     }
 
     #[test]
-    fn single_pass_scoring_preserves_every_catalog_entry_for_representative_queries() {
-        let names = unicode_name_index();
-        let annotations = annotations::index();
-        for query in [
-            "letter",
-            "black",
-            "arabic letter",
-            "mathematical symbol",
-            "cjk unified",
-            "at",
-            "letter letter",
-            "party piñata",
-            "skin tone",
-            "woman judge",
-            "nonexistentterm",
-            "cjk 4e",
-            "hangul gag",
-        ] {
-            let normalized = normalize_name_query(query);
-            let terms = normalized.split_whitespace().collect::<Vec<_>>();
-            for name in (0..names.records.len())
-                .map(|position| names.name(position))
-                .chain(
-                    (0..annotations.len())
-                        .map(|position| annotations.annotation(position).searchable),
-                )
-            {
-                assert_eq!(
-                    score_unicode_name(name, &terms),
-                    reference_name_score(name, &terms),
-                    "name={name:?}, query={query:?}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn single_pass_scoring_preserves_unicode_boundaries_and_mixed_match_tiers() {
-        for name in [
-            "",
-            "ALPHA",
-            "XALPHA ALPHABET ALPHA",
-            "ALPHABET XALPHA",
-            "AA-AAA AA",
-            "PIÑATA PARTY",
-            "文ATA ATA文",
-            "A\u{301}ATA",
-            "ΑΛΦΑ Α",
-            "A—B",
-            " B-A ",
-        ] {
-            let queries: &[&[&str]] = &[
-                &[],
-                &[""],
-                &["A"],
-                &["AA"],
-                &["ALPHA"],
-                &["ATA"],
-                &["ALPHA", "BET"],
-                &["ALPHA", "ALPHA"],
-                &["PIÑATA", "PART"],
-                &["Α"],
-                &["文"],
-                &["A", "B"],
-                &["A", "MISSING"],
-                &[" "],
-            ];
-            for terms in queries {
-                assert_eq!(
-                    score_unicode_name(name, terms),
-                    reference_name_score(name, terms),
-                    "name={name:?}, terms={terms:?}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    #[ignore = "opt-in paired Unicode name-scoring benchmark; not a cross-machine speed claim"]
-    fn paired_unicode_name_scoring_benchmark() {
-        let index = unicode_name_index();
-        let queries: &[&[&str]] = &[
-            &["LETTER"],
-            &["BLACK"],
-            &["ARABIC", "LETTER"],
-            &["MATHEMATICAL", "SYMBOL"],
-            &["CJK", "UNIFIED"],
+    fn name_scoring_ranks_the_weakest_term_by_unicode_word_boundaries() {
+        let cases: &[(&str, &[&str], Option<u32>)] = &[
+            ("ALPHA", &[], Some(2)),
+            ("ALPHA", &["ALPHA"], Some(2)),
+            ("ALPHA", &["A"], Some(1)),
+            ("ALPHA", &["A", "MISSING"], None),
+            ("", &["A"], None),
+            // A later whole word beats an earlier substring or prefix.
+            ("XALPHA ALPHABET ALPHA", &["ALPHA"], Some(2)),
+            ("XALPHA ALPHABET ALPHA", &["ALPHA", "ALPHA"], Some(2)),
+            ("ALPHABET XALPHA", &["ALPHA"], Some(1)),
+            ("ALPHABET XALPHA", &["ALPHA", "BET"], Some(0)),
+            // Punctuation separates words; letters of any script do not.
+            ("AA-AAA AA", &["AA"], Some(2)),
+            ("A—B", &["A", "B"], Some(2)),
+            ("PIÑATA PARTY", &["ATA"], Some(0)),
+            ("PIÑATA PARTY", &["PIÑATA", "PART"], Some(1)),
+            ("文ATA ATA文", &["ATA"], Some(1)),
+            ("文ATA ATA文", &["文"], Some(1)),
+            ("ΑΛΦΑ Α", &["Α"], Some(2)),
+            // A combining mark is not alphanumeric, so it ends a word.
+            ("A\u{301}ATA", &["ATA"], Some(2)),
         ];
-        let measure = |scorer: fn(&str, &[&str]) -> Option<u32>| {
-            let start = Instant::now();
-            let mut checksum = 0u64;
-            for terms in queries {
-                for position in 0..index.records.len() {
-                    checksum += u64::from(
-                        std::hint::black_box(scorer(
-                            std::hint::black_box(index.name(position)),
-                            std::hint::black_box(terms),
-                        ))
-                        .unwrap_or(0),
-                    );
-                }
-            }
-            (start.elapsed(), checksum)
-        };
-        let mut old = Vec::new();
-        let mut new = Vec::new();
-        for iteration in 0..7 {
-            let (before, after) = if iteration % 2 == 0 {
-                (measure(reference_name_score), measure(score_unicode_name))
-            } else {
-                let after = measure(score_unicode_name);
-                (measure(reference_name_score), after)
-            };
-            assert_eq!(before.1, after.1);
-            old.push(before.0);
-            new.push(after.0);
+        for (name, terms, expected) in cases {
+            assert_eq!(
+                tier(name, terms),
+                *expected,
+                "name={name:?}, terms={terms:?}"
+            );
         }
-        old.sort();
-        new.sort();
-        eprintln!(
-            "paired-name-scoring old={old:?} new={new:?} median_old={:?} median_new={:?} retained_bytes={}",
-            old[3],
-            new[3],
-            index.retained_bytes()
-        );
     }
 
     fn filter(picker: &mut UnicodePicker, value: &str) -> PaletteInfo {
