@@ -12763,7 +12763,6 @@ fn delayed_notification_completion_does_not_alias_a_replacement_single_owner() {
         origin,
         focus: true,
         protocol_reply: Some(b"\x1b]99;i=fixture;1\x1b\\".to_vec()),
-        activation_token: Some("synthetic-not-for-forwarding".into()),
     };
     split_harvest_capture_owner(&mut app, directory.path());
     app.close_control_pane(entry.source.tab_id as u64, 0)
@@ -12838,7 +12837,6 @@ fn delayed_notification_reply_returns_to_requesting_pane_without_a_focus_fallbac
             },
             focus: false,
             protocol_reply: Some(data),
-            activation_token: None,
         }
     ));
 
@@ -12976,7 +12974,6 @@ fn notification_activation_selects_the_exact_origin_and_stale_origins_fail_close
             origin,
             focus: true,
             protocol_reply: None,
-            activation_token: Some("must-not-be-logged-or-forwarded".into()),
         }
     ));
     let tabs = app.tabs.as_ref().unwrap();
@@ -13001,7 +12998,6 @@ fn notification_activation_selects_the_exact_origin_and_stale_origins_fail_close
             origin: stale,
             focus: true,
             protocol_reply: None,
-            activation_token: None,
         }
     ));
     assert_eq!(app.tabs.as_ref().unwrap().active_tab_id(), Some(active_tab));
@@ -13011,7 +13007,6 @@ fn notification_activation_selects_the_exact_origin_and_stale_origins_fail_close
             origin,
             focus: false,
             protocol_reply: None,
-            activation_token: None,
         }
     ));
     assert_eq!(app.tabs.as_ref().unwrap().active_tab_id(), Some(active_tab));

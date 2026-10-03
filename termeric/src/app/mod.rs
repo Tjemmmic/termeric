@@ -1986,12 +1986,7 @@ impl App {
                 origin,
                 focus,
                 protocol_reply,
-                activation_token,
             } => {
-                // The daemon token is bounded and generation-scoped by the
-                // worker. Winit does not expose applying an external token to
-                // an existing window, so consume it without logging it.
-                drop(activation_token);
                 let changed = focus && self.activate_notification_origin(origin);
                 if let Some(data) = protocol_reply
                     && let Some(tabs) = &mut self.tabs

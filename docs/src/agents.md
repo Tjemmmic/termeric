@@ -64,7 +64,7 @@ With agent status set up, each agent's tab shows what it is doing:
 | Done | A dot, until you look at that terminal | "Codex is done", with the first line of the answer |
 | Failed | A dot, until you look at that terminal | "Claude Code stopped with an error" |
 
-Notifications appear only for terminals you are not looking at, and clicking one shows that terminal. Turn them off with **Notify When Agents Need You** on the Settings **Agents** page, or with `notify = false` under `[agent_status]`. Screen readers hear the same state after the tab title.
+Notifications appear only for terminals you are not looking at. Clicking one switches to that terminal and brings its window forward on X11; on Wayland the window is marked as needing attention instead, since Termeric can't raise it there. Turn them off with **Notify When Agents Need You** on the Settings **Agents** page, or with `notify = false` under `[agent_status]`. Screen readers hear the same state after the tab title.
 
 Pressing Escape or Ctrl+C in a working or waiting agent ends the ring, since Claude Code does not report an interruption itself.
 

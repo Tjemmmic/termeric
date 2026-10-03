@@ -144,8 +144,9 @@ impl App {
                 .ok()
                 .is_some_and(|handle| matches!(handle.as_raw(), RawWindowHandle::Wayland(_)));
             if is_wayland {
-                // Winit owns the Wayland connection and safely performs an
-                // xdg-activation request for this existing surface.
+                // Raising an existing window on Wayland needs the daemon's
+                // activation token, which winit can't apply to an existing
+                // window. Asking for attention is the most it allows.
                 window.request_user_attention(Some(winit::window::UserAttentionType::Critical));
             } else {
                 window.focus_window();

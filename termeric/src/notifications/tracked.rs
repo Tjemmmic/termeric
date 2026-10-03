@@ -17,7 +17,6 @@ const EXPIRY_RETRY_DELAY: Duration = Duration::from_secs(1);
 const CLOSE_SIGNAL_TIMEOUT: Duration = Duration::from_secs(5);
 const DBUS_METHOD_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_NATIVE_ACTION_KEY_BYTES: usize = 64;
-const MAX_ACTIVATION_TOKEN_BYTES: usize = 4 * 1024;
 const DEFAULT_ACTION_KEY: &str = "default";
 const BUTTON_ACTION_KEY_PREFIX: &str = "termeric-button-";
 
@@ -43,7 +42,6 @@ struct TrackedEntry {
     focus_on_activation: bool,
     button_action_keys: Vec<String>,
     activation_handled: bool,
-    activation_token: Option<String>,
     reply_uses_8bit_controls: bool,
 }
 
@@ -61,24 +59,11 @@ pub(super) struct ProtocolReply {
     pub(super) data: Vec<u8>,
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ActivationCompletion {
     pub(super) origin: TerminalIdentity,
     pub(super) focus: bool,
     pub(super) protocol_reply: Option<Vec<u8>>,
-    pub(super) activation_token: Option<String>,
-}
-
-impl std::fmt::Debug for ActivationCompletion {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("ActivationCompletion")
-            .field("origin", &self.origin)
-            .field("focus", &self.focus)
-            .field("protocol_reply", &self.protocol_reply)
-            .field("activation_token_present", &self.activation_token.is_some())
-            .finish()
-    }
 }
 
 enum TrackedCommand {
@@ -104,10 +89,6 @@ enum TrackedCommand {
     ActionInvoked {
         desktop_id: u32,
         action_key: String,
-    },
-    ActivationToken {
-        desktop_id: u32,
-        token: String,
     },
     BackendFailure(String),
     Shutdown,
@@ -223,7 +204,6 @@ impl<B: TrackedNotificationBackend> TrackedState<B> {
                 focus_on_activation: request.focus_on_activation,
                 button_action_keys,
                 activation_handled: false,
-                activation_token: None,
                 reply_uses_8bit_controls: request.reply_uses_8bit_controls,
             },
         );
@@ -324,24 +304,6 @@ impl<B: TrackedNotificationBackend> TrackedState<B> {
             .then(|| close_reply_for(&key, entry.reply_uses_8bit_controls, false))
     }
 
-    fn set_activation_token(&mut self, desktop_id: u32, token: String) {
-        if token.is_empty()
-            || token.len() > MAX_ACTIVATION_TOKEN_BYTES
-            || token.chars().any(char::is_control)
-        {
-            return;
-        }
-        let Some(key) = self.native_keys.get(&desktop_id) else {
-            return;
-        };
-        let Some(entry) = self.entries.get_mut(key) else {
-            return;
-        };
-        if entry.focus_on_activation && entry.activation_token.is_none() {
-            entry.activation_token = Some(token);
-        }
-    }
-
     fn action_invoked(
         &mut self,
         desktop_id: u32,
@@ -371,7 +333,6 @@ impl<B: TrackedNotificationBackend> TrackedState<B> {
             origin: key.origin,
             focus: entry.focus_on_activation,
             protocol_reply,
-            activation_token: entry.activation_token.take(),
         })
     }
 
@@ -878,9 +839,6 @@ fn tracked_worker<B: TrackedNotificationBackend>(
                 }
                 publish_operation(&completions, &mut last_failure, Vec::new());
             }
-            Ok(TrackedCommand::ActivationToken { desktop_id, token }) => {
-                state.set_activation_token(desktop_id, token);
-            }
             Ok(TrackedCommand::BackendFailure(error)) => {
                 publish_operation(&completions, &mut last_failure, vec![error]);
             }
@@ -1254,21 +1212,6 @@ async fn notification_signal_listener(
                             break;
                         }
                     }
-                    Some("ActivationToken") => {
-                        let (desktop_id, token): (u32, String) = match message.body().deserialize()
-                        {
-                            Ok(body) => body,
-                            Err(_) => continue,
-                        };
-                        // Treat daemon-provided tokens as opaque, short-lived
-                        // authority. Never log or forward their contents.
-                        if commands
-                            .send(TrackedCommand::ActivationToken { desktop_id, token })
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
                     _ => {}
                 }
             }
@@ -1402,7 +1345,6 @@ mod tests {
             origin,
             focus: false,
             protocol_reply: Some(data.into()),
-            activation_token: None,
         }
     }
 
@@ -1579,7 +1521,6 @@ mod tests {
         let mut request = action_request(Some("job"), false);
         request.report_close = true;
         assert!(state.show(key(event_origin, "job"), request).is_empty());
-        state.set_activation_token(1, "unused-without-focus".into());
 
         assert_eq!(state.action_invoked(1, "unknown"), None);
         assert_eq!(state.action_invoked(999, DEFAULT_ACTION_KEY), None);
@@ -1663,14 +1604,13 @@ mod tests {
                 origin: event_origin,
                 focus: true,
                 protocol_reply: None,
-                activation_token: None,
             })
         );
         assert_eq!(state.action_invoked(1, DEFAULT_ACTION_KEY), None);
     }
 
     #[test]
-    fn activation_tokens_are_bounded_opaque_and_replacement_scoped() {
+    fn focus_and_reported_activation_combine_and_rearm_on_replacement() {
         let event_origin = origin(4, 7);
         let tracked_key = key(event_origin, "focus");
         let mut state = TrackedState::new(FakeBackend::default());
@@ -1682,18 +1622,12 @@ mod tests {
             ..NotificationRequest::default()
         };
         assert!(state.show(tracked_key.clone(), request.clone()).is_empty());
-        state.set_activation_token(999, "unmatched".into());
-        state.set_activation_token(1, "bad\ntoken".into());
-        state.set_activation_token(1, "x".repeat(MAX_ACTIVATION_TOKEN_BYTES + 1));
-        state.set_activation_token(1, "opaque-token".into());
-        state.set_activation_token(1, "ignored-second-token".into());
         assert_eq!(
             state.action_invoked(1, DEFAULT_ACTION_KEY),
             Some(ActivationCompletion {
                 origin: event_origin,
                 focus: true,
                 protocol_reply: Some(b"\x1b]99;i=focus;\x1b\\".to_vec()),
-                activation_token: Some("opaque-token".into()),
             })
         );
 
@@ -1704,7 +1638,6 @@ mod tests {
                 origin: event_origin,
                 focus: true,
                 protocol_reply: Some(b"\x1b]99;i=focus;\x1b\\".to_vec()),
-                activation_token: None,
             })
         );
     }

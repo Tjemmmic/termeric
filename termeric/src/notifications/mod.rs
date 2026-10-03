@@ -28,11 +28,6 @@ pub(crate) enum NotificationCompletion {
         origin: crate::tabs::TerminalIdentity,
         focus: bool,
         protocol_reply: Option<Vec<u8>>,
-        /// Opaque daemon authority retained only for this notification
-        /// generation. Winit cannot currently apply a supplied token to an
-        /// existing window, so the app deliberately consumes it without
-        /// logging or forwarding it.
-        activation_token: Option<String>,
     },
 }
 
@@ -511,7 +506,6 @@ impl Notifications {
                         origin: activation.origin,
                         focus: activation.focus,
                         protocol_reply: activation.protocol_reply,
-                        activation_token: activation.activation_token,
                     })
                 }
             })

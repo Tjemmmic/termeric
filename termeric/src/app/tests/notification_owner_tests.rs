@@ -89,7 +89,6 @@ fn delayed_notification_effects_follow_only_the_same_surviving_owner() {
                         origin: identity,
                         focus: kind.starts_with("focus"),
                         protocol_reply: (kind != "focus").then(|| data.clone()),
-                        activation_token: Some("synthetic-token-never-forwarded".into()),
                     }
                 };
                 let survives = matches!(
