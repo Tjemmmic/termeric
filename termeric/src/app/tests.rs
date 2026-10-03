@@ -9206,41 +9206,60 @@ fn idle_deadline_releases_stalled_synchronized_output_and_requests_the_final_fra
     );
 }
 
+fn cursor_terminal(tab_id: usize, pane: u32) -> Option<crate::tabs::TerminalIdentity> {
+    Some(crate::tabs::TerminalIdentity {
+        tab_id,
+        pane_id: PaneId(pane),
+    })
+}
+
 #[test]
 fn cursor_motion_preserves_new_tab_snaps_and_animates_existing_tab_switches() {
     use crate::ui::cursor_motion::CURSOR_MOVE_DURATION;
     let mut app = App::new_headless(Config::default()).unwrap();
     let now = Instant::now();
     assert_eq!(
-        app.update_cursor_animation_at(5, 6, true, Some(1), now),
+        app.update_cursor_animation_at(5, 6, true, cursor_terminal(1, 0), now),
         (5.0, 6.0)
     );
     assert!(!app.cursor_position_animation_active());
     let moved = now + Duration::from_secs(1);
     // An old frame gap no longer accidentally disables the transition.
     assert_eq!(
-        app.update_cursor_animation_at(50, 20, true, Some(1), moved),
+        app.update_cursor_animation_at(50, 20, true, cursor_terminal(1, 0), moved),
         (5.0, 6.0)
     );
     assert!(app.cursor_position_animation_active());
     assert_eq!(
-        app.update_cursor_animation_at(50, 20, true, Some(1), moved + CURSOR_MOVE_DURATION),
+        app.update_cursor_animation_at(
+            50,
+            20,
+            true,
+            cursor_terminal(1, 0),
+            moved + CURSOR_MOVE_DURATION
+        ),
         (50.0, 20.0)
     );
     assert!(!app.cursor_position_animation_active());
     let switched = moved + Duration::from_secs(1);
     assert_eq!(
-        app.update_cursor_animation_at(100, 50, true, Some(2), switched),
+        app.update_cursor_animation_at(100, 50, true, cursor_terminal(2, 0), switched),
         (100.0, 50.0)
     );
     assert!(!app.cursor_position_animation_active());
     assert_eq!(
-        app.update_cursor_animation_at(5, 6, true, Some(1), switched),
+        app.update_cursor_animation_at(5, 6, true, cursor_terminal(1, 0), switched),
         (100.0, 50.0)
     );
     assert!(app.cursor_position_animation_active());
     assert_eq!(
-        app.update_cursor_animation_at(5, 6, true, Some(1), switched + CURSOR_MOVE_DURATION),
+        app.update_cursor_animation_at(
+            5,
+            6,
+            true,
+            cursor_terminal(1, 0),
+            switched + CURSOR_MOVE_DURATION
+        ),
         (5.0, 6.0)
     );
     assert!(!app.cursor_position_animation_active());
@@ -9250,8 +9269,8 @@ fn cursor_motion_preserves_new_tab_snaps_and_animates_existing_tab_switches() {
 fn cursor_motion_cancels_for_hidden_cursors_reappearance_reduced_motion_and_no_tab() {
     let mut app = App::new_headless(Config::default()).unwrap();
     let now = Instant::now();
-    app.update_cursor_animation_at(0, 0, true, Some(1), now);
-    app.update_cursor_animation_at(20, 29, true, Some(1), now);
+    app.update_cursor_animation_at(0, 0, true, cursor_terminal(1, 0), now);
+    app.update_cursor_animation_at(20, 29, true, cursor_terminal(1, 0), now);
     assert!(app.cursor_position_animation_active());
     for (step, col, visible) in [(1, 30, false), (2, 40, false), (3, 50, true)] {
         assert_eq!(
@@ -9259,29 +9278,62 @@ fn cursor_motion_cancels_for_hidden_cursors_reappearance_reduced_motion_and_no_t
                 col,
                 29,
                 visible,
-                Some(1),
+                cursor_terminal(1, 0),
                 now + Duration::from_millis(step)
             ),
             (col as f32, 29.0)
         );
         assert!(!app.cursor_position_animation_active());
     }
-    app.update_cursor_animation_at(60, 29, true, Some(1), now + Duration::from_millis(4));
+    app.update_cursor_animation_at(
+        60,
+        29,
+        true,
+        cursor_terminal(1, 0),
+        now + Duration::from_millis(4),
+    );
     assert!(app.cursor_position_animation_active());
     app.config.accessibility.reduce_motion = crate::config::AccessibilityPreference::On;
     assert_eq!(
-        app.update_cursor_animation_at(70, 29, true, Some(1), now + Duration::from_millis(5)),
+        app.update_cursor_animation_at(
+            70,
+            29,
+            true,
+            cursor_terminal(1, 0),
+            now + Duration::from_millis(5)
+        ),
         (70.0, 29.0)
     );
     assert!(!app.cursor_position_animation_active());
     app.config.accessibility.reduce_motion = crate::config::AccessibilityPreference::Off;
-    app.update_cursor_animation_at(80, 29, true, Some(1), now + Duration::from_millis(6));
+    app.update_cursor_animation_at(
+        80,
+        29,
+        true,
+        cursor_terminal(1, 0),
+        now + Duration::from_millis(6),
+    );
     assert!(app.cursor_position_animation_active());
     assert_eq!(
         app.update_cursor_animation_at(0, 0, false, None, now + Duration::from_millis(7)),
         (0.0, 0.0)
     );
     assert!(!app.cursor_position_animation_active());
+}
+
+#[test]
+fn cursor_motion_snaps_when_focus_moves_to_another_pane_of_the_tab() {
+    let mut app = App::new_headless(Config::default()).unwrap();
+    let now = Instant::now();
+    app.update_cursor_animation_at(5, 6, true, cursor_terminal(1, 0), now);
+    assert_eq!(
+        app.update_cursor_animation_at(30, 2, true, cursor_terminal(1, 1), now),
+        (30.0, 2.0)
+    );
+    assert!(!app.cursor_position_animation_active());
+    // Moving within the newly focused pane still glides.
+    app.update_cursor_animation_at(31, 2, true, cursor_terminal(1, 1), now);
+    assert!(app.cursor_position_animation_active());
 }
 
 #[cfg(unix)]
@@ -9297,7 +9349,7 @@ fn cursor_motion_scheduler_follows_presented_state_during_synchronized_output() 
     let (col, row, visible) = (presented.col, presented.row, presented.visible);
     assert_eq!((col, row), (1, 0));
     assert_ne!(app.active_terminal().unwrap().grid().cursor().col, col);
-    app.update_cursor_animation_at(col, row, visible, Some(id), now);
+    app.update_cursor_animation_at(col, row, visible, cursor_terminal(id, 0), now);
     assert!(
         !app.cursor_position_animation_active(),
         "unpresented live-grid movement must not sustain redraws"
@@ -9305,14 +9357,14 @@ fn cursor_motion_scheduler_follows_presented_state_during_synchronized_output() 
     app.active_terminal_mut().unwrap().process(b"\x1b[?2026l");
     let presented = app.active_terminal().unwrap().presentation_grid().cursor();
     let (col, row, visible) = (presented.col, presented.row, presented.visible);
-    app.update_cursor_animation_at(col, row, visible, Some(id), now);
+    app.update_cursor_animation_at(col, row, visible, cursor_terminal(id, 0), now);
     assert!(app.cursor_position_animation_active());
     assert_eq!(
         app.update_cursor_animation_at(
             col,
             row,
             visible,
-            Some(id),
+            cursor_terminal(id, 0),
             now + crate::ui::cursor_motion::CURSOR_MOVE_DURATION
         ),
         (39.0, 4.0)

@@ -2077,6 +2077,12 @@ impl Renderer {
                 .collect()
         };
 
+        // Text runs break around the cell the cursor rests on, never its
+        // gliding position: that changes every frame and can sit between cells.
+        let cursor_cell =
+            (is_focused && cursor_opacity > 0.0 && scroll_offset == 0 && !filter_mode)
+                .then(|| grid.cursor())
+                .map(|cursor| (cursor.row, cursor.col));
         for (visual_row, grid_row) in rows_to_render {
             let row_data = if filter_mode {
                 grid.row_at_offset(grid_row)
@@ -2088,12 +2094,8 @@ impl Renderer {
                 grid_id: grid as *const Grid as usize,
                 visual_row,
             };
-            let cursor_break_col = (is_focused
-                && cursor_opacity > 0.0
-                && scroll_offset == 0
-                && !filter_mode
-                && visual_row == cursor_pos.1 as usize)
-                .then_some(cursor_pos.0 as usize);
+            let cursor_break_col =
+                cursor_cell.and_then(|(row, col)| (row == visual_row).then_some(col));
             let mut hasher = DefaultHasher::new();
             self.render_cache_generation.hash(&mut hasher);
             dynamic_colors.generation().hash(&mut hasher);
@@ -2343,8 +2345,13 @@ impl Renderer {
             if cursor.visible {
                 let (cursor_top, cursor_left, cursor_rows, cursor_columns) =
                     cursor_cell_geometry(grid, cursor.row, cursor.col);
-                let x = offset_x + cursor_left as f32 * cell_width;
-                let y = offset_y + cursor_top as f32 * cell_height;
+                let (glide_col, glide_row) = gliding_cursor_origin(
+                    (cursor_left, cursor_top),
+                    (cursor.col, cursor.row),
+                    cursor_pos,
+                );
+                let x = offset_x + glide_col * cell_width;
+                let y = offset_y + glide_row * cell_height;
                 let cursor_width = cursor_columns as f32 * cell_width;
                 let cursor_height = cursor_rows as f32 * cell_height;
 
@@ -2517,6 +2524,40 @@ fn cursor_cell_geometry(grid: &Grid, row: usize, col: usize) -> (usize, usize, u
                 region.descriptor.columns(),
             )
         })
+}
+
+/// Where to draw the cursor, in cells: the origin of the cell it rests on,
+/// moved by the distance its glide still has to travel. `cursor` is the grid
+/// cursor and `glide` the animated position, both `(col, row)`. At rest the
+/// result is exactly `rest`, so a cursor inside a scaled cell lands on it.
+fn gliding_cursor_origin(
+    rest: (usize, usize),
+    cursor: (usize, usize),
+    glide: (f32, f32),
+) -> (f32, f32) {
+    (
+        rest.0 as f32 + glide.0 - cursor.0 as f32,
+        rest.1 as f32 + glide.1 - cursor.1 as f32,
+    )
+}
+
+#[cfg(test)]
+#[test]
+fn the_cursor_glides_toward_the_cell_it_rests_on() {
+    // At rest on a plain cell and on a scaled cell's interior.
+    assert_eq!(
+        gliding_cursor_origin((5, 2), (5, 2), (5.0, 2.0)),
+        (5.0, 2.0)
+    );
+    assert_eq!(
+        gliding_cursor_origin((1, 0), (4, 1), (4.0, 1.0)),
+        (1.0, 0.0)
+    );
+    // Mid-glide, the remaining distance carries over to the scaled origin.
+    assert_eq!(
+        gliding_cursor_origin((1, 0), (4, 1), (2.5, 3.0)),
+        (-0.5, 2.0)
+    );
 }
 
 #[cfg(test)]

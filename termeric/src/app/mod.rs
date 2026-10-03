@@ -1148,6 +1148,8 @@ pub struct App {
     last_cursor_visible: bool,
     /// Highest tab ID we've seen (to detect truly new tabs)
     max_seen_tab_id: Option<usize>,
+    /// Terminal the cursor was last drawn in (to detect pane focus changes)
+    last_cursor_terminal: Option<crate::tabs::TerminalIdentity>,
     /// Mouse input state
     mouse_state: MouseState,
     /// Current keyboard modifiers
@@ -1471,6 +1473,7 @@ impl App {
             last_theme_mtime,
             last_cursor_visible: true,
             max_seen_tab_id: None,
+            last_cursor_terminal: None,
             mouse_state: MouseState::new(),
             modifiers: ModifiersState::empty(),
             ime: ime::ImeState::default(),
@@ -2188,12 +2191,17 @@ impl App {
             .and_then(|tabs| tabs.active_tab())
             .and_then(|tab| {
                 let cursor = tab.focused_terminal()?.presentation_grid().cursor();
-                Some((cursor.col, cursor.row, cursor.visible, tab.id))
+                Some((
+                    cursor.col,
+                    cursor.row,
+                    cursor.visible,
+                    tab.focused_terminal_identity(),
+                ))
             });
 
         // Update cursor animation if we have a target
-        let cursor_display_pos = if let Some((col, row, visible, tab_id)) = cursor_info {
-            self.update_cursor_animation(col, row, visible, Some(tab_id))
+        let cursor_display_pos = if let Some((col, row, visible, terminal)) = cursor_info {
+            self.update_cursor_animation(col, row, visible, Some(terminal))
         } else {
             // No active tab - snap to origin and mark as not visible
             self.update_cursor_animation(0, 0, false, None)
@@ -3420,6 +3428,7 @@ impl App {
     /// Snaps immediately (no animation) when:
     /// - Cursor visibility changes (reappears after being hidden)
     /// - A new tab is created (to avoid animating from old tab's position)
+    /// - Focus moves to another pane of the same tab (its cells are another grid's)
     ///
     /// Animates smoothly for:
     /// - Switching between existing tabs
@@ -3429,13 +3438,13 @@ impl App {
         target_col: usize,
         target_row: usize,
         cursor_visible: bool,
-        active_tab_id: Option<usize>,
+        focused: Option<crate::tabs::TerminalIdentity>,
     ) -> (f32, f32) {
         self.update_cursor_animation_at(
             target_col,
             target_row,
             cursor_visible,
-            active_tab_id,
+            focused,
             Instant::now(),
         )
     }
@@ -3445,7 +3454,7 @@ impl App {
         target_col: usize,
         target_row: usize,
         cursor_visible: bool,
-        active_tab_id: Option<usize>,
+        focused: Option<crate::tabs::TerminalIdentity>,
         now: Instant,
     ) -> (f32, f32) {
         self.last_frame_time = now;
@@ -3459,14 +3468,25 @@ impl App {
 
         // Detect truly new tab: compare against the highest ID we've ever seen,
         // not just the last active tab (which could be lower when switching tabs)
+        let active_tab_id = focused.map(|terminal| terminal.tab_id);
         let is_new_tab = match (active_tab_id, self.max_seen_tab_id) {
             (Some(current), Some(max)) => current > max,
             (Some(_), None) => true, // First tab ever
             _ => false,
         };
 
+        // Cursor positions are cells of the focused pane's own grid, so a
+        // glide from another pane of the same tab would start from a cell of
+        // the wrong grid.
+        let pane_changed = matches!(
+            (self.last_cursor_terminal, focused),
+            (Some(last), Some(current))
+                if last.tab_id == current.tab_id && last.pane_id != current.pane_id
+        );
+
         // Update tracking state
         self.last_cursor_visible = cursor_visible;
+        self.last_cursor_terminal = focused;
         // Update max seen tab ID
         if let Some(current) = active_tab_id {
             self.max_seen_tab_id =
@@ -3475,8 +3495,11 @@ impl App {
 
         // Hidden movement has no pixels to animate. New tabs, visibility
         // transitions, and reduced motion retain their immediate placement.
-        let snap =
-            self.reduced_motion_enabled() || !cursor_visible || visibility_changed || is_new_tab;
+        let snap = self.reduced_motion_enabled()
+            || !cursor_visible
+            || visibility_changed
+            || is_new_tab
+            || pane_changed;
         self.cursor_motion
             .update((target_col as f32, target_row as f32), now, snap)
     }
