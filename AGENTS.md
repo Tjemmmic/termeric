@@ -83,7 +83,7 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 | `serial.rs` | Serial transport for serial terminal profiles |
 | `paths.rs` | Configuration and data directories; test builds resolve them under a per-process temporary directory |
 | `safe_fs.rs` | Hardened reads (no symlinks, FIFOs, or unbounded reads) and atomic private-staging writes for Termeric's own files |
-| `safe_text.rs` | Character classes and bounding for untrusted text shown in chrome or sent over protocols |
+| `safe_text.rs` | Bounding untrusted text shown in chrome or sent over protocols (character classes come from termeric-core) |
 
 ### Key Modules (termeric-core/)
 
@@ -98,6 +98,7 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 | `event.rs` | `TerminalEvent`, the events a terminal raises for the app |
 | `file_transfer.rs` | Kitty file-transfer (OSC 5113) wire types |
 | `unicode.rs` | Grapheme segmentation and cell-width rules |
+| `safe_text.rs` | Character classes for untrusted text in chrome and protocol fields (also used by the fuzzed domain protocol) |
 
 ### Renderer Sub-modules
 

@@ -297,7 +297,7 @@ pub fn validate_upload_name(name: &str) -> anyhow::Result<()> {
         || name.len() > MAX_UPLOAD_NAME_BYTES
         || matches!(name, "." | "..")
         || name.contains(['/', '\\'])
-        || name.chars().any(crate::safe_text::is_unsafe_display_char)
+        || name.chars().any(termeric_core::safe_text::is_unsafe_display_char)
     {
         anyhow::bail!("upload name must be one safe UTF-8 file-name component");
     }

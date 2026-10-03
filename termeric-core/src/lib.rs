@@ -34,6 +34,7 @@ pub mod file_transfer;
 pub mod graphics;
 pub mod grid;
 pub mod pty;
+pub mod safe_text;
 pub mod shell;
 pub mod term;
 pub mod unicode;
