@@ -109,10 +109,18 @@ pub(super) struct QueuedChar {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct TextBatch {
-    pub queued: Vec<QueuedChar>,
     pub vertices: Vec<TextVertex>,
     pub indices: Vec<u32>,
     pub atlas_pages: Vec<u16>,
+}
+
+impl TextBatch {
+    /// Empty the batch, keeping its allocations for the next frame.
+    fn clear(&mut self) {
+        self.vertices.clear();
+        self.indices.clear();
+        self.atlas_pages.clear();
+    }
 }
 
 /// Collects compatible adjacent terminal cells into logical shaping runs.
@@ -410,21 +418,58 @@ fn append_glyph_quad(
     indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
 }
 
+/// Append a quad for every glyph the queued text draws, noting each atlas
+/// page the quads sample.
+fn append_queued_quads(
+    queued: &[QueuedChar],
+    queue: &Queue,
+    glyph_cache: &mut GlyphCache,
+    batch: &mut TextBatch,
+) {
+    let (atlas_width, atlas_height) = glyph_cache.atlas_size();
+    let baseline = glyph_cache.cell_baseline();
+    for character in queued {
+        let character_baseline = match character.content {
+            QueuedContent::MultiCell { font_scale, .. } => baseline * font_scale,
+            QueuedContent::UiText { .. } => 0.0,
+            _ => baseline,
+        };
+        for (entry, x_offset) in queued_glyphs(character, glyph_cache, queue) {
+            let page = entry.page_key();
+            if !batch.atlas_pages.contains(&page) {
+                batch.atlas_pages.push(page);
+            }
+            append_glyph_quad(
+                &mut batch.vertices,
+                &mut batch.indices,
+                entry,
+                character.x + x_offset,
+                character.y,
+                character.color,
+                atlas_width as f32,
+                atlas_height as f32,
+                character_baseline,
+                character.clip,
+            );
+        }
+    }
+}
+
 /// Text rendering pipeline
 pub struct TextPipeline {
     pipeline: RenderPipeline,
-    bind_group: Option<BindGroup>,
+    bind_group: BindGroup,
     uniform_buffer: Buffer,
     vertex_buffer: GrowableBuffer,
     index_buffer: GrowableBuffer,
     // Queued characters for this frame
     queued: Vec<QueuedChar>,
-    // Built vertices
-    vertices: Vec<TextVertex>,
-    indices: Vec<u32>,
+    // Geometry built from the queue by upload()
+    batch: TextBatch,
     // Layer boundaries — each entry is the queued-char count at the start of that layer
     layer_boundaries: Vec<usize>,
-    // Index-space layer boundaries — populated during upload(), maps to actual index ranges
+    // The index count at each layer boundary, built by upload(): a queued
+    // item can draw any number of quads, including none
     index_layer_boundaries: Vec<u32>,
     // Screen size
     screen_size: [f32; 2],
@@ -572,13 +617,12 @@ impl TextPipeline {
 
         Ok(Self {
             pipeline,
-            bind_group: Some(bind_group),
+            bind_group,
             uniform_buffer,
             vertex_buffer: GrowableBuffer::new("Text Vertex Buffer", BufferUsages::VERTEX),
             index_buffer: GrowableBuffer::new("Text Index Buffer", BufferUsages::INDEX),
             queued: Vec::new(),
-            vertices: Vec::new(),
-            indices: Vec::new(),
+            batch: TextBatch::default(),
             layer_boundaries: Vec::new(),
             index_layer_boundaries: Vec::new(),
             screen_size: [800.0, 600.0],
@@ -598,8 +642,7 @@ impl TextPipeline {
     /// Clear queued characters
     pub fn clear(&mut self) {
         self.queued.clear();
-        self.vertices.clear();
-        self.indices.clear();
+        self.batch.clear();
         self.layer_boundaries.clear();
         self.index_layer_boundaries.clear();
     }
@@ -613,47 +656,17 @@ impl TextPipeline {
     }
 
     pub(super) fn build_batch(
-        queued: Vec<QueuedChar>,
+        queued: &[QueuedChar],
         queue: &Queue,
         glyph_cache: &mut GlyphCache,
     ) -> TextBatch {
-        let (atlas_width, atlas_height) = glyph_cache.atlas_size();
-        let baseline = glyph_cache.cell_baseline();
-        let mut vertices = Vec::with_capacity(queued.len() * 4);
-        let mut indices = Vec::with_capacity(queued.len() * 6);
-        let mut atlas_pages = Vec::new();
-
-        for character in &queued {
-            let character_baseline = match character.content {
-                QueuedContent::MultiCell { font_scale, .. } => baseline * font_scale,
-                QueuedContent::UiText { .. } => 0.0,
-                _ => baseline,
-            };
-            for (entry, x_offset) in queued_glyphs(character, glyph_cache, queue) {
-                let page = entry.page_key();
-                if !atlas_pages.contains(&page) {
-                    atlas_pages.push(page);
-                }
-                append_glyph_quad(
-                    &mut vertices,
-                    &mut indices,
-                    entry,
-                    character.x + x_offset,
-                    character.y,
-                    character.color,
-                    atlas_width as f32,
-                    atlas_height as f32,
-                    character_baseline,
-                    character.clip,
-                );
-            }
-        }
-        TextBatch {
-            queued,
-            vertices,
-            indices,
-            atlas_pages,
-        }
+        let mut batch = TextBatch {
+            vertices: Vec::with_capacity(queued.len() * 4),
+            indices: Vec::with_capacity(queued.len() * 6),
+            atlas_pages: Vec::new(),
+        };
+        append_queued_quads(queued, queue, glyph_cache, &mut batch);
+        batch
     }
 
     pub(super) fn draw_external<'a>(
@@ -663,14 +676,11 @@ impl TextPipeline {
         index_buffer: &'a Buffer,
         index_count: u32,
     ) {
-        let Some(bind_group) = &self.bind_group else {
-            return;
-        };
         if index_count == 0 {
             return;
         }
         render_pass.set_pipeline(&self.pipeline);
-        render_pass.set_bind_group(0, bind_group, &[]);
+        render_pass.set_bind_group(0, &self.bind_group, &[]);
         render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
         render_pass.set_index_buffer(index_buffer.slice(..), IndexFormat::Uint32);
         render_pass.draw_indexed(0..index_count, 0, 0..1);
@@ -873,26 +883,30 @@ impl TextPipeline {
         });
     }
 
-    /// Upload vertex data to GPU
+    /// Build this frame's geometry from the queue and upload it.
     pub fn upload(&mut self, device: &Device, queue: &Queue, glyph_cache: &mut GlyphCache) {
-        self.vertices.clear();
-        self.indices.clear();
+        self.batch.clear();
+        self.index_layer_boundaries.clear();
+        let mut start = 0;
+        for &boundary in &self.layer_boundaries {
+            let end = boundary.clamp(start, self.queued.len());
+            append_queued_quads(
+                &self.queued[start..end],
+                queue,
+                glyph_cache,
+                &mut self.batch,
+            );
+            self.index_layer_boundaries
+                .push(self.batch.indices.len() as u32);
+            start = end;
+        }
+        append_queued_quads(&self.queued[start..], queue, glyph_cache, &mut self.batch);
 
-        let (atlas_w, atlas_h) = glyph_cache.atlas_size();
-        let atlas_w = atlas_w as f32;
-        let atlas_h = atlas_h as f32;
-
-        let baseline = glyph_cache.cell_baseline();
-
-        self.upload_queued(queue, glyph_cache, atlas_w, atlas_h, baseline);
-
-        // Create/update vertex buffer
-        if !self.vertices.is_empty() {
-            let vertex_data = bytemuck::cast_slice(&self.vertices);
-            let index_data = bytemuck::cast_slice(&self.indices);
-
-            self.vertex_buffer.upload(device, queue, vertex_data);
-            self.index_buffer.upload(device, queue, index_data);
+        if !self.batch.vertices.is_empty() {
+            self.vertex_buffer
+                .upload(device, queue, bytemuck::cast_slice(&self.batch.vertices));
+            self.index_buffer
+                .upload(device, queue, bytemuck::cast_slice(&self.batch.indices));
         }
     }
 
@@ -901,109 +915,32 @@ impl TextPipeline {
         self.vertex_buffer.allocations() + self.index_buffer.allocations()
     }
 
-    /// Upload queued characters, graphemes, and shaped row runs.
-    fn upload_queued(
-        &mut self,
-        queue: &Queue,
-        glyph_cache: &mut GlyphCache,
-        atlas_w: f32,
-        atlas_h: f32,
-        baseline: f32,
-    ) {
-        // Build index-space layer boundaries as we iterate through queued chars
-        self.index_layer_boundaries.clear();
-        let mut next_boundary_idx = 0usize;
-
-        for (i, queued) in self.queued.iter().enumerate() {
-            // Check if we've crossed a layer boundary
-            while next_boundary_idx < self.layer_boundaries.len()
-                && i == self.layer_boundaries[next_boundary_idx]
-            {
-                self.index_layer_boundaries.push(self.indices.len() as u32);
-                next_boundary_idx += 1;
-            }
-
-            let queued_baseline = match queued.content {
-                QueuedContent::MultiCell { font_scale, .. } => baseline * font_scale,
-                QueuedContent::UiText { .. } => 0.0,
-                _ => baseline,
-            };
-            for (entry, x_offset) in queued_glyphs(queued, glyph_cache, queue) {
-                append_glyph_quad(
-                    &mut self.vertices,
-                    &mut self.indices,
-                    entry,
-                    queued.x + x_offset,
-                    queued.y,
-                    queued.color,
-                    atlas_w,
-                    atlas_h,
-                    queued_baseline,
-                    queued.clip,
-                );
-            }
-        }
-
-        // Flush any remaining layer boundaries (layers with no chars, or at the end)
-        while next_boundary_idx < self.layer_boundaries.len() {
-            self.index_layer_boundaries.push(self.indices.len() as u32);
-            next_boundary_idx += 1;
-        }
-    }
-
-    /// Draw only the text belonging to a specific layer.
-    /// Layer 0 is everything before the first mark_layer() call.
-    ///
-    /// Because text vertices are built from queued chars during upload(),
-    /// and each queued char produces exactly 4 vertices / 6 indices,
-    /// we can map layer boundaries (in queued-char space) to index ranges.
-    pub fn draw_layer<'a>(
-        &'a self,
-        render_pass: &mut RenderPass<'a>,
-        _glyph_cache: &'a GlyphCache,
-        layer: usize,
-    ) {
-        if self.indices.is_empty() {
-            return;
-        }
-
-        let Some(vertex_buffer) = self.vertex_buffer.buffer() else {
+    /// Draw the text queued in one layer; layer 0 is everything queued
+    /// before the first `mark_layer()`.
+    pub fn draw_layer<'a>(&'a self, render_pass: &mut RenderPass<'a>, layer: usize) {
+        let (Some(vertex_buffer), Some(index_buffer)) =
+            (self.vertex_buffer.buffer(), self.index_buffer.buffer())
+        else {
             return;
         };
-        let Some(index_buffer) = self.index_buffer.buffer() else {
-            return;
+        let start = match layer.checked_sub(1) {
+            None => 0,
+            Some(boundary) => match self.index_layer_boundaries.get(boundary) {
+                Some(&start) => start,
+                None => return,
+            },
         };
-        let Some(bind_group) = &self.bind_group else {
-            return;
-        };
-
-        // Each queued char produces at most 6 indices (one quad),
-        // but some chars may produce 0 indices (whitespace, missing glyphs).
-        // Since we can't map queued-char boundaries perfectly to index ranges
-        // without tracking per-char index output, we store the index count
-        // at each layer boundary during upload.
-        // For simplicity and correctness, we use the _index_layer_boundaries
-        // that are populated during upload().
-        let start = if layer == 0 {
-            0u32
-        } else if layer <= self.index_layer_boundaries.len() {
-            self.index_layer_boundaries[layer - 1]
-        } else {
-            return;
-        };
-
-        let end = if layer < self.index_layer_boundaries.len() {
-            self.index_layer_boundaries[layer]
-        } else {
-            self.indices.len() as u32
-        };
-
+        let end = self
+            .index_layer_boundaries
+            .get(layer)
+            .copied()
+            .unwrap_or(self.batch.indices.len() as u32);
         if start >= end {
             return;
         }
 
         render_pass.set_pipeline(&self.pipeline);
-        render_pass.set_bind_group(0, bind_group, &[]);
+        render_pass.set_bind_group(0, &self.bind_group, &[]);
         render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
         render_pass.set_index_buffer(index_buffer.slice(..), IndexFormat::Uint32);
         render_pass.draw_indexed(start..end, 0, 0..1);

@@ -1332,8 +1332,7 @@ impl Renderer {
                 }
 
                 // Draw text for this layer
-                self.text_pipeline
-                    .draw_layer(&mut render_pass, &self.glyph_cache, layer);
+                self.text_pipeline.draw_layer(&mut render_pass, layer);
                 if layer == 0 {
                     self.image_pipeline.draw_above_text(&mut render_pass);
                 }
@@ -2134,7 +2133,7 @@ impl Renderer {
 
             let rects = self.rect_pipeline.take_since(rect_checkpoint);
             let queued = self.text_pipeline.take_queued_since(text_checkpoint);
-            let text = TextPipeline::build_batch(queued, &self.queue, &mut self.glyph_cache);
+            let text = TextPipeline::build_batch(&queued, &self.queue, &mut self.glyph_cache);
             self.terminal_row_cache
                 .replace(key, signature, rects, text, &self.device, &self.queue);
         }
@@ -2925,7 +2924,7 @@ pub(crate) fn headless_ui_text_smoke(device: &Device, queue: &Queue) -> Result<(
     let mut text = TextPipeline::new(device, TextureFormat::Rgba8Unorm, &glyph_cache)?;
     text.push_ui_text("~/dev/termeric", 10.4, baseline, size, [1.0; 4], None);
     let queued = text.take_queued_since(0);
-    let batch = TextPipeline::build_batch(queued, queue, &mut glyph_cache);
+    let batch = TextPipeline::build_batch(&queued, queue, &mut glyph_cache);
     anyhow::ensure!(
         batch.vertices.len() >= 4 * 12,
         "UI label produced {} vertices",
@@ -3050,7 +3049,7 @@ pub(crate) fn headless_unicode_render_smoke(device: &Device, queue: &Queue) -> R
             }
         }
     }
-    let batch = TextPipeline::build_batch(queued, queue, &mut glyph_cache);
+    let batch = TextPipeline::build_batch(&queued, queue, &mut glyph_cache);
     anyhow::ensure!(
         !batch.vertices.is_empty(),
         "Unicode golden produced no glyph geometry"
@@ -3098,7 +3097,7 @@ pub(crate) fn headless_unicode_render_smoke(device: &Device, queue: &Queue) -> R
             timestamp_writes: None,
             occlusion_query_set: None,
         });
-        text.draw_layer(&mut pass, &glyph_cache, 0);
+        text.draw_layer(&mut pass, 0);
     }
     queue.submit([encoder.finish()]);
     Ok(())
@@ -3201,7 +3200,7 @@ pub(crate) fn headless_glyph_atlas_stress_smoke(device: &Device, queue: &Queue) 
             clip: None,
         });
     }
-    let batch = TextPipeline::build_batch(queued, queue, &mut glyph_cache);
+    let batch = TextPipeline::build_batch(&queued, queue, &mut glyph_cache);
     anyhow::ensure!(
         batch.vertices.len() == GLYPHS * 4,
         "atlas pressure dropped glyph geometry"
@@ -3363,7 +3362,7 @@ pub(crate) fn headless_glyph_atlas_stress_smoke(device: &Device, queue: &Queue) 
             timestamp_writes: None,
             occlusion_query_set: None,
         });
-        text.draw_layer(&mut pass, &glyph_cache, 0);
+        text.draw_layer(&mut pass, 0);
     }
     queue.submit([encoder.finish()]);
     Ok(())
@@ -3492,7 +3491,7 @@ fn render_queued_text_snapshot(
             timestamp_writes: None,
             occlusion_query_set: None,
         });
-        text.draw_layer(&mut pass, glyph_cache, 0);
+        text.draw_layer(&mut pass, 0);
     }
     encoder.copy_texture_to_buffer(
         TexelCopyTextureInfo {
@@ -3816,7 +3815,7 @@ pub(crate) fn headless_sgr_render_smoke(device: &Device, queue: &Queue) -> Resul
 
     let queued = text.take_queued_since(0);
     anyhow::ensure!(queued.len() == text_cases.len());
-    let text_batch = TextPipeline::build_batch(queued, queue, &mut glyph_cache);
+    let text_batch = TextPipeline::build_batch(&queued, queue, &mut glyph_cache);
     anyhow::ensure!(!text_batch.vertices.is_empty());
     anyhow::ensure!(text_batch.vertices.iter().all(|vertex| {
         vertex.position[0] >= clip.left
@@ -3928,7 +3927,7 @@ pub(crate) fn headless_sgr_render_smoke(device: &Device, queue: &Queue) -> Resul
             occlusion_query_set: None,
         });
         rects.draw_layer(&mut pass, 0);
-        text.draw_layer(&mut pass, &glyph_cache, 0);
+        text.draw_layer(&mut pass, 0);
     }
     queue.submit([encoder.finish()]);
     Ok(())
@@ -4096,7 +4095,7 @@ pub(crate) fn benchmark_headless_renderer() -> Result<Option<HeadlessRendererBen
                     occlusion_query_set: None,
                 });
                 rect.draw_layer(&mut pass, 0);
-                text.draw_layer(&mut pass, glyph_cache, 0);
+                text.draw_layer(&mut pass, 0);
             }
             let submission = queue.submit([encoder.finish()]);
             let _ = device.poll(Maintain::wait_for(submission));
@@ -4138,7 +4137,7 @@ pub(crate) fn benchmark_headless_renderer() -> Result<Option<HeadlessRendererBen
                 }
             }
             let queued = text.take_queued_since(0);
-            TextPipeline::build_batch(queued, &queue, glyph_cache)
+            TextPipeline::build_batch(&queued, &queue, glyph_cache)
         };
     let _ = build_code_tokens(&mut text, &mut glyph_cache, 1);
     let before = glyph_cache.shaping_cache_metrics();

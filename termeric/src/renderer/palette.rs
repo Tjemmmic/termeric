@@ -90,7 +90,7 @@ pub(crate) fn headless_palette_input_smoke(
                 );
                 let queued = text.take_queued_since(0);
                 anyhow::ensure!(queued.len() == 1 && queued[0].clip == Some(clip));
-                let batch = TextPipeline::build_batch(queued, queue, &mut glyphs);
+                let batch = TextPipeline::build_batch(&queued, queue, &mut glyphs);
                 anyhow::ensure!(
                     !batch.vertices.is_empty(),
                     "query field produced no glyph geometry"
