@@ -2049,8 +2049,7 @@ impl Renderer {
                     } else {
                         match &cell.content {
                             CellContent::Char(character)
-                                if !character.is_whitespace()
-                                    && *character != termeric_core::IMAGE_PLACEHOLDER
+                                if draws_char(*character)
                                     && !cell.flags.contains(CellFlags::WIDE_CHAR) =>
                             {
                                 text_run.push(
@@ -2064,19 +2063,13 @@ impl Renderer {
                                     cell_width,
                                 );
                             }
-                            CellContent::Char(character)
-                                if !character.is_whitespace()
-                                    && *character != termeric_core::IMAGE_PLACEHOLDER =>
-                            {
+                            CellContent::Char(character) if draws_char(*character) => {
                                 text_run.flush(&mut self.text_pipeline);
                                 self.text_pipeline.push_styled_char(
                                     *character, x, y, text_color, style.font, pane_clip,
                                 );
                             }
-                            CellContent::Grapheme(grapheme)
-                                if !grapheme.starts_with(termeric_core::IMAGE_PLACEHOLDER)
-                                    && !grapheme.chars().all(char::is_whitespace) =>
-                            {
+                            CellContent::Grapheme(grapheme) if draws_grapheme(grapheme) => {
                                 text_run.flush(&mut self.text_pipeline);
                                 self.text_pipeline.push_styled_grapheme(
                                     grapheme, x, y, text_color, style.font, pane_clip,
@@ -2139,121 +2132,26 @@ impl Renderer {
         if is_focused && cursor_opacity > 0.0 && scroll_offset == 0 && !filter_mode {
             let cursor = grid.cursor();
             if cursor.visible {
-                let (cursor_top, cursor_left, cursor_rows, cursor_columns) =
-                    cursor_cell_geometry(grid, cursor.row, cursor.col);
-                let (glide_col, glide_row) = gliding_cursor_origin(
-                    (cursor_left, cursor_top),
-                    (cursor.col, cursor.row),
+                let cursor_color = dynamic_colors
+                    .cursor()
+                    .map_or(self.ui.cursor, |color| color.to_f32_array());
+                self.draw_cursor_at(
+                    grid,
+                    dynamic_colors,
+                    cursor.row,
+                    cursor.col,
                     cursor_pos,
+                    offset_x,
+                    offset_y,
+                    max_grid_y,
+                    pane_clip,
+                    cursor_style,
+                    cursor_opacity,
+                    brightness,
+                    text_blink,
+                    cursor_color,
+                    self.ui.cursor_text,
                 );
-                let x = offset_x + glide_col * cell_width;
-                let y = offset_y + glide_row * cell_height;
-                let cursor_width = cursor_columns as f32 * cell_width;
-                let cursor_height = cursor_rows as f32 * cell_height;
-
-                if y + cursor_height <= max_grid_y {
-                    let cursor_color = scale_rgb(
-                        dynamic_colors
-                            .cursor()
-                            .map_or(self.ui.cursor, |color| color.to_f32_array()),
-                        brightness,
-                    );
-                    let cc = [
-                        cursor_color[0],
-                        cursor_color[1],
-                        cursor_color[2],
-                        cursor_opacity,
-                    ];
-
-                    match cursor_style {
-                        CursorStyle::Block => {
-                            self.rect_pipeline.push_rounded_rect(
-                                x,
-                                y,
-                                cursor_width,
-                                cursor_height,
-                                cc,
-                                2.0,
-                            );
-                            let cursor_row = cursor_top;
-                            let cursor_col = cursor_left;
-                            if let Some(cell) = grid.cell_scrolled(cursor_row, cursor_col) {
-                                let style = ResolvedCellStyle::resolve(
-                                    &self.terminal_palette,
-                                    dynamic_colors,
-                                    &cell,
-                                    self.bold_is_bright,
-                                    text_blink,
-                                );
-                                if style.paint_foreground {
-                                    let mut color =
-                                        style.text_color(Some(self.ui.cursor_text), brightness);
-                                    color[3] = cursor_opacity;
-                                    if cell.multicell.is_leader() {
-                                        self.text_pipeline.push_styled_multicell(
-                                            &cell.content.to_text(),
-                                            x,
-                                            y,
-                                            color,
-                                            style.font,
-                                            pane_clip,
-                                            cell_width,
-                                            cell_height,
-                                            cell.multicell,
-                                        );
-                                    } else {
-                                        match &cell.content {
-                                            CellContent::Char(character)
-                                                if !character.is_whitespace()
-                                                    && *character
-                                                        != termeric_core::IMAGE_PLACEHOLDER =>
-                                            {
-                                                self.text_pipeline.push_styled_char(
-                                                    *character, x, y, color, style.font, pane_clip,
-                                                );
-                                            }
-                                            CellContent::Grapheme(grapheme)
-                                                if !grapheme.starts_with(
-                                                    termeric_core::IMAGE_PLACEHOLDER,
-                                                ) && !grapheme
-                                                    .chars()
-                                                    .all(char::is_whitespace) =>
-                                            {
-                                                self.text_pipeline.push_styled_grapheme(
-                                                    grapheme, x, y, color, style.font, pane_clip,
-                                                );
-                                            }
-                                            _ => {}
-                                        }
-                                    }
-                                    self.draw_sgr_decorations(
-                                        style,
-                                        x,
-                                        y,
-                                        cursor_width,
-                                        brightness,
-                                        Some((self.ui.cursor_text, cursor_opacity)),
-                                    );
-                                }
-                            }
-                        }
-                        CursorStyle::Underline => {
-                            let underline_height = 2.0_f32.max(cell_height * 0.1);
-                            self.rect_pipeline.push_rect(
-                                x,
-                                y + cursor_height - underline_height,
-                                cursor_width,
-                                underline_height,
-                                cc,
-                            );
-                        }
-                        CursorStyle::Beam => {
-                            let beam_width = 2.0_f32.max(cell_width * 0.1);
-                            self.rect_pipeline
-                                .push_rect(x, y, beam_width, cursor_height, cc);
-                        }
-                    }
-                }
             }
         }
 
@@ -2308,6 +2206,18 @@ impl Renderer {
             }
         }
     }
+}
+
+/// Whether a cell holding this character draws it: blanks and Kitty image
+/// placeholders have no glyph.
+fn draws_char(character: char) -> bool {
+    !character.is_whitespace() && character != termeric_core::IMAGE_PLACEHOLDER
+}
+
+/// Whether a cell holding this grapheme draws it; see [`draws_char`].
+fn draws_grapheme(grapheme: &str) -> bool {
+    !grapheme.starts_with(termeric_core::IMAGE_PLACEHOLDER)
+        && !grapheme.chars().all(char::is_whitespace)
 }
 
 fn cursor_cell_geometry(grid: &Grid, row: usize, col: usize) -> (usize, usize, usize, usize) {

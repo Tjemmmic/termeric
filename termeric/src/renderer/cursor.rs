@@ -55,6 +55,7 @@ impl Renderer {
                 dynamic_colors,
                 cursor.row,
                 cursor.col,
+                (cursor.col as f32, cursor.row as f32),
                 offset_x,
                 offset_y,
                 max_grid_y,
@@ -91,12 +92,16 @@ impl Renderer {
         }
     }
 
-    fn draw_cursor_at(
+    /// Paint a cursor resting on `(row, col)`, drawn at `glide`, its animated
+    /// `(col, row)` position: a block repaints the cell's text in
+    /// `cursor_text`.
+    pub(super) fn draw_cursor_at(
         &mut self,
         grid: &Grid,
         dynamic_colors: &termeric_core::DynamicColors,
         row: usize,
         col: usize,
+        glide: (f32, f32),
         offset_x: f32,
         offset_y: f32,
         max_grid_y: f32,
@@ -110,8 +115,10 @@ impl Renderer {
     ) {
         let (cursor_top, cursor_left, cursor_rows, cursor_columns) =
             cursor_cell_geometry(grid, row, col);
-        let x = offset_x + cursor_left as f32 * self.cell_width();
-        let y = offset_y + cursor_top as f32 * self.cell_height();
+        let (origin_col, origin_row) =
+            gliding_cursor_origin((cursor_left, cursor_top), (col, row), glide);
+        let x = offset_x + origin_col * self.cell_width();
+        let y = offset_y + origin_row * self.cell_height();
         let cursor_width = cursor_columns as f32 * self.cell_width();
         let cursor_height = cursor_rows as f32 * self.cell_height();
         if y + cursor_height > max_grid_y {
@@ -159,17 +166,11 @@ impl Renderer {
                     );
                 } else {
                     match &cell.content {
-                        CellContent::Char(character)
-                            if !character.is_whitespace()
-                                && *character != termeric_core::IMAGE_PLACEHOLDER =>
-                        {
+                        CellContent::Char(character) if draws_char(*character) => {
                             self.text_pipeline
                                 .push_styled_char(*character, x, y, color, style.font, pane_clip);
                         }
-                        CellContent::Grapheme(grapheme)
-                            if !grapheme.starts_with(termeric_core::IMAGE_PLACEHOLDER)
-                                && !grapheme.chars().all(char::is_whitespace) =>
-                        {
+                        CellContent::Grapheme(grapheme) if draws_grapheme(grapheme) => {
                             self.text_pipeline
                                 .push_styled_grapheme(grapheme, x, y, color, style.font, pane_clip);
                         }
