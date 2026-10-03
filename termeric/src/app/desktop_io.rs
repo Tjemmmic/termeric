@@ -806,6 +806,13 @@ impl App {
                 self.handle_kitty_file_transfer(origin, command);
             }
             TerminalEvent::TitleChanged(title) => {
+                // The program keeps its exact title for title reports; the
+                // tab bar and window title drop what could break or reorder
+                // the line around it.
+                let title = title
+                    .chars()
+                    .filter(|character| !crate::safe_text::is_unsafe_display_char(*character))
+                    .collect();
                 let updated = self
                     .tabs
                     .as_mut()

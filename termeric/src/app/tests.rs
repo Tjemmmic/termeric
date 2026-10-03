@@ -13090,7 +13090,8 @@ fn osc_titles_and_dynamic_colors_apply_to_exact_inactive_tab_and_pane_origins() 
     });
     app.handle_terminal_event(RoutedTerminalEvent {
         origin: first_origin,
-        event: TerminalEvent::TitleChanged("pane-build".into()),
+        // Chrome drops what could reorder or break the title line.
+        event: TerminalEvent::TitleChanged("pane\u{202e}-build\u{2028}".into()),
     });
     app.handle_terminal_event(RoutedTerminalEvent {
         origin: TerminalEventOrigin::Tab {

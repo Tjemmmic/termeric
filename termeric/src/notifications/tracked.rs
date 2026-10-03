@@ -553,11 +553,21 @@ struct FreedesktopNotification<'a> {
     expire_timeout: i32,
 }
 
+/// Notification text comes from terminal programs. Bidi formatting could
+/// make it read as something else; line breaks in the body are kept.
+fn without_bidi_formatting(text: &str) -> String {
+    text.chars()
+        .filter(|character| !crate::safe_text::is_bidi_format(*character))
+        .collect()
+}
+
 fn freedesktop_notification(request: &NotificationRequest) -> FreedesktopNotification<'_> {
     FreedesktopNotification {
         app_name: request.application_name.as_deref().unwrap_or("Termeric"),
-        summary: escape_markup(request.title.as_deref().unwrap_or("Terminal")),
-        body: escape_markup(&request.body),
+        summary: escape_markup(&without_bidi_formatting(
+            request.title.as_deref().unwrap_or("Terminal"),
+        )),
+        body: escape_markup(&without_bidi_formatting(&request.body)),
         category: (!request.notification_types.is_empty())
             .then(|| request.notification_types.join(",")),
         urgency: request.urgency.map(|urgency| match urgency {
@@ -1801,8 +1811,8 @@ mod tests {
     #[test]
     fn rich_notification_metadata_becomes_freedesktop_notify_fields() {
         let request = NotificationRequest {
-            title: Some("Build <b>done</b>; $(touch nope)".into()),
-            body: "Finished `without a shell` & <i>quietly</i>".into(),
+            title: Some("Build <b>done</b>;\u{202e} $(touch nope)".into()),
+            body: "Finished `without a shell` &\n<i>quietly</i>\u{2066}".into(),
             application_name: Some("build agent".into()),
             notification_types: vec!["build.complete".into(), "ci".into()],
             urgency: Some(NotificationUrgency::Critical),
@@ -1814,7 +1824,7 @@ mod tests {
             FreedesktopNotification {
                 app_name: "build agent",
                 summary: "Build &lt;b&gt;done&lt;/b&gt;; $(touch nope)".into(),
-                body: "Finished `without a shell` &amp; &lt;i&gt;quietly&lt;/i&gt;".into(),
+                body: "Finished `without a shell` &amp;\n&lt;i&gt;quietly&lt;/i&gt;".into(),
                 category: Some("build.complete,ci".into()),
                 urgency: Some(2),
                 expire_timeout: 5_000,
