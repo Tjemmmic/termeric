@@ -15,10 +15,6 @@ categories.workspace = true
 name = "termeric_core"
 path = "src/lib.rs"
 
-[features]
-default = []
-dhat-heap = []
-
 [dependencies]
 # PTY handling
 portable-pty = "0.8"
@@ -45,7 +41,5 @@ thiserror.workspace = true
 anyhow.workspace = true
 
 [dev-dependencies]
-# Testing dependencies
-dhat = "0.3"
 tempfile = "3"
 toml.workspace = true

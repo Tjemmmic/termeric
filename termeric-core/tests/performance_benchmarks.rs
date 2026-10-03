@@ -1,10 +1,8 @@
 //! Release-only benchmark workloads consumed by scripts/run_benchmarks.py.
 
 use serde::Serialize;
-#[cfg(not(feature = "dhat-heap"))]
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::fmt::Write as _;
-#[cfg(not(feature = "dhat-heap"))]
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -14,19 +12,11 @@ use termeric_core::{ImageId, Pty, StoredImage, Terminal};
 
 const SAMPLE_COUNT: usize = 5;
 
-#[cfg(feature = "dhat-heap")]
-#[global_allocator]
-static ALLOCATOR: dhat::Alloc = dhat::Alloc;
-
-#[cfg(not(feature = "dhat-heap"))]
 struct CountingAllocator;
 
-#[cfg(not(feature = "dhat-heap"))]
 static ALLOCATED_BYTES: AtomicU64 = AtomicU64::new(0);
-#[cfg(not(feature = "dhat-heap"))]
 static ALLOCATION_COUNT: AtomicU64 = AtomicU64::new(0);
 
-#[cfg(not(feature = "dhat-heap"))]
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         // SAFETY: This forwards the allocator contract and returns System's
@@ -69,27 +59,20 @@ unsafe impl GlobalAlloc for CountingAllocator {
     }
 }
 
-#[cfg(not(feature = "dhat-heap"))]
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 struct AllocationSnapshot {
     bytes: u64,
     count: u64,
 }
 
-#[cfg(not(feature = "dhat-heap"))]
 fn allocation_snapshot() -> AllocationSnapshot {
     AllocationSnapshot {
         bytes: ALLOCATED_BYTES.load(Ordering::Relaxed),
         count: ALLOCATION_COUNT.load(Ordering::Relaxed),
     }
-}
-
-#[cfg(feature = "dhat-heap")]
-fn allocation_snapshot() -> AllocationSnapshot {
-    AllocationSnapshot::default()
 }
 
 fn allocation_delta(before: AllocationSnapshot) -> AllocationSnapshot {
@@ -168,7 +151,6 @@ fn require_release_profile() {
 #[cfg(not(debug_assertions))]
 fn require_release_profile() {}
 
-#[cfg(not(feature = "dhat-heap"))]
 #[test]
 fn counting_allocator_observes_requested_bytes_and_calls() {
     let before = allocation_snapshot();
@@ -182,8 +164,6 @@ fn counting_allocator_observes_requested_bytes_and_calls() {
 #[ignore = "run with scripts/run_benchmarks.py; requires a release build"]
 fn release_benchmark_suite() {
     require_release_profile();
-    #[cfg(feature = "dhat-heap")]
-    let _heap_profiler = dhat::Profiler::new_heap();
 
     let plain = vec![b'x'; 4 * 1024 * 1024];
     let mut samples = Vec::with_capacity(SAMPLE_COUNT);
