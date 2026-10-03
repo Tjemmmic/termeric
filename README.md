@@ -8,14 +8,14 @@ Termeric keeps your shells in tabs, panes, and windows, draws them with your GPU
 
 - **Tabs, panes, and windows**, with layout presets, zoom, broadcast input, and tabs you can drag between windows
 - **Workspaces** that save your windows, tabs, panes, folders, and scrollback, and bring them back at startup
-- **26 themes**: twelve named after roots (Turmeric, Ginger, Daikon, and more) and fourteen community favorites, plus your own
+- **Themes** named after roots (Turmeric, Ginger, Daikon, and more), community favorites, and your own
 - **Good text**: ligatures, color emoji, wide characters, a fallback chain you control, and a Unicode character picker
 - **Images** through the Kitty graphics protocol, Sixel, and iTerm2 inline images
 - **Shell integration** for Bash, Zsh, Fish, Nushell, and Elvish: prompt jumping and failed-command navigation
 - **Search, keyboard copy mode, and quick-select hints** for links, paths, and hashes
-- **A command palette and Settings dialog**, with every shortcut rebindable
-- **Coding-agent integration** for Claude Code, Codex, Gemini CLI, OpenCode, and your own agents
-- **Automation**: launch from the command line, script a running Termeric, and add plugins
+- **A command palette, a Settings dialog, and rebindable shortcuts**
+- **Coding-agent integration** (experimental) for Claude Code, Codex, Gemini CLI, OpenCode, and your own agents
+- **Automation**: launch from the command line, add plugins, and script a running Termeric (experimental)
 
 ## Status
 
@@ -23,16 +23,7 @@ Termeric is a **developer preview for Linux** (Wayland and X11). Expect rough ed
 
 ## Install
 
-Packages for Debian/Ubuntu and Arch Linux will come with the first release. Until then, build from source with a stable Rust toolchain (1.89 or newer):
-
-```bash
-sudo apt-get install build-essential pkg-config libfontconfig1-dev libwayland-dev \
-  libxkbcommon-dev libxcb-shape0-dev libxcb-xfixes0-dev libvulkan-dev mesa-vulkan-drivers
-cargo build --release --locked
-./target/release/termeric
-```
-
-[Installation](docs/src/installation.md) covers the desktop entry, icons, and terminfo.
+Packages for Debian/Ubuntu and Arch Linux come with the first release. Until then, [build from source](docs/src/installation.md#build-from-source) with Rust 1.89 or newer, or build the Arch package from `packaging/arch`. [Installation](docs/src/installation.md) covers both, including the desktop entry, icons, and terminfo.
 
 ## Documentation
 
