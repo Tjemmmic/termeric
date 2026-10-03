@@ -26,7 +26,7 @@ cargo test --workspace --locked
 python3 scripts/check_markdown_links.py
 ```
 
-[docs/dev/testing.md](docs/dev/testing.md) covers the rest: the helper-script tests, the native GUI tests, soaks, benchmarks, fuzzing, and package checks, and what CI runs.
+[docs/dev/testing.md](docs/dev/testing.md) covers the rest: the helper-script tests, the GPU render smoke, the resource soak, benchmarks, fuzzing, package checks, and what CI runs.
 
 Add tests with your change. A bug fix should come with a test that fails without it.
 
