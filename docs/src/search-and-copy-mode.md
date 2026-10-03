@@ -14,7 +14,7 @@ Press `Ctrl+Shift+F` to open the find box, then type. Matches are highlighted as
 | `Alt+C` | Toggle case-sensitive matching |
 | `Alt+R` | Toggle regular expressions |
 | `Alt+F` | Toggle filter mode |
-| `Left`, `Right`, `Home`, `End`, `Backspace`, `Delete` | Edit the query; add `Ctrl` to move or delete by word |
+| `Left`, `Right`, `Home`, `End`, `Backspace`, `Delete` | Edit the query; add `Ctrl` to `Left`, `Right`, `Backspace`, or `Delete` to move or delete by word |
 | `Ctrl+Shift+V` | Paste into the query |
 
 The same toggles, previous and next buttons, and a close button are on the find bar, so you can also use them with the mouse. After you press `Enter`, the bar stays visible with its buttons while the highlights remain; click its close button to clear them, or click the query to edit it again.
@@ -42,7 +42,7 @@ bindings = "emacs" # "vi" (default) or "emacs"
 
 ### Copy-mode keys
 
-The arrow keys, `Home`, `End`, `Page Up`, and `Page Down` work with either style.
+The arrow keys, `Home`, `End`, `Page Up`, `Page Down`, and `Ctrl+Home` / `Ctrl+End` (top and bottom of the scrollback) work with either style.
 
 | Action | vi | Emacs |
 | --- | --- | --- |

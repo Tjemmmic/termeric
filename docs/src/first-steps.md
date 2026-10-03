@@ -31,30 +31,15 @@ Changes apply as soon as you make them, so you can try things out. To keep them,
 
 ## Tabs and panes
 
-Click **+** in the tab bar or press **Ctrl+Shift+T** to open a tab. Each tab can be split into panes, each running its own shell.
+Click **+** in the tab bar or press **Ctrl+Shift+T** to open a tab, and press **Ctrl+Shift+W** to close it. **Ctrl+Tab** and **Ctrl+Shift+Tab** move between tabs.
 
-| Key | Action |
-|---|---|
-| Ctrl+Shift+T | New tab |
-| Ctrl+Shift+W | Close tab |
-| Ctrl+Tab | Next tab |
-| Ctrl+Shift+Tab | Previous tab |
-| Ctrl+1 … Ctrl+9 | Switch to tab 1–9 |
-| Alt+Shift+Right | Split pane right |
-| Alt+Shift+Down | Split pane down |
-| Alt+Left, Alt+Right, Alt+Up, Alt+Down | Move to the pane in that direction |
-| Alt+Shift+W | Close pane |
+Each tab can be split into panes, each running its own shell. **Alt+Shift+Right** and **Alt+Shift+Down** split the focused pane, **Alt** with an arrow key moves to the pane in that direction, and **Alt+Shift+W** closes a pane. [Keyboard and mouse](keyboard-and-mouse.md#default-key-bindings) lists every tab and pane shortcut.
 
 You can also click a pane to focus it and drag the divider between panes to resize them. Typing `exit` in a shell closes its pane or tab as usual. Renaming, pinning, and reordering tabs, zooming and rearranging panes, and moving tabs between windows are covered in [Tabs, panes, and windows](tabs-panes-windows.md).
 
 ## Copy, paste, and find
 
-| Key | Action |
-|---|---|
-| Ctrl+Shift+C | Copy the selection |
-| Ctrl+Shift+V | Paste |
-| Ctrl+Shift+F | Find in scrollback |
-| Shift+Page Up, Shift+Page Down | Scroll up or down |
+Press **Ctrl+Shift+C** to copy the selection and **Ctrl+Shift+V** to paste. **Ctrl+Shift+F** finds text in the scrollback, and **Shift+Page Up** and **Shift+Page Down** scroll it.
 
 Select text by dragging with the mouse; double-click selects a word and triple-click a line. Hold **Ctrl** and click a link to open it. When a program in the terminal uses the mouse itself, hold **Shift** to select text anyway. See [Search, copy mode, and links](search-and-copy-mode.md) and [Keyboard and mouse](keyboard-and-mouse.md).
 
@@ -66,13 +51,7 @@ The first twelve themes are Termeric's own, named after roots: Turmeric (the def
 
 ## Change the font size
 
-| Key | Action |
-|---|---|
-| Ctrl+= | Increase font size |
-| Ctrl+- | Decrease font size |
-| Ctrl+0 | Reset font size |
-
-The keys change the size in the current window in steps of two points. To choose an exact size, or a different font family, open the **Font** page in Settings. The default is 12 points in your system's default monospace font. Either way, press **Ctrl+S** in Settings (or run **Save Configuration** from the palette) to keep the new size for future windows. See [Fonts and text](fonts-and-text.md) for fallback fonts, ligatures, and line height.
+**Ctrl+=** makes the text larger, **Ctrl+-** smaller, and **Ctrl+0** returns it to your configured size. The keys change the size in the current window in steps of two points. To choose an exact size, or a different font family, open the **Font** page in Settings. The default is 12 points in your system's default monospace font. Either way, press **Ctrl+S** in Settings (or run **Save Configuration** from the palette) to keep the new size for future windows. See [Fonts and text](fonts-and-text.md) for fallback fonts, ligatures, and line height.
 
 ## Where to go next
 

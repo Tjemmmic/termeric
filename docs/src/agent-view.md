@@ -6,10 +6,7 @@ The agent view is a panel docked to the right of your terminals where a coding a
 
 ## Opening it
 
-| Command | Default key | What it does |
-| --- | --- | --- |
-| **Agent View** | Ctrl+Shift+A | Opens the panel and gives it the keyboard, or closes it when it already has the keyboard. |
-| **New Agent View Session** | | Opens the panel on a new session. |
+Press **Ctrl+Shift+A** (**Agent View** in the command palette) to open the panel and give it the keyboard; press it again while the panel has the keyboard to close it. **New Agent View Session** in the command palette opens the panel on a new session.
 
 Each tab has its own agent view holding one conversation. Switching tabs switches the conversation, and a tab without one shows no panel, so Claude Code in one project and Codex in another are simply two tabs. A tab moved to another window takes its conversation along, and closing a tab ends its session.
 

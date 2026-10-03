@@ -6,12 +6,7 @@ Most of the commands on this page are in the command palette (`Ctrl+Shift+P`). C
 
 ## Tabs
 
-| Key | Action |
-| --- | --- |
-| `Ctrl+Shift+T` | New tab |
-| `Ctrl+Shift+W` | Close the current tab |
-| `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab |
-| `Ctrl+1` … `Ctrl+9` | Go to tab 1–9 |
+`Ctrl+Shift+T` opens a tab and `Ctrl+Shift+W` closes the current one. `Ctrl+Tab` and `Ctrl+Shift+Tab` go to the next and previous tab, and `Ctrl+1` to `Ctrl+9` go to a tab by its position.
 
 You can also click **+** in the tab bar to open a tab, click a tab to select it, and click its **×** to close it. The close button shows on the active tab and on the tab under the pointer. An inactive tab that has printed new output shows a small dot in place of its close button.
 
@@ -50,12 +45,7 @@ A small icon before a tab's title shows its most important state, in this order:
 
 Panes split one tab into several terminals, each running its own shell.
 
-| Key | Action |
-| --- | --- |
-| `Alt+Shift+Right` | Split the focused pane, new pane on the right |
-| `Alt+Shift+Down` | Split the focused pane, new pane below |
-| `Alt+Shift+W` | Close the focused pane |
-| `Alt+Left` / `Alt+Right` / `Alt+Up` / `Alt+Down` | Focus the pane in that direction |
+`Alt+Shift+Right` splits the focused pane with the new pane on the right, and `Alt+Shift+Down` puts it below. `Alt+Shift+W` closes the focused pane, and `Alt` with an arrow key focuses the pane in that direction.
 
 Click a pane to focus it. When a tab has more than one pane, the focused pane has a thin outline. Keyboard input always goes to the focused pane.
 

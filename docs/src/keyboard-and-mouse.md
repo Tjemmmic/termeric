@@ -144,9 +144,9 @@ action = "navigate_pane_left"
 
 Key names are case-insensitive. Use the character for letter, digit, and symbol keys (`"z"`, `"5"`, `"/"`), and these names for other keys: `enter`, `tab`, `space`, `backspace`, `escape`, `delete`, `insert`, `home`, `end`, `pageup`, `pagedown`, `up`, `down`, `left`, `right`, `f1` to `f12`.
 
-Shortcuts match the character your keyboard layout produces, not the physical key. For a symbol typed with Shift, use the shifted character, for example `key = "?"` with `shift = true`.
+Shortcuts match the character your keyboard layout produces, not the physical key. For a symbol typed with Shift, use the shifted character, for example `key = "?"` with `shift = true`. `+` and `=` count as the same key, because they share one on most layouts: `key = "+"` with `ctrl = true` and `shift = true` is the same shortcut as `key = "="` with those modifiers.
 
-Reload with **Reload Configuration** in the command palette after editing the file. See [Configuration](configuration.md) for where the file lives.
+Termeric reloads the file when you save it, so the change takes effect at once. See [Configuration](configuration.md) for where the file lives.
 
 ## Keys that type text or run commands
 

@@ -21,11 +21,7 @@ The default is `monospace` at 12 points with a line height of 1.2. Use the famil
 
 ## Zoom
 
-| Keys | Action |
-| --- | --- |
-| Ctrl+= | Increase the font size by 2 points |
-| Ctrl+- | Decrease the font size by 2 points |
-| Ctrl+0 | Return to the configured size |
+Ctrl+= increases the font size by 2 points, Ctrl+- decreases it by 2 points, and Ctrl+0 returns to the configured size.
 
 Zoom affects only the current window and stays between 8 and 72 points. Saving Settings stores the window's current size as `font.size`. You can rebind these under Keyboard Shortcuts in Settings (see [Keyboard and mouse](keyboard-and-mouse.md)).
 

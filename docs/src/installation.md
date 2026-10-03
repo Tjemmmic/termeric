@@ -22,33 +22,18 @@ sudo apt remove termeric
 
 ## Arch Linux
 
-From the first release, Termeric will be in the AUR as two packages:
-
-| Package | Builds |
-|---|---|
-| `termeric` | The latest release |
-| `termeric-git` | The latest development version from the main branch |
-
-Install either one with an AUR helper such as `paru` or `yay`:
-
-```bash
-paru -S termeric
-```
-
-Or build it yourself with `makepkg`:
+Termeric is planned for the AUR from its first release, as `termeric` (the latest release) and `termeric-git` (the latest development version from the main branch). Neither is published yet. Until they are, build the development package with the `PKGBUILD` in this repository:
 
 ```bash
 sudo pacman -S --needed base-devel git
-git clone https://aur.archlinux.org/termeric.git
-cd termeric
+git clone https://github.com/Tjemmmic/termeric.git
+cd termeric/packaging/arch
 makepkg -si
 ```
 
-The optional dependencies `mesa` and `vulkan-icd-loader` provide the Vulkan and OpenGL drivers Termeric renders with, including the software fallback. Install them if your system doesn't already have them.
+`makepkg` fetches the latest source from GitHub, builds and tests it, and installs it as the `termeric-git` package, with the desktop entry, icons, and the `xterm-termeric` terminfo entry. The optional dependencies `mesa` and `vulkan-icd-loader` provide the Vulkan and OpenGL drivers Termeric renders with, including the software fallback. Install them if your system doesn't already have them.
 
-Until then, `cd packaging/arch && makepkg -si` in a clone of this repository builds the development package from the latest source on GitHub.
-
-Upgrade with your AUR helper (`paru -Syu`), or pull the AUR repository and run `makepkg -si` again. Uninstall with `sudo pacman -R termeric` (or `termeric-git`).
+To upgrade, run `makepkg -si` in `packaging/arch` again; it builds the newest commit on the main branch. Uninstall with `sudo pacman -R termeric-git`.
 
 ## Build from source
 

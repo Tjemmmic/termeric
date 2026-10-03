@@ -15,11 +15,6 @@ Without integration, Termeric falls back to reading the shell's directory from t
 
 Prompt jumping works in the normal screen only. While a full-screen program such as `vim` or `less` is running, the keys do nothing.
 
-| Key | Action |
-| --- | --- |
-| Ctrl+Shift+Up | Scroll to the previous prompt |
-| Ctrl+Shift+Down | Scroll to the next prompt |
-
 ## Setup by shell
 
 Termeric uses the shell from `[shell].program` in your configuration, or `$SHELL` if that's not set. Integration is added when that shell (or a [profile](profiles.md) program) starts as an ordinary interactive shell. Shells started to run a script or a `-c` command are left untouched, because changing their startup could change what the command does.

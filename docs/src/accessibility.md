@@ -87,13 +87,7 @@ It doesn't change the terminal's own colors or the colors programs use. For high
 
 ## Text size
 
-| Key | Action |
-| --- | --- |
-| `Ctrl+=` | Make terminal text larger (2 points per step, up to 72) |
-| `Ctrl+-` | Make terminal text smaller (down to 8 points) |
-| `Ctrl+0` | Return to your configured size |
-
-These keys change the window you're in. To change the size for every new window, set it in **Settings → Font → Size** or in your configuration file:
+`Ctrl+=` makes terminal text larger and `Ctrl+-` smaller, 2 points per step between 8 and 72 points, and `Ctrl+0` returns to your configured size. These keys change the window you're in. To change the size for every new window, set it in **Settings → Font → Size** or in your configuration file:
 
 ```toml
 [font]

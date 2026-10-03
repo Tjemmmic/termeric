@@ -38,7 +38,7 @@ Termeric runs `program` directly with exactly the `args` you list. There's no sh
 
 Termeric sets `TERM`, `COLORTERM`, `TERM_PROGRAM`, `TERM_PROGRAM_VERSION`, `TERMINFO`, `TERMINFO_DIRS`, `PWD`, and `TERMERIC_TERMINAL_ID` itself, so a profile can't override them. Environment values are not shown in the command palette or copied into saved workspaces, but they are stored in plain text in your configuration file.
 
-After editing the file, run **Reload Configuration** from the command palette. The profile list updates at once.
+Termeric reloads the file when you save it, and the profile list updates at once.
 
 ## Open a profile
 

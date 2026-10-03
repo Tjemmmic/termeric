@@ -17,11 +17,11 @@ The repository has five example plugins in `examples/plugins/`. Each manifest st
 
 | Plugin | What it does | Shows how to |
 | --- | --- | --- |
-| [task-runner](https://github.com/Tjemmmic/termeric/tree/main/examples/plugins/task-runner) | Profiles that run your project's test command or dev server in the active terminal's directory, and a clean shell. | Launch profiles, settings, launch context |
-| [command-notifier](https://github.com/Tjemmmic/termeric/tree/main/examples/plugins/command-notifier) | Shows a notice with the end of the output when a shell command fails, ignoring exit codes you list. | Reacting to `command-completed` |
-| [pane-layouts](https://github.com/Tjemmmic/termeric/tree/main/examples/plugins/pane-layouts) | Commands that split, tile, and balance the panes of the active tab. | Querying the workspace, then acting |
-| [window-switcher](https://github.com/Tjemmmic/termeric/tree/main/examples/plugins/window-switcher) | Commands that focus the next window, or select a tab by title in any window. | `:all-windows` permissions |
-| [rerun-in-sibling](https://github.com/Tjemmmic/termeric/tree/main/examples/plugins/rerun-in-sibling) | Types the focused pane's last command into the next pane of the tab and runs it. | Remembering state, typing into a terminal |
+| `task-runner` | Profiles that run your project's test command or dev server in the active terminal's directory, and a clean shell. | Launch profiles, settings, launch context |
+| `command-notifier` | Shows a notice with the end of the output when a shell command fails, ignoring exit codes you list. | Reacting to `command-completed` |
+| `pane-layouts` | Commands that split, tile, and balance the panes of the active tab. | Querying the workspace, then acting |
+| `window-switcher` | Commands that focus the next window, or select a tab by title in any window. | `:all-windows` permissions |
+| `rerun-in-sibling` | Types the focused pane's last command into the next pane of the tab and runs it. | Remembering state, typing into a terminal |
 
 To try one, clone the repository and install it from its folder, for example:
 
