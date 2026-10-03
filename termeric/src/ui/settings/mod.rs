@@ -756,9 +756,7 @@ pub struct AgentSettingsRow {
 impl SettingsPanel {
     pub fn new() -> Self {
         Self {
-            animation: super::animation::PanelAnimation::with_duration(
-                super::animation::DEFAULT_PANEL_DURATION,
-            ),
+            animation: super::animation::PanelAnimation::new(),
             page: SettingsPage::Appearance,
             hovered_control: None,
             filter: TextInput::new(TextLimit::Chars(MAX_FILTER_CHARACTERS)),
@@ -877,9 +875,9 @@ impl SettingsPanel {
         self.animation.is_open()
     }
 
-    /// Update animation state. Returns true if still animating (needs redraw).
-    pub fn update_animation(&mut self) -> bool {
-        self.animation.update()
+    /// Whether the open or close animation is still playing.
+    pub fn needs_redraw(&self) -> bool {
+        self.animation.needs_redraw()
     }
 
     pub fn set_reduced_motion(&mut self, reduced_motion: bool) {
@@ -2820,7 +2818,6 @@ mod tests {
 
         // Wait for animation to complete
         thread::sleep(Duration::from_millis(250));
-        panel.update_animation();
         assert!(panel.is_active());
 
         panel.toggle();
@@ -2828,7 +2825,6 @@ mod tests {
         assert!(panel.is_visible());
         // Wait for close animation to complete
         thread::sleep(Duration::from_millis(250));
-        panel.update_animation();
         assert!(!panel.is_visible());
     }
 
@@ -2853,7 +2849,6 @@ mod tests {
         let mut panel = SettingsPanel::new();
         panel.open();
         thread::sleep(Duration::from_millis(250));
-        panel.update_animation();
 
         let config = Config::default();
         let registry = default_registry();
@@ -2883,7 +2878,6 @@ mod tests {
         let mut panel = SettingsPanel::new();
         panel.open();
         thread::sleep(Duration::from_millis(250));
-        panel.update_animation();
 
         let config = Config::default();
         let registry = default_registry();
@@ -3295,7 +3289,6 @@ mod tests {
         let mut panel = SettingsPanel::new();
         panel.open();
         thread::sleep(Duration::from_millis(250));
-        panel.update_animation();
 
         let config = Config::default();
         let registry = default_registry();
@@ -3334,7 +3327,6 @@ mod tests {
         let mut panel = SettingsPanel::new();
         panel.open();
         thread::sleep(Duration::from_millis(250));
-        panel.update_animation();
 
         let config = Config::default();
         let registry = default_registry();
@@ -3354,7 +3346,6 @@ mod tests {
         let mut panel = SettingsPanel::new();
         panel.open();
         thread::sleep(Duration::from_millis(250));
-        panel.update_animation();
 
         let config = Config::default();
         let registry = default_registry();
@@ -3479,7 +3470,6 @@ mod tests {
         let mut panel = SettingsPanel::new();
         panel.open();
         thread::sleep(Duration::from_millis(250));
-        panel.update_animation();
 
         let config = Config::default();
         let registry = default_registry();
@@ -3507,7 +3497,6 @@ mod tests {
         let mut panel = SettingsPanel::new();
         panel.open();
         thread::sleep(Duration::from_millis(250));
-        panel.update_animation();
 
         // Tight viewport so scrolling actually kicks in.
         panel.set_max_visible(5);
@@ -3610,7 +3599,6 @@ mod tests {
         let mut panel = SettingsPanel::new();
         panel.open_to_section(SettingsSection::Sessions);
         thread::sleep(Duration::from_millis(250));
-        panel.update_animation();
 
         // Filter must be empty — the rest of the page stays browsable.
         assert!(panel.filter.text().is_empty());

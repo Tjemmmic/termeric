@@ -442,11 +442,6 @@ impl SessionPanel {
         self.animation.set_reduced_motion(reduced_motion);
     }
 
-    /// Mark the panel as fully closed once animation completes
-    pub fn update(&mut self) {
-        self.animation.update();
-    }
-
     /// Refresh the session list from disk
     pub fn refresh_sessions(&mut self) {
         let now = super::unix_now();

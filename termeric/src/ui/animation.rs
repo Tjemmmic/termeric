@@ -22,10 +22,8 @@ pub fn ease_out_cubic(t: f32) -> f32 {
 
 // ── OverlayAnimation ──────────────────────────────────────────────────
 
-/// Simple time-based overlay animation for modal overlays that fade in/out.
-///
-/// Used by: InfoOverlay, DiffReviewOverlay, ContextPicker, GuardrailOverlay,
-/// CommandPalette.
+/// Time-based animation for modal overlays that fade in and out. Owners call
+/// `update()` every frame so the close animation can end their input.
 pub struct OverlayAnimation {
     active: bool,
     animation_start: Instant,
@@ -138,16 +136,12 @@ impl OverlayAnimation {
 
 // ── PanelAnimation ────────────────────────────────────────────────────
 
-/// Panel animation supporting seamless mid-animation direction reversal.
-///
-/// Used by: SettingsPanel, SessionPanel, CommandsPanel.
-/// These are slide-in panels that may be toggled rapidly, requiring the
-/// animation to reverse smoothly from its current position.
+/// Animation for slide-in panels, which may be toggled rapidly and so
+/// reverse smoothly from wherever the animation is.
 #[derive(Debug, Clone)]
 pub struct PanelAnimation {
     open: bool,
     animation_start: Instant,
-    animating_open: bool,
     animation_base: f32,
     duration: f32,
     reduced_motion: bool,
@@ -159,7 +153,6 @@ impl PanelAnimation {
         Self {
             open: false,
             animation_start: Instant::now(),
-            animating_open: false,
             animation_base: 0.0,
             duration: DEFAULT_PANEL_DURATION,
             reduced_motion: false,
@@ -178,18 +171,15 @@ impl PanelAnimation {
     pub fn open(&mut self) {
         self.animation_base = self.raw_progress();
         self.open = true;
-        self.animating_open = true;
         self.animation_start = Instant::now();
     }
 
     /// Start the close animation, capturing the current position for seamless reversal.
-    /// Sets `open` to false immediately so that `is_open()` returns false right away,
-    /// matching the original CommandsPanel behavior where toggle() did `self.open = !self.open`.
-    /// The close animation still plays out via `raw_progress()` / `is_visible()`.
+    /// `is_open()` is false at once, so the panel stops taking input; the close
+    /// animation still plays out through `raw_progress()` and `is_visible()`.
     pub fn close(&mut self) {
         self.animation_base = self.raw_progress();
         self.open = false;
-        self.animating_open = false;
         self.animation_start = Instant::now();
     }
 
@@ -235,7 +225,7 @@ impl PanelAnimation {
         let elapsed = self.animation_start.elapsed().as_secs_f32();
         let linear = (elapsed / self.duration).min(1.0);
 
-        if self.animating_open {
+        if self.open {
             self.animation_base + (1.0 - self.animation_base) * linear
         } else {
             self.animation_base * (1.0 - linear)
@@ -245,19 +235,6 @@ impl PanelAnimation {
     /// Animation progress with ease-out cubic applied.
     pub fn progress(&self) -> f32 {
         ease_out_cubic(self.raw_progress())
-    }
-
-    /// Update animation state. Returns true if still animating (needs redraw).
-    pub fn update(&mut self) -> bool {
-        if self.reduced_motion {
-            return false;
-        }
-        let anim = self.raw_progress();
-        if !self.animating_open && anim < ANIM_EPSILON {
-            self.open = false;
-            return false;
-        }
-        self.animation_start.elapsed().as_secs_f32() < self.duration
     }
 
     /// Disable non-essential transition frames. Open panels remain fully

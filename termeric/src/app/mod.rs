@@ -2403,7 +2403,7 @@ impl App {
             };
 
         // Update settings panel animation
-        if self.settings_panel.update_animation() {
+        if self.settings_panel.needs_redraw() {
             animating = true;
         }
 
@@ -2425,7 +2425,6 @@ impl App {
         };
 
         // Build session panel info if panel is open or animating
-        self.session_panel.update();
         let session_panel_info = if !self.session_panel.is_closed() {
             let preview = self.session_panel.build_info();
             let (window_width, window_height) = renderer.window_size();

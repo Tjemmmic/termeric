@@ -11267,7 +11267,7 @@ fn headless_accessibility_settings_apply_without_transition_frames() {
     app.settings_panel.toggle();
     assert_eq!(app.settings_panel.animation_progress(), 1.0);
     app.settings_panel.close();
-    assert!(!app.settings_panel.update_animation());
+    assert!(!app.settings_panel.needs_redraw());
     assert!(!app.settings_panel.is_visible());
 }
 
