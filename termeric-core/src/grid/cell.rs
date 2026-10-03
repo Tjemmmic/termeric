@@ -321,20 +321,6 @@ impl CellContent {
         matches!(self, CellContent::Empty)
     }
 
-    /// Get the content as a string slice
-    pub fn as_str(&self) -> &str {
-        match self {
-            CellContent::Empty => "",
-            CellContent::Char(_c) => {
-                // This is a bit of a hack, but chars are always valid UTF-8
-                // We'd need a buffer to return a &str for a char
-                // In practice, callers should handle Char separately
-                ""
-            }
-            CellContent::Grapheme(s) => s,
-        }
-    }
-
     /// Get the character if this is a single char
     pub fn char(&self) -> Option<char> {
         match self {
