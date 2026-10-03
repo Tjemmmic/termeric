@@ -19,39 +19,59 @@ pub struct Theme {
     pub ui: UiColors,
 }
 
-/// Single source of truth for built-in theme names. Used by
-/// `list_available()`; `load_builtin` must stay in sync (enforced by
-/// `test_all_listed_themes_load`).
-const BUILTIN_THEME_NAMES: [&str; 26] = [
+/// A built-in theme's name and its TOML, embedded from
+/// `themes/<group>/<name>.toml`.
+macro_rules! builtin_theme {
+    ($group:literal, $name:literal) => {
+        (
+            $name,
+            include_str!(concat!("../../themes/", $group, "/", $name, ".toml")),
+        )
+    };
+}
+
+/// Every built-in theme: its name and its embedded TOML.
+const BUILTIN_THEMES: [(&str, &str); 26] = [
     // Root themes (Termeric house palettes)
-    "turmeric",
-    "ginger",
-    "daikon",
-    "malanga",
-    "beet",
-    "turnip",
-    "yuca",
-    "taro",
-    "wasabi",
-    "galangal",
-    "horseradish",
-    "parsnip",
+    builtin_theme!("roots", "turmeric"),
+    builtin_theme!("roots", "ginger"),
+    builtin_theme!("roots", "daikon"),
+    builtin_theme!("roots", "malanga"),
+    builtin_theme!("roots", "beet"),
+    builtin_theme!("roots", "turnip"),
+    builtin_theme!("roots", "yuca"),
+    builtin_theme!("roots", "taro"),
+    builtin_theme!("roots", "wasabi"),
+    builtin_theme!("roots", "galangal"),
+    builtin_theme!("roots", "horseradish"),
+    builtin_theme!("roots", "parsnip"),
     // Community themes
-    "solarized-dark",
-    "solarized-light",
-    "dracula",
-    "nord",
-    "gruvbox-dark",
-    "gruvbox-light",
-    "catppuccin-mocha",
-    "catppuccin-latte",
-    "tokyo-night",
-    "one-dark",
-    "one-light",
-    "rose-pine",
-    "kanagawa",
-    "everforest",
+    builtin_theme!("community", "solarized-dark"),
+    builtin_theme!("community", "solarized-light"),
+    builtin_theme!("community", "dracula"),
+    builtin_theme!("community", "nord"),
+    builtin_theme!("community", "gruvbox-dark"),
+    builtin_theme!("community", "gruvbox-light"),
+    builtin_theme!("community", "catppuccin-mocha"),
+    builtin_theme!("community", "catppuccin-latte"),
+    builtin_theme!("community", "tokyo-night"),
+    builtin_theme!("community", "one-dark"),
+    builtin_theme!("community", "one-light"),
+    builtin_theme!("community", "rose-pine"),
+    builtin_theme!("community", "kanagawa"),
+    builtin_theme!("community", "everforest"),
 ];
+
+/// The names column of `BUILTIN_THEMES`, so `list_available` can lend a slice.
+const BUILTIN_THEME_NAMES: [&str; BUILTIN_THEMES.len()] = {
+    let mut names = [""; BUILTIN_THEMES.len()];
+    let mut index = 0;
+    while index < BUILTIN_THEMES.len() {
+        names[index] = BUILTIN_THEMES[index].0;
+        index += 1;
+    }
+    names
+};
 
 impl Default for Theme {
     /// The house palette, parsed from the embedded `turmeric.toml` so the
@@ -72,48 +92,17 @@ impl Theme {
         Ok(theme)
     }
 
-    /// Load a built-in theme by name.
-    /// Themes are embedded as TOML files at compile time.
+    /// Load a built-in theme by name, ignoring case.
     pub fn load_builtin(name: &str) -> Result<Self> {
-        let toml_str = match name.to_lowercase().as_str() {
-            // ── Root themes (Termeric house palettes) ──
-            "turmeric" | "default" => include_str!("../../themes/roots/turmeric.toml"),
-            "ginger" => include_str!("../../themes/roots/ginger.toml"),
-            "daikon" => include_str!("../../themes/roots/daikon.toml"),
-            "malanga" => include_str!("../../themes/roots/malanga.toml"),
-            "beet" => include_str!("../../themes/roots/beet.toml"),
-            "turnip" => include_str!("../../themes/roots/turnip.toml"),
-            "yuca" => include_str!("../../themes/roots/yuca.toml"),
-            "taro" => include_str!("../../themes/roots/taro.toml"),
-            "wasabi" => include_str!("../../themes/roots/wasabi.toml"),
-            "galangal" => include_str!("../../themes/roots/galangal.toml"),
-            "horseradish" => include_str!("../../themes/roots/horseradish.toml"),
-            "parsnip" => include_str!("../../themes/roots/parsnip.toml"),
-            // ── Community themes ──
-            "solarized-dark" => include_str!("../../themes/community/solarized-dark.toml"),
-            "solarized-light" => include_str!("../../themes/community/solarized-light.toml"),
-            "dracula" => include_str!("../../themes/community/dracula.toml"),
-            "nord" => include_str!("../../themes/community/nord.toml"),
-            "gruvbox-dark" => include_str!("../../themes/community/gruvbox-dark.toml"),
-            "gruvbox-light" => include_str!("../../themes/community/gruvbox-light.toml"),
-            "catppuccin-mocha" => include_str!("../../themes/community/catppuccin-mocha.toml"),
-            "catppuccin-latte" => include_str!("../../themes/community/catppuccin-latte.toml"),
-            "tokyo-night" => include_str!("../../themes/community/tokyo-night.toml"),
-            "one-dark" => include_str!("../../themes/community/one-dark.toml"),
-            "one-light" => include_str!("../../themes/community/one-light.toml"),
-            "rose-pine" => include_str!("../../themes/community/rose-pine.toml"),
-            "kanagawa" => include_str!("../../themes/community/kanagawa.toml"),
-            "everforest" => include_str!("../../themes/community/everforest.toml"),
-            _ => return Err(anyhow!("Unknown built-in theme: {}", name)),
-        };
+        let (_, toml_str) = BUILTIN_THEMES
+            .iter()
+            .find(|(builtin, _)| builtin.eq_ignore_ascii_case(name))
+            .ok_or_else(|| anyhow!("Unknown built-in theme: {}", name))?;
         let theme: Theme = toml::from_str(toml_str)?;
         Ok(theme)
     }
 
-    /// List all available built-in theme names. Kept in sync with
-    /// `load_builtin` via the `test_all_listed_themes_load` test below —
-    /// if you add a theme to `load_builtin`, add it here too (the test
-    /// will catch any drift in CI).
+    /// List all built-in theme names, root themes first.
     pub fn list_available() -> &'static [&'static str] {
         &BUILTIN_THEME_NAMES
     }
@@ -621,16 +610,22 @@ mod tests {
     }
 
     #[test]
-    fn test_all_listed_themes_load() {
-        // Every name exposed by `list_available` must be loadable by
-        // `load_builtin`. Catches drift between the two lists.
+    fn every_builtin_theme_parses() {
         for name in Theme::list_available() {
             assert!(
                 Theme::load_builtin(name).is_ok(),
-                "theme '{}' is listed but can't be loaded",
+                "theme '{}' does not parse",
                 name
             );
         }
+    }
+
+    #[test]
+    fn builtin_theme_names_ignore_case() {
+        assert_eq!(
+            Theme::load_builtin("Tokyo-Night").unwrap().meta.name,
+            Theme::load_builtin("tokyo-night").unwrap().meta.name
+        );
     }
 
     #[test]
