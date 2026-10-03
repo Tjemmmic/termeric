@@ -1663,43 +1663,52 @@ mod tests {
     }
 
     #[test]
-    fn window_levels_are_typed_and_round_trip() {
-        let config: Config = toml::from_str(
-            r#"
-                [window]
-                level = "always_on_bottom"
-            "#,
-        )
-        .unwrap();
-        assert_eq!(config.window.level, WindowLevelConfig::AlwaysOnBottom);
-        assert_eq!(
-            config.window.level.native(),
-            winit::window::WindowLevel::AlwaysOnBottom
-        );
-        assert_eq!(
-            config.window.level.native_for_window(true),
-            winit::window::WindowLevel::AlwaysOnTop
-        );
-
-        let encoded = toml::to_string(&config).unwrap();
-        let decoded: Config = toml::from_str(&encoded).unwrap();
-        assert_eq!(decoded.window.level, WindowLevelConfig::AlwaysOnBottom);
+    fn enum_settings_parse_and_round_trip() {
+        type Holds = fn(&Config) -> bool;
+        let cases: [(&str, Holds); 4] = [
+            ("[window]\nlevel = \"always_on_bottom\"", |config| {
+                config.window.level == WindowLevelConfig::AlwaysOnBottom
+            }),
+            ("[window]\ntab_bar_position = \"left\"", |config| {
+                config.window.tab_bar_position == TabBarPosition::Left
+            }),
+            ("[renderer]\nbackend = \"software\"", |config| {
+                config.renderer.backend == RendererBackend::Software
+            }),
+            ("[keyboard]\nxterm_type = \"vt220\"", |config| {
+                config.keyboard.xterm_type == XtermKeyboardTypeConfig::Vt220
+            }),
+        ];
+        for (source, holds) in cases {
+            let config: Config = toml::from_str(source).unwrap();
+            assert!(holds(&config), "{source}");
+            let decoded: Config = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
+            assert!(holds(&decoded), "{source} after a round trip");
+        }
+        assert!(toml::from_str::<Config>("[keyboard]\nxterm_type = \"sun\"").is_err());
     }
 
     #[test]
-    fn tab_bar_positions_are_typed_and_round_trip() {
-        let config: Config = toml::from_str(
-            r#"
-                [window]
-                tab_bar_position = "left"
-            "#,
-        )
-        .unwrap();
-        assert_eq!(config.window.tab_bar_position, TabBarPosition::Left);
+    fn enum_settings_default_and_map_to_their_native_types() {
+        let defaults = Config::default();
+        assert_eq!(defaults.renderer.backend, RendererBackend::Auto);
+        assert_eq!(
+            defaults.keyboard.xterm_type,
+            XtermKeyboardTypeConfig::Normal
+        );
 
-        let encoded = toml::to_string(&config).unwrap();
-        let decoded: Config = toml::from_str(&encoded).unwrap();
-        assert_eq!(decoded.window.tab_bar_position, TabBarPosition::Left);
+        assert_eq!(
+            WindowLevelConfig::AlwaysOnBottom.native(),
+            winit::window::WindowLevel::AlwaysOnBottom
+        );
+        assert_eq!(
+            WindowLevelConfig::AlwaysOnBottom.native_for_window(true),
+            winit::window::WindowLevel::AlwaysOnTop
+        );
+        assert_eq!(
+            XtermKeyboardTypeConfig::Vt220.terminal_type(),
+            termeric_core::term::XtermKeyboardType::Vt220
+        );
     }
 
     #[test]
@@ -1738,53 +1747,6 @@ mod tests {
             "x".repeat(MAX_BACKGROUND_IMAGE_PATH_BYTES + 1),
         ));
         assert!(invalid.validate().is_err());
-    }
-
-    #[test]
-    fn renderer_backend_defaults_to_auto_and_round_trips_software() {
-        assert_eq!(Config::default().renderer.backend, RendererBackend::Auto);
-        let config: Config = toml::from_str(
-            r#"
-                [renderer]
-                backend = "software"
-            "#,
-        )
-        .unwrap();
-        assert_eq!(config.renderer.backend, RendererBackend::Software);
-        let encoded = toml::to_string(&config).unwrap();
-        assert_eq!(
-            toml::from_str::<Config>(&encoded).unwrap().renderer.backend,
-            RendererBackend::Software
-        );
-    }
-
-    #[test]
-    fn xterm_keyboard_type_defaults_to_normal_and_round_trips_historical_types() {
-        assert_eq!(
-            Config::default().keyboard.xterm_type,
-            XtermKeyboardTypeConfig::Normal
-        );
-        let config: Config = toml::from_str(
-            r#"
-                [keyboard]
-                xterm_type = "vt220"
-            "#,
-        )
-        .unwrap();
-        assert_eq!(config.keyboard.xterm_type, XtermKeyboardTypeConfig::Vt220);
-        assert_eq!(
-            config.keyboard.xterm_type.terminal_type(),
-            termeric_core::term::XtermKeyboardType::Vt220
-        );
-        let encoded = toml::to_string(&config).unwrap();
-        assert_eq!(
-            toml::from_str::<Config>(&encoded)
-                .unwrap()
-                .keyboard
-                .xterm_type,
-            XtermKeyboardTypeConfig::Vt220
-        );
-        assert!(toml::from_str::<Config>("[keyboard]\nxterm_type = \"sun\"").is_err());
     }
 
     #[test]
