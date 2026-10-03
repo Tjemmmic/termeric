@@ -541,6 +541,38 @@ fn button_action_key(generation: u64, index: usize) -> String {
     format!("{BUTTON_ACTION_KEY_PREFIX}{generation}-{index}")
 }
 
+/// The `Notify` call's text, category, urgency, and expiry for a request;
+/// icons and actions are resolved separately.
+#[derive(Debug, PartialEq, Eq)]
+struct FreedesktopNotification<'a> {
+    app_name: &'a str,
+    summary: String,
+    body: String,
+    category: Option<String>,
+    urgency: Option<u8>,
+    expire_timeout: i32,
+}
+
+fn freedesktop_notification(request: &NotificationRequest) -> FreedesktopNotification<'_> {
+    FreedesktopNotification {
+        app_name: request.application_name.as_deref().unwrap_or("Termeric"),
+        summary: escape_markup(request.title.as_deref().unwrap_or("Terminal")),
+        body: escape_markup(&request.body),
+        category: (!request.notification_types.is_empty())
+            .then(|| request.notification_types.join(",")),
+        urgency: request.urgency.map(|urgency| match urgency {
+            NotificationUrgency::Low => 0,
+            NotificationUrgency::Normal => 1,
+            NotificationUrgency::Critical => 2,
+        }),
+        expire_timeout: match request.expiry {
+            NotificationExpiry::System => -1,
+            NotificationExpiry::Never => 0,
+            NotificationExpiry::AfterMillis(milliseconds) => milliseconds as i32,
+        },
+    }
+}
+
 fn freedesktop_actions(
     request: &NotificationRequest,
     button_action_keys: &[String],
@@ -1036,23 +1068,15 @@ impl TrackedNotificationBackend for FreedesktopBackend {
                 "org.freedesktop.Notifications",
             )
             .map_err(|error| format!("notification interface is unavailable: {error}"))?;
-            let app_name = request.application_name.as_deref().unwrap_or("Termeric");
+            let notification = freedesktop_notification(request);
             let app_icon =
                 freedesktop_app_icon(request, named_icon.as_deref(), transmitted_icon.is_some());
-            let summary = escape_markup(request.title.as_deref().unwrap_or("Terminal"));
-            let body = escape_markup(&request.body);
             let actions = freedesktop_actions(request, button_action_keys);
-            let categories = request.notification_types.join(",");
             let mut hints: HashMap<&str, Value<'_>> = HashMap::new();
-            if !categories.is_empty() {
-                hints.insert("category", Value::from(categories.as_str()));
+            if let Some(category) = notification.category.as_deref() {
+                hints.insert("category", Value::from(category));
             }
-            if let Some(urgency) = request.urgency {
-                let urgency = match urgency {
-                    NotificationUrgency::Low => 0_u8,
-                    NotificationUrgency::Normal => 1_u8,
-                    NotificationUrgency::Critical => 2_u8,
-                };
+            if let Some(urgency) = notification.urgency {
                 hints.insert("urgency", Value::from(urgency));
             }
             match freedesktop_sound_hint(request.sound) {
@@ -1069,23 +1093,18 @@ impl TrackedNotificationBackend for FreedesktopBackend {
             {
                 hints.insert("image-data", freedesktop_image_data_value(icon));
             }
-            let expire_timeout = match request.expiry {
-                NotificationExpiry::System => -1,
-                NotificationExpiry::Never => 0,
-                NotificationExpiry::AfterMillis(milliseconds) => milliseconds as i32,
-            };
             proxy
                 .call(
                     "Notify",
                     &(
-                        app_name,
+                        notification.app_name,
                         replaces_id,
                         app_icon.as_str(),
-                        summary.as_str(),
-                        body.as_str(),
+                        notification.summary.as_str(),
+                        notification.body.as_str(),
                         actions,
                         hints,
-                        expire_timeout,
+                        notification.expire_timeout,
                     ),
                 )
                 .map_err(|error| format!("Notify call failed: {error}"))
@@ -1776,6 +1795,44 @@ mod tests {
         assert_eq!(
             freedesktop_actions(&focus_only, &[]),
             vec!["default", "Activate"]
+        );
+    }
+
+    #[test]
+    fn rich_notification_metadata_becomes_freedesktop_notify_fields() {
+        let request = NotificationRequest {
+            title: Some("Build <b>done</b>; $(touch nope)".into()),
+            body: "Finished `without a shell` & <i>quietly</i>".into(),
+            application_name: Some("build agent".into()),
+            notification_types: vec!["build.complete".into(), "ci".into()],
+            urgency: Some(NotificationUrgency::Critical),
+            expiry: NotificationExpiry::AfterMillis(5_000),
+            ..NotificationRequest::default()
+        };
+        assert_eq!(
+            freedesktop_notification(&request),
+            FreedesktopNotification {
+                app_name: "build agent",
+                summary: "Build &lt;b&gt;done&lt;/b&gt;; $(touch nope)".into(),
+                body: "Finished `without a shell` &amp; &lt;i&gt;quietly&lt;/i&gt;".into(),
+                category: Some("build.complete,ci".into()),
+                urgency: Some(2),
+                expire_timeout: 5_000,
+            }
+        );
+        assert_eq!(
+            freedesktop_notification(&NotificationRequest {
+                body: "Body".into(),
+                ..NotificationRequest::default()
+            }),
+            FreedesktopNotification {
+                app_name: "Termeric",
+                summary: "Terminal".into(),
+                body: "Body".into(),
+                category: None,
+                urgency: None,
+                expire_timeout: -1,
+            }
         );
     }
 
