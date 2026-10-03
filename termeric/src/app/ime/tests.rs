@@ -209,7 +209,7 @@ fn command_form_ime_follows_the_active_scrolled_field_and_respects_modal_priorit
 
 #[test]
 fn search_ime_caret_uses_query_columns_and_shared_shifted_scaled_layout() {
-    use crate::terminal::search::SearchBarLayout;
+    use crate::ui::search_bar::SearchBarLayout;
     let mut app = App::new_headless(Config::default()).unwrap();
     let terminal = termeric_core::Terminal::new(80, 24);
     app.search.start();

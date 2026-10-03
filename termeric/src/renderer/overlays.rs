@@ -6,9 +6,9 @@ use super::Renderer;
 use super::draw::DrawCtx;
 use super::icons::draw_icon;
 use super::types::*;
-use crate::terminal::guardrails::GuardrailLayout;
 use crate::ui::color::{mix, scale_alpha, with_alpha};
 use crate::ui::constants::*;
+use crate::ui::guardrail::GuardrailLayout;
 use crate::ui::icon::Icon;
 
 impl Renderer {

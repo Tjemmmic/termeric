@@ -39,7 +39,7 @@ pub(crate) fn headless_palette_input_smoke(
             search.start();
             assert!(search.set_query(&query, terminal.grid()));
             let info = search.build_info(query.len());
-            let search_layout = crate::terminal::search::SearchBarLayout::calculate(
+            let search_layout = crate::ui::search_bar::SearchBarLayout::calculate(
                 &info,
                 160.0,
                 width.max(800.0),

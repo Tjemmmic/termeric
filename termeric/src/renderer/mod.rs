@@ -57,9 +57,10 @@ use image::{ImagePipeline, presentation_geometry};
 
 use crate::config::theme::Theme;
 use crate::config::{CursorStyle, RendererBackend, TabBarPosition};
-use crate::terminal::search::{Search, SearchBarInfo};
+use crate::terminal::search::Search;
 use crate::terminal::url::UrlCache;
 use crate::ui::color::{luminance, mix, scale_rgb, with_alpha};
+use crate::ui::search_bar::SearchBarInfo;
 use crate::ui::settings::SettingsPanelInfo;
 use anyhow::Result;
 use std::collections::BTreeMap;

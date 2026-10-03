@@ -1476,7 +1476,7 @@ impl App {
         )
     }
 
-    fn guardrail_accessibility_layout(&self) -> crate::terminal::guardrails::GuardrailLayout {
+    fn guardrail_accessibility_layout(&self) -> crate::ui::guardrail::GuardrailLayout {
         let UiMetrics {
             width,
             height,
@@ -1484,7 +1484,7 @@ impl App {
             cell_height,
             ..
         } = self.ui_metrics();
-        crate::terminal::guardrails::GuardrailLayout::calculate(
+        crate::ui::guardrail::GuardrailLayout::calculate(
             width,
             height,
             cell_width,
@@ -2181,12 +2181,12 @@ impl App {
 
     fn search_accessibility_layout(
         &self,
-        info: &crate::terminal::search::SearchBarInfo,
+        info: &crate::ui::search_bar::SearchBarInfo,
         window_width: f32,
-    ) -> crate::terminal::search::SearchBarLayout {
+    ) -> crate::ui::search_bar::SearchBarLayout {
         self.renderer.as_ref().map_or_else(
             || {
-                crate::terminal::search::SearchBarLayout::calculate(
+                crate::ui::search_bar::SearchBarLayout::calculate(
                     info,
                     0.0,
                     window_width,

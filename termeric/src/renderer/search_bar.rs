@@ -2,9 +2,9 @@
 
 use super::Renderer;
 use super::types::*;
-use crate::terminal::search::{SearchBarInfo, SearchBarLayout};
 use crate::ui::color::{scale_alpha, with_alpha};
 use crate::ui::icon::Icon;
+use crate::ui::search_bar::{SearchBarInfo, SearchBarLayout};
 use crate::ui::text_input_viewport::TextInputViewport;
 
 impl Renderer {

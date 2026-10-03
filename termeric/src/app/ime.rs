@@ -302,7 +302,7 @@ impl App {
 
     fn search_ime_viewport(
         &self,
-        layout: &crate::terminal::search::SearchBarLayout,
+        layout: &crate::ui::search_bar::SearchBarLayout,
         cell_width: f32,
     ) -> Option<crate::ui::text_input_viewport::TextInputViewport> {
         self.search_owns_ime_text()

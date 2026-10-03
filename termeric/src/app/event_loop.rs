@@ -510,7 +510,7 @@ impl App {
                             (self.last_cursor_pos, &self.renderer)
                         {
                             let (width, height) = renderer.window_size();
-                            let layout = crate::terminal::guardrails::GuardrailLayout::calculate(
+                            let layout = crate::ui::guardrail::GuardrailLayout::calculate(
                                 width as f32,
                                 height as f32,
                                 renderer.cell_width(),
