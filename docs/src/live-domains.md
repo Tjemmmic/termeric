@@ -33,7 +33,7 @@ Dropping a file or folder onto a domain pane asks you to confirm an upload. Term
 
 ## Controlling a domain from scripts
 
-Every change you can make in a window has a command. Pane, tab, and split IDs come from `termeric domain show DOMAIN --json`, which describes the whole layout. Add `--json` to most commands for script-friendly output.
+Every change you can make in a window has a command; the [command reference](#command-reference) lists them all. Pane, tab, and split IDs come from `termeric domain show DOMAIN --json`, which describes the whole layout.
 
 ```bash
 # Create a domain running a command, with a size and title
@@ -53,7 +53,7 @@ termeric domain move-pane DOMAIN 1 2
 termeric domain rename-tab DOMAIN 0 "Build"
 ```
 
-`send` types up to 64 KiB of text; unlike [typing into ordinary windows](control.md#typing-into-a-pane), it needs no setting. `get-text` returns up to 1 MiB of the pane's newest text. [Command line](command-line.md#termeric-domain) lists every `termeric domain` command and its options.
+Unlike [typing into ordinary windows](control.md#typing-into-a-pane), `send` needs no setting.
 
 To copy a file or directory into a pane's working directory from a script:
 
@@ -66,12 +66,7 @@ An upload never overwrites an existing file. It is limited to 64 MiB, and a dire
 
 ## Closing panes, tabs, and domains
 
-| Command | What it does |
-| --- | --- |
-| `close-pane DOMAIN PANE` | Ends a pane's program and removes the pane. A tab's only pane is closed with `close-tab`. |
-| `close-tab DOMAIN TAB` | Ends every program in a tab and removes it. A domain's only tab can't be closed this way. |
-| `kill DOMAIN` | Ends every program in the domain and removes it. |
-| `stop-server` | Stops the daemon once no domains remain. |
+Closing a pane or tab ends its programs, whether you close it in a window or with `close-pane` or `close-tab`. A domain always keeps at least one tab with one pane: a tab's last pane closes only with its tab, and a domain's last tab only with `termeric domain kill`, which ends every program in the domain.
 
 When a program exits on its own, its pane is removed, and its tab too if that was the tab's last pane. The last pane of a domain's last tab stays, showing its final output, until you kill the domain. Exited programs are never restarted.
 
@@ -79,7 +74,7 @@ To upgrade Termeric, kill your domains and run `termeric domain stop-server`, so
 
 ## Domains on another computer
 
-Any `termeric domain` command can run against a domain on another computer over SSH: put `--host` and an SSH destination right after `domain`.
+Every `termeric domain` command except `hosts` and `protocol-version` can run against a domain on another computer over SSH: put `--host` and an SSH destination right after `domain`.
 
 ```bash
 termeric domain --host me@build.example list
@@ -113,6 +108,43 @@ termeric domain --host-profile build attach DOMAIN
 ```
 
 A saved host holds only a name, a destination, and an optional description. Keep everything else in `~/.ssh/config`.
+
+## Command reference
+
+`DOMAIN` is a domain ID such as `domain-…`, printed when you create one and by `termeric domain list`. A command that needs the daemon starts it if it isn't running. Only the commands shown with `[--json]` accept it, for script-friendly output. To run a command on another computer, put `--host SSH_DESTINATION` or `--host-profile NAME` right after `domain`, as described [above](#domains-on-another-computer).
+
+| Command | What it does |
+| --- | --- |
+| `list [--json]` | List live domains with their tab, pane, and attached-window counts. |
+| `show DOMAIN [--json]` | Summarize a domain on one line; with `--json`, describe all its tabs, panes, and splits. |
+| `workspaces DOMAIN [--json]` | List a domain's workspaces. |
+| `panes DOMAIN [--json]` | List a domain's panes, with their size and whether their program is still running. |
+| `attach DOMAIN [--geometry WIDTHxHEIGHT] [--app-id NAME]` | Open a window showing the domain. `--class NAME` is the same as `--app-id NAME`. |
+| `create NAME [LAUNCH OPTIONS] [-- PROGRAM ARG...]` | Create a domain with one tab running `PROGRAM`, or your shell, and print the domain's ID. |
+| `spawn DOMAIN [LAUNCH OPTIONS] [-- PROGRAM ARG...]` | Add a tab. |
+| `split DOMAIN PANE horizontal\|vertical [LAUNCH OPTIONS] [-- PROGRAM ARG...]` | Split a pane, adding one below (`horizontal`, or `h`) or to the right (`vertical`, or `v`). |
+| `resize-split DOMAIN SPLIT RATIO` | Set a split's ratio in thousandths, from 100 to 900. |
+| `balance-tab DOMAIN TAB` | Reset every split in a tab to 50%. |
+| `layout-tab DOMAIN TAB PRESET` | Arrange a tab's panes as `columns`, `rows`, `grid`, `tall`, or `fat`. |
+| `rename-tab DOMAIN TAB TITLE` | Set a tab's title; an empty title clears it. |
+| `pin-tab DOMAIN TAB`, `unpin-tab DOMAIN TAB` | Pin or unpin a tab. |
+| `move-tab DOMAIN TAB INDEX` | Move a tab to a position among the domain's tabs, counting from 0. A move into the other pinned or unpinned group is refused. |
+| `swap-pane DOMAIN PANE` | Swap a pane with the next one in its tab, wrapping around to the first. |
+| `move-pane DOMAIN PANE TAB` | Move a pane to another tab. A tab's last pane can't be moved. |
+| `focus DOMAIN PANE` | Focus a pane. |
+| `send DOMAIN PANE TEXT [--enter]` | Type text into a pane, pressing Enter after it with `--enter`; at most 64 KiB. |
+| `get-text DOMAIN PANE [--bytes N] [--json]` | Print up to `N` bytes of a pane's newest text: 64 KiB by default, at most 1 MiB. |
+| `upload DOMAIN PANE SOURCE [--name NAME] [--retain\|--resume UPLOAD_ID] [--json]` | Copy a file or directory into a pane's working directory, never overwriting (see [above](#controlling-a-domain-from-scripts)). |
+| `uploads [--json]` | List interrupted uploads kept for resuming. |
+| `cancel-upload UPLOAD_ID [--json]` | Delete a kept upload. |
+| `close-pane DOMAIN PANE` | End a pane's program and remove the pane. Refused for a tab's last pane; use `close-tab`. |
+| `close-tab DOMAIN TAB` | End every program in a tab and remove it. Refused for a domain's last tab; use `kill`. |
+| `kill DOMAIN` | End every program in the domain and remove it. |
+| `stop-server` | Stop the daemon. Refused while any domain remains. |
+| `hosts [--json]` | List your [saved SSH hosts](#saved-hosts). Can't be combined with `--host` or `--host-profile`. |
+| `protocol-version [--json]` | Print the domain protocol version this `termeric` speaks. Can't be combined with `--host` or `--host-profile`. |
+
+The launch options for `create`, `spawn`, and `split` come before any `--`: `--working-directory PATH` (or `--cwd PATH`), a directory that must exist; `--title TITLE`; and `--size COLSxROWS`, from 1x1 to 1000x1000 cells (80x24 by default). Commands that change a domain's tabs or panes print a one-line summary of the domain, starting with its ID.
 
 ## Limits
 
