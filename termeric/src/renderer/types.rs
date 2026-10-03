@@ -242,16 +242,17 @@ pub struct GuardrailInfo {
     pub user: String,
 }
 
-/// Render data for a single pane in multi-pane mode.
-///
-/// Each pane holds a reference to its terminal grid and its pixel-space
-/// rectangle within the content area.
+/// Whether a pane is a broadcast target, and whether broadcasting is live.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BroadcastTargetState {
     Armed,
     Active,
 }
 
+/// Render data for a single pane in multi-pane mode.
+///
+/// Each pane holds a reference to its terminal grid and its pixel-space
+/// rectangle within the content area.
 pub struct PaneRenderData<'a> {
     /// Stable identity of the live terminal, independent of whether its live
     /// grid or a synchronized-output snapshot is being presented.
