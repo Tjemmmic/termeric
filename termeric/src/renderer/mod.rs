@@ -1634,25 +1634,26 @@ impl Renderer {
         // ── Git completion dropdown, over the grid ──
         self.rect_pipeline.mark_layer();
         self.text_pipeline.mark_layer();
-        // Names and width metadata are shared; cloning this frame does not
-        // duplicate or scan the complete branch list.
-        if let Some(ref info) = self.git_completions.clone()
-            && let Some(anchor) = git::CompletionAnchor::for_view(
+        // Overlay state is taken while it draws and put back afterwards, so
+        // building it can borrow the renderer without copying the state.
+        if let Some(info) = self.git_completions.take() {
+            if let Some(anchor) = git::CompletionAnchor::for_view(
                 cursor_pos,
                 panes,
                 (content_left, content_top),
                 (cell_width, cell_height),
                 padding,
-            )
-        {
-            self.build_git_completions(
-                info,
-                anchor,
-                content_left,
-                content_top,
-                content_width,
-                window_height,
-            );
+            ) {
+                self.build_git_completions(
+                    &info,
+                    anchor,
+                    content_left,
+                    content_top,
+                    content_width,
+                    window_height,
+                );
+            }
+            self.git_completions = Some(info);
         }
 
         // ── Modal layers, bottom first: the one drawn on top owns input ──
@@ -1727,31 +1728,35 @@ impl Renderer {
                     }
                 }
                 ModalLayer::ContextPicker => {
-                    if let Some(ref info) = self.context_picker.clone()
-                        && info.snapshot.animation > 0.001
-                    {
-                        self.build_context_picker(info, window_width, window_height);
+                    if let Some(info) = self.context_picker.take() {
+                        if info.snapshot.animation > 0.001 {
+                            self.build_context_picker(&info, window_width, window_height);
+                        }
+                        self.context_picker = Some(info);
                     }
                 }
                 ModalLayer::DiffReview => {
-                    if let Some(ref info) = self.diff_review.clone()
-                        && info.animation > 0.001
-                    {
-                        self.build_diff_review(info, window_width, window_height);
+                    if let Some(info) = self.diff_review.take() {
+                        if info.animation > 0.001 {
+                            self.build_diff_review(&info, window_width, window_height);
+                        }
+                        self.diff_review = Some(info);
                     }
                 }
                 ModalLayer::InfoOverlay => {
-                    if let Some(ref info) = self.info_overlay.clone()
-                        && info.animation > 0.001
-                    {
-                        self.build_info_overlay(info, window_width, window_height);
+                    if let Some(info) = self.info_overlay.take() {
+                        if info.animation > 0.001 {
+                            self.build_info_overlay(&info, window_width, window_height);
+                        }
+                        self.info_overlay = Some(info);
                     }
                 }
                 ModalLayer::Guardrail => {
-                    if let Some(ref info) = self.guardrail.clone()
-                        && info.animation > 0.001
-                    {
-                        self.build_guardrail_confirmation(info, window_width, window_height);
+                    if let Some(info) = self.guardrail.take() {
+                        if info.animation > 0.001 {
+                            self.build_guardrail_confirmation(&info, window_width, window_height);
+                        }
+                        self.guardrail = Some(info);
                     }
                 }
             }
@@ -1761,10 +1766,11 @@ impl Renderer {
         self.rect_pipeline.mark_layer();
         self.text_pipeline.mark_layer();
         if !self.toasts.is_empty() {
-            let toasts = self.toasts.clone();
+            let toasts = std::mem::take(&mut self.toasts);
             // Toasts sit in the terminal area's corner, clear of the dock.
             let toast_width = self.content_right_for(window_width);
             self.build_toasts(&toasts, toast_width, window_height);
+            self.toasts = toasts;
         }
 
         // ── Platform IME preedit (never PTY-owned) ──
