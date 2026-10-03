@@ -756,15 +756,7 @@ impl SerialFlowControl {
     }
 }
 
-const MAX_LAUNCH_PROFILES: usize = 64;
-const MAX_PROFILE_ARGS: usize = 64;
-const MAX_PROFILE_ENV: usize = 64;
-const MAX_PROFILE_TOTAL_BYTES: usize = 64 * 1024;
-
 fn validate_launch_profiles(profiles: &BTreeMap<String, LaunchProfileConfig>) -> Result<()> {
-    if profiles.len() > MAX_LAUNCH_PROFILES {
-        bail!("profiles must contain at most {MAX_LAUNCH_PROFILES} entries");
-    }
     for (name, profile) in profiles {
         validate_launch_profile_name(name)?;
         if let Some(serial) = &profile.serial {
@@ -777,59 +769,31 @@ fn validate_launch_profiles(profiles: &BTreeMap<String, LaunchProfileConfig>) ->
                 bail!("serial profile {name:?} cannot also set program, args, cwd, or environment");
             }
         } else {
-            if profile.program.trim().is_empty()
-                || profile.program.len() > 4096
-                || !is_single_line(&profile.program)
-            {
+            if profile.program.trim().is_empty() || !is_single_line(&profile.program) {
                 bail!("terminal profile {name:?} has an invalid program");
             }
-            if profile.args.len() > MAX_PROFILE_ARGS
-                || profile
-                    .args
-                    .iter()
-                    .any(|arg| arg.len() > 4096 || arg.contains('\0'))
-            {
-                bail!(
-                    "terminal profile {name:?} must contain at most {MAX_PROFILE_ARGS} arguments of at most 4096 bytes"
-                );
+            if profile.args.iter().any(|arg| arg.contains('\0')) {
+                bail!("terminal profile {name:?} has an argument containing NUL");
             }
         }
-        if profile.description.as_ref().is_some_and(|value| {
-            value.trim().is_empty() || value.len() > 512 || !is_single_line(value)
-        }) {
+        if profile
+            .description
+            .as_ref()
+            .is_some_and(|value| value.trim().is_empty() || !is_single_line(value))
+        {
             bail!("terminal profile {name:?} has an invalid description");
         }
-        if profile.title.as_ref().is_some_and(|value| {
-            value.trim().is_empty() || value.chars().count() > 256 || !is_single_line(value)
-        }) {
+        if profile
+            .title
+            .as_ref()
+            .is_some_and(|value| value.trim().is_empty() || !is_single_line(value))
+        {
             bail!("terminal profile {name:?} has an invalid title");
         }
         if profile.cwd.as_ref().is_some_and(|path| !path.is_absolute()) {
             bail!("terminal profile {name:?} cwd must be an absolute path");
         }
         validate_child_environment(&format!("terminal profile {name:?}"), &profile.env)?;
-        let mut total_bytes = profile.program.len()
-            + profile.args.iter().map(String::len).sum::<usize>()
-            + profile
-                .cwd
-                .as_ref()
-                .map_or(0, |path| path.as_os_str().len())
-            + profile.title.as_ref().map_or(0, String::len)
-            + profile.description.as_ref().map_or(0, String::len);
-        total_bytes = total_bytes.saturating_add(
-            profile
-                .serial
-                .as_ref()
-                .map_or(0, |serial| serial.device.as_os_str().len()),
-        );
-        for (key, value) in &profile.env {
-            total_bytes = total_bytes.saturating_add(key.len() + value.len());
-        }
-        if total_bytes > MAX_PROFILE_TOTAL_BYTES {
-            bail!(
-                "terminal profile {name:?} exceeds the {MAX_PROFILE_TOTAL_BYTES}-byte configuration budget"
-            );
-        }
     }
     Ok(())
 }
@@ -847,19 +811,11 @@ fn validate_launch_profile_name(name: &str) -> Result<()> {
 }
 
 fn validate_child_environment(owner: &str, env: &BTreeMap<String, String>) -> Result<()> {
-    if env.len() > MAX_PROFILE_ENV {
-        bail!("{owner} must contain at most {MAX_PROFILE_ENV} environment variables");
-    }
-    let mut total_bytes = 0usize;
     for (key, value) in env {
         validate_child_env_key(owner, key)?;
-        if value.len() > 8192 || value.contains('\0') {
-            bail!("{owner} environment value {key:?} is invalid");
+        if value.contains('\0') {
+            bail!("{owner} environment value {key:?} contains NUL");
         }
-        total_bytes = total_bytes.saturating_add(key.len() + value.len());
-    }
-    if total_bytes > MAX_PROFILE_TOTAL_BYTES {
-        bail!("{owner} environment exceeds {MAX_PROFILE_TOTAL_BYTES} bytes");
     }
     Ok(())
 }
@@ -871,7 +827,7 @@ fn validate_child_env_key(owner: &str, key: &str) -> Result<()> {
         .is_some_and(|byte| byte == b'_' || byte.is_ascii_alphabetic())
         && bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric());
     let reserved = key == "PWD" || termeric_core::pty::terminal_identity_variable(key);
-    if !valid || key.len() > 128 || reserved {
+    if !valid || reserved {
         bail!("{owner} has invalid or reserved environment key {key:?}");
     }
     Ok(())
@@ -1854,7 +1810,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_profiles_are_bounded_validated_and_round_trip() {
+    fn terminal_profiles_are_validated_and_round_trip() {
         let mut config: Config = toml::from_str(
             r#"
                 [profiles.dev]
@@ -1884,7 +1840,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_profiles_reject_ambiguous_or_unbounded_process_configuration() {
+    fn terminal_profiles_reject_ambiguous_process_configuration() {
         for source in [
             "[profiles.'bad name']\nprogram = '/bin/sh'",
             "[profiles.dev]\nprogram = ''",
@@ -1915,18 +1871,6 @@ mod tests {
                 .insert(reserved.into(), "spoofed".into());
             assert!(reserved_shell_env.validate().is_err(), "{reserved}");
         }
-
-        let mut config = Config::default();
-        for index in 0..=MAX_LAUNCH_PROFILES {
-            config.profiles.insert(
-                format!("profile-{index}"),
-                LaunchProfileConfig {
-                    program: "/bin/sh".into(),
-                    ..LaunchProfileConfig::default()
-                },
-            );
-        }
-        assert!(config.validate().is_err());
     }
 
     #[test]
@@ -1936,6 +1880,8 @@ mod tests {
                 [profiles.console]
                 description = "Development board"
                 title = "Board console"
+            "[profiles.dev]\nprogram = '/bin/sh'\nargs = [\"a\\u0000b\"]",
+            "[profiles.dev]\nprogram = '/bin/sh'\nenv = { MARK = \"a\\u0000b\" }",
 
                 [profiles.console.serial]
                 device = "/dev/ttyUSB0"

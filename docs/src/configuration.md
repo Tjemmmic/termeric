@@ -165,7 +165,7 @@ An optional picture behind the terminal content. See [Themes and backgrounds](th
 | --- | --- | --- |
 | `program` | your login shell | Program to run in new tabs and panes. |
 | `args` | `[]` | Arguments passed to `program`. |
-| `env` | `{}` | Extra environment variables for new shells, at most 64. `TERM`, `COLORTERM`, `TERMINFO`, `TERMINFO_DIRS`, `TERM_PROGRAM`, `TERM_PROGRAM_VERSION`, `TERMERIC_TERMINAL_ID`, and `PWD` are reserved. |
+| `env` | `{}` | Extra environment variables for new shells. `TERM`, `COLORTERM`, `TERMINFO`, `TERMINFO_DIRS`, `TERM_PROGRAM`, `TERM_PROGRAM_VERSION`, `TERMERIC_TERMINAL_ID`, and `PWD` are reserved. |
 
 ```toml
 [shell]
@@ -255,13 +255,13 @@ OSC 52 lets programs, including ones on remote hosts, use your clipboard.
 
 ### [profiles.NAME]
 
-Reusable launches that appear in the command palette and work with `termeric --terminal-profile NAME`. Names use letters, digits, `-`, `_`, and `.`; at most 64 profiles. See [Profiles](profiles.md).
+Reusable launches that appear in the command palette and work with `termeric --terminal-profile NAME`. Names use letters, digits, `-`, `_`, and `.`, up to 64 characters. See [Profiles](profiles.md).
 
 | Setting | Default | Description |
 | --- | --- | --- |
 | `description` | unset | One-line description shown in the palette. |
 | `program` | required | Program to run (not run through a shell). |
-| `args` | `[]` | Arguments, at most 64. |
+| `args` | `[]` | Arguments. |
 | `cwd` | unset | Absolute starting directory. |
 | `title` | unset | Tab title. |
 | `env` | `{}` | Extra environment variables, with the same reserved names as `[shell]`. |
