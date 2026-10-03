@@ -1305,8 +1305,7 @@ impl App {
             })
             .and_then(|terminal| {
                 terminal
-                    .shell_integration()
-                    .prompt_tracker
+                    .prompt_tracker()
                     .completed_region_by_id(target.region_id)
                     .filter(|region| region.content_available)
                     .map(|region| Self::extract_command_text(terminal, region))
@@ -1340,8 +1339,7 @@ impl App {
                 return None;
             }
             terminal
-                .shell_integration()
-                .prompt_tracker
+                .prompt_tracker()
                 .completed_region_by_id(target.region_id)
                 .filter(|region| region.content_available)
                 .map(|region| (terminal, region))
@@ -1437,8 +1435,7 @@ impl App {
                     return None;
                 }
                 let region = terminal
-                    .shell_integration()
-                    .prompt_tracker
+                    .prompt_tracker()
                     .completed_region_by_id(target.region_id)?;
                 if !region.content_available {
                     return None;

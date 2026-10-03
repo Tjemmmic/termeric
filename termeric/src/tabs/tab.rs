@@ -672,10 +672,8 @@ impl Tab {
         let Some(terminal) = &self.terminal else {
             return Vec::new();
         };
-        self.harvest.observe(
-            &terminal.shell_integration().prompt_tracker,
-            show_indicators,
-        )
+        self.harvest
+            .observe(terminal.prompt_tracker(), show_indicators)
     }
 
     /// Write user input and record it only on the receiving terminal.

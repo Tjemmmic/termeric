@@ -981,7 +981,7 @@ mod tests {
             stdout.escape_debug()
         );
         let mut state = crate::harvest::HarvestTerminalState::default();
-        let regions = state.observe(&terminal.shell_integration().prompt_tracker, true);
+        let regions = state.observe(terminal.prompt_tracker(), true);
         assert!(
             !regions.is_empty(),
             "real Bash output produced no command region"
@@ -1529,7 +1529,7 @@ mod tests {
                     // terminal-query replies. Wait for an input-ready prompt
                     // and the preceding command's completion before each send.
                     // Repaints alone must not advance the input sequence.
-                    let tracker = &terminal.shell_integration().prompt_tracker;
+                    let tracker = terminal.prompt_tracker();
                     if next_command < commands.len()
                         && tracker.completed_count() == next_command
                         && tracker.active_region().is_some_and(|region| {
@@ -1599,7 +1599,7 @@ mod tests {
         );
 
         let mut state = crate::harvest::HarvestTerminalState::default();
-        let regions = state.observe(&terminal.shell_integration().prompt_tracker, true);
+        let regions = state.observe(terminal.prompt_tracker(), true);
         let exit_codes: Vec<_> = regions
             .iter()
             .filter_map(|region| region.exit_code)

@@ -91,6 +91,65 @@ impl PromptTracker {
         Self::default()
     }
 
+    /// Handle OSC 133 sequence
+    ///
+    /// OSC 133 format: `ESC ] 133 ; <type> [; <data>] ST`
+    ///
+    /// Types:
+    /// - A: Prompt start (fresh line)
+    /// - B: Prompt end / Command start
+    /// - C: Command end / Output start
+    /// - D: Output end (with optional exit code)
+    pub(crate) fn handle_osc_133(&mut self, params: &[&[u8]], cursor_row: usize) {
+        if params.is_empty() {
+            return;
+        }
+
+        // Parse the type from the first parameter (after the 133)
+        let type_str = std::str::from_utf8(params[0]).unwrap_or("");
+
+        match type_str {
+            "A" => {
+                // Prompt start
+                log::trace!("OSC 133 A: Prompt start at row {}", cursor_row);
+                self.mark_prompt_start(cursor_row);
+            }
+            "B" => {
+                // Command start (prompt end)
+                log::trace!("OSC 133 B: Command start at row {}", cursor_row);
+                if !self.mark_command_start(cursor_row) {
+                    log::trace!("Ignoring out-of-order or duplicate OSC 133 B");
+                }
+            }
+            "C" => {
+                // Output start (command end)
+                log::trace!("OSC 133 C: Output start at row {}", cursor_row);
+                if !self.mark_output_start(cursor_row) {
+                    log::trace!("Ignoring out-of-order or duplicate OSC 133 C");
+                }
+            }
+            "D" => {
+                // Command finished with optional exit code
+                let exit_code = params
+                    .get(1)
+                    .and_then(|value| std::str::from_utf8(value).ok())
+                    .and_then(|value| value.parse::<u8>().ok())
+                    .map(i32::from);
+                log::trace!(
+                    "OSC 133 D: Command finished at row {}, exit code: {:?}",
+                    cursor_row,
+                    exit_code
+                );
+                if !self.mark_command_finished(cursor_row, exit_code) {
+                    log::trace!("Ignoring out-of-order or duplicate OSC 133 D");
+                }
+            }
+            _ => {
+                log::trace!("OSC 133: Unknown type '{}'", type_str);
+            }
+        }
+    }
+
     /// Mark the start of a prompt (OSC 133;A)
     pub fn mark_prompt_start(&mut self, row: usize) {
         // A new prompt is also a recovery boundary. Only a region that reached
@@ -529,6 +588,53 @@ fn region_overlaps(region: &CommandRegion, start_row: i32, end_row: i32) -> bool
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn complete(tracker: &mut PromptTracker, status: &[u8], row: usize) {
+        tracker.handle_osc_133(&[b"A"], row);
+        tracker.handle_osc_133(&[b"B"], row);
+        tracker.handle_osc_133(&[b"C"], row + 1);
+        tracker.handle_osc_133(&[b"D", status], row + 2);
+    }
+
+    #[test]
+    fn exit_status_is_bounded_and_malformed_status_still_closes_the_command() {
+        let mut tracker = PromptTracker::new();
+        complete(&mut tracker, b"0", 0);
+        complete(&mut tracker, b"255", 3);
+        for (index, status) in [b"256".as_slice(), b"-1", b"nope", b"999999999999999999"]
+            .into_iter()
+            .enumerate()
+        {
+            complete(&mut tracker, status, 6 + index * 3);
+        }
+
+        let statuses = (0..tracker.completed_count())
+            .map(|index| tracker.completed_region(index).unwrap().exit_code)
+            .collect::<Vec<_>>();
+        assert_eq!(statuses, vec![Some(0), Some(255), None, None, None, None]);
+        assert!(tracker.active_region().is_none());
+    }
+
+    #[test]
+    fn malformed_sequences_recover_at_the_next_valid_prompt() {
+        let mut tracker = PromptTracker::new();
+        for parameters in [
+            vec![b"B".as_slice()],
+            vec![b"C".as_slice()],
+            vec![b"D".as_slice(), b"0"],
+        ] {
+            tracker.handle_osc_133(&parameters, 0);
+        }
+        tracker.handle_osc_133(&[b"A"], 1);
+        tracker.handle_osc_133(&[b"B"], 1);
+        tracker.handle_osc_133(&[b"B"], 1);
+        tracker.handle_osc_133(&[b"D", b"0"], 1);
+        assert_eq!(tracker.completed_count(), 0);
+
+        complete(&mut tracker, b"9", 2);
+        assert_eq!(tracker.completed_count(), 1);
+        assert_eq!(tracker.completed_region(0).unwrap().exit_code, Some(9));
+    }
 
     #[test]
     fn test_prompt_tracking() {

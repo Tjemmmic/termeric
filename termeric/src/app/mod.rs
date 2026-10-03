@@ -1927,10 +1927,9 @@ impl App {
             for tab in tabs.all_tabs_mut() {
                 if let Some(panes) = &mut tab.pane_manager {
                     for pane in panes.all_panes_mut() {
-                        let regions = pane.harvest.observe(
-                            &pane.terminal.shell_integration().prompt_tracker,
-                            show_indicators,
-                        );
+                        let regions = pane
+                            .harvest
+                            .observe(pane.terminal.prompt_tracker(), show_indicators);
                         for region in regions {
                             let (command, command_truncated) =
                                 Self::extract_command_text(&pane.terminal, &region);

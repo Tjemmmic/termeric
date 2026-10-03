@@ -184,12 +184,7 @@ fn resize_eviction_cannot_rebind_commands_to_new_oldest_lines() {
     let mut terminal = Terminal::new(8, 4);
     terminal.set_scrollback_limits(3, 1024 * 1024);
     terminal.process(b"\x1b]133;A\x07\x1b]133;B\x07AAAAAAAA\r\n\x1b]133;C\x07BBBBBBBB\r\n\x1b]133;D;7\x07CCCCCCCC\r\nDDDDDDDD\r\nEEEEEEEE\r\nFFFFFFFF");
-    let original = terminal
-        .shell
-        .prompt_tracker
-        .completed_region(0)
-        .unwrap()
-        .clone();
+    let original = terminal.prompt_tracker.completed_region(0).unwrap().clone();
     assert!(original.content_available);
     assert_eq!(
         terminal.rows_text(original.prompt_row, original.prompt_row),
@@ -197,7 +192,6 @@ fn resize_eviction_cannot_rebind_commands_to_new_oldest_lines() {
     );
     terminal.resize(4, 4);
     let retained = terminal
-        .shell
         .prompt_tracker
         .completed_region_by_id(original.id)
         .unwrap();
@@ -207,7 +201,7 @@ fn resize_eviction_cannot_rebind_commands_to_new_oldest_lines() {
         retained
     );
     assert_eq!(retained.exit_code, Some(7));
-    assert!(terminal.shell.prompt_tracker.all_prompts().next().is_none());
+    assert!(terminal.prompt_tracker.all_prompts().next().is_none());
 }
 
 #[test]
@@ -233,7 +227,6 @@ fn resize_command_ids_and_navigation_follow_independently_identified_text() {
                     terminal.process(b"\x1b]133;C\x07\x1b]133;D;7\x07");
                 }
                 let before: Vec<_> = terminal
-                    .shell
                     .prompt_tracker
                     .completed_regions_after(0)
                     .cloned()
@@ -257,7 +250,6 @@ fn resize_command_ids_and_navigation_follow_independently_identified_text() {
                         .then(|| locate(b'A' + original.id as u8 - 1))
                         .flatten();
                     let actual = terminal
-                        .shell
                         .prompt_tracker
                         .completed_region_by_id(original.id)
                         .unwrap();
@@ -281,11 +273,7 @@ fn resize_command_ids_and_navigation_follow_independently_identified_text() {
                 );
                 let retained_prompts: Vec<_> = (b'A'..=b'H').filter_map(locate).collect();
                 assert_eq!(
-                    terminal
-                        .shell
-                        .prompt_tracker
-                        .all_prompts()
-                        .collect::<Vec<_>>(),
+                    terminal.prompt_tracker.all_prompts().collect::<Vec<_>>(),
                     retained_prompts
                 );
             }
@@ -304,7 +292,6 @@ fn partial_logical_line_eviction_uses_wide_grapheme_units_not_physical_columns()
             );
             assert_eq!(
                 terminal
-                    .shell
                     .prompt_tracker
                     .completed_region(0)
                     .unwrap()
@@ -322,7 +309,7 @@ fn partial_logical_line_eviction_uses_wide_grapheme_units_not_physical_columns()
                     .iter()
                     .any(|cell| cell.content.char() == Some('Q'))
             });
-            let region = terminal.shell.prompt_tracker.completed_region(0).unwrap();
+            let region = terminal.prompt_tracker.completed_region(0).unwrap();
             assert_eq!(
                 region.content_available,
                 expected.is_some(),
@@ -348,7 +335,7 @@ fn blank_command_boundaries_survive_only_when_their_logical_line_is_retained() {
         terminal.process(b"AAAAAAAA\r\n\x1b]133;A\x07\x1b]133;B\x07\x1b]133;C\x07\x1b]133;D;0\x07\r\nBBBBBBBB\r\nCCCCCCCC");
         terminal.reveal_prompt(1);
         terminal.resize(4, 4);
-        let region = terminal.shell.prompt_tracker.completed_region(0).unwrap();
+        let region = terminal.prompt_tracker.completed_region(0).unwrap();
         assert_eq!(region.content_available, limit > 0);
         if limit > 0 {
             assert_eq!(region.prompt_row, -1);
@@ -376,7 +363,7 @@ fn active_commands_keep_completion_identity_after_resize_retention_or_eviction()
                 }
                 terminal.process(&[letter, b'x', b'x', b'x', b'x', b'x', b'x', b'x']);
             }
-            let id = terminal.shell.prompt_tracker.active_region().unwrap().id;
+            let id = terminal.prompt_tracker.active_region().unwrap().id;
             terminal.resize(cols, 4);
             let letter = if early { 'A' } else { 'D' };
             let oldest = -(terminal.grid().scrollback_len() as i32);
@@ -388,18 +375,14 @@ fn active_commands_keep_completion_identity_after_resize_retention_or_eviction()
                     .iter()
                     .any(|cell| cell.content.char() == Some(letter))
             });
-            let active = terminal.shell.prompt_tracker.active_region().unwrap();
+            let active = terminal.prompt_tracker.active_region().unwrap();
             assert_eq!(active.id, id);
             assert_eq!(active.content_available, expected.is_some());
             if let Some(row) = expected {
                 assert_eq!(active.prompt_row, row);
             }
             terminal.process(b"\x1b]133;D;9\x07");
-            let completed = terminal
-                .shell
-                .prompt_tracker
-                .completed_region_by_id(id)
-                .unwrap();
+            let completed = terminal.prompt_tracker.completed_region_by_id(id).unwrap();
             assert_eq!(completed.content_available, expected.is_some());
             assert_eq!(completed.exit_code, Some(9));
         }

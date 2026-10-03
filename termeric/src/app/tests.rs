@@ -6260,8 +6260,7 @@ fn harvest_search_switches_to_the_exact_producing_terminal() {
         .unwrap()
         .focused_terminal()
         .unwrap()
-        .shell_integration()
-        .prompt_tracker
+        .prompt_tracker()
         .completed_region(0)
         .unwrap()
         .clone();
@@ -6277,8 +6276,7 @@ fn harvest_search_switches_to_the_exact_producing_terminal() {
         .unwrap()
         .focused_terminal()
         .unwrap()
-        .shell_integration()
-        .prompt_tracker
+        .prompt_tracker()
         .completed_region_by_id(region.id)
         .unwrap();
     assert!(moved_region.prompt_row < 0);
@@ -6344,8 +6342,7 @@ fn harvest_search_switches_to_the_exact_producing_terminal() {
     assert!(
         !app.active_terminal()
             .unwrap()
-            .shell_integration()
-            .prompt_tracker
+            .prompt_tracker()
             .completed_region_by_id(region.id)
             .unwrap()
             .content_available
@@ -6855,8 +6852,7 @@ fn harvest_incomplete_command_refuses_live_retained_and_stale_menu_reruns() {
             .unwrap()
             .terminal_for_origin(origin)
             .unwrap()
-            .shell_integration()
-            .prompt_tracker
+            .prompt_tracker()
             .completed_regions_after(recorded.region_id)
             .next()
             .unwrap()
@@ -7294,8 +7290,7 @@ fn prompt_actions_walk_the_focused_terminals_scrollback_in_both_directions() {
     terminal.process(b"\x1b]133;A\x07");
     let cursor_row = i32::try_from(terminal.grid().cursor().row).unwrap();
     let expected = terminal
-        .shell_integration()
-        .prompt_tracker
+        .prompt_tracker()
         .all_prompts()
         .filter(|row| *row < cursor_row)
         .collect::<Vec<_>>()
@@ -7424,12 +7419,7 @@ fn clear_scrollback_action_retires_shell_metadata_with_the_erased_history() {
     terminal
         .process(b"\x1b]133;A\x07\x1b]133;B\x07echo old\r\n\x1b]133;C\x07old\r\n\x1b]133;D;0\x07");
     terminal.process(b"one\r\ntwo\r\nthree\r\nfour\r\n");
-    let region_id = terminal
-        .shell_integration()
-        .prompt_tracker
-        .completed_region(0)
-        .unwrap()
-        .id;
+    let region_id = terminal.prompt_tracker().completed_region(0).unwrap().id;
     assert!(terminal.grid().scrollback_len() > 0);
 
     let mut app = App::new_headless(Config::default()).unwrap();
@@ -7440,19 +7430,12 @@ fn clear_scrollback_action_retires_shell_metadata_with_the_erased_history() {
     assert_eq!(terminal.grid().scrollback_len(), 0);
     assert!(
         !terminal
-            .shell_integration()
-            .prompt_tracker
+            .prompt_tracker()
             .completed_region_by_id(region_id)
             .unwrap()
             .content_available
     );
-    assert!(
-        terminal
-            .shell_integration()
-            .prompt_tracker
-            .all_prompts()
-            .all(|row| row >= 0)
-    );
+    assert!(terminal.prompt_tracker().all_prompts().all(|row| row >= 0));
 }
 
 #[cfg(unix)]

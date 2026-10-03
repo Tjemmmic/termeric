@@ -146,7 +146,7 @@ fn assert_prompt_preserved(command: &str) {
     let mut terminal = termeric_core::Terminal::new(100, 30);
     terminal.process(&bytes);
     let mut harvest = crate::harvest::HarvestTerminalState::default();
-    let regions = harvest.observe(&terminal.shell_integration().prompt_tracker, true);
+    let regions = harvest.observe(terminal.prompt_tracker(), true);
     assert_eq!(
         regions
             .iter()
@@ -212,7 +212,7 @@ fn assert_nounset_without_user_hooks(rc_commands: &str) {
     let mut terminal = termeric_core::Terminal::new(100, 30);
     terminal.process(&bytes);
     let mut harvest = crate::harvest::HarvestTerminalState::default();
-    let regions = harvest.observe(&terminal.shell_integration().prompt_tracker, true);
+    let regions = harvest.observe(terminal.prompt_tracker(), true);
     assert_eq!(
         regions
             .iter()

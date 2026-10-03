@@ -1139,7 +1139,7 @@ impl App {
         {
             return None;
         }
-        let tracker = &terminal.shell_integration().prompt_tracker;
+        let tracker = terminal.prompt_tracker();
         let region = tracker.completed_region(tracker.completed_count().checked_sub(1)?)?;
         let (command, _) = App::extract_command_text(terminal, region);
         let command = command.trim().to_owned();
@@ -1170,7 +1170,7 @@ impl App {
             {
                 return None;
             }
-            let tracker = &terminal.shell_integration().prompt_tracker;
+            let tracker = terminal.prompt_tracker();
             let region = tracker.completed_region(tracker.completed_count().checked_sub(1)?)?;
             let (command, _) = App::extract_command_text(terminal, region);
             let command = command.trim().to_owned();

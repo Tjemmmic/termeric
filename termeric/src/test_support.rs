@@ -197,8 +197,7 @@ fn ansi_hyperlink_and_semantic_marks_cross_the_parser_grid_and_harvest() {
 
     fixture.feed(b"\x1b]133;A\x07\x1b]133;B\x07echo ok\r\n\x1b]133;C\x07ok\r\n\x1b]133;D;0\x07");
     let mut terminal_state = HarvestTerminalState::default();
-    let regions =
-        terminal_state.observe(&fixture.terminal.shell_integration().prompt_tracker, true);
+    let regions = terminal_state.observe(fixture.terminal.prompt_tracker(), true);
     assert_eq!(regions.len(), 1);
     let mut harvest = HarvestMode::with_capacity(10);
     harvest.record_command(

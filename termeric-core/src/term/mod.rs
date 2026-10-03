@@ -68,7 +68,7 @@ use crate::graphics::{
 use crate::grid::{
     Cell, CellAttrs, CellContent, CellFlags, Color, ColorSpec, Grid, HyperlinkRegistry, MultiCell,
 };
-use crate::shell::ShellIntegration;
+use crate::shell::PromptTracker;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -836,7 +836,7 @@ pub struct Terminal {
     graphics_relay_apc_overflow: bool,
     pending_graphics_relay_import: Option<PendingGraphicsRelayImport>,
     /// Shell integration for prompt tracking
-    shell: ShellIntegration,
+    prompt_tracker: PromptTracker,
     /// Exact prompt selected by the previous/next prompt actions. The saved
     /// offset lets direct/manual scrolling invalidate this navigation cursor.
     prompt_navigation: Option<PromptNavigationState>,
@@ -944,7 +944,7 @@ impl Terminal {
             graphics_relay_apc_active: false,
             graphics_relay_apc_overflow: false,
             pending_graphics_relay_import: None,
-            shell: ShellIntegration::new(),
+            prompt_tracker: PromptTracker::new(),
             prompt_navigation: None,
             pending_events: Vec::new(),
             pending_notification_icon_event_bytes: 0,
@@ -2067,7 +2067,7 @@ impl Terminal {
         self.graphics
             .prune_scrollback(false, self.grid.scrollback_len());
         let oldest = -(self.grid.scrollback_len() as i32);
-        self.shell.prompt_tracker.adjust_for_scroll(0, oldest);
+        self.prompt_tracker.adjust_for_scroll(0, oldest);
         self.retain_prompt_navigation(oldest);
         self.clear_selection_if_evicted();
         self.prune_unreferenced_hyperlinks();
@@ -2080,7 +2080,7 @@ impl Terminal {
         self.graphics.prune_scrollback(self.alt_screen_active, 0);
         self.clear_selection_if_evicted();
         if !self.alt_screen_active {
-            self.shell.prompt_tracker.adjust_for_scroll(0, 0);
+            self.prompt_tracker.adjust_for_scroll(0, 0);
             self.retain_prompt_navigation(0);
         }
     }
@@ -2356,7 +2356,7 @@ impl Terminal {
             .prompt_navigation
             .filter(|navigation| navigation.scroll_offset == self.grid.scroll_offset())
             .map(|navigation| navigation.row);
-        let mut shell_rows = self.shell.prompt_tracker.tracked_rows();
+        let mut shell_rows = self.prompt_tracker.tracked_rows();
         shell_rows.extend(prompt_navigation_row);
         let shell_anchors = capture_shell_anchors(&self.grid, shell_rows);
         let same_columns = self.cols == cols;
@@ -2392,12 +2392,11 @@ impl Terminal {
             })
             .collect();
         let remapped_shell_rows = restore_shell_anchors(&self.grid, retained_shell_anchors);
-        self.shell.prompt_tracker.remap_rows(&remapped_shell_rows);
+        self.prompt_tracker.remap_rows(&remapped_shell_rows);
         self.prompt_navigation = prompt_navigation_row
             .and_then(|row| remapped_shell_rows.get(&row).copied())
             .filter(|row| {
-                self.shell
-                    .prompt_tracker
+                self.prompt_tracker
                     .all_prompts()
                     .any(|prompt| prompt == *row)
             })
@@ -3355,9 +3354,7 @@ impl Terminal {
                     self.note_history_eviction(evicted);
                     let oldest = -(self.grid().scrollback_len() as i32);
                     let scroll_amount = i32::try_from(rows).unwrap_or(i32::MAX);
-                    self.shell
-                        .prompt_tracker
-                        .adjust_for_scroll(scroll_amount, oldest);
+                    self.prompt_tracker.adjust_for_scroll(scroll_amount, oldest);
                     if let Some(navigation) = &mut self.prompt_navigation {
                         navigation.row = navigation.row.saturating_sub(scroll_amount);
                     }
@@ -3368,7 +3365,7 @@ impl Terminal {
                 self.erase_cells_in_region(0..rows, 0..cols, false);
                 self.graphics.clear_screen(self.alt_screen_active);
                 if !self.alt_screen_active && rows > 0 {
-                    self.shell.prompt_tracker.retire_content_in_rows(
+                    self.prompt_tracker.retire_content_in_rows(
                         0,
                         i32::try_from(rows.saturating_sub(1)).unwrap_or(i32::MAX),
                     );
@@ -4655,7 +4652,7 @@ impl Terminal {
         if params.first().is_some_and(|value| *value == b"A") {
             self.prompt_navigation = None;
         }
-        self.shell.handle_osc_133(params, cursor_row);
+        self.prompt_tracker.handle_osc_133(params, cursor_row);
     }
 
     /// Navigate to the previous retained OSC 133 prompt from the current
@@ -4666,7 +4663,7 @@ impl Terminal {
             return None;
         }
         let from_row = self.prompt_navigation_origin(true);
-        let row = self.shell.previous_prompt(from_row)?;
+        let row = self.prompt_tracker.previous_prompt(from_row)?;
         self.reveal_prompt(row);
         Some(row)
     }
@@ -4679,7 +4676,7 @@ impl Terminal {
             return None;
         }
         let from_row = self.prompt_navigation_origin(false);
-        let row = self.shell.next_prompt(from_row)?;
+        let row = self.prompt_tracker.next_prompt(from_row)?;
         self.reveal_prompt(row);
         Some(row)
     }
@@ -4692,7 +4689,7 @@ impl Terminal {
             return None;
         }
         let from_row = self.prompt_navigation_origin(true);
-        let row = self.shell.previous_failed_prompt(from_row)?;
+        let row = self.prompt_tracker.previous_failed_prompt(from_row)?;
         self.reveal_prompt(row);
         Some(row)
     }
@@ -4705,7 +4702,7 @@ impl Terminal {
             return None;
         }
         let from_row = self.prompt_navigation_origin(false);
-        let row = self.shell.next_failed_prompt(from_row)?;
+        let row = self.prompt_tracker.next_failed_prompt(from_row)?;
         self.reveal_prompt(row);
         Some(row)
     }
@@ -4715,7 +4712,6 @@ impl Terminal {
         if let Some(navigation) = self.prompt_navigation
             && navigation.scroll_offset == offset
             && self
-                .shell
                 .prompt_tracker
                 .all_prompts()
                 .any(|row| row == navigation.row)
@@ -4757,8 +4753,7 @@ impl Terminal {
         }
         let oldest = -(self.grid().scrollback_len() as i32);
         let cursor_row = self.grid().cursor().row;
-        self.shell
-            .prompt_tracker
+        self.prompt_tracker
             .adjust_for_archival_region(bottom, oldest, cursor_row);
         if let Some(navigation) = &mut self.prompt_navigation
             && navigation.row < i32::try_from(bottom).unwrap_or(i32::MAX)
@@ -4772,7 +4767,6 @@ impl Terminal {
         let retained = self.prompt_navigation.is_some_and(|navigation| {
             navigation.row >= oldest_retained_row
                 && self
-                    .shell
                     .prompt_tracker
                     .all_prompts()
                     .any(|row| row == navigation.row)
@@ -4800,9 +4794,9 @@ impl Terminal {
         }
     }
 
-    /// Get shell integration state
-    pub fn shell_integration(&self) -> &ShellIntegration {
-        &self.shell
+    /// OSC 133 prompt and command regions reported by the shell.
+    pub fn prompt_tracker(&self) -> &PromptTracker {
+        &self.prompt_tracker
     }
 
     /// Check if synchronized output mode is enabled
@@ -5336,7 +5330,7 @@ impl Terminal {
     pub fn reset(&mut self) {
         let previous_pointer_shape = self.effective_pointer_shape();
         if self.rows > 0 {
-            self.shell.prompt_tracker.retire_content_in_rows(
+            self.prompt_tracker.retire_content_in_rows(
                 0,
                 i32::try_from(self.rows.saturating_sub(1)).unwrap_or(i32::MAX),
             );
@@ -10761,19 +10755,10 @@ mod tests {
         term.process(
             b"\x1b]133;A\x07\x1b]133;B\x07echo stable\r\n\x1b]133;C\x07stable\r\n\x1b]133;D;0\x07",
         );
-        let id = term
-            .shell_integration()
-            .prompt_tracker
-            .completed_region(0)
-            .unwrap()
-            .id;
+        let id = term.prompt_tracker().completed_region(0).unwrap().id;
         term.process(b"one\r\ntwo\r\n");
 
-        let region = term
-            .shell_integration()
-            .prompt_tracker
-            .completed_region_by_id(id)
-            .unwrap();
+        let region = term.prompt_tracker().completed_region_by_id(id).unwrap();
         assert_eq!(region.prompt_row, -2);
         assert_eq!(region.output_row, Some(-1));
         assert_eq!(
@@ -10782,15 +10767,10 @@ mod tests {
         );
 
         term.set_scrollback_limits(1, 1024 * 1024);
-        let evicted = term
-            .shell_integration()
-            .prompt_tracker
-            .completed_region_by_id(id)
-            .unwrap();
+        let evicted = term.prompt_tracker().completed_region_by_id(id).unwrap();
         assert!(!evicted.content_available);
         assert!(
-            term.shell_integration()
-                .prompt_tracker
+            term.prompt_tracker()
                 .command_at(evicted.prompt_row)
                 .is_none()
         );
@@ -10803,12 +10783,7 @@ mod tests {
             b"\x1b]133;A\x07\x1b]133;B\x07echo 12345678\r\n\x1b]133;C\x07result value\r\n\x1b]133;D;0\x07",
         );
         term.process(b"later one\r\nlater two\r\n");
-        let before = term
-            .shell_integration()
-            .prompt_tracker
-            .completed_region(0)
-            .unwrap()
-            .clone();
+        let before = term.prompt_tracker().completed_region(0).unwrap().clone();
         assert!(before.prompt_row < 0);
         let command_before = term.rows_text(
             before.command_row.unwrap(),
@@ -10822,8 +10797,7 @@ mod tests {
         term.resize(6, 7);
 
         let after = term
-            .shell_integration()
-            .prompt_tracker
+            .prompt_tracker()
             .completed_region_by_id(before.id)
             .unwrap();
         let command_after = term.rows_text(
@@ -10838,8 +10812,7 @@ mod tests {
         assert_eq!(compact(&command_after), compact(&command_before));
         assert_eq!(compact(&output_after), compact(&output_before));
         assert_eq!(
-            term.shell_integration()
-                .prompt_tracker
+            term.prompt_tracker()
                 .command_at(after.output_row.unwrap())
                 .unwrap()
                 .id,
@@ -10856,7 +10829,7 @@ mod tests {
             term.process(format!("\x1b]133;C\x07out\r\n\x1b]133;D;{exit}\x07").as_bytes());
         }
         term.process(b"\x1b]133;A\x07");
-        let tracker = &term.shell_integration().prompt_tracker;
+        let tracker = term.prompt_tracker();
         let failed: Vec<i32> = (0..5)
             .filter_map(|index| tracker.completed_region(index))
             .filter(|region| region.is_failure())
@@ -10883,11 +10856,7 @@ mod tests {
         term.process(b"\x1b]133;A\x07");
 
         let cursor_row = i32::try_from(term.grid().cursor().row).unwrap();
-        let prompts = term
-            .shell_integration()
-            .prompt_tracker
-            .all_prompts()
-            .collect::<Vec<_>>();
+        let prompts = term.prompt_tracker().all_prompts().collect::<Vec<_>>();
         let backwards = prompts
             .iter()
             .copied()
@@ -10922,36 +10891,22 @@ mod tests {
         assert_eq!(term.previous_prompt(), Some(newest_previous));
         let reflow_target = term.previous_prompt().unwrap();
         assert!(reflow_target < 0);
-        let target_region_id = term
-            .shell_integration()
-            .prompt_tracker
-            .command_at(reflow_target)
-            .unwrap()
-            .id;
+        let target_region_id = term.prompt_tracker().command_at(reflow_target).unwrap().id;
         term.grid_mut().set_scroll_offset(0);
         assert_eq!(term.previous_prompt(), Some(newest_previous));
         assert_eq!(term.previous_prompt(), Some(reflow_target));
 
         term.resize(7, 6);
         let remapped_target = term
-            .shell_integration()
-            .prompt_tracker
+            .prompt_tracker()
             .completed_region_by_id(target_region_id)
             .unwrap()
             .prompt_row;
-        let expected_older = term
-            .shell_integration()
-            .prompt_tracker
-            .previous_prompt(remapped_target);
+        let expected_older = term.prompt_tracker().previous_prompt(remapped_target);
         assert_eq!(term.previous_prompt(), expected_older);
 
         term.set_scrollback_limits(0, 0);
-        assert!(
-            term.shell_integration()
-                .prompt_tracker
-                .all_prompts()
-                .all(|row| row >= 0)
-        );
+        assert!(term.prompt_tracker().all_prompts().all(|row| row >= 0));
         assert!(term.previous_prompt().is_none_or(|row| row >= 0));
 
         term.process(b"\x1b[?1049h");
@@ -10971,18 +10926,12 @@ mod tests {
 
         let selected = term.previous_prompt().unwrap();
         assert!(selected >= 0);
-        let selected_id = term
-            .shell_integration()
-            .prompt_tracker
-            .command_at(selected)
-            .unwrap()
-            .id;
+        let selected_id = term.prompt_tracker().command_at(selected).unwrap().id;
         assert_eq!(term.grid().scroll_offset(), 0);
 
         term.process(b"more\r\nmore\r\n");
         let moved = term
-            .shell_integration()
-            .prompt_tracker
+            .prompt_tracker()
             .completed_region_by_id(selected_id)
             .unwrap()
             .prompt_row;
@@ -11006,59 +10955,34 @@ mod tests {
             b"\x1b]133;A\x07\x1b]133;B\x07echo old\r\n\x1b]133;C\x07old\r\n\x1b]133;D;0\x07",
         );
         term.process(b"one\r\ntwo\r\nthree\r\nfour\r\n");
-        let historical = term
-            .shell_integration()
-            .prompt_tracker
-            .completed_region(0)
-            .unwrap()
-            .clone();
+        let historical = term.prompt_tracker().completed_region(0).unwrap().clone();
         assert!(historical.finish_row.unwrap() < 0);
 
         term.process(b"\x1b]133;A\x07\x1b]133;B\x07echo active\x1b]133;C\x07");
-        let active_id = term
-            .shell_integration()
-            .prompt_tracker
-            .active_region()
-            .unwrap()
-            .id;
-        assert!(
-            term.shell_integration()
-                .prompt_tracker
-                .active_region()
-                .unwrap()
-                .prompt_row
-                >= 0
-        );
+        let active_id = term.prompt_tracker().active_region().unwrap().id;
+        assert!(term.prompt_tracker().active_region().unwrap().prompt_row >= 0);
 
         term.process(b"\x1b[2J");
         assert!(
-            term.shell_integration()
-                .prompt_tracker
+            term.prompt_tracker()
                 .completed_region_by_id(historical.id)
                 .unwrap()
                 .content_available
         );
         assert!(
             !term
-                .shell_integration()
-                .prompt_tracker
+                .prompt_tracker()
                 .active_region()
                 .unwrap()
                 .content_available
         );
-        assert!(
-            term.shell_integration()
-                .prompt_tracker
-                .all_prompts()
-                .all(|row| row < 0)
-        );
+        assert!(term.prompt_tracker().all_prompts().all(|row| row < 0));
 
         // Completion identity survives the erase and is still emitted once;
         // only its authority to resolve erased terminal text is retired.
         term.process(b"\x1b]133;D;1\x07");
         let active_completion = term
-            .shell_integration()
-            .prompt_tracker
+            .prompt_tracker()
             .completed_region_by_id(active_id)
             .unwrap();
         assert!(!active_completion.content_available);
@@ -11066,16 +10990,10 @@ mod tests {
 
         term.clear_scrollback();
         assert_eq!(term.grid().scrollback_len(), 0);
-        assert!(
-            term.shell_integration()
-                .prompt_tracker
-                .all_prompts()
-                .all(|row| row >= 0)
-        );
+        assert!(term.prompt_tracker().all_prompts().all(|row| row >= 0));
         assert!(
             !term
-                .shell_integration()
-                .prompt_tracker
+                .prompt_tracker()
                 .completed_region_by_id(historical.id)
                 .unwrap()
                 .content_available
@@ -11089,21 +11007,11 @@ mod tests {
             b"\x1b]133;A\x07\x1b]133;B\x07echo old\r\n\x1b]133;C\x07old\r\n\x1b]133;D;0\x07",
         );
         term.process(b"one\r\ntwo\r\nthree\r\nfour\r\n");
-        let historical = term
-            .shell_integration()
-            .prompt_tracker
-            .completed_region(0)
-            .unwrap()
-            .clone();
+        let historical = term.prompt_tracker().completed_region(0).unwrap().clone();
         assert!(historical.finish_row.unwrap() < 0);
 
         term.process(b"\x1b]133;A\x07\x1b]133;B\x07echo visible\x1b]133;C\x07\x1b]133;D;0\x07");
-        let visible = term
-            .shell_integration()
-            .prompt_tracker
-            .completed_region(1)
-            .unwrap()
-            .clone();
+        let visible = term.prompt_tracker().completed_region(1).unwrap().clone();
         assert!(visible.prompt_row >= 0);
         let oldest_offset = term.grid().scrollback_len();
         term.grid_mut().set_scroll_offset(oldest_offset);
@@ -11111,54 +11019,37 @@ mod tests {
         term.process(b"\x1bc");
         assert_eq!(term.grid().scroll_offset(), 0);
         assert!(
-            term.shell_integration()
-                .prompt_tracker
+            term.prompt_tracker()
                 .completed_region_by_id(historical.id)
                 .unwrap()
                 .content_available
         );
         assert!(
             !term
-                .shell_integration()
-                .prompt_tracker
+                .prompt_tracker()
                 .completed_region_by_id(visible.id)
                 .unwrap()
                 .content_available
         );
-        assert!(
-            term.shell_integration()
-                .prompt_tracker
-                .all_prompts()
-                .all(|row| row < 0)
-        );
+        assert!(term.prompt_tracker().all_prompts().all(|row| row < 0));
     }
 
     #[test]
     fn alternate_screen_cannot_publish_primary_shell_marks() {
         let mut term = Terminal::new(16, 4);
         term.process(b"\x1b]133;A\x07");
-        let prompts_before = term
-            .shell_integration()
-            .prompt_tracker
-            .all_prompts()
-            .collect::<Vec<_>>();
-        let regions_before = term.shell_integration().prompt_tracker.completed_count();
+        let prompts_before = term.prompt_tracker().all_prompts().collect::<Vec<_>>();
+        let regions_before = term.prompt_tracker().completed_count();
 
         term.process(b"\x1b[?1049h");
         term.process(b"\x1b]133;A\x07\x1b]133;B\x07untrusted\x1b]133;C\x07\x1b]133;D;9\x07");
         term.process(b"\x1b[3J\x1b[?1049l");
 
         assert_eq!(
-            term.shell_integration()
-                .prompt_tracker
-                .all_prompts()
-                .collect::<Vec<_>>(),
+            term.prompt_tracker().all_prompts().collect::<Vec<_>>(),
             prompts_before
         );
-        assert_eq!(
-            term.shell_integration().prompt_tracker.completed_count(),
-            regions_before
-        );
+        assert_eq!(term.prompt_tracker().completed_count(), regions_before);
     }
 
     #[test]
@@ -11169,11 +11060,7 @@ mod tests {
         for byte in valid {
             term.process(std::slice::from_ref(byte));
         }
-        let first = term
-            .shell_integration()
-            .prompt_tracker
-            .completed_region(0)
-            .unwrap();
+        let first = term.prompt_tracker().completed_region(0).unwrap();
         assert_eq!(first.exit_code, Some(255));
 
         // Prompt-only and out-of-order cycles must not add completed regions.
@@ -11182,16 +11069,12 @@ mod tests {
         for split in malformed.chunks(2) {
             term.process(split);
         }
-        assert_eq!(term.shell_integration().prompt_tracker.completed_count(), 1);
+        assert_eq!(term.prompt_tracker().completed_count(), 1);
 
         term.process(
             b"\x1b]133;A\x07\x1b]133;B\x07echo recover\r\n\x1b]133;C\x07out\r\n\x1b]133;D;256\x07",
         );
-        let recovered = term
-            .shell_integration()
-            .prompt_tracker
-            .completed_region(1)
-            .unwrap();
+        let recovered = term.prompt_tracker().completed_region(1).unwrap();
         assert_eq!(recovered.exit_code, None);
     }
 
