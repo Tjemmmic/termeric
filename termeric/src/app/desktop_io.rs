@@ -607,25 +607,10 @@ impl App {
     }
 
     pub(super) fn file_drop_input_blocked(&self) -> bool {
-        self.guardrail.is_active()
-            || self.info_overlay.is_active()
-            || self.diff_review.is_active()
-            || self.context_picker.is_active()
-            || self.domain_picker.is_active()
-            || self.unicode_picker.is_active()
-            || self.command_palette.is_active()
-            || self.shortcuts_panel.is_active()
-            || self.settings_panel.is_active()
-            || self.commands_panel.is_open()
-            || self.agents_panel.is_open()
-            || self.session_panel.is_open()
-            || self.workspace_menu.is_some()
+        self.top_modal_layer().is_some()
             || self.search.is_active()
             || self.copy_mode.is_active()
             || self.tab_rename.is_some()
-            || self.harvest.as_ref().is_some_and(|harvest| {
-                harvest.sprout_menu.is_some() || harvest.cellar.is_expanded()
-            })
     }
 
     pub(super) fn apply_guardrail_action(

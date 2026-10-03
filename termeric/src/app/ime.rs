@@ -3,6 +3,7 @@
 //! Preedit text is application-owned display state. It is never written to a
 //! PTY; only `Ime::Commit` reaches the currently focused text surface.
 
+use super::modal_layer::ModalLayer;
 use winit::event::Ime;
 
 use super::*;
@@ -69,46 +70,35 @@ impl App {
     /// Return whether the current focus owner is a text destination. Modal
     /// surfaces without an editable field intentionally swallow IME input.
     fn accepts_ime_text(&self) -> bool {
-        // The guardrail can open over any surface, including an info-overlay
-        // text field, and owns the keyboard until it is answered.
-        if self.guardrail.is_active() {
-            return false;
-        }
-        if self.info_overlay.is_active() {
+        let top = self.top_modal_layer();
+        if top == Some(ModalLayer::InfoOverlay) {
             return self.info_overlay.input_focused();
         }
-        if matches!(self.broadcast, BroadcastState::Armed { .. })
-            || self.diff_review.is_active()
-            || self.context_picker.is_active()
-            || self
-                .harvest
-                .as_ref()
-                .is_some_and(|h| h.sprout_menu.is_some() || h.cellar.is_expanded())
-        {
+        if matches!(self.broadcast, BroadcastState::Armed { .. }) {
             return false;
         }
-        if let Some(modal) = self.open_palette_modal() {
-            return self.palette_owner(modal).query_editable();
-        }
-        if self.shortcuts_panel.is_active() {
-            return !self.shortcuts_panel.is_recording();
-        }
-        if self.settings_panel.is_active() {
-            return !self.settings_panel.is_dropdown_open();
-        }
-        if self.session_panel.is_open() {
-            return self.session_panel.is_renaming();
-        }
-        // Like every key, IME text must not reach a field beneath an open
-        // Workspaces menu.
-        if self.workspace_menu.is_some() {
-            return false;
-        }
-        if self.commands_panel.is_open() {
-            return self.commands_panel.is_editing();
-        }
-        if self.agents_panel.is_open() {
-            return false;
+        if let Some(layer) = top {
+            return match layer {
+                ModalLayer::DomainPicker
+                | ModalLayer::UnicodePicker
+                | ModalLayer::CommandPalette => self
+                    .open_palette_modal()
+                    .is_some_and(|modal| self.palette_owner(modal).query_editable()),
+                ModalLayer::ShortcutsPanel => !self.shortcuts_panel.is_recording(),
+                ModalLayer::Settings => !self.settings_panel.is_dropdown_open(),
+                ModalLayer::SessionPanel => self.session_panel.is_renaming(),
+                ModalLayer::CommandsPanel => self.commands_panel.is_editing(),
+                // Like every key, IME text must not reach a field beneath a
+                // layer that has none of its own.
+                ModalLayer::Guardrail
+                | ModalLayer::InfoOverlay
+                | ModalLayer::DiffReview
+                | ModalLayer::ContextPicker
+                | ModalLayer::SproutMenu
+                | ModalLayer::Cellar
+                | ModalLayer::WorkspaceMenu
+                | ModalLayer::AgentsPanel => false,
+            };
         }
         if self.tab_rename.is_some() {
             return true;
@@ -186,60 +176,38 @@ impl App {
     /// Match commit_ime_text's destination priority: the agent view's
     /// message box yields to every modal surface and rename field above it.
     fn agent_view_owns_ime_text(&self) -> bool {
-        self.agent_view_has_keyboard()
+        self.top_modal_layer().is_none()
+            && self.tab_rename.is_none()
+            && self.agent_view_has_keyboard()
             && self.agent_view_accepts_text()
             && self.accepts_ime_text()
-            && !self.info_overlay.is_active()
-            && self.open_palette_modal().is_none()
-            && !self.shortcuts_panel.is_active()
-            && !self.settings_panel.is_active()
-            && !self.session_panel.is_open()
-            && !self.commands_panel.is_open()
-            && !self.agents_panel.is_open()
-            && self.tab_rename.is_none()
     }
 
     /// Match commit_ime_text's destination priority: a retained search must
     /// not steal candidate geometry from a higher-priority text surface.
     fn search_owns_ime_text(&self) -> bool {
-        self.search.is_active()
-            && self.accepts_ime_text()
-            && !self.info_overlay.is_active()
-            && self.open_palette_modal().is_none()
+        self.top_modal_layer().is_none()
             && self.tab_rename.is_none()
-            && !self.shortcuts_panel.is_active()
-            && !self.settings_panel.is_active()
-            && !self.session_panel.is_open()
-            && !self.commands_panel.is_open()
-            && !self.agents_panel.is_open()
+            && self.search.is_active()
+            && self.accepts_ime_text()
     }
 
     fn commands_owns_ime_text(&self) -> bool {
-        self.commands_panel.is_open()
+        self.modal_layer_on_top(ModalLayer::CommandsPanel)
             && self.commands_panel.is_editing()
             && self.accepts_ime_text()
-            && !self.info_overlay.is_active()
-            && self.open_palette_modal().is_none()
-            && !self.shortcuts_panel.is_active()
-            && !self.settings_panel.is_active()
-            && !self.session_panel.is_open()
     }
 
     fn shortcuts_owns_ime_text(&self) -> bool {
-        self.shortcuts_panel.is_active()
+        self.modal_layer_on_top(ModalLayer::ShortcutsPanel)
             && !self.shortcuts_panel.is_recording()
             && self.accepts_ime_text()
-            && !self.info_overlay.is_active()
-            && self.open_palette_modal().is_none()
     }
 
     fn settings_owns_ime_text(&self) -> bool {
-        self.settings_panel.is_active()
+        self.modal_layer_on_top(ModalLayer::Settings)
             && !self.settings_panel.is_dropdown_open()
             && self.accepts_ime_text()
-            && !self.info_overlay.is_active()
-            && self.open_palette_modal().is_none()
-            && !self.shortcuts_panel.is_active()
     }
 
     fn settings_ime_viewport(
@@ -258,13 +226,9 @@ impl App {
     }
 
     fn session_owns_ime_text(&self) -> bool {
-        self.session_panel.is_open()
+        self.modal_layer_on_top(ModalLayer::SessionPanel)
             && self.session_panel.is_renaming()
             && self.accepts_ime_text()
-            && !self.info_overlay.is_active()
-            && self.open_palette_modal().is_none()
-            && !self.shortcuts_panel.is_active()
-            && !self.settings_panel.is_active()
     }
 
     fn session_ime_viewport(

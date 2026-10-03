@@ -3,6 +3,7 @@
 //! interaction, so one path handles keys, clicks, the wheel, and query
 //! edits for whichever is open; only what a chosen entry means differs.
 
+use super::modal_layer::ModalLayer;
 use super::text_field_keys::FieldKey;
 use super::*;
 use crate::ui::command_palette::{PaletteLayout, PaletteResult};
@@ -44,16 +45,13 @@ pub(super) fn open_palette_owner<'a>(
 }
 
 impl App {
-    /// The open palette-style modal that owns input, if any.
+    /// The palette-style modal that owns input: open and the top modal layer.
     pub(super) fn open_palette_modal(&self) -> Option<PaletteModal> {
-        if self.domain_picker.is_active() {
-            Some(PaletteModal::Domains)
-        } else if self.unicode_picker.is_active() {
-            Some(PaletteModal::Unicode)
-        } else if self.command_palette.is_active() {
-            Some(PaletteModal::Commands)
-        } else {
-            None
+        match self.top_modal_layer()? {
+            ModalLayer::DomainPicker => Some(PaletteModal::Domains),
+            ModalLayer::UnicodePicker => Some(PaletteModal::Unicode),
+            ModalLayer::CommandPalette => Some(PaletteModal::Commands),
+            _ => None,
         }
     }
 

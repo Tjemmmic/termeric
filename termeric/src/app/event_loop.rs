@@ -3,6 +3,8 @@
 //! Window events for one `App`, dispatched by `Application`.
 
 use std::sync::Arc;
+
+use super::modal_layer::ModalLayer;
 use winit::{
     dpi::{LogicalSize, PhysicalPosition, PhysicalSize},
     event::WindowEvent,
@@ -276,7 +278,7 @@ impl App {
                 }
 
                 // Handle guardrail confirmation (highest priority)
-                if self.guardrail.is_active() {
+                if self.modal_layer_on_top(ModalLayer::Guardrail) {
                     if event.state == winit::event::ElementState::Pressed {
                         use winit::keyboard::{Key, NamedKey};
                         let request_id = self.guardrail.request_id();
@@ -298,7 +300,7 @@ impl App {
                 // Information overlays own all input until their close
                 // animation completes. Actions are request-scoped so input
                 // during exit cannot target a replacement notice.
-                if self.info_overlay.is_active() {
+                if self.modal_layer_on_top(ModalLayer::InfoOverlay) {
                     if event.state == winit::event::ElementState::Pressed {
                         use crate::ui::info_overlay::InfoOverlayAction;
                         use winit::keyboard::{Key, NamedKey};
@@ -459,7 +461,7 @@ impl App {
                 }
 
                 // Handle diff review overlay input
-                if self.diff_review.is_active() {
+                if self.modal_layer_on_top(ModalLayer::DiffReview) {
                     if event.state == winit::event::ElementState::Pressed {
                         use crate::ui::diff_review::DiffReviewAction;
                         use winit::keyboard::{Key, NamedKey};
@@ -540,7 +542,7 @@ impl App {
                 }
 
                 // Handle context picker input
-                if self.context_picker.is_active() {
+                if self.modal_layer_on_top(ModalLayer::ContextPicker) {
                     if event.state == winit::event::ElementState::Pressed {
                         use crate::ui::context_picker::{ContextPickerAction, ContextPickerPhase};
                         use winit::keyboard::{Key, NamedKey};
@@ -608,10 +610,10 @@ impl App {
                 }
 
                 // Harvest menus own keyboard input while logically open.
-                if let Some(request_id) = self
-                    .harvest
-                    .as_ref()
-                    .and_then(|harvest| harvest.sprout_menu.as_ref().map(|menu| menu.request_id))
+                if self.modal_layer_on_top(ModalLayer::SproutMenu)
+                    && let Some(request_id) = self.harvest.as_ref().and_then(|harvest| {
+                        harvest.sprout_menu.as_ref().map(|menu| menu.request_id)
+                    })
                 {
                     if event.state == winit::event::ElementState::Pressed {
                         use winit::keyboard::{Key, NamedKey};
@@ -671,11 +673,7 @@ impl App {
                     }
                     return;
                 }
-                if self
-                    .harvest
-                    .as_ref()
-                    .is_some_and(|harvest| harvest.cellar.is_expanded())
-                {
+                if self.modal_layer_on_top(ModalLayer::Cellar) {
                     if event.state == winit::event::ElementState::Pressed {
                         use winit::keyboard::{Key, NamedKey};
                         let activate = match &event.logical_key {
@@ -749,7 +747,7 @@ impl App {
                     return;
                 }
                 // Handle shortcuts panel input (centered modal)
-                if self.shortcuts_panel.is_active() {
+                if self.modal_layer_on_top(ModalLayer::ShortcutsPanel) {
                     if event.state == winit::event::ElementState::Pressed {
                         use crate::ui::shortcuts_panel::ShortcutsKey;
                         use winit::keyboard::{Key, NamedKey};
@@ -809,7 +807,7 @@ impl App {
                 }
 
                 // Handle settings panel input (highest priority when open)
-                if self.settings_panel.is_active() {
+                if self.modal_layer_on_top(ModalLayer::Settings) {
                     if event.state == winit::event::ElementState::Pressed {
                         use winit::keyboard::{Key, NamedKey};
 
@@ -865,7 +863,7 @@ impl App {
                 // The workspace manager is a modal side panel. Rename input
                 // and dismissal are handled here, and no keystroke may leak
                 // through to the focused PTY while it is open.
-                if self.session_panel.is_open() {
+                if self.modal_layer_on_top(ModalLayer::SessionPanel) {
                     if event.state == winit::event::ElementState::Pressed {
                         use crate::session::panel::SessionPanelKey;
                         use winit::keyboard::{Key, NamedKey};
@@ -891,7 +889,7 @@ impl App {
                 }
 
                 // An open toolbar menu owns every key, so none reaches the PTY.
-                if self.workspace_menu.is_some() {
+                if self.modal_layer_on_top(ModalLayer::WorkspaceMenu) {
                     if event.state == winit::event::ElementState::Pressed {
                         self.handle_workspace_menu_key(&event.logical_key);
                     }
@@ -899,13 +897,13 @@ impl App {
                 }
 
                 // Both browse mode and the inline form own modal input.
-                if self.commands_panel.is_open() {
+                if self.modal_layer_on_top(ModalLayer::CommandsPanel) {
                     if event.state == winit::event::ElementState::Pressed {
                         self.handle_commands_panel_key(&event.logical_key);
                     }
                     return;
                 }
-                if self.agents_panel.is_open() {
+                if self.modal_layer_on_top(ModalLayer::AgentsPanel) {
                     if event.state == winit::event::ElementState::Pressed {
                         self.handle_agents_panel_key(&event.logical_key);
                     }
@@ -1028,7 +1026,7 @@ impl App {
                         return;
                     }
                 }
-                if self.guardrail.is_active() {
+                if self.modal_layer_on_top(ModalLayer::Guardrail) {
                     if state == winit::event::ElementState::Pressed
                         && button == winit::event::MouseButton::Left
                     {
@@ -1055,7 +1053,7 @@ impl App {
                 }
                 // Information overlay pointer actions use the same request and
                 // geometry as keyboard, rendering, and accessibility.
-                if self.info_overlay.is_active() {
+                if self.modal_layer_on_top(ModalLayer::InfoOverlay) {
                     if state == winit::event::ElementState::Pressed
                         && button == winit::event::MouseButton::Left
                     {
@@ -1137,7 +1135,7 @@ impl App {
                     }
                     return;
                 }
-                if self.diff_review.is_active() {
+                if self.modal_layer_on_top(ModalLayer::DiffReview) {
                     if state == winit::event::ElementState::Pressed
                         && button == winit::event::MouseButton::Left
                         && let (Some(pos), Some(renderer)) = (self.last_cursor_pos, &self.renderer)
@@ -1164,7 +1162,7 @@ impl App {
                     }
                     return;
                 }
-                if self.context_picker.is_active() {
+                if self.modal_layer_on_top(ModalLayer::ContextPicker) {
                     if state == winit::event::ElementState::Pressed
                         && button == winit::event::MouseButton::Left
                         && let (Some(pos), Some(renderer)) = (self.last_cursor_pos, &self.renderer)
@@ -1188,11 +1186,7 @@ impl App {
                 }
                 // Sprout menu is an input-blocking context menu. Click an
                 // action to execute it, or click outside to dismiss.
-                if self
-                    .harvest
-                    .as_ref()
-                    .is_some_and(|harvest| harvest.sprout_menu.is_some())
-                {
+                if self.modal_layer_on_top(ModalLayer::SproutMenu) {
                     if state == winit::event::ElementState::Pressed
                         && button == winit::event::MouseButton::Left
                     {
@@ -1231,11 +1225,7 @@ impl App {
                     }
                     return;
                 }
-                if self
-                    .harvest
-                    .as_ref()
-                    .is_some_and(|harvest| harvest.cellar.is_expanded())
-                {
+                if self.modal_layer_on_top(ModalLayer::Cellar) {
                     if state == winit::event::ElementState::Pressed
                         && button == winit::event::MouseButton::Left
                         && let Some(pos) = self.last_cursor_pos
@@ -1258,7 +1248,7 @@ impl App {
                     return;
                 }
                 // When shortcuts panel is open, dismiss on outside clicks
-                if self.shortcuts_panel.is_active() {
+                if self.modal_layer_on_top(ModalLayer::ShortcutsPanel) {
                     if state == winit::event::ElementState::Pressed
                         && button == winit::event::MouseButton::Left
                     {
@@ -1368,10 +1358,10 @@ impl App {
     pub(super) fn handle_mouse_wheel(&mut self, delta: winit::event::MouseScrollDelta) {
         // The guardrail draws above every surface and can open over
         // any of them, so nothing beneath it may scroll.
-        if self.guardrail.is_active() {
+        if self.modal_layer_on_top(ModalLayer::Guardrail) {
             return;
         }
-        if self.info_overlay.is_active() {
+        if self.modal_layer_on_top(ModalLayer::InfoOverlay) {
             let (mut horizontal, mut vertical) = match delta {
                 winit::event::MouseScrollDelta::LineDelta(x, y) => (x, y),
                 winit::event::MouseScrollDelta::PixelDelta(pos) => {
@@ -1398,7 +1388,7 @@ impl App {
             self.request_redraw(RedrawReason::PointerInput);
             return;
         }
-        if self.diff_review.is_active() {
+        if self.modal_layer_on_top(ModalLayer::DiffReview) {
             let (mut horizontal, mut vertical) = match delta {
                 winit::event::MouseScrollDelta::LineDelta(x, y) => (x, y),
                 winit::event::MouseScrollDelta::PixelDelta(pos) => {
@@ -1425,7 +1415,7 @@ impl App {
             self.request_redraw(RedrawReason::PointerInput);
             return;
         }
-        if self.context_picker.is_active() {
+        if self.modal_layer_on_top(ModalLayer::ContextPicker) {
             let lines = match delta {
                 winit::event::MouseScrollDelta::LineDelta(_, y) => y,
                 winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
@@ -1446,7 +1436,7 @@ impl App {
             self.request_redraw(RedrawReason::PointerInput);
             return;
         }
-        if self.session_panel.is_open() {
+        if self.modal_layer_on_top(ModalLayer::SessionPanel) {
             let lines = match delta {
                 winit::event::MouseScrollDelta::LineDelta(_, y) => y,
                 winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
@@ -1460,7 +1450,7 @@ impl App {
             return;
         }
         // Scroll settings panel when active
-        if self.settings_panel.is_active() {
+        if self.modal_layer_on_top(ModalLayer::Settings) {
             let lines = match delta {
                 winit::event::MouseScrollDelta::LineDelta(_, y) => y,
                 winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
@@ -1479,7 +1469,7 @@ impl App {
             return;
         }
         // Scroll shortcuts panel when active
-        if self.shortcuts_panel.is_active() {
+        if self.modal_layer_on_top(ModalLayer::ShortcutsPanel) {
             let lines = match delta {
                 winit::event::MouseScrollDelta::LineDelta(_, y) => y,
                 winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
@@ -1498,11 +1488,7 @@ impl App {
         }
         // Root Cellar owns the wheel while open; positive deltas move
         // toward older commands, matching terminal scroll direction.
-        if self
-            .harvest
-            .as_ref()
-            .is_some_and(|harvest| harvest.cellar.is_expanded())
-        {
+        if self.modal_layer_on_top(ModalLayer::Cellar) {
             let lines = match delta {
                 winit::event::MouseScrollDelta::LineDelta(_, y) => y,
                 winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
@@ -1517,18 +1503,11 @@ impl App {
             self.request_redraw(RedrawReason::PointerInput);
             return;
         }
-        // Every remaining modal/context surface owns the wheel while
-        // visible, even when it has no scroll action of its own.
-        if self.session_panel.is_open()
-            || self.workspace_menu.is_some()
-            || self.info_overlay.is_active()
-            || self.diff_review.is_active()
-            || self.context_picker.is_active()
-            || self
-                .harvest
-                .as_ref()
-                .is_some_and(|harvest| harvest.sprout_menu.is_some())
-        {
+        // Every other modal layer owns the wheel while on top, even with no
+        // scroll action of its own; the side panels scroll under the pointer.
+        if self.top_modal_layer().is_some_and(|layer| {
+            !matches!(layer, ModalLayer::CommandsPanel | ModalLayer::AgentsPanel)
+        }) {
             return;
         }
         if self.handle_commands_panel_scroll(delta) || self.handle_agents_panel_scroll(delta) {

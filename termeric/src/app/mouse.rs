@@ -1,5 +1,6 @@
 //! Mouse routing for modal layers, chrome, panes, and terminal content.
 
+use super::modal_layer::ModalLayer;
 use super::*;
 use crate::ui::geometry::Bounds;
 
@@ -147,11 +148,7 @@ impl App {
     /// above terminal scrollbars/dividers. Keep their ownership independent
     /// of where the pointer lands (including outside-click dismissal).
     pub(super) fn pointer_panel_owns_input(&self) -> bool {
-        self.settings_panel.is_active()
-            || self.commands_panel.is_open()
-            || self.agents_panel.is_open()
-            || self.session_panel.is_open()
-            || self.workspace_menu.is_some()
+        self.top_modal_layer().is_some_and(ModalLayer::is_panel)
     }
 
     /// A terminal-side drag is in progress: a selection, scrollbar, pane
@@ -167,19 +164,7 @@ impl App {
     /// remains held. Do this before dispatch/dismissal and animation cleanup,
     /// not only on release (which the modal may consume).
     pub(super) fn finish_obscured_native_pointer_gesture(&mut self) {
-        if self.guardrail.is_active()
-            || self.info_overlay.is_active()
-            || self.diff_review.is_active()
-            || self.context_picker.is_active()
-            || self.domain_picker.is_active()
-            || self.unicode_picker.is_active()
-            || self.command_palette.is_active()
-            || self.shortcuts_panel.is_active()
-            || self.pointer_panel_owns_input()
-            || self.harvest.as_ref().is_some_and(|harvest| {
-                harvest.sprout_menu.is_some() || harvest.cellar.is_expanded()
-            })
-        {
+        if self.top_modal_layer().is_some() {
             self.finish_native_pointer_gesture();
         }
     }
@@ -394,7 +379,7 @@ impl App {
                         }
 
                         // If commands panel is open, intercept all clicks
-                        if self.commands_panel.is_open() {
+                        if self.modal_layer_on_top(ModalLayer::CommandsPanel) {
                             let window_size = self.window.as_ref().map(|w| w.inner_size());
                             if let Some(size) = window_size {
                                 let info = self.commands_panel.build_info(&self.config.commands);
@@ -413,13 +398,13 @@ impl App {
 
                         // The agents panel owns every click while open,
                         // including the one beside it that closes it.
-                        if self.agents_panel.is_open() {
+                        if self.modal_layer_on_top(ModalLayer::AgentsPanel) {
                             self.handle_agents_panel_click(px, py);
                             return;
                         }
 
                         // If session management panel is open, intercept all clicks
-                        if self.session_panel.is_open() {
+                        if self.modal_layer_on_top(ModalLayer::SessionPanel) {
                             let window_size = self.window.as_ref().map(|w| w.inner_size());
                             if let Some(size) = window_size {
                                 let info = self.session_panel.build_info();
@@ -439,7 +424,7 @@ impl App {
 
                         // An open menu owns every click: rows activate and
                         // anything outside dismisses it.
-                        if self.workspace_menu.is_some() {
+                        if self.modal_layer_on_top(ModalLayer::WorkspaceMenu) {
                             self.click_workspace_menu(px, py);
                             return;
                         }
@@ -447,7 +432,7 @@ impl App {
                         // Settings modal intercepts all clicks (inside: handle;
                         // outside: dismiss). Must come before tab bar / search bar
                         // so the modal can't be undercut by chrome under the scrim.
-                        if self.settings_panel.is_active() {
+                        if self.modal_layer_on_top(ModalLayer::Settings) {
                             let window_size = self.window.as_ref().map(|w| w.inner_size());
                             if let Some(size) = window_size {
                                 let action = self.settings_panel.handle_click(
@@ -820,17 +805,10 @@ impl App {
             return;
         }
 
-        if self.info_overlay.is_active()
-            || self.diff_review.is_active()
-            || self.context_picker.is_active()
-            || self.domain_picker.is_active()
-            || self.unicode_picker.is_active()
-            || self.guardrail.is_active()
-            || self.command_palette.is_active()
-            || self.shortcuts_panel.is_active()
-            || self.harvest.as_ref().is_some_and(|harvest| {
-                harvest.sprout_menu.is_some() || harvest.cellar.is_expanded()
-            })
+        // Overlays above the panels take no hover of their own here.
+        if self
+            .top_modal_layer()
+            .is_some_and(|layer| !layer.is_panel())
         {
             return;
         }
@@ -870,7 +848,7 @@ impl App {
 
         // Don't update selection when an overlay panel is open,
         // but DO track hover state for visual highlights.
-        if self.settings_panel.is_active() {
+        if self.modal_layer_on_top(ModalLayer::Settings) {
             let px = position.0 as f32;
             let py = position.1 as f32;
             if let Some(renderer) = &self.renderer {
@@ -926,7 +904,7 @@ impl App {
             return;
         }
 
-        if self.commands_panel.is_open() {
+        if self.modal_layer_on_top(ModalLayer::CommandsPanel) {
             let px = position.0 as f32;
             let py = position.1 as f32;
             let layout = self.commands_panel_layout();
@@ -934,12 +912,12 @@ impl App {
             self.request_redraw(RedrawReason::PointerInput);
             return;
         }
-        if self.agents_panel.is_open() {
+        if self.modal_layer_on_top(ModalLayer::AgentsPanel) {
             self.update_agents_panel_hover(position.0 as f32, position.1 as f32);
             return;
         }
 
-        if self.session_panel.is_open() {
+        if self.modal_layer_on_top(ModalLayer::SessionPanel) {
             let px = position.0 as f32;
             let py = position.1 as f32;
             if let Some(renderer) = &self.renderer {
@@ -973,7 +951,7 @@ impl App {
             return;
         }
 
-        if self.workspace_menu.is_some() {
+        if self.modal_layer_on_top(ModalLayer::WorkspaceMenu) {
             if self.hover_workspace_menu(position.0 as f32, position.1 as f32) {
                 self.request_redraw(RedrawReason::PointerInput);
             }
@@ -1247,19 +1225,7 @@ impl App {
             || self.divider_dragging.is_some()
             || self.scrollbar_dragging.is_some()
             || self.tab_dragging.is_some()
-            || self.info_overlay.is_active()
-            || self.diff_review.is_active()
-            || self.context_picker.is_active()
-            || self.domain_picker.is_active()
-            || self.unicode_picker.is_active()
-            || self.guardrail.is_active()
-            || self.command_palette.is_active()
-            || self.shortcuts_panel.is_active()
-            || self.settings_panel.is_active()
-            || self.commands_panel.is_open()
-            || self.agents_panel.is_open()
-            || self.session_panel.is_open()
-            || self.workspace_menu.is_some()
+            || self.top_modal_layer().is_some()
         {
             return;
         }

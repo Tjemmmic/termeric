@@ -22,6 +22,7 @@ pub mod domain_picker;
 pub mod geometry;
 pub mod icon;
 pub mod info_overlay;
+pub mod modal;
 pub mod popup_menu;
 pub mod scroll;
 pub mod settings;

@@ -1,5 +1,6 @@
 //! Clipboard ownership for bounded single-line queries and command forms.
 
+use super::modal_layer::ModalLayer;
 use super::palette_input::PaletteModal;
 use super::*;
 
@@ -19,54 +20,32 @@ enum PasteTarget {
 
 impl App {
     fn clipboard_paste_target(&self) -> PasteTarget {
-        if self.guardrail.is_active()
-            || self.info_overlay.is_active()
-            || self.diff_review.is_active()
-            || self.context_picker.is_active()
-            || matches!(self.broadcast, BroadcastState::Armed { .. })
-            || self.harvest.as_ref().is_some_and(|harvest| {
-                harvest.sprout_menu.is_some() || harvest.cellar.is_expanded()
-            })
-        {
+        let top = self.top_modal_layer();
+        if matches!(self.broadcast, BroadcastState::Armed { .. }) {
             return PasteTarget::Blocked;
         }
-        // Match native keyboard dispatch, including retained background fields.
-        if let Some(modal) = self.open_palette_modal() {
-            return PasteTarget::Palette(modal);
-        }
-        if self.shortcuts_panel.is_active() {
-            return if self.shortcuts_panel.is_recording() {
-                PasteTarget::Blocked
-            } else {
-                PasteTarget::ShortcutsFilter
+        // Match keyboard dispatch: the top layer's own field, or nothing.
+        if let Some(layer) = top {
+            return match layer {
+                ModalLayer::DomainPicker
+                | ModalLayer::UnicodePicker
+                | ModalLayer::CommandPalette => self
+                    .open_palette_modal()
+                    .map_or(PasteTarget::Blocked, PasteTarget::Palette),
+                ModalLayer::ShortcutsPanel if !self.shortcuts_panel.is_recording() => {
+                    PasteTarget::ShortcutsFilter
+                }
+                ModalLayer::Settings if !self.settings_panel.is_dropdown_open() => {
+                    PasteTarget::SettingsFilter
+                }
+                ModalLayer::SessionPanel if self.session_panel.is_renaming() => {
+                    PasteTarget::WorkspaceRename
+                }
+                ModalLayer::CommandsPanel if self.commands_panel.is_editing() => {
+                    PasteTarget::CommandsForm
+                }
+                _ => PasteTarget::Blocked,
             };
-        }
-        if self.settings_panel.is_active() {
-            return if self.settings_panel.is_dropdown_open() {
-                PasteTarget::Blocked
-            } else {
-                PasteTarget::SettingsFilter
-            };
-        }
-        if self.workspace_menu.is_some() {
-            return PasteTarget::Blocked;
-        }
-        if self.session_panel.is_open() {
-            return if self.session_panel.is_renaming() {
-                PasteTarget::WorkspaceRename
-            } else {
-                PasteTarget::Blocked
-            };
-        }
-        if self.commands_panel.is_open() {
-            return if self.commands_panel.is_editing() {
-                PasteTarget::CommandsForm
-            } else {
-                PasteTarget::Blocked
-            };
-        }
-        if self.agents_panel.is_open() {
-            return PasteTarget::Blocked;
         }
         if self.tab_rename.is_some() {
             return PasteTarget::TabRename;

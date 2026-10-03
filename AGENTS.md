@@ -162,17 +162,21 @@ Two animation types in `ui/animation.rs`:
 
 When adding a component that blocks input, trace its whole lifecycle — open, input dispatch, close, state reset — before wiring it into a dispatch chain.
 
+### Modal Layers
+
+`ModalLayer::INPUT_PRIORITY` (`ui/modal.rs`) is the one stacking order: guardrail → info overlay → diff review → context picker → Harvest sprout menu → Harvest cellar → domain picker → Unicode picker → command palette → shortcuts panel → Settings → Workspaces menu → session panel → Commands panel → Agents panel. Only `App::top_modal_layer()` owns input: keys, clicks, wheel, hover, IME, paste, and accessibility actions and snapshots all gate on it, and the renderer draws the layers in the reverse order, so the surface in front is the one that answers. A consumer with nothing to do for the top layer swallows the input rather than passing it beneath.
+
 ### Mouse Click Dispatch Priority
 
 In `app/event_loop.rs` (MouseInput handler), before anything else:
 1. A press exits copy mode; a release that completes terminal mouse capture goes back to its terminal
-2. Modal layers, each swallowing clicks while active: guardrail confirmation → info overlay → diff review → context picker → Harvest sprout menu → Harvest cellar → domain picker → Unicode picker → command palette → shortcuts panel
+2. The top modal layer above the panels, which swallows clicks while on top
 3. Everything else goes to `handle_mouse_input`
 
 In `app/mouse.rs` (`handle_mouse_input`): 0. The docked agent view claims presses on its area and divider when `pointer_panel_owns_input()` is false; a press elsewhere returns the keyboard to the terminals
 1. Native scrollbar/divider presses only when `pointer_panel_owns_input()` is false
 2. Global Settings button (preserves direct panel-to-Settings switching)
-3. Commands panel, Agents panel, session panel, Workspaces menu, and Settings intercept their clicks, including outside-click dismissal, before background controls
+3. The top panel layer (Settings, Workspaces menu, session, Commands, or Agents panel) intercepts its clicks, including outside-click dismissal, before background controls
 4. Tab bar and search bar, then toggling a pane in or out of an armed broadcast target set
 5. Pane focus, Ctrl+Click hyperlink, and terminal mouse reporting when requested; Shift bypasses to native selection
 6. Terminal selection (default)
@@ -185,7 +189,7 @@ The same panel-ownership predicate blocks background divider hover from returnin
 
 In `app/event_loop.rs` (KeyboardInput handler), after AltGraph tracking and query-paste handling, checked in order:
 
-1. Modal layers: guardrail → info overlay → diff review → context picker → Harvest sprout menu → Harvest cellar → domain picker → Unicode picker → command palette → shortcuts panel → Settings → session panel → Workspaces menu → Commands panel → Agents panel
+1. The top modal layer
 2. Tab rename
 3. Agent view, only while it holds the keyboard (global shortcuts still run, except its composer's editing chords)
 4. Search, then copy mode/quick select

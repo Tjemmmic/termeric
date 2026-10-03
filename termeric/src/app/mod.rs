@@ -20,6 +20,7 @@ mod font_range_editor;
 mod git_completion;
 mod ime;
 mod kitty_file_transfer;
+mod modal_layer;
 mod mouse;
 mod mouse_selection;
 mod palette_input;

@@ -1708,39 +1708,21 @@ impl Renderer {
         self.text_pipeline.mark_layer();
         self.build_agent_view_overlay();
 
-        // ── LAYER 1: Harvest indicators (in gutter, alongside grid) ──
+        // ── Harvest indicators (in gutter, alongside grid) ──
         self.rect_pipeline.mark_layer();
         self.text_pipeline.mark_layer();
         if let Some(harvest_info) = harvest {
             self.build_harvest_indicators(&harvest_info.indicators, content_top + padding);
         }
 
-        // ── LAYER 2: Harvest cellar panel (slide-in overlay) ──
-        self.rect_pipeline.mark_layer();
-        self.text_pipeline.mark_layer();
-        if let Some(harvest_info) = harvest {
-            if let Some(ref cellar) = harvest_info.cellar {
-                self.build_root_cellar(cellar, window_width, window_height);
-            }
-        }
-
-        // ── LAYER 3: Harvest sprout menu (context menu overlay) ──
-        self.rect_pipeline.mark_layer();
-        self.text_pipeline.mark_layer();
-        if let Some(harvest_info) = harvest {
-            if let Some(ref menu) = harvest_info.sprout_menu {
-                self.build_sprout_menu(menu);
-            }
-        }
-
-        // ── LAYER 4: Search bar (overlays grid content) ──
+        // ── Search bar, over the grid and under every modal layer ──
         self.rect_pipeline.mark_layer();
         self.text_pipeline.mark_layer();
         if let Some(search_info) = search_bar {
             self.build_search_bar(search_info, content_left, content_width, content_top);
         }
 
-        // ── LAYER 5: Git completion dropdown (overlays grid) ──
+        // ── Git completion dropdown, over the grid ──
         self.rect_pipeline.mark_layer();
         self.text_pipeline.mark_layer();
         // Names and width metadata are shared; cloning this frame does not
@@ -1764,110 +1746,109 @@ impl Renderer {
             );
         }
 
-        // ── LAYER 8: Toolbar menus (on top of everything) ──
-        self.rect_pipeline.mark_layer();
-        self.text_pipeline.mark_layer();
-        if let Some(menu) = workspace_menu {
-            self.build_popup_menu(menu);
-        }
-
-        // ── LAYER 9: Session management panel (topmost overlay) ──
-        self.rect_pipeline.mark_layer();
-        self.text_pipeline.mark_layer();
-        if let Some(sp) = session_panel {
-            if sp.animation > 0.001 {
-                self.build_session_management_panel(sp, window_width, window_height);
+        // ── Modal layers, bottom first: the one drawn on top owns input ──
+        for layer in crate::ui::modal::ModalLayer::draw_order() {
+            use crate::ui::modal::ModalLayer;
+            self.rect_pipeline.mark_layer();
+            self.text_pipeline.mark_layer();
+            match layer {
+                ModalLayer::AgentsPanel => {
+                    if let Some(agents) = agents_panel
+                        && agents.animation > 0.001
+                    {
+                        self.build_agents_panel(agents, window_width, window_height);
+                    }
+                }
+                ModalLayer::CommandsPanel => {
+                    if let Some(cp) = commands_panel
+                        && cp.animation > 0.001
+                    {
+                        self.build_commands_panel(cp, window_width, window_height);
+                    }
+                }
+                ModalLayer::WorkspaceMenu => {
+                    if let Some(menu) = workspace_menu {
+                        self.build_popup_menu(menu);
+                    }
+                }
+                ModalLayer::SessionPanel => {
+                    if let Some(sp) = session_panel
+                        && sp.animation > 0.001
+                    {
+                        self.build_session_management_panel(sp, window_width, window_height);
+                    }
+                }
+                ModalLayer::Settings => {
+                    if let Some(sp) = settings_panel
+                        && sp.animation > 0.001
+                    {
+                        self.build_settings_panel(sp, window_width, window_height);
+                        if sp.dropdown_open {
+                            self.rect_pipeline.mark_layer();
+                            self.text_pipeline.mark_layer();
+                            self.build_dropdown_overlay(sp, window_width, window_height);
+                        }
+                    }
+                }
+                ModalLayer::ShortcutsPanel => {
+                    if let Some(sp) = shortcuts_panel
+                        && sp.animation > 0.001
+                    {
+                        self.build_shortcuts_panel(sp, window_width, window_height);
+                    }
+                }
+                // The palette draws whichever palette-style modal is open;
+                // at most one is.
+                ModalLayer::CommandPalette => {
+                    if let Some(palette) = command_palette
+                        && palette.animation > 0.001
+                    {
+                        self.build_command_palette(palette, window_width, window_height);
+                    }
+                }
+                ModalLayer::UnicodePicker | ModalLayer::DomainPicker => {}
+                ModalLayer::Cellar => {
+                    if let Some(cellar) = harvest.and_then(|harvest| harvest.cellar.as_ref()) {
+                        self.build_root_cellar(cellar, window_width, window_height);
+                    }
+                }
+                ModalLayer::SproutMenu => {
+                    if let Some(menu) = harvest.and_then(|harvest| harvest.sprout_menu.as_ref()) {
+                        self.build_sprout_menu(menu);
+                    }
+                }
+                ModalLayer::ContextPicker => {
+                    if let Some(ref info) = self.context_picker.clone()
+                        && info.snapshot.animation > 0.001
+                    {
+                        self.build_context_picker(info, window_width, window_height);
+                    }
+                }
+                ModalLayer::DiffReview => {
+                    if let Some(ref info) = self.diff_review.clone()
+                        && info.animation > 0.001
+                    {
+                        self.build_diff_review(info, window_width, window_height);
+                    }
+                }
+                ModalLayer::InfoOverlay => {
+                    if let Some(ref info) = self.info_overlay.clone()
+                        && info.animation > 0.001
+                    {
+                        self.build_info_overlay(info, window_width, window_height);
+                    }
+                }
+                ModalLayer::Guardrail => {
+                    if let Some(ref info) = self.guardrail.clone()
+                        && info.animation > 0.001
+                    {
+                        self.build_guardrail_confirmation(info, window_width, window_height);
+                    }
+                }
             }
         }
 
-        // ── LAYER 10: Commands panel ──
-        self.rect_pipeline.mark_layer();
-        self.text_pipeline.mark_layer();
-        if let Some(cp) = commands_panel {
-            if cp.animation > 0.001 {
-                self.build_commands_panel(cp, window_width, window_height);
-            }
-        }
-        // Side panels are never open together, so they share a layer.
-        if let Some(agents) = agents_panel
-            && agents.animation > 0.001
-        {
-            self.build_agents_panel(agents, window_width, window_height);
-        }
-
-        // ── LAYER 10.5: Settings panel (centered modal) ──
-        self.rect_pipeline.mark_layer();
-        self.text_pipeline.mark_layer();
-        if let Some(sp) = settings_panel {
-            if sp.animation > 0.001 {
-                self.build_settings_panel(sp, window_width, window_height);
-            }
-        }
-
-        // ── LAYER 10.6: Settings dropdown overlay (on top of settings panel) ──
-        self.rect_pipeline.mark_layer();
-        self.text_pipeline.mark_layer();
-        if let Some(sp) = settings_panel {
-            if sp.animation > 0.001 && sp.dropdown_open {
-                self.build_dropdown_overlay(sp, window_width, window_height);
-            }
-        }
-
-        // ── LAYER 11: Command palette (topmost overlay) ──
-        self.rect_pipeline.mark_layer();
-        self.text_pipeline.mark_layer();
-        if let Some(palette) = command_palette {
-            if palette.animation > 0.001 {
-                self.build_command_palette(palette, window_width, window_height);
-            }
-        }
-
-        // ── LAYER 12: Shortcuts panel (centered modal, same tier as palette) ──
-        self.rect_pipeline.mark_layer();
-        self.text_pipeline.mark_layer();
-        if let Some(sp) = shortcuts_panel {
-            if sp.animation > 0.001 {
-                self.build_shortcuts_panel(sp, window_width, window_height);
-            }
-        }
-
-        // ── LAYER 13: Info overlay (above everything) ──
-        self.rect_pipeline.mark_layer();
-        self.text_pipeline.mark_layer();
-        if let Some(ref info) = self.info_overlay.clone() {
-            if info.animation > 0.001 {
-                self.build_info_overlay(info, window_width, window_height);
-            }
-        }
-
-        // ── LAYER 13: Diff review overlay (topmost) ──
-        self.rect_pipeline.mark_layer();
-        self.text_pipeline.mark_layer();
-        if let Some(ref info) = self.diff_review.clone() {
-            if info.animation > 0.001 {
-                self.build_diff_review(info, window_width, window_height);
-            }
-        }
-
-        // ── LAYER 14: Context picker overlay ──
-        self.rect_pipeline.mark_layer();
-        self.text_pipeline.mark_layer();
-        if let Some(ref info) = self.context_picker.clone() {
-            if info.snapshot.animation > 0.001 {
-                self.build_context_picker(info, window_width, window_height);
-            }
-        }
-
-        // ── LAYER 15: Guardrail confirmation overlay (absolute topmost) ──
-        self.rect_pipeline.mark_layer();
-        self.text_pipeline.mark_layer();
-        if let Some(ref info) = self.guardrail.clone() {
-            if info.animation > 0.001 {
-                self.build_guardrail_confirmation(info, window_width, window_height);
-            }
-        }
-
-        // ── LAYER 16: Toasts (always on top — transient status notices) ──
+        // ── Toasts (always on top — transient status notices) ──
         self.rect_pipeline.mark_layer();
         self.text_pipeline.mark_layer();
         if !self.toasts.is_empty() {
@@ -1877,7 +1858,7 @@ impl Renderer {
             self.build_toasts(&toasts, toast_width, window_height);
         }
 
-        // ── LAYER 17: Platform IME preedit (never PTY-owned) ──
+        // ── Platform IME preedit (never PTY-owned) ──
         self.rect_pipeline.mark_layer();
         self.text_pipeline.mark_layer();
         if let Some(preedit) = ime_preedit {

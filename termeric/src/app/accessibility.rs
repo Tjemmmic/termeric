@@ -9,6 +9,7 @@ use accesskit::{
 use accesskit_winit::WindowEvent;
 use termeric_core::{Cell, CellAttrs, CellFlags, Grid, Selection};
 
+use super::modal_layer::ModalLayer;
 use super::palette_input::PaletteModal;
 use super::*;
 use crate::ui::commands::navigation::{
@@ -1010,67 +1011,31 @@ impl App {
     }
 
     fn handle_accessibility_action(&mut self, request: ActionRequest) {
-        if self.guardrail.is_active() {
-            self.handle_guardrail_accessibility_action(request);
-            self.request_redraw(RedrawReason::Accessibility);
-            return;
-        }
-        if self.info_overlay.is_active() {
-            self.handle_info_accessibility_action(request);
-            self.request_redraw(RedrawReason::Accessibility);
-            return;
-        }
-        if self.diff_review.is_active() {
-            self.handle_diff_accessibility_action(request);
-            self.request_redraw(RedrawReason::Accessibility);
-            return;
-        }
-        if self.workspace_menu.is_some() {
-            self.handle_workspace_menu_accessibility_action(request);
-            self.request_redraw(RedrawReason::Accessibility);
-            return;
-        }
-        if self.context_picker.is_active() {
-            self.handle_context_accessibility_action(request);
-            self.request_redraw(RedrawReason::Accessibility);
-            return;
-        }
-        if self
-            .harvest
-            .as_ref()
-            .is_some_and(|harvest| harvest.sprout_menu.is_some() || harvest.cellar.is_expanded())
-        {
-            self.handle_harvest_accessibility_action(request);
-            self.request_redraw(RedrawReason::Accessibility);
-            return;
-        }
-        if let Some(modal) = self.open_palette_modal() {
-            self.handle_palette_modal_accessibility_action(modal, request);
-            self.request_redraw(RedrawReason::Accessibility);
-            return;
-        }
-        if self.shortcuts_panel.is_active() {
-            self.handle_shortcuts_accessibility_action(request);
-            self.request_redraw(RedrawReason::Accessibility);
-            return;
-        }
-        if self.settings_panel.is_active() {
-            self.handle_settings_accessibility_action(request);
-            self.request_redraw(RedrawReason::Accessibility);
-            return;
-        }
-        if self.commands_panel.is_open() {
-            self.handle_commands_accessibility_action(request);
-            self.request_redraw(RedrawReason::Accessibility);
-            return;
-        }
-        if self.agents_panel.is_open() {
-            self.handle_agents_accessibility_action(request);
-            self.request_redraw(RedrawReason::Accessibility);
-            return;
-        }
-        if self.session_panel.is_open() {
-            self.handle_session_accessibility_action(request);
+        if let Some(layer) = self.top_modal_layer() {
+            match layer {
+                ModalLayer::Guardrail => self.handle_guardrail_accessibility_action(request),
+                ModalLayer::InfoOverlay => self.handle_info_accessibility_action(request),
+                ModalLayer::DiffReview => self.handle_diff_accessibility_action(request),
+                ModalLayer::ContextPicker => self.handle_context_accessibility_action(request),
+                ModalLayer::SproutMenu | ModalLayer::Cellar => {
+                    self.handle_harvest_accessibility_action(request)
+                }
+                ModalLayer::DomainPicker
+                | ModalLayer::UnicodePicker
+                | ModalLayer::CommandPalette => {
+                    if let Some(modal) = self.open_palette_modal() {
+                        self.handle_palette_modal_accessibility_action(modal, request);
+                    }
+                }
+                ModalLayer::ShortcutsPanel => self.handle_shortcuts_accessibility_action(request),
+                ModalLayer::Settings => self.handle_settings_accessibility_action(request),
+                ModalLayer::SessionPanel => self.handle_session_accessibility_action(request),
+                ModalLayer::WorkspaceMenu => {
+                    self.handle_workspace_menu_accessibility_action(request)
+                }
+                ModalLayer::CommandsPanel => self.handle_commands_accessibility_action(request),
+                ModalLayer::AgentsPanel => self.handle_agents_accessibility_action(request),
+            }
             self.request_redraw(RedrawReason::Accessibility);
             return;
         }
@@ -2760,122 +2725,7 @@ impl App {
             })
             .unwrap_or((1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0));
 
-        if self.guardrail.is_active() {
-            return self.guardrail_accessibility_snapshot(width, height);
-        }
-        if self
-            .accessibility
-            .focus_override
-            .is_some_and(|node| self.accessibility.is_guardrail_node(node))
-        {
-            self.accessibility.focus_override = None;
-        }
-        if self.info_overlay.is_active() {
-            return self.info_accessibility_snapshot(width, height);
-        }
-        if self
-            .accessibility
-            .focus_override
-            .is_some_and(|node| self.accessibility.is_info_node(node))
-        {
-            self.accessibility.focus_override = None;
-        }
-        if self.diff_review.is_active() {
-            return self.diff_accessibility_snapshot(width, height);
-        }
-        if self
-            .accessibility
-            .focus_override
-            .is_some_and(|node| self.accessibility.is_diff_node(node))
-        {
-            self.accessibility.focus_override = None;
-        }
-        if self.context_picker.is_active() {
-            return self.context_accessibility_snapshot(width, height);
-        }
-        if self
-            .accessibility
-            .focus_override
-            .is_some_and(|node| self.accessibility.is_context_node(node))
-        {
-            self.accessibility.focus_override = None;
-        }
-        if self
-            .harvest
-            .as_ref()
-            .is_some_and(|harvest| harvest.sprout_menu.is_some())
-        {
-            return self.sprout_accessibility_snapshot(width, height);
-        }
-        if self
-            .harvest
-            .as_ref()
-            .is_some_and(|harvest| harvest.cellar.is_expanded())
-        {
-            return self.cellar_accessibility_snapshot(width, height);
-        }
-        if self
-            .accessibility
-            .focus_override
-            .is_some_and(|node| self.accessibility.is_harvest_node(node))
-        {
-            self.accessibility.focus_override = None;
-        }
-        if let Some(modal) = self.open_palette_modal() {
-            return self.palette_modal_accessibility_snapshot(modal, width, height);
-        }
-        if self.accessibility.focus_override.is_some_and(|node| {
-            self.accessibility.is_domain_node(node) || self.accessibility.is_unicode_node(node)
-        }) {
-            self.accessibility.focus_override = None;
-        }
-        if self.accessibility.focus_override == Some(PALETTE_INPUT) {
-            self.accessibility.focus_override = None;
-        }
-        if self.shortcuts_panel.is_active() {
-            return self.shortcuts_accessibility_snapshot(width, height);
-        }
-        if self
-            .accessibility
-            .focus_override
-            .is_some_and(|node| self.accessibility.is_shortcuts_node(node))
-        {
-            self.accessibility.focus_override = None;
-        }
-        if self.settings_panel.is_active() {
-            return self.settings_accessibility_snapshot(width, height);
-        }
-        if self
-            .accessibility
-            .focus_override
-            .is_some_and(|node| self.accessibility.is_settings_node(node))
-        {
-            self.accessibility.focus_override = None;
-        }
-        if self.commands_panel.is_open() {
-            return self.commands_accessibility_snapshot(width, height);
-        }
-        if self
-            .accessibility
-            .focus_override
-            .is_some_and(|node| self.accessibility.is_commands_node(node))
-        {
-            self.accessibility.focus_override = None;
-        }
-        if self.agents_panel.is_open() {
-            return self.agents_accessibility_snapshot(width, height);
-        }
-        self.clear_agents_accessibility_focus();
-        if self.session_panel.is_open() {
-            return self.session_accessibility_snapshot(width, height);
-        }
-        if self
-            .accessibility
-            .focus_override
-            .is_some_and(|node| self.accessibility.is_session_node(node))
-        {
-            self.accessibility.focus_override = None;
-        }
+        // Search focus is stale whenever search is hidden, whatever is open.
         if !self.search_is_visible()
             && self
                 .accessibility
@@ -2887,15 +2737,14 @@ impl App {
         if !self.search.is_active() && self.accessibility.focus_override == Some(SEARCH_INPUT) {
             self.accessibility.focus_override = None;
         }
-        if self.workspace_menu.is_some() {
-            return self.workspace_menu_accessibility_snapshot(width, height);
-        }
-        if self
-            .accessibility
-            .focus_override
-            .is_some_and(|node| node == WORKSPACE_MENU || workspace_menu_row(node).is_some())
-        {
-            self.accessibility.focus_override = None;
+        // The top modal layer is all assistive technology sees; focus left on
+        // a layer above it has closed.
+        let top = self.top_modal_layer();
+        for layer in ModalLayer::INPUT_PRIORITY {
+            if Some(layer) == top {
+                return self.modal_layer_accessibility_snapshot(layer, width, height);
+            }
+            self.forget_modal_layer_focus(layer);
         }
 
         let mut nodes = Vec::new();
@@ -3680,6 +3529,72 @@ impl App {
                 self.accessibility.focus_override = None;
             }
             _ => {}
+        }
+    }
+
+    fn modal_layer_accessibility_snapshot(
+        &mut self,
+        layer: ModalLayer,
+        width: f32,
+        height: f32,
+    ) -> SemanticSnapshot {
+        match layer {
+            ModalLayer::Guardrail => self.guardrail_accessibility_snapshot(width, height),
+            ModalLayer::InfoOverlay => self.info_accessibility_snapshot(width, height),
+            ModalLayer::DiffReview => self.diff_accessibility_snapshot(width, height),
+            ModalLayer::ContextPicker => self.context_accessibility_snapshot(width, height),
+            ModalLayer::SproutMenu => self.sprout_accessibility_snapshot(width, height),
+            ModalLayer::Cellar => self.cellar_accessibility_snapshot(width, height),
+            ModalLayer::DomainPicker => {
+                self.palette_modal_accessibility_snapshot(PaletteModal::Domains, width, height)
+            }
+            ModalLayer::UnicodePicker => {
+                self.palette_modal_accessibility_snapshot(PaletteModal::Unicode, width, height)
+            }
+            ModalLayer::CommandPalette => {
+                self.palette_modal_accessibility_snapshot(PaletteModal::Commands, width, height)
+            }
+            ModalLayer::ShortcutsPanel => self.shortcuts_accessibility_snapshot(width, height),
+            ModalLayer::Settings => self.settings_accessibility_snapshot(width, height),
+            ModalLayer::SessionPanel => self.session_accessibility_snapshot(width, height),
+            ModalLayer::WorkspaceMenu => self.workspace_menu_accessibility_snapshot(width, height),
+            ModalLayer::CommandsPanel => self.commands_accessibility_snapshot(width, height),
+            ModalLayer::AgentsPanel => self.agents_accessibility_snapshot(width, height),
+        }
+    }
+
+    /// Drop focus left on one of `layer`'s nodes; the layer is not on top.
+    fn forget_modal_layer_focus(&mut self, layer: ModalLayer) {
+        if layer == ModalLayer::AgentsPanel {
+            self.clear_agents_accessibility_focus();
+            return;
+        }
+        let Some(node) = self.accessibility.focus_override else {
+            return;
+        };
+        let stale = match layer {
+            ModalLayer::Guardrail => self.accessibility.is_guardrail_node(node),
+            ModalLayer::InfoOverlay => self.accessibility.is_info_node(node),
+            ModalLayer::DiffReview => self.accessibility.is_diff_node(node),
+            ModalLayer::ContextPicker => self.accessibility.is_context_node(node),
+            // The two Harvest layers share their nodes, so only the lower one
+            // forgets them, once neither is on top.
+            ModalLayer::SproutMenu => false,
+            ModalLayer::Cellar => self.accessibility.is_harvest_node(node),
+            ModalLayer::DomainPicker => self.accessibility.is_domain_node(node),
+            ModalLayer::UnicodePicker => self.accessibility.is_unicode_node(node),
+            ModalLayer::CommandPalette => node == PALETTE_INPUT,
+            ModalLayer::ShortcutsPanel => self.accessibility.is_shortcuts_node(node),
+            ModalLayer::Settings => self.accessibility.is_settings_node(node),
+            ModalLayer::SessionPanel => self.accessibility.is_session_node(node),
+            ModalLayer::WorkspaceMenu => {
+                node == WORKSPACE_MENU || workspace_menu_row(node).is_some()
+            }
+            ModalLayer::CommandsPanel => self.accessibility.is_commands_node(node),
+            ModalLayer::AgentsPanel => unreachable!("handled above"),
+        };
+        if stale {
+            self.accessibility.focus_override = None;
         }
     }
 
