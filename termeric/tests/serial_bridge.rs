@@ -112,7 +112,6 @@ fn executable_bridge_configures_a_pseudoterminal_and_relays_exact_bytes() {
             "1",
             "none",
         ])
-        .env_remove("TERMERIC_REAL_CODEX_CONTRACT")
         .stdin(Stdio::from(stdin))
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr))

@@ -38,7 +38,7 @@ jobs:
           sudo apt-get install -y pkg-config libfontconfig1-dev libwayland-dev \
             libxkbcommon-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libvulkan-dev mesa-vulkan-drivers \
-            ncurses-bin vim less tmux zsh fish python3-pil
+            ncurses-bin vim less tmux zsh fish
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked

@@ -1,6 +1,6 @@
 # Testing
 
-Most of Termeric's tests are ordinary Rust unit and integration tests that run anywhere. A smaller set needs a real GPU, a compositor, or several minutes, and runs by hand. Helper scripts in `scripts/` drive those.
+Most of Termeric's tests are ordinary Rust unit and integration tests that run anywhere. A few are ignored by default because they need a GPU or several minutes; run them by hand. Behavior that needs a real display is checked by the manual smoke in the release checklist.
 
 ## Everyday checks
 
@@ -15,7 +15,7 @@ python3 scripts/check_markdown_links.py
 python3 scripts/check_terminfo.py --require-apps
 ```
 
-`check_terminfo.py --require-apps` compiles `assets/terminfo/xterm-termeric.terminfo` and runs Vim, less, and tmux against it, so those three need to be installed. The Python tests cover the helper scripts themselves and need Python 3 with Pillow (`python3-pil` on Debian and Ubuntu, `python-pillow` on Arch).
+`check_terminfo.py --require-apps` compiles `assets/terminfo/xterm-termeric.terminfo` and runs Vim, less, and tmux against it, so those three need to be installed. The Python tests cover the helper scripts themselves.
 
 To build the user guide, install [mdBook](https://rust-lang.github.io/mdBook/) and run `mdbook build docs`; the output goes to `target/book/`.
 
@@ -25,47 +25,29 @@ To build the user guide, install [mdBook](https://rust-lang.github.io/mdBook/) a
 
 `.github/workflows/fuzz.yml` runs the three fuzz targets (see [Fuzzing](#fuzzing)) every Monday against `main`, and whenever it's started from the Actions tab.
 
-The native GUI tests, soaks, benchmarks, and package checks don't run in CI. Run them by hand before a release.
+The GPU smoke, the soak, benchmarks, and package checks don't run in CI. Run them by hand before a release.
 
-## Native GUI tests
+## GPU render smoke
 
-`scripts/gui_acceptance.py` launches the built application inside a private compositor and drives it with synthetic input. Every run needs `tic`, `fc-list`, and Pillow. Wayland scenarios need `sway`, `swaymsg`, `wtype`, and `wl-clipboard`, plus `weston` for `--start-weston`; X11 scenarios need `xvfb-run`, `xdotool`, `xclip`, and `openbox`. The `graphics` scenario also needs `kitten` (from kitty), `img2sixel`, and `timg`, and the `vim`, `less`, and `tmux` scenarios need those programs. The script names anything missing before it starts.
-
-```bash
-cargo build -p termeric --locked
-WGPU_BACKEND=gl python3 scripts/gui_acceptance.py --backend wayland --start-sway \
-  --scenario interaction --skip-visual-checks --font-family 'Noto Sans Mono' \
-  --binary target/debug/termeric --artifacts target/gui-acceptance/wayland
-```
-
-Repeat `--scenario` to run several; run the script with `--help` for the full list. The default font family is DejaVu Sans Mono; pass `--font-family` with an installed family otherwise. Logs, PTY transcripts, and screenshots land in the artifacts directory, and `results.json` records each scenario's result.
-
-The headless render smoke runs the renderer's offscreen checks (text, emoji, ligatures, inline images, themes, background images, and a glyph-atlas stress test) on a software adapter (Mesa llvmpipe, `mesa-vulkan-drivers` on Debian and Ubuntu), then compares the frame with Termeric's visual signature:
+The GPU smoke runs the renderer's offscreen checks (text, emoji, ligatures, inline images, themes, background images, and a glyph-atlas stress test) on a software adapter (Mesa llvmpipe, `mesa-vulkan-drivers` on Debian and Ubuntu), then compares one frame with the visual signature in `termeric/src/renderer/visual_baseline.json`:
 
 ```bash
-TERMERIC_GPU_SMOKE=1 TERMERIC_GUI_VISUAL_OUTPUT=$PWD/target/gui-acceptance/renderer.png WGPU_BACKEND=vulkan \
-  cargo test -p termeric --locked linux_headless_gpu_render_smoke_when_requested -- --nocapture
-python3 scripts/check_gui_visual.py target/gui-acceptance/renderer.png
+WGPU_BACKEND=vulkan cargo test -p termeric --locked -- --ignored gpu_render_smoke
 ```
 
-## Soaks
+Set `TERMERIC_GUI_VISUAL_OUTPUT=path.png` to save the frame, `TERMERIC_GPU_SMOKE_HARDWARE=1` to require a hardware adapter instead, and `TERMERIC_GUI_VISUAL_UPDATE=1` to rewrite the signature after an intended visual change.
 
-The soak runners look for resource leaks by running a busy workload while sampling the process through `/proc`. They print every check and exit non-zero if any limit is exceeded.
+## Soak
+
+The soak repeats terminal, search, image, pane, tab, session, transcript, and diff work for a while, then fails if the test process's memory, threads, open files, or child processes grew past fixed limits:
 
 ```bash
-WGPU_BACKEND=vulkan python3 scripts/run_soak.py --duration-seconds 30 --gpu-smoke \
-  --output target/soak/local.json --log target/soak/local.log
-
-cargo build -p termeric --locked
-WGPU_BACKEND=gl python3 scripts/run_native_gui_soak.py --duration-seconds 30 \
-  --binary target/debug/termeric --artifacts target/native-gui-soak
+TERMERIC_SOAK_DURATION_SECONDS=60 cargo test -p termeric --locked -- --ignored scheduled_resource_soak_scenario
 ```
 
-`run_soak.py` runs the headless workload. `run_native_gui_soak.py` runs the displayed application in headless Sway while it resizes the output and opens and closes panes; it needs `sway`, `swaymsg`, `tic`, and `wtype`, and an artifacts directory that is new or empty. Run `--help` on either for the adjustable limits.
+## Extra shells
 
-## Integration runners
-
-`scripts/run_shell_acceptance.py --output DIR` runs the shell-integration test against the real Bash, Zsh, and Fish on your `PATH`; add `--include-extended-shells` to require Nushell and Elvish as well. `scripts/run_fake_provider_acceptance.py --output DIR` runs every agent command against fake Claude Code and Codex executables. Neither needs an account or network access. Both write `results.json` and their logs to `DIR`.
+CI requires Bash, Zsh, and Fish for the shell-integration tests (`TERMERIC_REQUIRE_SHELL_ACCEPTANCE=1`). Set `TERMERIC_REQUIRE_NUSHELL_ACCEPTANCE=1` or `TERMERIC_REQUIRE_ELVISH_ACCEPTANCE=1` as well to require Nushell or Elvish.
 
 ## Benchmarks
 

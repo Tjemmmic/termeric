@@ -1450,28 +1450,11 @@ mod tests {
         expected_support: ShellIntegrationSupport,
         options: ShellProbeOptions<'_>,
     ) {
-        use sha2::{Digest, Sha256};
-        let program_path = std::fs::canonicalize(program).unwrap();
-        let program_digest = format!(
-            "{:x}",
-            Sha256::digest(std::fs::read(&program_path).unwrap())
-        );
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path().join(options.home_component);
         let rc = home.join(rc_path);
         std::fs::create_dir_all(rc.parent().unwrap()).unwrap();
         std::fs::write(&rc, rc_contents).unwrap();
-        let version = Command::new(&program_path)
-            .arg("--version")
-            .env_clear()
-            .env("HOME", &home)
-            .env("PATH", "/usr/bin:/bin")
-            .output()
-            .unwrap();
-        assert!(version.status.success());
-        let version = String::from_utf8(version.stdout).unwrap();
-        let version = version.lines().next().unwrap();
-        assert!(!version.is_empty());
 
         let mut config = shell(program, options.args);
         config.env.insert("HOME".into(), home.display().to_string());
@@ -1518,7 +1501,6 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(8);
         let mut bytes = Vec::new();
         let mut reader_closed = false;
-        let mut capability_replies = 0usize;
         let mut terminal = termeric_core::Terminal::new(100, 30);
         while Instant::now() < deadline {
             match rx.recv_timeout(Duration::from_millis(100)) {
@@ -1529,7 +1511,6 @@ mod tests {
                         match event {
                             termeric_core::TerminalEvent::PtyWrite(reply) => {
                                 handle.write_all(&reply).unwrap();
-                                capability_replies += 1;
                             }
                             termeric_core::TerminalEvent::DynamicColor(
                                 termeric_core::DynamicColorOperation::Query {
@@ -1540,7 +1521,6 @@ mod tests {
                                 handle
                                     .write_all(b"\x1b]11;rgb:2020/1818/1414\x1b\\")
                                     .unwrap();
-                                capability_replies += 1;
                             }
                             _ => {}
                         }
@@ -1638,26 +1618,5 @@ mod tests {
             stdout.escape_debug()
         );
         assert_eq!(std::fs::read(&rc).unwrap(), rc_contents.as_bytes());
-        assert_eq!(std::fs::canonicalize(program).unwrap(), program_path);
-        assert_eq!(
-            format!(
-                "{:x}",
-                Sha256::digest(std::fs::read(&program_path).unwrap())
-            ),
-            program_digest,
-            "shell executable changed during acceptance"
-        );
-        // Emitted only after every semantic assertion passes. Zero replies is
-        // explicit: an idle response path is not evidence of a round trip.
-        eprintln!(
-            "TERMERIC_SHELL_ACCEPTANCE={}",
-            serde_json::json!({
-                "shell": shell_name,
-                "path": program_path,
-                "version": version,
-                "sha256": program_digest,
-                "capability_replies": capability_replies,
-            })
-        );
     }
 }

@@ -63,18 +63,13 @@ use crate::ui::settings::SettingsPanelInfo;
 use anyhow::Result;
 use std::collections::BTreeMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(test)]
 use termeric_core::CellAttrs;
 use termeric_core::grid::ColorSpec;
 use termeric_core::{CellContent, CellFlags, Color as TermColor, Grid, Selection};
 use wgpu::*;
 
-static ACCEPTANCE_SURFACE_LOSS_INJECTED: AtomicBool = AtomicBool::new(false);
-static ACCEPTANCE_SURFACE_OUTDATED_INJECTED: AtomicBool = AtomicBool::new(false);
-static ACCEPTANCE_DEVICE_LOSS_INJECTED: AtomicBool = AtomicBool::new(false);
 use winit::window::Window;
 
 use rect::RectPipeline;
@@ -693,14 +688,6 @@ pub struct Renderer {
     toasts: Vec<crate::ui::toast::ToastInfo>,
     /// Visual bell intensity (0.0 = off, 1.0 = full flash)
     bell_intensity: f32,
-    // One-shot native acceptance hook; production is unaffected unless the
-    // explicit harness variable is present at renderer construction.
-    acceptance_surface_loss_pending: bool,
-    acceptance_surface_loss_trigger: Option<PathBuf>,
-    acceptance_surface_outdated_pending: bool,
-    acceptance_surface_outdated_trigger: Option<PathBuf>,
-    acceptance_device_loss_callback: Option<RendererFailureCallback>,
-    acceptance_device_loss_trigger: Option<PathBuf>,
 }
 
 impl Renderer {
@@ -806,7 +793,7 @@ impl Renderer {
         } else {
             log::info!("Renderer diagnostics: {}", diagnostics.summary());
         }
-        if let Some(callback) = failure_callback.as_ref().cloned() {
+        if let Some(callback) = failure_callback {
             device.set_device_lost_callback(move |reason, message| {
                 callback(RendererDeviceFailure { reason, message });
             });
@@ -875,20 +862,6 @@ impl Renderer {
         let image_pipeline = ImagePipeline::new(&device, formats.render)?;
 
         let padding_physical = (padding * scale_factor).round().max(0.0);
-        let acceptance_surface_loss_trigger =
-            std::env::var_os("TERMERIC_GUI_SURFACE_LOSS_TRIGGER").map(PathBuf::from);
-        let acceptance_surface_outdated_trigger =
-            std::env::var_os("TERMERIC_GUI_SURFACE_OUTDATED_TRIGGER").map(PathBuf::from);
-        let acceptance_device_loss_trigger =
-            std::env::var_os("TERMERIC_GUI_DEVICE_LOSS_TRIGGER").map(PathBuf::from);
-        let legacy_device_loss_pending = std::env::var_os("TERMERIC_GUI_FORCE_DEVICE_LOSS_ONCE")
-            .is_some()
-            && !ACCEPTANCE_DEVICE_LOSS_INJECTED.swap(true, Ordering::AcqRel);
-        let acceptance_device_loss_callback = (legacy_device_loss_pending
-            || acceptance_device_loss_trigger.is_some())
-        .then_some(failure_callback)
-        .flatten();
-
         Ok(Self {
             window,
             surface,
@@ -936,20 +909,6 @@ impl Renderer {
             guardrail: None,
             toasts: Vec::new(),
             bell_intensity: 0.0,
-            acceptance_surface_loss_pending: std::env::var_os(
-                "TERMERIC_GUI_FORCE_SURFACE_LOSS_ONCE",
-            )
-            .is_some()
-                && !ACCEPTANCE_SURFACE_LOSS_INJECTED.swap(true, Ordering::AcqRel),
-            acceptance_surface_loss_trigger,
-            acceptance_surface_outdated_pending: std::env::var_os(
-                "TERMERIC_GUI_FORCE_SURFACE_OUTDATED_ONCE",
-            )
-            .is_some()
-                && !ACCEPTANCE_SURFACE_OUTDATED_INJECTED.swap(true, Ordering::AcqRel),
-            acceptance_surface_outdated_trigger,
-            acceptance_device_loss_callback,
-            acceptance_device_loss_trigger,
         })
     }
 
@@ -1328,40 +1287,6 @@ impl Renderer {
         pane_dividers: &[crate::panes::Divider],
         harvest: Option<&HarvestRenderInfo>,
     ) -> Result<(), SurfaceError> {
-        if std::mem::take(&mut self.acceptance_surface_loss_pending)
-            || acceptance_trigger_ready(
-                self.acceptance_surface_loss_trigger.as_deref(),
-                &ACCEPTANCE_SURFACE_LOSS_INJECTED,
-            )
-        {
-            log::info!("Injecting one surface-loss event for native GUI acceptance");
-            return Err(SurfaceError::Lost);
-        }
-        if std::mem::take(&mut self.acceptance_surface_outdated_pending)
-            || acceptance_trigger_ready(
-                self.acceptance_surface_outdated_trigger.as_deref(),
-                &ACCEPTANCE_SURFACE_OUTDATED_INJECTED,
-            )
-        {
-            log::info!("Injecting one surface-outdated event for native GUI acceptance");
-            return Err(SurfaceError::Outdated);
-        }
-        let triggered_device_loss = acceptance_trigger_ready(
-            self.acceptance_device_loss_trigger.as_deref(),
-            &ACCEPTANCE_DEVICE_LOSS_INJECTED,
-        );
-        let legacy_device_loss = self.acceptance_device_loss_trigger.is_none()
-            && self.acceptance_device_loss_callback.is_some();
-        if let Some(callback) = (legacy_device_loss || triggered_device_loss)
-            .then(|| self.acceptance_device_loss_callback.take())
-            .flatten()
-        {
-            log::info!("Injecting one device-loss event for native GUI acceptance");
-            callback(RendererDeviceFailure {
-                reason: DeviceLostReason::Unknown,
-                message: "native acceptance injection".into(),
-            });
-        }
         let output = self.surface.get_current_texture()?;
         let view = output.texture.create_view(&TextureViewDescriptor {
             format: Some(self.render_format),
@@ -2558,10 +2483,6 @@ fn multicell_cursor_geometry_expands_from_every_covered_cell() {
     assert_eq!(cursor_cell_geometry(terminal.grid(), 0, 1), (0, 1, 2, 4));
     assert_eq!(cursor_cell_geometry(terminal.grid(), 1, 4), (0, 1, 2, 4));
     assert_eq!(cursor_cell_geometry(terminal.grid(), 3, 9), (3, 9, 1, 1));
-}
-
-fn acceptance_trigger_ready(path: Option<&Path>, injected: &AtomicBool) -> bool {
-    path.is_some_and(Path::is_file) && !injected.swap(true, Ordering::AcqRel)
 }
 
 #[cfg(test)]
@@ -4822,21 +4743,5 @@ mod backend_selection_tests {
         assert!(summary.contains("backend=Vulkan"));
         assert!(summary.contains("device_type=Cpu"));
         assert!(summary.contains("software=true"));
-    }
-
-    #[test]
-    fn acceptance_fault_files_trigger_once_only_after_the_harness_arms_them() {
-        let directory = tempfile::tempdir().unwrap();
-        let trigger = directory.path().join("surface-loss");
-        let injected = AtomicBool::new(false);
-
-        assert!(!acceptance_trigger_ready(Some(&trigger), &injected));
-        std::fs::write(&trigger, b"armed\n").unwrap();
-        assert!(acceptance_trigger_ready(Some(&trigger), &injected));
-        assert!(!acceptance_trigger_ready(Some(&trigger), &injected));
-        assert!(
-            trigger.is_file(),
-            "renderer must not delete an external path"
-        );
     }
 }
