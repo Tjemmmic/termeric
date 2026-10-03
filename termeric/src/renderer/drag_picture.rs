@@ -3,6 +3,7 @@
 
 use super::Renderer;
 use super::types::DraggedTabPicture;
+use crate::ui::geometry::Bounds;
 
 /// How a surface stores the four channels of a pixel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -170,17 +171,10 @@ impl Renderer {
 
 /// The whole pixels a drawn rectangle covers within a `width` × `height`
 /// texture, as (x, y, width, height); `None` when none are covered.
-fn pixel_bounds(
-    rect: (f32, f32, f32, f32),
-    width: u32,
-    height: u32,
-) -> Option<(u32, u32, u32, u32)> {
+fn pixel_bounds(rect: Bounds, width: u32, height: u32) -> Option<(u32, u32, u32, u32)> {
     let clamp = |value: f32, limit: u32| value.round().clamp(0.0, limit as f32) as u32;
-    let (left, top) = (clamp(rect.0, width), clamp(rect.1, height));
-    let (right, bottom) = (
-        clamp(rect.0 + rect.2, width),
-        clamp(rect.1 + rect.3, height),
-    );
+    let (left, top) = (clamp(rect.x, width), clamp(rect.y, height));
+    let (right, bottom) = (clamp(rect.right(), width), clamp(rect.bottom(), height));
     (right > left && bottom > top).then(|| (left, top, right - left, bottom - top))
 }
 
@@ -267,19 +261,25 @@ mod tests {
     #[test]
     fn a_drawn_rect_covers_whole_pixels_inside_the_frame() {
         assert_eq!(
-            pixel_bounds((10.4, 4.0, 100.2, 28.0), 800, 600),
+            pixel_bounds(Bounds::new(10.4, 4.0, 100.2, 28.0), 800, 600),
             Some((10, 4, 101, 28))
         );
         assert_eq!(
-            pixel_bounds((-20.0, 4.0, 100.0, 28.0), 800, 600),
+            pixel_bounds(Bounds::new(-20.0, 4.0, 100.0, 28.0), 800, 600),
             Some((0, 4, 80, 28))
         );
         assert_eq!(
-            pixel_bounds((790.0, 4.0, 100.0, 28.0), 800, 600),
+            pixel_bounds(Bounds::new(790.0, 4.0, 100.0, 28.0), 800, 600),
             Some((790, 4, 10, 28))
         );
-        assert_eq!(pixel_bounds((900.0, 4.0, 100.0, 28.0), 800, 600), None);
-        assert_eq!(pixel_bounds((10.0, 4.0, 0.2, 28.0), 800, 600), None);
+        assert_eq!(
+            pixel_bounds(Bounds::new(900.0, 4.0, 100.0, 28.0), 800, 600),
+            None
+        );
+        assert_eq!(
+            pixel_bounds(Bounds::new(10.0, 4.0, 0.2, 28.0), 800, 600),
+            None
+        );
     }
 
     #[test]

@@ -7,6 +7,7 @@ use super::animation::OverlayAnimation;
 use super::text_input::{TextInput, TextInputEdit};
 use super::text_input_viewport::TextInputViewport;
 use crate::input::keybindings::{BindableAction, KeyChord, ShortcutCategory, ShortcutRegistry};
+use crate::ui::geometry::Bounds;
 
 const MAX_FILTER_CHARACTERS: usize = 128;
 
@@ -103,20 +104,6 @@ impl ShortcutNotice {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ShortcutsPanelRect {
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
-}
-
-impl ShortcutsPanelRect {
-    pub fn contains(self, x: f32, y: f32) -> bool {
-        x >= self.x && x <= self.x + self.width && y >= self.y && y <= self.y + self.height
-    }
-}
-
 /// Shared shortcuts-modal geometry for rendering and outside-click routing.
 #[derive(Debug, Clone, Copy)]
 pub struct ShortcutsPanelLayout {
@@ -131,8 +118,8 @@ pub struct ShortcutsPanelLayout {
     pub separator_height: f32,
     pub list_height: f32,
     pub rows_that_fit: usize,
-    pub input: ShortcutsPanelRect,
-    pub list: ShortcutsPanelRect,
+    pub input: Bounds,
+    pub list: Bounds,
 }
 
 impl ShortcutsPanelLayout {
@@ -211,13 +198,13 @@ impl ShortcutsPanelLayout {
             separator_height,
             list_height,
             rows_that_fit,
-            input: ShortcutsPanelRect {
+            input: Bounds {
                 x: panel_x + padding,
                 y: input_y,
                 width: panel_width - padding * 2.0,
                 height: input_height,
             },
-            list: ShortcutsPanelRect {
+            list: Bounds {
                 x: panel_x + padding * 0.5,
                 y: list_y,
                 width: panel_width - padding,
@@ -227,14 +214,17 @@ impl ShortcutsPanelLayout {
     }
 
     pub fn contains(&self, x: f32, y: f32) -> bool {
-        x >= self.panel_x
-            && x <= self.panel_x + self.panel_width
-            && y >= self.panel_y
-            && y <= self.panel_y + self.panel_height
+        Bounds::new(
+            self.panel_x,
+            self.panel_y,
+            self.panel_width,
+            self.panel_height,
+        )
+        .contains(x, y)
     }
 
-    pub fn row(&self, visible_index: usize) -> ShortcutsPanelRect {
-        ShortcutsPanelRect {
+    pub fn row(&self, visible_index: usize) -> Bounds {
+        Bounds {
             x: self.list.x,
             y: self.list.y + visible_index as f32 * self.row_height,
             width: self.list.width,
@@ -1130,7 +1120,7 @@ mod tests {
                         layout.input_cursor_at(
                             &text,
                             cursor,
-                            (layout.input.x + layout.input.width, view.text_y),
+                            (layout.input.right() - 0.5, view.text_y),
                             cw,
                             ch
                         ),

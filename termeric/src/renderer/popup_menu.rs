@@ -2,6 +2,7 @@
 
 use super::Renderer;
 use crate::ui::color::scale_alpha;
+use crate::ui::geometry::Bounds;
 use crate::ui::icon::Icon;
 use crate::ui::popup_menu::{MenuRow, PopupMenuLayout};
 
@@ -55,7 +56,12 @@ impl Renderer {
     pub(super) fn build_popup_menu(&mut self, menu: &PopupMenuInfo) {
         let scale = menu.layout.scale;
         let px = |logical: f32| (logical * scale).round().max(1.0);
-        let (x, y, width, height) = menu.layout.panel;
+        let Bounds {
+            x,
+            y,
+            width,
+            height,
+        } = menu.layout.panel;
         let radius = px(8.0);
         for (spread, alpha) in [(px(2.0), 0.16), (px(8.0), 0.08)] {
             self.rect_pipeline.push_rounded_rect(
@@ -88,9 +94,13 @@ impl Renderer {
             .rows
             .iter()
             .any(|row| matches!(row, PopupMenuRowInfo::Item { checked: true, .. }));
-        for (index, (row, &(row_x, row_y, row_width, row_height))) in
-            menu.rows.iter().zip(&menu.layout.rows).enumerate()
-        {
+        for (index, (row, bounds)) in menu.rows.iter().zip(&menu.layout.rows).enumerate() {
+            let Bounds {
+                x: row_x,
+                y: row_y,
+                width: row_width,
+                height: row_height,
+            } = *bounds;
             match row {
                 PopupMenuRowInfo::Separator => {
                     self.rect_pipeline.push_rect(

@@ -11,6 +11,7 @@ pub mod commands;
 pub mod layout;
 pub mod scene;
 
+use crate::ui::geometry::Bounds;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -20,7 +21,7 @@ use crate::agent_view::session::SessionId;
 use crate::agent_view::transcript::Attachment;
 use crate::ui::text_area::TextArea;
 
-use scene::{Bounds, ExpandKey, MenuKind, Target};
+use scene::{ExpandKey, MenuKind, Target};
 
 /// Default width in logical pixels.
 pub const DEFAULT_WIDTH: f32 = 440.0;

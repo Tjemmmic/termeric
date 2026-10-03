@@ -5,24 +5,11 @@
 use super::animation::OverlayAnimation;
 use super::constants::CONTENT_CHAR_SCALE;
 use crate::terminal::diff_detector::{DetectedDiff, DiffLine};
+use crate::ui::geometry::Bounds;
 
 pub const MAX_DIFF_FILENAME_CHARS: usize = 512;
 pub const MAX_DIFF_REVIEW_ROWS: usize = 4096;
 pub const MAX_DIFF_REVIEW_LINE_CHARS: usize = 4096;
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct DiffReviewRect {
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
-}
-
-impl DiffReviewRect {
-    pub fn contains(self, x: f32, y: f32) -> bool {
-        x >= self.x && x <= self.x + self.width && y >= self.y && y <= self.y + self.height
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiffReviewRow {
@@ -127,13 +114,13 @@ pub enum DiffReviewAction {
 /// accessibility. The card and its controls remain inside small windows.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DiffReviewLayout {
-    pub card: DiffReviewRect,
-    pub content: DiffReviewRect,
-    pub copy_button: DiffReviewRect,
-    pub done_button: DiffReviewRect,
+    pub card: Bounds,
+    pub content: Bounds,
+    pub copy_button: Bounds,
+    pub done_button: Bounds,
     /// Present only when reviewing an agent's change.
-    pub stage_button: Option<DiffReviewRect>,
-    pub revert_button: Option<DiffReviewRect>,
+    pub stage_button: Option<Bounds>,
+    pub revert_button: Option<Bounds>,
     pub padding: f32,
     pub title_height: f32,
     pub line_height: f32,
@@ -190,7 +177,7 @@ impl DiffReviewLayout {
         let button_height = cell_height * 1.8;
         let button_gap = cell_width * 1.5;
         let button_y = content_y + content_height + cell_height * 1.15;
-        let button = |x: f32, width: f32| DiffReviewRect {
+        let button = |x: f32, width: f32| Bounds {
             x,
             y: button_y,
             width: width.max(1.0),
@@ -221,13 +208,13 @@ impl DiffReviewLayout {
         };
 
         Self {
-            card: DiffReviewRect {
+            card: Bounds {
                 x: card_x,
                 y: card_y,
                 width: card_width,
                 height: card_height,
             },
-            content: DiffReviewRect {
+            content: Bounds {
                 x: content_x,
                 y: content_y,
                 width: content_width,
@@ -786,7 +773,7 @@ mod tests {
         }
         let last = layout.done_button;
         assert!(last.x + last.width <= layout.card.x + layout.card.width);
-        let centre = |rect: DiffReviewRect| (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
+        let centre = |rect: Bounds| (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
         let hit = |rect| {
             let (x, y) = centre(rect);
             layout.hit_test(x, y, 3)

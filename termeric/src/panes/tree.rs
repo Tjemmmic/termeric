@@ -2,9 +2,8 @@
 //!
 //! Uses a binary tree where each node is either a leaf (pane) or a split
 //! containing two children.
-
-use super::layout::PaneRect;
 use super::{Divider, DividerTarget, PANE_DIVIDER_THICKNESS};
+use crate::ui::geometry::Bounds;
 use std::collections::HashMap;
 pub use termeric_core::split::SplitDirection;
 use termeric_core::split::{LayoutShape, PaneLayoutPreset};
@@ -221,7 +220,7 @@ impl PaneNode {
     }
 
     /// Calculate layout for all panes in this subtree
-    fn calculate_layout(&self, rect: PaneRect, result: &mut HashMap<PaneId, PaneRect>) {
+    fn calculate_layout(&self, rect: Bounds, result: &mut HashMap<PaneId, Bounds>) {
         match self {
             PaneNode::Leaf(id) => {
                 result.insert(*id, rect);
@@ -240,13 +239,13 @@ impl PaneNode {
                         let first_height = (rect.height - divider_height) * ratio;
                         let second_height = rect.height - first_height - divider_height;
                         (
-                            PaneRect {
+                            Bounds {
                                 x: rect.x,
                                 y: rect.y,
                                 width: rect.width,
                                 height: first_height,
                             },
-                            PaneRect {
+                            Bounds {
                                 x: rect.x,
                                 y: rect.y + first_height + divider_height,
                                 width: rect.width,
@@ -260,13 +259,13 @@ impl PaneNode {
                         let first_width = (rect.width - divider_width) * ratio;
                         let second_width = rect.width - first_width - divider_width;
                         (
-                            PaneRect {
+                            Bounds {
                                 x: rect.x,
                                 y: rect.y,
                                 width: first_width,
                                 height: rect.height,
                             },
-                            PaneRect {
+                            Bounds {
                                 x: rect.x + first_width + divider_width,
                                 y: rect.y,
                                 width: second_width,
@@ -284,7 +283,7 @@ impl PaneNode {
 
     fn resize_target(
         &mut self,
-        rect: PaneRect,
+        rect: Bounds,
         pos_x: f32,
         pos_y: f32,
         target: DividerTarget,
@@ -321,7 +320,7 @@ impl PaneNode {
                 let first_height = (rect.height - divider_thickness) * *ratio;
                 first
                     .resize_target(
-                        PaneRect {
+                        Bounds {
                             x: rect.x,
                             y: rect.y,
                             width: rect.width,
@@ -333,7 +332,7 @@ impl PaneNode {
                     )
                     .or_else(|| {
                         second.resize_target(
-                            PaneRect {
+                            Bounds {
                                 x: rect.x,
                                 y: rect.y + first_height + divider_thickness,
                                 width: rect.width,
@@ -349,7 +348,7 @@ impl PaneNode {
                 let first_width = (rect.width - divider_thickness) * *ratio;
                 first
                     .resize_target(
-                        PaneRect {
+                        Bounds {
                             x: rect.x,
                             y: rect.y,
                             width: first_width,
@@ -361,7 +360,7 @@ impl PaneNode {
                     )
                     .or_else(|| {
                         second.resize_target(
-                            PaneRect {
+                            Bounds {
                                 x: rect.x + first_width + divider_thickness,
                                 y: rect.y,
                                 width: rect.width - first_width - divider_thickness,
@@ -402,7 +401,7 @@ impl PaneNode {
     }
 
     /// Get dividers for rendering
-    fn get_dividers(&self, rect: PaneRect, result: &mut Vec<Divider>) {
+    fn get_dividers(&self, rect: Bounds, result: &mut Vec<Divider>) {
         if let PaneNode::Split {
             local_split_id,
             domain_split_id,
@@ -430,7 +429,7 @@ impl PaneNode {
                     // Recurse into children
                     let first_height = (rect.height - divider_thickness) * ratio;
                     first.get_dividers(
-                        PaneRect {
+                        Bounds {
                             x: rect.x,
                             y: rect.y,
                             width: rect.width,
@@ -439,7 +438,7 @@ impl PaneNode {
                         result,
                     );
                     second.get_dividers(
-                        PaneRect {
+                        Bounds {
                             x: rect.x,
                             y: rect.y + first_height + divider_thickness,
                             width: rect.width,
@@ -464,7 +463,7 @@ impl PaneNode {
                     // Recurse into children
                     let first_width = (rect.width - divider_thickness) * ratio;
                     first.get_dividers(
-                        PaneRect {
+                        Bounds {
                             x: rect.x,
                             y: rect.y,
                             width: first_width,
@@ -473,7 +472,7 @@ impl PaneNode {
                         result,
                     );
                     second.get_dividers(
-                        PaneRect {
+                        Bounds {
                             x: rect.x + first_width + divider_thickness,
                             y: rect.y,
                             width: rect.width - first_width - divider_thickness,
@@ -557,14 +556,14 @@ impl PaneTree {
     }
 
     /// Calculate layout for all panes
-    pub fn calculate_layout(&self, rect: PaneRect) -> HashMap<PaneId, PaneRect> {
+    pub fn calculate_layout(&self, rect: Bounds) -> HashMap<PaneId, Bounds> {
         let mut result = HashMap::new();
         self.root.calculate_layout(rect, &mut result);
         result
     }
 
     /// Get dividers for rendering
-    pub fn get_dividers(&self, rect: PaneRect) -> Vec<Divider> {
+    pub fn get_dividers(&self, rect: Bounds) -> Vec<Divider> {
         let mut result = Vec::new();
         self.root.get_dividers(rect, &mut result);
         result
@@ -608,7 +607,7 @@ impl PaneTree {
 
     pub fn resize_target(
         &mut self,
-        rect: PaneRect,
+        rect: Bounds,
         pos_x: f32,
         pos_y: f32,
         target: DividerTarget,
@@ -652,7 +651,7 @@ mod tests {
     fn assert_tree_invariants(
         tree: &PaneTree,
         expected: &BTreeSet<u32>,
-        bounds: PaneRect,
+        bounds: Bounds,
         seed: u64,
         step: usize,
     ) {
@@ -706,7 +705,7 @@ mod tests {
     #[test]
     fn test_single_pane() {
         let tree = PaneTree::new(PaneId(0));
-        let layout = tree.calculate_layout(PaneRect {
+        let layout = tree.calculate_layout(Bounds {
             x: 0.0,
             y: 0.0,
             width: 800.0,
@@ -721,7 +720,7 @@ mod tests {
 
     #[test]
     fn local_divider_ids_survive_unrelated_collapse_and_stale_ids_fail_exactly() {
-        let bounds = PaneRect {
+        let bounds = Bounds {
             x: 0.0,
             y: 0.0,
             width: 800.0,
@@ -769,7 +768,7 @@ mod tests {
         let mut tree = PaneTree::new(PaneId(0));
         tree.split(PaneId(0), PaneId(1), SplitDirection::Vertical);
 
-        let layout = tree.calculate_layout(PaneRect {
+        let layout = tree.calculate_layout(Bounds {
             x: 0.0,
             y: 0.0,
             width: 800.0,
@@ -791,7 +790,7 @@ mod tests {
         let mut tree = PaneTree::new(PaneId(0));
         tree.split(PaneId(0), PaneId(1), SplitDirection::Horizontal);
 
-        let layout = tree.calculate_layout(PaneRect {
+        let layout = tree.calculate_layout(Bounds {
             x: 0.0,
             y: 0.0,
             width: 800.0,
@@ -833,7 +832,7 @@ mod tests {
         let mut tree = PaneTree::new(PaneId(0));
         tree.split(PaneId(0), PaneId(1), SplitDirection::Vertical);
         tree.split(PaneId(1), PaneId(2), SplitDirection::Horizontal);
-        let bounds = PaneRect::new(0.0, 0.0, 900.0, 600.0);
+        let bounds = Bounds::new(0.0, 0.0, 900.0, 600.0);
         let root = tree
             .get_dividers(bounds)
             .into_iter()
@@ -847,7 +846,7 @@ mod tests {
         let before = tree.calculate_layout(bounds);
         assert!(tree.swap(PaneId(0), PaneId(2)));
         let after = tree.calculate_layout(bounds);
-        let geometry = |rect: PaneRect| (rect.x, rect.y, rect.width, rect.height);
+        let geometry = |rect: Bounds| (rect.x, rect.y, rect.width, rect.height);
         assert_eq!(geometry(before[&PaneId(0)]), geometry(after[&PaneId(2)]));
         assert_eq!(geometry(before[&PaneId(2)]), geometry(after[&PaneId(0)]));
 
@@ -875,7 +874,7 @@ mod tests {
         const SEEDS: u64 = 128;
         const STEPS: usize = 96;
         const MAX_PANES: usize = 16;
-        let bounds = PaneRect::new(11.0, 17.0, 4096.0, 3072.0);
+        let bounds = Bounds::new(11.0, 17.0, 4096.0, 3072.0);
 
         for seed in 1..=SEEDS {
             let mut state = seed;
@@ -907,8 +906,7 @@ mod tests {
                             let before = tree.calculate_layout(bounds);
                             assert!(tree.swap(first, second));
                             let after = tree.calculate_layout(bounds);
-                            let geometry =
-                                |rect: PaneRect| (rect.x, rect.y, rect.width, rect.height);
+                            let geometry = |rect: Bounds| (rect.x, rect.y, rect.width, rect.height);
                             assert_eq!(geometry(after[&first]), geometry(before[&second]));
                             assert_eq!(geometry(after[&second]), geometry(before[&first]));
                         }
@@ -945,7 +943,7 @@ mod tests {
         let mut tree = PaneTree::new(PaneId(0));
         tree.split(PaneId(0), PaneId(1), SplitDirection::Vertical);
         tree.split(PaneId(1), PaneId(2), SplitDirection::Horizontal);
-        let bounds = PaneRect::new(0.0, 0.0, 800.0, 600.0);
+        let bounds = Bounds::new(0.0, 0.0, 800.0, 600.0);
         let before = tree.get_dividers(bounds);
         let root = before.iter().find(|divider| divider.vertical).unwrap();
         let nested = before.iter().find(|divider| !divider.vertical).unwrap();

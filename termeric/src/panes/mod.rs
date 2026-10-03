@@ -5,8 +5,6 @@
 
 mod layout;
 mod tree;
-
-pub use layout::PaneRect;
 pub use termeric_core::split::PaneLayoutPreset;
 pub(crate) use tree::PaneNode;
 pub use tree::{PaneId, PaneTree, SplitDirection};
@@ -44,6 +42,7 @@ use crate::terminal::geometry::TerminalGeometry;
 use crate::terminal::shell_integration::{
     ShellIntegrationSupport, ShellLaunch, prepare_shell_launch,
 };
+use crate::ui::geometry::Bounds;
 use anyhow::Context;
 use std::collections::HashMap;
 use std::io;
@@ -1066,7 +1065,7 @@ impl PaneManager {
         target: PaneId,
         direction: SplitDirection,
     ) -> anyhow::Result<TerminalGeometry> {
-        let layout = self.tree.calculate_layout(PaneRect {
+        let layout = self.tree.calculate_layout(Bounds {
             x: 0.0,
             y: 0.0,
             width: self.total_width,
@@ -1379,8 +1378,8 @@ impl PaneManager {
     }
 
     /// Calculate the layout for all panes
-    pub fn calculate_layout(&self) -> HashMap<PaneId, PaneRect> {
-        let root_rect = PaneRect {
+    pub fn calculate_layout(&self) -> HashMap<PaneId, Bounds> {
+        let root_rect = Bounds {
             x: 0.0,
             y: 0.0,
             width: self.total_width,
@@ -1416,7 +1415,7 @@ impl PaneManager {
         if self.zoomed.is_some() {
             return Vec::new();
         }
-        self.tree.get_dividers(PaneRect {
+        self.tree.get_dividers(Bounds {
             x: 0.0,
             y: 0.0,
             width: self.total_width,
@@ -1437,7 +1436,7 @@ impl PaneManager {
             return None;
         }
         let ratio = self.tree.resize_target(
-            PaneRect {
+            Bounds {
                 x: 0.0,
                 y: 0.0,
                 width: self.total_width,
@@ -1571,7 +1570,7 @@ impl PaneManager {
         self.validate_complete_live_layout()?;
         let changed = self
             .tree
-            .get_dividers(PaneRect {
+            .get_dividers(Bounds {
                 x: 0.0,
                 y: 0.0,
                 width: self.total_width,
@@ -1770,7 +1769,7 @@ impl PaneManager {
     }
 
     /// Iterate over all panes with their layouts
-    pub fn iter_with_layout(&self) -> impl Iterator<Item = (&Pane, PaneRect)> {
+    pub fn iter_with_layout(&self) -> impl Iterator<Item = (&Pane, Bounds)> {
         let layout = self.calculate_layout();
         self.panes
             .values()
@@ -1781,7 +1780,7 @@ impl PaneManager {
         self.panes.values()
     }
 
-    pub fn iter_panes_identified(&self) -> Vec<(PaneId, &Terminal, PaneRect, bool)> {
+    pub fn iter_panes_identified(&self) -> Vec<(PaneId, &Terminal, Bounds, bool)> {
         let layout = self.calculate_layout();
         self.panes
             .values()
@@ -1846,7 +1845,7 @@ impl PaneManager {
 #[derive(Debug, Clone)]
 pub struct PaneRenderInfo {
     /// The pane's layout rectangle
-    pub rect: PaneRect,
+    pub rect: Bounds,
     /// Whether this pane is focused
     pub is_focused: bool,
     /// Pane ID
@@ -1880,13 +1879,13 @@ pub enum DividerTarget {
 /// target wins when it is still a valid neighbor; otherwise ambiguous T-split
 /// ties resolve top-to-bottom or left-to-right, then by pane ID.
 fn navigation_target(
-    layout: &HashMap<PaneId, PaneRect>,
+    layout: &HashMap<PaneId, Bounds>,
     current_id: PaneId,
     dir: PaneDir,
     remembered: Option<PaneId>,
 ) -> Option<PaneId> {
     let current = layout.get(&current_id)?;
-    let is_neighbor = |rect: &PaneRect| match dir {
+    let is_neighbor = |rect: &Bounds| match dir {
         PaneDir::Right => {
             rect.x >= current.right() - 1.0 && rects_overlap_vertically(current, rect)
         }
@@ -1906,17 +1905,17 @@ fn navigation_target(
         return Some(id);
     }
 
-    let primary_distance = |rect: &PaneRect| match dir {
+    let primary_distance = |rect: &Bounds| match dir {
         PaneDir::Right => rect.x - current.right(),
         PaneDir::Left => current.x - rect.right(),
         PaneDir::Down => rect.y - current.bottom(),
         PaneDir::Up => current.y - rect.bottom(),
     };
-    let cross_distance = |rect: &PaneRect| match dir {
-        PaneDir::Right | PaneDir::Left => (rect.center_y() - current.center_y()).abs(),
-        PaneDir::Up | PaneDir::Down => (rect.center_x() - current.center_x()).abs(),
+    let cross_distance = |rect: &Bounds| match dir {
+        PaneDir::Right | PaneDir::Left => (rect.center()[1] - current.center()[1]).abs(),
+        PaneDir::Up | PaneDir::Down => (rect.center()[0] - current.center()[0]).abs(),
     };
-    let cross_position = |rect: &PaneRect| match dir {
+    let cross_position = |rect: &Bounds| match dir {
         PaneDir::Right | PaneDir::Left => rect.y,
         PaneDir::Up | PaneDir::Down => rect.x,
     };
@@ -1935,12 +1934,12 @@ fn navigation_target(
 }
 
 /// Check if two rectangles overlap vertically
-fn rects_overlap_vertically(a: &PaneRect, b: &PaneRect) -> bool {
+fn rects_overlap_vertically(a: &Bounds, b: &Bounds) -> bool {
     a.y < b.y + b.height && a.y + a.height > b.y
 }
 
 /// Check if two rectangles overlap horizontally
-fn rects_overlap_horizontally(a: &PaneRect, b: &PaneRect) -> bool {
+fn rects_overlap_horizontally(a: &Bounds, b: &Bounds) -> bool {
     a.x < b.x + b.width && a.x + a.width > b.x
 }
 
@@ -2587,11 +2586,11 @@ mod tests {
         );
     }
 
-    fn asymmetric_three_pane_layout() -> HashMap<PaneId, PaneRect> {
+    fn asymmetric_three_pane_layout() -> HashMap<PaneId, Bounds> {
         HashMap::from([
-            (PaneId(0), PaneRect::new(0.0, 0.0, 500.0, 800.0)),
-            (PaneId(1), PaneRect::new(500.0, 0.0, 500.0, 400.0)),
-            (PaneId(2), PaneRect::new(500.0, 400.0, 500.0, 400.0)),
+            (PaneId(0), Bounds::new(0.0, 0.0, 500.0, 800.0)),
+            (PaneId(1), Bounds::new(500.0, 0.0, 500.0, 400.0)),
+            (PaneId(2), Bounds::new(500.0, 400.0, 500.0, 400.0)),
         ])
     }
 

@@ -4,6 +4,7 @@
 use crate::config::ShellConfig;
 use crate::harvest::{HarvestMode, HarvestSource, HarvestTerminalState};
 use crate::tabs::{TabManager, TabType};
+use crate::ui::geometry::Bounds;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -751,7 +752,7 @@ fn persistent_diff_history_soak_exercises_count_and_byte_eviction() {
 fn release_benchmark_suite() {
     use crate::app::App;
     use crate::config::Config;
-    use crate::panes::{PaneId, PaneRect, PaneTree, SplitDirection};
+    use crate::panes::{PaneId, PaneTree, SplitDirection};
     use crate::renderer::benchmark_headless_renderer;
     use crate::session::transcript::benchmark_slow_transcript_enqueue;
     use crate::terminal::search::{
@@ -996,7 +997,7 @@ fn release_benchmark_suite() {
                 },
             ));
         }
-        let bounds = PaneRect::new(0.0, 0.0, 1_920.0, 1_080.0);
+        let bounds = Bounds::new(0.0, 0.0, 1_920.0, 1_080.0);
         // Prime layout allocation/code paths before measuring repeatability;
         // the variation budget compares steady samples, not one cold call
         // against four warm calls.

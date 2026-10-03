@@ -4,13 +4,14 @@
 //! `crate::ui::agent_view`; this module only turns scene primitives into
 //! rectangles, strokes, and text, clipped to their layers.
 
+use crate::ui::geometry::Bounds;
 use std::f32::consts::TAU;
 use std::sync::Arc;
 
 use super::Renderer;
 use super::icons::{draw_arc, draw_icon};
 use super::text::TextClip;
-use crate::ui::agent_view::scene::{Bounds, Layer, Prim, Scene};
+use crate::ui::agent_view::scene::{Layer, Prim, Scene};
 
 impl Renderer {
     /// Shows the panel's scene, or nothing.

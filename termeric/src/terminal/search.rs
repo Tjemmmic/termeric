@@ -3,6 +3,7 @@
 //! Provides incremental search through terminal history and visible content.
 //! Supports both literal and regex search modes.
 
+use crate::ui::geometry::Bounds;
 use regex::{Regex, RegexBuilder};
 use std::ops::RangeInclusive;
 use std::time::{Duration, Instant};
@@ -1002,20 +1003,6 @@ fn describe_regex_error(error: &regex::Error) -> String {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct SearchBarRect {
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
-}
-
-impl SearchBarRect {
-    pub fn contains(self, x: f32, y: f32) -> bool {
-        x >= self.x && x < self.x + self.width && y >= self.y && y < self.y + self.height
-    }
-}
-
 /// One shared geometry contract for painting, pointer hit-testing, and the
 /// native accessibility tree.
 ///
@@ -1024,25 +1011,25 @@ impl SearchBarRect {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SearchBarLayout {
     /// The floating box, including the error line when one is shown.
-    pub bar: SearchBarRect,
+    pub bar: Bounds,
     /// Magnifier slot at the start of the control row.
-    pub icon: SearchBarRect,
-    pub input: SearchBarRect,
-    pub filter: SearchBarRect,
-    pub case_sensitive: SearchBarRect,
-    pub regex: SearchBarRect,
+    pub icon: Bounds,
+    pub input: Bounds,
+    pub filter: Bounds,
+    pub case_sensitive: Bounds,
+    pub regex: Bounds,
     /// Right-aligned match status, sized for its text in terminal cells as an
     /// upper bound on the narrower UI face.
-    pub status: SearchBarRect,
+    pub status: Bounds,
     /// Always reserved so the box does not reflow as results arrive; they
     /// act only while `navigable`.
-    pub previous: SearchBarRect,
-    pub next: SearchBarRect,
+    pub previous: Bounds,
+    pub next: Bounds,
     /// Whether there are matches to move between.
     pub navigable: bool,
-    pub close: SearchBarRect,
+    pub close: Bounds,
     /// A second line describing an invalid regular expression.
-    pub error: Option<SearchBarRect>,
+    pub error: Option<Bounds>,
     pub text_y: f32,
 }
 
@@ -1084,7 +1071,7 @@ impl SearchBarLayout {
         let x = content_x + content_width - margin_right - width;
         let y = content_y + margin * 0.75;
         let row_y = y + inset;
-        let square = |x: f32| SearchBarRect {
+        let square = |x: f32| Bounds {
             x,
             y: row_y,
             width: control,
@@ -1110,7 +1097,7 @@ impl SearchBarLayout {
         let input_x = icon.x + icon.width + gap;
         let input_right = (status_x - gap * 2.0).max(input_x);
         let text_y = row_y + (control - cell_height) / 2.0;
-        let error = info.regex_error.as_ref().map(|_| SearchBarRect {
+        let error = info.regex_error.as_ref().map(|_| Bounds {
             x: input_x,
             y: row_y + control,
             width: (x + width - inset - input_x).max(0.0),
@@ -1118,14 +1105,14 @@ impl SearchBarLayout {
         });
         let height = row_height + error.map_or(0.0, |line| line.height);
         Self {
-            bar: SearchBarRect {
+            bar: Bounds {
                 x,
                 y,
                 width,
                 height,
             },
             icon,
-            input: SearchBarRect {
+            input: Bounds {
                 x: input_x,
                 y: row_y,
                 width: (input_right - input_x).max(0.0),
@@ -1134,7 +1121,7 @@ impl SearchBarLayout {
             filter,
             case_sensitive,
             regex,
-            status: SearchBarRect {
+            status: Bounds {
                 x: status_x,
                 y: row_y,
                 width: status_width,

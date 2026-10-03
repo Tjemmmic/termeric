@@ -10,6 +10,7 @@
 use super::navigation::{CommandControl, CommandNavigation, CommandNavigationKey};
 use crate::config::CustomCommand;
 use crate::ui::animation::PanelAnimation;
+use crate::ui::geometry::Bounds;
 use crate::ui::text_input::{TextInput, TextInputEdit};
 use crate::ui::text_input_viewport::TextInputViewport;
 use unicode_segmentation::UnicodeSegmentation;
@@ -92,45 +93,29 @@ pub struct CommandsPanelInfo {
     pub form_cursor: usize,
 }
 
-/// Rectangle used by the commands panel's shared render, hit-test, and
-/// accessibility geometry.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct CommandsPanelRect {
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
-}
-
-impl CommandsPanelRect {
-    pub fn contains(self, x: f32, y: f32) -> bool {
-        x >= self.x && x <= self.x + self.width && y >= self.y && y <= self.y + self.height
-    }
-}
-
 /// Inline form geometry within the commands panel.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CommandsFormLayout {
-    pub container: CommandsPanelRect,
-    pub name_input: CommandsPanelRect,
-    pub command_input: CommandsPanelRect,
-    pub save_button: CommandsPanelRect,
-    pub cancel_button: CommandsPanelRect,
+    pub container: Bounds,
+    pub name_input: Bounds,
+    pub command_input: Bounds,
+    pub save_button: Bounds,
+    pub cancel_button: Bounds,
 }
 
 /// Single source of truth for custom-command panel geometry.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CommandsPanelLayout {
-    pub panel: CommandsPanelRect,
+    pub panel: Bounds,
     pub padding: f32,
     pub small_padding: f32,
     pub title_y: f32,
     /// Line of explanatory text under the title.
     pub note_y: f32,
     pub separator_y: f32,
-    pub close_button: CommandsPanelRect,
+    pub close_button: Bounds,
     /// The header's "+" control, beside close.
-    pub new_button: CommandsPanelRect,
+    pub new_button: Bounds,
     pub form: Option<CommandsFormLayout>,
     pub list_start_y: f32,
     pub row_height: f32,
@@ -219,13 +204,13 @@ impl CommandsPanelLayout {
         let small_padding = cell_width * 0.8;
         let title_y = top + cell_height * 0.9;
         let control = cell_height * 1.5;
-        let close_button = CommandsPanelRect {
+        let close_button = Bounds {
             x: panel_x + panel_width - padding * 0.5 - control,
             y: title_y,
             width: control,
             height: control,
         };
-        let new_button = CommandsPanelRect {
+        let new_button = Bounds {
             x: close_button.x - control - cell_width * 0.25,
             ..close_button
         };
@@ -249,31 +234,31 @@ impl CommandsPanelLayout {
             let cancel_x = save_x - cancel_width - small_padding;
             let form_height = buttons_y + save_height + small_padding - list_start_y;
             let layout = CommandsFormLayout {
-                container: CommandsPanelRect {
+                container: Bounds {
                     x: form_x,
                     y: list_start_y,
                     width: form_width,
                     height: form_height,
                 },
-                name_input: CommandsPanelRect {
+                name_input: Bounds {
                     x: input_x,
                     y: field_y,
                     width: input_width,
                     height: field_height,
                 },
-                command_input: CommandsPanelRect {
+                command_input: Bounds {
                     x: input_x,
                     y: command_y,
                     width: input_width,
                     height: field_height,
                 },
-                save_button: CommandsPanelRect {
+                save_button: Bounds {
                     x: save_x,
                     y: buttons_y,
                     width: save_width,
                     height: save_height,
                 },
-                cancel_button: CommandsPanelRect {
+                cancel_button: Bounds {
                     x: cancel_x,
                     y: buttons_y,
                     width: cancel_width,
@@ -285,7 +270,7 @@ impl CommandsPanelLayout {
         });
         let row_height = cell_height * 3.0;
         Self {
-            panel: CommandsPanelRect {
+            panel: Bounds {
                 x: panel_x,
                 y: top,
                 width: panel_width,
@@ -361,13 +346,13 @@ impl CommandsPanelLayout {
         }
     }
 
-    pub fn command_row(self, index: usize) -> CommandsPanelRect {
+    pub fn command_row(self, index: usize) -> Bounds {
         let relative = if index >= self.scroll_offset {
             (index - self.scroll_offset) as f32
         } else {
             -((self.scroll_offset - index) as f32)
         };
-        CommandsPanelRect {
+        Bounds {
             x: self.panel.x,
             y: self.list_start_y + relative * self.row_height,
             width: self.panel.width,
@@ -375,7 +360,7 @@ impl CommandsPanelLayout {
         }
     }
 
-    pub fn control_rect(self, control: CommandControl) -> Option<CommandsPanelRect> {
+    pub fn control_rect(self, control: CommandControl) -> Option<Bounds> {
         match control {
             CommandControl::New => Some(self.new_button),
             CommandControl::Close => Some(self.close_button),
@@ -390,21 +375,21 @@ impl CommandsPanelLayout {
     }
 
     /// Everything on the row left of Delete runs the command.
-    pub fn command_run(self, index: usize) -> CommandsPanelRect {
+    pub fn command_run(self, index: usize) -> Bounds {
         let row = self.command_row(index);
         let delete = self.command_delete(index);
-        CommandsPanelRect {
+        Bounds {
             width: (delete.x - row.x).max(0.0),
             ..row
         }
     }
 
     /// The row's Delete button, drawn while the row is hovered or focused.
-    pub fn command_delete(self, index: usize) -> CommandsPanelRect {
+    pub fn command_delete(self, index: usize) -> Bounds {
         let row = self.command_row(index);
         let width = self.cell_width * 8.0;
         let height = self.cell_height * 1.5;
-        CommandsPanelRect {
+        Bounds {
             x: self.panel.x + self.panel.width - self.padding - width,
             y: row.y + (row.height - height) / 2.0,
             width,
@@ -986,8 +971,7 @@ mod tests {
 
     #[test]
     fn panel_sits_below_the_toolbar_and_hover_names_the_control_under_the_pointer() {
-        let centre =
-            |rect: CommandsPanelRect| (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
+        let centre = |rect: Bounds| (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
         let layout = CommandsPanelLayout::calculate(1000.0, 800.0, 34.0, 10.0, 20.0, 1.0, false, 3);
         assert_eq!(layout.panel.y, 34.0);
         assert_eq!(layout.panel.height, 766.0);
@@ -1090,7 +1074,7 @@ mod tests {
                         assert!(panel.place_form_caret(target, cursor));
                         assert_eq!(panel.active_input().unwrap().text(), text);
                     }
-                    for (x, expected) in [(rect.x, 0), (rect.x + rect.width, text.len())] {
+                    for (x, expected) in [(rect.x, 0), (rect.right() - 0.5, text.len())] {
                         assert!(matches!(layout.input_click(&info, x, rect.y),
                             Some(CommandsPanelAction::PlaceCaret { cursor, .. }) if cursor == expected));
                     }

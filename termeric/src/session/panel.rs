@@ -3,6 +3,7 @@
 //! A slide-in panel for listing, loading, and deleting saved sessions.
 
 use crate::ui::animation::PanelAnimation;
+use crate::ui::geometry::Bounds;
 use crate::ui::text_input::{TextInput, TextInputEdit};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -88,32 +89,18 @@ pub struct SessionPanelInfo {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct SessionPanelRect {
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
-}
-
-impl SessionPanelRect {
-    pub fn contains(self, x: f32, y: f32) -> bool {
-        x >= self.x && x <= self.x + self.width && y >= self.y && y <= self.y + self.height
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SessionRenameLayout {
-    pub input: SessionPanelRect,
-    pub save_button: SessionPanelRect,
-    pub cancel_button: SessionPanelRect,
+    pub input: Bounds,
+    pub save_button: Bounds,
+    pub cancel_button: Bounds,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SessionEntryLayout {
-    pub row: SessionPanelRect,
-    pub load_button: SessionPanelRect,
-    pub rename_button: Option<SessionPanelRect>,
-    pub delete_button: SessionPanelRect,
+    pub row: Bounds,
+    pub load_button: Bounds,
+    pub rename_button: Option<Bounds>,
+    pub delete_button: Bounds,
 }
 
 /// Shared workspace/session geometry for rendering, hit testing, hover, and
@@ -121,18 +108,18 @@ pub struct SessionEntryLayout {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SessionPanelLayout {
     window_width: f32,
-    pub panel: SessionPanelRect,
+    pub panel: Bounds,
     pub padding_x: f32,
     pub padding_y: f32,
     pub title_y: f32,
     /// Line of explanatory text under the title.
     pub note_y: f32,
-    pub close_button: SessionPanelRect,
+    pub close_button: Bounds,
     /// Returns from tab snapshots to workspaces.
-    pub back_button: Option<SessionPanelRect>,
+    pub back_button: Option<Bounds>,
     /// Opens tab snapshots from the workspace list. Reserved in workspace
     /// mode and drawn only when snapshots exist.
-    pub snapshots_link: Option<SessionPanelRect>,
+    pub snapshots_link: Option<Bounds>,
     pub rename: Option<SessionRenameLayout>,
     pub separator_y: f32,
     pub list_start_y: f32,
@@ -217,13 +204,13 @@ impl SessionPanelLayout {
         let padding_y = cell_height * 0.5;
         let title_y = top + cell_height * 0.9;
         let control = cell_height * 1.5;
-        let close_button = SessionPanelRect {
+        let close_button = Bounds {
             x: panel_x + panel_width - padding_x * 0.5 - control,
             y: title_y,
             width: control,
             height: control,
         };
-        let back_button = (!workspaces).then_some(SessionPanelRect {
+        let back_button = (!workspaces).then_some(Bounds {
             x: panel_x + padding_x * 0.5,
             y: title_y,
             width: control,
@@ -238,19 +225,19 @@ impl SessionPanelLayout {
             let cancel_x = panel_x + panel_width - padding_x - cancel_width;
             let save_x = cancel_x - cell_width * 0.5 - save_width;
             SessionRenameLayout {
-                input: SessionPanelRect {
+                input: Bounds {
                     x: panel_x + padding_x,
                     y: form_y,
                     width: (save_x - cell_width * 0.5 - (panel_x + padding_x)).max(cell_width),
                     height: form_height,
                 },
-                save_button: SessionPanelRect {
+                save_button: Bounds {
                     x: save_x,
                     y: form_y,
                     width: save_width,
                     height: form_height,
                 },
-                cancel_button: SessionPanelRect {
+                cancel_button: Bounds {
                     x: cancel_x,
                     y: form_y,
                     width: cancel_width,
@@ -264,7 +251,7 @@ impl SessionPanelLayout {
         let list_start_y = separator_y + padding_y;
         let row_height = (cell_height * 3.5).max(52.0);
         let link_height = cell_height * 2.2;
-        let snapshots_link = workspaces.then_some(SessionPanelRect {
+        let snapshots_link = workspaces.then_some(Bounds {
             x: panel_x,
             y: window_height - link_height,
             width: panel_width,
@@ -276,7 +263,7 @@ impl SessionPanelLayout {
             .max(1.0) as usize;
         Self {
             window_width,
-            panel: SessionPanelRect {
+            panel: Bounds {
                 x: panel_x,
                 y: top,
                 width: panel_width,
@@ -302,7 +289,7 @@ impl SessionPanelLayout {
     }
 
     pub fn entry(self, visible_index: usize) -> SessionEntryLayout {
-        let row = SessionPanelRect {
+        let row = Bounds {
             x: self.panel.x,
             y: self.list_start_y + visible_index as f32 * self.row_height,
             width: self.panel.width,
@@ -312,7 +299,7 @@ impl SessionPanelLayout {
         let button_y = row.y + self.padding_y + self.cell_height * 0.1;
         let delete_width = self.cell_width * 8.0;
         let delete_x = self.panel.x + self.panel.width - self.padding_x - delete_width;
-        let delete_button = SessionPanelRect {
+        let delete_button = Bounds {
             x: delete_x,
             y: button_y,
             width: delete_width,
@@ -323,7 +310,7 @@ impl SessionPanelLayout {
             let x = delete_x - width - self.cell_width * 0.5;
             (
                 x,
-                Some(SessionPanelRect {
+                Some(Bounds {
                     x,
                     y: button_y,
                     width,
@@ -334,7 +321,7 @@ impl SessionPanelLayout {
             (delete_x, None)
         };
         let load_width = self.cell_width * 6.0;
-        let load_button = SessionPanelRect {
+        let load_button = Bounds {
             x: load_anchor_x - load_width - self.cell_width * 0.5,
             y: button_y,
             width: load_width,
@@ -1127,8 +1114,7 @@ mod tests {
 
     #[test]
     fn header_and_footer_controls_are_hit_exactly_and_rows_stay_above_the_link() {
-        let centre =
-            |rect: SessionPanelRect| (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
+        let centre = |rect: Bounds| (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
         let workspaces =
             SessionPanelLayout::calculate(1000.0, 800.0, 34.0, 10.0, 20.0, 1.0, false, true, 40);
         assert!(workspaces.panel.y == 34.0 && workspaces.back_button.is_none());

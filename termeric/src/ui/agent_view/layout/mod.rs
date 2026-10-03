@@ -11,6 +11,7 @@ mod screens;
 
 pub use screens::session_summary;
 
+use crate::ui::geometry::Bounds;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -30,7 +31,7 @@ use super::colors::Colors;
 use crate::ui::icon::Icon;
 
 use super::scene::{
-    Bounds, Caret, ComposerGeometry, Hit, HitRole, Layer, MenuAction, MenuKind, Node, Prim, Scene,
+    Caret, ComposerGeometry, Hit, HitRole, Layer, MenuAction, MenuKind, Node, Prim, Scene,
     SpanPaint, Target, TextNode, composer_layout,
 };
 use super::{AgentViewState, Focus, Layout, OpenMenu, Screen};

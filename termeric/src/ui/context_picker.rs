@@ -1,5 +1,6 @@
 //! Request-scoped context assembly for developer-tool terminal sessions.
 
+use crate::ui::geometry::Bounds;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -16,20 +17,6 @@ pub const MAX_CONTEXT_PATH_CHARS: usize = 1024;
 pub const MAX_CONTEXT_SOURCE_CHARS: usize = 10_000;
 pub const MAX_ASSEMBLED_CONTEXT_CHARS: usize = 64_000;
 const CONTEXT_COMMAND_TIMEOUT: Duration = Duration::from_secs(3);
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ContextPickerRect {
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
-}
-
-impl ContextPickerRect {
-    pub fn contains(self, x: f32, y: f32) -> bool {
-        x >= self.x && x <= self.x + self.width && y >= self.y && y <= self.y + self.height
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ContextSourceId {
@@ -151,11 +138,11 @@ impl ContextPickerSnapshot {
 /// accessibility semantics.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ContextPickerLayout {
-    pub card: ContextPickerRect,
-    pub content: ContextPickerRect,
-    pub file_input: ContextPickerRect,
-    pub cancel_button: ContextPickerRect,
-    pub primary_button: ContextPickerRect,
+    pub card: Bounds,
+    pub content: Bounds,
+    pub file_input: Bounds,
+    pub cancel_button: Bounds,
+    pub primary_button: Bounds,
     pub padding: f32,
     pub title_height: f32,
     pub row_height: f32,
@@ -213,31 +200,31 @@ impl ContextPickerLayout {
         let primary_x = cancel_x + cancel_width + button_gap;
 
         Self {
-            card: ContextPickerRect {
+            card: Bounds {
                 x: card_x,
                 y: card_y,
                 width: card_width,
                 height: card_height,
             },
-            content: ContextPickerRect {
+            content: Bounds {
                 x: content_x,
                 y: content_y,
                 width: content_width,
                 height: content_height,
             },
-            file_input: ContextPickerRect {
+            file_input: Bounds {
                 x: content_x,
                 y: content_y + row_height * 0.75,
                 width: content_width,
                 height: row_height,
             },
-            cancel_button: ContextPickerRect {
+            cancel_button: Bounds {
                 x: cancel_x,
                 y: button_y,
                 width: cancel_width,
                 height: button_height,
             },
-            primary_button: ContextPickerRect {
+            primary_button: Bounds {
                 x: primary_x,
                 y: button_y,
                 width: primary_width,

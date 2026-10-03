@@ -6,6 +6,7 @@
 //! Blocking errors that demand acknowledgement still go through
 //! `info_overlay` (the full modal card).
 
+use crate::ui::geometry::Bounds;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
@@ -282,17 +283,9 @@ fn bound_message(message: String) -> String {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ToastRect {
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ToastPlacement {
     pub toast_index: usize,
-    pub rect: ToastRect,
+    pub rect: Bounds,
 }
 
 /// Shared toast placement used by rendering and accessibility bounds.
@@ -320,7 +313,7 @@ pub fn toast_layout(
         let x = window_width - width - right_margin + (1.0 - toast.opacity) * (cell_width * 2.0);
         placements.push(ToastPlacement {
             toast_index,
-            rect: ToastRect {
+            rect: Bounds {
                 x,
                 y,
                 width,

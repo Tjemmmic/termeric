@@ -19,6 +19,7 @@ pub mod context_picker;
 pub mod cursor_motion;
 pub mod diff_review;
 pub mod domain_picker;
+pub mod geometry;
 pub mod icon;
 pub mod info_overlay;
 pub mod popup_menu;

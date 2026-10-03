@@ -390,6 +390,7 @@ fn completion_text_chars(value: &str, cells: usize) -> impl Iterator<Item = char
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::geometry::Bounds;
 
     fn info(count: usize, selected: Option<usize>) -> GitCompletionInfo {
         GitCompletionInfo {
@@ -426,7 +427,7 @@ mod tests {
             selection: None,
             dynamic_colors: terminal.presentation_dynamic_colors(),
             extra_cursors: terminal.presentation_extra_cursors(),
-            rect: crate::panes::PaneRect {
+            rect: Bounds {
                 x: origin.0,
                 y: origin.1,
                 width: 320.0,

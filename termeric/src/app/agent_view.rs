@@ -6,6 +6,7 @@
 //! the window and end with it; the agents keep their logs, so they can be
 //! continued later.
 
+use crate::ui::geometry::Bounds;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -21,7 +22,7 @@ use crate::ui::agent_view::colors::Colors;
 use crate::ui::agent_view::layout::{
     self, AgentAvailability, Input, NewSessionInfo, PastSession, Suggestions,
 };
-use crate::ui::agent_view::scene::{Bounds, Scene};
+use crate::ui::agent_view::scene::Scene;
 use crate::ui::agent_view::{AgentViewState, Focus, Layout, Screen};
 
 /// Earlier conversations listed per folder.
@@ -1889,7 +1890,7 @@ mod tests {
         let scene = {
             let sessions = app.agent_view.by_recency();
             let input = layout::Input {
-                panel: crate::ui::agent_view::scene::Bounds::new(1000.0, 34.0, 440.0, 866.0),
+                panel: crate::ui::geometry::Bounds::new(1000.0, 34.0, 440.0, 866.0),
                 scale: 1.0,
                 now: Instant::now() + std::time::Duration::from_secs(1),
                 colors: &colors,

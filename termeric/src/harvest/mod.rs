@@ -9,11 +9,9 @@ mod cellar;
 mod indicators;
 pub mod sprouts;
 
-pub use cellar::{
-    CellarAction, CellarLayout, CellarRect, CommandEntry, MAX_HARVEST_COMMAND_BYTES, RootCellar,
-};
+pub use cellar::{CellarAction, CellarLayout, CommandEntry, MAX_HARVEST_COMMAND_BYTES, RootCellar};
 pub use indicators::GrowthIndicator;
-pub use sprouts::{SproutAvailability, SproutMenu, SproutMenuLayout, SproutMenuRect};
+pub use sprouts::{SproutAvailability, SproutMenu, SproutMenuLayout};
 
 use termeric_core::CommandRegion;
 use termeric_core::shell::PromptTracker;

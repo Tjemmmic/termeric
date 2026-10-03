@@ -8,6 +8,7 @@ use sublime_fuzzy::FuzzySearch;
 use super::super::animation::OverlayAnimation;
 use super::super::text_input::{TextInput, TextInputEdit};
 use crate::input::keybindings::{BindableAction, ShortcutRegistry};
+use crate::ui::geometry::Bounds;
 use crate::ui::scroll::reveal_row;
 
 const MAX_QUERY_CHARACTERS: usize = 256;
@@ -192,10 +193,13 @@ impl PaletteLayout {
     }
 
     pub fn contains(&self, x: f32, y: f32) -> bool {
-        x >= self.panel_x
-            && x <= self.panel_x + self.panel_width
-            && y >= self.panel_y
-            && y <= self.panel_y + self.panel_height
+        Bounds::new(
+            self.panel_x,
+            self.panel_y,
+            self.panel_width,
+            self.panel_height,
+        )
+        .contains(x, y)
     }
 
     /// Map a y-coordinate to the 0-based visible row, if inside the list area.

@@ -632,7 +632,7 @@ pub struct Renderer {
     tab_bar_hover_progress: f32,
     tab_drag: TabDragVisual,
     /// Where this frame drew the dragged tab, lifted over the others.
-    dragged_tab_surface: Option<(f32, f32, f32, f32)>,
+    dragged_tab_surface: Option<crate::ui::geometry::Bounds>,
     /// The dragged tab copied from the last frame that asked for it.
     dragged_tab_picture: Option<DraggedTabPicture>,
     /// The surface can be copied from, so the dragged tab can be pictured.

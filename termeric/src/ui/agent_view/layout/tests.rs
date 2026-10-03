@@ -1,3 +1,4 @@
+use crate::ui::geometry::Bounds;
 use std::path::PathBuf;
 use std::time::Instant;
 

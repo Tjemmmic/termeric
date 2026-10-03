@@ -4,6 +4,7 @@
 //! with branching for piped commands and color-coding by exit status.
 
 use super::HarvestSource;
+use crate::ui::geometry::Bounds;
 use std::collections::VecDeque;
 use termeric_core::CommandRegion;
 
@@ -109,20 +110,6 @@ impl CommandEntry {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct CellarRect {
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
-}
-
-impl CellarRect {
-    pub fn contains(self, x: f32, y: f32) -> bool {
-        x >= self.x && x < self.x + self.width && y >= self.y && y < self.y + self.height
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CellarAction {
     None,
@@ -134,12 +121,12 @@ pub enum CellarAction {
 /// Shared Root Cellar geometry for rendering, pointer actions, and AccessKit.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CellarLayout {
-    pub panel: CellarRect,
-    pub close: CellarRect,
-    pub summary: CellarRect,
-    pub list: CellarRect,
-    pub rows: Vec<(u64, CellarRect)>,
-    pub scrollbar: CellarRect,
+    pub panel: Bounds,
+    pub close: Bounds,
+    pub summary: Bounds,
+    pub list: Bounds,
+    pub rows: Vec<(u64, Bounds)>,
+    pub scrollbar: Bounds,
     pub row_height: f32,
     pub max_visible: usize,
 }
@@ -175,7 +162,7 @@ impl CellarLayout {
             .map(|(index, id)| {
                 (
                     *id,
-                    CellarRect {
+                    Bounds {
                         x: panel_x + cell_width * 0.5,
                         y: list_y + index as f32 * cell_height,
                         width: (panel_width - cell_width * 1.5).max(0.0),
@@ -185,32 +172,32 @@ impl CellarLayout {
             })
             .collect();
         Self {
-            panel: CellarRect {
+            panel: Bounds {
                 x: panel_x,
                 y: panel_y,
                 width: panel_width,
                 height: panel_height,
             },
-            close: CellarRect {
+            close: Bounds {
                 x: panel_x + panel_width - cell_width * 2.0,
                 y: header_y,
                 width: cell_width,
                 height: cell_height,
             },
-            summary: CellarRect {
+            summary: Bounds {
                 x: panel_x + cell_width,
                 y: header_y + cell_height,
                 width: (panel_width - cell_width * 2.0).max(0.0),
                 height: cell_height,
             },
-            list: CellarRect {
+            list: Bounds {
                 x: panel_x + cell_width * 0.5,
                 y: list_y,
                 width: (panel_width - cell_width * 1.5).max(0.0),
                 height: list_height,
             },
             rows,
-            scrollbar: CellarRect {
+            scrollbar: Bounds {
                 x: panel_x + panel_width - cell_width,
                 y: list_y,
                 width: 4.0,

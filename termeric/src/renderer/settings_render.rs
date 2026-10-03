@@ -466,19 +466,19 @@ impl Renderer {
         let fade = |color: [f32; 4]| scale_alpha(color, anim);
         let radius = px(8.0);
         self.rect_pipeline.push_rounded_rect(
-            rect.x,
-            rect.y + px(2.0),
-            rect.width,
-            rect.height,
+            rect.bounds.x,
+            rect.bounds.y + px(2.0),
+            rect.bounds.width,
+            rect.bounds.height,
             [0.0, 0.0, 0.0, 0.25 * anim],
             radius,
         );
         let line = px(1.0);
         self.rect_pipeline.push_rounded_rect(
-            rect.x,
-            rect.y,
-            rect.width,
-            rect.height,
+            rect.bounds.x,
+            rect.bounds.y,
+            rect.bounds.width,
+            rect.bounds.height,
             fade(self.ui.menu_border),
             radius,
         );
@@ -489,10 +489,10 @@ impl Renderer {
             anim,
         ];
         self.rect_pipeline.push_rounded_rect(
-            rect.x + line,
-            rect.y + line,
-            rect.width - line * 2.0,
-            rect.height - line * 2.0,
+            rect.bounds.x + line,
+            rect.bounds.y + line,
+            rect.bounds.width - line * 2.0,
+            rect.bounds.height - line * 2.0,
             surface,
             radius - line,
         );
@@ -506,13 +506,13 @@ impl Renderer {
             .take(rect.visible_options)
             .enumerate()
         {
-            let option_y = rect.y + 4.0 + visible_index as f32 * rect.option_height;
+            let option_y = rect.bounds.y + 4.0 + visible_index as f32 * rect.option_height;
             let highlighted = index == info.dropdown_highlight;
             if highlighted || info.dropdown_hovered == Some(index) {
                 self.rect_pipeline.push_rounded_rect(
-                    rect.x + 4.0,
+                    rect.bounds.x + 4.0,
                     option_y,
-                    rect.width - 8.0,
+                    rect.bounds.width - 8.0,
                     rect.option_height,
                     if highlighted {
                         fade(self.ui.menu_highlight)
@@ -524,10 +524,10 @@ impl Renderer {
             }
             self.push_ui_label(
                 option,
-                rect.x + cell_width * 1.2,
+                rect.bounds.x + cell_width * 1.2,
                 option_y,
                 rect.option_height,
-                rect.width - cell_width * 2.4,
+                rect.bounds.width - cell_width * 2.4,
                 size,
                 fade(self.ui.menu_text),
             );

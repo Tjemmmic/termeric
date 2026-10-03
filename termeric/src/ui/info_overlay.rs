@@ -3,26 +3,13 @@
 use super::animation::OverlayAnimation;
 use super::constants::CONTENT_CHAR_SCALE;
 use super::text_input::{TextInput, TextInputEdit, grapheme_boundary};
+use crate::ui::geometry::Bounds;
 
 pub const MAX_INFO_TITLE_CHARS: usize = 256;
 pub const MAX_INFO_LINES: usize = 512;
 pub const MAX_INFO_LINE_CHARS: usize = 4096;
 pub const MAX_INFO_CHOICES: usize = 32;
 pub const MAX_INFO_INPUT_BYTES: usize = 4096;
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct InfoOverlayRect {
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
-}
-
-impl InfoOverlayRect {
-    pub fn contains(self, x: f32, y: f32) -> bool {
-        x >= self.x && x <= self.x + self.width && y >= self.y && y <= self.y + self.height
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InfoOverlayChoice {
@@ -92,10 +79,10 @@ struct InfoOverlayInput {
 /// accessibility. Content is always bounded so controls remain on-screen.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct InfoOverlayLayout {
-    pub card: InfoOverlayRect,
-    pub content: InfoOverlayRect,
-    pub copy_button: InfoOverlayRect,
-    pub continue_button: InfoOverlayRect,
+    pub card: Bounds,
+    pub content: Bounds,
+    pub copy_button: Bounds,
+    pub continue_button: Bounds,
     pub padding: f32,
     pub title_height: f32,
     pub line_height: f32,
@@ -157,25 +144,25 @@ impl InfoOverlayLayout {
         let continue_x = copy_x + copy_width + button_gap;
 
         Self {
-            card: InfoOverlayRect {
+            card: Bounds {
                 x: card_x,
                 y: card_y,
                 width: card_width,
                 height: card_height,
             },
-            content: InfoOverlayRect {
+            content: Bounds {
                 x: content_x,
                 y: content_y,
                 width: content_rect_width,
                 height: content_height,
             },
-            copy_button: InfoOverlayRect {
+            copy_button: Bounds {
                 x: copy_x,
                 y: button_y,
                 width: copy_width,
                 height: button_height,
             },
-            continue_button: InfoOverlayRect {
+            continue_button: Bounds {
                 x: continue_x,
                 y: button_y,
                 width: continue_width,
@@ -212,14 +199,14 @@ impl InfoOverlayLayout {
         source_line: usize,
         scroll_offset: usize,
         total_lines: usize,
-    ) -> Option<InfoOverlayRect> {
+    ) -> Option<Bounds> {
         if source_line >= total_lines
             || source_line < scroll_offset
             || source_line >= scroll_offset.saturating_add(self.rows_that_fit)
         {
             return None;
         }
-        Some(InfoOverlayRect {
+        Some(Bounds {
             x: self.content.x,
             y: self.content.y + source_line.saturating_sub(scroll_offset) as f32 * self.line_height,
             width: self.content.width,

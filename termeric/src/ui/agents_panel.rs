@@ -9,6 +9,7 @@
 
 use crate::tabs::TerminalIdentity;
 use crate::ui::animation::PanelAnimation;
+use crate::ui::geometry::Bounds;
 
 /// Where an agent in the panel runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -95,38 +96,24 @@ pub struct AgentsPanelInfo {
     pub hovered: Option<AgentsControl>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct AgentsPanelRect {
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
-}
-
-impl AgentsPanelRect {
-    pub fn contains(self, x: f32, y: f32) -> bool {
-        x >= self.x && x <= self.x + self.width && y >= self.y && y <= self.y + self.height
-    }
-}
-
 /// Most activity entries the supervisor section shows.
 const MAX_SUPERVISOR_ENTRIES: usize = 8;
 
 /// The supervisor section at the foot of the panel.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SupervisorLayout {
-    pub section: AgentsPanelRect,
+    pub section: Bounds,
     /// "Supervisor · Assist", beside the button.
-    pub heading: AgentsPanelRect,
-    pub button: AgentsPanelRect,
+    pub heading: Bounds,
+    pub button: Bounds,
     pub first_entry_y: f32,
     pub entry_height: f32,
     pub entry_count: usize,
 }
 
 impl SupervisorLayout {
-    pub fn entry(self, index: usize) -> AgentsPanelRect {
-        AgentsPanelRect {
+    pub fn entry(self, index: usize) -> Bounds {
+        Bounds {
             x: self.heading.x,
             y: self.first_entry_y + index as f32 * self.entry_height,
             width: self.section.x + self.section.width - self.heading.x,
@@ -138,10 +125,10 @@ impl SupervisorLayout {
 /// Single source of truth for the panel's geometry.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AgentsPanelLayout {
-    pub panel: AgentsPanelRect,
+    pub panel: Bounds,
     pub padding: f32,
     pub title_y: f32,
-    pub close_button: AgentsPanelRect,
+    pub close_button: Bounds,
     pub separator_y: f32,
     pub list_start_y: f32,
     pub row_height: f32,
@@ -170,7 +157,7 @@ impl AgentsPanelLayout {
         let padding = cell_width * 1.5;
         let title_y = top + cell_height * 0.9;
         let control = cell_height * 1.5;
-        let close_button = AgentsPanelRect {
+        let close_button = Bounds {
             x: panel_x + panel_width - padding * 0.5 - control,
             y: title_y,
             width: control,
@@ -188,14 +175,14 @@ impl AgentsPanelLayout {
                 .min(MAX_SUPERVISOR_ENTRIES)
                 .min((room / entry_height).floor() as usize);
             let height = header + entry_count as f32 * entry_height + cell_height * 0.8;
-            let section = AgentsPanelRect {
+            let section = Bounds {
                 x: panel_x,
                 y: (bottom - height).max(list_start_y),
                 width: panel_width,
                 height,
             };
             let button_width = cell_width * 12.0;
-            let button = AgentsPanelRect {
+            let button = Bounds {
                 x: panel_x + panel_width - padding - button_width,
                 y: section.y + cell_height * 0.6,
                 width: button_width,
@@ -203,7 +190,7 @@ impl AgentsPanelLayout {
             };
             SupervisorLayout {
                 section,
-                heading: AgentsPanelRect {
+                heading: Bounds {
                     x: panel_x + padding,
                     y: button.y,
                     width: (button.x - panel_x - padding * 1.5).max(0.0),
@@ -220,7 +207,7 @@ impl AgentsPanelLayout {
         let visible_count =
             (((list_bottom - list_start_y).max(0.0) / row_height).floor() as usize).min(row_count);
         Self {
-            panel: AgentsPanelRect {
+            panel: Bounds {
                 x: panel_x,
                 y: top,
                 width: panel_width,
@@ -253,9 +240,9 @@ impl AgentsPanelLayout {
         self.scroll_offset..self.scroll_offset + self.visible_count
     }
 
-    pub fn row(self, index: usize) -> AgentsPanelRect {
+    pub fn row(self, index: usize) -> Bounds {
         let relative = index as f32 - self.scroll_offset as f32;
-        AgentsPanelRect {
+        Bounds {
             x: self.panel.x,
             y: self.list_start_y + relative * self.row_height,
             width: self.panel.width,
@@ -275,10 +262,7 @@ impl AgentsPanelLayout {
             return Some(AgentsControl::Supervisor);
         }
         self.visible_range()
-            .find(|index| {
-                let row = self.row(*index);
-                row.contains(x, y) && y < row.y + row.height
-            })
+            .find(|index| self.row(*index).contains(x, y))
             .map(AgentsControl::Agent)
     }
 
@@ -295,7 +279,7 @@ impl AgentsPanelLayout {
     }
 
     /// The bounds of a control, if it is painted.
-    pub fn control_rect(self, control: AgentsControl) -> Option<AgentsPanelRect> {
+    pub fn control_rect(self, control: AgentsControl) -> Option<Bounds> {
         match control {
             AgentsControl::Close => Some(self.close_button),
             AgentsControl::Supervisor => self.supervisor.map(|supervisor| supervisor.button),

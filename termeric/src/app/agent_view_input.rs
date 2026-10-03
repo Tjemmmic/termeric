@@ -1,5 +1,6 @@
 //! The agent view's actions, keys, pointer, and wheel.
 
+use crate::ui::geometry::Bounds;
 use std::time::Instant;
 
 use unicode_segmentation::UnicodeSegmentation;
@@ -11,7 +12,7 @@ use crate::agent_view::session::{AgentSession, QuestionAnswer};
 use crate::agent_view::transcript::{Attachment, DecidedBy, Item};
 use crate::ui::agent_view::commands;
 use crate::ui::agent_view::layout::plural;
-use crate::ui::agent_view::scene::{Bounds, HitRole, MenuAction, MenuKind, Target};
+use crate::ui::agent_view::scene::{HitRole, MenuAction, MenuKind, Target};
 use crate::ui::agent_view::{ComposerIntent, Focus, OpenMenu, Screen};
 use crate::ui::text_input::TextInputEdit;
 use crate::ui::text_layout::TextMeasure;

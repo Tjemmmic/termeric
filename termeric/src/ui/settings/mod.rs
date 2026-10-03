@@ -4,6 +4,7 @@ use crate::config::{
     WindowLevelConfig,
 };
 use crate::input::keybindings::ShortcutRegistry;
+use crate::ui::geometry::Bounds;
 use crate::ui::text_input::{TextInputEdit, edit_grapheme};
 use crate::ui::text_input_viewport::TextInputViewport;
 
@@ -46,15 +47,15 @@ const FONT_FALLBACK_LABELS: [&str; crate::config::MAX_FONT_FALLBACKS] = [
 #[derive(Debug, Clone, Copy)]
 pub struct SettingsModalLayout {
     /// The filter field in the header.
-    pub input: SettingsInputRect,
+    pub input: Bounds,
     pub panel_x: f32,
     pub panel_y: f32,
     pub panel_width: f32,
     pub panel_height: f32,
     pub padding: f32,
     pub header_height: f32,
-    pub close_button: SettingsInputRect,
-    pub sidebar: SettingsInputRect,
+    pub close_button: Bounds,
+    pub sidebar: Bounds,
     pub page_height: f32,
     /// Left edge and width of the rows' text column.
     pub content_x: f32,
@@ -71,22 +72,8 @@ pub struct SettingsModalLayout {
     pub value_x: f32,
     pub footer_y: f32,
     pub footer_height: f32,
-    pub save_button: SettingsInputRect,
+    pub save_button: Bounds,
     pub cell_width: f32,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct SettingsInputRect {
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
-}
-
-impl SettingsInputRect {
-    pub fn contains(self, x: f32, y: f32) -> bool {
-        x >= self.x && x <= self.x + self.width && y >= self.y && y <= self.y + self.height
-    }
 }
 
 impl SettingsModalLayout {
@@ -143,7 +130,7 @@ impl SettingsModalLayout {
         let control = cell_height * 1.5;
 
         let header_height = cell_height * 3.0;
-        let close_button = SettingsInputRect {
+        let close_button = Bounds {
             x: panel_x + panel_width - padding * 0.5 - control,
             y: panel_y + (header_height - control) / 2.0,
             width: control,
@@ -151,7 +138,7 @@ impl SettingsModalLayout {
         };
         let input_height = cell_height * 1.7;
         let input_width = (panel_width * 0.36).min(cell_width * 36.0);
-        let input = SettingsInputRect {
+        let input = Bounds {
             x: close_button.x - cell_width * 0.75 - input_width,
             y: panel_y + (header_height - input_height) / 2.0,
             width: input_width,
@@ -161,7 +148,7 @@ impl SettingsModalLayout {
         let footer_height = cell_height * 2.8;
         let footer_y = panel_y + panel_height - footer_height;
         let body_y = panel_y + header_height;
-        let sidebar = SettingsInputRect {
+        let sidebar = Bounds {
             x: panel_x,
             y: body_y,
             width: (cell_width * 22.0).clamp(150.0, 220.0),
@@ -201,7 +188,7 @@ impl SettingsModalLayout {
             value_x: content_x + content_width * 0.5,
             footer_y,
             footer_height,
-            save_button: SettingsInputRect {
+            save_button: Bounds {
                 x: panel_x + panel_width - padding - save_width,
                 y: footer_y + (footer_height - save_height) / 2.0,
                 width: save_width,
@@ -212,15 +199,18 @@ impl SettingsModalLayout {
     }
 
     pub fn contains(&self, x: f32, y: f32) -> bool {
-        x >= self.panel_x
-            && x <= self.panel_x + self.panel_width
-            && y >= self.panel_y
-            && y <= self.panel_y + self.panel_height
+        Bounds::new(
+            self.panel_x,
+            self.panel_y,
+            self.panel_width,
+            self.panel_height,
+        )
+        .contains(x, y)
     }
 
     /// Sidebar row for the `index`th page.
-    pub fn page_rect(&self, index: usize) -> SettingsInputRect {
-        SettingsInputRect {
+    pub fn page_rect(&self, index: usize) -> Bounds {
+        Bounds {
             x: self.sidebar.x + self.padding * 0.5,
             y: self.sidebar.y + self.padding * 0.5 + index as f32 * self.page_height,
             width: self.sidebar.width - self.padding,
@@ -238,8 +228,8 @@ impl SettingsModalLayout {
     }
 
     /// Bounds of the `row`th visible entry, spanning the content column.
-    pub fn row_rect(&self, row: usize) -> SettingsInputRect {
-        SettingsInputRect {
+    pub fn row_rect(&self, row: usize) -> Bounds {
+        Bounds {
             x: self.content_x - self.padding * 0.5,
             y: self.list_y + row as f32 * self.row_height,
             width: self.content_width + self.padding,
@@ -335,10 +325,7 @@ impl SettingsModalLayout {
         let dd_width = min_dd_width.max(remaining).min(self.content_width * 0.7);
 
         Some(DropdownRect {
-            x: self.value_x,
-            y: anchor_y,
-            width: dd_width,
-            height: dd_height,
+            bounds: Bounds::new(self.value_x, anchor_y, dd_width, dd_height),
             option_height: option_h,
             visible_options,
             first_option,
@@ -349,10 +336,7 @@ impl SettingsModalLayout {
 /// Dropdown overlay rectangle derived from `SettingsModalLayout`.
 #[derive(Debug, Clone, Copy)]
 pub struct DropdownRect {
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
+    pub bounds: Bounds,
     pub option_height: f32,
     pub visible_options: usize,
     /// Absolute option index displayed in the first visible row.
@@ -362,7 +346,7 @@ pub struct DropdownRect {
 impl DropdownRect {
     /// Which option index does a y-coordinate fall into, if any.
     pub fn option_at(&self, y: f32) -> Option<usize> {
-        let inner_y = y - self.y - 4.0;
+        let inner_y = y - self.bounds.y - 4.0;
         if inner_y < 0.0 {
             return None;
         }
@@ -372,10 +356,6 @@ impl DropdownRect {
         } else {
             None
         }
-    }
-
-    pub fn contains(&self, x: f32, y: f32) -> bool {
-        x >= self.x && x < self.x + self.width && y >= self.y && y < self.y + self.height
     }
 }
 
@@ -2290,7 +2270,7 @@ impl SettingsPanel {
         // If a dropdown is open, resolve clicks against it first.
         if self.dropdown_open {
             if let Some((rect, option_count)) = self.dropdown_layout(&layout, &entries) {
-                if rect.contains(x, y) {
+                if rect.bounds.contains(x, y) {
                     if let Some(opt_idx) = rect.option_at(y) {
                         self.dropdown_open = false;
                         if opt_idx < option_count {
@@ -2668,7 +2648,7 @@ mod tests {
                         layout.input_cursor_at(
                             &text,
                             cursor,
-                            (layout.input.x + layout.input.width, view.text_y),
+                            (layout.input.right() - 0.5, view.text_y),
                             ch
                         ),
                         Some(view.text_range.end)
@@ -3095,9 +3075,9 @@ mod tests {
             .expect("visible dropdown");
         assert_eq!(rect.visible_options, 8);
         assert_eq!(rect.first_option, 5);
-        assert_eq!(rect.option_at(rect.y + 5.0), Some(5));
+        assert_eq!(rect.option_at(rect.bounds.y + 5.0), Some(5));
         assert_eq!(
-            rect.option_at(rect.y + 4.0 + rect.option_height * 7.5),
+            rect.option_at(rect.bounds.y + 4.0 + rect.option_height * 7.5),
             Some(12)
         );
 
@@ -3105,7 +3085,7 @@ mod tests {
             .dropdown_rect(1, 0, 20, 12, 19)
             .expect("visible dropdown");
         assert_eq!(last.first_option, 12);
-        assert_eq!(last.option_at(last.y + 5.0), Some(12));
+        assert_eq!(last.option_at(last.bounds.y + 5.0), Some(12));
     }
 
     #[test]
@@ -3487,8 +3467,7 @@ mod tests {
             panel.animation_progress(),
             0,
         );
-        let centre =
-            |rect: SettingsInputRect| (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
+        let centre = |rect: Bounds| (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
         let click = |panel: &mut SettingsPanel, (x, y): (f32, f32)| {
             panel.handle_click(x, y, &config, &registry, 1000.0, 800.0, 10.0, 20.0)
         };

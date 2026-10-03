@@ -7,6 +7,7 @@
 //! - Explain (future AI integration)
 
 use super::cellar::CommandEntry;
+use crate::ui::geometry::Bounds;
 use std::time::Instant;
 
 /// An action available in the sprout menu
@@ -323,24 +324,10 @@ impl SproutMenu {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct SproutMenuRect {
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
-}
-
-impl SproutMenuRect {
-    pub fn contains(self, x: f32, y: f32) -> bool {
-        x >= self.x && x < self.x + self.width && y >= self.y && y < self.y + self.height
-    }
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct SproutMenuLayout {
-    pub panel: SproutMenuRect,
-    pub rows: Vec<SproutMenuRect>,
+    pub panel: Bounds,
+    pub rows: Vec<Bounds>,
     pub padding: f32,
     pub item_height: f32,
 }
@@ -373,14 +360,14 @@ impl SproutMenuLayout {
         let y = preferred_y
             .min((window_height - height - content_padding).max(content_top))
             .max(content_top);
-        let panel = SproutMenuRect {
+        let panel = Bounds {
             x,
             y,
             width,
             height,
         };
         let rows = (0..action_count)
-            .map(|index| SproutMenuRect {
+            .map(|index| Bounds {
                 x: x + 2.0,
                 y: y + padding + index as f32 * item_height,
                 width: (width - 4.0).max(0.0),

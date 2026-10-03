@@ -2,8 +2,7 @@
 //! whole-pixel layout shared by rendering, pointer hit testing, and
 //! accessibility bounds.
 
-/// Pixel rectangle: x, y, width, height.
-pub type Rect = (f32, f32, f32, f32);
+use crate::ui::geometry::Bounds;
 
 /// Logical metrics before display scaling.
 const MENU_WIDTH: f32 = 280.0;
@@ -121,9 +120,9 @@ impl<A: Clone> PopupMenu<A> {
 /// Whole-pixel geometry of an open menu.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PopupMenuLayout {
-    pub panel: Rect,
+    pub panel: Bounds,
     /// One rectangle per row, separators included, in row order.
-    pub rows: Vec<Rect>,
+    pub rows: Vec<Bounds>,
     /// Display scale the layout was computed for.
     pub scale: f32,
 }
@@ -155,29 +154,25 @@ impl PopupMenuLayout {
                     MenuRow::Item(_) => px(ROW_HEIGHT),
                     MenuRow::Separator => px(SEPARATOR_HEIGHT),
                 };
-                let rect = (x, row_y, width, height);
+                let rect = Bounds::new(x, row_y, width, height);
                 row_y += height;
                 rect
             })
             .collect();
         Self {
-            panel: (x, y, width, row_y + padding - y),
+            panel: Bounds::new(x, y, width, row_y + padding - y),
             rows: rects,
             scale,
         }
     }
 
     pub fn contains(&self, x: f32, y: f32) -> bool {
-        contains(self.panel, x, y)
+        self.panel.contains(x, y)
     }
 
     pub fn row_at(&self, x: f32, y: f32) -> Option<usize> {
-        self.rows.iter().position(|&rect| contains(rect, x, y))
+        self.rows.iter().position(|rect| rect.contains(x, y))
     }
-}
-
-fn contains(rect: Rect, x: f32, y: f32) -> bool {
-    x >= rect.0 && x < rect.0 + rect.2 && y >= rect.1 && y < rect.1 + rect.3
 }
 
 #[cfg(test)]
@@ -255,18 +250,17 @@ mod tests {
     fn layout_is_whole_pixel_right_aligned_and_inside_the_window() {
         for scale in [1.0, 1.25, 2.0] {
             let layout = PopupMenuLayout::calculate(&rows(), 700.0, 34.0, 800.0, scale);
-            let (x, y, width, height) = layout.panel;
-            assert_eq!(x + width, 700.0);
-            for value in [x, y, width, height] {
+            let panel = layout.panel;
+            assert_eq!(panel.right(), 700.0);
+            for value in [panel.x, panel.y, panel.width, panel.height] {
                 assert_eq!(value.fract(), 0.0);
             }
             assert_eq!(layout.rows.len(), 4);
             let last = layout.rows[3];
-            assert!(last.1 + last.3 < y + height);
-            let (row_x, row_y, _, row_h) = layout.rows[3];
-            assert_eq!(layout.row_at(row_x + 5.0, row_y + row_h / 2.0), Some(3));
+            assert!(last.bottom() < panel.bottom());
+            assert_eq!(layout.row_at(last.x + 5.0, last.center()[1]), Some(3));
         }
         let narrow = PopupMenuLayout::calculate(&rows(), 100.0, 34.0, 200.0, 1.0);
-        assert!(narrow.panel.0 >= 4.0 && narrow.panel.0 + narrow.panel.2 <= 196.0);
+        assert!(narrow.panel.x >= 4.0 && narrow.panel.right() <= 196.0);
     }
 }

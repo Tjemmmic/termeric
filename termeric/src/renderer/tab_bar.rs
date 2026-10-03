@@ -6,6 +6,7 @@ use super::{Renderer, contrast_text};
 use crate::agents::AgentBadge;
 use crate::tabs::{TabInfo, TabType};
 use crate::ui::color::{mix, scale_alpha, with_alpha};
+use crate::ui::geometry::Bounds;
 use crate::ui::icon::Icon;
 
 /// Logical tab widths before display scaling.
@@ -71,7 +72,7 @@ struct VerticalTabBarLayout {
 }
 
 impl VerticalTabBarLayout {
-    fn control_rect(&self, target: TabBarClick, rail_width: f32) -> Option<(f32, f32, f32, f32)> {
+    fn control_rect(&self, target: TabBarClick, rail_width: f32) -> Option<Bounds> {
         if self.control_height <= 0.0 || rail_width <= 0.0 {
             return None;
         }
@@ -91,7 +92,7 @@ impl VerticalTabBarLayout {
         } else {
             0.0
         };
-        Some((x, y, width, self.control_height))
+        Some(Bounds::new(x, y, width, self.control_height))
     }
 }
 
@@ -229,7 +230,7 @@ fn vertical_tab_bar_hit_test(
     ] {
         if layout
             .control_rect(target, rail_width)
-            .is_some_and(|rect| contains(rect, x, y))
+            .is_some_and(|rect| rect.contains(x, y))
         {
             return target;
         }
@@ -240,7 +241,7 @@ fn vertical_tab_bar_hit_test(
         }
         let surface = chrome.vertical_surface(slot, rail_width);
         if tab_animation_multiplier(&tabs[slot.index]) > 0.3
-            && contains(chrome.close_rect(surface), x, y)
+            && chrome.close_rect(surface).contains(x, y)
         {
             return TabBarClick::CloseTab(slot.index);
         }
@@ -330,13 +331,6 @@ fn tab_bar_layout(
     }
 }
 
-/// Pixel rectangle: x, y, width, height.
-type Rect = (f32, f32, f32, f32);
-
-fn contains(rect: Rect, x: f32, y: f32) -> bool {
-    x >= rect.0 && x < rect.0 + rect.2 && y >= rect.1 && y < rect.1 + rect.3
-}
-
 /// Whole-pixel chrome geometry at one display scale. Rendering, hit testing,
 /// keyboard focus, and accessibility all derive tab rectangles from here so
 /// they cannot drift apart.
@@ -367,9 +361,9 @@ impl TabChrome {
     }
 
     /// Visible surface of a top-bar tab slot.
-    fn horizontal_surface(self, slot: &TabSlot, bar_height: f32) -> Rect {
+    fn horizontal_surface(self, slot: &TabSlot, bar_height: f32) -> Bounds {
         let (inset_x, inset_y) = (self.px(2.0), self.px(4.0));
-        (
+        Bounds::new(
             slot.x + inset_x,
             inset_y,
             (slot.width - inset_x * 2.0).max(0.0),
@@ -378,9 +372,9 @@ impl TabChrome {
     }
 
     /// Visible surface of a left-rail tab slot.
-    fn vertical_surface(self, slot: &VerticalTabSlot, rail_width: f32) -> Rect {
+    fn vertical_surface(self, slot: &VerticalTabSlot, rail_width: f32) -> Bounds {
         let (inset_x, inset_y) = (self.px(4.0), self.px(2.0));
-        (
+        Bounds::new(
             inset_x,
             slot.y + inset_y,
             (rail_width - inset_x * 2.0).max(0.0),
@@ -389,11 +383,11 @@ impl TabChrome {
     }
 
     /// Close button inside a tab surface.
-    fn close_rect(self, surface: Rect) -> Rect {
-        let size = self.px(16.0).min(surface.3).min(surface.2);
-        (
-            surface.0 + surface.2 - self.px(6.0) - size,
-            (surface.1 + (surface.3 - size) / 2.0).round(),
+    fn close_rect(self, surface: Bounds) -> Bounds {
+        let size = self.px(16.0).min(surface.height).min(surface.width);
+        Bounds::new(
+            surface.right() - self.px(6.0) - size,
+            (surface.y + (surface.height - size) / 2.0).round(),
             size,
             size,
         )
@@ -408,14 +402,19 @@ enum AccentEdge {
 }
 
 /// Commands, workspace, and settings buttons at the right of the top strip.
-fn toolbar_control_rect(target: TabBarClick, window_width: f32, height: f32) -> Option<Rect> {
+fn toolbar_control_rect(target: TabBarClick, window_width: f32, height: f32) -> Option<Bounds> {
     let offset = match target {
         TabBarClick::CommandsButton => 3.0,
         TabBarClick::SessionDropdown => 2.0,
         TabBarClick::Gear => 1.0,
         _ => return None,
     };
-    Some((window_width - height * offset, 0.0, height, height))
+    Some(Bounds::new(
+        window_width - height * offset,
+        0.0,
+        height,
+        height,
+    ))
 }
 
 fn horizontal_tab_bar_element_rect(
@@ -424,7 +423,7 @@ fn horizontal_tab_bar_element_rect(
     window_width: f32,
     height: f32,
     chrome: TabChrome,
-) -> Option<Rect> {
+) -> Option<Bounds> {
     let surface = |index: usize| {
         layout
             .tabs
@@ -435,9 +434,11 @@ fn horizontal_tab_bar_element_rect(
     match target {
         TabBarClick::Tab(index) => surface(index),
         TabBarClick::CloseTab(index) => surface(index).map(|surface| chrome.close_rect(surface)),
-        TabBarClick::NewTab => Some((layout.add_x, 0.0, height, height)),
-        TabBarClick::PreviousTab => layout.previous_x.map(|x| (x, 0.0, height, height)),
-        TabBarClick::NextTab => layout.next_x.map(|x| (x, 0.0, height, height)),
+        TabBarClick::NewTab => Some(Bounds::new(layout.add_x, 0.0, height, height)),
+        TabBarClick::PreviousTab => layout
+            .previous_x
+            .map(|x| Bounds::new(x, 0.0, height, height)),
+        TabBarClick::NextTab => layout.next_x.map(|x| Bounds::new(x, 0.0, height, height)),
         TabBarClick::CommandsButton | TabBarClick::SessionDropdown | TabBarClick::Gear => {
             toolbar_control_rect(target, window_width, height)
         }
@@ -466,7 +467,7 @@ fn horizontal_tab_bar_hit_test(
         TabBarClick::NewTab,
     ] {
         if horizontal_tab_bar_element_rect(layout, target, window_width, height, chrome)
-            .is_some_and(|rect| contains(rect, x, y))
+            .is_some_and(|rect| rect.contains(x, y))
         {
             return target;
         }
@@ -477,7 +478,7 @@ fn horizontal_tab_bar_hit_test(
         }
         let surface = chrome.horizontal_surface(slot, height);
         if tab_animation_multiplier(&tabs[slot.index]) > 0.3
-            && contains(chrome.close_rect(surface), x, y)
+            && chrome.close_rect(surface).contains(x, y)
         {
             return TabBarClick::CloseTab(slot.index);
         }
@@ -602,9 +603,9 @@ impl Renderer {
                 // Overflow arrows keep a fixed, dimmed slot while either end
                 // still has hidden tabs, so the strip never jumps.
                 TabBarClick::PreviousTab if overflow => {
-                    Some((0.0, 0.0, tab_bar_height, tab_bar_height))
+                    Some(Bounds::new(0.0, 0.0, tab_bar_height, tab_bar_height))
                 }
-                TabBarClick::NextTab if overflow => Some((
+                TabBarClick::NextTab if overflow => Some(Bounds::new(
                     window_width - tab_bar_height * 5.0,
                     0.0,
                     tab_bar_height,
@@ -631,10 +632,10 @@ impl Renderer {
 
     /// Draw one tab: its surface, accent indicator, markers, label, and the
     /// close button or activity dot.
-    fn build_tab_item(&mut self, tab: &TabInfo, index: usize, surface: Rect, edge: AccentEdge) {
+    fn build_tab_item(&mut self, tab: &TabInfo, index: usize, surface: Bounds, edge: AccentEdge) {
         let chrome = self.tab_chrome();
         let animation = tab_animation_multiplier(tab);
-        if surface.2 <= 2.0 || surface.3 <= 2.0 {
+        if surface.width <= 2.0 || surface.height <= 2.0 {
             return;
         }
         let hovered = matches!(
@@ -646,7 +647,12 @@ impl Renderer {
         } else {
             0.0
         };
-        let (x, y, width, height) = surface;
+        let Bounds {
+            x,
+            y,
+            width,
+            height,
+        } = surface;
         let radius = chrome.corner_radius();
         if tab.is_active {
             self.rect_pipeline.push_rounded_rect(
@@ -725,7 +731,7 @@ impl Renderer {
             };
             self.build_status_icon(
                 status,
-                (text_x, center_y - size / 2.0, size, size),
+                Bounds::new(text_x, center_y - size / 2.0, size, size),
                 text_color,
                 surface_color,
             );
@@ -743,7 +749,7 @@ impl Renderer {
         } else {
             0.0
         };
-        let label_right = close.0 - chrome.px(6.0) - badge_reserve;
+        let label_right = close.x - chrome.px(6.0) - badge_reserve;
         let drawn = self.push_ui_label(
             &tab.title,
             text_x,
@@ -758,7 +764,7 @@ impl Renderer {
             let badge_height = chrome.px(16.0).min(height);
             let badge_x = (text_x + drawn + chrome.px(6.0)).round();
             let badge_y = (center_y - badge_height / 2.0).round();
-            if badge_x + badge_width <= close.0 - chrome.px(4.0) {
+            if badge_x + badge_width <= close.x - chrome.px(4.0) {
                 let fill = with_alpha(self.ui.palette_accent, 0.9 * text_alpha);
                 self.rect_pipeline.push_rounded_rect(
                     badge_x,
@@ -787,12 +793,12 @@ impl Renderer {
             let close_hover = self.hover_progress(TabBarClick::CloseTab(index));
             if close_hover > 0.0 {
                 self.rect_pipeline.push_rounded_rect(
-                    close.0,
-                    close.1,
-                    close.2,
-                    close.3,
+                    close.x,
+                    close.y,
+                    close.width,
+                    close.height,
                     with_alpha(self.ui.tab_text_active, 0.14 * close_hover * text_alpha),
-                    close.2 / 2.0,
+                    close.width / 2.0,
                 );
             }
             let color = with_alpha(
@@ -807,15 +813,15 @@ impl Renderer {
             draw_icon(
                 &mut self.rect_pipeline,
                 Icon::Close,
-                [close.0 + close.2 / 2.0, close.1 + close.3 / 2.0],
+                [close.x + close.width / 2.0, close.y + close.height / 2.0],
                 12.5 * chrome.scale,
                 color,
             );
         } else if tab.has_activity {
             let dot = chrome.px(6.0);
             self.rect_pipeline.push_rounded_rect(
-                (close.0 + (close.2 - dot) / 2.0).round(),
-                (close.1 + (close.3 - dot) / 2.0).round(),
+                (close.x + (close.width - dot) / 2.0).round(),
+                (close.y + (close.height - dot) / 2.0).round(),
                 dot,
                 dot,
                 with_alpha(self.ui.tab_activity, text_alpha),
@@ -828,12 +834,14 @@ impl Renderer {
     fn build_status_icon(
         &mut self,
         status: TabStatus,
-        rect: Rect,
+        rect: Bounds,
         color: [f32; 4],
         surface: [f32; 4],
     ) {
         let chrome = self.tab_chrome();
-        let (x, y, size, _) = rect;
+        let Bounds {
+            x, y, width: size, ..
+        } = rect;
         let (cx, cy) = (x + size / 2.0, y + size / 2.0);
         let stroke = chrome.stroke() * 0.8;
         match status {
@@ -949,7 +957,7 @@ impl Renderer {
     fn build_toolbar_button(
         &mut self,
         target: TabBarClick,
-        rect: Rect,
+        rect: Bounds,
         enabled: bool,
         vertical: bool,
     ) {
@@ -959,7 +967,12 @@ impl Renderer {
         } else {
             0.0
         };
-        let (x, y, width, height) = rect;
+        let Bounds {
+            x,
+            y,
+            width,
+            height,
+        } = rect;
         let side = (width.min(height) - chrome.px(8.0)).max(0.0);
         if hover > 0.0 && side > 0.0 {
             self.rect_pipeline.push_rounded_rect(
@@ -1073,8 +1086,12 @@ impl Renderer {
         window_width: f32,
         window_height: f32,
     ) {
-        let Some((x, y, width, height)) =
-            self.tab_bar_element_rect(target, tabs, window_width, window_height)
+        let Some(Bounds {
+            x,
+            y,
+            width,
+            height,
+        }) = self.tab_bar_element_rect(target, tabs, window_width, window_height)
         else {
             return;
         };
@@ -1106,7 +1123,7 @@ impl Renderer {
         tabs: &[TabInfo],
         window_width: f32,
         window_height: f32,
-    ) -> Option<(f32, f32, f32, f32)> {
+    ) -> Option<Bounds> {
         let height = self.tab_bar_height();
         let chrome = self.tab_chrome();
         if self.tab_bar_position == crate::config::TabBarPosition::Left {
@@ -1158,7 +1175,7 @@ impl Renderer {
                 .into_iter()
                 .find(|&target| {
                     toolbar_control_rect(target, window_width, tab_bar_height)
-                        .is_some_and(|rect| contains(rect, x, y))
+                        .is_some_and(|rect| rect.contains(x, y))
                 })
                 .unwrap_or(TabBarClick::None);
             }
@@ -1191,16 +1208,16 @@ impl Renderer {
 
     /// Puts the dragged tab on a layer of its own over an opaque backing,
     /// so the tab it passes over never shows through it.
-    fn lift_dragged_tab(&mut self, surface: Rect) {
+    fn lift_dragged_tab(&mut self, surface: Bounds) {
         self.dragged_tab_surface = Some(surface);
         self.rect_pipeline.mark_layer();
         self.text_pipeline.mark_layer();
         let chrome = self.tab_chrome();
         self.rect_pipeline.push_rounded_rect(
-            surface.0,
-            surface.1,
-            surface.2,
-            surface.3,
+            surface.x,
+            surface.y,
+            surface.width,
+            surface.height,
             self.ui.tab_bar_bg,
             chrome.corner_radius(),
         );
@@ -1462,7 +1479,15 @@ mod tests {
                             TabBarClick::NextTab,
                             TabBarClick::NewTab,
                         ] {
-                            if let Some(rect @ (x, y, w, h)) = layout.control_rect(target, 220.0) {
+                            if let Some(
+                                rect @ Bounds {
+                                    x,
+                                    y,
+                                    width: w,
+                                    height: h,
+                                },
+                            ) = layout.control_rect(target, 220.0)
+                            {
                                 assert!(x >= 0.0 && y >= row_height && w > 0.0 && h > 0.0);
                                 assert!(x + w <= 220.001 && y + h <= height + 0.001);
                                 assert_eq!(
@@ -1495,15 +1520,14 @@ mod tests {
                                 ),
                                 TabBarClick::Tab(slot.index)
                             );
-                            rectangles.push((0.0, slot.y, 220.0, slot.height));
+                            rectangles.push(Bounds::new(0.0, slot.y, 220.0, slot.height));
                         }
-                        for (index, &(x, y, w, h)) in rectangles.iter().enumerate() {
-                            for &(other_x, other_y, other_w, other_h) in &rectangles[index + 1..] {
-                                let overlap_width = (x + w).min(other_x + other_w) - x.max(other_x);
-                                let overlap_height =
-                                    (y + h).min(other_y + other_h) - y.max(other_y);
+                        for (index, rect) in rectangles.iter().enumerate() {
+                            for other in &rectangles[index + 1..] {
                                 assert!(
-                                    overlap_width <= 0.001 || overlap_height <= 0.001,
+                                    rect.intersect(*other).is_none_or(|overlap| {
+                                        overlap.width <= 0.001 || overlap.height <= 0.001
+                                    }),
                                     "rows={rows} count={count} anchor={anchor}: {rectangles:?}"
                                 );
                             }
@@ -1605,10 +1629,10 @@ mod tests {
                     // Tab bodies report the close button at their centre only
                     // when it overlaps; probe a point clear of it.
                     let probe_x = match target {
-                        TabBarClick::Tab(_) => rect.0 + 4.0,
-                        _ => rect.0 + rect.2 / 2.0,
+                        TabBarClick::Tab(_) => rect.x + 4.0,
+                        _ => rect.x + rect.width / 2.0,
                     };
-                    let probe_y = rect.1 + rect.3 / 2.0;
+                    let probe_y = rect.y + rect.height / 2.0;
                     assert_eq!(
                         horizontal_tab_bar_hit_test(
                             &layout, &tabs, probe_x, probe_y, width, height, chrome
@@ -1632,7 +1656,13 @@ mod tests {
                 let surface = chrome.horizontal_surface(slot, height);
                 let close = chrome.close_rect(surface);
                 for value in [
-                    surface.0, surface.1, surface.2, surface.3, close.0, close.1, close.2,
+                    surface.x,
+                    surface.y,
+                    surface.width,
+                    surface.height,
+                    close.x,
+                    close.y,
+                    close.width,
                 ] {
                     assert_eq!(
                         value.fract(),
@@ -1640,8 +1670,10 @@ mod tests {
                         "scale={scale} surface={surface:?} close={close:?}"
                     );
                 }
-                assert!(close.0 >= surface.0 && close.0 + close.2 <= surface.0 + surface.2);
-                assert!(close.1 >= surface.1 && close.1 + close.3 <= surface.1 + surface.3);
+                assert!(close.x >= surface.x && close.x + close.width <= surface.x + surface.width);
+                assert!(
+                    close.y >= surface.y && close.y + close.height <= surface.y + surface.height
+                );
             }
         }
     }

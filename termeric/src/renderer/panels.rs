@@ -2,84 +2,8 @@
 
 use super::Renderer;
 use crate::ui::color::{scale_alpha, with_alpha};
+use crate::ui::geometry::Bounds;
 use crate::ui::icon::Icon;
-
-/// Bounds of a side-panel control, whichever panel's layout produced it.
-#[derive(Debug, Clone, Copy)]
-pub(super) struct PanelBox {
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-}
-
-impl From<crate::session::panel::SessionPanelRect> for PanelBox {
-    fn from(rect: crate::session::panel::SessionPanelRect) -> Self {
-        let crate::session::panel::SessionPanelRect {
-            x,
-            y,
-            width,
-            height,
-        } = rect;
-        Self {
-            x,
-            y,
-            width,
-            height,
-        }
-    }
-}
-
-impl From<crate::ui::settings::SettingsInputRect> for PanelBox {
-    fn from(rect: crate::ui::settings::SettingsInputRect) -> Self {
-        let crate::ui::settings::SettingsInputRect {
-            x,
-            y,
-            width,
-            height,
-        } = rect;
-        Self {
-            x,
-            y,
-            width,
-            height,
-        }
-    }
-}
-
-impl From<crate::ui::agents_panel::AgentsPanelRect> for PanelBox {
-    fn from(rect: crate::ui::agents_panel::AgentsPanelRect) -> Self {
-        let crate::ui::agents_panel::AgentsPanelRect {
-            x,
-            y,
-            width,
-            height,
-        } = rect;
-        Self {
-            x,
-            y,
-            width,
-            height,
-        }
-    }
-}
-
-impl From<crate::ui::commands::panel::CommandsPanelRect> for PanelBox {
-    fn from(rect: crate::ui::commands::panel::CommandsPanelRect) -> Self {
-        let crate::ui::commands::panel::CommandsPanelRect {
-            x,
-            y,
-            width,
-            height,
-        } = rect;
-        Self {
-            x,
-            y,
-            width,
-            height,
-        }
-    }
-}
 
 impl Renderer {
     pub(super) fn build_commands_panel(
@@ -595,13 +519,13 @@ impl Renderer {
 
     /// Scrim over the terminal beside a side panel, the panel surface, and
     /// its hairline edge. Shared by every right-edge panel.
-    pub(super) fn build_side_panel_frame(&mut self, panel: impl Into<PanelBox>, animation: f32) {
-        let PanelBox {
+    pub(super) fn build_side_panel_frame(&mut self, panel: Bounds, animation: f32) {
+        let Bounds {
             x,
             y,
             width,
             height,
-        } = panel.into();
+        } = panel;
         let hairline = self.scale_factor.round().max(1.0);
         let scrim = self.ui.scrim;
         self.rect_pipeline
@@ -613,18 +537,13 @@ impl Renderer {
     }
 
     /// A square header control drawn as a vector icon, dim until hovered.
-    pub(super) fn build_header_icon_button(
-        &mut self,
-        bounds: impl Into<PanelBox>,
-        icon: Icon,
-        hovered: bool,
-    ) {
-        let PanelBox {
+    pub(super) fn build_header_icon_button(&mut self, bounds: Bounds, icon: Icon, hovered: bool) {
+        let Bounds {
             x,
             y,
             width,
             height,
-        } = bounds.into();
+        } = bounds;
         if hovered {
             self.rect_pipeline.push_rounded_rect(
                 x,
@@ -985,14 +904,7 @@ impl Renderer {
 
     /// A quiet text button: a subtle surface for the primary action, text
     /// alone otherwise, label centred in the UI face.
-    fn build_panel_button(
-        &mut self,
-        rect: impl Into<PanelBox>,
-        label: &str,
-        primary: bool,
-        color: [f32; 4],
-    ) {
-        let rect = rect.into();
+    fn build_panel_button(&mut self, rect: Bounds, label: &str, primary: bool, color: [f32; 4]) {
         let radius = (5.0 * self.scale_factor).round();
         if primary {
             self.rect_pipeline.push_rounded_rect(

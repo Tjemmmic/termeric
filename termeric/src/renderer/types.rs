@@ -3,6 +3,8 @@
 //! Info structs, click result enums, and constants used by both the renderer
 //! and the application layer to pass rendering data.
 
+use crate::ui::geometry::Bounds;
+
 /// CPU raster work and retained image payload, separate from GPU atlas bytes.
 /// Font-system and scaler scratch allocations are not included.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -266,7 +268,7 @@ pub struct PaneRenderData<'a> {
     /// Kitty multiple cursors at the same presentation boundary as the grid.
     pub extra_cursors: &'a termeric_core::ExtraCursorState,
     /// Pixel rectangle within the content area (relative to content_top)
-    pub rect: crate::panes::PaneRect,
+    pub rect: Bounds,
     /// Whether this pane currently has focus
     pub is_focused: bool,
     /// This pane is selected for an armed or active broadcast operation.

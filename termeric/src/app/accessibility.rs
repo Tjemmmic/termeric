@@ -1,5 +1,6 @@
 //! Incremental AccessKit tree for native screen readers.
 
+use crate::ui::geometry::Bounds;
 use std::collections::{HashMap, HashSet};
 
 use accesskit::{
@@ -2642,9 +2643,7 @@ impl App {
             .composer()
             .map(|composer| composer.text().to_owned())
             .unwrap_or_default();
-        let bounds = |bounds: crate::ui::agent_view::scene::Bounds| {
-            rect(bounds.x, bounds.y, bounds.width, bounds.height)
-        };
+        let bounds = bounds_rect;
         let mut children = Vec::with_capacity(scene.nodes.len());
         let mut text_index = 0;
         for node in &scene.nodes {
@@ -2811,12 +2810,7 @@ impl App {
                     Live::Polite
                 },
             );
-            node.set_bounds(rect(
-                placement.rect.x,
-                placement.rect.y,
-                placement.rect.width,
-                placement.rect.height,
-            ));
+            node.set_bounds(bounds_rect(placement.rect));
             snapshot.nodes.push((id, node));
             toast_ids.push(id);
         }
@@ -3069,7 +3063,7 @@ impl App {
             node.add_action(Action::Click);
             node.add_action(Action::Focus);
             node.set_children([close_id]);
-            if let Some((x, y, w, h)) = self.renderer.as_ref().and_then(|renderer| {
+            if let Some(bounds) = self.renderer.as_ref().and_then(|renderer| {
                 renderer.tab_bar_element_rect(
                     crate::renderer::TabBarClick::Tab(index),
                     &tab_info,
@@ -3077,7 +3071,7 @@ impl App {
                     height,
                 )
             }) {
-                node.set_bounds(rect(x, y, w, h));
+                node.set_bounds(bounds_rect(bounds));
             }
             nodes.push((tab_id, node));
 
@@ -3085,7 +3079,7 @@ impl App {
             close.set_label(format!("Close {}", tab.title));
             close.add_action(Action::Click);
             close.add_action(Action::Focus);
-            if let Some((x, y, w, h)) = self.renderer.as_ref().and_then(|renderer| {
+            if let Some(bounds) = self.renderer.as_ref().and_then(|renderer| {
                 renderer.tab_bar_element_rect(
                     crate::renderer::TabBarClick::CloseTab(index),
                     &tab_info,
@@ -3093,7 +3087,7 @@ impl App {
                     height,
                 )
             }) {
-                close.set_bounds(rect(x, y, w, h));
+                close.set_bounds(bounds_rect(bounds));
             }
             nodes.push((close_id, close));
             tab_children.push(tab_id);
@@ -3136,10 +3130,10 @@ impl App {
             node.set_label(label);
             node.add_action(Action::Click);
             node.add_action(Action::Focus);
-            if let Some((x, y, w, h)) = self.renderer.as_ref().and_then(|renderer| {
+            if let Some(bounds) = self.renderer.as_ref().and_then(|renderer| {
                 renderer.tab_bar_element_rect(target, &tab_info, width, height)
             }) {
-                node.set_bounds(rect(x, y, w, h));
+                node.set_bounds(bounds_rect(bounds));
             }
             nodes.push((id, node));
         }
@@ -3152,7 +3146,7 @@ impl App {
             ),
             (NEXT_TAB, "Next tab", crate::renderer::TabBarClick::NextTab),
         ] {
-            let Some((x, y, w, h)) = self.renderer.as_ref().and_then(|renderer| {
+            let Some(bounds) = self.renderer.as_ref().and_then(|renderer| {
                 renderer.tab_bar_element_rect(target, &tab_info, width, height)
             }) else {
                 continue;
@@ -3161,7 +3155,7 @@ impl App {
             node.set_label(label);
             node.add_action(Action::Click);
             node.add_action(Action::Focus);
-            node.set_bounds(rect(x, y, w, h));
+            node.set_bounds(bounds_rect(bounds));
             nodes.push((id, node));
             root_children.push(id);
         }
@@ -3205,7 +3199,7 @@ impl App {
                 anchor: position,
                 focus: position,
             });
-            input.set_bounds(search_rect(layout.input));
+            input.set_bounds(bounds_rect(layout.input));
             input.add_action(Action::Focus);
             if info.is_active {
                 input.add_action(Action::SetValue);
@@ -3221,7 +3215,7 @@ impl App {
             } else {
                 Live::Polite
             });
-            status.set_bounds(search_rect(layout.status));
+            status.set_bounds(bounds_rect(layout.status));
             nodes.push((SEARCH_STATUS, status));
 
             for (id, label, rectangle, toggled) in [
@@ -3251,7 +3245,7 @@ impl App {
                 } else {
                     Toggled::False
                 });
-                button.set_bounds(search_rect(rectangle));
+                button.set_bounds(bounds_rect(rectangle));
                 button.add_action(Action::Click);
                 button.add_action(Action::Focus);
                 nodes.push((id, button));
@@ -3264,7 +3258,7 @@ impl App {
                 if layout.navigable {
                     let mut button = Node::new(Role::Button);
                     button.set_label(label);
-                    button.set_bounds(search_rect(rectangle));
+                    button.set_bounds(bounds_rect(rectangle));
                     button.add_action(Action::Click);
                     button.add_action(Action::Focus);
                     nodes.push((id, button));
@@ -3273,7 +3267,7 @@ impl App {
             }
             let mut close = Node::new(Role::Button);
             close.set_label("Close terminal search");
-            close.set_bounds(search_rect(layout.close));
+            close.set_bounds(bounds_rect(layout.close));
             close.add_action(Action::Click);
             close.add_action(Action::Focus);
             nodes.push((SEARCH_CLOSE, close));
@@ -3281,7 +3275,7 @@ impl App {
 
             let mut toolbar = Node::new(Role::Toolbar);
             toolbar.set_label("Terminal search");
-            toolbar.set_bounds(search_rect(layout.bar));
+            toolbar.set_bounds(bounds_rect(layout.bar));
             toolbar.set_children(search_children);
             nodes.push((SEARCH_TOOLBAR, toolbar));
             root_children.push(SEARCH_TOOLBAR);
@@ -3480,7 +3474,7 @@ impl App {
             )
         });
         status.set_live(Live::Polite);
-        status.set_bounds(cellar_rect(layout.summary));
+        status.set_bounds(bounds_rect(layout.summary));
         nodes.push((CELLAR_STATUS, status));
 
         for (entry, (id, node_id)) in entries.iter().zip(&entry_nodes) {
@@ -3509,7 +3503,7 @@ impl App {
             node.add_action(Action::Focus);
             node.add_action(Action::Click);
             if let Some((_, row)) = layout.rows.iter().find(|(row_id, _)| row_id == id) {
-                node.set_bounds(cellar_rect(*row));
+                node.set_bounds(bounds_rect(*row));
             }
             nodes.push((*node_id, node));
         }
@@ -3523,7 +3517,7 @@ impl App {
                 .map(|(_, node)| *node)
                 .collect::<Vec<_>>(),
         );
-        list.set_bounds(cellar_rect(layout.list));
+        list.set_bounds(bounds_rect(layout.list));
         if scroll > 0 {
             list.add_action(Action::ScrollUp);
         }
@@ -3534,7 +3528,7 @@ impl App {
 
         let mut close = Node::new(Role::Button);
         close.set_label("Close Root Cellar");
-        close.set_bounds(cellar_rect(layout.close));
+        close.set_bounds(bounds_rect(layout.close));
         close.add_action(Action::Focus);
         close.add_action(Action::Click);
         nodes.push((CELLAR_CLOSE, close));
@@ -3542,7 +3536,7 @@ impl App {
         let mut dialog = Node::new(Role::Dialog);
         dialog.set_label("Root Cellar command history");
         dialog.set_modal();
-        dialog.set_bounds(cellar_rect(layout.panel));
+        dialog.set_bounds(bounds_rect(layout.panel));
         dialog.set_children([CELLAR_TITLE, CELLAR_STATUS, CELLAR_LIST, CELLAR_CLOSE]);
         nodes.push((CELLAR_DIALOG, dialog));
         nodes.push((ROOT, root));
@@ -3666,7 +3660,7 @@ impl App {
                 node.set_description(*description);
             }
             node.set_selected(index == selected);
-            node.set_bounds(sprout_rect(*row));
+            node.set_bounds(bounds_rect(*row));
             if *enabled {
                 node.add_action(Action::Focus);
                 node.add_action(Action::Click);
@@ -3679,7 +3673,7 @@ impl App {
         let mut menu = Node::new(Role::Menu);
         menu.set_label(format!("Actions for {command}"));
         menu.set_orientation(accesskit::Orientation::Vertical);
-        menu.set_bounds(sprout_rect(layout.panel));
+        menu.set_bounds(bounds_rect(layout.panel));
         menu.set_children(action_nodes.clone());
         nodes.push((SPROUT_MENU, menu));
 
@@ -3687,7 +3681,7 @@ impl App {
         dialog.set_label(format!("Harvest actions for {command}"));
         dialog.set_description("Press Escape to close without running an action");
         dialog.set_modal();
-        dialog.set_bounds(sprout_rect(layout.panel));
+        dialog.set_bounds(bounds_rect(layout.panel));
         dialog.set_children([SPROUT_MENU]);
         nodes.push((SPROUT_DIALOG, dialog));
         nodes.push((ROOT, root));
@@ -3743,8 +3737,8 @@ impl App {
             } else {
                 node.set_disabled();
             }
-            if let Some(&(x, y, w, h)) = layout.as_ref().and_then(|layout| layout.rows.get(row)) {
-                node.set_bounds(rect(x, y, w, h));
+            if let Some(&bounds) = layout.as_ref().and_then(|layout| layout.rows.get(row)) {
+                node.set_bounds(bounds_rect(bounds));
             }
             items.push(id);
             nodes.push((id, node));
@@ -3752,8 +3746,8 @@ impl App {
         let mut menu_node = Node::new(Role::Menu);
         menu_node.set_label("Workspaces");
         menu_node.set_orientation(accesskit::Orientation::Vertical);
-        if let Some((x, y, w, h)) = layout.as_ref().map(|layout| layout.panel) {
-            menu_node.set_bounds(rect(x, y, w, h));
+        if let Some(layout) = &layout {
+            menu_node.set_bounds(bounds_rect(layout.panel));
         }
         menu_node.set_children(items);
         nodes.push((WORKSPACE_MENU, menu_node));
@@ -4328,7 +4322,7 @@ impl App {
         content.set_label("Notice content");
         content.set_value(visible_lines.join("\n"));
         content.set_description(status_text.clone());
-        content.set_bounds(info_rect(layout.content));
+        content.set_bounds(bounds_rect(layout.content));
         let mut content_children = input_id.into_iter().collect::<Vec<_>>();
         content_children.extend(choice_nodes.iter().map(|(_, node)| *node));
         content.set_children(content_children);
@@ -4378,7 +4372,7 @@ impl App {
                 anchor: position,
                 focus: position,
             });
-            node.set_bounds(info_rect(input_rect));
+            node.set_bounds(bounds_rect(input_rect));
             if awaiting {
                 node.add_action(Action::Focus);
                 node.add_action(Action::SetValue);
@@ -4419,7 +4413,7 @@ impl App {
         let mut copy = Node::new(Role::Button);
         copy.set_label("Copy notice content");
         copy.set_keyboard_shortcut("C");
-        copy.set_bounds(info_rect(layout.copy_button));
+        copy.set_bounds(bounds_rect(layout.copy_button));
         if awaiting {
             copy.add_action(Action::Click);
             copy.add_action(Action::Focus);
@@ -4436,7 +4430,7 @@ impl App {
             dismiss.set_label("Continue and close notice");
             dismiss.set_keyboard_shortcut("Enter or Escape");
         }
-        dismiss.set_bounds(info_rect(layout.continue_button));
+        dismiss.set_bounds(bounds_rect(layout.continue_button));
         if awaiting {
             dismiss.add_action(Action::Click);
             dismiss.add_action(Action::Focus);
@@ -4450,7 +4444,7 @@ impl App {
         dialog.set_description("Application notice with bounded scrollable content");
         dialog.set_modal();
         dialog.add_action(Action::Focus);
-        dialog.set_bounds(info_rect(layout.card));
+        dialog.set_bounds(bounds_rect(layout.card));
         let mut children = vec![INFO_TITLE, content_id];
         children.extend([INFO_STATUS, copy_id, dismiss_id]);
         dialog.set_children(children);
@@ -4561,7 +4555,7 @@ impl App {
         if let Some(list_id) = list_id {
             let mut list = Node::new(Role::List);
             list.set_label("Available context sources");
-            list.set_bounds(context_rect(layout.content));
+            list.set_bounds(bounds_rect(layout.content));
             list.set_children(source_nodes.iter().map(|(_, id)| *id).collect::<Vec<_>>());
             if snapshot.awaiting {
                 list.add_action(Action::Focus);
@@ -4618,7 +4612,7 @@ impl App {
                 "Comma-separated paths; files must remain inside the context working directory",
             );
             input.set_value(snapshot.file_input.as_str());
-            input.set_bounds(context_rect(layout.file_input));
+            input.set_bounds(bounds_rect(layout.file_input));
             if snapshot.awaiting {
                 input.add_action(Action::Focus);
                 input.add_action(Action::SetValue);
@@ -4656,7 +4650,7 @@ impl App {
         let mut cancel = Node::new(Role::Button);
         cancel.set_label(snapshot.cancel_label());
         cancel.set_keyboard_shortcut("Escape");
-        cancel.set_bounds(context_rect(layout.cancel_button));
+        cancel.set_bounds(bounds_rect(layout.cancel_button));
         if snapshot.awaiting {
             cancel.add_action(Action::Click);
             cancel.add_action(Action::Focus);
@@ -4669,7 +4663,7 @@ impl App {
         let mut primary = Node::new(Role::DefaultButton);
         primary.set_label(snapshot.primary_label());
         primary.set_keyboard_shortcut("Enter");
-        primary.set_bounds(context_rect(layout.primary_button));
+        primary.set_bounds(bounds_rect(layout.primary_button));
         if primary_enabled {
             primary.add_action(Action::Click);
             primary.add_action(Action::Focus);
@@ -4685,7 +4679,7 @@ impl App {
         );
         dialog.set_modal();
         dialog.add_action(Action::Focus);
-        dialog.set_bounds(context_rect(layout.card));
+        dialog.set_bounds(bounds_rect(layout.card));
         let mut children = vec![CONTEXT_TITLE];
         if let Some(main) = list_id.or(input_id) {
             children.push(main);
@@ -4809,7 +4803,7 @@ impl App {
         });
         content.set_value(visible_rows.join("\n"));
         content.set_description(status_text.clone());
-        content.set_bounds(diff_rect(layout.content));
+        content.set_bounds(bounds_rect(layout.content));
         if awaiting {
             content.add_action(Action::Focus);
             if self.diff_review.scroll_offset() > 0 {
@@ -4847,7 +4841,7 @@ impl App {
             let mut node = Node::new(Role::Button);
             node.set_label(label);
             node.set_keyboard_shortcut(shortcut);
-            node.set_bounds(diff_rect(button));
+            node.set_bounds(bounds_rect(button));
             if awaiting {
                 node.add_action(Action::Click);
                 node.add_action(Action::Focus);
@@ -4861,7 +4855,7 @@ impl App {
         let mut copy = Node::new(Role::Button);
         copy.set_label("Copy complete raw diff");
         copy.set_keyboard_shortcut("C");
-        copy.set_bounds(diff_rect(layout.copy_button));
+        copy.set_bounds(bounds_rect(layout.copy_button));
         if awaiting {
             copy.add_action(Action::Click);
             copy.add_action(Action::Focus);
@@ -4873,7 +4867,7 @@ impl App {
         let mut dismiss = Node::new(Role::DefaultButton);
         dismiss.set_label("Mark this diff reviewed and close");
         dismiss.set_keyboard_shortcut("Enter or Escape");
-        dismiss.set_bounds(diff_rect(layout.done_button));
+        dismiss.set_bounds(bounds_rect(layout.done_button));
         if awaiting {
             dismiss.add_action(Action::Click);
             dismiss.add_action(Action::Focus);
@@ -4891,7 +4885,7 @@ impl App {
         });
         dialog.set_modal();
         dialog.add_action(Action::Focus);
-        dialog.set_bounds(diff_rect(layout.card));
+        dialog.set_bounds(bounds_rect(layout.card));
         let mut children = vec![DIFF_TITLE, content_id, DIFF_STATUS];
         children.extend(change_ids);
         children.extend([copy_id, dismiss_id]);
@@ -5009,7 +5003,7 @@ impl App {
         cancel.set_label("Cancel guarded command");
         cancel.set_description("Discard all buffered guarded input; recommended safe action");
         cancel.set_keyboard_shortcut("Enter or Escape");
-        cancel.set_bounds(guardrail_rect(layout.cancel_button));
+        cancel.set_bounds(bounds_rect(layout.cancel_button));
         if awaiting {
             cancel.add_action(Action::Click);
             cancel.add_action(Action::Focus);
@@ -5028,7 +5022,7 @@ impl App {
             "Release all buffered input to the exact captured terminal destination or destination set; {reason_value}; {context_value}"
         ));
         confirm.set_keyboard_shortcut("Ctrl+Enter");
-        confirm.set_bounds(guardrail_rect(layout.confirm_button));
+        confirm.set_bounds(bounds_rect(layout.confirm_button));
         if awaiting {
             confirm.add_action(Action::Click);
             confirm.add_action(Action::Focus);
@@ -5046,7 +5040,7 @@ impl App {
         dialog.set_description("Review the exact command, target, and user before choosing");
         dialog.set_modal();
         dialog.add_action(Action::Focus);
-        dialog.set_bounds(guardrail_rect(layout.card));
+        dialog.set_bounds(bounds_rect(layout.card));
         dialog.set_children([
             GUARDRAIL_COMMAND,
             GUARDRAIL_REASON,
@@ -5115,7 +5109,7 @@ impl App {
             anchor: position,
             focus: position,
         });
-        input.set_bounds(shortcuts_rect(layout.input));
+        input.set_bounds(bounds_rect(layout.input));
         input.set_controls([SHORTCUTS_LIST]);
         if info.recording {
             input.set_read_only();
@@ -5134,7 +5128,7 @@ impl App {
             };
             let node_id = self.accessibility.shortcuts_node(target);
             list_children.push(node_id);
-            let bounds = shortcuts_rect(layout.row(row));
+            let bounds = bounds_rect(layout.row(row));
             if entry.is_header {
                 let mut heading = Node::new(Role::Heading);
                 heading.set_label(entry.label);
@@ -5175,7 +5169,7 @@ impl App {
         let mut list = Node::new(Role::List);
         list.set_label(format!("{} keyboard shortcuts", info.total_entries));
         list.set_orientation(accesskit::Orientation::Vertical);
-        list.set_bounds(shortcuts_rect(layout.list));
+        list.set_bounds(bounds_rect(layout.list));
         if let Some(selected) = selected_node {
             list.set_active_descendant(selected);
         }
@@ -5287,12 +5281,7 @@ impl App {
             anchor: cursor_position,
             focus: cursor_position,
         });
-        input.set_bounds(rect(
-            layout.input.x,
-            layout.input.y,
-            layout.input.width,
-            layout.input.height,
-        ));
+        input.set_bounds(bounds_rect(layout.input));
         input.set_controls([SETTINGS_LIST]);
         if info.dropdown_open {
             input.set_read_only();
@@ -5322,7 +5311,7 @@ impl App {
             let node_id = self.accessibility.settings_node(target);
             list_children.push(node_id);
             let row_rect = layout.row_rect(row);
-            let bounds = rect(row_rect.x, row_rect.y, row_rect.width, row_rect.height);
+            let bounds = bounds_rect(row_rect);
 
             if entry.is_header {
                 let mut node = Node::new(Role::Heading);
@@ -5447,7 +5436,7 @@ impl App {
             tab.set_label(page.label());
             tab.set_selected(info.filter.is_empty() && *page == info.page);
             tab.set_controls([SETTINGS_LIST]);
-            tab.set_bounds(rect(bounds.x, bounds.y, bounds.width, bounds.height));
+            tab.set_bounds(bounds_rect(bounds));
             tab.add_action(Action::Click);
             tab.add_action(Action::Focus);
             nodes.push((id, tab));
@@ -5456,12 +5445,7 @@ impl App {
         let mut pages = Node::new(Role::TabList);
         pages.set_label("Settings pages");
         pages.set_orientation(accesskit::Orientation::Vertical);
-        pages.set_bounds(rect(
-            layout.sidebar.x,
-            layout.sidebar.y,
-            layout.sidebar.width,
-            layout.sidebar.height,
-        ));
+        pages.set_bounds(bounds_rect(layout.sidebar));
         pages.set_children(page_ids);
         nodes.push((SETTINGS_PAGES, pages));
 
@@ -5483,7 +5467,7 @@ impl App {
             if let Some(description) = description {
                 button.set_description(description);
             }
-            button.set_bounds(rect(bounds.x, bounds.y, bounds.width, bounds.height));
+            button.set_bounds(bounds_rect(bounds));
             button.add_action(Action::Click);
             button.add_action(Action::Focus);
             nodes.push((id, button));
@@ -5528,9 +5512,11 @@ impl App {
                     option.set_selected(index == info.dropdown_highlight);
                     option.add_action(Action::Click);
                     option.set_bounds(rect(
-                        dropdown_rect.x + 4.0,
-                        dropdown_rect.y + 4.0 + visible_index as f32 * dropdown_rect.option_height,
-                        dropdown_rect.width - 8.0,
+                        dropdown_rect.bounds.x + 4.0,
+                        dropdown_rect.bounds.y
+                            + 4.0
+                            + visible_index as f32 * dropdown_rect.option_height,
+                        dropdown_rect.bounds.width - 8.0,
                         dropdown_rect.option_height,
                     ));
                     nodes.push((option_id, option));
@@ -5539,12 +5525,7 @@ impl App {
                 let mut dropdown = Node::new(Role::ListBox);
                 dropdown.set_label(format!("{} options", entry.label));
                 dropdown.set_orientation(accesskit::Orientation::Vertical);
-                dropdown.set_bounds(rect(
-                    dropdown_rect.x,
-                    dropdown_rect.y,
-                    dropdown_rect.width,
-                    dropdown_rect.height,
-                ));
+                dropdown.set_bounds(bounds_rect(dropdown_rect.bounds));
                 if let Some(highlighted) = option_nodes
                     .get(
                         info.dropdown_highlight
@@ -5622,14 +5603,14 @@ impl App {
         close.set_label("Close custom commands");
         close.add_action(Action::Click);
         close.add_action(Action::Focus);
-        close.set_bounds(command_rect(layout.close_button));
+        close.set_bounds(bounds_rect(layout.close_button));
         nodes.push((COMMANDS_CLOSE, close));
 
         let mut new_command = Node::new(Role::Button);
         new_command.set_label("New command");
         new_command.add_action(Action::Click);
         new_command.add_action(Action::Focus);
-        new_command.set_bounds(command_rect(layout.new_button));
+        new_command.set_bounds(bounds_rect(layout.new_button));
         nodes.push((COMMANDS_NEW, new_command));
 
         let mut dialog_children = vec![COMMANDS_CLOSE, COMMANDS_NEW];
@@ -5663,14 +5644,14 @@ impl App {
             save.set_description("Both name and shell command are required");
             save.add_action(Action::Click);
             save.add_action(Action::Focus);
-            save.set_bounds(command_rect(form.save_button));
+            save.set_bounds(bounds_rect(form.save_button));
             nodes.push((COMMANDS_SAVE, save));
 
             let mut cancel = Node::new(Role::Button);
             cancel.set_label("Cancel new command");
             cancel.add_action(Action::Click);
             cancel.add_action(Action::Focus);
-            cancel.set_bounds(command_rect(form.cancel_button));
+            cancel.set_bounds(bounds_rect(form.cancel_button));
             nodes.push((COMMANDS_CANCEL, cancel));
             dialog_children.extend([
                 COMMANDS_NAME,
@@ -5701,7 +5682,7 @@ impl App {
             run.add_action(Action::Click);
             run.add_action(Action::Focus);
             if layout.visible_range().contains(&index) {
-                run.set_bounds(command_rect(layout.command_run(index)));
+                run.set_bounds(bounds_rect(layout.command_run(index)));
             }
             nodes.push((run_id, run));
 
@@ -5711,14 +5692,14 @@ impl App {
             delete.add_action(Action::Click);
             delete.add_action(Action::Focus);
             if layout.visible_range().contains(&index) {
-                delete.set_bounds(command_rect(layout.command_delete(index)));
+                delete.set_bounds(bounds_rect(layout.command_delete(index)));
             }
             nodes.push((delete_id, delete));
 
             let mut group = Node::new(Role::Group);
             group.set_label(command.name.clone());
             if layout.visible_range().contains(&index) {
-                group.set_bounds(command_rect(layout.command_row(index)));
+                group.set_bounds(bounds_rect(layout.command_row(index)));
             }
             group.set_children([run_id, delete_id]);
             nodes.push((group_id, group));
@@ -5755,7 +5736,7 @@ impl App {
         let mut dialog = Node::new(Role::Dialog);
         dialog.set_label("Custom commands");
         dialog.set_modal();
-        dialog.set_bounds(command_rect(layout.panel));
+        dialog.set_bounds(bounds_rect(layout.panel));
         dialog.set_children(dialog_children);
         nodes.push((COMMANDS_DIALOG, dialog));
         nodes.push((ROOT, root));
@@ -5809,7 +5790,7 @@ impl App {
         close.set_label("Close agents");
         close.add_action(Action::Click);
         close.add_action(Action::Focus);
-        close.set_bounds(agents_rect(layout.close_button));
+        close.set_bounds(bounds_rect(layout.close_button));
         nodes.push((AGENTS_CLOSE, close));
         let mut dialog_children = vec![AGENTS_CLOSE];
 
@@ -5822,7 +5803,7 @@ impl App {
             button.add_action(Action::Click);
             button.add_action(Action::Focus);
             if layout.visible_range().contains(&index) {
-                button.set_bounds(agents_rect(layout.row(index)));
+                button.set_bounds(bounds_rect(layout.row(index)));
             }
             nodes.push((id, button));
             row_ids.push(id);
@@ -5863,7 +5844,7 @@ impl App {
             });
             toggle.add_action(Action::Click);
             toggle.add_action(Action::Focus);
-            toggle.set_bounds(agents_rect(section.button));
+            toggle.set_bounds(bounds_rect(section.button));
             nodes.push((AGENTS_SUPERVISOR_TOGGLE, toggle));
 
             let mut entry_ids = Vec::with_capacity(section.entry_count);
@@ -5876,7 +5857,7 @@ impl App {
                 let id = NodeId(AGENTS_ACTIVITY_BASE + index as u64);
                 let mut item = Node::new(Role::ListItem);
                 item.set_label(entry.clone());
-                item.set_bounds(agents_rect(section.entry(index)));
+                item.set_bounds(bounds_rect(section.entry(index)));
                 nodes.push((id, item));
                 entry_ids.push(id);
             }
@@ -5887,7 +5868,7 @@ impl App {
 
             let mut group = Node::new(Role::Group);
             group.set_label(format!("Supervisor, {}", supervisor.mode));
-            group.set_bounds(agents_rect(section.section));
+            group.set_bounds(bounds_rect(section.section));
             group.set_children([AGENTS_SUPERVISOR_TOGGLE, AGENTS_ACTIVITY]);
             nodes.push((AGENTS_SUPERVISOR, group));
             dialog_children.push(AGENTS_SUPERVISOR);
@@ -5896,7 +5877,7 @@ impl App {
         let mut dialog = Node::new(Role::Dialog);
         dialog.set_label("Agents");
         dialog.set_modal();
-        dialog.set_bounds(agents_rect(layout.panel));
+        dialog.set_bounds(bounds_rect(layout.panel));
         dialog.set_children(dialog_children);
         nodes.push((AGENTS_DIALOG, dialog));
         nodes.push((ROOT, root));
@@ -5970,7 +5951,7 @@ impl App {
         });
         close.add_action(Action::Click);
         close.add_action(Action::Focus);
-        close.set_bounds(session_rect(layout.close_button));
+        close.set_bounds(bounds_rect(layout.close_button));
         nodes.push((SESSION_CLOSE, close));
 
         let mut dialog_children = vec![SESSION_CLOSE];
@@ -5979,7 +5960,7 @@ impl App {
             node.set_label("Back to workspaces");
             node.add_action(Action::Click);
             node.add_action(Action::Focus);
-            node.set_bounds(session_rect(back));
+            node.set_bounds(bounds_rect(back));
             nodes.push((SESSION_BACK, node));
             dialog_children.push(SESSION_BACK);
         }
@@ -5991,7 +5972,7 @@ impl App {
             node.set_description("Show snapshots saved when tabs closed");
             node.add_action(Action::Click);
             node.add_action(Action::Focus);
-            node.set_bounds(session_rect(link));
+            node.set_bounds(bounds_rect(link));
             nodes.push((SESSION_SNAPSHOTS, node));
             dialog_children.push(SESSION_SNAPSHOTS);
         }
@@ -6020,21 +6001,21 @@ impl App {
             });
             input.add_action(Action::Focus);
             input.add_action(Action::SetValue);
-            input.set_bounds(session_rect(rename.input));
+            input.set_bounds(bounds_rect(rename.input));
             nodes.push((SESSION_RENAME_INPUT, input));
 
             let mut save = Node::new(Role::Button);
             save.set_label("Save workspace name");
             save.add_action(Action::Click);
             save.add_action(Action::Focus);
-            save.set_bounds(session_rect(rename.save_button));
+            save.set_bounds(bounds_rect(rename.save_button));
             nodes.push((SESSION_RENAME_SAVE, save));
 
             let mut cancel = Node::new(Role::Button);
             cancel.set_label("Cancel workspace rename");
             cancel.add_action(Action::Click);
             cancel.add_action(Action::Focus);
-            cancel.set_bounds(session_rect(rename.cancel_button));
+            cancel.set_bounds(bounds_rect(rename.cancel_button));
             nodes.push((SESSION_RENAME_CANCEL, cancel));
             dialog_children.extend([
                 SESSION_RENAME_INPUT,
@@ -6074,7 +6055,7 @@ impl App {
                 load.add_action(Action::Click);
                 load.add_action(Action::Focus);
             }
-            load.set_bounds(session_rect(geometry.load_button));
+            load.set_bounds(bounds_rect(geometry.load_button));
             nodes.push((load_id, load));
 
             let mut children = vec![load_id];
@@ -6091,7 +6072,7 @@ impl App {
                     rename.add_action(Action::Focus);
                 }
                 if let Some(bounds) = geometry.rename_button {
-                    rename.set_bounds(session_rect(bounds));
+                    rename.set_bounds(bounds_rect(bounds));
                 }
                 nodes.push((rename_id, rename));
                 children.push(rename_id);
@@ -6110,7 +6091,7 @@ impl App {
                 delete.add_action(Action::Click);
                 delete.add_action(Action::Focus);
             }
-            delete.set_bounds(session_rect(geometry.delete_button));
+            delete.set_bounds(bounds_rect(geometry.delete_button));
             nodes.push((delete_id, delete));
             children.push(delete_id);
 
@@ -6124,7 +6105,7 @@ impl App {
             if !description.is_empty() {
                 group.set_description(description);
             }
-            group.set_bounds(session_rect(geometry.row));
+            group.set_bounds(bounds_rect(geometry.row));
             group.set_children(children);
             nodes.push((group_id, group));
             group_nodes.push(group_id);
@@ -6178,7 +6159,7 @@ impl App {
             "Saved when tabs close. Opening starts a new shell"
         });
         dialog.set_modal();
-        dialog.set_bounds(session_rect(layout.panel));
+        dialog.set_bounds(bounds_rect(layout.panel));
         dialog.set_children(dialog_children);
         nodes.push((SESSION_DIALOG, dialog));
         nodes.push((ROOT, root));
@@ -6200,45 +6181,13 @@ impl App {
     }
 }
 
-fn session_rect(rectangle: crate::session::panel::SessionPanelRect) -> Rect {
-    rect(rectangle.x, rectangle.y, rectangle.width, rectangle.height)
-}
-
-fn shortcuts_rect(rectangle: crate::ui::shortcuts_panel::ShortcutsPanelRect) -> Rect {
-    rect(rectangle.x, rectangle.y, rectangle.width, rectangle.height)
-}
-
-fn guardrail_rect(rectangle: crate::terminal::guardrails::GuardrailRect) -> Rect {
-    rect(rectangle.x, rectangle.y, rectangle.width, rectangle.height)
-}
-
-fn info_rect(rectangle: crate::ui::info_overlay::InfoOverlayRect) -> Rect {
-    rect(rectangle.x, rectangle.y, rectangle.width, rectangle.height)
-}
-
-fn diff_rect(rectangle: crate::ui::diff_review::DiffReviewRect) -> Rect {
-    rect(rectangle.x, rectangle.y, rectangle.width, rectangle.height)
-}
-
-fn context_rect(rectangle: crate::ui::context_picker::ContextPickerRect) -> Rect {
-    rect(rectangle.x, rectangle.y, rectangle.width, rectangle.height)
-}
-
-fn agents_rect(rectangle: crate::ui::agents_panel::AgentsPanelRect) -> Rect {
-    rect(rectangle.x, rectangle.y, rectangle.width, rectangle.height)
-}
-
-fn command_rect(rectangle: crate::ui::commands::panel::CommandsPanelRect) -> Rect {
-    rect(rectangle.x, rectangle.y, rectangle.width, rectangle.height)
-}
-
 fn command_form_input(
     id: NodeId,
     label: &str,
     placeholder: &str,
     value: &str,
     cursor: Option<usize>,
-    bounds: crate::ui::commands::panel::CommandsPanelRect,
+    bounds: Bounds,
 ) -> Node {
     let mut input = Node::new(Role::TextInput);
     input.set_label(label);
@@ -6266,7 +6215,7 @@ fn command_form_input(
         });
     }
     input.add_action(Action::Focus);
-    input.set_bounds(command_rect(bounds));
+    input.set_bounds(bounds_rect(bounds));
     input
 }
 
@@ -6515,6 +6464,10 @@ fn workspace_menu_row(node: NodeId) -> Option<usize> {
         .map(|row| row as usize)
 }
 
+fn bounds_rect(bounds: Bounds) -> Rect {
+    rect(bounds.x, bounds.y, bounds.width, bounds.height)
+}
+
 fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
     Rect::new(
         x as f64,
@@ -6580,20 +6533,8 @@ fn is_search_node(node: NodeId) -> bool {
     )
 }
 
-fn search_rect(rectangle: crate::terminal::search::SearchBarRect) -> Rect {
-    rect(rectangle.x, rectangle.y, rectangle.width, rectangle.height)
-}
-
 fn toast_node(id: u64) -> NodeId {
     NodeId(TOAST_BASE.saturating_add(id))
-}
-
-fn cellar_rect(rectangle: crate::harvest::CellarRect) -> Rect {
-    rect(rectangle.x, rectangle.y, rectangle.width, rectangle.height)
-}
-
-fn sprout_rect(rectangle: crate::harvest::SproutMenuRect) -> Rect {
-    rect(rectangle.x, rectangle.y, rectangle.width, rectangle.height)
 }
 
 #[cfg(test)]
@@ -7199,8 +7140,8 @@ mod tests {
         assert_eq!(node(SEARCH_STATUS).live(), Some(Live::Polite));
         assert_eq!(node(SEARCH_FILTER).toggled(), Some(Toggled::False));
         assert!(node(SEARCH_CLOSE).supports_action(Action::Click));
-        assert_eq!(node(SEARCH_INPUT).bounds(), Some(search_rect(layout.input)));
-        assert_eq!(node(SEARCH_REGEX).bounds(), Some(search_rect(layout.regex)));
+        assert_eq!(node(SEARCH_INPUT).bounds(), Some(bounds_rect(layout.input)));
+        assert_eq!(node(SEARCH_REGEX).bounds(), Some(bounds_rect(layout.regex)));
 
         app.handle_accessibility_action(ActionRequest {
             action: Action::Focus,
@@ -7292,9 +7233,9 @@ mod tests {
         assert!(node(CELLAR_LIST).supports_action(Action::ScrollUp));
         assert_eq!(
             node(CELLAR_DIALOG).bounds(),
-            Some(cellar_rect(layout.panel))
+            Some(bounds_rect(layout.panel))
         );
-        assert_eq!(node(CELLAR_CLOSE).bounds(), Some(cellar_rect(layout.close)));
+        assert_eq!(node(CELLAR_CLOSE).bounds(), Some(bounds_rect(layout.close)));
         let focused = snapshot.focus;
         assert_eq!(node(focused).role(), Role::ListBoxOption);
         assert!(node(focused).label().unwrap().contains("fixture-29"));
@@ -8726,7 +8667,7 @@ mod tests {
         assert_eq!(layout.visible_range().end, 100);
         assert_eq!(
             bounds(&after, last),
-            Some(command_rect(layout.command_run(99)))
+            Some(bounds_rect(layout.command_run(99)))
         );
         assert!(app.commands_panel.is_open());
         assert_eq!(app.config.commands.len(), 100);
@@ -8881,11 +8822,8 @@ mod tests {
                 assert!((actual - expected).abs() < 0.05, "{actual} != {expected}");
             }
         };
-        assert_rect_close(node(run).bounds(), command_rect(layout.command_run(0)));
-        assert_rect_close(
-            node(delete).bounds(),
-            command_rect(layout.command_delete(0)),
-        );
+        assert_rect_close(node(run).bounds(), bounds_rect(layout.command_run(0)));
+        assert_rect_close(node(delete).bounds(), bounds_rect(layout.command_delete(0)));
     }
 
     #[test]
@@ -10076,7 +10014,7 @@ mod tests {
             .1
             .bounds()
             .unwrap();
-        let expected = info_rect(
+        let expected = bounds_rect(
             layout
                 .source_line_rect(1, app.info_overlay.scroll_offset(), 40)
                 .unwrap(),
@@ -10170,12 +10108,12 @@ mod tests {
         assert_eq!(node(choice).role(), Role::Button);
         assert!(node(choice).supports_action(Action::Click));
         assert_eq!(snapshot.focus, dismiss);
-        assert_eq!(node(copy).bounds(), Some(info_rect(layout.copy_button)));
+        assert_eq!(node(copy).bounds(), Some(bounds_rect(layout.copy_button)));
         assert_eq!(
             node(dismiss).bounds(),
-            Some(info_rect(layout.continue_button))
+            Some(bounds_rect(layout.continue_button))
         );
-        assert_eq!(node(content).bounds(), Some(info_rect(layout.content)));
+        assert_eq!(node(content).bounds(), Some(bounds_rect(layout.content)));
 
         app.handle_accessibility_action(ActionRequest {
             action: Action::ScrollDown,
@@ -10293,7 +10231,7 @@ mod tests {
         let actual = input.bounds().unwrap();
         let expected = layout
             .source_line_rect(1, app.info_overlay.scroll_offset(), 3)
-            .map(info_rect)
+            .map(bounds_rect)
             .unwrap();
         assert_eq!(actual, expected);
 
@@ -10374,9 +10312,12 @@ mod tests {
         assert!(node(content).supports_action(Action::ScrollDown));
         assert!(node(content).supports_action(Action::ScrollRight));
         assert_eq!(snapshot.focus, dismiss);
-        assert_eq!(node(copy).bounds(), Some(diff_rect(layout.copy_button)));
-        assert_eq!(node(dismiss).bounds(), Some(diff_rect(layout.done_button)));
-        assert_eq!(node(content).bounds(), Some(diff_rect(layout.content)));
+        assert_eq!(node(copy).bounds(), Some(bounds_rect(layout.copy_button)));
+        assert_eq!(
+            node(dismiss).bounds(),
+            Some(bounds_rect(layout.done_button))
+        );
+        assert_eq!(node(content).bounds(), Some(bounds_rect(layout.content)));
 
         app.handle_accessibility_action(ActionRequest {
             action: Action::ScrollDown,
@@ -10507,7 +10448,7 @@ mod tests {
         assert!(node(cancel).supports_action(Action::Click));
         assert!(node(primary).supports_action(Action::Click));
         let actual = node(list).bounds().unwrap();
-        let expected = context_rect(layout.content);
+        let expected = bounds_rect(layout.content);
         assert!((actual.x0 - expected.x0).abs() < 0.05);
         assert!((actual.y0 - expected.y0).abs() < 0.05);
 

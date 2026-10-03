@@ -5,6 +5,8 @@
 //! etc.) and asks the person to confirm before it is delivered. Input a person
 //! types, pastes, completes, or broadcasts is never intercepted.
 
+use crate::ui::geometry::Bounds;
+
 /// Get the current username
 fn whoami() -> String {
     std::env::var("USER")
@@ -75,29 +77,15 @@ struct PendingGuardedInput {
     writes: Vec<GuardedWrite>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct GuardrailRect {
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
-}
-
-impl GuardrailRect {
-    pub fn contains(self, x: f32, y: f32) -> bool {
-        x >= self.x && x <= self.x + self.width && y >= self.y && y <= self.y + self.height
-    }
-}
-
 /// Guardrail modal geometry shared by rendering, pointer hit testing, and
 /// accessibility. Confirm and Cancel are deliberately separate shapes so the
 /// safety decision never depends on color alone.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GuardrailLayout {
-    pub card: GuardrailRect,
-    pub confirm_button: GuardrailRect,
-    pub cancel_button: GuardrailRect,
-    pub close_button: GuardrailRect,
+    pub card: Bounds,
+    pub confirm_button: Bounds,
+    pub cancel_button: Bounds,
+    pub close_button: Bounds,
     pub padding: f32,
     pub title_height: f32,
     pub command_height: f32,
@@ -135,13 +123,13 @@ impl GuardrailLayout {
         let available_button_width = card_width - padding * 2.0 - button_gap;
         let button_width = (available_button_width / 2.0).max(1.0);
         let button_y = card_y + card_height - padding - button_height;
-        let cancel_button = GuardrailRect {
+        let cancel_button = Bounds {
             x: card_x + padding,
             y: button_y,
             width: button_width,
             height: button_height,
         };
-        let confirm_button = GuardrailRect {
+        let confirm_button = Bounds {
             x: cancel_button.x + button_width + button_gap,
             y: button_y,
             width: button_width,
@@ -149,7 +137,7 @@ impl GuardrailLayout {
         };
         let close_size = cell_height * 1.5;
         Self {
-            card: GuardrailRect {
+            card: Bounds {
                 x: card_x,
                 y: card_y,
                 width: card_width,
@@ -157,7 +145,7 @@ impl GuardrailLayout {
             },
             confirm_button,
             cancel_button,
-            close_button: GuardrailRect {
+            close_button: Bounds {
                 x: card_x + card_width - padding - close_size / 2.0,
                 y: card_y + padding - close_size / 2.0,
                 width: close_size,

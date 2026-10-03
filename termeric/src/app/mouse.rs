@@ -1,6 +1,7 @@
 //! Mouse routing for modal layers, chrome, panes, and terminal content.
 
 use super::*;
+use crate::ui::geometry::Bounds;
 
 impl DividerDrag {
     fn owns_tab(&self, tab: &crate::tabs::Tab) -> bool {
@@ -911,7 +912,7 @@ impl App {
                         let dd_hover = self
                             .settings_panel
                             .dropdown_layout(&layout, &entries)
-                            .filter(|(rect, _)| rect.contains(px, py))
+                            .filter(|(rect, _)| rect.bounds.contains(px, py))
                             .and_then(|(rect, option_count)| {
                                 rect.option_at(py).filter(|&i| i < option_count)
                             });
@@ -1758,7 +1759,7 @@ fn screen_to_pane_grid(
     content_left: f32,
     content_top: f32,
     padding: f32,
-    rect: crate::panes::PaneRect,
+    rect: Bounds,
     scroll_offset: usize,
 ) -> termeric_core::Point {
     let local_x = (position.0 as f32 - content_left - padding - rect.x).max(0.0);
@@ -1772,7 +1773,6 @@ fn screen_to_pane_grid(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::panes::PaneRect;
 
     #[cfg(unix)]
     fn mouse_report_position(app: &App) -> (f64, f64) {
@@ -1976,7 +1976,7 @@ mod tests {
             50.0,
             50.0,
             6.0,
-            PaneRect {
+            Bounds {
                 x: 100.0,
                 y: 60.0,
                 width: 200.0,
