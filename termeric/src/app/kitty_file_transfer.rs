@@ -5,7 +5,6 @@ use crate::tabs::{TabType, TerminalEventOrigin, TerminalIdentity};
 use crate::ui::info_overlay::InfoOverlayChoice;
 use std::collections::HashMap;
 use std::path::PathBuf;
-#[cfg(unix)]
 use std::sync::mpsc::Receiver;
 use std::sync::{
     Arc,
@@ -24,11 +23,8 @@ pub(super) const MAX_KITTY_DOWNLOAD_FILES: usize = 1_024;
 pub(super) const MAX_KITTY_DOWNLOAD_BYTES: u64 = 64 * 1024 * 1024;
 pub(super) const MAX_KITTY_UPLOAD_PATHS: usize = 16;
 pub(super) const MAX_KITTY_UPLOAD_BYTES: u64 = 64 * 1024 * 1024;
-#[cfg(unix)]
 const WORKER_IDLE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
-#[cfg(unix)]
 const WORKER_QUEUE_CAPACITY: usize = 1_024;
-#[cfg(target_os = "linux")]
 const UPLOAD_BATCH_CHUNKS: usize = 8;
 const PENDING_UPLOAD_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -401,20 +397,6 @@ impl App {
             );
             return;
         }
-        #[cfg(not(target_os = "linux"))]
-        {
-            self.write_kitty_status(
-                origin,
-                command.reply_uses_8bit_controls,
-                transfer_status(
-                    &command.id,
-                    "",
-                    KittyFileTransferStatusCode::PermissionDenied,
-                    "host file reads are currently supported only on Linux",
-                ),
-            );
-            return;
-        }
 
         self.kitty_file_transfers.next_token = self
             .kitty_file_transfers
@@ -644,21 +626,6 @@ impl App {
                     "",
                     KittyFileTransferStatusCode::PermissionDenied,
                     "this terminal type cannot write host files",
-                ),
-            );
-            return;
-        }
-
-        #[cfg(not(unix))]
-        {
-            self.write_kitty_status(
-                origin,
-                command.reply_uses_8bit_controls,
-                transfer_status(
-                    &command.id,
-                    "",
-                    KittyFileTransferStatusCode::PermissionDenied,
-                    "host file transfer is currently supported only on Unix",
                 ),
             );
             return;
@@ -1550,7 +1517,6 @@ fn resolve_kitty_upload_path(name: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-#[cfg(target_os = "linux")]
 fn start_upload_worker(
     window_id: winit::window::WindowId,
     token: u64,
@@ -1585,20 +1551,6 @@ fn start_upload_worker(
     Ok(sender)
 }
 
-#[cfg(not(target_os = "linux"))]
-fn start_upload_worker(
-    _window_id: winit::window::WindowId,
-    _token: u64,
-    _session_id: String,
-    _paths: Vec<UploadPath>,
-    _reply_uses_8bit_controls: bool,
-    _cancellation: Arc<AtomicBool>,
-    _proxy: winit::event_loop::EventLoopProxy<AppEvent>,
-) -> Result<SyncSender<UploadWorkerCommand>, String> {
-    Err("host file reads are currently supported only on Linux".into())
-}
-
-#[cfg(target_os = "linux")]
 fn pin_upload_path(path: &std::path::Path) -> std::io::Result<std::fs::File> {
     use std::ffi::CString;
     use std::fs::File;
@@ -1642,7 +1594,6 @@ fn pin_upload_path(path: &std::path::Path) -> std::io::Result<std::fs::File> {
     Ok(unsafe { File::from_raw_fd(descriptor as libc::c_int) })
 }
 
-#[cfg(target_os = "linux")]
 fn reopen_upload_regular_file(pinned: &std::fs::File) -> std::io::Result<std::fs::File> {
     use std::os::fd::AsRawFd;
     use std::os::unix::fs::MetadataExt;
@@ -1670,7 +1621,6 @@ fn reopen_upload_regular_file(pinned: &std::fs::File) -> std::io::Result<std::fs
     Ok(file)
 }
 
-#[cfg(target_os = "linux")]
 fn run_upload_worker(
     receiver: Receiver<UploadWorkerCommand>,
     session_id: String,
@@ -2161,7 +2111,6 @@ fn run_upload_worker(
     }
 }
 
-#[cfg(unix)]
 fn start_worker(
     window_id: winit::window::WindowId,
     token: u64,
@@ -2195,7 +2144,6 @@ fn start_worker(
     Ok(sender)
 }
 
-#[cfg(unix)]
 fn run_worker(
     receiver: Receiver<WorkerCommand>,
     session_id: String,
@@ -2204,7 +2152,7 @@ fn run_worker(
     idle_timeout: Duration,
     mut emit: impl FnMut(WorkerCompletion) -> bool,
 ) {
-    let mut transaction = unix::DownloadTransaction::new(session_id);
+    let mut transaction = download::DownloadTransaction::new(session_id);
     loop {
         let command = match receiver.recv_timeout(idle_timeout) {
             Ok(command) => command.command,
@@ -2236,13 +2184,13 @@ fn run_worker(
         let result = transaction.handle(command, &cancellation);
         let (progress_files, progress_bytes) = transaction.progress();
         let disposition = match result {
-            Ok(unix::TransactionResult::Status(status)) => WorkerDisposition::Status {
+            Ok(download::TransactionResult::Status(status)) => WorkerDisposition::Status {
                 status,
                 terminal: false,
                 files: progress_files,
                 bytes: progress_bytes,
             },
-            Ok(unix::TransactionResult::Finished { files, bytes }) => {
+            Ok(download::TransactionResult::Finished { files, bytes }) => {
                 WorkerDisposition::Finished { files, bytes }
             }
             Err(error) => WorkerDisposition::Status {
@@ -2265,18 +2213,6 @@ fn run_worker(
             break;
         }
     }
-}
-
-#[cfg(not(unix))]
-fn start_worker(
-    _window_id: winit::window::WindowId,
-    _token: u64,
-    _session_id: String,
-    _reply_uses_8bit_controls: bool,
-    _cancellation: Arc<AtomicBool>,
-    _proxy: winit::event_loop::EventLoopProxy<AppEvent>,
-) -> Result<SyncSender<WorkerCommand>, String> {
-    Err("host file transfer is currently supported only on Unix".into())
 }
 
 #[cfg(all(test, unix))]
@@ -3062,8 +2998,9 @@ mod upload_worker_tests {
     }
 }
 
-#[cfg(unix)]
-mod unix {
+/// The download transaction: staging, publishing, and rolling back files
+/// beneath a pinned destination.
+mod download {
     use super::*;
     use flate2::{Decompress, FlushDecompress, Status};
     use std::collections::{HashMap, HashSet};
@@ -3909,7 +3846,6 @@ mod unix {
         created: &mut Vec<CreatedPath>,
     ) -> io::Result<()> {
         ensure_creation_capacity(created)?;
-        #[cfg(target_os = "linux")]
         {
             // source is only a transaction lookup key. Its current pathname
             // cannot grant authority to link or timestamp a replacement inode.
@@ -3943,12 +3879,6 @@ mod unix {
                 _identity_guard: Some(published),
             });
             Ok(())
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            // Internal Unix transaction tests only; host transfers are Linux-only.
-            fs::hard_link(source, destination)?;
-            record_created(destination, CreatedKind::File, created)
         }
     }
 
@@ -4002,7 +3932,6 @@ mod unix {
         }
     }
 
-    #[cfg(target_os = "linux")]
     fn open_pinned_directory(path: &Path) -> io::Result<File> {
         use std::os::fd::FromRawFd;
 
@@ -4039,44 +3968,32 @@ mod unix {
     }
 
     struct StagingDirectory {
-        #[cfg(target_os = "linux")]
         parent: File,
         path: PathBuf,
     }
 
     impl StagingDirectory {
         fn open(path: &Path) -> io::Result<Self> {
-            #[cfg(target_os = "linux")]
-            {
-                use std::os::fd::AsRawFd;
+            use std::os::fd::AsRawFd;
 
-                let parent = open_pinned_directory(path)?;
-                let path = PathBuf::from(format!("/proc/self/fd/{}", parent.as_raw_fd()));
-                Ok(Self { parent, path })
-            }
-            #[cfg(not(target_os = "linux"))]
-            Ok(Self { path: path.into() })
+            let parent = open_pinned_directory(path)?;
+            let path = PathBuf::from(format!("/proc/self/fd/{}", parent.as_raw_fd()));
+            Ok(Self { parent, path })
         }
 
         fn create_file(self) -> io::Result<StagedFile> {
             let temporary = tempfile::Builder::new()
                 .prefix(".termeric-transfer-")
                 .tempfile_in(&self.path)?;
-            #[cfg(target_os = "linux")]
-            {
-                let mut staged = StagedFile::from(temporary);
-                // TempPath preserves this trusted procfs path. Keep its parent
-                // descriptor alive until StagedFile::drop finishes cleanup.
-                staged._parent = Some(self.parent);
-                Ok(staged)
-            }
-            #[cfg(not(target_os = "linux"))]
-            Ok(StagedFile::from(temporary))
+            let mut staged = StagedFile::from(temporary);
+            // TempPath preserves this trusted procfs path. Keep its parent
+            // descriptor alive until StagedFile::drop finishes cleanup.
+            staged._parent = Some(self.parent);
+            Ok(staged)
         }
     }
 
     struct PublicationTarget {
-        #[cfg(target_os = "linux")]
         parent: File,
         path: PathBuf,
         original_path: PathBuf,
@@ -4101,26 +4018,15 @@ mod unix {
                     "invalid publication destination",
                 ));
             }
-            #[cfg(target_os = "linux")]
-            {
-                use std::os::fd::AsRawFd;
+            use std::os::fd::AsRawFd;
 
-                let parent = open_pinned_directory(path.parent().unwrap())?;
-                let original_path = path.to_owned();
-                let path =
-                    PathBuf::from(format!("/proc/self/fd/{}", parent.as_raw_fd())).join(name);
-                Ok(Self {
-                    parent,
-                    path,
-                    original_path,
-                })
-            }
-            // Actual host transfers are Linux-only. Preserve the internal Unix
-            // transaction test implementation without claiming equivalent safety.
-            #[cfg(not(target_os = "linux"))]
+            let parent = open_pinned_directory(path.parent().unwrap())?;
+            let original_path = path.to_owned();
+            let path = PathBuf::from(format!("/proc/self/fd/{}", parent.as_raw_fd())).join(name);
             Ok(Self {
-                path: path.into(),
-                original_path: path.into(),
+                parent,
+                path,
+                original_path,
             })
         }
 
@@ -4148,20 +4054,9 @@ mod unix {
 
         fn publish(self, temporary: impl Into<StagedFile>) -> io::Result<File> {
             let temporary = temporary.into();
-            #[cfg(target_os = "linux")]
-            {
-                self.link_file(temporary.as_file())
-            }
-            // Internal Unix tests only; actual host transfers remain Linux-only.
-            #[cfg(not(target_os = "linux"))]
-            {
-                let published = temporary.as_file().try_clone()?;
-                fs::hard_link(&temporary.path, &self.path)?;
-                Ok(published)
-            }
+            self.link_file(temporary.as_file())
         }
 
-        #[cfg(target_os = "linux")]
         fn link_file(self, file: &File) -> io::Result<File> {
             use std::os::fd::AsRawFd;
 
@@ -4377,7 +4272,6 @@ mod unix {
 
     fn open_directory_identity(path: &Path) -> io::Result<File> {
         let result = open_directory(path);
-        #[cfg(target_os = "linux")]
         if result
             .as_ref()
             .is_err_and(|error| error.kind() == io::ErrorKind::PermissionDenied)
@@ -4414,7 +4308,6 @@ mod unix {
                 "directory handle does not match its recorded identity",
             ));
         }
-        #[cfg(target_os = "linux")]
         {
             use std::os::fd::AsRawFd;
             // SAFETY: directory owns a live descriptor; F_GETFL takes no
@@ -4544,10 +4437,7 @@ mod unix {
                     // can remove owner access needed by rollback.
                     open_directory_identity(path)
                 } else {
-                    #[cfg(target_os = "linux")]
                     let flags = libc::O_PATH | libc::O_NOFOLLOW;
-                    #[cfg(not(target_os = "linux"))]
-                    let flags = libc::O_NOFOLLOW | libc::O_NONBLOCK;
                     fs::OpenOptions::new()
                         .read(true)
                         .custom_flags(flags)
@@ -4629,7 +4519,6 @@ mod unix {
     }
 
     fn apply_link_mtime(entry: &CreatedPath, mtime_ns: Option<i64>) -> io::Result<()> {
-        #[cfg(target_os = "linux")]
         {
             use std::os::fd::AsRawFd;
 
@@ -4671,14 +4560,9 @@ mod unix {
                 Err(io::Error::last_os_error())
             }
         }
-        #[cfg(not(target_os = "linux"))]
-        {
-            // Non-Linux hosts still reject transfers at the application gate.
-            apply_mtime(&entry.path, mtime_ns, entry.kind == CreatedKind::Symlink)
-        }
     }
 
-    #[cfg(any(test, not(target_os = "linux")))]
+    #[cfg(test)]
     fn apply_mtime(path: &Path, mtime_ns: Option<i64>, symlink: bool) -> io::Result<()> {
         let Some(mtime_ns) = mtime_ns else {
             return Ok(());
@@ -4937,7 +4821,6 @@ mod unix {
             }
         }
 
-        #[cfg(target_os = "linux")]
         fn completed_filesystem_fixture(root: &Path) -> (DownloadTransaction, Vec<CreatedPath>) {
             let cancellation = AtomicBool::new(false);
             let mut transaction = DownloadTransaction::new("session".into());
@@ -5009,7 +4892,6 @@ mod unix {
         }
 
         #[test]
-        #[cfg(target_os = "linux")]
         fn cancellation_after_filesystem_commit_rolls_back_instead_of_finishing() {
             let root = tempdir().unwrap();
             let existing = root.path().join("existing");
@@ -5026,7 +4908,6 @@ mod unix {
         }
 
         #[test]
-        #[cfg(target_os = "linux")]
         fn commit_completion_preserves_success_and_does_not_revoke_it_later() {
             let root = tempdir().unwrap();
             let (transaction, created) = completed_filesystem_fixture(root.path());
@@ -5059,7 +4940,6 @@ mod unix {
         }
 
         #[test]
-        #[cfg(target_os = "linux")]
         fn commit_failure_preserves_original_error_and_rolls_back_when_canceled() {
             for canceled in [false, true] {
                 let root = tempdir().unwrap();
@@ -5208,7 +5088,6 @@ mod unix {
         }
 
         #[test]
-        #[cfg(target_os = "linux")]
         fn opath_directory_access_recovery_ignores_replaced_paths() {
             for symbolic in [false, true] {
                 let root = tempdir().unwrap();
@@ -5258,12 +5137,11 @@ mod unix {
         }
 
         #[test]
-        #[cfg(target_os = "linux")]
         fn directory_assembly_access_survives_restrictive_umask() {
             const CHILD: &str = "TERMERIC_TEST_TRANSFER_DIRECTORY_UMASK";
             if std::env::var_os(CHILD).is_none() {
                 let output = std::process::Command::new(std::env::current_exe().unwrap())
-                    .args(["--exact", "app::kitty_file_transfer::unix::tests::directory_assembly_access_survives_restrictive_umask", "--nocapture"])
+                    .args(["--exact", "app::kitty_file_transfer::download::tests::directory_assembly_access_survives_restrictive_umask", "--nocapture"])
                     .env(CHILD, "1")
                     .output().unwrap();
                 assert!(
@@ -5674,7 +5552,6 @@ mod unix {
         }
 
         #[test]
-        #[cfg(target_os = "linux")]
         fn expanded_creation_budget_counts_implicit_parents_once() {
             let root = tempdir().unwrap();
             let parent = root.path().join("missing-parent");
@@ -5700,7 +5577,6 @@ mod unix {
         }
 
         #[test]
-        #[cfg(target_os = "linux")]
         fn excessive_implicit_tree_is_rejected_before_any_destination_creation() {
             let root = tempdir().unwrap();
             let mut path = root.path().to_owned();
@@ -5738,7 +5614,6 @@ mod unix {
         }
 
         #[test]
-        #[cfg(target_os = "linux")]
         fn runtime_creation_budget_bounds_growth_and_preserves_existing_state() {
             let root = tempdir().unwrap();
             // Synthetic bookkeeping exercises the boundary without creating a
@@ -5795,7 +5670,6 @@ mod unix {
         }
 
         #[test]
-        #[cfg(target_os = "linux")]
         fn staging_rejects_symlink_ancestors_and_uses_nearest_existing_parent() {
             let root = tempdir().unwrap();
             let real = root.path().join("real");
@@ -5821,7 +5695,6 @@ mod unix {
         }
 
         #[test]
-        #[cfg(target_os = "linux")]
         fn pinned_staging_cleanup_runs_after_publication_success_and_failure() {
             for collision in [false, true] {
                 let root = tempdir().unwrap();
@@ -5861,7 +5734,6 @@ mod unix {
         }
 
         #[test]
-        #[cfg(target_os = "linux")]
         fn staging_creation_and_cleanup_retain_replaced_ancestors() {
             for symbolic in [false, true] {
                 for replace_ancestor in [false, true] {
@@ -5925,7 +5797,6 @@ mod unix {
         }
 
         #[test]
-        #[cfg(target_os = "linux")]
         fn directory_creation_rejects_existing_entries_and_symlink_ancestors() {
             for kind in ["file", "directory", "symlink", "ancestor"] {
                 let root = tempdir().unwrap();
@@ -5969,7 +5840,6 @@ mod unix {
         }
 
         #[test]
-        #[cfg(target_os = "linux")]
         fn implicit_directories_keep_logical_rollback_keys_and_private_modes() {
             let root = tempdir().unwrap();
             let existing = root.path().join("existing");
@@ -5999,7 +5869,6 @@ mod unix {
         }
 
         #[test]
-        #[cfg(target_os = "linux")]
         fn directory_creation_retains_parent_after_ancestor_replacement() {
             for symbolic in [false, true] {
                 for replace_ancestor in [false, true] {
@@ -6067,7 +5936,6 @@ mod unix {
         }
 
         #[test]
-        #[cfg(target_os = "linux")]
         fn symbolic_link_publication_preserves_literal_targets_and_rollback_keys() {
             let root = tempdir().unwrap();
             for target in [
@@ -6099,7 +5967,6 @@ mod unix {
         }
 
         #[test]
-        #[cfg(target_os = "linux")]
         fn symbolic_link_publication_never_replaces_existing_entries() {
             for directory in [false, true] {
                 let root = tempdir().unwrap();
@@ -6127,7 +5994,6 @@ mod unix {
         }
 
         #[test]
-        #[cfg(target_os = "linux")]
         fn symbolic_link_creation_retains_parent_after_ancestor_replacement() {
             for symbolic in [false, true] {
                 for replace_ancestor in [false, true] {
@@ -6194,7 +6060,6 @@ mod unix {
         }
 
         #[test]
-        #[cfg(target_os = "linux")]
         fn hard_link_refuses_invalid_source_authority() {
             for fault in [
                 "unrecorded",
@@ -6253,7 +6118,6 @@ mod unix {
         }
 
         #[test]
-        #[cfg(target_os = "linux")]
         fn hard_link_refuses_existing_destinations_and_symlink_ancestors() {
             for fault in ["file", "symlink", "ancestor"] {
                 let root = tempdir().unwrap();
@@ -6294,7 +6158,6 @@ mod unix {
         }
 
         #[test]
-        #[cfg(target_os = "linux")]
         fn hard_link_uses_recorded_source_after_name_replacement() {
             for symbolic in [false, true] {
                 let root = tempdir().unwrap();
@@ -6339,7 +6202,6 @@ mod unix {
         }
 
         #[test]
-        #[cfg(target_os = "linux")]
         fn staging_cleanup_preserves_replacements_before_publication() {
             for replacement_kind in ["file", "link", "directory", "none"] {
                 let root = tempdir().unwrap();
@@ -6369,7 +6231,6 @@ mod unix {
         }
 
         #[test]
-        #[cfg(target_os = "linux")]
         fn publication_uses_staging_inode_not_replacement_name() {
             for symbolic in [false, true] {
                 for remove_original in [false, true] {
@@ -6431,7 +6292,6 @@ mod unix {
         }
 
         #[test]
-        #[cfg(target_os = "linux")]
         fn publication_retains_parent_after_ancestor_replacement() {
             for symbolic in [false, true] {
                 for replace_ancestor in [false, true] {
@@ -6489,7 +6349,6 @@ mod unix {
         }
 
         #[test]
-        #[cfg(target_os = "linux")]
         fn publication_refuses_symlink_parents_and_invalid_destinations() {
             let root = tempdir().unwrap();
             let directory = root.path().join("directory");
@@ -6511,7 +6370,6 @@ mod unix {
         }
 
         #[test]
-        #[cfg(target_os = "linux")]
         fn publication_never_overwrites_existing_symlinks() {
             for dangling in [false, true] {
                 let root = tempdir().unwrap();
@@ -6635,7 +6493,6 @@ mod unix {
         }
 
         #[test]
-        #[cfg(target_os = "linux")]
         fn link_timestamps_use_the_retained_inode_after_path_replacement() {
             for symbolic in [false, true] {
                 for replacement_symbolic in [false, true] {
@@ -6690,7 +6547,6 @@ mod unix {
         }
 
         #[test]
-        #[cfg(target_os = "linux")]
         fn link_timestamp_updates_require_the_recorded_identity() {
             for invalid in ["missing", "foreign-link", "wrong-kind", "wrong-inode"] {
                 let root = tempdir().unwrap();
@@ -6742,7 +6598,6 @@ mod unix {
         }
 
         #[test]
-        #[cfg(target_os = "linux")]
         fn dangling_link_timestamps_survive_unlink_without_path_recovery() {
             let root = tempdir().unwrap();
             let path = root.path().join("link");
@@ -7367,7 +7222,6 @@ mod unix {
         }
 
         #[test]
-        #[cfg(target_os = "linux")]
         fn fifo_symlink_commit_does_not_wait_for_a_target_writer() {
             use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
 
@@ -7459,7 +7313,6 @@ mod unix {
         }
 
         #[test]
-        #[cfg(target_os = "linux")]
         fn rollback_identity_guard_pins_the_symlink_not_its_target() {
             let root = tempdir().unwrap();
             let target = root.path().join("target");
