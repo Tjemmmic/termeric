@@ -5640,44 +5640,72 @@ mod download {
             }
         }
 
+        /// Make `root/ancestor/parent` and return the parent.
+        fn nested_parent(root: &Path) -> PathBuf {
+            let parent = root.join("ancestor/parent");
+            fs::create_dir_all(&parent).unwrap();
+            parent
+        }
+
+        /// Where an ancestor-replacement race left things: the original
+        /// parent's new location, and the empty directory now reached through
+        /// its old path.
+        struct ReplacedParent {
+            moved_parent: PathBuf,
+            replacement_parent: PathBuf,
+        }
+
+        /// Move `root/ancestor/parent` (with `replace_ancestor`, its ancestor)
+        /// to `root/moved`, and put a fresh directory at the old path: a real
+        /// one, or with `symbolic` a symlink to a fresh `root/outside`.
+        fn replace_parent(root: &Path, replace_ancestor: bool, symbolic: bool) -> ReplacedParent {
+            let ancestor = root.join("ancestor");
+            let replaced = if replace_ancestor {
+                ancestor.clone()
+            } else {
+                ancestor.join("parent")
+            };
+            let moved = root.join("moved");
+            fs::rename(&replaced, &moved).unwrap();
+            let outside = root.join("outside");
+            let replacement = if symbolic { &outside } else { &replaced };
+            fs::create_dir(replacement).unwrap();
+            if symbolic {
+                std::os::unix::fs::symlink(&outside, &replaced).unwrap();
+            }
+            if replace_ancestor {
+                fs::create_dir(replacement.join("parent")).unwrap();
+                ReplacedParent {
+                    moved_parent: moved.join("parent"),
+                    replacement_parent: replacement.join("parent"),
+                }
+            } else {
+                ReplacedParent {
+                    moved_parent: moved,
+                    replacement_parent: replacement.clone(),
+                }
+            }
+        }
+
         #[test]
         fn staging_creation_and_cleanup_retain_replaced_ancestors() {
             for symbolic in [false, true] {
                 for replace_ancestor in [false, true] {
                     for replace_before_creation in [false, true] {
                         let root = tempdir().unwrap();
-                        let ancestor = root.path().join("ancestor");
-                        let parent = ancestor.join("parent");
-                        fs::create_dir_all(&parent).unwrap();
+                        let parent = nested_parent(root.path());
                         let mut directory = Some(StagingDirectory::open(&parent).unwrap());
                         let staged = if replace_before_creation {
                             None
                         } else {
                             Some(directory.take().unwrap().create_file().unwrap())
                         };
-                        let replaced = if replace_ancestor { &ancestor } else { &parent };
-                        let moved = root.path().join("moved");
-                        fs::rename(replaced, &moved).unwrap();
-                        let outside = root.path().join("outside");
-                        let replacement = if symbolic { &outside } else { replaced };
-                        fs::create_dir(replacement).unwrap();
-                        let replacement_parent = if replace_ancestor {
-                            let nested = replacement.join("parent");
-                            fs::create_dir(&nested).unwrap();
-                            nested
-                        } else {
-                            replacement.clone()
-                        };
-                        if symbolic {
-                            std::os::unix::fs::symlink(&outside, replaced).unwrap();
-                        }
+                        let ReplacedParent {
+                            moved_parent,
+                            replacement_parent,
+                        } = replace_parent(root.path(), replace_ancestor, symbolic);
                         let mut staged = staged
                             .unwrap_or_else(|| directory.take().unwrap().create_file().unwrap());
-                        let moved_parent = if replace_ancestor {
-                            moved.join("parent")
-                        } else {
-                            moved
-                        };
                         let original_file = moved_parent.join(staged.path.file_name().unwrap());
                         assert!(
                             original_file.is_file(),
@@ -5780,35 +5808,17 @@ mod download {
             for symbolic in [false, true] {
                 for replace_ancestor in [false, true] {
                     let root = tempdir().unwrap();
-                    let ancestor = root.path().join("ancestor");
-                    let parent = ancestor.join("parent");
-                    fs::create_dir_all(&parent).unwrap();
+                    let parent = nested_parent(root.path());
                     let path = parent.join("new-directory");
                     let destination = PublicationTarget::open(&path).unwrap();
-                    let replaced = if replace_ancestor { &ancestor } else { &parent };
-                    let moved = root.path().join("moved");
-                    fs::rename(replaced, &moved).unwrap();
-                    let outside = root.path().join("outside");
-                    let replacement = if symbolic { &outside } else { replaced };
-                    fs::create_dir(replacement).unwrap();
-                    let replacement_parent = if replace_ancestor {
-                        let nested = replacement.join("parent");
-                        fs::create_dir(&nested).unwrap();
-                        nested
-                    } else {
-                        replacement.clone()
-                    };
-                    if symbolic {
-                        std::os::unix::fs::symlink(&outside, replaced).unwrap();
-                    }
+                    let ReplacedParent {
+                        moved_parent,
+                        replacement_parent,
+                    } = replace_parent(root.path(), replace_ancestor, symbolic);
                     let before = fs::metadata(&replacement_parent).unwrap();
                     let mut created = Vec::new();
                     destination.create_directory(&mut created).unwrap();
-                    let moved_directory = if replace_ancestor {
-                        moved.join("parent/new-directory")
-                    } else {
-                        moved.join("new-directory")
-                    };
+                    let moved_directory = moved_parent.join("new-directory");
                     let original = fs::metadata(&moved_directory).unwrap();
                     assert!(original.is_dir());
                     assert_eq!(original.permissions().mode() & 0o777, 0o700);
@@ -5905,38 +5915,20 @@ mod download {
             for symbolic in [false, true] {
                 for replace_ancestor in [false, true] {
                     let root = tempdir().unwrap();
-                    let ancestor = root.path().join("ancestor");
-                    let parent = ancestor.join("parent");
-                    fs::create_dir_all(&parent).unwrap();
+                    let parent = nested_parent(root.path());
                     let path = parent.join("link");
                     let destination = PublicationTarget::open(&path).unwrap();
-                    let replaced = if replace_ancestor { &ancestor } else { &parent };
-                    let moved = root.path().join("moved");
-                    fs::rename(replaced, &moved).unwrap();
-                    let outside = root.path().join("outside");
-                    let replacement = if symbolic { &outside } else { replaced };
-                    fs::create_dir(replacement).unwrap();
-                    let replacement_parent = if replace_ancestor {
-                        let nested = replacement.join("parent");
-                        fs::create_dir(&nested).unwrap();
-                        nested
-                    } else {
-                        replacement.clone()
-                    };
-                    if symbolic {
-                        std::os::unix::fs::symlink(&outside, replaced).unwrap();
-                    }
+                    let ReplacedParent {
+                        moved_parent,
+                        replacement_parent,
+                    } = replace_parent(root.path(), replace_ancestor, symbolic);
                     let before = fs::metadata(&replacement_parent).unwrap();
                     let target = root.path().join("target");
                     fs::write(&target, b"keep target").unwrap();
                     let target_before = fs::metadata(&target).unwrap();
                     let mut created = Vec::new();
                     destination.create_symlink(&target, &mut created).unwrap();
-                    let moved_link = if replace_ancestor {
-                        moved.join("parent/link")
-                    } else {
-                        moved.join("link")
-                    };
+                    let moved_link = moved_parent.join("link");
                     assert_eq!(fs::read_link(&moved_link).unwrap(), target);
                     assert!(fs::symlink_metadata(replacement_parent.join("link")).is_err());
                     assert_eq!(created.len(), 1);
@@ -5961,7 +5953,7 @@ mod download {
                     assert_eq!(fs::read(&target).unwrap(), b"keep target");
                     rollback_paths(&created);
                     assert!(fs::symlink_metadata(&moved_link).is_ok());
-                    assert!(fs::symlink_metadata(replaced).is_ok());
+                    assert!(fs::symlink_metadata(&parent).is_ok());
                 }
             }
         }
@@ -6203,30 +6195,16 @@ mod download {
             for symbolic in [false, true] {
                 for replace_ancestor in [false, true] {
                     let root = tempdir().unwrap();
-                    let ancestor = root.path().join("ancestor");
-                    let parent = ancestor.join("parent");
-                    fs::create_dir_all(&parent).unwrap();
+                    let parent = nested_parent(root.path());
                     let target = PublicationTarget::open(&parent.join("published")).unwrap();
                     let mut staged = NamedTempFile::new_in(root.path()).unwrap();
                     staged.write_all(b"payload").unwrap();
                     prepare_staged_file(staged.as_file(), 0o400, Some(-1)).unwrap();
                     let identity = staged.as_file().metadata().unwrap();
-                    let replaced = if replace_ancestor { &ancestor } else { &parent };
-                    let moved = root.path().join("moved");
-                    fs::rename(replaced, &moved).unwrap();
-                    let outside = root.path().join("outside");
-                    let replacement = if symbolic { &outside } else { replaced };
-                    fs::create_dir(replacement).unwrap();
-                    let replacement_parent = if replace_ancestor {
-                        let nested = replacement.join("parent");
-                        fs::create_dir(&nested).unwrap();
-                        nested
-                    } else {
-                        replacement.clone()
-                    };
-                    if symbolic {
-                        std::os::unix::fs::symlink(&outside, replaced).unwrap();
-                    }
+                    let ReplacedParent {
+                        moved_parent,
+                        replacement_parent,
+                    } = replace_parent(root.path(), replace_ancestor, symbolic);
                     let before = fs::metadata(&replacement_parent).unwrap();
                     let published = target.publish(staged).unwrap();
                     let metadata = published.metadata().unwrap();
@@ -6236,11 +6214,6 @@ mod download {
                     );
                     assert_eq!(metadata.permissions().mode() & 0o777, 0o400);
                     assert_eq!((metadata.mtime(), metadata.mtime_nsec()), (-1, 999_999_999));
-                    let moved_parent = if replace_ancestor {
-                        moved.join("parent")
-                    } else {
-                        moved
-                    };
                     assert_eq!(
                         fs::read(moved_parent.join("published")).unwrap(),
                         b"payload"
