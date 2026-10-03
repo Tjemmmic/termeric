@@ -988,7 +988,6 @@ impl App {
             .map(|(id, rect)| PaneRenderInfo {
                 rect,
                 is_focused: id == focused,
-                id,
             })
             .collect()
     }

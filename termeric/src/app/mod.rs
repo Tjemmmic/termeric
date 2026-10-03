@@ -2161,19 +2161,8 @@ impl App {
 
         let tab_bar_hover_progress = self.tab_bar_hover_progress();
 
-        // Build pane render info (before renderer borrow)
+        // Pane geometry is read before the renderer is borrowed.
         let pane_info = self.pane_render_info();
-        for pi in &pane_info {
-            log::trace!(
-                "Pane {:?}: ({}, {}, {}x{}) focused={}",
-                pi.id,
-                pi.rect.x,
-                pi.rect.y,
-                pi.rect.width,
-                pi.rect.height,
-                pi.is_focused
-            );
-        }
 
         // Get cursor target position and calculate animations before borrowing
         let (cursor_style, _) = self.cursor_presentation();

@@ -1848,8 +1848,6 @@ pub struct PaneRenderInfo {
     pub rect: Bounds,
     /// Whether this pane is focused
     pub is_focused: bool,
-    /// Pane ID
-    pub id: PaneId,
 }
 
 /// A divider between panes
