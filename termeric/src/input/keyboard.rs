@@ -2,128 +2,95 @@
 
 use termeric_core::term::{
     KittyKeyboardFlags, TerminalMode, XtermKeyFormat, XtermKeyMode, XtermKeyResource,
-    XtermKeySetting, XtermKeyboardResource, XtermKeyboardType, XtermModifyOtherKeys,
+    XtermKeyResources, XtermKeySetting, XtermKeyboardResource, XtermKeyboardType,
+    XtermModifyOtherKeys,
 };
 use winit::event::{ElementState, KeyEvent};
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, NativeKey, PhysicalKey};
 
-/// Keyboard protocol selected for PTY input.
-///
-/// Keeping the protocol explicit prevents legacy encoding policy from being
-/// spread through the event loop when a negotiated protocol is added later.
+/// One terminal's negotiated xterm keyboard state. The default is xterm's
+/// startup profile, which sends the familiar VT/xterm sequences.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum KeyboardProtocol {
-    /// VT/xterm-compatible legacy sequences.
-    #[default]
-    LegacyXterm,
-    /// One or more xterm key resources differ from the startup profile.
-    Xterm {
-        keyboard_type: XtermKeyboardType,
-        keyboard_resource: XtermKeyboardResource,
-        cursor_keys: XtermKeySetting,
-        function_keys: XtermKeySetting,
-        keypad_keys: XtermKeySetting,
-        modifier_keys: XtermKeySetting,
-        special_keys: XtermKeySetting,
-        other_keys: XtermModifyOtherKeys,
-    },
-    /// Kitty progressive keyboard protocol with terminal-negotiated flags.
+struct XtermKeyProfile {
+    keyboard_type: XtermKeyboardType,
+    keyboard_resource: XtermKeyboardResource,
+    other_keys: XtermModifyOtherKeys,
+    resources: XtermKeyResources,
+}
+
+impl XtermKeyProfile {
+    fn of(terminal: &termeric_core::Terminal) -> Self {
+        Self {
+            keyboard_type: terminal.xterm_keyboard_type(),
+            keyboard_resource: terminal.xterm_keyboard_resource(),
+            other_keys: terminal.xterm_modify_other_keys(),
+            resources: terminal.xterm_key_resources(),
+        }
+    }
+
+    fn resource(&self, resource: XtermKeyResource) -> XtermKeySetting {
+        self.resources.get(resource)
+    }
+
+    fn other_keys_active(&self) -> bool {
+        self.other_keys.level() != 0
+    }
+
+    /// The modifiers a key reports. The historical keyboard types drop them
+    /// unless `modifyOtherKeys` is on or resource 0 enables `category_bit`.
+    fn modifiers(&self, category_bit: u16, modifiers: ModifiersState) -> ModifiersState {
+        if !self.keyboard_type.uses_resource_zero()
+            || self.other_keys_active()
+            || category_bit != 0 && self.keyboard_resource.modify() & category_bit != 0
+        {
+            modifiers
+        } else {
+            ModifiersState::empty()
+        }
+    }
+}
+
+/// The protocol one key event is encoded with. Kitty's negotiated protocol
+/// takes precedence over every xterm resource.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KeyboardProtocol {
+    Xterm(XtermKeyProfile),
     Kitty(KittyKeyboardFlags),
 }
 
-/// Stateless keyboard encoder. Terminal modes are supplied for every event
-/// because different panes can be in different application modes.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct KeyboardEncoder {
-    protocol: KeyboardProtocol,
-}
-
-impl KeyboardEncoder {
-    pub const fn new(protocol: KeyboardProtocol) -> Self {
-        Self { protocol }
+impl KeyboardProtocol {
+    fn new(kitty_flags: KittyKeyboardFlags, xterm: XtermKeyProfile) -> Self {
+        if kitty_flags.is_empty() {
+            Self::Xterm(xterm)
+        } else {
+            Self::Kitty(kitty_flags)
+        }
     }
 
-    /// Encode one key event for the focused terminal.
-    pub fn encode(
+    /// Terminal modes come with every event because panes can be in
+    /// different application modes.
+    fn encode(
         self,
         event: &KeyEvent,
         modifiers: ModifiersState,
         alt_graph_active: bool,
         mode: TerminalMode,
     ) -> Option<Vec<u8>> {
-        match self.protocol {
-            KeyboardProtocol::LegacyXterm => (event.state == ElementState::Pressed).then(|| {
-                encode_legacy_xterm(
+        match self {
+            Self::Xterm(profile) => (event.state == ElementState::Pressed).then(|| {
+                encode_xterm(
                     &event.logical_key,
                     event.physical_key,
                     event.text.as_deref(),
                     modifiers,
                     alt_graph_active,
                     mode,
+                    profile,
                 )
             })?,
-            KeyboardProtocol::Xterm {
-                keyboard_type,
-                keyboard_resource,
-                cursor_keys,
-                function_keys,
-                keypad_keys,
-                modifier_keys,
-                special_keys,
-                other_keys,
-            } => (event.state == ElementState::Pressed).then(|| {
-                encode_xterm_with_profile(
-                    &event.logical_key,
-                    event.physical_key,
-                    event.text.as_deref(),
-                    modifiers,
-                    alt_graph_active,
-                    mode,
-                    other_keys,
-                    cursor_keys,
-                    function_keys,
-                    keypad_keys,
-                    modifier_keys,
-                    special_keys,
-                    keyboard_type,
-                    keyboard_resource,
-                )
-            })?,
-            KeyboardProtocol::Kitty(flags) => {
-                encode_kitty(event, modifiers, alt_graph_active, mode, flags)
-            }
+            Self::Kitty(flags) => encode_kitty(event, modifiers, alt_graph_active, mode, flags),
         }
     }
-}
-
-/// Convert a key event using the default legacy/xterm protocol.
-fn key_to_bytes_with_modifiers(
-    event: &KeyEvent,
-    modifiers: ModifiersState,
-    alt_graph_active: bool,
-    mode: TerminalMode,
-    kitty_flags: KittyKeyboardFlags,
-    xterm_keyboard_type: XtermKeyboardType,
-    xterm_keyboard_resource: XtermKeyboardResource,
-    xterm_modify_other_keys: XtermModifyOtherKeys,
-    xterm_cursor_keys: XtermKeySetting,
-    xterm_function_keys: XtermKeySetting,
-    xterm_keypad_keys: XtermKeySetting,
-    xterm_modifier_keys: XtermKeySetting,
-    xterm_special_keys: XtermKeySetting,
-) -> Option<Vec<u8>> {
-    KeyboardEncoder::new(keyboard_protocol_with_profile(
-        kitty_flags,
-        xterm_keyboard_type,
-        xterm_keyboard_resource,
-        xterm_modify_other_keys,
-        xterm_cursor_keys,
-        xterm_function_keys,
-        xterm_keypad_keys,
-        xterm_modifier_keys,
-        xterm_special_keys,
-    ))
-    .encode(event, modifiers, alt_graph_active, mode)
 }
 
 /// Encode against one terminal's complete negotiated keyboard state. DECUDK
@@ -139,23 +106,11 @@ pub fn key_to_bytes_for_terminal(
     {
         return Some(definition);
     }
-    let kitty_flags = terminal.kitty_keyboard_flags();
-    let keyboard_type = terminal.xterm_keyboard_type();
-    key_to_bytes_with_modifiers(
-        event,
-        modifiers,
-        alt_graph_active,
-        terminal.mode(),
-        kitty_flags,
-        keyboard_type,
-        terminal.xterm_keyboard_resource(),
-        terminal.xterm_modify_other_keys(),
-        terminal.xterm_key_resource(XtermKeyResource::Cursor),
-        terminal.xterm_key_resource(XtermKeyResource::Function),
-        terminal.xterm_key_resource(XtermKeyResource::Keypad),
-        terminal.xterm_key_resource(XtermKeyResource::Modifier),
-        terminal.xterm_key_resource(XtermKeyResource::Special),
+    KeyboardProtocol::new(
+        terminal.kitty_keyboard_flags(),
+        XtermKeyProfile::of(terminal),
     )
+    .encode(event, modifiers, alt_graph_active, terminal.mode())
 }
 
 fn encode_xterm_user_defined_key(
@@ -168,66 +123,6 @@ fn encode_xterm_user_defined_key(
     }
     let code = xterm_user_defined_key_code(logical_key, modifiers, terminal.xterm_keyboard_type())?;
     terminal.xterm_user_defined_key(code).map(<[u8]>::to_vec)
-}
-
-#[cfg(test)]
-fn keyboard_protocol(
-    kitty_flags: KittyKeyboardFlags,
-    xterm_modify_other_keys: XtermModifyOtherKeys,
-    xterm_cursor_keys: XtermKeySetting,
-    xterm_function_keys: XtermKeySetting,
-    xterm_keypad_keys: XtermKeySetting,
-    xterm_modifier_keys: XtermKeySetting,
-    xterm_special_keys: XtermKeySetting,
-) -> KeyboardProtocol {
-    keyboard_protocol_with_profile(
-        kitty_flags,
-        XtermKeyboardType::Normal,
-        XtermKeyboardResource::default(),
-        xterm_modify_other_keys,
-        xterm_cursor_keys,
-        xterm_function_keys,
-        xterm_keypad_keys,
-        xterm_modifier_keys,
-        xterm_special_keys,
-    )
-}
-
-fn keyboard_protocol_with_profile(
-    kitty_flags: KittyKeyboardFlags,
-    xterm_keyboard_type: XtermKeyboardType,
-    xterm_keyboard_resource: XtermKeyboardResource,
-    xterm_modify_other_keys: XtermModifyOtherKeys,
-    xterm_cursor_keys: XtermKeySetting,
-    xterm_function_keys: XtermKeySetting,
-    xterm_keypad_keys: XtermKeySetting,
-    xterm_modifier_keys: XtermKeySetting,
-    xterm_special_keys: XtermKeySetting,
-) -> KeyboardProtocol {
-    if !kitty_flags.is_empty() {
-        KeyboardProtocol::Kitty(kitty_flags)
-    } else if xterm_modify_other_keys.level() != 0
-        || xterm_keyboard_type != XtermKeyboardType::default()
-        || xterm_keyboard_resource != XtermKeyboardResource::default()
-        || xterm_cursor_keys != XtermKeyResource::Cursor.default_setting()
-        || xterm_function_keys != XtermKeyResource::Function.default_setting()
-        || xterm_keypad_keys != XtermKeyResource::Keypad.default_setting()
-        || xterm_modifier_keys != XtermKeyResource::Modifier.default_setting()
-        || xterm_special_keys != XtermKeyResource::Special.default_setting()
-    {
-        KeyboardProtocol::Xterm {
-            keyboard_type: xterm_keyboard_type,
-            keyboard_resource: xterm_keyboard_resource,
-            cursor_keys: xterm_cursor_keys,
-            function_keys: xterm_function_keys,
-            keypad_keys: xterm_keypad_keys,
-            modifier_keys: xterm_modifier_keys,
-            special_keys: xterm_special_keys,
-            other_keys: xterm_modify_other_keys,
-        }
-    } else {
-        KeyboardProtocol::LegacyXterm
-    }
 }
 
 /// Encode a text-only IME commit under Kitty's associated-text extension.
@@ -431,7 +326,7 @@ fn encode_kitty_named(
     }
     if matches!(key, KittyKey::Final(_) | KittyKey::Tilde(_))
         && !flags.contains(KittyKeyboardFlags::REPORT_EVENT_TYPES)
-        && kitty_modifier_parameter(modifiers) == 1
+        && extended_modifier_parameter(modifiers) == 1
     {
         return encode_named(named, modifiers, mode);
     }
@@ -455,7 +350,7 @@ fn encode_kitty_key(
     event_type: KittyEventType,
     flags: KittyKeyboardFlags,
 ) -> Vec<u8> {
-    let modifier = kitty_modifier_parameter(modifiers);
+    let modifier = extended_modifier_parameter(modifiers);
     let report_event = flags.contains(KittyKeyboardFlags::REPORT_EVENT_TYPES);
     let associated = (flags.contains(KittyKeyboardFlags::REPORT_ALL_KEYS)
         && flags.contains(KittyKeyboardFlags::REPORT_ASSOCIATED_TEXT)
@@ -535,13 +430,6 @@ fn associated_text(text: &str) -> String {
         .map(|character| (character as u32).to_string())
         .collect::<Vec<_>>()
         .join(":")
-}
-
-fn kitty_modifier_parameter(modifiers: ModifiersState) -> u16 {
-    1 + u16::from(modifiers.shift_key())
-        + (u16::from(modifiers.alt_key()) << 1)
-        + (u16::from(modifiers.control_key()) << 2)
-        + (u16::from(modifiers.super_key()) << 3)
 }
 
 fn kitty_character_codes(
@@ -720,6 +608,7 @@ fn kitty_named_code(named: NamedKey) -> Option<u32> {
     })
 }
 
+/// Xterm's conventional sequences: everything but a `modifyOtherKeys` report.
 fn encode_legacy_xterm(
     logical_key: &Key,
     physical_key: PhysicalKey,
@@ -727,215 +616,84 @@ fn encode_legacy_xterm(
     modifiers: ModifiersState,
     alt_graph_active: bool,
     mode: TerminalMode,
-) -> Option<Vec<u8>> {
-    encode_legacy_xterm_with_resources(
-        logical_key,
-        physical_key,
-        text,
-        modifiers,
-        alt_graph_active,
-        mode,
-        XtermKeyResource::Cursor.default_setting(),
-        XtermKeyResource::Function.default_setting(),
-        XtermKeyResource::Keypad.default_setting(),
-        XtermKeyResource::Modifier.default_setting(),
-        XtermKeyResource::Special.default_setting(),
-    )
-}
-
-fn encode_legacy_xterm_with_resources(
-    logical_key: &Key,
-    physical_key: PhysicalKey,
-    text: Option<&str>,
-    modifiers: ModifiersState,
-    alt_graph_active: bool,
-    mode: TerminalMode,
-    cursor_policy: XtermKeySetting,
-    function_policy: XtermKeySetting,
-    keypad_policy: XtermKeySetting,
-    modifier_policy: XtermKeySetting,
-    special_policy: XtermKeySetting,
-) -> Option<Vec<u8>> {
-    encode_legacy_xterm_with_profile(
-        logical_key,
-        physical_key,
-        text,
-        modifiers,
-        alt_graph_active,
-        mode,
-        cursor_policy,
-        function_policy,
-        keypad_policy,
-        modifier_policy,
-        special_policy,
-        XtermKeyboardType::Normal,
-        XtermKeyboardResource::default(),
-        false,
-    )
-}
-
-fn encode_legacy_xterm_with_profile(
-    logical_key: &Key,
-    physical_key: PhysicalKey,
-    text: Option<&str>,
-    modifiers: ModifiersState,
-    alt_graph_active: bool,
-    mode: TerminalMode,
-    cursor_policy: XtermKeySetting,
-    function_policy: XtermKeySetting,
-    keypad_policy: XtermKeySetting,
-    modifier_policy: XtermKeySetting,
-    special_policy: XtermKeySetting,
-    keyboard_type: XtermKeyboardType,
-    keyboard_resource: XtermKeyboardResource,
-    other_keys_active: bool,
+    profile: XtermKeyProfile,
 ) -> Option<Vec<u8>> {
     if let Some(keypad) = KeypadKey::from_physical(physical_key) {
-        let (keypad, modifiers) = keypad.profile_mapping(keyboard_type, modifiers);
-        let modifiers = xterm_profile_modifiers(
-            keyboard_type,
-            keyboard_resource,
-            1,
-            modifiers,
-            other_keys_active,
-        );
-        return Some(keypad.encode_xterm(logical_key, mode, text, modifiers, keypad_policy));
+        let (keypad, modifiers) = keypad.profile_mapping(profile.keyboard_type, modifiers);
+        return Some(keypad.encode_xterm(
+            logical_key,
+            mode,
+            text,
+            profile.modifiers(1, modifiers),
+            profile.resource(XtermKeyResource::Keypad),
+        ));
     }
     if alt_graph_active && text.is_some_and(|produced| !produced.is_empty()) {
         return text.map(|produced| produced.as_bytes().to_vec());
     }
-    let special_modifiers = xterm_profile_modifiers(
-        keyboard_type,
-        keyboard_resource,
-        0,
-        modifiers,
-        other_keys_active,
-    );
-    if let Some(encoded) =
-        encode_xterm_special_key(logical_key, physical_key, special_modifiers, special_policy)
-    {
+    let special_modifiers = profile.modifiers(0, modifiers);
+    if let Some(encoded) = encode_xterm_special_key(
+        logical_key,
+        physical_key,
+        special_modifiers,
+        profile.resource(XtermKeyResource::Special),
+    ) {
         return Some(encoded);
     }
 
     match logical_key {
         Key::Character(character) => encode_character(character, text, modifiers, alt_graph_active),
-        Key::Named(named) => {
-            encode_xterm_modifier_named(*named, physical_key, special_modifiers, modifier_policy)
-                .or_else(|| {
-                    encode_xterm_function_named_profile(
-                        *named,
-                        modifiers,
-                        function_policy,
-                        keyboard_type,
-                        keyboard_resource,
-                        other_keys_active,
-                    )
-                })
-                .or_else(|| {
-                    encode_xterm_misc_function_named(
-                        *named,
-                        modifiers,
-                        function_policy,
-                        keyboard_type,
-                        keyboard_resource,
-                        other_keys_active,
-                    )
-                })
-                .or_else(|| {
-                    encode_xterm_cursor_named_profile(
-                        *named,
-                        modifiers,
-                        mode,
-                        cursor_policy,
-                        keyboard_type,
-                        keyboard_resource,
-                        other_keys_active,
-                    )
-                })
-                .or_else(|| encode_named(*named, modifiers, mode))
-        }
+        Key::Named(named) => encode_xterm_modifier_named(
+            *named,
+            physical_key,
+            special_modifiers,
+            profile.resource(XtermKeyResource::Modifier),
+        )
+        .or_else(|| encode_xterm_function_named(*named, modifiers, profile))
+        .or_else(|| encode_xterm_misc_function_named(*named, modifiers, profile))
+        .or_else(|| encode_xterm_cursor_named(*named, modifiers, mode, profile))
+        .or_else(|| encode_named(*named, modifiers, mode)),
         Key::Dead(_) | Key::Unidentified(_) => None,
     }
 }
 
-#[cfg(test)]
-fn encode_xterm_modify_other_keys(
+/// The xterm encoder: a `modifyOtherKeys` report when the profile asks for
+/// one, otherwise the conventional sequences.
+fn encode_xterm(
     logical_key: &Key,
     physical_key: PhysicalKey,
     text: Option<&str>,
     modifiers: ModifiersState,
     alt_graph_active: bool,
     mode: TerminalMode,
-    policy: XtermModifyOtherKeys,
-    cursor_policy: XtermKeySetting,
-    function_policy: XtermKeySetting,
-    keypad_policy: XtermKeySetting,
-    modifier_policy: XtermKeySetting,
-    special_policy: XtermKeySetting,
-) -> Option<Vec<u8>> {
-    encode_xterm_with_profile(
-        logical_key,
-        physical_key,
-        text,
-        modifiers,
-        alt_graph_active,
-        mode,
-        policy,
-        cursor_policy,
-        function_policy,
-        keypad_policy,
-        modifier_policy,
-        special_policy,
-        XtermKeyboardType::Normal,
-        XtermKeyboardResource::default(),
-    )
-}
-
-fn encode_xterm_with_profile(
-    logical_key: &Key,
-    physical_key: PhysicalKey,
-    text: Option<&str>,
-    modifiers: ModifiersState,
-    alt_graph_active: bool,
-    mode: TerminalMode,
-    policy: XtermModifyOtherKeys,
-    cursor_policy: XtermKeySetting,
-    function_policy: XtermKeySetting,
-    keypad_policy: XtermKeySetting,
-    modifier_policy: XtermKeySetting,
-    special_policy: XtermKeySetting,
-    keyboard_type: XtermKeyboardType,
-    keyboard_resource: XtermKeyboardResource,
+    profile: XtermKeyProfile,
 ) -> Option<Vec<u8>> {
     // AltGr is layout composition, not a Control+Alt shortcut. Preserve the
     // produced Unicode text exactly as in the legacy path.
     if alt_graph_active && text.is_some_and(|produced| !produced.is_empty()) {
-        return encode_legacy_xterm_with_profile(
+        return encode_legacy_xterm(
             logical_key,
             physical_key,
             text,
             modifiers,
             true,
             mode,
-            cursor_policy,
-            function_policy,
-            keypad_policy,
-            modifier_policy,
-            special_policy,
-            keyboard_type,
-            keyboard_resource,
-            policy.level() != 0,
+            profile,
         );
     }
     // Xterm classifies special keysyms before its ordinary-key resource. In
     // mode 4, resource 7 therefore owns keys such as Backspace and Escape
     // even when modifyOtherKeys level 3 would otherwise select them.
-    if let Some(encoded) =
-        encode_xterm_special_key(logical_key, physical_key, modifiers, special_policy)
-    {
+    if let Some(encoded) = encode_xterm_special_key(
+        logical_key,
+        physical_key,
+        modifiers,
+        profile.resource(XtermKeyResource::Special),
+    ) {
         return Some(encoded);
     }
 
+    let policy = profile.other_keys;
     let modifier_bits = xterm_other_modifier_bits(modifiers);
     let factored = modifier_bits.count_ones() == 1 && modifier_bits & policy.modifier_mask() != 0;
     let effective_bits = if factored { 0 } else { modifier_bits };
@@ -960,49 +718,22 @@ fn encode_xterm_with_profile(
         };
 
     if should_encode {
-        let modifier_parameter = u16::from(effective_bits) + 1;
-        let key_code = key_code.expect("checked above");
-        return Some(match policy.format() {
-            XtermKeyFormat::FunctionKey27 => {
-                format!("\x1b[27;{modifier_parameter};{key_code}~").into_bytes()
-            }
-            XtermKeyFormat::CsiU => format!("\x1b[{key_code};{modifier_parameter}u").into_bytes(),
-        });
+        return Some(xterm_extended_key(
+            policy.format(),
+            key_code.expect("checked above"),
+            u16::from(effective_bits) + 1,
+        ));
     }
 
-    encode_legacy_xterm_with_profile(
+    encode_legacy_xterm(
         logical_key,
         physical_key,
         text,
         modifiers,
         alt_graph_active,
         mode,
-        cursor_policy,
-        function_policy,
-        keypad_policy,
-        modifier_policy,
-        special_policy,
-        keyboard_type,
-        keyboard_resource,
-        policy.level() != 0,
+        profile,
     )
-}
-
-fn xterm_profile_modifiers(
-    keyboard_type: XtermKeyboardType,
-    resource: XtermKeyboardResource,
-    category_bit: u16,
-    modifiers: ModifiersState,
-    other_keys_active: bool,
-) -> ModifiersState {
-    if !keyboard_type.uses_resource_zero()
-        || other_keys_active
-        || category_bit != 0 && resource.modify() & category_bit != 0
-    {
-        modifiers
-    } else {
-        ModifiersState::empty()
-    }
 }
 
 fn encode_xterm_modifier_named(
@@ -1015,13 +746,11 @@ fn encode_xterm_modifier_named(
         return None;
     }
     let key_code = xterm_modifier_code(named, physical_key)?;
-    let modifier_parameter = u16::from(xterm_other_modifier_bits(modifiers)) + 1;
-    Some(match policy.format() {
-        XtermKeyFormat::FunctionKey27 => {
-            format!("\x1b[27;{modifier_parameter};{key_code}~").into_bytes()
-        }
-        XtermKeyFormat::CsiU => format!("\x1b[{key_code};{modifier_parameter}u").into_bytes(),
-    })
+    Some(xterm_extended_key(
+        policy.format(),
+        key_code,
+        extended_modifier_parameter(modifiers),
+    ))
 }
 
 fn xterm_modifier_code(named: NamedKey, physical_key: PhysicalKey) -> Option<u32> {
@@ -1067,13 +796,11 @@ fn encode_xterm_special_key(
         return None;
     }
     let key_code = xterm_special_code(logical_key, physical_key, modifiers)?;
-    let modifier_parameter = u16::from(xterm_other_modifier_bits(modifiers)) + 1;
-    Some(match policy.format() {
-        XtermKeyFormat::FunctionKey27 => {
-            format!("\x1b[27;{modifier_parameter};{key_code}~").into_bytes()
-        }
-        XtermKeyFormat::CsiU => format!("\x1b[{key_code};{modifier_parameter}u").into_bytes(),
-    })
+    Some(xterm_extended_key(
+        policy.format(),
+        key_code,
+        extended_modifier_parameter(modifiers),
+    ))
 }
 
 fn xterm_special_code(
@@ -1220,6 +947,21 @@ fn xterm_special_keysym_code(keysym: u32) -> Option<u32> {
     })
 }
 
+/// Xterm's extended key report in `format`: `CSI 27 ; m ; code ~` or
+/// `CSI code ; m u`.
+fn xterm_extended_key(format: XtermKeyFormat, code: u32, modifier: u16) -> Vec<u8> {
+    match format {
+        XtermKeyFormat::FunctionKey27 => format!("\x1b[27;{modifier};{code}~").into_bytes(),
+        XtermKeyFormat::CsiU => format!("\x1b[{code};{modifier}u").into_bytes(),
+    }
+}
+
+/// The modifier parameter of extended xterm and Kitty reports: one plus the
+/// Shift, Alt, Control, and Super bits.
+fn extended_modifier_parameter(modifiers: ModifiersState) -> u16 {
+    u16::from(xterm_other_modifier_bits(modifiers)) + 1
+}
+
 fn xterm_other_modifier_bits(modifiers: ModifiersState) -> u8 {
     u8::from(modifiers.shift_key())
         | (u8::from(modifiers.alt_key()) << 1)
@@ -1241,25 +983,6 @@ fn xterm_other_key_code(logical_key: &Key) -> Option<u32> {
         Key::Named(NamedKey::Backspace) => Some(127),
         _ => None,
     }
-}
-
-#[cfg(test)]
-pub(crate) fn encode_legacy_xterm_test(
-    logical_key: &Key,
-    physical_key: PhysicalKey,
-    text: Option<&str>,
-    modifiers: ModifiersState,
-    alt_graph_active: bool,
-    mode: TerminalMode,
-) -> Option<Vec<u8>> {
-    encode_legacy_xterm(
-        logical_key,
-        physical_key,
-        text,
-        modifiers,
-        alt_graph_active,
-        mode,
-    )
 }
 
 fn encode_character(
@@ -1427,14 +1150,13 @@ fn encode_unmodified_xterm_function(number: u8) -> Vec<u8> {
     }
 }
 
-fn encode_xterm_function_named_profile(
+fn encode_xterm_function_named(
     named: NamedKey,
     mut modifiers: ModifiersState,
-    policy: XtermKeySetting,
-    keyboard_type: XtermKeyboardType,
-    keyboard_resource: XtermKeyboardResource,
-    other_keys_active: bool,
+    profile: XtermKeyProfile,
 ) -> Option<Vec<u8>> {
+    let policy = profile.resource(XtermKeyResource::Function);
+    let keyboard_type = profile.keyboard_type;
     let mut number = xterm_function_number(named)?;
     let historical = keyboard_type.uses_resource_zero();
     if historical && modifiers.control_key() {
@@ -1443,26 +1165,18 @@ fn encode_xterm_function_named_profile(
         number = number.saturating_add(10);
         modifiers.set(ModifiersState::CONTROL, false);
     }
-    let modifiers = xterm_profile_modifiers(
-        keyboard_type,
-        keyboard_resource,
-        4,
-        modifiers,
-        other_keys_active,
-    );
+    let modifiers = profile.modifiers(4, modifiers);
     let modifier_bits = xterm_other_modifier_bits(modifiers);
 
     if policy.mode() == XtermKeyMode::Extended {
-        let modifier = u16::from(modifier_bits) + 1;
         // X11 F1 starts at keysym 0xffbe. Xterm's keysym-to-Unicode mapping
         // translates that contiguous F1-F35 range to U+E2BE..U+E2E0.
         let codepoint = 58_045 + u32::from(number);
-        return Some(match policy.format() {
-            XtermKeyFormat::FunctionKey27 => {
-                format!("\x1b[27;{modifier};{codepoint}~").into_bytes()
-            }
-            XtermKeyFormat::CsiU => format!("\x1b[{codepoint};{modifier}u").into_bytes(),
-        });
+        return Some(xterm_extended_key(
+            policy.format(),
+            codepoint,
+            u16::from(modifier_bits) + 1,
+        ));
     }
 
     if policy.mode() == XtermKeyMode::Disabled {
@@ -1541,32 +1255,21 @@ fn encode_unmodified_xterm_function_profile(
 fn encode_xterm_misc_function_named(
     named: NamedKey,
     modifiers: ModifiersState,
-    policy: XtermKeySetting,
-    keyboard_type: XtermKeyboardType,
-    keyboard_resource: XtermKeyboardResource,
-    other_keys_active: bool,
+    profile: XtermKeyProfile,
 ) -> Option<Vec<u8>> {
+    let policy = profile.resource(XtermKeyResource::Function);
     let (number, codepoint) = match named {
         NamedKey::Help => (28, 0xe26a),
         NamedKey::ContextMenu => (29, 0xe267),
         _ => return None,
     };
-    let modifiers = xterm_profile_modifiers(
-        keyboard_type,
-        keyboard_resource,
-        8,
-        modifiers,
-        other_keys_active,
-    );
-    let modifier_bits = xterm_other_modifier_bits(modifiers);
+    let modifier_bits = xterm_other_modifier_bits(profile.modifiers(8, modifiers));
     if policy.mode() == XtermKeyMode::Extended {
-        let modifier = u16::from(modifier_bits) + 1;
-        return Some(match policy.format() {
-            XtermKeyFormat::FunctionKey27 => {
-                format!("\x1b[27;{modifier};{codepoint}~").into_bytes()
-            }
-            XtermKeyFormat::CsiU => format!("\x1b[{codepoint};{modifier}u").into_bytes(),
-        });
+        return Some(xterm_extended_key(
+            policy.format(),
+            codepoint,
+            u16::from(modifier_bits) + 1,
+        ));
     }
     if modifier_bits == 0 || policy.mode() == XtermKeyMode::Disabled {
         return Some(format!("\x1b[{number}~").into_bytes());
@@ -1645,28 +1348,21 @@ impl XtermCursorKey {
     }
 }
 
-fn encode_xterm_cursor_named_profile(
+fn encode_xterm_cursor_named(
     named: NamedKey,
     modifiers: ModifiersState,
     mode: TerminalMode,
-    policy: XtermKeySetting,
-    keyboard_type: XtermKeyboardType,
-    keyboard_resource: XtermKeyboardResource,
-    other_keys_active: bool,
+    profile: XtermKeyProfile,
 ) -> Option<Vec<u8>> {
+    let policy = profile.resource(XtermKeyResource::Cursor);
+    let keyboard_type = profile.keyboard_type;
     let named = match (keyboard_type, named) {
         (XtermKeyboardType::Vt220, NamedKey::Home) => NamedKey::Find,
         (XtermKeyboardType::Vt220, NamedKey::End) => NamedKey::Select,
         _ => named,
     };
     let key = XtermCursorKey::from_named(named)?;
-    let modifiers = xterm_profile_modifiers(
-        keyboard_type,
-        keyboard_resource,
-        2,
-        modifiers,
-        other_keys_active,
-    );
+    let modifiers = profile.modifiers(2, modifiers);
     if keyboard_type == XtermKeyboardType::Legacy
         && named == NamedKey::Delete
         && modifiers.is_empty()
@@ -1676,15 +1372,15 @@ fn encode_xterm_cursor_named_profile(
     let modifier_bits = xterm_other_modifier_bits(modifiers);
 
     if policy.mode() == XtermKeyMode::Extended {
-        let modifier = u16::from(modifier_bits) + 1;
         let code = match key {
             XtermCursorKey::Final { extended_code, .. }
             | XtermCursorKey::Tilde { extended_code, .. } => extended_code,
         };
-        return Some(match policy.format() {
-            XtermKeyFormat::FunctionKey27 => format!("\x1b[27;{modifier};{code}~").into_bytes(),
-            XtermKeyFormat::CsiU => format!("\x1b[{code};{modifier}u").into_bytes(),
-        });
+        return Some(xterm_extended_key(
+            policy.format(),
+            code,
+            u16::from(modifier_bits) + 1,
+        ));
     }
 
     let application = mode.contains(TerminalMode::CURSOR_KEYS_APPLICATION);
@@ -1900,14 +1596,11 @@ impl KeypadKey {
             return self.encode(mode, produced_text, modifiers);
         }
 
-        let codepoint = self.xterm_codepoint(logical_key);
-        let modifier = u16::from(xterm_other_modifier_bits(modifiers)) + 1;
-        match policy.format() {
-            XtermKeyFormat::FunctionKey27 => {
-                format!("\x1b[27;{modifier};{codepoint}~").into_bytes()
-            }
-            XtermKeyFormat::CsiU => format!("\x1b[{codepoint};{modifier}u").into_bytes(),
-        }
+        xterm_extended_key(
+            policy.format(),
+            self.xterm_codepoint(logical_key),
+            extended_modifier_parameter(modifiers),
+        )
     }
 
     fn kitty_code(self) -> u32 {
@@ -2010,6 +1703,7 @@ mod tests {
             modifiers,
             false,
             mode,
+            XtermKeyProfile::default(),
         )
         .unwrap()
     }
@@ -2021,19 +1715,17 @@ mod tests {
         level: u8,
         mask: u8,
     ) -> Vec<u8> {
-        encode_xterm_modify_other_keys(
+        encode_xterm(
             &logical,
             PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified),
             text,
             modifiers,
             false,
             TerminalMode::default(),
-            XtermModifyOtherKeys::new(level, mask).unwrap(),
-            XtermKeyResource::Cursor.default_setting(),
-            XtermKeyResource::Function.default_setting(),
-            XtermKeyResource::Keypad.default_setting(),
-            XtermKeyResource::Modifier.default_setting(),
-            XtermKeyResource::Special.default_setting(),
+            XtermKeyProfile {
+                other_keys: XtermModifyOtherKeys::new(level, mask).unwrap(),
+                ..XtermKeyProfile::default()
+            },
         )
         .unwrap()
     }
@@ -2044,18 +1736,17 @@ mod tests {
         mode: TerminalMode,
         policy: XtermKeySetting,
     ) -> Vec<u8> {
-        encode_legacy_xterm_with_resources(
+        encode_legacy_xterm(
             &Key::Named(key),
             PhysicalKey::Code(KeyCode::F24),
             None,
             modifiers,
             false,
             mode,
-            policy,
-            XtermKeyResource::Function.default_setting(),
-            XtermKeyResource::Keypad.default_setting(),
-            XtermKeyResource::Modifier.default_setting(),
-            XtermKeyResource::Special.default_setting(),
+            XtermKeyProfile {
+                resources: XtermKeyResources::default().with(XtermKeyResource::Cursor, policy),
+                ..XtermKeyProfile::default()
+            },
         )
         .unwrap()
     }
@@ -2065,18 +1756,17 @@ mod tests {
         modifiers: ModifiersState,
         policy: XtermKeySetting,
     ) -> Vec<u8> {
-        encode_legacy_xterm_with_resources(
+        encode_legacy_xterm(
             &Key::Named(key),
             PhysicalKey::Code(KeyCode::F24),
             None,
             modifiers,
             false,
             TerminalMode::default(),
-            XtermKeyResource::Cursor.default_setting(),
-            policy,
-            XtermKeyResource::Keypad.default_setting(),
-            XtermKeyResource::Modifier.default_setting(),
-            XtermKeyResource::Special.default_setting(),
+            XtermKeyProfile {
+                resources: XtermKeyResources::default().with(XtermKeyResource::Function, policy),
+                ..XtermKeyProfile::default()
+            },
         )
         .unwrap()
     }
@@ -2103,18 +1793,17 @@ mod tests {
         mode: TerminalMode,
         policy: XtermKeySetting,
     ) -> Vec<u8> {
-        encode_legacy_xterm_with_resources(
+        encode_legacy_xterm(
             &logical,
             PhysicalKey::Code(key),
             None,
             modifiers,
             false,
             mode,
-            XtermKeyResource::Cursor.default_setting(),
-            XtermKeyResource::Function.default_setting(),
-            policy,
-            XtermKeyResource::Modifier.default_setting(),
-            XtermKeyResource::Special.default_setting(),
+            XtermKeyProfile {
+                resources: XtermKeyResources::default().with(XtermKeyResource::Keypad, policy),
+                ..XtermKeyProfile::default()
+            },
         )
         .unwrap()
     }
@@ -2125,18 +1814,17 @@ mod tests {
         modifiers: ModifiersState,
         policy: XtermKeySetting,
     ) -> Option<Vec<u8>> {
-        encode_legacy_xterm_with_resources(
+        encode_legacy_xterm(
             &logical,
             physical,
             None,
             modifiers,
             false,
             TerminalMode::default(),
-            XtermKeyResource::Cursor.default_setting(),
-            XtermKeyResource::Function.default_setting(),
-            XtermKeyResource::Keypad.default_setting(),
-            XtermKeyResource::Modifier.default_setting(),
-            policy,
+            XtermKeyProfile {
+                resources: XtermKeyResources::default().with(XtermKeyResource::Special, policy),
+                ..XtermKeyProfile::default()
+            },
         )
     }
 
@@ -2148,21 +1836,18 @@ mod tests {
         keyboard_type: XtermKeyboardType,
         modify_keyboard: u16,
     ) -> Vec<u8> {
-        encode_xterm_with_profile(
+        encode_xterm(
             &Key::Named(logical),
             physical,
             None,
             modifiers,
             false,
             mode,
-            XtermModifyOtherKeys::default(),
-            XtermKeyResource::Cursor.default_setting(),
-            XtermKeyResource::Function.default_setting(),
-            XtermKeyResource::Keypad.default_setting(),
-            XtermKeyResource::Modifier.default_setting(),
-            XtermKeyResource::Special.default_setting(),
-            keyboard_type,
-            XtermKeyboardResource::new(modify_keyboard, 0),
+            XtermKeyProfile {
+                keyboard_type,
+                keyboard_resource: XtermKeyboardResource::new(modify_keyboard, 0),
+                ..XtermKeyProfile::default()
+            },
         )
         .unwrap()
     }
@@ -2767,19 +2452,17 @@ mod tests {
             b"\x1b[27;9;120~"
         );
 
-        let altgr = encode_xterm_modify_other_keys(
+        let altgr = encode_xterm(
             &Key::Character("€".into()),
             PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified),
             Some("€"),
             mods(false, true, true),
             true,
             TerminalMode::default(),
-            XtermModifyOtherKeys::new(2, 0).unwrap(),
-            XtermKeyResource::Cursor.default_setting(),
-            XtermKeyResource::Function.default_setting(),
-            XtermKeyResource::Keypad.default_setting(),
-            XtermKeyResource::Modifier.default_setting(),
-            XtermKeyResource::Special.default_setting(),
+            XtermKeyProfile {
+                other_keys: XtermModifyOtherKeys::new(2, 0).unwrap(),
+                ..XtermKeyProfile::default()
+            },
         );
         assert_eq!(altgr, Some("€".as_bytes().to_vec()));
 
@@ -2787,19 +2470,17 @@ mod tests {
         // it, xterm falls back to the legacy encoding, which must treat AltGr
         // as layout composition there too, not as Control+Alt.
         for level in [0, 1] {
-            let unproduced = encode_xterm_modify_other_keys(
+            let unproduced = encode_xterm(
                 &Key::Character("e".into()),
                 PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified),
                 None,
                 mods(false, true, true),
                 true,
                 TerminalMode::default(),
-                XtermModifyOtherKeys::new(level, 0).unwrap(),
-                XtermKeyResource::Cursor.default_setting(),
-                XtermKeyResource::Function.default_setting(),
-                XtermKeyResource::Keypad.default_setting(),
-                XtermKeyResource::Modifier.default_setting(),
-                XtermKeyResource::Special.default_setting(),
+                XtermKeyProfile {
+                    other_keys: XtermModifyOtherKeys::new(level, 0).unwrap(),
+                    ..XtermKeyProfile::default()
+                },
             );
             let legacy = encode_legacy_xterm(
                 &Key::Character("e".into()),
@@ -2808,6 +2489,7 @@ mod tests {
                 mods(false, true, true),
                 true,
                 TerminalMode::default(),
+                XtermKeyProfile::default(),
             );
             assert_eq!(unproduced, legacy, "level {level}");
             assert_eq!(unproduced, Some(b"e".to_vec()), "level {level}");
@@ -2820,19 +2502,17 @@ mod tests {
             .unwrap()
             .with_format(XtermKeyFormat::CsiU);
         assert_eq!(
-            encode_xterm_modify_other_keys(
+            encode_xterm(
                 &Key::Character("i".into()),
                 PhysicalKey::Code(KeyCode::KeyI),
                 None,
                 mods(false, false, true),
                 false,
                 TerminalMode::default(),
-                program,
-                XtermKeyResource::Cursor.default_setting(),
-                XtermKeyResource::Function.default_setting(),
-                XtermKeyResource::Keypad.default_setting(),
-                XtermKeyResource::Modifier.default_setting(),
-                XtermKeyResource::Special.default_setting(),
+                XtermKeyProfile {
+                    other_keys: program,
+                    ..XtermKeyProfile::default()
+                }
             ),
             Some(b"\x1b[105;5u".to_vec())
         );
@@ -2841,19 +2521,17 @@ mod tests {
             .unwrap()
             .with_format(XtermKeyFormat::CsiU);
         assert_eq!(
-            encode_xterm_modify_other_keys(
+            encode_xterm(
                 &Key::Character("λ".into()),
                 PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified),
                 Some("λ"),
                 ModifiersState::empty(),
                 false,
                 TerminalMode::default(),
-                all_keys,
-                XtermKeyResource::Cursor.default_setting(),
-                XtermKeyResource::Function.default_setting(),
-                XtermKeyResource::Keypad.default_setting(),
-                XtermKeyResource::Modifier.default_setting(),
-                XtermKeyResource::Special.default_setting(),
+                XtermKeyProfile {
+                    other_keys: all_keys,
+                    ..XtermKeyProfile::default()
+                }
             ),
             Some(b"\x1b[955;1u".to_vec())
         );
@@ -3128,297 +2806,59 @@ mod tests {
             );
         }
 
-        let encoded = encode_xterm_modify_other_keys(
+        let encoded = encode_xterm(
             &Key::Named(NamedKey::Backspace),
             PhysicalKey::Code(KeyCode::Backspace),
             None,
             ModifiersState::empty(),
             false,
             TerminalMode::default(),
-            XtermModifyOtherKeys::new(3, 0).unwrap(),
-            XtermKeyResource::Cursor.default_setting(),
-            XtermKeyResource::Function.default_setting(),
-            XtermKeyResource::Keypad.default_setting(),
-            XtermKeyResource::Modifier.default_setting(),
-            XtermKeySetting::new(XtermKeyMode::Extended, XtermKeyFormat::CsiU),
+            XtermKeyProfile {
+                other_keys: XtermModifyOtherKeys::new(3, 0).unwrap(),
+                resources: XtermKeyResources::default().with(
+                    XtermKeyResource::Special,
+                    XtermKeySetting::new(XtermKeyMode::Extended, XtermKeyFormat::CsiU),
+                ),
+                ..XtermKeyProfile::default()
+            },
         );
         assert_eq!(encoded, Some(b"\x1b[8;1u".to_vec()));
     }
 
     #[test]
     fn kitty_protocol_takes_precedence_over_xterm_resources() {
-        let xterm = XtermModifyOtherKeys::new(2, 0).unwrap();
         let kitty = KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES;
-        let protocol =
-            |kitty_flags, other_keys, cursor_keys, function_keys, keypad_keys, modifier_keys| {
-                keyboard_protocol(
-                    kitty_flags,
-                    other_keys,
-                    cursor_keys,
-                    function_keys,
-                    keypad_keys,
-                    modifier_keys,
-                    XtermKeyResource::Special.default_setting(),
-                )
-            };
-
-        assert_eq!(
-            protocol(
-                kitty,
-                xterm,
-                XtermKeyResource::Cursor.default_setting(),
-                XtermKeyResource::Function.default_setting(),
-                XtermKeyResource::Keypad.default_setting(),
-                XtermKeyResource::Modifier.default_setting(),
-            ),
-            KeyboardProtocol::Kitty(kitty)
-        );
-        assert_eq!(
-            protocol(
-                KittyKeyboardFlags::empty(),
-                xterm,
-                XtermKeyResource::Cursor.default_setting(),
-                XtermKeyResource::Function.default_setting(),
-                XtermKeyResource::Keypad.default_setting(),
-                XtermKeyResource::Modifier.default_setting(),
-            ),
-            KeyboardProtocol::Xterm {
-                keyboard_type: XtermKeyboardType::Normal,
-                keyboard_resource: XtermKeyboardResource::default(),
-                cursor_keys: XtermKeyResource::Cursor.default_setting(),
-                function_keys: XtermKeyResource::Function.default_setting(),
-                keypad_keys: XtermKeyResource::Keypad.default_setting(),
-                modifier_keys: XtermKeyResource::Modifier.default_setting(),
-                special_keys: XtermKeyResource::Special.default_setting(),
-                other_keys: xterm,
-            }
-        );
-        assert_eq!(
-            protocol(
-                KittyKeyboardFlags::empty(),
-                XtermModifyOtherKeys::default(),
-                XtermKeyResource::Cursor.default_setting(),
-                XtermKeyResource::Function.default_setting(),
-                XtermKeyResource::Keypad.default_setting(),
-                XtermKeyResource::Modifier.default_setting(),
-            ),
-            KeyboardProtocol::LegacyXterm
-        );
-
-        let cursor = XtermKeyResource::Cursor
-            .default_setting()
-            .with_mode(XtermKeyMode::Private);
-        assert_eq!(
-            protocol(
-                KittyKeyboardFlags::empty(),
-                XtermModifyOtherKeys::default(),
-                cursor,
-                XtermKeyResource::Function.default_setting(),
-                XtermKeyResource::Keypad.default_setting(),
-                XtermKeyResource::Modifier.default_setting(),
-            ),
-            KeyboardProtocol::Xterm {
-                keyboard_type: XtermKeyboardType::Normal,
-                keyboard_resource: XtermKeyboardResource::default(),
-                cursor_keys: cursor,
-                function_keys: XtermKeyResource::Function.default_setting(),
-                keypad_keys: XtermKeyResource::Keypad.default_setting(),
-                modifier_keys: XtermKeyResource::Modifier.default_setting(),
-                special_keys: XtermKeyResource::Special.default_setting(),
-                other_keys: XtermModifyOtherKeys::default(),
-            }
-        );
-        assert_eq!(
-            protocol(
-                kitty,
-                XtermModifyOtherKeys::default(),
-                cursor,
-                XtermKeyResource::Function.default_setting(),
-                XtermKeyResource::Keypad.default_setting(),
-                XtermKeyResource::Modifier.default_setting(),
-            ),
-            KeyboardProtocol::Kitty(kitty)
-        );
-
-        let function = XtermKeyResource::Function
-            .default_setting()
-            .with_mode(XtermKeyMode::Private);
-        assert_eq!(
-            protocol(
-                KittyKeyboardFlags::empty(),
-                XtermModifyOtherKeys::default(),
-                XtermKeyResource::Cursor.default_setting(),
-                function,
-                XtermKeyResource::Keypad.default_setting(),
-                XtermKeyResource::Modifier.default_setting(),
-            ),
-            KeyboardProtocol::Xterm {
-                keyboard_type: XtermKeyboardType::Normal,
-                keyboard_resource: XtermKeyboardResource::default(),
-                cursor_keys: XtermKeyResource::Cursor.default_setting(),
-                function_keys: function,
-                keypad_keys: XtermKeyResource::Keypad.default_setting(),
-                modifier_keys: XtermKeyResource::Modifier.default_setting(),
-                special_keys: XtermKeyResource::Special.default_setting(),
-                other_keys: XtermModifyOtherKeys::default(),
-            }
-        );
-        assert_eq!(
-            protocol(
-                kitty,
-                XtermModifyOtherKeys::default(),
-                XtermKeyResource::Cursor.default_setting(),
-                function,
-                XtermKeyResource::Keypad.default_setting(),
-                XtermKeyResource::Modifier.default_setting(),
-            ),
-            KeyboardProtocol::Kitty(kitty)
-        );
-
-        let keypad = XtermKeyResource::Keypad
-            .default_setting()
-            .with_mode(XtermKeyMode::Extended);
-        assert_eq!(
-            protocol(
-                KittyKeyboardFlags::empty(),
-                XtermModifyOtherKeys::default(),
-                XtermKeyResource::Cursor.default_setting(),
-                XtermKeyResource::Function.default_setting(),
-                keypad,
-                XtermKeyResource::Modifier.default_setting(),
-            ),
-            KeyboardProtocol::Xterm {
-                keyboard_type: XtermKeyboardType::Normal,
-                keyboard_resource: XtermKeyboardResource::default(),
-                cursor_keys: XtermKeyResource::Cursor.default_setting(),
-                function_keys: XtermKeyResource::Function.default_setting(),
-                keypad_keys: keypad,
-                modifier_keys: XtermKeyResource::Modifier.default_setting(),
-                special_keys: XtermKeyResource::Special.default_setting(),
-                other_keys: XtermModifyOtherKeys::default(),
-            }
-        );
-        assert_eq!(
-            protocol(
-                kitty,
-                XtermModifyOtherKeys::default(),
-                XtermKeyResource::Cursor.default_setting(),
-                XtermKeyResource::Function.default_setting(),
-                keypad,
-                XtermKeyResource::Modifier.default_setting(),
-            ),
-            KeyboardProtocol::Kitty(kitty)
-        );
-
-        let modifier = XtermKeyResource::Modifier
-            .default_setting()
-            .with_mode(XtermKeyMode::Extended);
-        assert_eq!(
-            protocol(
-                KittyKeyboardFlags::empty(),
-                XtermModifyOtherKeys::default(),
-                XtermKeyResource::Cursor.default_setting(),
-                XtermKeyResource::Function.default_setting(),
-                XtermKeyResource::Keypad.default_setting(),
-                modifier,
-            ),
-            KeyboardProtocol::Xterm {
-                keyboard_type: XtermKeyboardType::Normal,
-                keyboard_resource: XtermKeyboardResource::default(),
-                cursor_keys: XtermKeyResource::Cursor.default_setting(),
-                function_keys: XtermKeyResource::Function.default_setting(),
-                keypad_keys: XtermKeyResource::Keypad.default_setting(),
-                modifier_keys: modifier,
-                special_keys: XtermKeyResource::Special.default_setting(),
-                other_keys: XtermModifyOtherKeys::default(),
-            }
-        );
-        assert_eq!(
-            protocol(
-                kitty,
-                XtermModifyOtherKeys::default(),
-                XtermKeyResource::Cursor.default_setting(),
-                XtermKeyResource::Function.default_setting(),
-                XtermKeyResource::Keypad.default_setting(),
-                modifier,
-            ),
-            KeyboardProtocol::Kitty(kitty)
-        );
-
-        let special = XtermKeyResource::Special
-            .default_setting()
-            .with_mode(XtermKeyMode::Extended);
-        assert_eq!(
-            keyboard_protocol(
-                KittyKeyboardFlags::empty(),
-                XtermModifyOtherKeys::default(),
-                XtermKeyResource::Cursor.default_setting(),
-                XtermKeyResource::Function.default_setting(),
-                XtermKeyResource::Keypad.default_setting(),
-                XtermKeyResource::Modifier.default_setting(),
-                special,
-            ),
-            KeyboardProtocol::Xterm {
-                keyboard_type: XtermKeyboardType::Normal,
-                keyboard_resource: XtermKeyboardResource::default(),
-                cursor_keys: XtermKeyResource::Cursor.default_setting(),
-                function_keys: XtermKeyResource::Function.default_setting(),
-                keypad_keys: XtermKeyResource::Keypad.default_setting(),
-                modifier_keys: XtermKeyResource::Modifier.default_setting(),
-                special_keys: special,
-                other_keys: XtermModifyOtherKeys::default(),
-            }
-        );
-        assert_eq!(
-            keyboard_protocol(
-                kitty,
-                XtermModifyOtherKeys::default(),
-                XtermKeyResource::Cursor.default_setting(),
-                XtermKeyResource::Function.default_setting(),
-                XtermKeyResource::Keypad.default_setting(),
-                XtermKeyResource::Modifier.default_setting(),
-                special,
-            ),
-            KeyboardProtocol::Kitty(kitty)
-        );
-
-        assert_eq!(
-            keyboard_protocol_with_profile(
-                KittyKeyboardFlags::empty(),
-                XtermKeyboardType::Vt220,
-                XtermKeyboardResource::new(15, 42),
-                XtermModifyOtherKeys::default(),
-                XtermKeyResource::Cursor.default_setting(),
-                XtermKeyResource::Function.default_setting(),
-                XtermKeyResource::Keypad.default_setting(),
-                XtermKeyResource::Modifier.default_setting(),
-                XtermKeyResource::Special.default_setting(),
-            ),
-            KeyboardProtocol::Xterm {
+        let resource = |resource: XtermKeyResource, mode| XtermKeyProfile {
+            resources: XtermKeyResources::default()
+                .with(resource, resource.default_setting().with_mode(mode)),
+            ..XtermKeyProfile::default()
+        };
+        for profile in [
+            XtermKeyProfile::default(),
+            XtermKeyProfile {
+                other_keys: XtermModifyOtherKeys::new(2, 0).unwrap(),
+                ..XtermKeyProfile::default()
+            },
+            resource(XtermKeyResource::Cursor, XtermKeyMode::Private),
+            resource(XtermKeyResource::Function, XtermKeyMode::Private),
+            resource(XtermKeyResource::Keypad, XtermKeyMode::Extended),
+            resource(XtermKeyResource::Modifier, XtermKeyMode::Extended),
+            resource(XtermKeyResource::Special, XtermKeyMode::Extended),
+            XtermKeyProfile {
                 keyboard_type: XtermKeyboardType::Vt220,
                 keyboard_resource: XtermKeyboardResource::new(15, 42),
-                cursor_keys: XtermKeyResource::Cursor.default_setting(),
-                function_keys: XtermKeyResource::Function.default_setting(),
-                keypad_keys: XtermKeyResource::Keypad.default_setting(),
-                modifier_keys: XtermKeyResource::Modifier.default_setting(),
-                special_keys: XtermKeyResource::Special.default_setting(),
-                other_keys: XtermModifyOtherKeys::default(),
-            }
-        );
-        assert_eq!(
-            keyboard_protocol_with_profile(
-                kitty,
-                XtermKeyboardType::Vt220,
-                XtermKeyboardResource::new(15, 42),
-                XtermModifyOtherKeys::default(),
-                XtermKeyResource::Cursor.default_setting(),
-                XtermKeyResource::Function.default_setting(),
-                XtermKeyResource::Keypad.default_setting(),
-                XtermKeyResource::Modifier.default_setting(),
-                XtermKeyResource::Special.default_setting(),
-            ),
-            KeyboardProtocol::Kitty(kitty)
-        );
+                ..XtermKeyProfile::default()
+            },
+        ] {
+            assert_eq!(
+                KeyboardProtocol::new(kitty, profile),
+                KeyboardProtocol::Kitty(kitty)
+            );
+            assert_eq!(
+                KeyboardProtocol::new(KittyKeyboardFlags::empty(), profile),
+                KeyboardProtocol::Xterm(profile)
+            );
+        }
     }
 
     #[test]
@@ -3501,7 +2941,7 @@ mod tests {
         );
         let mut modifiers = mods(true, true, true);
         modifiers.insert(ModifiersState::SUPER);
-        assert_eq!(kitty_modifier_parameter(modifiers), 16);
+        assert_eq!(extended_modifier_parameter(modifiers), 16);
     }
 
     #[test]
@@ -3676,6 +3116,7 @@ mod tests {
                     ModifiersState::empty(),
                     false,
                     TerminalMode::default(),
+                    XtermKeyProfile::default()
                 )
                 .unwrap(),
                 normal
@@ -3688,6 +3129,7 @@ mod tests {
                     ModifiersState::empty(),
                     false,
                     TerminalMode::KEYPAD_APPLICATION,
+                    XtermKeyProfile::default()
                 )
                 .unwrap(),
                 application
@@ -3812,6 +3254,7 @@ mod tests {
                 mods(true, false, true),
                 false,
                 TerminalMode::default(),
+                XtermKeyProfile::default()
             ),
             Some(vec![0x03])
         );
@@ -3823,6 +3266,7 @@ mod tests {
                 mods(false, true, false),
                 false,
                 TerminalMode::default(),
+                XtermKeyProfile::default()
             ),
             Some(b"\x1bx".to_vec())
         );
@@ -3834,6 +3278,7 @@ mod tests {
                 mods(false, true, true),
                 true,
                 TerminalMode::default(),
+                XtermKeyProfile::default()
             ),
             Some("€".as_bytes().to_vec())
         );
@@ -3845,6 +3290,7 @@ mod tests {
                 mods(false, true, true),
                 true,
                 TerminalMode::default(),
+                XtermKeyProfile::default()
             ),
             Some("\u{a0}".as_bytes().to_vec())
         );
@@ -3856,6 +3302,7 @@ mod tests {
                 mods(false, true, true),
                 false,
                 TerminalMode::default(),
+                XtermKeyProfile::default()
             ),
             Some(vec![0x1b, 0x18])
         );
@@ -3867,6 +3314,7 @@ mod tests {
                 ModifiersState::empty(),
                 false,
                 TerminalMode::default(),
+                XtermKeyProfile::default()
             ),
             Some("界".as_bytes().to_vec())
         );
@@ -3896,5 +3344,86 @@ mod tests {
             assert_eq!(control_byte(character), Some(index as u8 + 1));
         }
         assert_eq!(control_byte('界'), None);
+    }
+
+    #[test]
+    fn real_bash_readline_accepts_normal_and_application_home_from_the_encoder() {
+        use std::time::{Duration, Instant};
+
+        let mut environment = std::collections::HashMap::new();
+        environment.insert("TERM".into(), "xterm-256color".into());
+        environment.insert("PS1".into(), "termeric-readline> ".into());
+        let mut tab = crate::tabs::Tab::new_with_command(
+            0,
+            80,
+            24,
+            "/bin/bash",
+            &["--noprofile".into(), "--norc".into(), "-i".into()],
+            None,
+            Some("readline"),
+            1_000,
+            8 * 1024 * 1024,
+            None,
+            environment,
+        )
+        .unwrap();
+        let home = |mode| {
+            encode_legacy_xterm(
+                &Key::Named(NamedKey::Home),
+                PhysicalKey::Code(KeyCode::Home),
+                None,
+                ModifiersState::empty(),
+                false,
+                mode,
+                XtermKeyProfile::default(),
+            )
+            .unwrap()
+        };
+
+        let prompt_deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < prompt_deadline
+            && !tab
+                .focused_terminal()
+                .unwrap()
+                .rows_text(0, 23)
+                .contains("termeric-readline>")
+        {
+            tab.poll_events();
+            std::thread::sleep(Duration::from_millis(2));
+        }
+
+        tab.write(b"printf 'NORMAL_TAIL\\n'").unwrap();
+        tab.write(&home(termeric_core::term::TerminalMode::default()))
+            .unwrap();
+        tab.write(b"printf 'NORMAL_HEAD\\n'; ").unwrap();
+        tab.write(b"\r").unwrap();
+
+        tab.write(b"printf 'APP_TAIL\\n'").unwrap();
+        tab.write(&home(
+            termeric_core::term::TerminalMode::CURSOR_KEYS_APPLICATION,
+        ))
+        .unwrap();
+        tab.write(b"printf 'APP_HEAD\\n'; ").unwrap();
+        tab.write(b"\r").unwrap();
+
+        let output_deadline = Instant::now() + Duration::from_secs(3);
+        let mut output = String::new();
+        while Instant::now() < output_deadline {
+            tab.poll_events();
+            output = tab.focused_terminal().unwrap().rows_text(0, 23);
+            if ["NORMAL_HEAD", "NORMAL_TAIL", "APP_HEAD", "APP_TAIL"]
+                .iter()
+                .all(|marker| output.matches(marker).count() >= 2)
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        for marker in ["NORMAL_HEAD", "NORMAL_TAIL", "APP_HEAD", "APP_TAIL"] {
+            assert!(
+                output.matches(marker).count() >= 2,
+                "readline omitted executed output for {marker}: {output}"
+            );
+        }
     }
 }

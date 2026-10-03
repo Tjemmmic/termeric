@@ -35,10 +35,10 @@ mod title;
 pub(crate) use cursor::SavedCursor;
 pub use cursor::{TerminalCursorShape, TerminalCursorStyle};
 pub use keyboard::{
-    KittyKeyboardFlags, XtermKeyFormat, XtermKeyMode, XtermKeyResource, XtermKeySetting,
-    XtermKeyboardResource, XtermKeyboardType, XtermModifyOtherKeys,
+    KittyKeyboardFlags, XtermKeyFormat, XtermKeyMode, XtermKeyResource, XtermKeyResources,
+    XtermKeySetting, XtermKeyboardResource, XtermKeyboardType, XtermModifyOtherKeys,
 };
-pub(crate) use keyboard::{MAX_USER_DEFINED_KEY_BYTES, XtermKeyResources, XtermUserDefinedKeys};
+pub(crate) use keyboard::{MAX_USER_DEFINED_KEY_BYTES, XtermUserDefinedKeys};
 pub use mode::TerminalMode;
 use multicell::Osc66Command;
 pub use multiple_cursors::{
@@ -1705,6 +1705,11 @@ impl Terminal {
     /// One of xterm's terminal-local mode-and-format key resources.
     pub fn xterm_key_resource(&self, resource: XtermKeyResource) -> XtermKeySetting {
         self.xterm_key_resources.get(resource)
+    }
+
+    /// All of xterm's terminal-local mode-and-format key resources.
+    pub fn xterm_key_resources(&self) -> XtermKeyResources {
+        self.xterm_key_resources
     }
 
     pub(crate) fn set_xterm_key_mode(&mut self, resource: XtermKeyResource, parameter: u16) {

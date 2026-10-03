@@ -326,7 +326,7 @@ impl XtermKeySetting {
 /// Every resource in [`XtermKeyResource`], each starting at its xterm
 /// default. The state applies across both screen buffers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct XtermKeyResources([XtermKeySetting; XtermKeyResource::ALL.len()]);
+pub struct XtermKeyResources([XtermKeySetting; XtermKeyResource::ALL.len()]);
 
 impl Default for XtermKeyResources {
     fn default() -> Self {
@@ -335,8 +335,14 @@ impl Default for XtermKeyResources {
 }
 
 impl XtermKeyResources {
-    pub(crate) fn get(&self, resource: XtermKeyResource) -> XtermKeySetting {
+    pub fn get(&self, resource: XtermKeyResource) -> XtermKeySetting {
         self.0[resource as usize]
+    }
+
+    /// A copy with one resource's setting replaced.
+    pub const fn with(mut self, resource: XtermKeyResource, setting: XtermKeySetting) -> Self {
+        self.0[resource as usize] = setting;
+        self
     }
 
     /// Out-of-range parameters leave the mode unchanged.

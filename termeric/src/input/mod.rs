@@ -10,8 +10,6 @@ mod terminal_protocol;
 
 pub use actions::Action;
 pub use keybindings::ShortcutRegistry;
-#[cfg(test)]
-pub(crate) use keyboard::encode_legacy_xterm_test;
 pub use keyboard::{encode_ime_text, key_to_bytes_for_terminal};
 pub use mouse::{MouseState, screen_to_grid};
 pub(crate) use terminal_protocol::{
