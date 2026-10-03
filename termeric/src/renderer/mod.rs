@@ -3182,7 +3182,7 @@ pub(crate) fn headless_color_emoji_render_smoke(device: &Device, queue: &Queue) 
     .into_iter()
     .map(std::path::Path::new)
     .find(|path| path.is_file())
-    .ok_or_else(|| anyhow::anyhow!("Noto Color Emoji is required for GPU acceptance"))?;
+    .ok_or_else(|| anyhow::anyhow!("Noto Color Emoji is required for the GPU render smoke"))?;
     let font_data = std::fs::read(font_path)?;
     let mut glyph_cache = GlyphCache::new(
         device,
@@ -3594,8 +3594,8 @@ fn render_queued_text_snapshot(
     Ok(pixels)
 }
 
-/// Produce a small, deterministic renderer snapshot for reviewable GUI
-/// acceptance artifacts. The bundled test font removes host font discovery
+/// Produce a small, deterministic renderer snapshot for the GPU render
+/// smoke's visual baseline. The bundled test font removes host font discovery
 /// from the baseline while retaining Termeric's real atlas, shaping, upload,
 /// shader, blending, and GPU readback paths.
 #[cfg(test)]

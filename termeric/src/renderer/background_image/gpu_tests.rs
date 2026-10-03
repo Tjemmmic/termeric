@@ -178,7 +178,7 @@ fn snapshot(
         depth_or_array_layers: 1,
     };
     let target = device.create_texture(&TextureDescriptor {
-        label: Some("background acceptance target"),
+        label: Some("background test target"),
         size: extent,
         mip_level_count: 1,
         sample_count: 1,
@@ -188,7 +188,7 @@ fn snapshot(
         view_formats: &[],
     });
     let readback = device.create_buffer(&BufferDescriptor {
-        label: Some("background acceptance readback"),
+        label: Some("background test readback"),
         size: u64::from(case.size.0 * case.size.1 * 4),
         usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
         mapped_at_creation: false,
@@ -197,7 +197,7 @@ fn snapshot(
     let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor::default());
     {
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("background acceptance pass"),
+            label: Some("background test pass"),
             color_attachments: &[Some(RenderPassColorAttachment {
                 view: &view,
                 resolve_target: None,
@@ -369,7 +369,7 @@ pub(crate) fn headless_background_render_smoke(device: &Device, queue: &Queue) -
         count += 4;
     }
     eprintln!(
-        "background image pixel acceptance: {count} frames passed (PNG/JPEG, four fits, opacity, viewport, replacement/clear/recreate)"
+        "background image pixel test: {count} frames passed (PNG/JPEG, four fits, opacity, viewport, replacement/clear/recreate)"
     );
     Ok(())
 }

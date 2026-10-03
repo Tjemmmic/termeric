@@ -253,7 +253,7 @@ impl App {
             format!(
                 "The report is read-only and examines at most {MAX_FONT_COVERAGE_GRAPHEMES} complete graphemes."
             ),
-            "Character-map and shaping evidence does not prove native visual quality.".into(),
+            "The report shows which font draws each character, not how it looks on screen.".into(),
         ];
         if let Some(error) = error {
             lines.push(String::new());
@@ -668,11 +668,11 @@ fn format_font_coverage_report(report: &FontCoverageReport) -> Vec<String> {
                 String::new()
             }
         ),
-        "Evidence: installed font character maps plus a bounded normal-style cosmic-text shaping probe."
+        "Based on the installed fonts' character maps and a trial shaping in the regular style."
             .into(),
-        String::new(),
     ];
     for (index, entry) in report.entries.iter().enumerate() {
+        lines.push(String::new());
         let codepoints = entry
             .codepoints
             .iter()
@@ -723,17 +723,13 @@ fn format_font_coverage_report(report: &FontCoverageReport) -> Vec<String> {
             ),
         };
         lines.push(route);
-        lines.push(String::new());
     }
     if report.graphemes_truncated {
+        lines.push(String::new());
         lines.push(format!(
             "Additional graphemes were omitted after the {MAX_FONT_COVERAGE_GRAPHEMES}-grapheme report limit."
         ));
     }
-    lines.push(
-        "A successful report explains routing; native rasterization and appearance remain separate evidence."
-            .into(),
-    );
     lines
 }
 
@@ -945,8 +941,8 @@ mod tests {
         assert!(lines.iter().any(|line| line.contains("truncated at 16")));
         assert!(
             lines
-                .iter()
-                .any(|line| line.contains("native rasterization"))
+                .last()
+                .is_some_and(|line| line.starts_with("Additional graphemes were omitted"))
         );
     }
 

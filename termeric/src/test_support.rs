@@ -232,7 +232,7 @@ fn gpu_render_smoke() {
             "software smoke selected a non-CPU adapter: {adapter_info:?}"
         );
     }
-    eprintln!("headless renderer acceptance adapter: {adapter_info:?}");
+    eprintln!("GPU render smoke adapter: {adapter_info:?}");
     let (device, queue) = pollster::block_on(adapter.request_device(
         &wgpu::DeviceDescriptor {
             required_features: wgpu::Features::empty(),

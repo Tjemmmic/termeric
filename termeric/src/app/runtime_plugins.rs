@@ -385,7 +385,7 @@ impl App {
                 preview.current_source_fingerprint
             ),
             format!(
-                "Candidate fingerprint: {}",
+                "New version fingerprint: {}",
                 preview.candidate_source_fingerprint
             ),
             format!(
@@ -399,7 +399,7 @@ impl App {
         ]);
         if preview.default_profile_will_be_cleared {
             lines.push(format!(
-                "Configured default profile {:?} is absent from the candidate and will return to manifest order.",
+                "Configured default profile {:?} is absent from the new version and will return to manifest order.",
                 preview.configured_default_profile.as_deref().unwrap_or_default()
             ));
         }
@@ -410,7 +410,7 @@ impl App {
         lines.extend([
             String::new(),
             format!(
-                "Candidate permissions: {}",
+                "Permissions the new version requests: {}",
                 preview.candidate_permissions.iter().count()
             ),
             "Select a permission to toggle its post-update grant.".into(),
@@ -430,10 +430,10 @@ impl App {
         lines.push(String::new());
         if grants != preview.candidate_permissions {
             let source_line = lines.len();
-            lines.push("[G] Grant all candidate permissions".into());
+            lines.push("[G] Grant all requested permissions".into());
             choices.push(InfoOverlayChoice::new(
                 "grant-all",
-                "Grant all candidate permissions",
+                "Grant all requested permissions",
                 source_line,
                 Some('g'),
             ));
@@ -476,7 +476,7 @@ impl App {
                 Some('e'),
             ));
         } else {
-            lines.push("An enabled update requires every candidate permission.".into());
+            lines.push("Enabling after the update requires every requested permission.".into());
         }
         let back_line = lines.len();
         lines.push("[B] Back to plugin details".into());
