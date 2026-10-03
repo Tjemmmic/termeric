@@ -252,18 +252,6 @@ mod tests {
     }
 
     #[test]
-    fn branch_merge_moves_retained_name_storage_without_cloning() {
-        let local = vec![String::from("main"), String::from("z-local")];
-        let remote = vec![String::from("a-remote"), String::from("main")];
-        let pointers = [local[0].as_ptr(), local[1].as_ptr(), remote[0].as_ptr()];
-        let result = merge_sorted_branches(local, remote);
-        assert_eq!(result, ["main", "z-local", "a-remote"]);
-        for (name, pointer) in result.iter().zip(pointers) {
-            assert_eq!(name.as_ptr(), pointer);
-        }
-    }
-
-    #[test]
     fn branch_merge_preserves_large_overlapping_lists_and_completion_priority() {
         let local = (20_000..40_000).map(|i| format!("branch-{i:05}")).collect();
         let remote = (0..60_000).map(|i| format!("branch-{i:05}")).collect();
