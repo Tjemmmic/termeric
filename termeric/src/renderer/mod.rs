@@ -232,22 +232,14 @@ pub(crate) struct UiPalette {
     pub(crate) menu_highlight: [f32; 4],
     pub(crate) menu_text: [f32; 4],
     pub(crate) menu_text_dim: [f32; 4],
-    pub(crate) tab_activity: [f32; 4],
     /// Status hues from the terminal's own palette (yellow, red, green), for
-    /// agent badges, toasts, diffs, and warnings.
+    /// agent badges, tab activity, toasts, diffs, and warnings.
     pub(crate) warning: [f32; 4],
     pub(crate) error: [f32; 4],
     pub(crate) success: [f32; 4],
     pub(crate) tab_border: [f32; 4],
     pub(crate) tab_text_active: [f32; 4],
     pub(crate) tab_text_inactive: [f32; 4],
-    // Settings panel colors
-    pub(crate) settings_bg: [f32; 4],
-    pub(crate) settings_header: [f32; 4],
-    pub(crate) settings_text: [f32; 4],
-    pub(crate) settings_text_dim: [f32; 4],
-    pub(crate) settings_accent: [f32; 4],
-    pub(crate) settings_separator: [f32; 4],
     pub(crate) scrim: [f32; 4],
     // Search colors
     pub(crate) search_match: [f32; 4],
@@ -300,20 +292,12 @@ impl UiPalette {
             menu_highlight: chrome(0.11),
             menu_text: fg.to_f32_array(),
             menu_text_dim: with_alpha(fg.to_f32_array(), 0.55),
-            tab_activity: theme.primary.yellow.to_f32_array(),
             warning: theme.primary.yellow.to_f32_array(),
             error: theme.primary.red.to_f32_array(),
             success: theme.primary.green.to_f32_array(),
             tab_border: tab_border.to_f32_array(),
             tab_text_active,
             tab_text_inactive,
-            // Settings panel
-            settings_bg: with_alpha(scale_rgb(bg.to_f32_array(), 0.85), 0.97),
-            settings_header: fg.to_f32_array(),
-            settings_text: fg.to_f32_array(),
-            settings_text_dim: with_alpha(fg.to_f32_array(), 0.55),
-            settings_accent: tab_active.to_f32_array(),
-            settings_separator: with_alpha(tab_border.to_f32_array(), 0.4),
             // Warm scrim derived from theme background
             scrim: with_alpha(scale_rgb(bg.to_f32_array(), 0.3), 0.30),
             // Search highlights and the find box's error color
@@ -339,14 +323,6 @@ impl UiPalette {
     }
 
     fn enforce_high_contrast(&mut self) {
-        self.settings_bg[3] = 1.0;
-        let settings_text = high_contrast_text(self.settings_bg);
-        self.settings_header = settings_text;
-        self.settings_text = settings_text;
-        self.settings_text_dim = settings_text;
-        self.settings_accent = settings_text;
-        self.settings_separator = settings_text;
-
         self.tab_bar_bg[3] = 1.0;
         self.tab_active[3] = 1.0;
         self.tab_inactive[3] = 1.0;
@@ -4174,8 +4150,6 @@ mod ui_palette_accessibility_tests {
             let theme = Theme::load_builtin(theme_name).unwrap();
             let palette = UiPalette::from_theme_with_contrast(&theme, true);
             for (foreground, background) in [
-                (palette.settings_text, palette.settings_bg),
-                (palette.settings_text_dim, palette.settings_bg),
                 (palette.tab_text_active, palette.tab_active),
                 (palette.tab_text_inactive, palette.tab_bar_bg),
                 (palette.tab_text_inactive, palette.tab_inactive),

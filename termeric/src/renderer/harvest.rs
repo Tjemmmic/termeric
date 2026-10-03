@@ -69,7 +69,7 @@ impl Renderer {
         let panel_height = layout.panel.height;
 
         // Use DrawCtx for card and text rendering
-        let bg = with_alpha(self.ui.settings_bg, 0.95 * anim);
+        let bg = with_alpha(self.ui.menu_bg, 0.95 * anim);
         let border = with_alpha(self.ui.tab_border, 0.5 * anim);
 
         {
@@ -89,8 +89,8 @@ impl Renderer {
 
             // Header
             let header_y = panel_y + cell_height * 0.5;
-            let text_color = with_alpha(ctx.ui.settings_header, anim);
-            let dim_color = with_alpha(ctx.ui.settings_text_dim, anim);
+            let text_color = with_alpha(ctx.ui.menu_text, anim);
+            let dim_color = with_alpha(ctx.ui.menu_text_dim, anim);
             ctx.draw_text("Root Cellar", panel_x + cell_width, header_y, text_color);
             ctx.text
                 .push_char('×', layout.close.x, layout.close.y, text_color);

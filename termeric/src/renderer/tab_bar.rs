@@ -824,7 +824,7 @@ impl Renderer {
                 (close.y + (close.height - dot) / 2.0).round(),
                 dot,
                 dot,
-                with_alpha(self.ui.tab_activity, text_alpha),
+                with_alpha(self.ui.warning, text_alpha),
                 dot / 2.0,
             );
         }
@@ -847,7 +847,7 @@ impl Renderer {
         match status {
             TabStatus::BroadcastActive | TabStatus::BroadcastArmed => {
                 let dot = (size * 0.66).round();
-                let dot_color = with_alpha(self.ui.tab_activity, color[3]);
+                let dot_color = with_alpha(self.ui.warning, color[3]);
                 self.rect_pipeline.push_rounded_rect(
                     (cx - dot / 2.0).round(),
                     (cy - dot / 2.0).round(),

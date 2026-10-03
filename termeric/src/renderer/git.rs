@@ -283,9 +283,9 @@ impl Renderer {
         };
         let cw = self.cell_width();
         let cell_h = self.cell_height();
-        let accent = self.ui.settings_accent;
-        let text_color = self.ui.settings_text;
-        let bg = self.ui.settings_bg;
+        let accent = self.ui.tab_accent;
+        let text_color = self.ui.menu_text;
+        let bg = self.ui.menu_bg;
         let clip = layout.clip();
         let text_offset = (layout.row_height - cell_h) / 2.0;
         self.rect_pipeline.push_rounded_rect(
@@ -331,7 +331,7 @@ impl Renderer {
                 layout.items_y() - 1.0,
                 layout.width - cw,
                 0.5,
-                self.ui.settings_separator,
+                self.ui.menu_border,
             );
         }
         for (row, index) in (layout.start..layout.end).enumerate() {
