@@ -8639,7 +8639,12 @@ fn fullscreen_is_window_local_transient_state_for_shortcut_and_palette_routes() 
     assert!(first.fullscreen_requested);
     assert!(!second.fullscreen_requested);
 
-    first.handle_palette_result(PaletteResult::RunAction("core.toggle-fullscreen".into()));
+    first.command_palette.open();
+    let result = first
+        .command_palette
+        .execute_command("core.toggle-fullscreen")
+        .unwrap();
+    first.handle_palette_result(result);
     assert!(!first.fullscreen_requested);
 }
 
@@ -13600,7 +13605,7 @@ fn terminal_profile_palette_entries_follow_live_config_replacement() {
         100,
         1024 * 1024,
     ));
-    app.handle_palette_result(crate::ui::command_palette::PaletteResult::RunAction(
+    app.handle_palette_result(crate::ui::command_palette::PaletteResult::RunCommand(
         "profile.open.dev".into(),
     ));
     assert!(matches!(

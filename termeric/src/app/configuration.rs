@@ -477,7 +477,7 @@ impl App {
     }
 
     pub(super) fn sync_harvest_from_config(&mut self) {
-        self.command_palette.register_commands(core_commands(
+        self.command_palette.replace_core_commands(core_commands(
             self.config.harvest.enabled,
             &self.shortcut_registry,
         ));
@@ -956,7 +956,7 @@ impl App {
                     .select_action(action, &self.shortcut_registry)
                 {
                     self.shortcut_registry.set_binding(action, None);
-                    self.command_palette.register_commands(core_commands(
+                    self.command_palette.replace_core_commands(core_commands(
                         self.config.harvest.enabled,
                         &self.shortcut_registry,
                     ));
@@ -964,7 +964,7 @@ impl App {
             }
             ShortcutsAction::SetShortcut { action, chord } => {
                 self.shortcut_registry.set_binding(action, chord);
-                self.command_palette.register_commands(core_commands(
+                self.command_palette.replace_core_commands(core_commands(
                     self.config.harvest.enabled,
                     &self.shortcut_registry,
                 ));

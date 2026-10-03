@@ -1643,7 +1643,7 @@ impl App {
 
         // Initialize command palette and apply all runtime config through the
         // same path used by reload, settings changes, and reset.
-        app.command_palette.register_commands(core_commands(
+        app.command_palette.replace_core_commands(core_commands(
             app.config.harvest.enabled,
             &app.shortcut_registry,
         ));
@@ -3598,7 +3598,7 @@ impl App {
         }
     }
 
-    /// Handle an action triggered by a keybinding.
+    /// Handle an action from a key binding or the command palette.
     /// Returns true if the action was handled and the key should be consumed.
     fn handle_action(&mut self, action: Action) -> bool {
         match action {
@@ -3820,6 +3820,44 @@ impl App {
                     terminal.reset();
                 }
             }
+            Action::NewWindow => self.request_new_window = true,
+            Action::AttachDomain => self.open_domain_picker(),
+            Action::CancelFileUpload => self.cancel_file_upload(),
+            Action::ToggleShortcutsPanel => {
+                self.shortcuts_panel.toggle();
+                self.request_redraw(RedrawReason::Action);
+            }
+            Action::SaveConfig => self.save_config_with_toast(),
+            Action::ReloadConfig => self.reload_config_from_disk(),
+            Action::ResetConfig => self.reset_config_to_defaults(),
+            Action::ToggleWorkspaceManager => self.toggle_workspace_manager(),
+            Action::SaveWorkspace => self.force_save_workspace(),
+            Action::ConfigurePlugins => {
+                self.settings_panel
+                    .open_to_section(crate::ui::settings::SettingsSection::Plugins);
+                self.request_redraw(RedrawReason::Action);
+            }
+            Action::ShowAbout => {
+                self.info_overlay.show_about();
+            }
+            Action::ToggleHarvestCellar => {
+                if let Some(harvest) = &mut self.harvest {
+                    harvest.cellar.toggle_expanded();
+                }
+            }
+            Action::ShowSproutMenu => self.show_sprout_menu_for_latest_command(),
+            Action::HideSproutMenu => {
+                if let Some(harvest) = &mut self.harvest {
+                    harvest.hide_sprout_menu();
+                }
+            }
+            Action::ClearHarvest => {
+                if let Some(harvest) = &mut self.harvest {
+                    harvest.cellar.clear();
+                }
+            }
+            Action::ToggleTranscript => self.toggle_transcript(),
+            Action::ChangeTheme => self.open_theme_picker(),
         }
         true
     }
@@ -3865,264 +3903,128 @@ impl App {
 
     /// Handle the result of executing a command from the palette
     fn handle_palette_result(&mut self, result: PaletteResult) {
+        use crate::ui::command_palette::palette::PickKind;
         match result {
             PaletteResult::Picked {
-                kind: crate::ui::command_palette::palette::PickKind::Theme,
+                kind: PickKind::Theme,
                 id,
             } => self.commit_theme(&id),
             PaletteResult::Picked {
-                kind: crate::ui::command_palette::palette::PickKind::Agent(placement),
+                kind: PickKind::Agent(placement),
                 id,
             } => self.start_picked_agent(placement, &id),
             PaletteResult::Picked {
-                kind: crate::ui::command_palette::palette::PickKind::AgentTerminal,
+                kind: PickKind::AgentTerminal,
                 id,
             } => self.focus_agent_terminal(&id),
             PaletteResult::Picked {
-                kind: crate::ui::command_palette::palette::PickKind::AgentChange,
+                kind: PickKind::AgentChange,
                 id,
             } => self.pick_agent_change(&id),
             PaletteResult::Picked {
-                kind: crate::ui::command_palette::palette::PickKind::SupervisorMode,
+                kind: PickKind::SupervisorMode,
                 id,
             } => self.pick_supervisor_mode(&id),
-            PaletteResult::RunAction(id) => {
-                if self.run_agent_command(&id) {
-                    return;
-                }
-                if let Some(value) = id.strip_prefix("plugin-pane.") {
-                    self.open_plugin_pane_command(value);
-                    return;
-                }
-                if let Some(name) = id.strip_prefix("profile.open.") {
-                    self.open_terminal_profile(name);
-                    return;
-                }
-                let action = match id.as_str() {
-                    "core.new-window" => {
-                        self.request_new_window = true;
-                        return;
-                    }
-                    "core.toggle-fullscreen" => Action::ToggleFullscreen,
-                    "core.attach-domain" => {
-                        self.open_domain_picker();
-                        return;
-                    }
-                    "core.cancel-file-upload" => {
-                        self.cancel_file_upload();
-                        return;
-                    }
-                    "core.new-tab" => Action::NewTab,
-                    "core.close-tab" => Action::CloseTab,
-                    "core.next-tab" => Action::NextTab,
-                    "core.prev-tab" => Action::PrevTab,
-                    "core.find" => Action::ToggleSearch,
-                    "core.previous-failed-command" => Action::PreviousFailedCommand,
-                    "core.next-failed-command" => Action::NextFailedCommand,
-                    "core.copy-mode" => Action::ToggleCopyMode,
-                    "core.quick-select" => Action::QuickSelect,
-                    "core.unicode-picker" => Action::OpenUnicodePicker,
-                    "core.settings" => Action::ToggleSettings,
-                    "core.shortcuts" => {
-                        self.shortcuts_panel.toggle();
-                        self.request_redraw(RedrawReason::Action);
-                        return;
-                    }
-                    "core.save-config" => {
-                        match self.save_config() {
-                            Ok(path) => self.toasts.success(format!("Configuration saved: {path}")),
-                            Err(error) => self.toasts.error(format!("{error:#}")),
-                        }
-                        return;
-                    }
-                    "core.reload-config" => {
-                        match crate::config::Config::load_or_default() {
-                            Ok(config) => {
-                                if let Err(error) = self.apply_config(config) {
-                                    self.toasts.error(format!("Reload failed: {error}"));
-                                } else {
-                                    self.mark_config_saved();
-                                    log::info!("Configuration reloaded");
-                                    self.toasts.success("Configuration reloaded");
-                                }
-                            }
-                            Err(e) => {
-                                log::error!("Failed to reload config: {}", e);
-                                self.toasts.error(format!("Reload failed: {}", e));
-                            }
-                        }
-                        return;
-                    }
-                    "core.reset-config" => {
-                        if let Err(error) = self.apply_config(Config::default()) {
-                            self.toasts.error(format!("Reset failed: {error}"));
-                        } else {
-                            match self.save_config_replacing() {
-                                Ok(path) => {
-                                    self.toasts.success(format!("Configuration reset: {path}"))
-                                }
-                                Err(error) => self
-                                    .toasts
-                                    .error(format!("Reset could not be saved: {error}")),
-                            };
-                        }
-                        return;
-                    }
-                    "core.workspace-manager" => {
-                        if self.session_panel.is_open() {
-                            self.session_panel.close();
-                        } else {
-                            self.settings_panel.close();
-                            self.commands_panel.close();
-                            self.agents_panel.close();
-                            self.session_panel.open_workspaces();
-                        }
-                        self.request_redraw(RedrawReason::Action);
-                        return;
-                    }
-                    "core.save-workspace" => {
-                        self.force_save_workspace();
-                        return;
-                    }
-                    "core.plugins" => {
-                        use crate::ui::settings::SettingsSection;
-                        self.settings_panel
-                            .open_to_section(SettingsSection::Plugins);
-                        self.request_redraw(RedrawReason::Action);
-                        return;
-                    }
-                    "core.font-size-increase" => Action::IncreaseFontSize,
-                    "core.font-size-decrease" => Action::DecreaseFontSize,
-                    "core.font-size-reset" => Action::ResetFontSize,
-                    "core.copy" => Action::Copy,
-                    "core.paste" => Action::Paste,
-                    "core.about" => {
-                        self.info_overlay.show_about();
-                        return;
-                    }
-                    "core.harvest-cellar" => {
-                        if let Some(ref mut harvest) = self.harvest {
-                            harvest.cellar.toggle_expanded();
-                        }
-                        return;
-                    }
-                    "core.show-sprout-menu" => {
-                        // Anchor the menu to the latest recorded command
-                        // so the actions target something the user can
-                        // reason about. If no command has completed yet
-                        // (e.g. fresh shell), fall back to cursor row.
-                        let source = self.active_harvest_source();
-                        let (anchor_row, anchor_col, entry) =
-                            if let (Some(h), Some(source)) = (self.harvest.as_ref(), source) {
-                                if let Some(latest) = h.cellar.latest_for_source(source).cloned() {
-                                    let col = 0;
-                                    (latest.row.max(0) as usize, col, Some(latest))
-                                } else {
-                                    let cur = self
-                                        .active_terminal_mut()
-                                        .map(|t| t.grid().cursor())
-                                        .map(|c| (c.row, c.col))
-                                        .unwrap_or((0, 0));
-                                    (cur.0, cur.1, None)
-                                }
-                            } else {
-                                (0, 0, None)
-                            };
-                        if entry.is_none() {
-                            let message = self.active_shell_integration_message();
-                            self.toasts.warning(message);
-                            return;
-                        }
-                        let availability = entry
-                            .as_ref()
-                            .map(|entry| self.sprout_availability_for_entry(entry))
-                            .unwrap_or_default();
-                        if let Some(ref mut harvest) = self.harvest {
-                            harvest.show_sprout_menu(anchor_row, anchor_col, entry, availability);
-                        }
-                        return;
-                    }
-                    "core.hide-sprout-menu" => {
-                        if let Some(ref mut harvest) = self.harvest {
-                            harvest.hide_sprout_menu();
-                        }
-                        return;
-                    }
-                    "core.clear-harvest" => {
-                        if let Some(ref mut harvest) = self.harvest {
-                            harvest.cellar.clear();
-                        }
-                        return;
-                    }
-                    "core.toggle-transcript" => {
-                        self.toggle_transcript();
-                        return;
-                    }
-                    "core.split-vertical" => {
-                        self.split_pane(SplitDirection::Vertical);
-                        return;
-                    }
-                    "core.split-horizontal" => {
-                        self.split_pane(SplitDirection::Horizontal);
-                        return;
-                    }
-                    "core.close-pane" => {
-                        self.close_focused_pane();
-                        return;
-                    }
-                    "core.rename-tab" => Action::RenameTab,
-                    "core.clear-scrollback" => Action::ClearScrollback,
-                    "core.reset-terminal" => Action::ResetTerminal,
-                    "core.move-tab-left" => Action::MoveTabLeft,
-                    "core.move-tab-right" => Action::MoveTabRight,
-                    "core.toggle-pin-tab" => Action::TogglePinTab,
-                    "core.toggle-pane-zoom" => Action::TogglePaneZoom,
-                    "core.toggle-pane-read-only" => Action::TogglePaneReadOnly,
-                    "core.swap-pane-next" => Action::SwapPaneNext,
-                    "core.balance-panes" => Action::BalancePanes,
-                    "core.move-pane-next-tab" => Action::MovePaneToNextTab,
-                    "core.move-pane-next-window" => Action::MovePaneToNextWindow,
-                    "core.move-tab-next-window" => Action::MoveTabToNextWindow,
-                    "core.layout-columns" => Action::LayoutColumns,
-                    "core.layout-rows" => Action::LayoutRows,
-                    "core.layout-grid" => Action::LayoutGrid,
-                    "core.layout-tall" => Action::LayoutTall,
-                    "core.layout-fat" => Action::LayoutFat,
-                    "core.cycle-pane-cwd" => Action::CyclePaneCwdMode,
-                    "core.toggle-broadcast" => Action::ToggleBroadcast,
-                    "core.navigate-pane-up" => {
-                        self.navigate_focused_pane(crate::panes::PaneDir::Up);
-                        return;
-                    }
-                    "core.navigate-pane-down" => {
-                        self.navigate_focused_pane(crate::panes::PaneDir::Down);
-                        return;
-                    }
-                    "core.navigate-pane-left" => {
-                        self.navigate_focused_pane(crate::panes::PaneDir::Left);
-                        return;
-                    }
-                    "core.navigate-pane-right" => {
-                        self.navigate_focused_pane(crate::panes::PaneDir::Right);
-                        return;
-                    }
-                    "core.change-theme" => {
-                        self.open_theme_picker();
-                        return;
-                    }
-                    _ => {
-                        log::warn!("Unknown palette action: {}", id);
-                        return;
-                    }
-                };
+            PaletteResult::Action(action) => {
                 self.handle_action(action);
             }
+            PaletteResult::RunCommand(id) => self.run_palette_command(&id),
             PaletteResult::RunPluginCommand(id) => {
                 self.execute_plugin_command(&id);
             }
             PaletteResult::Cancelled => {}
         }
         self.request_redraw(RedrawReason::Action);
+    }
+
+    /// Run a palette command the app resolves by ID: an agent command, a
+    /// terminal profile, or a plugin pane.
+    fn run_palette_command(&mut self, id: &str) {
+        if self.run_agent_command(id) {
+            return;
+        }
+        if let Some(value) = id.strip_prefix("plugin-pane.") {
+            self.open_plugin_pane_command(value);
+        } else if let Some(name) = id.strip_prefix("profile.open.") {
+            self.open_terminal_profile(name);
+        } else {
+            log::warn!("Unknown palette command: {id}");
+        }
+    }
+
+    /// Save the configuration and report where it went.
+    fn save_config_with_toast(&mut self) {
+        match self.save_config() {
+            Ok(path) => self.toasts.success(format!("Configuration saved: {path}")),
+            Err(error) => self.toasts.error(format!("{error:#}")),
+        }
+    }
+
+    /// Replace the running configuration with the one on disk.
+    fn reload_config_from_disk(&mut self) {
+        match crate::config::Config::load_or_default() {
+            Ok(config) => {
+                if let Err(error) = self.apply_config(config) {
+                    self.toasts.error(format!("Reload failed: {error}"));
+                } else {
+                    self.mark_config_saved();
+                    log::info!("Configuration reloaded");
+                    self.toasts.success("Configuration reloaded");
+                }
+            }
+            Err(e) => {
+                log::error!("Failed to reload config: {}", e);
+                self.toasts.error(format!("Reload failed: {}", e));
+            }
+        }
+    }
+
+    /// Apply the default configuration and save it over the file on disk.
+    fn reset_config_to_defaults(&mut self) {
+        if let Err(error) = self.apply_config(Config::default()) {
+            self.toasts.error(format!("Reset failed: {error}"));
+            return;
+        }
+        match self.save_config_replacing() {
+            Ok(path) => self.toasts.success(format!("Configuration reset: {path}")),
+            Err(error) => self
+                .toasts
+                .error(format!("Reset could not be saved: {error}")),
+        }
+    }
+
+    /// Show the workspace manager in place of any other side panel, or hide it.
+    fn toggle_workspace_manager(&mut self) {
+        if self.session_panel.is_open() {
+            self.session_panel.close();
+        } else {
+            self.settings_panel.close();
+            self.commands_panel.close();
+            self.agents_panel.close();
+            self.session_panel.open_workspaces();
+        }
+        self.request_redraw(RedrawReason::Action);
+    }
+
+    /// Show the sprout menu for the latest command Harvest recorded, so its
+    /// actions target something the user can reason about.
+    fn show_sprout_menu_for_latest_command(&mut self) {
+        let source = self.active_harvest_source();
+        let latest = self
+            .harvest
+            .as_ref()
+            .zip(source)
+            .and_then(|(harvest, source)| harvest.cellar.latest_for_source(source).cloned());
+        let Some(entry) = latest else {
+            let message = self.active_shell_integration_message();
+            self.toasts.warning(message);
+            return;
+        };
+        let availability = self.sprout_availability_for_entry(&entry);
+        let anchor_row = entry.row.max(0) as usize;
+        if let Some(ref mut harvest) = self.harvest {
+            harvest.show_sprout_menu(anchor_row, 0, Some(entry), availability);
+        }
     }
 
     /// Copy selection to clipboard. Returns true if anything was copied so

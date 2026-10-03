@@ -7,6 +7,7 @@ use sublime_fuzzy::FuzzySearch;
 
 use super::super::animation::OverlayAnimation;
 use super::super::text_input::{TextInput, TextInputEdit, TextLimit};
+use crate::input::Action;
 use crate::input::keybindings::{BindableAction, ShortcutRegistry};
 use crate::ui::geometry::Bounds;
 use crate::ui::scroll::reveal_row;
@@ -14,9 +15,12 @@ use crate::ui::scroll::reveal_row;
 const MAX_QUERY_CHARACTERS: usize = 256;
 
 /// Source of a registered command
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum CommandSource {
-    /// Built-in core command
+    /// A built-in command that runs this action.
+    Action(Action),
+    /// A built-in entry resolved by its ID: an agent command, or a row of a
+    /// quick pick or a dedicated picker.
     Core,
     /// User-configured reusable terminal profiles.
     LaunchProfiles,
@@ -27,11 +31,12 @@ pub enum CommandSource {
 /// A command registered in the palette
 #[derive(Debug, Clone)]
 pub struct RegisteredCommand {
-    /// Unique identifier (e.g., "core.new-tab", "claude-code.open")
+    /// Unique identifier (e.g., "core.new-tab", "claude-code.open"), which
+    /// recency, availability, and accessibility key on
     pub id: String,
     /// Display title (e.g., "New Tab")
     pub title: String,
-    /// Category for grouping (e.g., "Core", "AI", "Config")
+    /// Searchable category, shown as detail text in pickers
     pub category: String,
     /// Human-readable shortcut (e.g., "Ctrl+T")
     pub shortcut: Option<String>,
@@ -55,8 +60,10 @@ pub struct PaletteEntry {
 /// Result of executing a palette command
 #[derive(Debug, Clone)]
 pub enum PaletteResult {
-    /// Run a core action by ID
-    RunAction(String),
+    /// Run a built-in action
+    Action(Action),
+    /// Run a command the app or a dedicated picker resolves by ID
+    RunCommand(String),
     /// Run a plugin command by ID
     RunPluginCommand(String),
     /// An entry of an active quick pick was chosen.
@@ -307,15 +314,19 @@ impl CommandPalette {
         self.show_category = show;
     }
 
-    /// Register commands, replacing any existing ones from the same source
-    pub fn register_commands(&mut self, commands: Vec<RegisteredCommand>) {
-        // Remove commands from this source if re-registering
-        if let Some(first) = commands.first() {
-            let source = &first.source;
-            self.registry.retain(|c| &c.source != source);
-        }
+    /// Replace every built-in command (see [`core_commands`]).
+    pub fn replace_core_commands(&mut self, commands: Vec<RegisteredCommand>) {
+        self.registry.retain(|command| {
+            !matches!(
+                command.source,
+                CommandSource::Action(_) | CommandSource::Core
+            )
+        });
         self.registry.extend(commands);
         self.sort_registry();
+        if self.animation.is_active() {
+            self.update_entries();
+        }
     }
 
     /// Replace the complete registry for a dedicated palette instance.
@@ -372,7 +383,7 @@ impl CommandPalette {
     /// Replace every user-configured terminal-profile command.
     pub fn replace_launch_profile_commands(&mut self, commands: Vec<RegisteredCommand>) {
         self.registry
-            .retain(|command| command.source != CommandSource::LaunchProfiles);
+            .retain(|command| !matches!(command.source, CommandSource::LaunchProfiles));
         self.registry.extend(commands);
         self.sort_registry();
         if self.animation.is_active() {
@@ -609,19 +620,21 @@ impl CommandPalette {
         if let Some(entry) = self.entries.get(self.selected) {
             let cmd = &self.registry[entry.registry_index];
             let id = cmd.id.clone();
-            let source = cmd.source.clone();
+            let result = match &cmd.source {
+                CommandSource::Action(action) => PaletteResult::Action(action.clone()),
+                CommandSource::Plugin(_) => PaletteResult::RunPluginCommand(id.clone()),
+                CommandSource::Core | CommandSource::LaunchProfiles => {
+                    PaletteResult::RunCommand(id.clone())
+                }
+            };
 
             // Track recently used
             self.recently_used.retain(|r| r != &id);
-            self.recently_used.insert(0, id.clone());
+            self.recently_used.insert(0, id);
             self.recently_used.truncate(20);
 
             self.close();
-
-            match source {
-                CommandSource::Plugin(_) => PaletteResult::RunPluginCommand(id),
-                CommandSource::Core | CommandSource::LaunchProfiles => PaletteResult::RunAction(id),
-            }
+            result
         } else {
             self.close();
             PaletteResult::Cancelled
@@ -799,548 +812,220 @@ impl CommandPalette {
     }
 }
 
-/// Build the default set of core commands using the active shortcut registry,
-/// so command-palette hints stay correct after user overrides.
+/// The grouping a built-in command is searched under.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CoreCategory {
+    Core,
+    Navigation,
+    Terminal,
+    Search,
+    Config,
+    Workspaces,
+    Help,
+    Font,
+    Harvest,
+    Agents,
+    Tabs,
+    Panes,
+    Appearance,
+}
+
+impl CoreCategory {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Core => "Core",
+            Self::Navigation => "Navigation",
+            Self::Terminal => "Terminal",
+            Self::Search => "Search",
+            Self::Config => "Config",
+            Self::Workspaces => "Workspaces",
+            Self::Help => "Help",
+            Self::Font => "Font",
+            Self::Harvest => "Harvest",
+            Self::Agents => "Agents",
+            Self::Tabs => "Tabs",
+            Self::Panes => "Panes",
+            Self::Appearance => "Appearance",
+        }
+    }
+}
+
+/// What a built-in command runs.
+enum CoreRun {
+    /// A bindable action; the row shows its current key binding.
+    Bound(BindableAction),
+    /// An action with no key binding.
+    Unbound(Action),
+    /// An agent command, resolved by ID because agents hide some of them by
+    /// ID while they don't apply (see `App::run_agent_command`).
+    Agent,
+}
+
+/// A row of the built-in command table.
+struct CoreCommand {
+    id: &'static str,
+    title: &'static str,
+    category: CoreCategory,
+    run: CoreRun,
+    destructive: bool,
+}
+
+fn command(
+    id: &'static str,
+    title: &'static str,
+    category: CoreCategory,
+    run: CoreRun,
+) -> CoreCommand {
+    CoreCommand {
+        id,
+        title,
+        category,
+        run,
+        destructive: false,
+    }
+}
+
+/// A command shown with the destructive (amber) highlight.
+fn destructive(
+    id: &'static str,
+    title: &'static str,
+    category: CoreCategory,
+    run: CoreRun,
+) -> CoreCommand {
+    CoreCommand {
+        destructive: true,
+        ..command(id, title, category, run)
+    }
+}
+
+/// Every built-in command, one row each.
+#[rustfmt::skip]
+fn core_command_table() -> Vec<CoreCommand> {
+    use BindableAction as Key;
+    use CoreCategory::*;
+    use CoreRun::{Agent, Bound, Unbound};
+    vec![
+        command("core.new-window", "New Window", Core, Unbound(Action::NewWindow)),
+        command("core.toggle-fullscreen", "Toggle Fullscreen", Core, Bound(Key::ToggleFullscreen)),
+        command("core.attach-domain", "Attach Live Domain…", Core, Unbound(Action::AttachDomain)),
+        destructive("core.cancel-file-upload", "Cancel Upload", Core, Unbound(Action::CancelFileUpload)),
+        command("core.new-tab", "New Tab", Core, Bound(Key::NewTab)),
+        destructive("core.close-tab", "Close Tab", Core, Bound(Key::CloseTab)),
+        command("core.next-tab", "Next Tab", Core, Bound(Key::NextTab)),
+        command("core.prev-tab", "Previous Tab", Core, Bound(Key::PrevTab)),
+        command("core.copy", "Copy Selection", Core, Bound(Key::Copy)),
+        command("core.paste", "Paste from Clipboard", Core, Bound(Key::Paste)),
+        command("core.previous-failed-command", "Jump to Previous Failed Command", Navigation, Bound(Key::PreviousFailedCommand)),
+        command("core.next-failed-command", "Jump to Next Failed Command", Navigation, Bound(Key::NextFailedCommand)),
+        destructive("core.clear-scrollback", "Clear Scrollback", Terminal, Bound(Key::ClearScrollback)),
+        destructive("core.reset-terminal", "Reset Terminal", Terminal, Bound(Key::ResetTerminal)),
+        command("core.find", "Find", Search, Bound(Key::ToggleSearch)),
+        command("core.copy-mode", "Keyboard Copy Mode", Search, Bound(Key::ToggleCopyMode)),
+        command("core.quick-select", "Quick Select Links and Matches", Search, Bound(Key::QuickSelect)),
+        command("core.unicode-picker", "Insert Unicode Character…", Search, Bound(Key::OpenUnicodePicker)),
+        command("core.settings", "Open Settings", Config, Bound(Key::ToggleSettings)),
+        command("core.shortcuts", "Keyboard Shortcuts", Config, Unbound(Action::ToggleShortcutsPanel)),
+        command("core.save-config", "Save Configuration", Config, Unbound(Action::SaveConfig)),
+        command("core.reload-config", "Reload Configuration", Config, Unbound(Action::ReloadConfig)),
+        destructive("core.reset-config", "Reset Configuration to Defaults", Config, Unbound(Action::ResetConfig)),
+        command("core.plugins", "Configure Plugins", Config, Unbound(Action::ConfigurePlugins)),
+        command("core.save-workspace", "Save Workspace", Workspaces, Unbound(Action::SaveWorkspace)),
+        command("core.workspace-manager", "Manage Workspaces…", Workspaces, Unbound(Action::ToggleWorkspaceManager)),
+        command("core.about", "About Termeric", Help, Unbound(Action::ShowAbout)),
+        command("core.font-size-increase", "Increase Font Size", Font, Bound(Key::IncreaseFontSize)),
+        command("core.font-size-decrease", "Decrease Font Size", Font, Bound(Key::DecreaseFontSize)),
+        command("core.font-size-reset", "Reset Font Size", Font, Bound(Key::ResetFontSize)),
+        command("core.harvest-cellar", "Show Harvest Cellar", Harvest, Unbound(Action::ToggleHarvestCellar)),
+        command("core.show-sprout-menu", "Show Sprout Menu", Harvest, Unbound(Action::ShowSproutMenu)),
+        command("core.hide-sprout-menu", "Hide Sprout Menu", Harvest, Unbound(Action::HideSproutMenu)),
+        destructive("core.clear-harvest", "Clear Harvest History", Harvest, Unbound(Action::ClearHarvest)),
+        command("agent.new", "New Agent…", Agents, Bound(Key::NewAgent)),
+        command("agent.resume", "Resume Agent Conversation…", Agents, Agent),
+        command("agent.view", "Agent View", Agents, Bound(Key::ToggleAgentView)),
+        command("agent.view-new", "New Agent View Session", Agents, Agent),
+        command("agent.go-to", "Go to Agent…", Agents, Agent),
+        command("agent.panel", "Show Agents", Agents, Agent),
+        command("agent.split-right", "Split Right with Agent…", Agents, Agent),
+        command("agent.split-down", "Split Down with Agent…", Agents, Agent),
+        command("agent.new-conversation", "Start New Agent Conversation", Agents, Agent),
+        command("agent.restart", "Restart Agent", Agents, Agent),
+        command("agent.insert-context", "Send Context to Agent…", Agents, Agent),
+        command("agent.review-changes", "Review Agent Changes…", Agents, Agent),
+        command("agent.stage-changes", "Stage All Agent Changes", Agents, Agent),
+        command("agent.review-diff", "Review Agent Diff", Agents, Agent),
+        command("agent.copy-diff", "Copy Agent Diff", Agents, Agent),
+        command("agent.export", "Export Agent Session", Agents, Agent),
+        command("agent.copy-last-response", "Copy Last Agent Response", Agents, Agent),
+        command("core.toggle-transcript", "Toggle Agent Transcript", Agents, Unbound(Action::ToggleTranscript)),
+        command("agent.setup-status", "Set Up Agent Status…", Agents, Agent),
+        command("agent.remove-status", "Remove Agent Status Hooks…", Agents, Agent),
+        command("supervisor.start", "Start Supervisor", Agents, Agent),
+        command("supervisor.mode", "Supervisor Mode…", Agents, Agent),
+        command("supervisor.take-over", "Take Over from Supervisor", Agents, Agent),
+        command("supervisor.hand-back", "Hand Back to Supervisor", Agents, Agent),
+        command("supervisor.rules", "Edit Supervisor Rules", Agents, Agent),
+        command("supervisor.stop", "Stop Supervisor", Agents, Agent),
+        command("core.rename-tab", "Rename Tab", Tabs, Bound(Key::RenameTab)),
+        command("core.move-tab-left", "Move Tab Left", Tabs, Bound(Key::MoveTabLeft)),
+        command("core.move-tab-right", "Move Tab Right", Tabs, Bound(Key::MoveTabRight)),
+        command("core.move-tab-next-window", "Move Tab to Next Window", Tabs, Bound(Key::MoveTabToNextWindow)),
+        command("core.toggle-pin-tab", "Pin or Unpin Tab", Tabs, Bound(Key::TogglePinTab)),
+        command("core.split-vertical", "Split Pane Right", Panes, Bound(Key::SplitVertical)),
+        command("core.split-horizontal", "Split Pane Down", Panes, Bound(Key::SplitHorizontal)),
+        destructive("core.close-pane", "Close Pane", Panes, Bound(Key::ClosePane)),
+        command("core.navigate-pane-up", "Navigate Pane Up", Panes, Bound(Key::NavigatePaneUp)),
+        command("core.navigate-pane-down", "Navigate Pane Down", Panes, Bound(Key::NavigatePaneDown)),
+        command("core.navigate-pane-left", "Navigate Pane Left", Panes, Bound(Key::NavigatePaneLeft)),
+        command("core.navigate-pane-right", "Navigate Pane Right", Panes, Bound(Key::NavigatePaneRight)),
+        command("core.toggle-pane-zoom", "Zoom Pane", Panes, Bound(Key::TogglePaneZoom)),
+        command("core.toggle-pane-read-only", "Toggle Pane Read-only", Panes, Bound(Key::TogglePaneReadOnly)),
+        command("core.swap-pane-next", "Swap Pane with Next", Panes, Bound(Key::SwapPaneNext)),
+        command("core.balance-panes", "Balance Panes", Panes, Bound(Key::BalancePanes)),
+        command("core.move-pane-next-tab", "Move Pane to Next Tab", Panes, Bound(Key::MovePaneToNextTab)),
+        command("core.move-pane-next-window", "Move Pane to Next Window", Panes, Bound(Key::MovePaneToNextWindow)),
+        command("core.layout-columns", "Layout: Columns", Panes, Bound(Key::LayoutColumns)),
+        command("core.layout-rows", "Layout: Rows", Panes, Bound(Key::LayoutRows)),
+        command("core.layout-grid", "Layout: Grid", Panes, Bound(Key::LayoutGrid)),
+        command("core.layout-tall", "Layout: Tall", Panes, Bound(Key::LayoutTall)),
+        command("core.layout-fat", "Layout: Fat", Panes, Bound(Key::LayoutFat)),
+        command("core.cycle-pane-cwd", "Cycle New Pane Directory", Panes, Bound(Key::CyclePaneCwdMode)),
+        destructive("core.toggle-broadcast", "Toggle Broadcast Input", Panes, Bound(Key::ToggleBroadcast)),
+        command("core.change-theme", "Change Theme…", Appearance, Unbound(Action::ChangeTheme)),
+    ]
+}
+
+/// Build the built-in commands, with shortcut hints from the active
+/// shortcut registry so they stay correct after user overrides.
 pub fn core_commands(
     harvest_enabled: bool,
     shortcuts: &ShortcutRegistry,
 ) -> Vec<RegisteredCommand> {
-    let shortcut = |action| {
-        shortcuts
-            .binding_for(action)
-            .map(|chord| chord.display_string())
-    };
-    let mut commands = vec![
-        // ── Core ──
-        RegisteredCommand {
-            id: "core.new-window".into(),
-            title: "New Window".into(),
-            category: "Core".into(),
-            shortcut: None,
-            source: CommandSource::Core,
-            destructive: false,
-        },
-        RegisteredCommand {
-            id: "core.toggle-fullscreen".into(),
-            title: "Toggle Fullscreen".into(),
-            category: "Core".into(),
-            shortcut: shortcut(BindableAction::ToggleFullscreen),
-            source: CommandSource::Core,
-            destructive: false,
-        },
-        RegisteredCommand {
-            id: "core.attach-domain".into(),
-            title: "Attach Live Domain…".into(),
-            category: "Core".into(),
-            shortcut: None,
-            source: CommandSource::Core,
-            destructive: false,
-        },
-        RegisteredCommand {
-            id: "core.cancel-file-upload".into(),
-            title: "Cancel Upload".into(),
-            category: "Core".into(),
-            shortcut: None,
-            source: CommandSource::Core,
-            destructive: true,
-        },
-        RegisteredCommand {
-            id: "core.new-tab".into(),
-            title: "New Tab".into(),
-            category: "Core".into(),
-            shortcut: shortcut(BindableAction::NewTab),
-            source: CommandSource::Core,
-            destructive: false,
-        },
-        RegisteredCommand {
-            id: "core.close-tab".into(),
-            title: "Close Tab".into(),
-            category: "Core".into(),
-            shortcut: shortcut(BindableAction::CloseTab),
-            source: CommandSource::Core,
-            destructive: true,
-        },
-        RegisteredCommand {
-            id: "core.next-tab".into(),
-            title: "Next Tab".into(),
-            category: "Core".into(),
-            shortcut: shortcut(BindableAction::NextTab),
-            source: CommandSource::Core,
-            destructive: false,
-        },
-        RegisteredCommand {
-            id: "core.prev-tab".into(),
-            title: "Previous Tab".into(),
-            category: "Core".into(),
-            shortcut: shortcut(BindableAction::PrevTab),
-            source: CommandSource::Core,
-            destructive: false,
-        },
-        RegisteredCommand {
-            id: "core.previous-failed-command".into(),
-            title: "Jump to Previous Failed Command".into(),
-            category: "Navigation".into(),
-            shortcut: shortcut(BindableAction::PreviousFailedCommand),
-            source: CommandSource::Core,
-            destructive: false,
-        },
-        RegisteredCommand {
-            id: "core.next-failed-command".into(),
-            title: "Jump to Next Failed Command".into(),
-            category: "Navigation".into(),
-            shortcut: shortcut(BindableAction::NextFailedCommand),
-            source: CommandSource::Core,
-            destructive: false,
-        },
-        // ── Terminal ──
-        RegisteredCommand {
-            id: "core.clear-scrollback".into(),
-            title: "Clear Scrollback".into(),
-            category: "Terminal".into(),
-            shortcut: shortcut(BindableAction::ClearScrollback),
-            source: CommandSource::Core,
-            destructive: true,
-        },
-        RegisteredCommand {
-            id: "core.reset-terminal".into(),
-            title: "Reset Terminal".into(),
-            category: "Terminal".into(),
-            shortcut: shortcut(BindableAction::ResetTerminal),
-            source: CommandSource::Core,
-            destructive: true,
-        },
-        // ── Search ──
-        RegisteredCommand {
-            id: "core.find".into(),
-            title: "Find".into(),
-            category: "Search".into(),
-            shortcut: shortcut(BindableAction::ToggleSearch),
-            source: CommandSource::Core,
-            destructive: false,
-        },
-        RegisteredCommand {
-            id: "core.copy-mode".into(),
-            title: "Keyboard Copy Mode".into(),
-            category: "Search".into(),
-            shortcut: shortcut(BindableAction::ToggleCopyMode),
-            source: CommandSource::Core,
-            destructive: false,
-        },
-        RegisteredCommand {
-            id: "core.quick-select".into(),
-            title: "Quick Select Links and Matches".into(),
-            category: "Search".into(),
-            shortcut: shortcut(BindableAction::QuickSelect),
-            source: CommandSource::Core,
-            destructive: false,
-        },
-        RegisteredCommand {
-            id: "core.unicode-picker".into(),
-            title: "Insert Unicode Character…".into(),
-            category: "Search".into(),
-            shortcut: shortcut(BindableAction::OpenUnicodePicker),
-            source: CommandSource::Core,
-            destructive: false,
-        },
-        // ── Config ──
-        RegisteredCommand {
-            id: "core.settings".into(),
-            title: "Open Settings".into(),
-            category: "Config".into(),
-            shortcut: shortcut(BindableAction::ToggleSettings),
-            source: CommandSource::Core,
-            destructive: false,
-        },
-        RegisteredCommand {
-            id: "core.shortcuts".into(),
-            title: "Keyboard Shortcuts".into(),
-            category: "Config".into(),
-            shortcut: None,
-            source: CommandSource::Core,
-            destructive: false,
-        },
-        RegisteredCommand {
-            id: "core.save-config".into(),
-            title: "Save Configuration".into(),
-            category: "Config".into(),
-            shortcut: None,
-            source: CommandSource::Core,
-            destructive: false,
-        },
-        RegisteredCommand {
-            id: "core.reload-config".into(),
-            title: "Reload Configuration".into(),
-            category: "Config".into(),
-            shortcut: None,
-            source: CommandSource::Core,
-            destructive: false,
-        },
-        RegisteredCommand {
-            id: "core.reset-config".into(),
-            title: "Reset Configuration to Defaults".into(),
-            category: "Config".into(),
-            shortcut: None,
-            source: CommandSource::Core,
-            destructive: true,
-        },
-        // ── Workspaces ──
-        RegisteredCommand {
-            id: "core.save-workspace".into(),
-            title: "Save Workspace".into(),
-            category: "Workspaces".into(),
-            shortcut: None,
-            source: CommandSource::Core,
-            destructive: false,
-        },
-        RegisteredCommand {
-            id: "core.workspace-manager".into(),
-            title: "Manage Workspaces…".into(),
-            category: "Workspaces".into(),
-            shortcut: None,
-            source: CommandSource::Core,
-            destructive: false,
-        },
-        // ── Plugins ──
-        RegisteredCommand {
-            id: "core.plugins".into(),
-            title: "Configure Plugins".into(),
-            category: "Config".into(),
-            shortcut: None,
-            source: CommandSource::Core,
-            destructive: false,
-        },
-        // ── Help ──
-        RegisteredCommand {
-            id: "core.about".into(),
-            title: "About Termeric".into(),
-            category: "Help".into(),
-            shortcut: None,
-            source: CommandSource::Core,
-            destructive: false,
-        },
-        // ── Font ──
-        RegisteredCommand {
-            id: "core.font-size-increase".into(),
-            title: "Increase Font Size".into(),
-            category: "Font".into(),
-            shortcut: shortcut(BindableAction::IncreaseFontSize),
-            source: CommandSource::Core,
-            destructive: false,
-        },
-        RegisteredCommand {
-            id: "core.font-size-decrease".into(),
-            title: "Decrease Font Size".into(),
-            category: "Font".into(),
-            shortcut: shortcut(BindableAction::DecreaseFontSize),
-            source: CommandSource::Core,
-            destructive: false,
-        },
-        RegisteredCommand {
-            id: "core.font-size-reset".into(),
-            title: "Reset Font Size".into(),
-            category: "Font".into(),
-            shortcut: shortcut(BindableAction::ResetFontSize),
-            source: CommandSource::Core,
-            destructive: false,
-        },
-        // ── Export ──
-        // ── Copy/Paste ──
-        RegisteredCommand {
-            id: "core.copy".into(),
-            title: "Copy Selection".into(),
-            category: "Core".into(),
-            shortcut: shortcut(BindableAction::Copy),
-            source: CommandSource::Core,
-            destructive: false,
-        },
-        RegisteredCommand {
-            id: "core.paste".into(),
-            title: "Paste from Clipboard".into(),
-            category: "Core".into(),
-            shortcut: shortcut(BindableAction::Paste),
-            source: CommandSource::Core,
-            destructive: false,
-        },
-    ];
-
-    // Harvest is an experimental beta and stays out of the palette unless
-    // explicitly enabled in configuration.
-    if harvest_enabled {
-        commands.push(RegisteredCommand {
-            id: "core.harvest-cellar".into(),
-            title: "Show Harvest Cellar".into(),
-            category: "Harvest".into(),
-            shortcut: None,
-            source: CommandSource::Core,
-            destructive: false,
-        });
-        commands.push(RegisteredCommand {
-            id: "core.show-sprout-menu".into(),
-            title: "Show Sprout Menu".into(),
-            category: "Harvest".into(),
-            shortcut: None,
-            source: CommandSource::Core,
-            destructive: false,
-        });
-        commands.push(RegisteredCommand {
-            id: "core.hide-sprout-menu".into(),
-            title: "Hide Sprout Menu".into(),
-            category: "Harvest".into(),
-            shortcut: None,
-            source: CommandSource::Core,
-            destructive: false,
-        });
-        commands.push(RegisteredCommand {
-            id: "core.clear-harvest".into(),
-            title: "Clear Harvest History".into(),
-            category: "Harvest".into(),
-            shortcut: None,
-            source: CommandSource::Core,
-            destructive: true,
-        });
-    }
-    // ── Agents ── (those acting on "the agent" are listed only while the
-    // focused terminal runs one)
-    for (id, title, shortcut) in [
-        (
-            "agent.new",
-            "New Agent…",
-            shortcut(BindableAction::NewAgent),
-        ),
-        ("agent.resume", "Resume Agent Conversation…", None),
-        (
-            "agent.view",
-            "Agent View",
-            shortcut(BindableAction::ToggleAgentView),
-        ),
-        ("agent.view-new", "New Agent View Session", None),
-        ("agent.go-to", "Go to Agent…", None),
-        ("agent.panel", "Show Agents", None),
-        ("agent.split-right", "Split Right with Agent…", None),
-        ("agent.split-down", "Split Down with Agent…", None),
-        (
-            "agent.new-conversation",
-            "Start New Agent Conversation",
-            None,
-        ),
-        ("agent.restart", "Restart Agent", None),
-        ("agent.insert-context", "Send Context to Agent…", None),
-        ("agent.review-changes", "Review Agent Changes…", None),
-        ("agent.stage-changes", "Stage All Agent Changes", None),
-        ("agent.review-diff", "Review Agent Diff", None),
-        ("agent.copy-diff", "Copy Agent Diff", None),
-        ("agent.export", "Export Agent Session", None),
-        ("agent.copy-last-response", "Copy Last Agent Response", None),
-        ("core.toggle-transcript", "Toggle Agent Transcript", None),
-        ("agent.setup-status", "Set Up Agent Status…", None),
-        ("supervisor.start", "Start Supervisor", None),
-        ("supervisor.mode", "Supervisor Mode…", None),
-        ("supervisor.take-over", "Take Over from Supervisor", None),
-        ("supervisor.hand-back", "Hand Back to Supervisor", None),
-        ("supervisor.rules", "Edit Supervisor Rules", None),
-        ("supervisor.stop", "Stop Supervisor", None),
-        ("agent.remove-status", "Remove Agent Status Hooks…", None),
-    ] {
-        commands.push(RegisteredCommand {
-            id: id.into(),
-            title: title.into(),
-            category: "Agents".into(),
-            shortcut,
-            source: CommandSource::Core,
-            destructive: false,
-        });
-    }
-
-    // ── Panes ──
-    commands.push(RegisteredCommand {
-        id: "core.split-vertical".into(),
-        title: "Split Pane Right".into(),
-        category: "Panes".into(),
-        shortcut: shortcut(BindableAction::SplitVertical),
-        source: CommandSource::Core,
-        destructive: false,
-    });
-    commands.push(RegisteredCommand {
-        id: "core.split-horizontal".into(),
-        title: "Split Pane Down".into(),
-        category: "Panes".into(),
-        shortcut: shortcut(BindableAction::SplitHorizontal),
-        source: CommandSource::Core,
-        destructive: false,
-    });
-    commands.push(RegisteredCommand {
-        id: "core.close-pane".into(),
-        title: "Close Pane".into(),
-        category: "Panes".into(),
-        shortcut: shortcut(BindableAction::ClosePane),
-        source: CommandSource::Core,
-        destructive: true,
-    });
-    for (id, title, action) in [
-        (
-            "core.navigate-pane-up",
-            "Navigate Pane Up",
-            BindableAction::NavigatePaneUp,
-        ),
-        (
-            "core.navigate-pane-down",
-            "Navigate Pane Down",
-            BindableAction::NavigatePaneDown,
-        ),
-        (
-            "core.navigate-pane-left",
-            "Navigate Pane Left",
-            BindableAction::NavigatePaneLeft,
-        ),
-        (
-            "core.navigate-pane-right",
-            "Navigate Pane Right",
-            BindableAction::NavigatePaneRight,
-        ),
-    ] {
-        commands.push(RegisteredCommand {
-            id: id.into(),
-            title: title.into(),
-            category: "Panes".into(),
-            shortcut: shortcut(action),
-            source: CommandSource::Core,
-            destructive: false,
-        });
-    }
-    for (id, title, action, destructive) in [
-        (
-            "core.rename-tab",
-            "Rename Tab",
-            BindableAction::RenameTab,
-            false,
-        ),
-        (
-            "core.move-tab-left",
-            "Move Tab Left",
-            BindableAction::MoveTabLeft,
-            false,
-        ),
-        (
-            "core.move-tab-right",
-            "Move Tab Right",
-            BindableAction::MoveTabRight,
-            false,
-        ),
-        (
-            "core.move-tab-next-window",
-            "Move Tab to Next Window",
-            BindableAction::MoveTabToNextWindow,
-            false,
-        ),
-        (
-            "core.toggle-pin-tab",
-            "Pin or Unpin Tab",
-            BindableAction::TogglePinTab,
-            false,
-        ),
-        (
-            "core.toggle-pane-zoom",
-            "Zoom Pane",
-            BindableAction::TogglePaneZoom,
-            false,
-        ),
-        (
-            "core.toggle-pane-read-only",
-            "Toggle Pane Read-only",
-            BindableAction::TogglePaneReadOnly,
-            false,
-        ),
-        (
-            "core.swap-pane-next",
-            "Swap Pane with Next",
-            BindableAction::SwapPaneNext,
-            false,
-        ),
-        (
-            "core.balance-panes",
-            "Balance Panes",
-            BindableAction::BalancePanes,
-            false,
-        ),
-        (
-            "core.move-pane-next-tab",
-            "Move Pane to Next Tab",
-            BindableAction::MovePaneToNextTab,
-            false,
-        ),
-        (
-            "core.move-pane-next-window",
-            "Move Pane to Next Window",
-            BindableAction::MovePaneToNextWindow,
-            false,
-        ),
-        (
-            "core.layout-columns",
-            "Layout: Columns",
-            BindableAction::LayoutColumns,
-            false,
-        ),
-        (
-            "core.layout-rows",
-            "Layout: Rows",
-            BindableAction::LayoutRows,
-            false,
-        ),
-        (
-            "core.layout-grid",
-            "Layout: Grid",
-            BindableAction::LayoutGrid,
-            false,
-        ),
-        (
-            "core.layout-tall",
-            "Layout: Tall",
-            BindableAction::LayoutTall,
-            false,
-        ),
-        (
-            "core.layout-fat",
-            "Layout: Fat",
-            BindableAction::LayoutFat,
-            false,
-        ),
-        (
-            "core.cycle-pane-cwd",
-            "Cycle New Pane Directory",
-            BindableAction::CyclePaneCwdMode,
-            false,
-        ),
-        (
-            "core.toggle-broadcast",
-            "Toggle Broadcast Input",
-            BindableAction::ToggleBroadcast,
-            true,
-        ),
-    ] {
-        commands.push(RegisteredCommand {
-            id: id.into(),
-            title: title.into(),
-            category: if id.contains("tab") && !id.contains("pane") {
-                "Tabs".into()
-            } else {
-                "Panes".into()
-            },
-            shortcut: shortcut(action),
-            source: CommandSource::Core,
-            destructive,
-        });
-    }
-
-    commands.push(RegisteredCommand {
-        id: "core.change-theme".into(),
-        title: "Change Theme…".into(),
-        category: "Appearance".into(),
-        shortcut: None,
-        source: CommandSource::Core,
-        destructive: false,
-    });
-
-    commands
+    core_command_table()
+        .into_iter()
+        // Harvest is an experimental beta and stays out of the palette
+        // unless explicitly enabled in configuration.
+        .filter(|command| harvest_enabled || command.category != CoreCategory::Harvest)
+        .map(|command| {
+            let (source, shortcut) = match command.run {
+                CoreRun::Bound(key) => (
+                    CommandSource::Action(key.to_action()),
+                    shortcuts
+                        .binding_for(key)
+                        .map(|chord| chord.display_string()),
+                ),
+                CoreRun::Unbound(action) => (CommandSource::Action(action), None),
+                CoreRun::Agent => (CommandSource::Core, None),
+            };
+            RegisteredCommand {
+                id: command.id.into(),
+                title: command.title.into(),
+                category: command.category.label().into(),
+                shortcut,
+                source,
+                destructive: command.destructive,
+            }
+        })
+        .collect()
 }
 
 /// Convert a theme slug (e.g., "catppuccin-mocha") to display name ("Catppuccin Mocha")
@@ -1457,7 +1142,7 @@ mod tests {
 
     fn test_palette() -> CommandPalette {
         let mut palette = CommandPalette::new();
-        palette.register_commands(core_commands(true, &ShortcutRegistry::new()));
+        palette.replace_core_commands(core_commands(true, &ShortcutRegistry::new()));
         palette
     }
 
@@ -1472,7 +1157,7 @@ mod tests {
     #[test]
     fn equal_scores_preserve_registration_order_before_and_after_recency_ranking() {
         let mut palette = CommandPalette::new();
-        palette.register_commands(
+        palette.replace_core_commands(
             ["third", "first", "second"]
                 .into_iter()
                 .map(|id| RegisteredCommand {
@@ -1534,118 +1219,50 @@ mod tests {
     }
 
     #[test]
-    fn live_domain_picker_is_discoverable() {
-        let commands = core_commands(false, &ShortcutRegistry::new());
-        assert!(commands.iter().any(|command| {
-            command.id == "core.attach-domain" && command.title == "Attach Live Domain…"
-        }));
-    }
-
-    #[test]
-    fn active_file_upload_cancellation_is_discoverable() {
-        let commands = core_commands(false, &ShortcutRegistry::new());
-        assert!(commands.iter().any(|command| {
-            command.id == "core.cancel-file-upload"
-                && command.title == "Cancel Upload"
-                && command.destructive
-        }));
-    }
-
-    #[test]
-    fn complete_workspace_save_and_manager_are_discoverable() {
-        let commands = core_commands(false, &ShortcutRegistry::new());
-        assert!(commands.iter().any(|command| {
-            command.id == "core.save-workspace"
-                && command.title == "Save Workspace"
-                && command.category == "Workspaces"
-        }));
-        assert!(commands.iter().any(|command| {
-            command.id == "core.workspace-manager"
-                && command.title == "Manage Workspaces…"
-                && command.category == "Workspaces"
-        }));
-    }
-
-    #[test]
-    fn window_controls_are_discoverable() {
-        let commands = core_commands(false, &ShortcutRegistry::new());
-        assert!(
-            commands
-                .iter()
-                .any(|command| command.id == "core.new-window" && command.title == "New Window")
-        );
-        assert!(commands.iter().any(|command| {
-            command.id == "core.toggle-fullscreen"
-                && command.title == "Toggle Fullscreen"
-                && command.shortcut.as_deref() == Some("F11")
-        }));
-        assert!(commands.iter().any(|command| {
-            command.id == "core.move-tab-next-window"
-                && command.title == "Move Tab to Next Window"
-                && command.category == "Tabs"
-        }));
-        assert!(commands.iter().any(|command| {
-            command.id == "core.move-pane-next-window"
-                && command.title == "Move Pane to Next Window"
-                && command.category == "Panes"
-        }));
-    }
-
-    #[test]
-    fn pane_commands_show_their_default_shortcuts() {
-        let commands = core_commands(false, &ShortcutRegistry::new());
-        let pane_commands: Vec<_> = commands
-            .iter()
-            .filter(|command| command.category == "Panes")
-            .collect();
-
-        assert_eq!(pane_commands.len(), 20);
-        assert_eq!(
-            pane_commands
-                .iter()
-                .filter(|command| command.shortcut.is_some())
-                .count(),
-            7
-        );
-        assert!(pane_commands.iter().any(|command| {
-            command.id == "core.split-vertical"
-                && command.shortcut.as_deref() == Some("Alt+Shift+Right")
-        }));
-        for id in [
-            "core.toggle-pane-zoom",
-            "core.toggle-pane-read-only",
-            "core.swap-pane-next",
-            "core.balance-panes",
-            "core.move-pane-next-tab",
-            "core.move-pane-next-window",
-            "core.layout-columns",
-            "core.layout-rows",
-            "core.layout-grid",
-            "core.layout-tall",
-            "core.layout-fat",
-            "core.cycle-pane-cwd",
-            "core.toggle-broadcast",
-        ] {
-            assert!(pane_commands.iter().any(|command| command.id == id));
-        }
-    }
-
-    #[test]
     fn command_shortcut_hints_follow_user_overrides() {
+        let split_shortcut = |registry: &ShortcutRegistry| {
+            core_commands(false, registry)
+                .into_iter()
+                .find(|command| command.id == "core.split-vertical")
+                .unwrap()
+                .shortcut
+        };
         let mut registry = ShortcutRegistry::new();
+        assert_eq!(
+            split_shortcut(&registry).as_deref(),
+            Some("Alt+Shift+Right")
+        );
         registry.set_binding(
             BindableAction::SplitVertical,
             Some(crate::input::keybindings::KeyChord::new(
                 "z", true, true, false, false,
             )),
         );
+        assert_eq!(split_shortcut(&registry).as_deref(), Some("Ctrl+Alt+Z"));
+    }
 
-        let commands = core_commands(false, &registry);
-        let split = commands
-            .iter()
-            .find(|command| command.id == "core.split-vertical")
-            .unwrap();
-        assert_eq!(split.shortcut.as_deref(), Some("Ctrl+Alt+Z"));
+    #[test]
+    fn core_command_ids_are_unique() {
+        // Recency, availability, and accessibility all key on the ID.
+        let commands = core_commands(true, &ShortcutRegistry::new());
+        let ids: std::collections::HashSet<_> =
+            commands.iter().map(|command| command.id.as_str()).collect();
+        assert_eq!(ids.len(), commands.len());
+    }
+
+    #[test]
+    fn built_in_commands_run_typed_actions_and_agent_commands_run_by_id() {
+        let mut palette = test_palette();
+        palette.open();
+        assert!(matches!(
+            palette.execute_command("core.toggle-fullscreen"),
+            Some(PaletteResult::Action(Action::ToggleFullscreen))
+        ));
+        palette.open();
+        assert!(matches!(
+            palette.execute_command("agent.go-to"),
+            Some(PaletteResult::RunCommand(id)) if id == "agent.go-to"
+        ));
     }
 
     #[test]
@@ -1713,7 +1330,7 @@ mod tests {
         let mut palette = test_palette();
         palette.open();
         let result = palette.execute();
-        assert!(matches!(result, PaletteResult::RunAction(_)));
+        assert!(matches!(result, PaletteResult::Action(_)));
         assert!(!palette.recently_used.is_empty());
     }
 
@@ -1748,7 +1365,7 @@ mod tests {
             source: CommandSource::Plugin("claude-code".into()),
             destructive: false,
         }];
-        palette.register_commands(plugin_cmds);
+        palette.replace_plugin_commands(plugin_cmds);
         palette.open();
         palette.insert_query_text("c");
         palette.insert_query_text("l");
@@ -1761,7 +1378,7 @@ mod tests {
     #[test]
     fn replace_plugin_commands_removes_disabled_plugin_sources() {
         let mut palette = CommandPalette::new();
-        palette.register_commands(core_commands(true, &ShortcutRegistry::new()));
+        palette.replace_core_commands(core_commands(true, &ShortcutRegistry::new()));
         palette.replace_plugin_commands(vec![RegisteredCommand {
             id: "codex.open".into(),
             title: "Open Codex".into(),
@@ -1795,7 +1412,7 @@ mod tests {
     #[test]
     fn terminal_profile_commands_replace_cleanly_and_execute_as_app_actions() {
         let mut palette = CommandPalette::new();
-        palette.register_commands(core_commands(true, &ShortcutRegistry::new()));
+        palette.replace_core_commands(core_commands(true, &ShortcutRegistry::new()));
         palette.replace_launch_profile_commands(vec![RegisteredCommand {
             id: "profile.open.dev".into(),
             title: "New Tab: dev".into(),
@@ -1810,7 +1427,7 @@ mod tests {
         palette.insert_query_text("v");
         assert!(matches!(
             palette.execute(),
-            PaletteResult::RunAction(id) if id == "profile.open.dev"
+            PaletteResult::RunCommand(id) if id == "profile.open.dev"
         ));
 
         palette.replace_launch_profile_commands(Vec::new());
@@ -1818,7 +1435,7 @@ mod tests {
             !palette
                 .registry
                 .iter()
-                .any(|command| command.source == CommandSource::LaunchProfiles)
+                .any(|command| matches!(command.source, CommandSource::LaunchProfiles))
         );
         assert!(
             palette
@@ -1831,7 +1448,7 @@ mod tests {
     #[test]
     fn test_execute_plugin_returns_plugin_result() {
         let mut palette = CommandPalette::new();
-        palette.register_commands(vec![RegisteredCommand {
+        palette.replace_plugin_commands(vec![RegisteredCommand {
             id: "test-plugin.action".into(),
             title: "Test Action".into(),
             category: "Test".into(),

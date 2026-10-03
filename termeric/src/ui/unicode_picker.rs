@@ -366,7 +366,7 @@ impl UnicodePicker {
     }
 
     fn resolve(&mut self, result: PaletteResult) -> Option<UnicodePickerSelection> {
-        let PaletteResult::RunAction(id) = result else {
+        let PaletteResult::RunCommand(id) = result else {
             if matches!(result, PaletteResult::Cancelled) {
                 self.close();
             }
@@ -665,7 +665,9 @@ fn ranked_results_owned_bytes(results: &Vec<RankedCharacter>) -> usize {
                     + result.command.shortcut.as_ref().map_or(0, String::capacity)
                     + match &result.command.source {
                         CommandSource::Plugin(plugin) => plugin.capacity(),
-                        CommandSource::Core | CommandSource::LaunchProfiles => 0,
+                        CommandSource::Action(_)
+                        | CommandSource::Core
+                        | CommandSource::LaunchProfiles => 0,
                     }
             })
             .sum::<usize>()

@@ -405,7 +405,7 @@ impl DomainPicker {
     }
 
     fn resolve_palette_result(&mut self, result: PaletteResult) -> Option<DomainPickerCommand> {
-        let PaletteResult::RunAction(id) = result else {
+        let PaletteResult::RunCommand(id) = result else {
             if matches!(result, PaletteResult::Cancelled) {
                 self.close();
             }

@@ -541,13 +541,11 @@ impl App {
     /// Run one `agent.*` palette command. Returns false for other ids.
     pub(super) fn run_agent_command(&mut self, id: &str) -> bool {
         match id {
-            "agent.new" => self.open_agent_picker(AgentPlacement::NewTab),
             "agent.resume" => self.open_agent_picker(AgentPlacement::Resume),
             "agent.split-right" => self.open_agent_picker(AgentPlacement::SplitRight),
             "agent.split-down" => self.open_agent_picker(AgentPlacement::SplitDown),
             "agent.go-to" => self.open_agent_list(),
             "agent.panel" => self.toggle_agents_panel(),
-            "agent.view" => self.toggle_agent_view(),
             "agent.view-new" => self.new_agent_session_page(),
             "supervisor.start" => self.start_supervisor(),
             "supervisor.mode" => self.open_supervisor_mode_picker(),
