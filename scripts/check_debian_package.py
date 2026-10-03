@@ -18,6 +18,8 @@ import sys
 import tempfile
 
 
+ROOT = Path(__file__).resolve().parent.parent
+CARGO_LOCK = ROOT / "Cargo.lock"
 PACKAGE_NAME = "termeric"
 TERMINFO_NAME = "xterm-termeric"
 SOFTWARE_RENDERER_PACKAGE = "mesa-vulkan-drivers"
@@ -50,6 +52,37 @@ def validate_icons(root: Path) -> None:
         height = int.from_bytes(header[20:24], "big")
         if (width, height) != (size, size):
             raise CheckError(f"/{relative} is {width}x{height}, expected {size}x{size}")
+
+
+def locked_libgit2_version(lock_text: str) -> str:
+    """The libgit2 release that the locked libgit2-sys bundles (0.17.0+1.8.1 is 1.8.1)."""
+    versions = re.findall(
+        r'^name = "libgit2-sys"\nversion = "[^"+]+\+([^"]+)"$', lock_text, re.MULTILINE
+    )
+    if len(versions) != 1:
+        raise CheckError(
+            "expected one libgit2-sys entry with a bundled libgit2 version in Cargo.lock, "
+            f"found {len(versions)}"
+        )
+    return versions[0]
+
+
+def validate_notice(notice_text: str, lock_text: str) -> None:
+    """The third-party notice carries the Unicode license and names the libgit2 that is linked.
+
+    The libgit2 section is pasted by hand into packaging/notices/notices.hbs, so a
+    libgit2-sys upgrade leaves it stale until someone refreshes it.
+    """
+    if "Unicode License v3" not in notice_text:
+        raise CheckError("third-party notice omits the Unicode License v3")
+    expected = locked_libgit2_version(lock_text)
+    named = re.findall(r"\blinks libgit2 (\d+\.\d+\.\d+)\b", notice_text)
+    if named != [expected]:
+        raise CheckError(
+            f"third-party notice names libgit2 {', '.join(named) or 'nowhere'}, but Cargo.lock "
+            f"bundles libgit2 {expected}; refresh the libgit2 section of "
+            "packaging/notices/notices.hbs (see Dependencies in CONTRIBUTING.md)"
+        )
 
 
 def require_tool(name: str) -> str:
@@ -140,8 +173,7 @@ def validate_layout(root: Path, *, exercise_native_tools: bool = True) -> None:
     desktop = root / "usr/share/applications/termeric.desktop"
     validate_desktop_entry(desktop)
     notice = root / "usr/share/doc/termeric/THIRD_PARTY_NOTICES.md"
-    if "Unicode License v3" not in notice.read_text(encoding="utf-8"):
-        raise CheckError("installed third-party notice omits the Unicode License v3")
+    validate_notice(notice.read_text(encoding="utf-8"), CARGO_LOCK.read_text(encoding="utf-8"))
     if not exercise_native_tools:
         return
 

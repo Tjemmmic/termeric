@@ -43,7 +43,8 @@ Add tests with your change. A bug fix should come with a test that fails without
 `Cargo.lock` is committed, and builds use `--locked`. Update dependencies deliberately, in their own commit, and then:
 
 1. Run `cargo audit` and address new advisories.
-2. Regenerate the shipped license notices, which list every crate compiled into the binary:
+2. If the libgit2 version bundled by `libgit2-sys` changed (the part after `+` in its `Cargo.lock` version, such as `0.17.0+1.8.1`), refresh the hand-maintained libgit2 section of `packaging/notices/notices.hbs`: name the new version in its first sentence and replace the license text with that release's `libgit2/COPYING` from the crate source (`~/.cargo/registry/src/*/libgit2-sys-*/libgit2/COPYING`). The script tests fail until the notice names the version `Cargo.lock` bundles.
+3. Regenerate the shipped license notices, which list every crate compiled into the binary:
 
 ```bash
 cargo install --locked --features cli cargo-about

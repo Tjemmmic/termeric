@@ -18,6 +18,7 @@ import tempfile
 
 if __package__:
     from scripts.check_debian_package import (
+        CARGO_LOCK,
         ICON_FILES,
         CheckError,
         parse_os_release,
@@ -25,9 +26,11 @@ if __package__:
         run,
         validate_desktop_entry,
         validate_icons,
+        validate_notice,
     )
 else:
     from check_debian_package import (
+        CARGO_LOCK,
         ICON_FILES,
         CheckError,
         parse_os_release,
@@ -35,6 +38,7 @@ else:
         run,
         validate_desktop_entry,
         validate_icons,
+        validate_notice,
     )
 
 
@@ -208,8 +212,7 @@ def validate_layout(root: Path, *, exercise_native_tools: bool = True) -> None:
     desktop = root / "usr/share/applications/termeric.desktop"
     validate_desktop_entry(desktop)
     notice = root / "usr/share/doc/termeric/THIRD_PARTY_NOTICES.md"
-    if "Unicode License v3" not in notice.read_text(encoding="utf-8"):
-        raise CheckError("installed third-party notice omits the Unicode License v3")
+    validate_notice(notice.read_text(encoding="utf-8"), CARGO_LOCK.read_text(encoding="utf-8"))
     if not exercise_native_tools:
         return
     run([require_tool("desktop-file-validate"), str(desktop)])

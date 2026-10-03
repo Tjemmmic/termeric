@@ -6,14 +6,18 @@ import unittest
 from unittest import mock
 
 from scripts.check_debian_package import (
+    CARGO_LOCK,
+    ROOT,
     CheckError,
     EXPECTED_FILES,
     ICON_FILES,
+    locked_libgit2_version,
     parse_desktop_entry,
     parse_os_release,
     validate_package_metadata,
     validate_desktop_entry,
     validate_layout,
+    validate_notice,
 )
 
 
@@ -31,6 +35,19 @@ Actions=NewWindow;
 Name=New Window
 Exec=termeric --new-window
 """
+
+
+LOCK_FIXTURE = """\
+[[package]]
+name = "libgit2-sys"
+version = "0.17.0+1.8.1"
+"""
+
+# A notice that passes validate_notice against the repository's Cargo.lock.
+NOTICE_FIXTURE = (
+    "Unicode License v3\nstatically links libgit2 "
+    f"{locked_libgit2_version(CARGO_LOCK.read_text(encoding='utf-8'))}, built from\n"
+).encode()
 
 
 def png_fixture(relative: str) -> bytes:
@@ -53,7 +70,7 @@ class DebianPackageCheckTests(unittest.TestCase):
                 elif relative.endswith(".desktop"):
                     contents = DESKTOP_ENTRY.encode()
                 elif relative.endswith("THIRD_PARTY_NOTICES.md"):
-                    contents = b"Unicode License v3\n"
+                    contents = NOTICE_FIXTURE
                 else:
                     contents = b"fixture"
                 path.write_bytes(contents)
@@ -65,6 +82,24 @@ class DebianPackageCheckTests(unittest.TestCase):
             notice.write_text("missing license")
             with self.assertRaisesRegex(CheckError, "Unicode License v3"):
                 validate_layout(root, exercise_native_tools=False)
+
+    def test_notice_must_name_the_libgit2_that_cargo_lock_bundles(self):
+        self.assertEqual(locked_libgit2_version(LOCK_FIXTURE), "1.8.1")
+        validate_notice("Unicode License v3\nstatically links libgit2 1.8.1, built", LOCK_FIXTURE)
+
+        stale = LOCK_FIXTURE.replace("0.17.0+1.8.1", "0.18.0+1.9.0")
+        with self.assertRaisesRegex(CheckError, "names libgit2 1.8.1, but Cargo.lock bundles libgit2 1.9.0"):
+            validate_notice("Unicode License v3\nstatically links libgit2 1.8.1, built", stale)
+        with self.assertRaisesRegex(CheckError, "names libgit2 nowhere"):
+            validate_notice("Unicode License v3\n", LOCK_FIXTURE)
+        with self.assertRaisesRegex(CheckError, "found 0"):
+            locked_libgit2_version('name = "git2"\nversion = "0.19.0"\n')
+
+    def test_repository_notices_name_the_libgit2_that_cargo_lock_bundles(self):
+        lock_text = CARGO_LOCK.read_text(encoding="utf-8")
+        for notice in (ROOT / "packaging/notices/notices.hbs", ROOT / "termeric/THIRD_PARTY_NOTICES.md"):
+            with self.subTest(notice=notice.name):
+                validate_notice(notice.read_text(encoding="utf-8"), lock_text)
 
     def test_layout_contract_rejects_an_icon_in_the_wrong_size_directory(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -79,7 +114,7 @@ class DebianPackageCheckTests(unittest.TestCase):
                 elif relative.endswith(".desktop"):
                     contents = DESKTOP_ENTRY.encode()
                 elif relative.endswith("THIRD_PARTY_NOTICES.md"):
-                    contents = b"Unicode License v3\n"
+                    contents = NOTICE_FIXTURE
                 else:
                     contents = b"fixture"
                 path.write_bytes(contents)
@@ -104,7 +139,7 @@ class DebianPackageCheckTests(unittest.TestCase):
                 elif relative.endswith(".png"):
                     contents = png_fixture(relative)
                 elif relative.endswith("THIRD_PARTY_NOTICES.md"):
-                    contents = b"Unicode License v3\n"
+                    contents = NOTICE_FIXTURE
                 path.write_bytes(contents)
                 path.chmod(0o644 if relative == "usr/bin/termeric" else mode)
 

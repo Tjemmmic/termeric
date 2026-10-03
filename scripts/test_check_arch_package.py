@@ -4,7 +4,7 @@ import stat
 import tempfile
 import unittest
 
-from scripts.test_check_debian_package import png_fixture
+from scripts.test_check_debian_package import NOTICE_FIXTURE, png_fixture
 from scripts.check_arch_package import (
     CheckError,
     EXPECTED_FILES,
@@ -155,7 +155,7 @@ class ArchPackageCheckTests(unittest.TestCase):
                 elif relative.endswith(".desktop"):
                     contents = DESKTOP_ENTRY.encode()
                 elif relative.endswith("THIRD_PARTY_NOTICES.md"):
-                    contents = b"Unicode License v3\n"
+                    contents = NOTICE_FIXTURE
                 else:
                     contents = b"fixture"
                 path.write_bytes(contents)
@@ -179,7 +179,7 @@ class ArchPackageCheckTests(unittest.TestCase):
                 elif relative.endswith(".png"):
                     contents = png_fixture(relative)
                 elif relative.endswith("THIRD_PARTY_NOTICES.md"):
-                    contents = b"Unicode License v3\n"
+                    contents = NOTICE_FIXTURE
                 path.write_bytes(contents)
                 path.chmod(0o777 if relative == "usr/bin/termeric" else mode)
             with self.assertRaisesRegex(CheckError, "mode 777, expected 755"):
