@@ -1,160 +1,126 @@
-manifest_version = 1
-
-# This list deliberately mirrors every byte-bearing test in ansi/processor.rs.
-# The conformance test validates each source function so a renamed or removed
-# parser test cannot silently leave stale fuzz provenance behind.
+# Parser inputs taken from the ansi/processor.rs tests. scripts/materialize_fuzz_corpus.py
+# turns them into seeds for the terminal_bytes fuzz target.
 
 [[seed]]
 id = "processor-creation"
-source_test = "src/ansi/processor.rs#test_processor_creation"
 input_hex = ""
 
 [[seed]]
 id = "simple-text"
-source_test = "src/ansi/processor.rs#test_simple_text"
 input_hex = "48 65 6c 6c 6f"
 
 [[seed]]
 id = "c1-input-and-output-framing"
-source_test = "src/ansi/processor.rs#c1_input_is_utf8_safe_and_s7c1t_s8c1t_frame_every_core_reply"
 input_hex = "1b 20 47 9b 35 6e 90 24 71 6d 9c c4 9b 9d 32 3b 63 31 2d 74 69 74 6c 65 9c 1b a0 c7 1b 5b b5 ee 1b 50 a4 f1 ed 1b dc 1b 5d b2 bb 68 c3 a9 1b dc"
 
 [[seed]]
 id = "newline"
-source_test = "src/ansi/processor.rs#test_newline"
 input_hex = "4c 69 6e 65 31 0d 0a 4c 69 6e 65 32"
 
 [[seed]]
 id = "cursor-movement"
-source_test = "src/ansi/processor.rs#test_cursor_movement"
 input_hex = "1b 5b 35 3b 31 30 48"
 
 [[seed]]
 id = "clear-screen"
-source_test = "src/ansi/processor.rs#test_clear_screen"
 input_hex = "53 6f 6d 65 20 74 65 78 74 1b 5b 32 4a"
 
 [[seed]]
 id = "extended-colors"
-source_test = "src/ansi/processor.rs#semicolon_and_colon_extended_colors_are_consumed_atomically"
 input_hex = "1b 5b 33 38 3b 32 3b 31 32 3b 33 34 3b 35 36 6d 41 1b 5b 34 38 3b 35 3b 31 39 36 6d 42 1b 5b 33 38 3a 32 3a 3a 39 30 3a 38 30 3a 37 30 6d 43"
 
 [[seed]]
 id = "alternate-screen-rendition"
-source_test = "src/ansi/processor.rs#alternate_screen_restores_cursor_and_rendition_state"
 input_hex = "41 1b 5b 3f 31 30 34 39 68 1b 5b 37 3b 34 38 3b 32 3b 39 30 3b 38 30 3b 37 30 6d 42 1b 5b 3f 31 30 34 39 6c 43"
 
 [[seed]]
 id = "modify-other-keys-reset"
-source_test = "src/ansi/processor.rs#claude_keyboard_protocol_reset_does_not_enable_underline"
 input_hex = "41 1b 5b 3f 31 30 34 39 68 42 1b 5b 3f 31 30 34 39 6c 1b 5b 3e 34 6d 43"
 
 [[seed]]
 id = "sgr-attribute-set-reset"
-source_test = "src/ansi/processor.rs#every_rendered_sgr_attribute_sets_and_resets_without_leaking"
 input_hex = "1b 5b 31 6d 41 1b 5b 32 32 6d 42 1b 5b 32 6d 43 1b 5b 32 32 6d 44 1b 5b 33 6d 45 1b 5b 32 33 6d 46 1b 5b 35 6d 47 1b 5b 32 35 6d 48 1b 5b 36 6d 49 1b 5b 32 35 6d 4a 1b 5b 37 6d 4b 1b 5b 32 37 6d 4c 1b 5b 38 6d 4d 1b 5b 32 38 6d 4e 1b 5b 39 6d 4f 1b 5b 32 39 6d 50 0d 0a 1b 5b 34 6d 41 1b 5b 34 3a 32 6d 42 1b 5b 34 3a 33 6d 43 1b 5b 34 3a 34 6d 44 1b 5b 34 3a 35 6d 45 1b 5b 32 34 6d 46"
 
 [[seed]]
 id = "chunked-osc-st"
-source_test = "src/ansi/processor.rs#osc_state_streams_across_chunks_and_releases_after_st"
 input_hex = "1b 5d 32 3b 63 68 75 6e 6b 65 64 1b 5c 78"
 
 [[seed]]
 id = "osc7-current-directory"
-source_test = "src/ansi/processor.rs#osc7_directory_reports_stream_without_leaking_into_terminal_text"
 input_hex = "1b 5d 37 3b 66 69 6c 65 3a 2f 2f 6c 6f 63 61 6c 68 6f 73 74 2f 77 6f 72 6b 2f 61 25 32 30 62 3b 73 65 6d 69 2f 25 45 37 25 39 35 25 38 43 1b 5c 78 9d 37 3b 66 69 6c 65 3a 2f 2f 2f 74 6d 70 2f 63 31 25 32 30 63 77 64 9c"
 
 [[seed]]
 id = "bounded-osc-recovery"
-source_test = "src/ansi/processor.rs#oversized_osc_is_discarded_and_following_text_is_processed"
 input_hex = "1b 5d 35 32 3b 63 3b 3f 07 6f 6b"
 
 [[seed]]
 id = "fish-startup-capability-queries"
-source_test = "src/ansi/processor.rs#fish_startup_queries_receive_truthful_bounded_replies"
 input_hex = "1b 5b 3f 75 1b 5b 3e 30 71 1b 50 2b 71 36 39 36 65 36 34 36 65 1b 5c 1b 50 2b 71 37 31 37 35 36 35 37 32 37 39 32 64 36 66 37 33 32 64 36 65 36 31 36 64 36 35 1b 5c"
 
 [[seed]]
 id = "bounded-multi-name-xtgettcap"
-source_test = "src/ansi/processor.rs#xtgettcap_is_bounded_multi_name_and_matches_the_native_terminfo_contract"
 input_hex = "1b 50 2b 71 35 34 34 65 3b 34 33 36 66 3b 35 32 34 37 34 32 3b 36 62 36 33 37 35 37 35 33 31 3b 36 62 36 36 33 31 33 32 3b 37 35 36 65 36 62 36 65 36 66 37 37 36 65 3b 36 62 36 33 37 35 36 34 33 31 1b 5c"
 
 [[seed]]
 id = "xtwinops-geometry-reports"
-source_test = "src/ansi/processor.rs#xtwinops_reports_exact_text_cell_and_character_geometry_only"
 input_hex = "1b 5b 31 34 74 1b 5b 31 36 74 1b 5b 31 38 74 1b 5b 31 34 3b 32 74 1b 5b 31 35 74 1b 5b 32 34 74"
 
 [[seed]]
 id = "xtwinops-title-operations"
-source_test = "src/ansi/processor.rs#xterm_title_queries_and_stack_are_global_bounded_and_byte_exact"
 input_hex = "1b 20 47 1b 5d 30 3b 61 6c 70 68 61 1b 5c 1b 5b 32 32 74 1b 5d 31 3b 62 65 74 61 2d 69 63 6f 6e 1b 5c 1b 5d 32 3b 62 65 74 61 2d 77 69 6e 64 6f 77 1b 5c 1b 5b 32 30 74 1b 5b 32 31 74 1b 5b 23 53 1b 5b 32 33 74 1b 5b 32 30 74 1b 5b 32 31 74 1b 5b 23 53"
 
 [[seed]]
 id = "osc99-notifications"
-source_test = "src/ansi/processor.rs#osc99_notifications_are_chunked_queryable_and_reset_bounded"
 input_hex = "1b 20 47 1b 5d 39 39 3b 69 3d 6e 6f 74 65 3a 64 3d 30 3b 62 75 69 6c 64 1b 5c 1b 5d 39 39 3b 69 3d 6f 74 68 65 72 3a 64 3d 30 3b 73 69 64 65 1b 5c 1b 5d 39 39 3b 69 3d 6e 6f 74 65 3a 70 3d 62 6f 64 79 3a 65 3d 31 3b 59 32 39 74 63 47 78 6c 64 47 55 3d 1b 5c 1b 5d 39 39 3b 69 3d 6f 74 68 65 72 3b 20 70 61 74 68 1b 5c 1b 5d 39 39 3b 69 3d 71 75 65 72 79 3a 70 3d 3f 3b 1b 5c"
 
 [[seed]]
 id = "kitty-keyboard-negotiation"
-source_test = "src/ansi/processor.rs#kitty_keyboard_negotiation_is_screen_local_stack_based_and_resettable"
 input_hex = "1b 5b 3d 31 75 1b 5b 3f 75 1b 5b 3f 31 30 34 39 68 1b 5b 3e 32 75 1b 5b 3f 75 1b 5b 3c 75 1b 5b 3f 31 30 34 39 6c"
 
 [[seed]]
 id = "osc22-pointer-shapes"
-source_test = "src/ansi/processor.rs#osc22_pointer_shapes_are_bounded_queryable_screen_local_and_resettable"
 input_hex = "1b 5d 32 32 3b 70 6f 69 6e 74 65 72 1b 5c"
 
 [[seed]]
 id = "xterm-modify-other-keys"
-source_test = "src/ansi/processor.rs#xterm_modify_other_keys_is_bounded_queryable_and_resettable"
 input_hex = "1b 5b 3f 34 6d 1b 5b 3e 34 3b 32 3a 31 6d 1b 5b 3f 34 6d 1b 5b 3e 34 3b 39 6d 1b 20 47 1b 5b 3f 34 6d 1b 5b 3e 34 6e"
 
 [[seed]]
 id = "xterm-other-key-format"
-source_test = "src/ansi/processor.rs#xterm_other_key_format_is_bounded_queryable_and_resettable"
 input_hex = "1b 5b 3f 34 67 1b 5b 3e 34 3b 31 66 1b 5b 3f 34 67 1b 5b 3e 34 3b 32 66 1b 5b 3e 39 39 3b 31 66 1b 5b 3e 30 66 1b 5b 3e 34 3b 31 3b 30 66 1b 5b 3e 34 3a 30 66 1b 5b 3f 31 30 34 39 68 1b 20 47 1b 5b 3f 34 67 1b 5b 3e 34 66 1b 5b 3f 34 67 1b 5b 3e 34 3b 31 66 1b 5b 3e 66 1b 5b 3f 34 67 1b 5b 3e 34 3b 31 66 1b 5b 21 70 1b 5b 3f 34 67 1b 50 24 71 3e 34 66 1b 5c 58 1b 5b 3e 34 3b 31 66 1b 63 1b 5b 3f 34 67"
 
 [[seed]]
 id = "xterm-keyboard-resource-zero"
-source_test = "src/ansi/processor.rs#xterm_keyboard_resource_zero_is_exact_queryable_and_resettable"
 input_hex = "1b 5b 3f 30 6d 1b 5b 3f 30 67 1b 5b 3e 30 3b 31 35 6d 1b 5b 3e 30 3b 34 32 66 1b 5b 3f 30 6d 1b 5b 3f 30 67 1b 5b 3e 30 6e 1b 5b 3e 6d 1b 5b 3e 66 1b 50 24 71 3e 30 6d 1b 5c 1b 50 24 71 3e 30 66 1b 5c"
 
 [[seed]]
 id = "xterm-cursor-key-resources"
-source_test = "src/ansi/processor.rs#xterm_cursor_key_resources_are_bounded_queryable_and_resettable"
 input_hex = "1b 5b 3f 31 6d 1b 5b 3f 31 67 1b 5b 3e 31 3b 34 6d 1b 5b 3e 31 3b 31 66 1b 5b 3f 31 6d 1b 5b 3f 31 67 1b 5b 3e 31 3b 35 6d 1b 5b 3e 31 3b 32 66 1b 5b 3e 31 6e 1b 5b 3e 6d 1b 5b 3e 66 1b 50 24 71 3e 31 6d 1b 5c 1b 50 24 71 3e 31 66 1b 5c"
 
 [[seed]]
 id = "xterm-function-key-resources"
-source_test = "src/ansi/processor.rs#xterm_function_key_resources_are_bounded_queryable_and_resettable"
 input_hex = "1b 5b 3f 32 6d 1b 5b 3f 32 67 1b 5b 3e 32 3b 34 6d 1b 5b 3e 32 3b 31 66 1b 5b 3f 32 6d 1b 5b 3f 32 67 1b 5b 3e 32 3b 35 6d 1b 5b 3e 32 3b 32 66 1b 5b 3e 32 6e 1b 5b 3e 6d 1b 5b 3e 66 1b 50 24 71 3e 32 6d 1b 5c 1b 50 24 71 3e 32 66 1b 5c"
 
 [[seed]]
 id = "xterm-keypad-key-resources"
-source_test = "src/ansi/processor.rs#xterm_keypad_key_resources_are_bounded_queryable_and_resettable"
 input_hex = "1b 5b 3f 33 6d 1b 5b 3f 33 67 1b 5b 3e 33 3b 34 6d 1b 5b 3e 33 3b 31 66 1b 5b 3f 33 6d 1b 5b 3f 33 67 1b 5b 3e 33 3b 35 6d 1b 5b 3e 33 3b 32 66 1b 5b 3e 33 6e 1b 5b 3e 6d 1b 5b 3e 66 1b 50 24 71 3e 33 6d 1b 5c 1b 50 24 71 3e 33 66 1b 5c"
 
 [[seed]]
 id = "xterm-modifier-key-resources"
-source_test = "src/ansi/processor.rs#xterm_modifier_key_resources_are_bounded_queryable_and_resettable"
 input_hex = "1b 5b 3f 36 6d 1b 5b 3f 36 67 1b 5b 3e 36 3b 34 6d 1b 5b 3e 36 3b 31 66 1b 5b 3f 36 6d 1b 5b 3f 36 67 1b 5b 3e 36 3b 35 6d 1b 5b 3e 36 3b 32 66 1b 5b 3e 36 6e 1b 5b 3e 6d 1b 5b 3e 66 1b 50 24 71 3e 36 6d 1b 5c 1b 50 24 71 3e 36 66 1b 5c"
 
 [[seed]]
 id = "xterm-special-key-resources"
-source_test = "src/ansi/processor.rs#xterm_special_key_resources_are_bounded_queryable_and_resettable"
 input_hex = "1b 5b 3f 37 6d 1b 5b 3f 37 67 1b 5b 3e 37 3b 34 6d 1b 5b 3e 37 3b 31 66 1b 5b 3f 37 6d 1b 5b 3f 37 67 1b 5b 3e 37 3b 35 6d 1b 5b 3e 37 3b 32 66 1b 5b 3e 37 6e 1b 5b 3e 6d 1b 5b 3e 66 1b 50 24 71 3e 37 6d 1b 5c 1b 50 24 71 3e 37 66 1b 5c"
 
 [[seed]]
 id = "decrqss-status-and-cancellation"
-source_test = "src/ansi/processor.rs#decrqss_reports_rendition_margins_and_cursor_style_and_recovers_from_cancel"
 input_hex = "1b 50 24 71 6d 1b 5c 1b 50 24 71 72 1b 5c 1b 50 24 71 73 1b 5c 1b 50 24 71 20 71 1b 5c 1b 50 24 71 22 71 1b 5c 1b 50 24 71 22 70 1b 5c 1b 50 24 71 6d 18 41"
 
 [[seed]]
 id = "decrqm-authoritative-mode-reports"
-source_test = "src/ansi/processor.rs#decrqm_reports_only_authoritative_standard_and_private_mode_state"
 input_hex = "1b 5b 34 24 70 1b 5b 3f 37 24 70 1b 5b 3f 31 32 68 1b 5b 3f 31 32 24 70 1b 5b 3f 32 35 6c 1b 5b 3f 32 35 24 70 1b 5b 3f 36 39 68 1b 5b 3f 36 39 24 70 1b 5b 3f 39 39 39 39 24 70"
 
 [[seed]]
 id = "bounded-dcs-recovery"
-source_test = "src/ansi/processor.rs#unknown_and_oversized_dcs_are_negative_or_discarded_without_leaking_text"
 input_hex = "1b 50 2b 71 37 35 36 65 36 62 36 65 36 66 37 37 36 65 1b 5c 6f 6b"

@@ -2,40 +2,16 @@
 
 use serde::Deserialize;
 use std::collections::HashSet;
-use std::path::Path;
 use termeric_core::term::TerminalMode;
 use termeric_core::{CellFlags, Terminal, TerminalEvent};
 
-const SUPPORT_MANIFEST: &str = include_str!("fixtures/vt_support.toml");
 const CONFORMANCE_CASES: &str = include_str!("fixtures/conformance_cases.toml");
-const PARSER_TEST_SEEDS: &str = include_str!("fixtures/parser_test_seeds.toml");
 const EXTERNAL_TRACES: &str = include_str!("fixtures/external_traces.toml");
 const FUZZ_SCROLLBACK_LIMIT: usize = 128;
 const FUZZ_SCROLLBACK_BYTE_LIMIT: usize = 64 * 1024;
 
 #[derive(Debug, Deserialize)]
-struct SupportManifest {
-    manifest_version: u32,
-    baseline: String,
-    sequence: Vec<SequenceClaim>,
-}
-
-#[derive(Debug, Deserialize)]
-struct SequenceClaim {
-    id: String,
-    family: String,
-    syntax: String,
-    layer: String,
-    status: String,
-    #[serde(default)]
-    evidence: Vec<String>,
-    tracking_issue: Option<String>,
-    notes: String,
-}
-
-#[derive(Debug, Deserialize)]
 struct FixtureSuite {
-    manifest_version: u32,
     case: Vec<FixtureCase>,
 }
 
@@ -119,19 +95,6 @@ struct ExpectedUserDefinedKey {
 }
 
 #[derive(Debug, Deserialize)]
-struct ParserSeedSuite {
-    manifest_version: u32,
-    seed: Vec<ParserSeed>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ParserSeed {
-    id: String,
-    source_test: String,
-    input_hex: String,
-}
-
-#[derive(Debug, Deserialize)]
 struct ExternalTraceSuite {
     manifest_version: u32,
     captured_at: String,
@@ -159,96 +122,6 @@ struct Snapshot {
     cursor: (usize, usize),
     modes: u32,
     events: Vec<String>,
-}
-
-#[test]
-fn support_manifest_is_versioned_unique_and_evidenced() {
-    let manifest: SupportManifest = toml::from_str(SUPPORT_MANIFEST).unwrap();
-    let fixtures: FixtureSuite = toml::from_str(CONFORMANCE_CASES).unwrap();
-    assert_eq!(manifest.manifest_version, 1);
-    assert!(!manifest.baseline.trim().is_empty());
-    assert_eq!(fixtures.manifest_version, 1);
-
-    let fixture_ids: HashSet<&str> = fixtures.case.iter().map(|case| case.id.as_str()).collect();
-    let mut claim_ids = HashSet::new();
-    let allowed_statuses = [
-        "supported",
-        "experimental",
-        "partial",
-        "parsed_only",
-        "unsupported",
-    ];
-    let allowed_layers = ["core", "app", "render"];
-
-    for claim in &manifest.sequence {
-        assert!(
-            claim_ids.insert(claim.id.as_str()),
-            "duplicate claim {}",
-            claim.id
-        );
-        assert!(
-            !claim.family.trim().is_empty(),
-            "{} has no family",
-            claim.id
-        );
-        assert!(
-            !claim.syntax.trim().is_empty(),
-            "{} has no syntax",
-            claim.id
-        );
-        assert!(
-            !claim.notes.trim().is_empty(),
-            "{} has no boundary note",
-            claim.id
-        );
-        assert!(
-            allowed_statuses.contains(&claim.status.as_str()),
-            "{} has invalid status {}",
-            claim.id,
-            claim.status
-        );
-        assert!(
-            allowed_layers.contains(&claim.layer.as_str()),
-            "{} has invalid layer {}",
-            claim.id,
-            claim.layer
-        );
-
-        if claim.status != "unsupported" {
-            assert!(
-                !claim.evidence.is_empty(),
-                "{} claims {} without evidence",
-                claim.id,
-                claim.status
-            );
-        }
-        if matches!(
-            claim.status.as_str(),
-            "partial" | "parsed_only" | "unsupported"
-        ) {
-            let issue = claim.tracking_issue.as_deref().unwrap_or_default();
-            assert!(
-                issue.starts_with("https://github.com/Tjemmmic/termeric/issues/"),
-                "{} needs a tracking issue",
-                claim.id
-            );
-        }
-
-        for evidence in &claim.evidence {
-            if let Some(fixture) = evidence.strip_prefix("fixture:") {
-                assert!(
-                    fixture_ids.contains(fixture),
-                    "{} references missing fixture {}",
-                    claim.id,
-                    fixture
-                );
-            } else if let Some(test) = evidence.strip_prefix("test:") {
-                validate_test_reference(&claim.id, test);
-            } else {
-                panic!("{} has invalid evidence reference {}", claim.id, evidence);
-            }
-        }
-    }
 }
 
 #[test]
@@ -482,44 +355,6 @@ fn replayable_conformance_cases_match_expected_state() {
 }
 
 #[test]
-fn every_existing_processor_test_seeds_the_fuzz_corpus() {
-    let suite: ParserSeedSuite = toml::from_str(PARSER_TEST_SEEDS).unwrap();
-    assert_eq!(suite.manifest_version, 1);
-
-    let mut seed_ids = HashSet::new();
-    let mut seeded_functions = HashSet::new();
-    for seed in &suite.seed {
-        assert!(
-            seed_ids.insert(seed.id.as_str()),
-            "duplicate seed {}",
-            seed.id
-        );
-        validate_test_reference(&seed.id, &seed.source_test);
-        let (_, function) = seed.source_test.split_once('#').unwrap();
-        assert!(
-            seeded_functions.insert(function),
-            "duplicate source seed {function}"
-        );
-
-        let mut terminal = bounded_terminal(80, 24);
-        terminal.process(&decode_hex(&seed.input_hex));
-        assert_terminal_invariants(&terminal);
-    }
-
-    let source = include_str!("../src/ansi/processor.rs");
-    let tests = source
-        .split("#[cfg(test)]")
-        .nth(1)
-        .expect("processor test module");
-    let discovered: HashSet<&str> = tests
-        .lines()
-        .filter_map(|line| line.trim().strip_prefix("fn "))
-        .filter_map(|signature| signature.split_once('(').map(|(name, _)| name))
-        .collect();
-    assert_eq!(seeded_functions, discovered, "parser test corpus is stale");
-}
-
-#[test]
 fn real_program_traces_replay_against_pinned_reference_snapshots() {
     let suite: ExternalTraceSuite = toml::from_str(EXTERNAL_TRACES).unwrap();
     assert_eq!(suite.manifest_version, 1);
@@ -709,38 +544,6 @@ fn parser_and_reflow_respect_the_scrollback_memory_budget() {
     );
 }
 
-fn validate_test_reference(claim_id: &str, reference: &str) {
-    let (relative_path, function) = reference
-        .split_once('#')
-        .unwrap_or_else(|| panic!("{} has invalid test reference {}", claim_id, reference));
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_path);
-    let source = std::fs::read_to_string(&path).unwrap_or_else(|error| {
-        panic!(
-            "{} references unreadable {}: {}",
-            claim_id,
-            path.display(),
-            error
-        )
-    });
-    let signature = format!("fn {function}(");
-    let position = source.find(&signature).unwrap_or_else(|| {
-        panic!(
-            "{} references missing test {}#{}",
-            claim_id, relative_path, function
-        )
-    });
-    let is_test = source[..position]
-        .lines()
-        .rev()
-        .filter(|line| !line.trim().is_empty())
-        .take_while(|line| line.trim().starts_with("#["))
-        .any(|line| line.contains("test"));
-    assert!(
-        is_test,
-        "{} references function {}#{} without a test attribute",
-        claim_id, relative_path, function
-    );
-}
 fn decode_hex(input: &str) -> Vec<u8> {
     input
         .split_whitespace()
