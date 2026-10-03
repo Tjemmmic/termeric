@@ -231,26 +231,11 @@ impl UrlDetector {
                     "trusted terminal directory must be absolute",
                 ));
             }
-            #[cfg(target_os = "windows")]
-            if url.as_bytes().get(1) == Some(&b':') {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "drive-relative opener paths are ambiguous; use an absolute path",
-                ));
-            }
             Some(directory)
         } else {
             None
         };
-        #[cfg(target_os = "linux")]
         let mut command = std::process::Command::new("xdg-open");
-
-        #[cfg(target_os = "macos")]
-        let mut command = std::process::Command::new("open");
-
-        #[cfg(target_os = "windows")]
-        let mut command = std::process::Command::new("explorer.exe");
-
         command.arg(url);
         if let Some(directory) = directory {
             command.current_dir(directory);
@@ -261,10 +246,6 @@ impl UrlDetector {
     fn is_relative_path(target: &str) -> bool {
         if Path::new(target).is_absolute() {
             return false;
-        }
-        #[cfg(target_os = "windows")]
-        if target.as_bytes().get(1) == Some(&b':') {
-            return true;
         }
         // A scheme is ASCII alpha followed by ASCII alphanumeric/+/./-.
         // URI interpretation remains the desktop handler's responsibility.
@@ -492,55 +473,6 @@ impl UrlCache {
             }
         }
         self.detection_scans += 1;
-    }
-
-    /// Detect URLs only when this visual row's text changed.
-    #[cfg(test)]
-    pub fn update_row(&mut self, row: usize, text: &str, detector: &UrlDetector) -> bool {
-        self.update_row_inner(row, text, None, detector)
-    }
-
-    /// Detect URLs using byte boundaries mapped back to terminal columns.
-    #[cfg(test)]
-    pub fn update_row_mapped(
-        &mut self,
-        row: usize,
-        text: &str,
-        byte_to_col: &[usize],
-        detector: &UrlDetector,
-    ) -> bool {
-        self.update_row_inner(row, text, Some(byte_to_col), detector)
-    }
-
-    #[cfg(test)]
-    fn update_row_inner(
-        &mut self,
-        row: usize,
-        text: &str,
-        byte_to_col: Option<&[usize]>,
-        detector: &UrlDetector,
-    ) -> bool {
-        if row >= self.rows {
-            return false;
-        }
-        let column = |byte: usize| byte_to_col.map_or(byte, |map| map[byte.min(map.len() - 1)]);
-        let spans: Vec<_> = text
-            .char_indices()
-            .map(|(byte_start, character)| {
-                let byte_end = byte_start + character.len_utf8();
-                UrlCellSpan {
-                    byte_start,
-                    byte_end,
-                    row,
-                    start_col: column(byte_start),
-                    end_col: column(byte_end).saturating_sub(1),
-                    linear: character.is_ascii() && column(byte_end) == column(byte_start) + 1,
-                }
-            })
-            .collect();
-        let scans = self.detection_scans;
-        self.update_logical_line(row, row, text, &spans, detector);
-        self.detection_scans != scans
     }
 
     pub fn metrics(&self) -> (u64, u64) {
@@ -1087,34 +1019,33 @@ mod tests {
         assert_eq!(urls[0].url, "https://example.com");
     }
 
+    /// A one-row terminal showing `text`, and a cache scanned from it.
+    fn scanned_row(text: &str) -> (termeric_core::Terminal, UrlCache) {
+        let mut terminal = termeric_core::Terminal::new(80, 1);
+        terminal.process(text.as_bytes());
+        let mut cache = UrlCache::new(1);
+        cache.update_grid(terminal.grid(), &UrlDetector::new());
+        (terminal, cache)
+    }
+
     #[test]
     fn cache_scans_only_changed_rows_and_replaces_old_urls() {
         let detector = UrlDetector::new();
-        let mut cache = UrlCache::new(1);
-        assert!(cache.update_row(0, "https://example.com", &detector));
-        assert!(!cache.update_row(0, "https://example.com", &detector));
+        let (mut terminal, mut cache) = scanned_row("https://example.com");
+        cache.update_grid(terminal.grid(), &detector);
         assert_eq!(cache.metrics(), (1, 1));
         assert!(cache.is_url(0, 0));
 
-        assert!(cache.update_row(0, "plain text", &detector));
+        terminal.process(b"\r\x1b[2Kplain text");
+        cache.update_grid(terminal.grid(), &detector);
         assert!(!cache.is_url(0, 0));
         assert_eq!(cache.metrics(), (2, 1));
     }
 
     #[test]
-    fn mapped_cache_uses_terminal_columns_after_wide_graphemes() {
-        let detector = UrlDetector::new();
-        let mut cache = UrlCache::new(1);
-        let text = "界 https://example.com";
-        let mut map = vec![0; text.len() + 1];
-        // 界 occupies bytes 0..3 but columns 0..2; the following space is col 2.
-        map[0..3].fill(0);
-        map[3] = 2;
-        map[4] = 3;
-        for (byte, value) in map.iter_mut().enumerate().skip(4) {
-            *value = byte - 1;
-        }
-        assert!(cache.update_row_mapped(0, text, &map, &detector));
+    fn cache_uses_terminal_columns_after_wide_graphemes() {
+        // 界 takes columns 0 and 1, so the URL starts at column 3.
+        let (_terminal, cache) = scanned_row("界 https://example.com");
         let url = cache.url_at(0, 3).unwrap();
         assert_eq!(url.start_col, 3);
         assert_eq!(url.url, "https://example.com");
@@ -1122,27 +1053,9 @@ mod tests {
     }
 
     #[test]
-    fn mapped_cache_invalidates_when_only_terminal_columns_change() {
-        let detector = UrlDetector::new();
-        let mut cache = UrlCache::new(1);
-        let text = "x https://example.com";
-        let identity_map: Vec<_> = (0..=text.len()).collect();
-        assert!(cache.update_row_mapped(0, text, &identity_map, &detector));
-        assert_eq!(cache.url_at(0, 2).unwrap().start_col, 2);
-
-        let shifted_map: Vec<_> = (0..=text.len()).map(|byte| byte + 3).collect();
-        assert!(cache.update_row_mapped(0, text, &shifted_map, &detector));
-        assert!(cache.url_at(0, 2).is_none());
-        assert_eq!(cache.url_at(0, 5).unwrap().start_col, 5);
-        assert_eq!(cache.metrics(), (2, 0));
-    }
-
-    #[test]
     fn cached_urls_are_position_sorted_for_logarithmic_cell_lookup() {
-        let detector = UrlDetector::new();
-        let mut cache = UrlCache::new(1);
         let text = "https://first.example then http://second.example then ftp://third.example";
-        assert!(cache.update_row(0, text, &detector));
+        let (_terminal, cache) = scanned_row(text);
 
         let urls = &cache.urls_by_row[0];
         assert_eq!(urls.len(), 3);
@@ -1159,10 +1072,8 @@ mod tests {
 
     #[test]
     fn cached_lookup_prefers_an_outer_url_over_a_nested_scheme() {
-        let detector = UrlDetector::new();
-        let mut cache = UrlCache::new(1);
         let text = "https://outer.example/?next=http://inner.example";
-        assert!(cache.update_row(0, text, &detector));
+        let (_terminal, cache) = scanned_row(text);
 
         assert_eq!(cache.urls_by_row[0].len(), 1);
         assert_eq!(cache.url_at(0, 0).unwrap().url, text);
@@ -1212,11 +1123,7 @@ mod tests {
                 std::io::ErrorKind::InvalidInput
             );
         }
-        let absolute = if cfg!(target_os = "windows") {
-            r"C:\absolute\file.txt"
-        } else {
-            "/absolute/file.txt"
-        };
+        let absolute = "/absolute/file.txt";
         let command = UrlDetector::opener_command(absolute, None).unwrap();
         assert!(command.get_current_dir().is_none());
         assert_eq!(
@@ -1297,11 +1204,7 @@ mod tests {
 
     #[test]
     fn opener_keeps_literal_arguments_and_only_rebases_relative_paths() {
-        let cwd = if cfg!(target_os = "windows") {
-            Path::new(r"C:\trusted\cwd")
-        } else {
-            Path::new("/trusted/cwd")
-        };
+        let cwd = Path::new("/trusted/cwd");
         for target in [
             "./a b;$(not-a-command).txt",
             "report.txt",
@@ -1327,12 +1230,7 @@ mod tests {
                 command.get_current_dir(),
                 UrlDetector::is_relative_path(target).then_some(cwd)
             );
-            #[cfg(target_os = "linux")]
             assert_eq!(command.get_program(), "xdg-open");
-            #[cfg(target_os = "macos")]
-            assert_eq!(command.get_program(), "open");
-            #[cfg(target_os = "windows")]
-            assert_eq!(command.get_program(), "explorer.exe");
         }
     }
 
