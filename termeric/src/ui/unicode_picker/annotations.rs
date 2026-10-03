@@ -25,7 +25,6 @@ pub(super) struct Annotation<'a> {
 pub(super) struct AnnotationIndex<'a> {
     records: &'a [u8],
     pool: &'a str,
-    static_bytes: usize,
 }
 
 impl<'a> AnnotationIndex<'a> {
@@ -56,11 +55,7 @@ impl<'a> AnnotationIndex<'a> {
         let records = &data[HEADER_BYTES..pool_start];
         let pool =
             std::str::from_utf8(&data[pool_start..]).expect("CLDR annotation pool is not UTF-8");
-        let index = Self {
-            records,
-            pool,
-            static_bytes: data.len(),
-        };
+        let index = Self { records, pool };
         index.validate();
         index
     }
@@ -143,8 +138,10 @@ impl<'a> AnnotationIndex<'a> {
         self.records.len() / RECORD_BYTES
     }
 
+    /// The whole embedded index: header, record table, and string pool.
+    #[cfg(test)]
     pub(super) fn static_bytes(&self) -> usize {
-        self.static_bytes
+        HEADER_BYTES + self.records.len() + self.pool.len()
     }
 }
 

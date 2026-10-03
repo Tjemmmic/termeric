@@ -13,12 +13,12 @@ use crate::ui::command_palette::{
 use search_worker::{Request, SearchWorker};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashSet};
-use std::mem::size_of;
 use std::sync::{OnceLock, mpsc::TryRecvError};
 
 const UNICODE_DATA_VERSION: &str = "17.0";
 const UNICODE_SEARCH_RESULT_LIMIT: usize = 256;
 const UNICODE_SEARCH_MEMORY_BUDGET: usize = 8 * 1024 * 1024;
+#[cfg(test)]
 const UNICODE_RESULT_MEMORY_BUDGET: usize = 1024 * 1024;
 const UNICODE_NAME_BYTES_CAPACITY: usize = 4_000_000;
 const UNICODE_RECORD_CAPACITY: usize = 160_000;
@@ -473,7 +473,6 @@ fn search_unicode_characters(query: &str) -> Vec<RankedCharacter> {
 
     if !terms.is_empty() {
         let annotations = annotations::index();
-        assert!(annotations.static_bytes() <= annotations::CLDR_STATIC_BYTES_BUDGET);
         let mut best = BinaryHeap::<Reverse<(u32, Reverse<u32>)>>::new();
         for position in 0..annotations.len() {
             let annotation = annotations.annotation(position);
@@ -508,7 +507,6 @@ fn search_unicode_characters(query: &str) -> Vec<RankedCharacter> {
     ranked.retain(|result| seen.insert(result.selection.text.clone()));
     ranked.truncate(UNICODE_SEARCH_RESULT_LIMIT);
     ranked.shrink_to_fit();
-    assert!(ranked_results_owned_bytes(&ranked) <= UNICODE_RESULT_MEMORY_BUDGET);
     ranked
 }
 
@@ -651,8 +649,11 @@ fn cldr_result(annotation: Annotation<'_>, score: u32) -> RankedCharacter {
     }
 }
 
+/// Heap and inline bytes a result set owns, which the tests and the
+/// benchmark hold to `UNICODE_RESULT_MEMORY_BUDGET`.
+#[cfg(test)]
 fn ranked_results_owned_bytes(results: &Vec<RankedCharacter>) -> usize {
-    results.capacity() * size_of::<RankedCharacter>()
+    results.capacity() * std::mem::size_of::<RankedCharacter>()
         + results
             .iter()
             .map(|result| {
@@ -663,12 +664,6 @@ fn ranked_results_owned_bytes(results: &Vec<RankedCharacter>) -> usize {
                     + result.command.title.capacity()
                     + result.command.category.capacity()
                     + result.command.shortcut.as_ref().map_or(0, String::capacity)
-                    + match &result.command.source {
-                        CommandSource::Plugin(plugin) => plugin.capacity(),
-                        CommandSource::Action(_)
-                        | CommandSource::Core
-                        | CommandSource::LaunchProfiles => 0,
-                    }
             })
             .sum::<usize>()
 }

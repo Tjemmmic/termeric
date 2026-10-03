@@ -24,8 +24,8 @@ pub enum CommandSource {
     Core,
     /// User-configured reusable terminal profiles.
     LaunchProfiles,
-    /// From a plugin
-    Plugin(String),
+    /// A plugin command, run by its ID.
+    Plugin,
 }
 
 /// A command registered in the palette
@@ -372,7 +372,7 @@ impl CommandPalette {
     /// Replace every plugin-owned command while preserving core entries.
     pub fn replace_plugin_commands(&mut self, commands: Vec<RegisteredCommand>) {
         self.registry
-            .retain(|command| !matches!(command.source, CommandSource::Plugin(_)));
+            .retain(|command| !matches!(command.source, CommandSource::Plugin));
         self.registry.extend(commands);
         self.sort_registry();
         if self.animation.is_active() {
@@ -622,7 +622,7 @@ impl CommandPalette {
             let id = cmd.id.clone();
             let result = match &cmd.source {
                 CommandSource::Action(action) => PaletteResult::Action(action.clone()),
-                CommandSource::Plugin(_) => PaletteResult::RunPluginCommand(id.clone()),
+                CommandSource::Plugin => PaletteResult::RunPluginCommand(id.clone()),
                 CommandSource::Core | CommandSource::LaunchProfiles => {
                     PaletteResult::RunCommand(id.clone())
                 }
@@ -1362,7 +1362,7 @@ mod tests {
             title: "Open Claude Code".into(),
             category: "AI".into(),
             shortcut: Some("Ctrl+Shift+I".into()),
-            source: CommandSource::Plugin("claude-code".into()),
+            source: CommandSource::Plugin,
             destructive: false,
         }];
         palette.replace_plugin_commands(plugin_cmds);
@@ -1384,7 +1384,7 @@ mod tests {
             title: "Open Codex".into(),
             category: "Plugins".into(),
             shortcut: None,
-            source: CommandSource::Plugin("codex".into()),
+            source: CommandSource::Plugin,
             destructive: false,
         }]);
         assert!(
@@ -1399,7 +1399,7 @@ mod tests {
             !palette
                 .registry
                 .iter()
-                .any(|command| matches!(command.source, CommandSource::Plugin(_)))
+                .any(|command| matches!(command.source, CommandSource::Plugin))
         );
         assert!(
             palette
@@ -1453,7 +1453,7 @@ mod tests {
             title: "Test Action".into(),
             category: "Test".into(),
             shortcut: None,
-            source: CommandSource::Plugin("test".into()),
+            source: CommandSource::Plugin,
             destructive: false,
         }]);
         palette.open();

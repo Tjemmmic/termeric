@@ -4363,20 +4363,13 @@ impl App {
 
         let palette_cmds: Vec<RegisteredCommand> = plugin_commands
             .iter()
-            .map(|pc| {
-                let plugin_source = pc
-                    .id
-                    .split_once('.')
-                    .map(|(prefix, _)| prefix.to_string())
-                    .unwrap_or_else(|| "plugin".to_string());
-                RegisteredCommand {
-                    id: pc.id.clone(),
-                    title: pc.name.clone(),
-                    category: pc.category.clone().unwrap_or_else(|| "Plugins".to_string()),
-                    shortcut: None,
-                    source: CommandSource::Plugin(plugin_source),
-                    destructive: false,
-                }
+            .map(|pc| RegisteredCommand {
+                id: pc.id.clone(),
+                title: pc.name.clone(),
+                category: pc.category.clone().unwrap_or_else(|| "Plugins".to_string()),
+                shortcut: None,
+                source: CommandSource::Plugin,
+                destructive: false,
             })
             .collect();
 
