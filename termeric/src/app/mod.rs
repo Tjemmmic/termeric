@@ -1048,7 +1048,6 @@ pub struct App {
     /// Headless integration controllers never perform implicit disk writes.
     automatic_persistence: bool,
     /// Application configuration
-    #[allow(dead_code)]
     config: Config,
     /// The window (created on resume)
     window: Option<Arc<Window>>,

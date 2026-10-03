@@ -183,12 +183,9 @@ pub struct ImageVertex {
     pub opacity: f32,
 }
 
-/// A GPU texture for an image
+/// A GPU texture for an image. The bind group keeps its texture and view
+/// alive.
 struct GpuImage {
-    #[allow(dead_code)]
-    texture: Texture,
-    #[allow(dead_code)]
-    view: TextureView,
     bind_group: BindGroup,
     revision: u64,
 }
@@ -437,8 +434,6 @@ impl ImagePipeline {
         self.images.insert(
             key,
             GpuImage {
-                texture,
-                view,
                 bind_group,
                 revision: image.revision,
             },

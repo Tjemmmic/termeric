@@ -627,7 +627,6 @@ impl TerminalPalette {
 
 /// Main renderer that manages all GPU resources
 pub struct Renderer {
-    #[allow(dead_code)]
     window: Arc<Window>,
     surface: Surface<'static>,
     device: Device,

@@ -124,7 +124,6 @@ struct QuickPick {
 /// Geometry for the centered command palette modal — single source of truth
 /// shared by the renderer, click hit-test, and scroll logic.
 #[derive(Debug, Clone, Copy)]
-#[allow(dead_code)] // Several fields are exposed for symmetry / future callers.
 pub struct PaletteLayout {
     pub panel_x: f32,
     pub panel_y: f32,
@@ -136,8 +135,6 @@ pub struct PaletteLayout {
     pub row_height: f32,
     pub input_height: f32,
     pub footer_height: f32,
-    pub header_area: f32,
-    pub footer_area: f32,
     pub list_y: f32,
     pub list_height: f32,
     pub rows_that_fit: usize,
@@ -184,8 +181,6 @@ impl PaletteLayout {
             row_height,
             input_height,
             footer_height,
-            header_area,
-            footer_area,
             list_y,
             list_height,
             rows_that_fit,

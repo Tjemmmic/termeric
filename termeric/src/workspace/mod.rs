@@ -8,5 +8,4 @@ mod model;
 mod storage;
 
 pub use model::*;
-#[allow(unused_imports)]
 pub use storage::*;
