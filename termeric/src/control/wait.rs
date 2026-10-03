@@ -7,8 +7,7 @@ use super::{
 };
 use anyhow::Context;
 use std::io::{self, Read, Write};
-use std::os::fd::{AsRawFd, FromRawFd};
-use std::os::unix::{ffi::OsStrExt, fs::MetadataExt, net::UnixStream};
+use std::os::unix::{fs::MetadataExt, net::UnixStream};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -275,8 +274,9 @@ fn remaining(deadline: Instant) -> io::Result<Duration> {
         })
 }
 
-/// Nonblocking connect/read/write all share one absolute deadline. A peer
-/// trickling individual frame bytes cannot reset the timeout indefinitely.
+/// Reads and writes share one absolute deadline: each call waits at most for
+/// the time left, so a peer trickling single frame bytes cannot stretch the
+/// exchange. Connecting blocks only while the listener's backlog is full.
 struct DeadlineStream {
     stream: UnixStream,
     deadline: Instant,
@@ -285,85 +285,28 @@ struct DeadlineStream {
 impl DeadlineStream {
     fn connect(path: &Path, deadline: Instant) -> io::Result<Self> {
         remaining(deadline)?;
-        let bytes = path.as_os_str().as_bytes();
-        // SAFETY: sockaddr_un is a C record whose all-zero representation is valid.
-        let mut address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
-        if bytes.is_empty() || bytes.contains(&0) || bytes.len() >= address.sun_path.len() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "invalid GUI socket path",
-            ));
-        }
-        address.sun_family = libc::AF_UNIX as libc::sa_family_t;
-        for (target, byte) in address.sun_path.iter_mut().zip(bytes) {
-            *target = *byte as libc::c_char;
-        }
-        let length = (std::mem::offset_of!(libc::sockaddr_un, sun_path) + bytes.len() + 1)
-            as libc::socklen_t;
-        // SAFETY: socket takes no pointers and returns a uniquely owned descriptor.
-        let fd = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0) };
-        if fd < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: adopt the new valid descriptor exactly once; every failure drops it.
-        let stream = unsafe { UnixStream::from_raw_fd(fd) };
-        // SAFETY: fcntl acts on our live descriptor and sets close-on-exec.
-        if unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        stream.set_nonblocking(true)?;
-        let stream = Self { stream, deadline };
-        // SAFETY: the address contains the checked pathname plus zero terminator;
-        // length stays within the initialized record and connect retains no pointer.
-        if unsafe { libc::connect(fd, (&address as *const libc::sockaddr_un).cast(), length) } != 0
-        {
-            let error = io::Error::last_os_error();
-            if error.raw_os_error() != Some(libc::EINPROGRESS) {
-                return Err(error);
-            }
-            stream.ready(libc::POLLOUT)?;
-            if let Some(error) = stream.stream.take_error()? {
-                return Err(error);
-            }
-        }
+        let stream = UnixStream::connect(path)?;
         remaining(deadline)?;
-        Ok(stream)
+        Ok(Self { stream, deadline })
     }
+}
 
-    fn ready(&self, events: libc::c_short) -> io::Result<()> {
-        loop {
-            let timeout = remaining(self.deadline)?
-                .as_millis()
-                .clamp(1, i32::MAX as u128) as i32;
-            let mut descriptor = libc::pollfd {
-                fd: self.stream.as_raw_fd(),
-                events,
-                revents: 0,
-            };
-            // SAFETY: poll receives one initialized record for our live descriptor.
-            let result = unsafe { libc::poll(&mut descriptor, 1, timeout) };
-            if result > 0 {
-                return Ok(());
-            }
-            if result < 0 {
-                let error = io::Error::last_os_error();
-                if error.kind() != io::ErrorKind::Interrupted {
-                    return Err(error);
-                }
-            }
-        }
-    }
+/// A socket timeout surfaces as `WouldBlock`; retrying re-checks the
+/// deadline, which reports `TimedOut` once it has passed.
+fn retryable(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+    )
 }
 
 impl Read for DeadlineStream {
     fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
         loop {
-            remaining(self.deadline)?;
+            self.stream
+                .set_read_timeout(Some(remaining(self.deadline)?))?;
             match self.stream.read(bytes) {
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                    self.ready(libc::POLLIN)?
-                }
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) if retryable(&error) => {}
                 result => return result,
             }
         }
@@ -373,12 +316,10 @@ impl Read for DeadlineStream {
 impl Write for DeadlineStream {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         loop {
-            remaining(self.deadline)?;
+            self.stream
+                .set_write_timeout(Some(remaining(self.deadline)?))?;
             match self.stream.write(bytes) {
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                    self.ready(libc::POLLOUT)?
-                }
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) if retryable(&error) => {}
                 result => return result,
             }
         }
@@ -403,21 +344,28 @@ mod tests {
     }
 
     #[test]
-    fn stream_deadline_covers_partial_frames_and_backpressure() {
+    fn stream_deadline_covers_trickled_frames_and_backpressure() {
+        // Each byte arrives well within a socket timeout, but the frame
+        // header never completes before the shared deadline.
         let (stream, mut peer) = UnixStream::pair().unwrap();
-        stream.set_nonblocking(true).unwrap();
-        let deadline = Instant::now() + Duration::from_millis(40);
+        let deadline = Instant::now() + Duration::from_millis(80);
         let mut stream = DeadlineStream { stream, deadline };
-        peer.write_all(&[0, 0]).unwrap();
+        let trickle = std::thread::spawn(move || {
+            for _ in 0..3 {
+                std::thread::sleep(Duration::from_millis(30));
+                peer.write_all(&[0]).unwrap();
+            }
+            peer
+        });
         let mut header = [0; 4];
         assert_eq!(
             stream.read_exact(&mut header).unwrap_err().kind(),
             io::ErrorKind::TimedOut
         );
         assert!(Instant::now() >= deadline);
+        drop(trickle.join().unwrap());
 
         let (stream, _peer) = UnixStream::pair().unwrap();
-        stream.set_nonblocking(true).unwrap();
         let mut stream = DeadlineStream {
             stream,
             deadline: Instant::now() + Duration::from_millis(40),
@@ -464,6 +412,7 @@ mod tests {
 
     #[test]
     fn fifo_token_substitution_does_not_block_before_type_validation() {
+        use std::os::unix::ffi::OsStrExt;
         let directory = tempfile::tempdir().unwrap();
         let endpoint =
             ControlPaths::from_directory(directory.path().into(), std::process::id()).unwrap();
