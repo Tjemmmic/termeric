@@ -894,7 +894,7 @@ mod tests {
     fn agent_events_round_trip_and_invalid_identities_are_refused() {
         use super::*;
         let event = Request::AgentEvent {
-            terminal_id: "4242.0123456789abcdef".into(),
+            terminal_id: "4242.0123456789abcdef0123456789abcdef".into(),
             agent_id: "codex".into(),
             event: protocol::AgentEventKind::NeedsInput,
             detail: Some("Approve shell: cargo test".into()),
@@ -941,9 +941,13 @@ mod tests {
             invalid("4242", "codex", None),
             invalid("pid.abc", "codex", None),
             invalid("4242.xyz", "codex", None),
-            invalid("4242.ab", "co dex", None),
-            invalid("4242.ab", "", None),
-            invalid("4242.ab", "codex", Some("relative/path")),
+            invalid("4242.0123456789abcdef0123456789abcdef", "co dex", None),
+            invalid("4242.0123456789abcdef0123456789abcdef", "", None),
+            invalid(
+                "4242.0123456789abcdef0123456789abcdef",
+                "codex",
+                Some("relative/path"),
+            ),
         ] {
             assert!(request.validate().is_err(), "{request:?}");
         }

@@ -95,12 +95,7 @@ impl Supervisor {
 
 /// A random token, as 32 lowercase hex digits.
 fn new_token() -> Option<String> {
-    use std::io::Read;
-    let mut bytes = [0_u8; 16];
-    std::fs::File::open("/dev/urandom")
-        .and_then(|mut source| source.read_exact(&mut bytes))
-        .ok()?;
-    Some(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+    termeric_core::hex::random(16).ok()
 }
 
 impl App {

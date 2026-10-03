@@ -4,7 +4,6 @@ use super::paths::ControlPaths;
 use super::protocol::{self, ClientFrame, ProcessInventory, Request, ServerFrame};
 use anyhow::Context;
 use serde::Serialize;
-use std::io::Read;
 use std::os::unix::net::UnixStream;
 use std::time::Duration;
 
@@ -1860,18 +1859,7 @@ fn request_within(
 }
 
 pub(super) fn generate_request_id() -> anyhow::Result<String> {
-    let mut random = [0u8; 16];
-    std::fs::File::open("/dev/urandom")
-        .context("open operating-system random source")?
-        .read_exact(&mut random)
-        .context("generate GUI control request ID")?;
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut id = String::with_capacity(32);
-    for byte in random {
-        id.push(HEX[usize::from(byte >> 4)] as char);
-        id.push(HEX[usize::from(byte & 0x0f)] as char);
-    }
-    Ok(id)
+    termeric_core::hex::random(16).context("generate GUI control request ID")
 }
 
 #[cfg(target_os = "linux")]

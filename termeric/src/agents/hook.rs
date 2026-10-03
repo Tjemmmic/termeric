@@ -278,7 +278,7 @@ mod tests {
         });
         let (kind, detail, _, transcript) = fields(build_report(
             &invocation(HookEvent::NeedsInput),
-            "1.ab".into(),
+            "1.0123456789abcdef0123456789abcdef".into(),
             Some(&claude),
         ));
         assert_eq!(kind, AgentEventKind::NeedsInput);
@@ -299,7 +299,7 @@ mod tests {
         });
         let (_, detail, _, transcript) = fields(build_report(
             &invocation(HookEvent::NeedsInput),
-            "1.ab".into(),
+            "1.0123456789abcdef0123456789abcdef".into(),
             Some(&codex),
         ));
         assert_eq!(detail.as_deref(), Some("Approve shell: cargo test"));
@@ -308,7 +308,7 @@ mod tests {
         let stop = json!({"last_assistant_message": "  Done.  ", "transcript_path": "relative"});
         let (kind, detail, message, transcript) = fields(build_report(
             &invocation(HookEvent::Stop),
-            "1.ab".into(),
+            "1.0123456789abcdef0123456789abcdef".into(),
             Some(&stop),
         ));
         assert_eq!(kind, AgentEventKind::Finished);
@@ -317,7 +317,7 @@ mod tests {
 
         let (kind, detail, ..) = fields(build_report(
             &invocation(HookEvent::StopFailure),
-            "1.ab".into(),
+            "1.0123456789abcdef0123456789abcdef".into(),
             None,
         ));
         assert_eq!(kind, AgentEventKind::Failed);
@@ -329,7 +329,7 @@ mod tests {
         let message = "é".repeat(MAX_AGENT_LAST_MESSAGE_BYTES);
         let (.., last, _) = fields(build_report(
             &invocation(HookEvent::Stop),
-            "1.ab".into(),
+            "1.0123456789abcdef0123456789abcdef".into(),
             Some(&json!({ "last_assistant_message": message })),
         ));
         let last = last.unwrap();
@@ -337,7 +337,7 @@ mod tests {
         assert!(last.chars().all(|c| c == 'é'));
         let request = build_report(
             &invocation(HookEvent::NeedsInput),
-            "1.ab".into(),
+            "1.0123456789abcdef0123456789abcdef".into(),
             Some(&json!({ "message": "x".repeat(4096) })),
         );
         request.unwrap().validate().unwrap();
@@ -348,7 +348,7 @@ mod tests {
         let start = |source: &str| {
             build_report(
                 &invocation(HookEvent::SessionStart),
-                "1.ab".into(),
+                "1.0123456789abcdef0123456789abcdef".into(),
                 Some(&json!({ "source": source })),
             )
         };

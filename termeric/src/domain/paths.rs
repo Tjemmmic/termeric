@@ -144,8 +144,8 @@ fn create_token(path: &Path) -> anyhow::Result<String> {
         .context("open operating-system random source")?
         .read_exact(&mut random)
         .context("read Termeric authentication token")?;
-    let token = encode_hex(&random[..32]);
-    let nonce = encode_hex(&random[32..]);
+    let token = termeric_core::hex::encode(&random[..32]);
+    let nonce = termeric_core::hex::encode(&random[32..]);
     let temporary = token_temporary_path(path, std::process::id(), &nonce);
     let mut file = OpenOptions::new()
         .write(true)
@@ -195,22 +195,15 @@ pub(crate) fn read_token(path: &Path) -> anyhow::Result<String> {
     file.read_exact(&mut bytes)
         .with_context(|| format!("read Termeric token {}", path.display()))?;
     let mut trailing = [0u8; 1];
-    if file.read(&mut trailing)? != 0 || !bytes.iter().all(u8::is_ascii_hexdigit) {
+    if file.read(&mut trailing)? != 0
+        || !std::str::from_utf8(&bytes)
+            .is_ok_and(|token| termeric_core::hex::is_lower(token, TOKEN_BYTES))
+    {
         anyhow::bail!("Termeric token file is malformed");
     }
     Ok(std::str::from_utf8(&bytes)
         .context("domain token is not valid UTF-8")?
         .to_owned())
-}
-
-fn encode_hex(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut encoded = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        encoded.push(HEX[usize::from(byte >> 4)] as char);
-        encoded.push(HEX[usize::from(byte & 0x0f)] as char);
-    }
-    encoded
 }
 
 fn token_temporary_path(path: &Path, process_id: u32, nonce: &str) -> PathBuf {

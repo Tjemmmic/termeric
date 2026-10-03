@@ -1360,8 +1360,7 @@ fn validate_agent_event(
     if terminal_id.len() > MAX_AGENT_TERMINAL_ID_BYTES
         || process.is_empty()
         || !process.bytes().all(|byte| byte.is_ascii_digit())
-        || random.is_empty()
-        || !random.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || !termeric_core::hex::is_lower(random, 32)
     {
         return Err("Agent terminal identity must be PID.HEX".into());
     }
@@ -1524,10 +1523,7 @@ pub fn valid_approval_id(value: &str) -> bool {
 }
 
 pub fn valid_request_id(value: &str) -> bool {
-    value.len() == 32
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    termeric_core::hex::is_lower(value, 32)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

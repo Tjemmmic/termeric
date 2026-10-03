@@ -1106,18 +1106,7 @@ fn report_upload_progress(
 }
 
 fn generate_upload_id() -> anyhow::Result<String> {
-    let mut random = [0_u8; 16];
-    std::fs::File::open("/dev/urandom")
-        .context("open operating-system random source")?
-        .read_exact(&mut random)
-        .context("generate upload retry identity")?;
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut upload_id = String::with_capacity(32);
-    for byte in random {
-        upload_id.push(HEX[usize::from(byte >> 4)] as char);
-        upload_id.push(HEX[usize::from(byte & 0x0f)] as char);
-    }
-    Ok(upload_id)
+    termeric_core::hex::random(16).context("generate upload retry identity")
 }
 
 fn connect_local(paths: &RuntimePaths) -> anyhow::Result<DomainStream> {

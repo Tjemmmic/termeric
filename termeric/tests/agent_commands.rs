@@ -39,7 +39,7 @@ impl Gui {
     }
 
     fn terminal_id(&self) -> String {
-        format!("{}.00ff", std::process::id())
+        format!("{}.00ff00ff00ff00ff00ff00ff00ff00ff", std::process::id())
     }
 
     /// Run the hook as an agent would, feeding `payload` on stdin.
@@ -166,7 +166,11 @@ fn outside_termeric_or_with_unknown_arguments_nothing_is_sent() {
 fn a_missing_refusing_or_stuck_gui_never_fails_the_hook() {
     let gui = Gui::new();
     // No GUI process owns this identity.
-    let (output, _) = gui.hook(&["codex", "prompt"], Some("999999999.00ff"), "");
+    let (output, _) = gui.hook(
+        &["codex", "prompt"],
+        Some("999999999.00ff00ff00ff00ff00ff00ff00ff00ff"),
+        "",
+    );
     assert_silent_success(&output);
 
     let id = gui.terminal_id();

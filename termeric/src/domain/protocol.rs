@@ -297,7 +297,9 @@ pub fn validate_upload_name(name: &str) -> anyhow::Result<()> {
         || name.len() > MAX_UPLOAD_NAME_BYTES
         || matches!(name, "." | "..")
         || name.contains(['/', '\\'])
-        || name.chars().any(termeric_core::safe_text::is_unsafe_display_char)
+        || name
+            .chars()
+            .any(termeric_core::safe_text::is_unsafe_display_char)
     {
         anyhow::bail!("upload name must be one safe UTF-8 file-name component");
     }
@@ -305,22 +307,14 @@ pub fn validate_upload_name(name: &str) -> anyhow::Result<()> {
 }
 
 pub fn validate_upload_id(upload_id: &str) -> anyhow::Result<()> {
-    if upload_id.len() != 32
-        || !upload_id
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
+    if !termeric_core::hex::is_lower(upload_id, 32) {
         anyhow::bail!("upload id must be exactly 32 lowercase hexadecimal characters");
     }
     Ok(())
 }
 
 pub fn validate_sha256(digest: &str) -> anyhow::Result<()> {
-    if digest.len() != 64
-        || !digest
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
+    if !termeric_core::hex::is_lower(digest, 64) {
         anyhow::bail!("SHA-256 digest must be exactly 64 lowercase hexadecimal characters");
     }
     Ok(())

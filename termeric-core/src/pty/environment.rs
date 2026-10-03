@@ -29,14 +29,10 @@ pub fn terminal_identity_variable(name: &str) -> bool {
 /// cannot supply randomness.
 #[cfg(unix)]
 pub(super) fn new_terminal_id() -> Option<String> {
-    use std::io::Read;
-    let mut bytes = [0_u8; 16];
-    std::fs::File::open("/dev/urandom")
-        .and_then(|mut source| source.read_exact(&mut bytes))
+    let random = crate::hex::random(16)
         .map_err(|error| log::warn!("No terminal identity: {error}"))
         .ok()?;
-    let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
-    Some(format!("{}.{hex}", std::process::id()))
+    Some(format!("{}.{random}", std::process::id()))
 }
 
 #[cfg(not(unix))]
