@@ -10562,7 +10562,10 @@ fn structured_plugin_completions_require_a_live_generation_and_plugin() {
             plugin_generation: generation,
             plugin_id: "completion-fixture".into(),
             request_id: 7,
-            continuation: None,
+            continuation: crate::plugin::structured::StructuredHandlerInvocation::fixture(
+                "completion-fixture",
+                Default::default(),
+            ),
             result: Ok(vec![
                 crate::plugin::structured::StructuredResponseAction::ShowMessage {
                     message: message.into(),
@@ -10602,8 +10605,7 @@ fn structured_plugin_completions_require_a_live_generation_and_plugin() {
 #[test]
 fn structured_completion_hands_its_host_operation_to_the_application() {
     use crate::plugin::structured::{
-        HandlerAuthority, StructuredHandlerCompletion, StructuredHandlerInvocation,
-        StructuredHandlerMode, StructuredResponseAction,
+        StructuredHandlerCompletion, StructuredHandlerInvocation, StructuredResponseAction,
     };
 
     let mut app = App::new_headless(Config::default()).unwrap();
@@ -10619,12 +10621,15 @@ fn structured_completion_hands_its_host_operation_to_the_application() {
         tab_id: 1,
     };
     let generation = app.plugin_runtime_generation;
-    let completion = |continuation| StructuredHandlerCompletion {
+    let completion = StructuredHandlerCompletion {
         window_id: winit::window::WindowId::dummy(),
         plugin_generation: generation,
         plugin_id: "operation-fixture".into(),
         request_id: 3,
-        continuation,
+        continuation: StructuredHandlerInvocation::fixture(
+            "operation-fixture",
+            crate::plugin::permission::PluginPermissions::default(),
+        ),
         result: Ok(vec![
             select.clone(),
             StructuredResponseAction::ShowMessage {
@@ -10632,36 +10637,10 @@ fn structured_completion_hands_its_host_operation_to_the_application() {
             },
         ]),
     };
-    let continuation = StructuredHandlerInvocation {
-        plugin_id: "operation-fixture".into(),
-        program: "fixture".into(),
-        args: Vec::new(),
-        event_json: "{}".into(),
-        mode: StructuredHandlerMode::Persistent,
-        authority: HandlerAuthority::for_event(
-            crate::plugin::permission::PluginPermissions::default(),
-            StructuredHandlerMode::Persistent,
-            false,
-        ),
-    };
-
-    let host = app
-        .accept_structured_plugin_completion(completion(Some(continuation)))
-        .unwrap();
+    let host = app.accept_structured_plugin_completion(completion).unwrap();
     assert_eq!(host.plugin_id, "operation-fixture");
     assert_eq!(host.operation, select);
     assert!(app.toasts.iter().any(|toast| toast.message == "selecting"));
-
-    // A host operation without a live persistent handler fails visibly.
-    assert!(
-        app.accept_structured_plugin_completion(completion(None))
-            .is_none()
-    );
-    assert!(app.toasts.iter().any(|toast| {
-        toast
-            .message
-            .contains("host operations require a live persistent handler")
-    }));
 }
 
 #[cfg(unix)]
@@ -10721,7 +10700,10 @@ fn plugin_window_close_waits_for_only_the_exact_result_callback() {
         plugin_generation: generation,
         plugin_id: "window-closer".into(),
         request_id,
-        continuation: None,
+        continuation: crate::plugin::structured::StructuredHandlerInvocation::fixture(
+            "window-closer",
+            Default::default(),
+        ),
         result,
     };
 
@@ -10766,7 +10748,10 @@ fn plugin_window_close_still_finishes_after_final_handler_failure() {
             plugin_generation: app.plugin_runtime_generation,
             plugin_id: "window-closer".into(),
             request_id: 73,
-            continuation: None,
+            continuation: crate::plugin::structured::StructuredHandlerInvocation::fixture(
+                "window-closer",
+                Default::default(),
+            ),
             result: Err("fixture callback failed".into()),
         },
     );

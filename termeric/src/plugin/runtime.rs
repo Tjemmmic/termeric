@@ -11,7 +11,6 @@ use super::hooks::{Hook, Plugin, PluginAction, PluginCommand, PluginContext};
 use super::permission::{Capability, PermissionScope, PluginPermission, PluginPermissions};
 use super::structured::{
     HandlerAuthority, MAX_PERSISTENT_SOURCE_EVENT_BYTES, StructuredHandlerInvocation,
-    StructuredHandlerMode,
 };
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -195,17 +194,7 @@ pub struct DeclarativeEventHandler {
     pub program: String,
     #[serde(default)]
     pub args: Vec<String>,
-    #[serde(default)]
-    pub mode: DeclarativeHandlerMode,
     pub events: BTreeSet<StructuredEventKind>,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum DeclarativeHandlerMode {
-    #[default]
-    ProcessPerEvent,
-    Persistent,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
@@ -413,8 +402,6 @@ impl PluginManifest {
     fn validate_capability_requirements(&self) -> Result<()> {
         let handler = self.event_handler.as_ref();
         let has_handler = handler.is_some();
-        let persistent =
-            handler.is_some_and(|handler| handler.mode == DeclarativeHandlerMode::Persistent);
         let subscribes_to_command_completed = handler.is_some_and(|handler| {
             handler
                 .events
@@ -425,18 +412,15 @@ impl PluginManifest {
         if has_handler != requests(Capability::EventSubscribe) {
             bail!("an event handler and the event-subscribe permission require each other");
         }
-        if requests(Capability::UiActions) && !has_handler {
-            bail!("ui-actions requires an event handler");
-        }
         if subscribes_to_command_completed != requests(Capability::CommandOutput) {
             bail!("command-completed events and the command-output permission require each other");
         }
         if let Some(capability) = Capability::ALL
             .into_iter()
-            .find(|capability| capability.requires_persistent_handler() && requests(*capability))
-            && !persistent
+            .find(|capability| capability.requires_event_handler() && requests(*capability))
+            && !has_handler
         {
-            bail!("{capability} requires a persistent event handler");
+            bail!("{capability} requires an event handler");
         }
         if self.permissions.scope(Capability::WindowClose) == Some(PermissionScope::Window)
             && self.commands.is_empty()
@@ -1027,14 +1011,7 @@ impl DeclarativePlugin {
                 },
             });
         }
-        let mode = match handler.mode {
-            DeclarativeHandlerMode::ProcessPerEvent => StructuredHandlerMode::ProcessPerEvent,
-            DeclarativeHandlerMode::Persistent => StructuredHandlerMode::Persistent,
-        };
-        let max_event_bytes = match mode {
-            StructuredHandlerMode::Persistent => MAX_PERSISTENT_SOURCE_EVENT_BYTES,
-            StructuredHandlerMode::ProcessPerEvent => MAX_STRUCTURED_CONTEXT_BYTES,
-        };
+        let max_event_bytes = MAX_PERSISTENT_SOURCE_EVENT_BYTES;
         let event_json = match if kind == StructuredEventKind::CommandCompleted {
             encode_command_event(envelope, max_event_bytes)
         } else {
@@ -1062,10 +1039,8 @@ impl DeclarativePlugin {
                 program: handler.program.clone(),
                 args: handler.args.clone(),
                 event_json,
-                mode,
                 authority: HandlerAuthority::for_event(
                     self.grants.clone(),
-                    mode,
                     kind == StructuredEventKind::CommandInvoked,
                 ),
             },
@@ -2131,7 +2106,7 @@ working_directory = "inherit"
     /// A handler plugin requesting `requested` (beyond process-spawn and
     /// event-subscribe). A `command-invoked` subscription declares one
     /// command, and a `command-completed` one requests command-output.
-    fn handler_manifest(requested: &[&str], persistent: bool, events: &[&str]) -> PluginManifest {
+    fn handler_manifest(requested: &[&str], events: &[&str]) -> PluginManifest {
         let mut requested_permissions = vec!["process-spawn", "event-subscribe"];
         requested_permissions.extend_from_slice(requested);
         if events.contains(&"command-completed") {
@@ -2141,11 +2116,6 @@ working_directory = "inherit"
             "[[commands]]\nid = \"run\"\nname = \"Run\"\n\n"
         } else {
             ""
-        };
-        let mode = if persistent {
-            "persistent"
-        } else {
-            "process-per-event"
         };
         toml::from_str(&format!(
             r#"api_version = 1
@@ -2157,7 +2127,6 @@ permissions = {requested_permissions:?}
 {commands}[event_handler]
 program = "fixture-handler"
 args = ["--stdio"]
-mode = "{mode}"
 events = {events:?}
 "#
         ))
@@ -2225,7 +2194,6 @@ choices = ["summary", "full"]
 
 [event_handler]
 program = "configurable-handler"
-mode = "persistent"
 events = ["command-invoked"]
 "#
         )
@@ -2833,7 +2801,6 @@ events = ["command-invoked"]
                 "navigate:all-windows",
                 "pane-create",
             ],
-            true,
             &["app-ready"],
         );
         fs::write(
@@ -2873,7 +2840,7 @@ events = ["command-invoked"]
     #[test]
     fn lifecycle_events_carry_the_origin_window_and_grant_scoped_context() {
         let events = ["app-ready", "tab-created", "tab-closed", "tab-switched"];
-        let manifest = handler_manifest(&["ui-actions", "workspace-query"], false, &events);
+        let manifest = handler_manifest(&["ui-actions", "workspace-query"], &events);
         manifest.validate().unwrap();
         let grants = manifest.permissions.clone();
         let invocation = invocation_for(
@@ -2889,7 +2856,6 @@ events = ["command-invoked"]
             },
         );
         assert_eq!(invocation.plugin_id, "handler-fixture");
-        assert_eq!(invocation.mode, StructuredHandlerMode::ProcessPerEvent);
         assert_eq!(invocation.authority.grants(), &grants);
         let value: serde_json::Value = serde_json::from_str(&invocation.event_json).unwrap();
         assert_eq!(value["schema_version"], 1);
@@ -2902,10 +2868,10 @@ events = ["command-invoked"]
             "/workspace/project"
         );
         assert_eq!(value["context"]["terminal"]["columns"], 120);
-        assert!(invocation.event_json.len() <= MAX_STRUCTURED_CONTEXT_BYTES);
+        assert!(invocation.event_json.len() <= MAX_PERSISTENT_SOURCE_EVENT_BYTES);
         assert!(!invocation.event_json.contains("command"));
 
-        let manifest = handler_manifest(&["ui-actions"], false, &events);
+        let manifest = handler_manifest(&["ui-actions"], &events);
         let grants = manifest.permissions.clone();
         let invocation = invocation_for(
             manifest,
@@ -2921,7 +2887,7 @@ events = ["command-invoked"]
         assert_eq!(value["origin_window_id"], 3);
         assert!(!invocation.event_json.contains("must-not-leak"));
 
-        let unsubscribed = handler_manifest(&["ui-actions"], false, &["app-ready"]);
+        let unsubscribed = handler_manifest(&["ui-actions"], &["app-ready"]);
         let grants = unsubscribed.permissions.clone();
         let mut plugin = DeclarativePlugin::new(unsubscribed, None, grants);
         assert!(
@@ -2937,7 +2903,7 @@ events = ["command-invoked"]
             let error = manifest.validate().unwrap_err().to_string();
             assert!(error.contains(expected), "{expected}: {error}");
         };
-        let base = handler_manifest(&["ui-actions"], false, &["app-ready"]);
+        let base = handler_manifest(&["ui-actions"], &["app-ready"]);
         base.validate().unwrap();
 
         let mut missing_subscribe = base.clone();
@@ -2973,8 +2939,8 @@ events = ["command-invoked"]
     }
 
     #[test]
-    fn persistent_mode_is_explicit_and_reserves_protocol_space() {
-        let manifest = handler_manifest(&["ui-actions"], true, &["tab-created"]);
+    fn events_reserve_protocol_space() {
+        let manifest = handler_manifest(&["ui-actions"], &["tab-created"]);
         manifest.validate().unwrap();
         let grants = manifest.permissions.clone();
         let invocation = invocation_for(
@@ -2989,12 +2955,11 @@ events = ["command-invoked"]
                 terminal_size: (usize::MAX, usize::MAX),
             },
         );
-        assert_eq!(invocation.mode, StructuredHandlerMode::Persistent);
         assert!(invocation.event_json.len() <= MAX_PERSISTENT_SOURCE_EVENT_BYTES);
     }
 
     #[test]
-    fn host_operation_capabilities_require_a_persistent_handler() {
+    fn capabilities_used_through_a_handler_require_one() {
         for capability in Capability::ALL {
             let name = capability.name();
             if matches!(
@@ -3003,33 +2968,29 @@ events = ["command-invoked"]
             ) {
                 continue;
             }
-            let (requested, events): (&[&str], &[&str]) = if capability == Capability::WindowClose {
-                (&[name], &["command-invoked"])
+            let events: &[&str] = if capability == Capability::WindowClose {
+                &["command-invoked"]
             } else {
-                (&[name], &["app-ready"])
+                &["app-ready"]
             };
-            handler_manifest(requested, true, events)
+            handler_manifest(&[name], events)
                 .validate()
-                .unwrap_or_else(|error| panic!("{name} with a persistent handler: {error}"));
-            let per_event = handler_manifest(requested, false, events).validate();
-            if capability.requires_persistent_handler() {
+                .unwrap_or_else(|error| panic!("{name} with a handler: {error}"));
+            let profile_only: PluginManifest =
+                toml::from_str(&manifest("1.0.0", &format!(", {name:?}"), "profile")).unwrap();
+            let without_handler = profile_only.validate();
+            if capability.requires_event_handler() {
                 assert!(
-                    per_event
+                    without_handler
                         .unwrap_err()
                         .to_string()
-                        .contains(&format!("{name} requires a persistent event handler")),
+                        .contains(&format!("{name} requires an event handler")),
                     "{name}"
                 );
             } else {
-                per_event.unwrap_or_else(|error| panic!("{name} per event: {error}"));
+                without_handler.unwrap_or_else(|error| panic!("{name} without a handler: {error}"));
             }
         }
-        // Window scope and all-windows scope obey the same handler rule.
-        let error = handler_manifest(&["pane-create:all-windows"], false, &["app-ready"])
-            .validate()
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("pane-create requires a persistent event handler"));
     }
 
     #[test]
@@ -3040,7 +3001,6 @@ events = ["command-invoked"]
         };
         let manifest = handler_manifest(
             &["workspace-query:all-windows", "window-close"],
-            true,
             &["app-ready", "command-invoked"],
         );
         manifest.validate().unwrap();
@@ -3054,7 +3014,6 @@ events = ["command-invoked"]
             },
             &context(),
         );
-        assert_eq!(command.mode, StructuredHandlerMode::Persistent);
         assert_eq!(
             command.authority.grants().scope(Capability::WorkspaceQuery),
             Some(PermissionScope::AllWindows)
@@ -3097,7 +3056,7 @@ events = ["command-invoked"]
 
     #[test]
     fn window_close_scope_selects_its_command_requirement() {
-        let window_scoped = handler_manifest(&["window-close"], true, &["app-ready"]);
+        let window_scoped = handler_manifest(&["window-close"], &["app-ready"]);
         assert!(
             window_scoped
                 .validate()
@@ -3105,17 +3064,17 @@ events = ["command-invoked"]
                 .to_string()
                 .contains("command-scoped")
         );
-        handler_manifest(&["window-close"], true, &["command-invoked"])
+        handler_manifest(&["window-close"], &["command-invoked"])
             .validate()
             .unwrap();
-        handler_manifest(&["window-close:all-windows"], true, &["app-ready"])
+        handler_manifest(&["window-close:all-windows"], &["app-ready"])
             .validate()
             .unwrap();
     }
 
     #[test]
     fn handler_commands_are_bounded_namespaced_and_exact() {
-        let manifest = handler_manifest(&["ui-actions"], true, &["command-invoked"]);
+        let manifest = handler_manifest(&["ui-actions"], &["command-invoked"]);
         manifest.validate().unwrap();
         let grants = manifest.permissions.clone();
         let mut plugin = DeclarativePlugin::new(manifest.clone(), None, grants.clone());
@@ -3137,7 +3096,6 @@ events = ["command-invoked"]
         ) else {
             panic!("declared command did not create a handler invocation")
         };
-        assert_eq!(invocation.mode, StructuredHandlerMode::Persistent);
         let value: serde_json::Value = serde_json::from_str(&invocation.event_json).unwrap();
         assert_eq!(value["schema_version"], 1);
         assert_eq!(value["plugin_id"], "handler-fixture");
@@ -3156,23 +3114,11 @@ events = ["command-invoked"]
                 )
                 .is_none()
         );
-
-        let process_per_event = handler_manifest(&["ui-actions"], false, &["command-invoked"]);
-        process_per_event.validate().unwrap();
-        let invocation = invocation_for(
-            process_per_event,
-            grants,
-            &Hook::CommandInvoked {
-                command_id: "handler-fixture.run".into(),
-            },
-            &context,
-        );
-        assert_eq!(invocation.mode, StructuredHandlerMode::ProcessPerEvent);
     }
 
     #[test]
     fn handler_command_contract_fails_closed() {
-        let manifest = handler_manifest(&["ui-actions"], true, &["command-invoked"]);
+        let manifest = handler_manifest(&["ui-actions"], &["command-invoked"]);
 
         let mut missing_subscription = manifest.clone();
         missing_subscription.event_handler.as_mut().unwrap().events =
@@ -3495,7 +3441,7 @@ events = ["command-invoked"]
 
     #[test]
     fn command_events_are_bounded_typed_and_command_output_gated() {
-        let manifest = handler_manifest(&[], false, &["command-completed"]);
+        let manifest = handler_manifest(&[], &["command-completed"]);
         manifest.validate().unwrap();
         let grants = manifest.permissions.clone();
         assert!(
@@ -3521,8 +3467,7 @@ events = ["command-invoked"]
             ),
             &context,
         );
-        assert!(invocation.event_json.len() <= MAX_STRUCTURED_CONTEXT_BYTES);
-        assert_eq!(invocation.mode, StructuredHandlerMode::ProcessPerEvent);
+        assert!(invocation.event_json.len() <= MAX_PERSISTENT_SOURCE_EVENT_BYTES);
         let value: serde_json::Value = serde_json::from_str(&invocation.event_json).unwrap();
         assert_eq!(value["schema_version"], 1);
         assert_eq!(value["event"]["type"], "command-completed");
@@ -3578,7 +3523,7 @@ events = ["command-invoked"]
 
     #[test]
     fn command_events_never_disclose_evicted_region_text() {
-        let manifest = handler_manifest(&[], false, &["command-completed"]);
+        let manifest = handler_manifest(&[], &["command-completed"]);
         let grants = manifest.permissions.clone();
         let invocation = invocation_for(
             manifest,

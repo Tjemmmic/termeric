@@ -1,9 +1,10 @@
 //! Bounded out-of-process execution for declarative plugin event handlers.
 //!
-//! Handlers exchange one schema-v1 JSON document per event. Persistent
-//! handlers additionally echo the host's `request_id`. Each handler response
-//! is checked against a [`HandlerAuthority`]: the plugin's granted
-//! capabilities plus where the response sits in its bounded follow-up chain.
+//! Each plugin's handler is one long-lived process that reads one schema-v1
+//! JSON request per line and answers each with one JSON line echoing the
+//! request's `request_id`. Each response is checked against a
+//! [`HandlerAuthority`]: the plugin's granted capabilities plus where the
+//! response sits in its bounded follow-up chain.
 
 use super::permission::{Capability, PermissionScope, PluginPermissions};
 use crate::panes::PaneLayoutPreset;
@@ -19,7 +20,6 @@ use std::time::{Duration, Instant};
 use winit::event_loop::EventLoopProxy;
 use winit::window::WindowId;
 
-#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 
 const QUEUE_CAPACITY: usize = 32;
@@ -40,16 +40,10 @@ const MAX_NOTICE_LINES: usize = 16;
 const MAX_LINE_BYTES: usize = 512;
 const MAX_QUERY_ID_BYTES: usize = 64;
 const MAX_ACTION_ID_BYTES: usize = 64;
-/// The one handler protocol version, shared by both handler modes.
+/// The handler protocol version.
 pub(crate) const SCHEMA_VERSION: u32 = 1;
 const WORKER_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const PERSISTENT_REAP_INTERVAL: Duration = Duration::from_millis(100);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StructuredHandlerMode {
-    ProcessPerEvent,
-    Persistent,
-}
 
 #[derive(Debug, Clone)]
 pub struct StructuredHandlerInvocation {
@@ -57,7 +51,6 @@ pub struct StructuredHandlerInvocation {
     pub program: String,
     pub args: Vec<String>,
     pub event_json: String,
-    pub mode: StructuredHandlerMode,
     pub authority: HandlerAuthority,
 }
 
@@ -84,19 +77,11 @@ pub struct HandlerAuthority {
 }
 
 impl HandlerAuthority {
-    /// Authority for a freshly dispatched event. Process-per-event handlers
-    /// cannot receive results, so they may never start host operations.
-    pub fn for_event(
-        grants: PluginPermissions,
-        mode: StructuredHandlerMode,
-        command_invoked: bool,
-    ) -> Self {
+    /// Authority for a freshly dispatched event.
+    pub fn for_event(grants: PluginPermissions, command_invoked: bool) -> Self {
         Self {
             grants,
-            stage: match mode {
-                StructuredHandlerMode::ProcessPerEvent => FollowUpStage::Ended,
-                StructuredHandlerMode::Persistent => FollowUpStage::Event,
-            },
+            stage: FollowUpStage::Event,
             command_invoked,
         }
     }
@@ -142,7 +127,7 @@ impl HandlerAuthority {
                 (OperationKind::Ui, _) => {}
                 (_, FollowUpStage::Ended) => {
                     return Err(format!(
-                        "handler requested {name}, but this response cannot start host operations; process-per-event handlers, action results, and terminal query results end the chain"
+                        "handler requested {name}, but this response cannot start host operations; action results and terminal query results end the chain"
                     ));
                 }
                 (OperationKind::WorkspaceQuery, FollowUpStage::AfterWorkspaceQuery) => {
@@ -507,9 +492,9 @@ pub struct StructuredHandlerCompletion {
     pub plugin_generation: u64,
     pub plugin_id: String,
     pub request_id: u64,
-    /// Persistent descriptor retained only long enough to deliver one bounded
-    /// follow-up result through the same isolated process.
-    pub continuation: Option<StructuredHandlerInvocation>,
+    /// The handler's descriptor, kept to deliver one bounded follow-up
+    /// result through the same process.
+    pub continuation: StructuredHandlerInvocation,
     pub result: Result<Vec<StructuredResponseAction>, String>,
 }
 
@@ -517,8 +502,7 @@ pub struct StructuredHandlerCompletion {
 #[serde(deny_unknown_fields)]
 struct StructuredResponse {
     schema_version: u32,
-    #[serde(default)]
-    request_id: Option<u64>,
+    request_id: u64,
     #[serde(default)]
     actions: Vec<StructuredResponseAction>,
 }
@@ -597,26 +581,15 @@ impl StructuredPluginWorker {
                             if worker_generation.load(Ordering::Acquire) != item.plugin_generation {
                                 continue;
                             }
-                            let result = match item.invocation.mode {
-                                StructuredHandlerMode::ProcessPerEvent => run_handler(
-                                    &item.invocation,
-                                    &worker_shutdown,
-                                    &worker_generation,
-                                    item.plugin_generation,
-                                ),
-                                StructuredHandlerMode::Persistent => run_persistent_handler(
-                                    &mut persistent_handlers,
-                                    &item.invocation,
-                                    item.request_id,
-                                    &worker_shutdown,
-                                    &worker_generation,
-                                    item.plugin_generation,
-                                ),
-                            };
+                            let result = run_persistent_handler(
+                                &mut persistent_handlers,
+                                &item.invocation,
+                                item.request_id,
+                                &worker_shutdown,
+                                &worker_generation,
+                                item.plugin_generation,
+                            );
                             let plugin_id = item.invocation.plugin_id.clone();
-                            let continuation = (item.invocation.mode
-                                == StructuredHandlerMode::Persistent)
-                                .then_some(item.invocation);
                             let _ = item.proxy.send_event(
                                 crate::app::AppEvent::StructuredPluginCompleted(
                                     StructuredHandlerCompletion {
@@ -624,7 +597,7 @@ impl StructuredPluginWorker {
                                         plugin_generation: item.plugin_generation,
                                         plugin_id,
                                         request_id: item.request_id,
-                                        continuation,
+                                        continuation: item.invocation,
                                         result,
                                     },
                                 ),
@@ -699,108 +672,12 @@ fn handler_command(invocation: &StructuredHandlerInvocation) -> Command {
         .env("TERMERIC_PLUGIN_ID", &invocation.plugin_id)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    #[cfg(unix)]
-    command.process_group(0);
+        .stderr(Stdio::piped())
+        .process_group(0);
     if let Some(path) = std::env::var_os("PATH") {
         command.env("PATH", path);
     }
     command
-}
-
-fn run_handler(
-    invocation: &StructuredHandlerInvocation,
-    shutdown: &AtomicBool,
-    active_generation: &AtomicU64,
-    expected_generation: u64,
-) -> Result<Vec<StructuredResponseAction>, String> {
-    let mut child = handler_command(invocation)
-        .spawn()
-        .map_err(|error| bounded_error(&format!("handler launch failed: {error}")))?;
-    let Some(stdin) = child.stdin.take() else {
-        terminate_handler(&mut child);
-        return Err("handler stdin was unavailable".into());
-    };
-    let Some(stdout) = child.stdout.take() else {
-        terminate_handler(&mut child);
-        return Err("handler stdout was unavailable".into());
-    };
-    let Some(stderr) = child.stderr.take() else {
-        terminate_handler(&mut child);
-        return Err("handler stderr was unavailable".into());
-    };
-    let event_json = invocation.event_json.clone();
-    let stdin_writer = thread::spawn(move || {
-        let mut stdin = stdin;
-        stdin.write_all(event_json.as_bytes())
-    });
-    let stdout_reader = thread::spawn(move || read_bounded(stdout, MAX_OUTPUT_BYTES));
-    let stderr_reader = thread::spawn(move || read_bounded(stderr, MAX_ERROR_BYTES));
-    let started = Instant::now();
-    let status = loop {
-        if shutdown.load(Ordering::Acquire)
-            || active_generation.load(Ordering::Acquire) != expected_generation
-        {
-            stop_handler(&mut child, stdin_writer, stdout_reader, stderr_reader);
-            return Err("structured plugin handler was cancelled".into());
-        }
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if started.elapsed() < HANDLER_TIMEOUT => {
-                thread::sleep(Duration::from_millis(10));
-            }
-            Ok(None) => {
-                stop_handler(&mut child, stdin_writer, stdout_reader, stderr_reader);
-                return Err(format!(
-                    "structured plugin handler exceeded {} ms",
-                    HANDLER_TIMEOUT.as_millis()
-                ));
-            }
-            Err(error) => {
-                stop_handler(&mut child, stdin_writer, stdout_reader, stderr_reader);
-                return Err(bounded_error(&format!("handler wait failed: {error}")));
-            }
-        }
-    };
-    // A handler is one bounded event process, not a service supervisor. Close
-    // any descendants that outlived the parent before joining captured pipes.
-    terminate_handler_group(child.id());
-    let stdin_result = stdin_writer
-        .join()
-        .map_err(|_| "handler stdin writer failed".to_string())?
-        .map_err(|error| bounded_error(&format!("handler event write failed: {error}")));
-    let stdout_result = stdout_reader
-        .join()
-        .map_err(|_| "handler stdout reader failed".to_string())?
-        .map_err(|error| bounded_error(&format!("handler stdout read failed: {error}")));
-    let stderr_result = stderr_reader
-        .join()
-        .map_err(|_| "handler stderr reader failed".to_string())?
-        .map_err(|error| bounded_error(&format!("handler stderr read failed: {error}")));
-    if !status.success() {
-        let mut detail = stderr_result
-            .as_ref()
-            .map(|(stderr, _)| String::from_utf8_lossy(stderr).into_owned())
-            .unwrap_or_default();
-        if stderr_result
-            .as_ref()
-            .is_ok_and(|(_, truncated)| *truncated)
-        {
-            detail.push('…');
-        }
-        return Err(bounded_error(&format!(
-            "handler exited with {status}: {detail}"
-        )));
-    }
-    stdin_result?;
-    let (stdout, stdout_truncated) = stdout_result?;
-    stderr_result?;
-    if stdout_truncated {
-        return Err(format!(
-            "structured plugin response exceeds {MAX_OUTPUT_BYTES} bytes"
-        ));
-    }
-    parse_response(&stdout, &invocation.authority, None)
 }
 
 #[derive(Debug)]
@@ -954,7 +831,7 @@ impl PersistentHandler {
                 "structured plugin response exceeds {MAX_OUTPUT_BYTES} bytes"
             ));
         }
-        let actions = parse_response(&bytes, authority, Some(request_id))?;
+        let actions = parse_response(&bytes, authority, request_id)?;
         if let Some(status) = self
             .child
             .try_wait()
@@ -1109,25 +986,12 @@ fn drain_persistent_stderr(mut stream: impl Read, target: &Mutex<BoundedStderr>)
     }
 }
 
-fn stop_handler(
-    child: &mut std::process::Child,
-    stdin_writer: JoinHandle<std::io::Result<()>>,
-    stdout_reader: JoinHandle<std::io::Result<(Vec<u8>, bool)>>,
-    stderr_reader: JoinHandle<std::io::Result<(Vec<u8>, bool)>>,
-) {
-    terminate_handler(child);
-    let _ = stdin_writer.join();
-    let _ = stdout_reader.join();
-    let _ = stderr_reader.join();
-}
-
 fn terminate_handler(child: &mut std::process::Child) {
     terminate_handler_group(child.id());
     let _ = child.kill();
     let _ = child.wait();
 }
 
-#[cfg(unix)]
 fn terminate_handler_group(process_id: u32) {
     if let Ok(process_group) = libc::pid_t::try_from(process_id) {
         // The child is started as its own process-group leader. A negative PID
@@ -1139,29 +1003,11 @@ fn terminate_handler_group(process_id: u32) {
     }
 }
 
-#[cfg(not(unix))]
-fn terminate_handler_group(_process_id: u32) {}
-
-fn read_bounded(mut stream: impl Read, max: u64) -> std::io::Result<(Vec<u8>, bool)> {
-    let mut bytes = Vec::new();
-    stream.by_ref().take(max + 1).read_to_end(&mut bytes)?;
-    let truncated = bytes.len() as u64 > max;
-    bytes.truncate(max as usize);
-    if truncated {
-        // Keep draining without retaining bytes so a finite oversized writer
-        // can exit and be classified by the output ceiling instead of filling
-        // the pipe and being misreported as a timeout.
-        std::io::copy(&mut stream, &mut std::io::sink())?;
-    }
-    Ok((bytes, truncated))
-}
-
-/// Parse one handler response. Persistent handlers must echo
-/// `expected_request_id`; process-per-event handlers must not send one.
+/// Parse one handler response, which must echo `expected_request_id`.
 fn parse_response(
     bytes: &[u8],
     authority: &HandlerAuthority,
-    expected_request_id: Option<u64>,
+    expected_request_id: u64,
 ) -> Result<Vec<StructuredResponseAction>, String> {
     let response: StructuredResponse = serde_json::from_slice(bytes)
         .map_err(|error| bounded_error(&format!("invalid handler response JSON: {error}")))?;
@@ -1171,21 +1017,11 @@ fn parse_response(
             response.schema_version
         ));
     }
-    match (expected_request_id, response.request_id) {
-        (Some(expected), Some(actual)) if expected != actual => {
-            return Err(format!(
-                "persistent handler response request id {actual} did not match {expected}"
-            ));
-        }
-        (Some(expected), None) => {
-            return Err(format!(
-                "persistent handler response is missing request id {expected}"
-            ));
-        }
-        (None, Some(_)) => {
-            return Err("process-per-event handler responses must not carry a request id".into());
-        }
-        _ => {}
+    if response.request_id != expected_request_id {
+        return Err(format!(
+            "handler response request id {} did not match {expected_request_id}",
+            response.request_id
+        ));
     }
     authority.check(&response.actions)?;
     Ok(response.actions)
@@ -1222,6 +1058,20 @@ fn bounded_error(value: &str) -> String {
 }
 
 #[cfg(test)]
+impl StructuredHandlerInvocation {
+    /// A descriptor for tests that need a completion but never run it.
+    pub(crate) fn fixture(plugin_id: &str, grants: PluginPermissions) -> Self {
+        Self {
+            plugin_id: plugin_id.into(),
+            program: "fixture".into(),
+            args: Vec::new(),
+            event_json: "{}".into(),
+            authority: HandlerAuthority::for_event(grants, false),
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
@@ -1237,11 +1087,7 @@ mod tests {
     }
 
     fn persistent_authority(permissions: &[&str]) -> HandlerAuthority {
-        HandlerAuthority::for_event(
-            grants(permissions),
-            StructuredHandlerMode::Persistent,
-            false,
-        )
+        HandlerAuthority::for_event(grants(permissions), false)
     }
 
     /// Check one persistent response carrying `actions` (a JSON array body).
@@ -1252,29 +1098,8 @@ mod tests {
         parse_response(
             format!(r#"{{"schema_version":1,"request_id":9,"actions":[{actions}]}}"#).as_bytes(),
             authority,
-            Some(9),
+            9,
         )
-    }
-
-    fn run_fixture(
-        invocation: &StructuredHandlerInvocation,
-    ) -> Result<Vec<StructuredResponseAction>, String> {
-        run_handler(invocation, &AtomicBool::new(false), &AtomicU64::new(1), 1)
-    }
-
-    fn process_fixture(plugin_id: &str, script: &str) -> StructuredHandlerInvocation {
-        StructuredHandlerInvocation {
-            plugin_id: plugin_id.into(),
-            program: "/bin/sh".into(),
-            args: vec!["-c".into(), script.into()],
-            event_json: "x".repeat(16 * 1024),
-            mode: StructuredHandlerMode::ProcessPerEvent,
-            authority: HandlerAuthority::for_event(
-                grants(&["ui-actions"]),
-                StructuredHandlerMode::ProcessPerEvent,
-                false,
-            ),
-        }
     }
 
     #[cfg(unix)]
@@ -1284,7 +1109,6 @@ mod tests {
             program: "/bin/sh".into(),
             args: vec!["-c".into(), script.into()],
             event_json: r#"{"schema_version":1,"event":{"type":"app-ready"}}"#.into(),
-            mode: StructuredHandlerMode::Persistent,
             authority: persistent_authority(&["ui-actions"]),
         }
     }
@@ -1390,44 +1214,27 @@ mod tests {
 
     #[test]
     fn response_schema_and_correlation_fail_closed() {
-        let authority = HandlerAuthority::for_event(
-            grants(&["ui-actions"]),
-            StructuredHandlerMode::ProcessPerEvent,
-            false,
-        );
-        let valid = br#"{"schema_version":1,"actions":[{"type":"show-message","message":"done"},{"type":"show-notice","title":"Result","lines":["one","two"]}]}"#;
-        assert_eq!(parse_response(valid, &authority, None).unwrap().len(), 2);
-        assert!(
-            parse_response(br#"{"schema_version":2,"actions":[]}"#, &authority, None)
-                .unwrap_err()
-                .contains("unsupported")
-        );
+        let authority = persistent_authority(&["ui-actions"]);
+        let valid = br#"{"schema_version":1,"request_id":42,"actions":[{"type":"show-message","message":"done"},{"type":"show-notice","title":"Result","lines":["one","two"]}]}"#;
+        assert_eq!(parse_response(valid, &authority, 42).unwrap().len(), 2);
         assert!(
             parse_response(
-                br#"{"schema_version":1,"request_id":1,"actions":[]}"#,
+                br#"{"schema_version":2,"request_id":42,"actions":[]}"#,
                 &authority,
-                None
+                42
             )
             .unwrap_err()
-            .contains("must not carry a request id")
+            .contains("unsupported")
         );
-
-        let persistent = persistent_authority(&["ui-actions"]);
-        let correlated = br#"{"schema_version":1,"request_id":42,"actions":[]}"#;
-        assert!(parse_response(correlated, &persistent, Some(42)).is_ok());
         assert!(
-            parse_response(correlated, &persistent, Some(41))
+            parse_response(valid, &authority, 41)
                 .unwrap_err()
                 .contains("did not match")
         );
         assert!(
-            parse_response(
-                br#"{"schema_version":1,"actions":[]}"#,
-                &persistent,
-                Some(42)
-            )
-            .unwrap_err()
-            .contains("missing request id")
+            parse_response(br#"{"schema_version":1,"actions":[]}"#, &authority, 42)
+                .unwrap_err()
+                .contains("missing field `request_id`")
         );
         for removed in [
             r#"{"type":"query-process","query_id":"all"}"#,
@@ -1482,27 +1289,6 @@ mod tests {
                 ..
             }]
         ));
-    }
-
-    #[test]
-    fn process_per_event_handlers_cannot_start_host_operations() {
-        let authority = HandlerAuthority::for_event(
-            grants(&["ui-actions", "workspace-query", "navigate"]),
-            StructuredHandlerMode::ProcessPerEvent,
-            false,
-        );
-        for action in [
-            r#"{"type":"query-workspace","query_id":"inventory"}"#,
-            r#"{"type":"select-tab","action_id":"a","tab_id":7}"#,
-        ] {
-            let error = parse_response(
-                format!(r#"{{"schema_version":1,"actions":[{action}]}}"#).as_bytes(),
-                &authority,
-                None,
-            )
-            .unwrap_err();
-            assert!(error.contains("cannot start host operations"), "{error}");
-        }
     }
 
     #[test]
@@ -1580,18 +1366,13 @@ mod tests {
     fn window_scoped_window_close_is_limited_to_invoked_commands() {
         let close = r#"{"type":"close-window","action_id":"close"}"#;
         let window_scoped = grants(&["window-close"]);
-        let lifecycle = HandlerAuthority::for_event(
-            window_scoped.clone(),
-            StructuredHandlerMode::Persistent,
-            false,
-        );
+        let lifecycle = HandlerAuthority::for_event(window_scoped.clone(), false);
         assert!(
             check(&lifecycle, close)
                 .unwrap_err()
                 .contains("outside an invoked plugin command")
         );
-        let command =
-            HandlerAuthority::for_event(window_scoped, StructuredHandlerMode::Persistent, true);
+        let command = HandlerAuthority::for_event(window_scoped, true);
         assert!(check(&command, close).is_ok());
         // A workspace query keeps the command origin for its follow-up.
         let query = StructuredResponseAction::QueryWorkspace {
@@ -2004,59 +1785,6 @@ done"#,
         assert!(handlers.contains_key("replacement"));
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn local_stdio_handler_round_trip_is_argv_preserving_and_bounded() {
-        let invocation = process_fixture(
-            "fixture",
-            "cat >/dev/null; printf '%s' '{\"schema_version\":1,\"actions\":[{\"type\":\"show-message\",\"message\":\"handled\"}]}'",
-        );
-        assert_eq!(
-            run_fixture(&invocation).unwrap(),
-            vec![StructuredResponseAction::ShowMessage {
-                message: "handled".into()
-            }]
-        );
-
-        let failed = StructuredHandlerInvocation {
-            args: vec![
-                "-c".into(),
-                "cat >/dev/null; printf 'bad' >&2; exit 7".into(),
-            ],
-            ..invocation
-        };
-        let error = run_fixture(&failed).unwrap_err();
-        assert!(error.contains("exit status: 7"));
-        assert!(error.contains("bad"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn timed_out_handler_process_group_is_terminated() {
-        let invocation = process_fixture("timeout-fixture", "sleep 10");
-        let started = Instant::now();
-        let error = run_fixture(&invocation).unwrap_err();
-        assert!(error.contains("exceeded 2000 ms"));
-        assert!(started.elapsed() < Duration::from_secs(4));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn registry_generation_change_cancels_active_handler() {
-        let invocation = process_fixture("cancel-fixture", "cat >/dev/null; sleep 10");
-        let generation = Arc::new(AtomicU64::new(1));
-        let update = Arc::clone(&generation);
-        let changer = thread::spawn(move || {
-            thread::sleep(Duration::from_millis(50));
-            update.store(2, Ordering::Release);
-        });
-        let started = Instant::now();
-        let error = run_handler(&invocation, &AtomicBool::new(false), &generation, 1).unwrap_err();
-        changer.join().unwrap();
-        assert!(error.contains("cancelled"));
-        assert!(started.elapsed() < Duration::from_secs(1));
-    }
-
     #[test]
     fn errors_are_control_free_and_bounded() {
         let error = bounded_error(&format!("bad\n\u{1b}{}", "x".repeat(2_000)));
@@ -2087,12 +1815,7 @@ done"#,
             program: handler.program,
             args: handler.args,
             event_json: String::new(),
-            mode: StructuredHandlerMode::Persistent,
-            authority: HandlerAuthority::for_event(
-                manifest.permissions,
-                StructuredHandlerMode::Persistent,
-                command_invoked,
-            ),
+            authority: HandlerAuthority::for_event(manifest.permissions, command_invoked),
         }
     }
 
@@ -2233,11 +1956,8 @@ done"#,
             command: &str,
             settings: Option<serde_json::Value>,
         ) -> Vec<StructuredResponseAction> {
-            self.invocation.authority = HandlerAuthority::for_event(
-                self.invocation.authority.grants().clone(),
-                StructuredHandlerMode::Persistent,
-                true,
-            );
+            self.invocation.authority =
+                HandlerAuthority::for_event(self.invocation.authority.grants().clone(), true);
             let plugin_id = self.invocation.plugin_id.clone();
             let mut envelope = self.envelope(serde_json::json!({
                 "type": "command-invoked",

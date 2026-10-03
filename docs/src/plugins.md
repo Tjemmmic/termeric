@@ -203,7 +203,7 @@ Each permission is a capability, and those that act on windows take a scope. Wri
 | `pane-layout` | `swap-panes`, `balance-panes`, `apply-pane-layout`, and `resize-divider`. | yes |
 | `window-close` | `close-window`. | yes |
 
-Every permission from `window-focus` down, except `workspace-query`, is used through handler actions whose results come back to the handler, so it requires `mode = "persistent"`. `window-close` without `:all-windows` also requires at least one command, because it may close the origin window only from a chain started by one of the plugin's commands.
+Every permission from `window-focus` down, except `workspace-query`, is used only through handler actions, so it requires an event handler. `window-close` without `:all-windows` also requires at least one command, because it may close the origin window only from a chain started by one of the plugin's commands.
 
 ## Event handlers
 
@@ -213,22 +213,15 @@ The `[event_handler]` table names one program that receives every event the plug
 | --- | --- | --- |
 | `program` | yes | The program to run, started directly. |
 | `args` | no | Arguments, with the same limits as a profile's. |
-| `mode` | no | `process-per-event` (default) or `persistent`. |
 | `events` | yes | One or more of the events below. |
 
 Termeric starts the handler with an empty environment except `PATH` and `TERMERIC_PLUGIN_ID` (the plugin's ID), in Termeric's own working directory. Only the manifest is installed, so give a handler script as an absolute path, or put the code in `args` as the examples do.
 
-Each window runs its handlers separately: in `persistent` mode, every window that has sent the plugin an event has its own handler process, with its own memory. A window runs one handler request at a time, across all plugins, and queues up to 32 more.
-
-### Process-per-event handlers
-
-Termeric starts the program for each event, writes one JSON request to its standard input, and closes it. The program writes one JSON response to standard output and exits with status 0 within 2 seconds. Anything it started is stopped when it exits. These handlers can only show messages and notices.
-
-### Persistent handlers
+Each window runs its handlers separately: every window that has sent the plugin an event has its own handler process, with its own memory. A window runs one handler request at a time, across all plugins, and queues up to 32 more.
 
 Termeric starts the program with the first event and keeps it running. Each request is one line of JSON on standard input, with a `request_id`; the program answers each with one line of JSON on standard output carrying the same `request_id`, within 2 seconds, and must print nothing else there. Flush standard output after each line. Standard error is kept for error messages.
 
-A persistent handler receives the results of its queries and actions, so only it can use them. If it fails a request, Termeric stops it and starts a fresh process for the next event. It is also restarted whenever the plugin registry or your configuration is reloaded, and stopped when the plugin is disabled or the window closes.
+The handler also receives the results of its queries and actions. If it fails a request, Termeric stops it and starts a fresh process for the next event. It is also restarted whenever the plugin registry or your configuration is reloaded, and stopped when the plugin is disabled or the window closes.
 
 ### Requests
 
@@ -238,11 +231,11 @@ A persistent handler receives the results of its queries and actions, so only it
 | `plugin_id` | The plugin's ID. |
 | `origin_window_id` | The window the event happened in, with the same IDs as `termeric control list`. |
 | `event` | The event, with its `type`. |
-| `request_id` | Persistent handlers only: the number to echo in the response. |
+| `request_id` | The number to echo in the response. |
 | `settings` | Event requests only, when the plugin declares settings: `{"SETTING-ID": value, …}`. |
 | `context` | Event requests only, when `workspace-query` is granted: `active_working_directory`, `tab_count`, `active_tab_index`, and `terminal` (`columns`, `rows`) for the origin window. |
 
-Result events (below) carry no `settings` or `context`; a persistent handler that needs them later keeps them from the event that started the conversation.
+Result events (below) carry no `settings` or `context`; a handler that needs them later keeps them from the event that started the conversation.
 
 ### Events
 
@@ -265,7 +258,7 @@ Tabs, panes, and focus changed by a plugin's own actions raise no events; the ac
 {"schema_version": 1, "request_id": 7, "actions": []}
 ```
 
-A response has `schema_version` 1, the `request_id` for persistent handlers (and none for process-per-event handlers), and up to 8 `actions`. Any number of them may be `show-message` or `show-notice`; at most one may be a query or another action. An empty `actions` list is a valid reply.
+A response has `schema_version` 1, the request's `request_id`, and up to 8 `actions`. Any number of them may be `show-message` or `show-notice`; at most one may be a query or another action. An empty `actions` list is a valid reply.
 
 Termeric checks the whole response before doing anything: if any action lacks its permission, has an invalid field, or isn't allowed at that point in the conversation, none of it runs and you see an error toast naming the plugin. Which window an action targets is checked only when the action runs, so naming another window without the permission's `:all-windows` scope comes back as a result with `ok` set to `false`, after the response's messages have been shown.
 
@@ -307,7 +300,7 @@ What the actions do, and their rules:
 
 ### Results
 
-A query or action gets exactly one result, sent to the persistent handler as a request with the same envelope and a fresh `request_id`.
+A query or action gets exactly one result, sent to the handler as a request with the same envelope and a fresh `request_id`.
 
 `workspace-query-result` has the `query_id`, a `windows` array, and `truncated`. Each window has `id`, `focused`, `visible`, `quick_access`, `workspace_id`, `pixel_width`, `pixel_height`, `tabs`, and `truncated`; each tab has `id`, `title`, `kind`, `active`, `pinned`, `activity`, `closed`, `domain_id`, `panes`, `dividers`, and `truncated`; each pane has `id`, `title`, `focused`, `closed`, `cols`, and `rows`; each divider has `id`, `kind`, `direction`, and `ratio_millis`. With window scope only the origin window is listed. The result covers at most 8 windows, 16 tabs, 32 panes, and 31 dividers, and `truncated` is `true` when something was left out.
 
@@ -335,7 +328,7 @@ The limit applies to one conversation, not across events. An action can cause a 
 | Request size | 16 KiB |
 | Response size | 64 KiB |
 | Actions per response | 8, with at most one query or action |
-| Persistent handlers per window | 8 |
+| Handler processes per window | 8 |
 | Queued requests per window | 32 |
 
 A handler that exits with an error, times out, writes invalid JSON, sends the wrong `schema_version` or `request_id`, or asks for something it may not do produces an error toast, "Plugin ID event handler failed", with the reason and, when the handler exited with an error, the start of its standard error. Control characters, line and paragraph separators, and bidirectional formatting characters are removed, and the whole message is cut to 1 KiB. An action that Termeric accepts but can't carry out, such as selecting a tab that has closed, comes back as an `action-result` with `ok` set to `false`.
@@ -367,7 +360,6 @@ name = "Split Focused Pane"
 [event_handler]
 program = "python3"
 args = ["/home/me/plugins/split-here/handler.py"]
-mode = "persistent"
 events = ["command-invoked"]
 ```
 

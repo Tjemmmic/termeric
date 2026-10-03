@@ -103,16 +103,13 @@ impl Capability {
         )
     }
 
-    /// Whether the capability is exercised only through handler queries or
-    /// actions, which need a persistent handler to receive their results.
-    pub fn requires_persistent_handler(self) -> bool {
+    /// Whether the capability is exercised only through handler responses.
+    /// Workspace queries also feed profile launch context, and command output
+    /// rides on events, so neither needs a handler of its own.
+    pub fn requires_event_handler(self) -> bool {
         !matches!(
             self,
-            Self::ProcessSpawn
-                | Self::EventSubscribe
-                | Self::UiActions
-                | Self::CommandOutput
-                | Self::WorkspaceQuery
+            Self::ProcessSpawn | Self::EventSubscribe | Self::CommandOutput | Self::WorkspaceQuery
         )
     }
 

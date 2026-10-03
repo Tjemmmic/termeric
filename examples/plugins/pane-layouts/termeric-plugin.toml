@@ -89,5 +89,4 @@ for line in sys.stdin:
     reply = {"schema_version": 1, "request_id": request["request_id"], "actions": actions}
     print(json.dumps(reply), flush=True)
 """]
-mode = "persistent"
 events = ["command-invoked"]

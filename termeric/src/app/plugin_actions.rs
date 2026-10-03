@@ -13,8 +13,7 @@ use crate::plugin::structured::{
 const MAX_RESULT_ERROR_BYTES: usize = 1024;
 
 /// A handler's one query or host action, taken from its response for the
-/// Application to execute, with the persistent handler that receives the
-/// result.
+/// Application to execute, with the handler that receives the result.
 #[derive(Debug)]
 pub(super) struct StructuredHostOperation {
     pub(super) plugin_id: String,
@@ -91,24 +90,10 @@ impl App {
             }
         }
         let operation = operations.pop()?;
-        let Some(continuation) = completion.continuation else {
-            let error = "host operations require a live persistent handler";
-            log::error!(
-                "Structured plugin {:?} {} failed: {error}",
-                completion.plugin_id,
-                operation.name()
-            );
-            self.toasts.error(format!(
-                "Plugin {} {} failed: {error}",
-                completion.plugin_id,
-                operation.name()
-            ));
-            return None;
-        };
         Some(StructuredHostOperation {
             plugin_id: completion.plugin_id,
             operation,
-            continuation,
+            continuation: completion.continuation,
         })
     }
 

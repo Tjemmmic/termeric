@@ -5453,32 +5453,6 @@ mod tests {
         assert_eq!(selected_same_window["origin_window_id"], 7);
         assert_eq!(selected_same_window["event"]["changed"], true);
 
-        let generation = application.windows[&native_id].plugin_runtime_generation;
-        application.handle_structured_plugin_completed(
-            crate::plugin::structured::StructuredHandlerCompletion {
-                window_id: native_id,
-                plugin_generation: generation,
-                plugin_id: "navigator".into(),
-                request_id: 99,
-                continuation: None,
-                result: Ok(vec![
-                    crate::plugin::structured::StructuredResponseAction::SelectTab {
-                        action_id: "missing-continuation".into(),
-                        window_id: Some(7),
-                        tab_id: first as u64,
-                    },
-                ]),
-            },
-        );
-        assert_eq!(
-            application.windows[&native_id]
-                .tabs
-                .as_ref()
-                .unwrap()
-                .active_tab_id(),
-            Some(second)
-        );
-
         let missing_pane = plugin_event(
             &mut application,
             "navigator",
@@ -6961,7 +6935,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn plugin_host_results_continue_under_the_follow_up_rule() {
-        use crate::plugin::structured::{HandlerAuthority, StructuredHandlerMode};
+        use crate::plugin::structured::HandlerAuthority;
         if !std::path::Path::new("/bin/sh").is_file() {
             return;
         }
@@ -6976,12 +6950,7 @@ mod tests {
             program: "handler".into(),
             args: Vec::new(),
             event_json: "{}".into(),
-            mode: StructuredHandlerMode::Persistent,
-            authority: HandlerAuthority::for_event(
-                grants.clone(),
-                StructuredHandlerMode::Persistent,
-                false,
-            ),
+            authority: HandlerAuthority::for_event(grants.clone(), false),
         };
         let query = StructuredResponseAction::QueryWorkspace {
             query_id: "windows".into(),
@@ -8511,7 +8480,7 @@ mod tests {
             plugin_generation: generation,
             plugin_id: "window-closer".into(),
             request_id,
-            continuation: None,
+            continuation: StructuredHandlerInvocation::fixture("window-closer", Default::default()),
             result: Ok(Vec::new()),
         };
         application
