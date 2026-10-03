@@ -1,23 +1,26 @@
-//! Bell and notification handling
+//! The terminal bell and desktop notifications.
 //!
-//! Handles terminal bell (BEL character) with visual and audio feedback.
+//! The bell flashes the window and can play a sound. Notifications go to the
+//! desktop's notification service over D-Bus from one worker thread, which
+//! also tracks the Kitty OSC 99 notifications a terminal may close, query,
+//! or ask to hear about.
 
 mod icon;
 mod tracked;
 
 use std::process::{Child, Command};
-use std::sync::OnceLock;
-use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::time::{Duration, Instant};
 
+use crate::config::BellConfigFile;
 use termeric_core::NotificationRequest;
 #[cfg(test)]
 use termeric_core::NotificationSound;
 
-const DESKTOP_COMMAND_QUEUE_CAPACITY: usize = 16;
-const MAX_DESKTOP_HELPER_CHILDREN: usize = 8;
 const MAX_DELIVERY_ERROR_CHARS: usize = 512;
+/// Bells closer together than this are ignored.
+const BELL_RATE_LIMIT: Duration = Duration::from_millis(50);
 
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) enum NotificationCompletion {
     Warning(String),
     ProtocolReply {
@@ -34,250 +37,87 @@ pub(crate) enum NotificationCompletion {
 #[cfg(test)]
 pub(crate) type CapturedNotificationCommand = (&'static str, crate::tabs::TerminalIdentity, String);
 
-struct DesktopCommandRequest {
-    program: String,
-    args: Vec<String>,
-    label: &'static str,
-    started: SyncSender<Result<(), String>>,
+/// Turns delivery failures into bounded, logged messages for the person,
+/// reporting each one once until a delivery succeeds again.
+struct FailureReport {
+    prefix: &'static str,
+    last: Option<String>,
 }
 
-impl DesktopCommandRequest {
-    fn new(
-        program: String,
-        args: Vec<String>,
-        label: &'static str,
-    ) -> (Self, Receiver<Result<(), String>>) {
-        // One acknowledgement cannot block cleanup if its caller is descheduled.
-        let (started, result) = mpsc::sync_channel(1);
-        (
-            Self {
-                program,
-                args,
-                label,
-                started,
-            },
-            result,
-        )
+impl FailureReport {
+    const fn new(prefix: &'static str) -> Self {
+        Self { prefix, last: None }
     }
-}
 
-static DESKTOP_COMMAND_RUNNER: OnceLock<Result<SyncSender<DesktopCommandRequest>, String>> =
-    OnceLock::new();
-
-fn desktop_command_sender() -> Result<&'static SyncSender<DesktopCommandRequest>, String> {
-    DESKTOP_COMMAND_RUNNER
-        .get_or_init(|| {
-            let (sender, receiver) = mpsc::sync_channel(DESKTOP_COMMAND_QUEUE_CAPACITY);
-            std::thread::Builder::new()
-                .name("termeric-desktop-command".into())
-                .spawn(move || run_desktop_commands(receiver, Vec::new(), |_| {}))
-                .map(|_| sender)
-                .map_err(|error| format!("could not start desktop helper worker: {error}"))
-        })
-        .as_ref()
-        .map_err(Clone::clone)
-}
-
-fn run_desktop_commands(
-    receiver: Receiver<DesktopCommandRequest>,
-    mut children: Vec<(&'static str, Child)>,
-    mut before_receive: impl FnMut(bool),
-) {
-    loop {
-        reap_desktop_commands(&mut children);
-        let idle = children.is_empty();
-        // The observer is a no-op in production. Tests observe this exact
-        // receive boundary, not an estimate of whole-application CPU usage.
-        before_receive(idle);
-        let received = if idle {
-            receiver
-                .recv()
-                .map_err(|_| mpsc::RecvTimeoutError::Disconnected)
-        } else {
-            receiver.recv_timeout(Duration::from_millis(50))
-        };
-        match received {
-            Ok(request) => {
-                // A child may have exited while receive was blocked. Reap
-                // before admission so a completed child cannot occupy a slot.
-                // One request per iteration also prevents queue traffic from
-                // postponing cleanup indefinitely.
-                reap_desktop_commands(&mut children);
-                start_desktop_command(request, &mut children);
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                // Accepted requests have drained. Do not abandon remaining
-                // children or kill desktop applications during teardown.
-                for (label, mut child) in children {
-                    report_desktop_exit(label, child.wait());
-                }
-                return;
-            }
+    /// The message to show for `detail`, or `None` when it repeats the last.
+    fn report(&mut self, detail: &str) -> Option<String> {
+        let message = crate::safe_text::truncate_with_ellipsis(
+            &format!("{}: {detail}", self.prefix),
+            MAX_DELIVERY_ERROR_CHARS,
+        );
+        log::warn!("{message}");
+        if self.last.as_deref() == Some(message.as_str()) {
+            return None;
         }
+        self.last = Some(message.clone());
+        Some(message)
     }
-}
 
-fn report_desktop_exit(label: &str, result: std::io::Result<std::process::ExitStatus>) {
-    match result {
-        Ok(status) if !status.success() => {
-            log::warn!("{label} helper exited unsuccessfully: {status}");
-        }
-        Err(error) => log::warn!("Could not reap {label} helper: {error}"),
-        Ok(_) => {}
-    }
-}
-
-fn reap_desktop_commands(children: &mut Vec<(&'static str, Child)>) {
-    let mut index = 0;
-    while index < children.len() {
-        let result = match children[index].1.try_wait() {
-            Ok(None) => {
-                index += 1;
-                continue;
-            }
-            Ok(Some(status)) => Ok(status),
-            Err(error) => Err(error),
-        };
-        report_desktop_exit(children[index].0, result);
-        children.swap_remove(index);
-    }
-}
-
-fn start_desktop_command(
-    request: DesktopCommandRequest,
-    children: &mut Vec<(&'static str, Child)>,
-) {
-    if children.len() >= MAX_DESKTOP_HELPER_CHILDREN {
-        let _ = request.started.send(Err(format!(
-            "at most {MAX_DESKTOP_HELPER_CHILDREN} desktop helpers may run at once"
-        )));
-        return;
-    }
-    match Command::new(&request.program).args(&request.args).spawn() {
-        Ok(child) => {
-            let _ = request.started.send(Ok(()));
-            children.push((request.label, child));
-        }
-        Err(error) => {
-            let _ = request.started.send(Err(error.to_string()));
-        }
-    }
-}
-
-fn spawn_desktop_command(
-    program: &str,
-    args: &[String],
-    label: &'static str,
-) -> Result<(), String> {
-    let runner = desktop_command_sender()?;
-    let (request, result) = DesktopCommandRequest::new(program.to_owned(), args.to_vec(), label);
-    match runner.try_send(request) {
-        Ok(()) => {}
-        Err(TrySendError::Full(_)) => {
-            return Err("desktop helper queue is busy".into());
-        }
-        Err(TrySendError::Disconnected(_)) => {
-            return Err("desktop helper worker stopped".into());
-        }
-    }
-    result
-        .recv()
-        .map_err(|_| "desktop helper worker stopped before launch".to_string())?
-        .map_err(|error| format!("could not start {program}: {error}"))
-}
-
-fn bounded_delivery_error(prefix: &str, detail: &str) -> String {
-    crate::safe_text::truncate_with_ellipsis(
-        &format!("{prefix}: {detail}"),
-        MAX_DELIVERY_ERROR_CHARS,
-    )
-}
-
-fn report_new_failure(slot: &mut Option<String>, message: String) -> Option<String> {
-    if slot.as_deref() == Some(message.as_str()) {
-        return None;
-    }
-    *slot = Some(message.clone());
-    Some(message)
-}
-
-/// Bell configuration
-#[derive(Debug, Clone)]
-pub struct BellConfig {
-    /// Enable visual bell (screen flash)
-    pub visual: bool,
-    /// Enable audio bell
-    pub audio: bool,
-    /// Duration of visual bell flash in milliseconds
-    pub visual_duration_ms: u64,
-    /// Minimum time between bells to prevent spam
-    pub rate_limit_ms: u64,
-}
-
-impl Default for BellConfig {
-    fn default() -> Self {
-        Self {
-            visual: true,
-            audio: false, // Audio can be annoying
-            visual_duration_ms: 100,
-            rate_limit_ms: 50,
-        }
+    fn recovered(&mut self) {
+        self.last = None;
     }
 }
 
 /// Bell state tracker
 pub struct Bell {
-    /// Configuration
-    config: BellConfig,
+    config: BellConfigFile,
+    rate_limit: Duration,
     /// Time of last bell
     last_bell: Option<Instant>,
-    /// Whether visual bell is currently active
-    visual_active: bool,
-    /// When visual bell started
+    /// When the visual bell started, while it is showing
     visual_start: Option<Instant>,
     audio_command: (String, Vec<String>),
-    last_audio_failure: Option<String>,
+    /// The sound playing now. One at a time: a bell during it stays silent.
+    audio_player: Option<Child>,
+    audio_failure: FailureReport,
 }
 
 impl Bell {
     /// Create a new bell handler
-    pub fn new(config: BellConfig) -> Self {
+    pub fn new(config: BellConfigFile) -> Self {
         Self {
             config,
+            rate_limit: BELL_RATE_LIMIT,
             last_bell: None,
-            visual_active: false,
             visual_start: None,
-            audio_command: default_audio_command(),
-            last_audio_failure: None,
+            audio_command: (
+                "paplay".into(),
+                vec!["/usr/share/sounds/freedesktop/stereo/bell.oga".into()],
+            ),
+            audio_player: None,
+            audio_failure: FailureReport::new("Audio bell unavailable"),
         }
     }
 
-    /// Trigger the bell
+    /// Trigger the bell. Returns a failure to show the person, if any.
     pub fn ring(&mut self) -> Option<String> {
-        // Rate limit
-        if let Some(last) = self.last_bell {
-            if last.elapsed().as_millis() < self.config.rate_limit_ms as u128 {
-                return None;
-            }
+        if self
+            .last_bell
+            .is_some_and(|last| last.elapsed() < self.rate_limit)
+        {
+            return None;
         }
-
         self.last_bell = Some(Instant::now());
 
-        // Visual bell
         if self.config.visual {
-            self.visual_active = true;
             self.visual_start = Some(Instant::now());
         }
 
-        // Audio bell
         if self.config.audio {
             if let Err(error) = self.play_audio() {
-                let message = bounded_delivery_error("Audio bell unavailable", &error);
-                log::warn!("{message}");
-                return report_new_failure(&mut self.last_audio_failure, message);
+                return self.audio_failure.report(&error);
             }
-            self.last_audio_failure = None;
+            self.audio_failure.recovered();
         }
 
         log::debug!("Bell triggered");
@@ -286,17 +126,17 @@ impl Bell {
 
     /// Check if visual bell should be displayed
     pub fn is_visual_active(&self) -> bool {
-        self.visual_active
+        self.visual_start.is_some()
     }
 
     /// Update bell state (call each frame)
     pub fn update(&mut self) {
-        if let Some(start) = self.visual_start {
-            if start.elapsed().as_millis() >= self.config.visual_duration_ms as u128 {
-                self.visual_active = false;
-                self.visual_start = None;
-            }
+        if let Some(start) = self.visual_start
+            && start.elapsed().as_millis() >= u128::from(self.config.visual_duration_ms)
+        {
+            self.visual_start = None;
         }
+        self.reap_audio_player();
     }
 
     /// Get visual bell intensity (0.0 to 1.0 based on time remaining)
@@ -310,37 +150,59 @@ impl Bell {
         }
     }
 
-    /// Play audio bell
-    fn play_audio(&self) -> Result<(), String> {
+    /// Start the bell sound unless one is still playing. The spawn does not
+    /// wait for the sound; `update` and the next bell reap the player.
+    fn play_audio(&mut self) -> Result<(), String> {
+        if self.reap_audio_player() {
+            return Ok(());
+        }
         let (program, args) = &self.audio_command;
-        spawn_desktop_command(program, args, "audio bell")
+        let player = Command::new(program)
+            .args(args)
+            .spawn()
+            .map_err(|error| format!("could not start {program}: {error}"))?;
+        self.audio_player = Some(player);
+        Ok(())
+    }
+
+    /// Reaps a finished sound player. Returns whether one is still playing.
+    fn reap_audio_player(&mut self) -> bool {
+        let Some(player) = &mut self.audio_player else {
+            return false;
+        };
+        match player.try_wait() {
+            Ok(None) => return true,
+            Ok(Some(status)) if !status.success() => {
+                log::warn!("Audio bell player exited unsuccessfully: {status}");
+            }
+            Ok(Some(_)) => {}
+            Err(error) => log::warn!("Could not reap the audio bell player: {error}"),
+        }
+        self.audio_player = None;
+        false
     }
 
     /// Update configuration
-    pub fn set_config(&mut self, config: BellConfig) {
-        // Turning audio back on may report a helper failure again.
+    pub fn set_config(&mut self, config: BellConfigFile) {
+        // Turning audio back on may report a player failure again.
         if config.audio && !self.config.audio {
-            self.last_audio_failure = None;
+            self.audio_failure.recovered();
         }
         self.config = config;
     }
 
     #[cfg(test)]
-    pub(crate) fn set_audio_command_for_test(&mut self, program: impl Into<String>) {
-        self.audio_command = (program.into(), Vec::new());
+    pub(crate) fn set_audio_command_for_test(&mut self, program: &str, args: &[&str]) {
+        self.audio_command = (
+            program.into(),
+            args.iter().map(|arg| (*arg).into()).collect(),
+        );
     }
-}
-
-fn default_audio_command() -> (String, Vec<String>) {
-    (
-        "paplay".into(),
-        vec!["/usr/share/sounds/freedesktop/stereo/bell.oga".into()],
-    )
 }
 
 impl Default for Bell {
     fn default() -> Self {
-        Self::new(BellConfig::default())
+        Self::new(BellConfigFile::default())
     }
 }
 
@@ -352,7 +214,7 @@ pub struct Notifications {
     last_notification: Option<Instant>,
     /// Minimum time between notifications
     rate_limit: Duration,
-    last_delivery_failure: Option<String>,
+    delivery_failure: FailureReport,
     /// The desktop notification worker, started on first use.
     tracked: Option<tracked::TrackedNotifications>,
 }
@@ -370,7 +232,7 @@ impl Notifications {
             enabled: true,
             last_notification: None,
             rate_limit: Duration::from_secs(1),
-            last_delivery_failure: None,
+            delivery_failure: FailureReport::new("Desktop notification unavailable"),
             tracked: None,
         }
     }
@@ -466,9 +328,7 @@ impl Notifications {
     }
 
     fn report_failure(&mut self, error: &str) -> Option<String> {
-        let message = bounded_delivery_error("Desktop notification unavailable", error);
-        log::warn!("{message}");
-        report_new_failure(&mut self.last_delivery_failure, message)
+        self.delivery_failure.report(error)
     }
 
     /// Drain asynchronous lifecycle failures for visible app reporting.
@@ -479,28 +339,14 @@ impl Notifications {
             .into_iter()
             .filter_map(|completion| match completion {
                 tracked::TrackedCompletion::Recovered => {
-                    self.last_delivery_failure = None;
+                    self.delivery_failure.recovered();
                     None
                 }
-                tracked::TrackedCompletion::Failure(error) => {
-                    let message =
-                        bounded_delivery_error("Desktop notification unavailable", &error);
-                    report_new_failure(&mut self.last_delivery_failure, message)
-                        .map(NotificationCompletion::Warning)
-                }
-                tracked::TrackedCompletion::ProtocolReply(reply) => {
-                    Some(NotificationCompletion::ProtocolReply {
-                        origin: reply.origin,
-                        data: reply.data,
-                    })
-                }
-                tracked::TrackedCompletion::Activation(activation) => {
-                    Some(NotificationCompletion::Activation {
-                        origin: activation.origin,
-                        focus: activation.focus,
-                        protocol_reply: activation.protocol_reply,
-                    })
-                }
+                tracked::TrackedCompletion::Failure(error) => self
+                    .delivery_failure
+                    .report(&error)
+                    .map(NotificationCompletion::Warning),
+                tracked::TrackedCompletion::Completed(completion) => Some(completion),
             })
             .collect()
     }
@@ -555,56 +401,90 @@ fn freedesktop_icon_name(name: &str) -> &str {
 }
 
 #[cfg(test)]
-mod desktop_worker_tests;
-
-#[cfg(test)]
 mod tests {
     use super::*;
 
+    fn audio_bell() -> Bell {
+        let mut bell = Bell::new(BellConfigFile {
+            visual: false,
+            audio: true,
+            ..BellConfigFile::default()
+        });
+        bell.rate_limit = Duration::ZERO;
+        bell
+    }
+
     #[test]
     fn bells_inside_the_rate_limit_are_ignored() {
-        let mut bell = Bell::new(BellConfig {
-            rate_limit_ms: 60_000,
-            ..Default::default()
-        });
+        let mut bell = Bell {
+            rate_limit: Duration::from_secs(60),
+            ..Bell::default()
+        };
         bell.ring();
         assert!(bell.is_visual_active());
         let first = bell.last_bell;
         bell.ring();
         assert_eq!(bell.last_bell, first);
 
-        bell.set_config(BellConfig {
-            rate_limit_ms: 0,
-            ..Default::default()
-        });
+        bell.rate_limit = Duration::ZERO;
         bell.ring();
         assert_ne!(bell.last_bell, first);
     }
 
     #[test]
     fn test_visual_intensity() {
-        let bell = Bell::new(BellConfig::default());
+        let bell = Bell::default();
         assert_eq!(bell.visual_intensity(), 0.0);
     }
 
     #[test]
-    fn audio_helper_failures_are_bounded_deduplicated_and_recoverable() {
-        let mut bell = Bell::new(BellConfig {
-            visual: false,
-            audio: true,
-            rate_limit_ms: 0,
-            ..BellConfig::default()
-        });
-        bell.set_audio_command_for_test("/definitely/missing/termeric-audio-helper");
+    fn audio_player_failures_are_bounded_deduplicated_and_recoverable() {
+        let mut bell = audio_bell();
+        bell.set_audio_command_for_test("/definitely/missing/termeric-audio-helper", &[]);
         let first = bell.ring().unwrap();
         assert!(first.contains("Audio bell unavailable"));
         assert!(first.contains("termeric-audio-helper"));
         assert!(bell.ring().is_none());
 
-        bell.set_audio_command_for_test("/bin/true");
+        bell.set_audio_command_for_test("/bin/true", &[]);
         assert!(bell.ring().is_none());
-        bell.set_audio_command_for_test("/definitely/missing/termeric-audio-helper");
+        bell.audio_player.as_mut().unwrap().wait().unwrap();
+        bell.set_audio_command_for_test("/definitely/missing/termeric-audio-helper", &[]);
         assert!(bell.ring().is_some());
+    }
+
+    #[test]
+    fn a_playing_sound_is_not_overlapped_and_a_finished_one_is_reaped() {
+        let mut bell = audio_bell();
+        bell.set_audio_command_for_test("/bin/sh", &["-c", "sleep 30"]);
+        assert!(bell.ring().is_none());
+        let playing = bell.audio_player.as_ref().unwrap().id();
+        assert!(bell.ring().is_none());
+        assert_eq!(bell.audio_player.as_ref().unwrap().id(), playing);
+
+        let player = bell.audio_player.as_mut().unwrap();
+        player.kill().unwrap();
+        // Wait without reaping, so update() is the one that reaps it.
+        let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::uninit();
+        // SAFETY: `info` is writable for waitid, and WNOWAIT leaves the
+        // exited child for try_wait to reap.
+        let waited = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                playing as libc::id_t,
+                info.as_mut_ptr(),
+                libc::WEXITED | libc::WNOWAIT,
+            )
+        };
+        assert_eq!(waited, 0);
+        bell.update();
+        assert!(bell.audio_player.is_none());
+
+        assert!(bell.ring().is_none());
+        let next = bell.audio_player.as_mut().unwrap();
+        assert_ne!(next.id(), playing);
+        next.kill().unwrap();
+        next.wait().unwrap();
     }
 
     /// Delivery runs on the notification worker, so failures arrive later.
@@ -636,7 +516,8 @@ mod tests {
 
     #[test]
     fn delivery_errors_have_a_hard_character_ceiling() {
-        let error = bounded_delivery_error("Desktop notification unavailable", &"x".repeat(1_024));
+        let mut report = FailureReport::new("Desktop notification unavailable");
+        let error = report.report(&"x".repeat(1_024)).unwrap();
         assert_eq!(error.chars().count(), MAX_DELIVERY_ERROR_CHARS);
         assert!(error.ends_with('…'));
     }

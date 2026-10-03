@@ -1,5 +1,6 @@
 //! Bounded, origin-scoped Linux notification handles for Kitty OSC 99.
 
+use super::NotificationCompletion;
 use crate::tabs::TerminalIdentity;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
@@ -9,6 +10,7 @@ use std::time::{Duration, Instant};
 use termeric_core::{
     NotificationExpiry, NotificationRequest, NotificationSound, NotificationUrgency,
 };
+use zbus::zvariant::Value;
 
 const TRACKED_COMMAND_CAPACITY: usize = 64;
 const MAX_TRACKED_NOTIFICATIONS: usize = 64;
@@ -17,6 +19,8 @@ const EXPIRY_RETRY_DELAY: Duration = Duration::from_secs(1);
 const CLOSE_SIGNAL_TIMEOUT: Duration = Duration::from_secs(5);
 const DBUS_METHOD_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_NATIVE_ACTION_KEY_BYTES: usize = 64;
+const NOTIFICATIONS_SERVICE: &str = "org.freedesktop.Notifications";
+const NOTIFICATIONS_PATH: &str = "/org/freedesktop/Notifications";
 const DEFAULT_ACTION_KEY: &str = "default";
 const BUTTON_ACTION_KEY_PREFIX: &str = "termeric-button-";
 
@@ -53,17 +57,15 @@ struct ClosingEntry {
     deadline: Instant,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct ProtocolReply {
-    pub(super) origin: TerminalIdentity,
-    pub(super) data: Vec<u8>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct ActivationCompletion {
-    pub(super) origin: TerminalIdentity,
-    pub(super) focus: bool,
-    pub(super) protocol_reply: Option<Vec<u8>>,
+impl ClosingEntry {
+    fn close_reply(&self, untracked: bool) -> NotificationCompletion {
+        close_reply(
+            self.origin,
+            &self.identifier,
+            self.reply_uses_8bit_controls,
+            untracked,
+        )
+    }
 }
 
 enum TrackedCommand {
@@ -97,8 +99,8 @@ enum TrackedCommand {
 pub(super) enum TrackedCompletion {
     Failure(String),
     Recovered,
-    ProtocolReply(ProtocolReply),
-    Activation(ActivationCompletion),
+    /// A protocol reply or activation for the app to deliver as is.
+    Completed(NotificationCompletion),
 }
 
 trait TrackedNotificationBackend: Send + 'static {
@@ -268,7 +270,10 @@ impl<B: TrackedNotificationBackend> TrackedState<B> {
         failures
     }
 
-    fn reap_unconfirmed_closes(&mut self, now: Instant) -> (Vec<String>, Vec<ProtocolReply>) {
+    fn reap_unconfirmed_closes(
+        &mut self,
+        now: Instant,
+    ) -> (Vec<String>, Vec<NotificationCompletion>) {
         let due = self
             .closing_order
             .iter()
@@ -288,27 +293,32 @@ impl<B: TrackedNotificationBackend> TrackedState<B> {
             failures.push(format!(
                 "notification service did not confirm close for desktop ID {desktop_id}"
             ));
-            replies.push(close_reply(&entry, true));
+            replies.push(entry.close_reply(true));
         }
         (failures, replies)
     }
 
-    fn native_closed(&mut self, desktop_id: u32) -> Option<ProtocolReply> {
+    fn native_closed(&mut self, desktop_id: u32) -> Option<NotificationCompletion> {
         if let Some(entry) = self.remove_closing(desktop_id) {
-            return Some(close_reply(&entry, false));
+            return Some(entry.close_reply(false));
         }
         let key = self.native_keys.get(&desktop_id)?.clone();
         let entry = self.remove(&key)?;
-        entry
-            .report_close
-            .then(|| close_reply_for(&key, entry.reply_uses_8bit_controls, false))
+        entry.report_close.then(|| {
+            close_reply(
+                key.origin,
+                &client_identifier(&key),
+                entry.reply_uses_8bit_controls,
+                false,
+            )
+        })
     }
 
     fn action_invoked(
         &mut self,
         desktop_id: u32,
         action_key: &str,
-    ) -> Option<ActivationCompletion> {
+    ) -> Option<NotificationCompletion> {
         let key = self.native_keys.get(&desktop_id)?.clone();
         let entry = self.entries.get_mut(&key)?;
         if entry.activation_handled {
@@ -328,8 +338,8 @@ impl<B: TrackedNotificationBackend> TrackedState<B> {
         entry.activation_handled = true;
         let protocol_reply = entry
             .report_activation
-            .then(|| activation_reply_for(&key, entry.reply_uses_8bit_controls, button).data);
-        Some(ActivationCompletion {
+            .then(|| activation_reply(&key, entry.reply_uses_8bit_controls, button));
+        Some(NotificationCompletion::Activation {
             origin: key.origin,
             focus: entry.focus_on_activation,
             protocol_reply,
@@ -341,7 +351,7 @@ impl<B: TrackedNotificationBackend> TrackedState<B> {
         origin: TerminalIdentity,
         identifier: &str,
         reply_uses_8bit_controls: bool,
-    ) -> ProtocolReply {
+    ) -> Vec<u8> {
         let mut identifiers = self
             .entries
             .keys()
@@ -357,13 +367,7 @@ impl<B: TrackedNotificationBackend> TrackedState<B> {
             "\x1b]99;i={identifier}:p=alive;{}\x1b\\",
             identifiers.join(",")
         );
-        ProtocolReply {
-            origin,
-            data: termeric_core::Terminal::frame_pty_reply_for_mode(
-                canonical.as_bytes(),
-                reply_uses_8bit_controls,
-            ),
-        }
+        framed_reply(&canonical, reply_uses_8bit_controls)
     }
 
     fn next_deadline(&self) -> Option<Instant> {
@@ -451,51 +455,40 @@ fn client_identifier(key: &TrackedKey) -> String {
     }
 }
 
-fn close_reply(entry: &ClosingEntry, untracked: bool) -> ProtocolReply {
-    let canonical = if untracked {
-        format!("\x1b]99;i={}:p=close;untracked\x1b\\", entry.identifier)
-    } else {
-        format!("\x1b]99;i={}:p=close;\x1b\\", entry.identifier)
-    };
-    ProtocolReply {
-        origin: entry.origin,
-        data: termeric_core::Terminal::frame_pty_reply_for_mode(
-            canonical.as_bytes(),
-            entry.reply_uses_8bit_controls,
-        ),
-    }
-}
-
-fn close_reply_for(
-    key: &TrackedKey,
-    reply_uses_8bit_controls: bool,
-    untracked: bool,
-) -> ProtocolReply {
-    close_reply(
-        &ClosingEntry {
-            origin: key.origin,
-            identifier: client_identifier(key),
-            reply_uses_8bit_controls,
-            deadline: Instant::now(),
-        },
-        untracked,
+/// An OSC 99 reply framed for the receiving terminal's 7- or 8-bit controls.
+fn framed_reply(canonical: &str, reply_uses_8bit_controls: bool) -> Vec<u8> {
+    termeric_core::Terminal::frame_pty_reply_for_mode(
+        canonical.as_bytes(),
+        reply_uses_8bit_controls,
     )
 }
 
-fn activation_reply_for(
-    key: &TrackedKey,
+fn close_reply(
+    origin: TerminalIdentity,
+    identifier: &str,
     reply_uses_8bit_controls: bool,
-    button: Option<usize>,
-) -> ProtocolReply {
-    let payload = button.map_or_else(String::new, |button| button.to_string());
-    let canonical = format!("\x1b]99;i={};{payload}\x1b\\", client_identifier(key));
-    ProtocolReply {
-        origin: key.origin,
-        data: termeric_core::Terminal::frame_pty_reply_for_mode(
-            canonical.as_bytes(),
+    untracked: bool,
+) -> NotificationCompletion {
+    let status = if untracked { "untracked" } else { "" };
+    NotificationCompletion::ProtocolReply {
+        origin,
+        data: framed_reply(
+            &format!("\x1b]99;i={identifier}:p=close;{status}\x1b\\"),
             reply_uses_8bit_controls,
         ),
     }
+}
+
+fn activation_reply(
+    key: &TrackedKey,
+    reply_uses_8bit_controls: bool,
+    button: Option<usize>,
+) -> Vec<u8> {
+    let payload = button.map_or_else(String::new, |button| button.to_string());
+    framed_reply(
+        &format!("\x1b]99;i={};{payload}\x1b\\", client_identifier(key)),
+        reply_uses_8bit_controls,
+    )
 }
 
 fn button_action_key(generation: u64, index: usize) -> String {
@@ -791,7 +784,7 @@ fn tracked_worker<B: TrackedNotificationBackend>(
             let (failures, replies) = state.reap_unconfirmed_closes(now);
             publish_operation(&completions, &mut last_failure, failures);
             for reply in replies {
-                publish_reply(&completions, reply);
+                publish(&completions, reply);
             }
         }
         let wait = state
@@ -820,13 +813,16 @@ fn tracked_worker<B: TrackedNotificationBackend>(
                 origin,
                 identifier,
                 reply_uses_8bit_controls,
-            }) => publish_reply(
+            }) => publish(
                 &completions,
-                state.alive_reply(origin, &identifier, reply_uses_8bit_controls),
+                NotificationCompletion::ProtocolReply {
+                    origin,
+                    data: state.alive_reply(origin, &identifier, reply_uses_8bit_controls),
+                },
             ),
             Ok(TrackedCommand::NativeClosed { desktop_id }) => {
                 if let Some(reply) = state.native_closed(desktop_id) {
-                    publish_reply(&completions, reply);
+                    publish(&completions, reply);
                 }
                 publish_operation(&completions, &mut last_failure, Vec::new());
             }
@@ -835,7 +831,7 @@ fn tracked_worker<B: TrackedNotificationBackend>(
                 action_key,
             }) => {
                 if let Some(activation) = state.action_invoked(desktop_id, &action_key) {
-                    publish_activation(&completions, activation);
+                    publish(&completions, activation);
                 }
                 publish_operation(&completions, &mut last_failure, Vec::new());
             }
@@ -851,21 +847,9 @@ fn tracked_worker<B: TrackedNotificationBackend>(
     state.backend.shutdown();
 }
 
-fn publish_reply(completions: &SyncSender<TrackedCompletion>, reply: ProtocolReply) {
+fn publish(completions: &SyncSender<TrackedCompletion>, completion: NotificationCompletion) {
     if completions
-        .send(TrackedCompletion::ProtocolReply(reply))
-        .is_ok()
-    {
-        wake_app();
-    }
-}
-
-fn publish_activation(
-    completions: &SyncSender<TrackedCompletion>,
-    activation: ActivationCompletion,
-) {
-    if completions
-        .send(TrackedCompletion::Activation(activation))
+        .send(TrackedCompletion::Completed(completion))
         .is_ok()
     {
         wake_app();
@@ -941,6 +925,16 @@ impl FreedesktopBackend {
             .connection
             .as_ref()
             .expect("connection was initialized"))
+    }
+
+    fn proxy(&mut self) -> Result<zbus::blocking::Proxy<'_>, String> {
+        zbus::blocking::Proxy::new(
+            self.connection()?,
+            NOTIFICATIONS_SERVICE,
+            NOTIFICATIONS_PATH,
+            NOTIFICATIONS_SERVICE,
+        )
+        .map_err(|error| format!("notification interface is unavailable: {error}"))
     }
 
     fn stop(&mut self) {
@@ -1023,76 +1017,52 @@ impl TrackedNotificationBackend for FreedesktopBackend {
         );
         self.last_warning = warning;
         let named_icon = super::icon::first_available_icon_name(&request.icon_names);
-        let connection = self.connection()?;
-        (|| {
-            use std::collections::HashMap;
-            use zbus::blocking::Proxy;
-            use zbus::zvariant::Value;
-
-            let proxy = Proxy::new(
-                connection,
-                "org.freedesktop.Notifications",
-                "/org/freedesktop/Notifications",
-                "org.freedesktop.Notifications",
+        let notification = freedesktop_notification(request);
+        let app_icon =
+            freedesktop_app_icon(request, named_icon.as_deref(), transmitted_icon.is_some());
+        let actions = freedesktop_actions(request, button_action_keys);
+        let mut hints: HashMap<&str, Value<'_>> = HashMap::new();
+        if let Some(category) = notification.category.as_deref() {
+            hints.insert("category", Value::from(category));
+        }
+        if let Some(urgency) = notification.urgency {
+            hints.insert("urgency", Value::from(urgency));
+        }
+        match freedesktop_sound_hint(request.sound) {
+            None => {}
+            Some(FreedesktopSoundHint::Suppress) => {
+                hints.insert("suppress-sound", Value::from(true));
+            }
+            Some(FreedesktopSoundHint::Name(name)) => {
+                hints.insert("sound-name", Value::from(name));
+            }
+        }
+        if named_icon.is_none()
+            && let Some(icon) = transmitted_icon.as_ref()
+        {
+            hints.insert("image-data", freedesktop_image_data_value(icon));
+        }
+        self.proxy()?
+            .call(
+                "Notify",
+                &(
+                    notification.app_name,
+                    replaces_id,
+                    app_icon.as_str(),
+                    notification.summary.as_str(),
+                    notification.body.as_str(),
+                    actions,
+                    hints,
+                    notification.expire_timeout,
+                ),
             )
-            .map_err(|error| format!("notification interface is unavailable: {error}"))?;
-            let notification = freedesktop_notification(request);
-            let app_icon =
-                freedesktop_app_icon(request, named_icon.as_deref(), transmitted_icon.is_some());
-            let actions = freedesktop_actions(request, button_action_keys);
-            let mut hints: HashMap<&str, Value<'_>> = HashMap::new();
-            if let Some(category) = notification.category.as_deref() {
-                hints.insert("category", Value::from(category));
-            }
-            if let Some(urgency) = notification.urgency {
-                hints.insert("urgency", Value::from(urgency));
-            }
-            match freedesktop_sound_hint(request.sound) {
-                None => {}
-                Some(FreedesktopSoundHint::Suppress) => {
-                    hints.insert("suppress-sound", Value::from(true));
-                }
-                Some(FreedesktopSoundHint::Name(name)) => {
-                    hints.insert("sound-name", Value::from(name));
-                }
-            }
-            if named_icon.is_none()
-                && let Some(icon) = transmitted_icon.as_ref()
-            {
-                hints.insert("image-data", freedesktop_image_data_value(icon));
-            }
-            proxy
-                .call(
-                    "Notify",
-                    &(
-                        notification.app_name,
-                        replaces_id,
-                        app_icon.as_str(),
-                        notification.summary.as_str(),
-                        notification.body.as_str(),
-                        actions,
-                        hints,
-                        notification.expire_timeout,
-                    ),
-                )
-                .map_err(|error| format!("Notify call failed: {error}"))
-        })()
+            .map_err(|error| format!("Notify call failed: {error}"))
     }
 
     fn close(&mut self, desktop_id: u32) -> Result<(), String> {
-        let connection = self.connection()?;
-        (|| {
-            let proxy = zbus::blocking::Proxy::new(
-                connection,
-                "org.freedesktop.Notifications",
-                "/org/freedesktop/Notifications",
-                "org.freedesktop.Notifications",
-            )
-            .map_err(|error| format!("notification interface is unavailable: {error}"))?;
-            proxy
-                .call("CloseNotification", &(desktop_id,))
-                .map_err(|error| format!("CloseNotification call failed: {error}"))
-        })()
+        self.proxy()?
+            .call("CloseNotification", &(desktop_id,))
+            .map_err(|error| format!("CloseNotification call failed: {error}"))
     }
 
     fn take_warning(&mut self) -> Option<String> {
@@ -1114,9 +1084,9 @@ async fn notification_signal_listener(
 
     let proxy = match zbus::Proxy::new(
         &connection,
-        "org.freedesktop.Notifications",
-        "/org/freedesktop/Notifications",
-        "org.freedesktop.Notifications",
+        NOTIFICATIONS_SERVICE,
+        NOTIFICATIONS_PATH,
+        NOTIFICATIONS_SERVICE,
     )
     .await
     {
@@ -1340,8 +1310,8 @@ mod tests {
     fn reported_activation(
         origin: TerminalIdentity,
         data: impl Into<Vec<u8>>,
-    ) -> ActivationCompletion {
-        ActivationCompletion {
+    ) -> NotificationCompletion {
+        NotificationCompletion::Activation {
             origin,
             focus: false,
             protocol_reply: Some(data.into()),
@@ -1471,23 +1441,23 @@ mod tests {
         );
 
         assert_eq!(
-            state.alive_reply(first_origin, "probe", false).data,
+            state.alive_reply(first_origin, "probe", false),
             b"\x1b]99;i=probe:p=alive;alpha,beta\x1b\\"
         );
         assert_eq!(
             state.native_closed(1),
-            Some(ProtocolReply {
+            Some(NotificationCompletion::ProtocolReply {
                 origin: first_origin,
                 data: b"\x1b]99;i=alpha:p=close;\x1b\\".to_vec(),
             })
         );
         assert_eq!(state.native_closed(1), None);
         assert_eq!(
-            state.alive_reply(first_origin, "probe", false).data,
+            state.alive_reply(first_origin, "probe", false),
             b"\x1b]99;i=probe:p=alive;beta\x1b\\"
         );
         assert_eq!(
-            state.alive_reply(second_origin, "probe", false).data,
+            state.alive_reply(second_origin, "probe", false),
             b"\x1b]99;i=probe:p=alive;alpha\x1b\\"
         );
     }
@@ -1510,13 +1480,13 @@ mod tests {
 
         assert_eq!(
             state.native_closed(1),
-            Some(ProtocolReply {
+            Some(NotificationCompletion::ProtocolReply {
                 origin: event_origin,
                 data: b"\x9d99;i=0:p=close;\x9c".to_vec(),
             })
         );
         assert_eq!(
-            state.alive_reply(event_origin, "probe", true).data,
+            state.alive_reply(event_origin, "probe", true),
             b"\x9d99;i=probe:p=alive;\x9c"
         );
     }
@@ -1538,7 +1508,7 @@ mod tests {
         assert_eq!(state.action_invoked(1, DEFAULT_ACTION_KEY), None);
         assert_eq!(
             state.native_closed(1),
-            Some(ProtocolReply {
+            Some(NotificationCompletion::ProtocolReply {
                 origin: event_origin,
                 data: b"\x1b]99;i=job:p=close;\x1b\\".to_vec(),
             })
@@ -1607,7 +1577,7 @@ mod tests {
         assert!(state.show(tracked_key, request).is_empty());
         assert_eq!(
             state.action_invoked(1, DEFAULT_ACTION_KEY),
-            Some(ActivationCompletion {
+            Some(NotificationCompletion::Activation {
                 origin: event_origin,
                 focus: true,
                 protocol_reply: None,
@@ -1631,7 +1601,7 @@ mod tests {
         assert!(state.show(tracked_key.clone(), request.clone()).is_empty());
         assert_eq!(
             state.action_invoked(1, DEFAULT_ACTION_KEY),
-            Some(ActivationCompletion {
+            Some(NotificationCompletion::Activation {
                 origin: event_origin,
                 focus: true,
                 protocol_reply: Some(b"\x1b]99;i=focus;\x1b\\".to_vec()),
@@ -1641,7 +1611,7 @@ mod tests {
         assert!(state.show(tracked_key, request).is_empty());
         assert_eq!(
             state.action_invoked(1, DEFAULT_ACTION_KEY),
-            Some(ActivationCompletion {
+            Some(NotificationCompletion::Activation {
                 origin: event_origin,
                 focus: true,
                 protocol_reply: Some(b"\x1b]99;i=focus;\x1b\\".to_vec()),
@@ -1896,12 +1866,12 @@ mod tests {
         assert!(!state.entries.contains_key(&first));
         assert!(state.closing.contains_key(&1));
         assert_eq!(
-            state.alive_reply(event_origin, "probe", false).data,
+            state.alive_reply(event_origin, "probe", false),
             b"\x1b]99;i=probe:p=alive;\x1b\\"
         );
         assert_eq!(
             state.native_closed(1),
-            Some(ProtocolReply {
+            Some(NotificationCompletion::ProtocolReply {
                 origin: event_origin,
                 data: b"\x1b]99;i=first:p=close;\x1b\\".to_vec(),
             })
@@ -1919,7 +1889,7 @@ mod tests {
         assert_eq!(failures.len(), 1);
         assert_eq!(
             replies,
-            vec![ProtocolReply {
+            vec![NotificationCompletion::ProtocolReply {
                 origin: event_origin,
                 data: b"\x1b]99;i=second:p=close;untracked\x1b\\".to_vec(),
             }]
@@ -1937,7 +1907,7 @@ mod tests {
         assert!(state.closing.contains_key(&3));
         assert_eq!(
             state.native_closed(3),
-            Some(ProtocolReply {
+            Some(NotificationCompletion::ProtocolReply {
                 origin: event_origin,
                 data: b"\x1b]99;i=third:p=close;\x1b\\".to_vec(),
             })

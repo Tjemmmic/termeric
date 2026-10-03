@@ -3899,12 +3899,12 @@ fn desktop_delivery_failures_become_deduplicated_visible_toasts() {
         ..Config::default()
     };
     let mut app = App::new_headless_with_tabs(config);
-    app.bell.set_config(crate::notifications::BellConfig {
+    app.bell.set_config(crate::config::BellConfigFile {
         audio: true,
         ..Default::default()
     });
     app.bell
-        .set_audio_command_for_test("/definitely/missing/termeric-audio-helper");
+        .set_audio_command_for_test("/definitely/missing/termeric-audio-helper", &[]);
     app.notifications
         .fail_delivery_for_test("synthetic notification service failure");
     let origin = TerminalEventOrigin::Tab {

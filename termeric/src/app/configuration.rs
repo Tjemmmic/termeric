@@ -318,12 +318,7 @@ impl App {
         }
         self.cursor_blink_period = (self.config.cursor.blink_rate as f32 / 1000.0) * 2.0;
         self.reset_cursor_blink();
-        self.bell.set_config(BellConfig {
-            visual: self.config.bell.visual,
-            audio: self.config.bell.audio,
-            visual_duration_ms: self.config.bell.visual_duration_ms,
-            ..Default::default()
-        });
+        self.bell.set_config(self.config.bell.clone());
         match Theme::resolve(&self.config.theme.name, self.config.theme.path.as_deref()) {
             Ok((theme, source)) => self.apply_theme(theme, source),
             Err(error) => {

@@ -79,7 +79,7 @@ use crate::config::{Config, SplashMode};
 use crate::harvest::HarvestMode;
 use crate::input::keybindings::{KeyAction, KeyBindingManager};
 use crate::input::{Action, MouseReportButton, MouseState, ShortcutRegistry, screen_to_grid};
-use crate::notifications::{Bell, BellConfig, Notifications};
+use crate::notifications::{Bell, Notifications};
 use crate::panes::PaneRenderInfo;
 use crate::panes::{PaneId, PaneManager, SplitDirection};
 use crate::plugin::{PluginContext, PluginManager};
@@ -1454,12 +1454,7 @@ impl App {
         });
 
         // Initialize bell from config
-        let bell = Bell::new(BellConfig {
-            visual: config.bell.visual,
-            audio: config.bell.audio,
-            visual_duration_ms: config.bell.visual_duration_ms,
-            ..Default::default()
-        });
+        let bell = Bell::new(config.bell.clone());
 
         // Initialize clipboard (may fail on some systems)
         let clipboard = use_system_state
