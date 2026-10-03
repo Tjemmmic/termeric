@@ -4118,41 +4118,6 @@ fn empty_upload_progress_is_complete_without_dividing_by_zero() {
 }
 
 #[test]
-fn native_presentation_latency_waits_for_terminal_output_and_records_once() {
-    let temporary = tempfile::tempdir().unwrap();
-    let output = temporary.path().join("latency.samples");
-    let mut probe = NativePresentationLatencyProbe {
-        output: Some(output.clone()),
-        pending: None,
-    };
-
-    probe.begin();
-    probe.finish_after_terminal_present("keyboard-input");
-    assert!(!output.exists());
-    probe.finish_after_terminal_present("keyboard-input,terminal-output");
-    let samples = std::fs::read_to_string(&output).unwrap();
-    assert_eq!(samples.lines().count(), 1);
-    assert!(samples.trim().parse::<f64>().unwrap() >= 0.0);
-    probe.finish_after_terminal_present("terminal-output");
-    assert_eq!(std::fs::read_to_string(output).unwrap(), samples);
-}
-
-#[test]
-fn native_frame_stats_publish_the_latest_complete_counter_atomically() {
-    let temporary = tempfile::tempdir().unwrap();
-    let output = temporary.path().join("frame-count");
-    let mut probe = NativeFrameStatsProbe {
-        output: Some(output.clone()),
-    };
-
-    probe.record(1);
-    assert_eq!(std::fs::read_to_string(&output).unwrap(), "1\n");
-    probe.record(17);
-    assert_eq!(std::fs::read_to_string(&output).unwrap(), "17\n");
-    assert!(!output.with_extension("tmp").exists());
-}
-
-#[test]
 fn desktop_delivery_failures_become_deduplicated_visible_toasts() {
     let mut config = Config::default();
     config.shell.program = Some("/bin/sh".into());

@@ -187,27 +187,6 @@ max = 100.0
 allow_skipped = true
 
 [[metric_budget]]
-name = "displayed idle CPU stays event-driven"
-metric = "idle.application_cpu"
-statistic = "p95"
-max = 3.0
-allow_skipped = true
-
-[[metric_budget]]
-name = "displayed idle submits no unchanged frames"
-metric = "idle.application_rendered_frames"
-statistic = "max"
-max = 0.0
-allow_skipped = true
-
-[[metric_budget]]
-name = "displayed idle RSS stays within the broad release safety rail"
-metric = "memory.application_idle_rss"
-statistic = "p95"
-max = 524288.0
-allow_skipped = true
-
-[[metric_budget]]
 name = "steady frames allocate no new pipeline buffers"
 metric = "renderer.steady_frame_buffer_allocations"
 statistic = "max"
@@ -248,11 +227,6 @@ metric = "latency.transcript_enqueue_under_slow_disk"
 statistic = "p95"
 max = 25.0
 
-[[variation_budget]]
-name = "deterministic core parser repeatability"
-metric = "core.parser.plain_4mib"
-max_coefficient_of_variation = 0.35
-
 [[metric_budget]]
 name = "production shaped-run owned-byte ceiling under pressure"
 metric = "memory.shaping_pressure.retained_bytes"
@@ -266,8 +240,3 @@ metric = "renderer.shaping_pressure.rasterizations"
 statistic = "max"
 max = 0.0
 allow_skipped = true
-
-[[variation_budget]]
-name = "deterministic pane-layout repeatability"
-metric = "interaction.pane_layout.8"
-max_coefficient_of_variation = 0.35

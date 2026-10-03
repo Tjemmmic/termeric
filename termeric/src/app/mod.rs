@@ -53,7 +53,6 @@ mod workspace_menu;
 mod workspaces;
 
 use anyhow::Result;
-use std::io::Write as _;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -924,91 +923,6 @@ fn clear_agent_view_wake_pending() {
     AGENT_VIEW_WAKE_PENDING.store(false, Ordering::Release);
 }
 
-/// Opt-in native key-event-to-surface-present probe used by the release
-/// benchmark runner. The disabled production path is one `Option` check.
-#[derive(Debug, Default)]
-struct NativePresentationLatencyProbe {
-    output: Option<PathBuf>,
-    pending: Option<Instant>,
-}
-
-impl NativePresentationLatencyProbe {
-    fn from_environment(enabled: bool) -> Self {
-        Self {
-            output: enabled
-                .then(|| std::env::var_os("TERMERIC_BENCHMARK_KEY_TO_PRESENT_PATH"))
-                .flatten()
-                .map(PathBuf::from),
-            pending: None,
-        }
-    }
-
-    fn begin(&mut self) {
-        if self.output.is_some() {
-            self.pending = Some(Instant::now());
-        }
-    }
-
-    fn finish_after_terminal_present(&mut self, frame_reasons: &str) {
-        if !frame_reasons
-            .split(',')
-            .any(|reason| reason == "terminal-output")
-        {
-            return;
-        }
-        let (Some(output), Some(started)) = (&self.output, self.pending.take()) else {
-            return;
-        };
-        let elapsed_ms = started.elapsed().as_secs_f64() * 1_000.0;
-        let result = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(output)
-            .and_then(|mut file| writeln!(file, "{elapsed_ms:.6}"));
-        if let Err(error) = result {
-            log::error!(
-                "Failed to write native presentation-latency sample to {}: {error}",
-                output.display()
-            );
-            self.output = None;
-        }
-    }
-}
-
-/// Opt-in rendered-frame counter for the displayed idle benchmark. Production
-/// does no filesystem work unless the explicit benchmark path is present.
-#[derive(Debug, Default)]
-struct NativeFrameStatsProbe {
-    output: Option<PathBuf>,
-}
-
-impl NativeFrameStatsProbe {
-    fn from_environment(enabled: bool) -> Self {
-        Self {
-            output: enabled
-                .then(|| std::env::var_os("TERMERIC_BENCHMARK_FRAME_STATS_PATH"))
-                .flatten()
-                .map(PathBuf::from),
-        }
-    }
-
-    fn record(&mut self, rendered_frames: u64) {
-        let Some(output) = &self.output else {
-            return;
-        };
-        let temporary = output.with_extension("tmp");
-        let result = std::fs::write(&temporary, format!("{rendered_frames}\n"))
-            .and_then(|()| std::fs::rename(&temporary, output));
-        if let Err(error) = result {
-            log::error!(
-                "Failed to write native frame-count sample to {}: {error}",
-                output.display()
-            );
-            self.output = None;
-        }
-    }
-}
-
 /// Main application state
 ///
 /// IMPORTANT: Drop order matters! The renderer's wgpu Surface holds a reference
@@ -1061,12 +975,6 @@ pub struct App {
     /// Requested visibility for the dedicated quick-access window. Native
     /// visibility queries are optional on some compositors.
     quick_access_visible: bool,
-    /// Disabled unless the process-level release benchmark requests native
-    /// key-to-present samples through an isolated output path.
-    native_presentation_latency: NativePresentationLatencyProbe,
-    /// Disabled unless the process-level release benchmark requests exact
-    /// rendered-frame counts through an isolated output path.
-    native_frame_stats: NativeFrameStatsProbe,
     /// The renderer
     renderer: Option<Renderer>,
     /// Identifies callbacks belonging to the currently installed WGPU device.
@@ -1426,10 +1334,6 @@ impl App {
             last_native_window_title: None,
             fullscreen_requested: false,
             quick_access_visible: true,
-            native_presentation_latency: NativePresentationLatencyProbe::from_environment(
-                use_system_state,
-            ),
-            native_frame_stats: NativeFrameStatsProbe::from_environment(use_system_state),
             renderer: None,
             renderer_generation: 0,
             background_image_generation: 0,
@@ -2097,14 +2001,14 @@ impl App {
     }
 
     /// Render the terminal
-    fn render(&mut self) -> bool {
+    fn render(&mut self) {
         self.finish_obscured_native_pointer_gesture();
         let reduced_motion = self.reduced_motion_enabled();
         self.sync_native_window_title();
         // Do not run animation/update paths that enqueue more redraws while a
         // lost surface is waiting for Winit's next real resize event.
         if self.surface_lost {
-            return false;
+            return;
         }
 
         self.reconcile_mouse_selection_presentation();
@@ -2223,13 +2127,13 @@ impl App {
 
         let tab_drag = self.tab_drag_visual(Instant::now());
         let Some(renderer) = &mut self.renderer else {
-            return false;
+            return;
         };
         renderer.set_tab_drag(tab_drag);
         renderer.set_tab_bar_keyboard_focus(chrome_focus_target);
-        let Some(tabs) = &self.tabs else { return false };
+        let Some(tabs) = &self.tabs else { return };
         let Some(tab) = tabs.active_tab() else {
-            return false;
+            return;
         };
         let harvest_indicators: &[crate::harvest::GrowthIndicator] =
             if let Some(panes) = &tab.pane_manager {
@@ -2242,7 +2146,7 @@ impl App {
             };
 
         let Some(terminal) = tab.focused_terminal() else {
-            return false;
+            return;
         };
         let mut tab_info = tabs.tab_info();
         if let Some((tab_id, _, state)) = &broadcast_render
@@ -2949,7 +2853,6 @@ impl App {
         };
         self.keep_dragged_tab_picture(presented);
         self.refresh_accessibility();
-        presented
     }
 
     fn desired_native_window_title(&self) -> String {

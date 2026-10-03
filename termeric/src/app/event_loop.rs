@@ -155,10 +155,8 @@ impl App {
                 self.redraw_scheduler.request(RedrawReason::Startup);
                 let reasons = self.redraw_scheduler.begin_frame();
                 log::trace!("Rendering frame: reasons={reasons}");
-                let _ = self.render();
+                self.render();
                 self.redraw_scheduler.finish_frame();
-                self.native_frame_stats
-                    .record(self.redraw_scheduler.rendered_frames());
             }
             Err(e) => {
                 let error = format!("Failed to create window: {e:#}");
@@ -1176,9 +1174,6 @@ impl App {
                     )
                 });
                 if let Some(data) = data {
-                    if event.state == winit::event::ElementState::Pressed {
-                        self.native_presentation_latency.begin();
-                    }
                     self.write_to_pty(&data);
                 }
             }
@@ -1644,14 +1639,8 @@ impl App {
 
                 let reasons = self.redraw_scheduler.begin_frame();
                 log::trace!("Rendering frame: reasons={reasons}");
-                let presented = self.render();
+                self.render();
                 self.redraw_scheduler.finish_frame();
-                if presented {
-                    self.native_presentation_latency
-                        .finish_after_terminal_present(&reasons);
-                }
-                self.native_frame_stats
-                    .record(self.redraw_scheduler.rendered_frames());
             }
 
             _ => {}

@@ -52,11 +52,10 @@ CI requires Bash, Zsh, and Fish for the shell-integration tests (`TERMERIC_REQUI
 ## Benchmarks
 
 ```bash
-python3 scripts/run_benchmarks.py --skip-displayed \
-  --baseline benchmarks/baselines/2026-08-25-linux.json
+python3 scripts/run_benchmarks.py
 ```
 
-The runner builds and runs the release benchmark suite, writes `target/benchmarks/latest.json`, and fails if a metric exceeds its budget in `benchmarks/budgets.toml`. `benchmarks/metrics.toml` defines each metric. Use `--no-check` to record results without enforcing budgets.
+The runner builds and runs the release benchmark suites, writes every metric's samples and statistics to `target/benchmarks/latest.json`, and fails if a metric exceeds its budget in `benchmarks/budgets.toml`. Use `--repeat N` to pool several runs and `--no-check` to record results without enforcing budgets. Renderer metrics need a GPU or Mesa's software Vulkan; without one they're reported as skipped, which only budgets marked `allow_skipped` accept.
 
 ## Fuzzing
 

@@ -104,10 +104,6 @@ impl RedrawScheduler {
         self.rendered_frames += 1;
     }
 
-    pub(super) fn rendered_frames(&self) -> u64 {
-        self.rendered_frames
-    }
-
     pub(super) fn next_deadline(
         now: Instant,
         deadlines: impl IntoIterator<Item = Instant>,
