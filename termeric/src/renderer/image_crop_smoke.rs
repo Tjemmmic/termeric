@@ -286,9 +286,6 @@ pub(super) fn run(device: &Device, queue: &Queue) -> Result<()> {
         }
     }
     ensure!(frames == 128, "partial-cell image coverage lost scenarios");
-    eprintln!(
-        "parser-to-GPU partial-cell image crops: {frames} complete-frame checks passed (Kitty/Sixel/iTerm2, local/relayed, offsets, scroll/copy/erase, frozen/released)"
-    );
     Ok(())
 }
 

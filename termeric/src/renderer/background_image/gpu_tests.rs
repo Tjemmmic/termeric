@@ -1,5 +1,5 @@
-//! Offscreen evidence for the production background upload/queue lifecycle.
-//! This does not exercise a native surface, full UI composition, or a driver reset.
+//! Offscreen pixel checks of the background image's upload, fit, opacity,
+//! and replacement through the production pipelines.
 
 use super::*;
 use crate::renderer::{image::ImagePipeline, rect::RectPipeline};
@@ -249,7 +249,6 @@ fn snapshot(
 
 pub(crate) fn headless_background_render_smoke(device: &Device, queue: &Queue) -> Result<()> {
     let dir = tempfile::tempdir()?;
-    let mut count = 0;
     for extension in ["png", "jpg"] {
         let path = dir.path().join(format!("background.{extension}"));
         let input = ::image::RgbaImage::from_fn(96, 48, |x, y| {
@@ -312,7 +311,6 @@ pub(crate) fn headless_background_render_smoke(device: &Device, queue: &Queue) -
                     state.opacity = opacity;
                     let actual = snapshot(device, queue, &state, &mut images, case)?;
                     verify(&actual, &reference_frame(Some(&source), case), case)?;
-                    count += 1;
                 }
             }
         }
@@ -366,11 +364,7 @@ pub(crate) fn headless_background_render_smoke(device: &Device, queue: &Queue) -
             &reference_frame(Some(&replacement), case),
             case,
         )?;
-        count += 4;
     }
-    eprintln!(
-        "background image pixel test: {count} frames passed (PNG/JPEG, four fits, opacity, viewport, replacement/clear/recreate)"
-    );
     Ok(())
 }
 
