@@ -1,11 +1,63 @@
 //! Bounded text and grapheme editing for the shortcut filter, not chord recording.
 
 use super::*;
+use crate::input::keybindings::KeyChord;
 use crate::ui::shortcuts_panel::ShortcutsPanelLayout;
 use crate::ui::text_input::TextInputEdit;
 use winit::keyboard::{Key, NamedKey};
 
 impl App {
+    /// Keys for the Shortcuts panel: recording a chord, the filter, and the list.
+    pub(super) fn handle_shortcuts_panel_key(&mut self, key: &Key) {
+        use crate::ui::shortcuts_panel::ShortcutsKey;
+
+        // In recording mode, capture the raw key
+        if self.shortcuts_panel.is_recording() {
+            let shortcuts_key = match key {
+                Key::Named(NamedKey::Escape) => Some(ShortcutsKey::Escape),
+                Key::Named(NamedKey::Backspace) | Key::Named(NamedKey::Delete) => {
+                    Some(ShortcutsKey::Delete)
+                }
+                _ => match key {
+                    Key::Named(
+                        NamedKey::Control | NamedKey::Shift | NamedKey::Alt | NamedKey::Super,
+                    ) => None,
+                    _ => KeyChord::from_key_event(key, self.modifiers)
+                        .map(ShortcutsKey::RecordedChord),
+                },
+            };
+            if let Some(key) = shortcuts_key {
+                let action = self
+                    .shortcuts_panel
+                    .handle_key(key, &self.shortcut_registry);
+                self.apply_shortcuts_action(action);
+                self.request_redraw(RedrawReason::KeyboardInput);
+            }
+            return;
+        }
+
+        if self.handle_shortcuts_filter_key(key) {
+            return;
+        }
+        let shortcuts_key = match key {
+            Key::Named(NamedKey::Escape) => Some(ShortcutsKey::Escape),
+            Key::Named(NamedKey::ArrowUp) => Some(ShortcutsKey::Up),
+            Key::Named(NamedKey::ArrowDown) => Some(ShortcutsKey::Down),
+            Key::Named(NamedKey::Enter) => Some(ShortcutsKey::Enter),
+            Key::Named(NamedKey::Backspace) => Some(ShortcutsKey::Backspace),
+            Key::Named(NamedKey::Delete) => Some(ShortcutsKey::Delete),
+            _ => None,
+        };
+
+        if let Some(key) = shortcuts_key {
+            let action = self
+                .shortcuts_panel
+                .handle_key(key, &self.shortcut_registry);
+            self.apply_shortcuts_action(action);
+            self.request_redraw(RedrawReason::KeyboardInput);
+        }
+    }
+
     /// Called only for primary presses after higher-priority modal routing.
     /// Even a collapsed or recording input consumes its own rectangle.
     pub(super) fn handle_shortcuts_filter_click(

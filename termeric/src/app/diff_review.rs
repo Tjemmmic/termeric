@@ -4,6 +4,60 @@
 use super::*;
 
 impl App {
+    /// Keys for diff review: scrolling, copy, and staging or reverting an agent change.
+    pub(super) fn handle_diff_review_key(&mut self, key: &winit::keyboard::Key) {
+        use super::overlay_scroll::{OverlayScroll, overlay_scroll_for_key};
+        use crate::ui::diff_review::DiffReviewAction;
+        use winit::keyboard::{Key, NamedKey};
+        let request_id = self.diff_review.request_id();
+        let scroll = overlay_scroll_for_key(key, self.modifiers, self.diff_review.viewport_rows());
+        let action = match (scroll, key) {
+            (Some(OverlayScroll::Rows(delta)), _) => {
+                DiffReviewAction::ScrollRows { request_id, delta }
+            }
+            (Some(OverlayScroll::Columns(delta)), _) => {
+                DiffReviewAction::ScrollColumns { request_id, delta }
+            }
+            (Some(OverlayScroll::Top), _) => DiffReviewAction::ScrollToTop { request_id },
+            (Some(OverlayScroll::Bottom), _) => DiffReviewAction::ScrollToBottom { request_id },
+            (Some(OverlayScroll::LineStart), _) => DiffReviewAction::ScrollToLeft { request_id },
+            (Some(OverlayScroll::LineEnd), _) => DiffReviewAction::ScrollToRight { request_id },
+            (None, Key::Named(NamedKey::Enter | NamedKey::Escape)) => {
+                DiffReviewAction::Dismiss { request_id }
+            }
+            (None, Key::Character(key)) if key.as_str().eq_ignore_ascii_case("k") => {
+                DiffReviewAction::ScrollRows {
+                    request_id,
+                    delta: -3,
+                }
+            }
+            (None, Key::Character(key)) if key.as_str().eq_ignore_ascii_case("j") => {
+                DiffReviewAction::ScrollRows {
+                    request_id,
+                    delta: 3,
+                }
+            }
+            (None, Key::Character(key)) if key.as_str().eq_ignore_ascii_case("c") => {
+                DiffReviewAction::Copy { request_id }
+            }
+            (None, Key::Character(key))
+                if key.as_str().eq_ignore_ascii_case("s")
+                    && self.diff_review.has_change_actions() =>
+            {
+                DiffReviewAction::Stage { request_id }
+            }
+            (None, Key::Character(key))
+                if key.as_str().eq_ignore_ascii_case("r")
+                    && self.diff_review.has_change_actions() =>
+            {
+                DiffReviewAction::Revert { request_id }
+            }
+            _ => DiffReviewAction::None,
+        };
+        self.apply_diff_review_action(action);
+        self.request_redraw(RedrawReason::KeyboardInput);
+    }
+
     pub(super) fn apply_diff_review_action(
         &mut self,
         action: crate::ui::diff_review::DiffReviewAction,

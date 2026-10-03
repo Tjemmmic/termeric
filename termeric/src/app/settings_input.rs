@@ -1,10 +1,54 @@
 //! Complete bounded Settings-filter events, separate from setting actions.
 
 use super::*;
+use crate::ui::settings::SettingsKey;
 use crate::ui::text_input::TextInputEdit;
 use winit::keyboard::{Key, NamedKey};
 
 impl App {
+    /// Keys for Settings: its own toggle shortcut, the filter, and the controls.
+    pub(super) fn handle_settings_panel_key(&mut self, key: &Key) {
+        // The same shortcut opens and closes Settings. Check it
+        // before treating character keys as filter input.
+        if self.shortcut_registry.check(key, self.modifiers)
+            == Some(crate::input::keybindings::BindableAction::ToggleSettings)
+        {
+            self.toggle_settings_surface();
+            self.request_redraw(RedrawReason::KeyboardInput);
+            return;
+        }
+
+        if self.handle_settings_filter_key(key) {
+            return;
+        }
+        let settings_key = match key {
+            Key::Named(NamedKey::Escape) => Some(SettingsKey::Escape),
+            Key::Named(NamedKey::ArrowUp) => Some(SettingsKey::Up),
+            Key::Named(NamedKey::ArrowDown) => Some(SettingsKey::Down),
+            Key::Named(NamedKey::ArrowLeft) => Some(SettingsKey::Left),
+            Key::Named(NamedKey::ArrowRight) => Some(SettingsKey::Right),
+            Key::Named(NamedKey::Enter) => Some(SettingsKey::Enter),
+            Key::Named(NamedKey::Tab) if self.modifiers.shift_key() => Some(SettingsKey::BackTab),
+            Key::Named(NamedKey::Tab) => Some(SettingsKey::Tab),
+            Key::Named(NamedKey::Backspace) => Some(SettingsKey::FilterBackspace),
+            Key::Named(NamedKey::Delete) => Some(SettingsKey::Delete),
+            Key::Character(c) if self.modifiers.control_key() => match c.as_str() {
+                "s" | "S" => Some(SettingsKey::Save),
+                "r" | "R" => Some(SettingsKey::Reset),
+                _ => None,
+            },
+            _ => None,
+        };
+
+        if let Some(key) = settings_key {
+            let action = self
+                .settings_panel
+                .handle_key(key, &self.config, &self.shortcut_registry);
+            self.apply_settings_action(action);
+            self.request_redraw(RedrawReason::KeyboardInput);
+        }
+    }
+
     pub(super) fn handle_settings_filter_key(&mut self, key: &Key) -> bool {
         if !self.settings_panel.is_active() {
             return false;

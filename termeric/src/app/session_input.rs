@@ -6,6 +6,28 @@ use crate::session::panel::SessionPanelAction;
 use winit::keyboard::{Key, NamedKey};
 
 impl App {
+    /// Keys for the workspace manager: renaming, the list, and dismissal.
+    pub(super) fn handle_session_panel_key(&mut self, key: &Key) {
+        use crate::session::panel::SessionPanelKey;
+        if self.handle_session_rename_key(key) {
+            return;
+        }
+        let panel_key = match key {
+            Key::Named(NamedKey::Escape) => Some(SessionPanelKey::Escape),
+            Key::Named(NamedKey::ArrowUp) => Some(SessionPanelKey::Up),
+            Key::Named(NamedKey::ArrowDown) => Some(SessionPanelKey::Down),
+            Key::Named(NamedKey::Enter) => Some(SessionPanelKey::Enter),
+            Key::Named(NamedKey::Delete) => Some(SessionPanelKey::Delete),
+            Key::Named(NamedKey::F2) => Some(SessionPanelKey::Rename),
+            _ => None,
+        };
+        if let Some(key) = panel_key {
+            let action = self.session_panel.handle_key(key);
+            self.apply_session_panel_action(action);
+        }
+        self.request_redraw(RedrawReason::KeyboardInput);
+    }
+
     pub(super) fn handle_session_rename_key(&mut self, key: &Key) -> bool {
         if !self.session_panel.is_open() || !self.session_panel.is_renaming() {
             return false;

@@ -590,6 +590,23 @@ impl App {
             || self.tab_rename.is_some()
     }
 
+    /// Ctrl+Enter confirms the guarded write; Enter or Escape cancels it.
+    pub(super) fn handle_guardrail_key(&mut self, key: &winit::keyboard::Key) {
+        use winit::keyboard::{Key, NamedKey};
+        let request_id = self.guardrail.request_id();
+        let action = match key {
+            Key::Named(NamedKey::Enter) if self.modifiers.control_key() => {
+                crate::terminal::guardrails::GuardrailAction::Confirm { request_id }
+            }
+            Key::Named(NamedKey::Enter | NamedKey::Escape) => {
+                crate::terminal::guardrails::GuardrailAction::Cancel { request_id }
+            }
+            _ => crate::terminal::guardrails::GuardrailAction::None,
+        };
+        self.apply_guardrail_action(action);
+        self.request_redraw(RedrawReason::KeyboardInput);
+    }
+
     pub(super) fn apply_guardrail_action(
         &mut self,
         action: crate::terminal::guardrails::GuardrailAction,

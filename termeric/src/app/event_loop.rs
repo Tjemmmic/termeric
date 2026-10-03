@@ -12,12 +12,8 @@ use winit::{
     window::Window,
 };
 
-use crate::input::keybindings::KeyChord;
-use crate::ui::settings::SettingsKey;
-
 use super::App;
 use super::redraw_scheduler::RedrawReason;
-use super::text_field_keys::FieldKey;
 
 impl App {
     pub(super) fn resumed(&mut self, event_loop: &ActiveEventLoop) {
@@ -279,19 +275,7 @@ impl App {
                 // Handle guardrail confirmation (highest priority)
                 if self.modal_layer_on_top(ModalLayer::Guardrail) {
                     if event.state == winit::event::ElementState::Pressed {
-                        use winit::keyboard::{Key, NamedKey};
-                        let request_id = self.guardrail.request_id();
-                        let action = match &event.logical_key {
-                            Key::Named(NamedKey::Enter) if self.modifiers.control_key() => {
-                                crate::terminal::guardrails::GuardrailAction::Confirm { request_id }
-                            }
-                            Key::Named(NamedKey::Enter | NamedKey::Escape) => {
-                                crate::terminal::guardrails::GuardrailAction::Cancel { request_id }
-                            }
-                            _ => crate::terminal::guardrails::GuardrailAction::None,
-                        };
-                        self.apply_guardrail_action(action);
-                        self.request_redraw(RedrawReason::KeyboardInput);
+                        self.handle_guardrail_key(&event.logical_key);
                     }
                     return;
                 }
@@ -301,160 +285,7 @@ impl App {
                 // during exit cannot target a replacement notice.
                 if self.modal_layer_on_top(ModalLayer::InfoOverlay) {
                     if event.state == winit::event::ElementState::Pressed {
-                        use crate::ui::info_overlay::InfoOverlayAction;
-                        use winit::keyboard::{Key, NamedKey};
-                        let request_id = self.info_overlay.request_id();
-                        let action = if event.logical_key == Key::Named(NamedKey::Tab) {
-                            self.ime.clear_preedit();
-                            self.info_overlay
-                                .cycle_focus(request_id, self.modifiers.shift_key());
-                            InfoOverlayAction::None
-                        } else if event.logical_key == Key::Named(NamedKey::Enter) {
-                            if event.repeat {
-                                InfoOverlayAction::None
-                            } else {
-                                self.info_overlay.activate_focused(request_id)
-                            }
-                        } else if self.info_overlay.input_focused() {
-                            if let Some(field_key) = self.text_edit_for_key(&event.logical_key) {
-                                if let FieldKey::Edit(edit) = field_key {
-                                    self.info_overlay.edit_input(request_id, edit);
-                                }
-                                InfoOverlayAction::None
-                            } else {
-                                match &event.logical_key {
-                                    Key::Named(NamedKey::Escape) => {
-                                        InfoOverlayAction::CancelInput { request_id }
-                                    }
-                                    Key::Named(NamedKey::ArrowUp) => {
-                                        InfoOverlayAction::ScrollLines {
-                                            request_id,
-                                            delta: -1,
-                                        }
-                                    }
-                                    Key::Named(NamedKey::ArrowDown) => {
-                                        InfoOverlayAction::ScrollLines {
-                                            request_id,
-                                            delta: 1,
-                                        }
-                                    }
-                                    Key::Named(NamedKey::PageUp) => {
-                                        InfoOverlayAction::ScrollLines {
-                                            request_id,
-                                            delta: -(self.info_overlay.viewport_rows() as isize),
-                                        }
-                                    }
-                                    Key::Named(NamedKey::PageDown) => {
-                                        InfoOverlayAction::ScrollLines {
-                                            request_id,
-                                            delta: self.info_overlay.viewport_rows() as isize,
-                                        }
-                                    }
-                                    Key::Character(character)
-                                        if self.modifiers.control_key()
-                                            && character.as_str().eq_ignore_ascii_case("c") =>
-                                    {
-                                        InfoOverlayAction::Copy { request_id }
-                                    }
-                                    Key::Character(character)
-                                        if self.modifiers.control_key()
-                                            && character.as_str().eq_ignore_ascii_case("d") =>
-                                    {
-                                        self.info_overlay.choice(request_id, "unset").map_or(
-                                            InfoOverlayAction::None,
-                                            |_| InfoOverlayAction::Choose {
-                                                request_id,
-                                                choice_id: "unset".into(),
-                                            },
-                                        )
-                                    }
-                                    Key::Character(character)
-                                        if !self.modifiers.control_key()
-                                            && !self.modifiers.super_key()
-                                            && !self.modifiers.alt_key() =>
-                                    {
-                                        self.info_overlay
-                                            .insert_input_text(request_id, character.as_str());
-                                        InfoOverlayAction::None
-                                    }
-                                    _ => InfoOverlayAction::None,
-                                }
-                            }
-                        } else {
-                            match &event.logical_key {
-                                Key::Named(NamedKey::Escape) => {
-                                    if self.info_overlay.has_input() {
-                                        InfoOverlayAction::CancelInput { request_id }
-                                    } else {
-                                        InfoOverlayAction::Dismiss { request_id }
-                                    }
-                                }
-                                Key::Named(NamedKey::ArrowUp) => InfoOverlayAction::ScrollLines {
-                                    request_id,
-                                    delta: -1,
-                                },
-                                Key::Named(NamedKey::ArrowDown) => InfoOverlayAction::ScrollLines {
-                                    request_id,
-                                    delta: 1,
-                                },
-                                Key::Named(NamedKey::PageUp) => InfoOverlayAction::ScrollLines {
-                                    request_id,
-                                    delta: -(self.info_overlay.viewport_rows() as isize),
-                                },
-                                Key::Named(NamedKey::PageDown) => InfoOverlayAction::ScrollLines {
-                                    request_id,
-                                    delta: self.info_overlay.viewport_rows() as isize,
-                                },
-                                Key::Named(NamedKey::ArrowLeft) => {
-                                    InfoOverlayAction::ScrollColumns {
-                                        request_id,
-                                        delta: -4,
-                                    }
-                                }
-                                Key::Named(NamedKey::ArrowRight) => {
-                                    InfoOverlayAction::ScrollColumns {
-                                        request_id,
-                                        delta: 4,
-                                    }
-                                }
-                                Key::Named(NamedKey::Home) if self.modifiers.control_key() => {
-                                    InfoOverlayAction::ScrollToTop { request_id }
-                                }
-                                Key::Named(NamedKey::End) if self.modifiers.control_key() => {
-                                    InfoOverlayAction::ScrollToBottom { request_id }
-                                }
-                                Key::Named(NamedKey::Home) => {
-                                    InfoOverlayAction::ScrollToLeft { request_id }
-                                }
-                                Key::Named(NamedKey::End) => {
-                                    InfoOverlayAction::ScrollToRight { request_id }
-                                }
-                                Key::Character(character)
-                                    if character.as_str().eq_ignore_ascii_case("c") =>
-                                {
-                                    InfoOverlayAction::Copy { request_id }
-                                }
-                                // A held key must not pick a choice it did not
-                                // mean to reach.
-                                Key::Character(_) if event.repeat => InfoOverlayAction::None,
-                                Key::Character(character) => character
-                                    .as_str()
-                                    .chars()
-                                    .next()
-                                    .and_then(|shortcut| {
-                                        self.info_overlay.choice_for_shortcut(request_id, shortcut)
-                                    })
-                                    .map_or(InfoOverlayAction::None, |choice| {
-                                        InfoOverlayAction::Choose {
-                                            request_id,
-                                            choice_id: choice.id.clone(),
-                                        }
-                                    }),
-                                _ => InfoOverlayAction::None,
-                            }
-                        };
-                        self.apply_info_overlay_action(action);
-                        self.request_redraw(RedrawReason::KeyboardInput);
+                        self.handle_info_overlay_key(&event.logical_key, event.repeat);
                     }
                     return;
                 }
@@ -462,80 +293,7 @@ impl App {
                 // Handle diff review overlay input
                 if self.modal_layer_on_top(ModalLayer::DiffReview) {
                     if event.state == winit::event::ElementState::Pressed {
-                        use crate::ui::diff_review::DiffReviewAction;
-                        use winit::keyboard::{Key, NamedKey};
-                        let request_id = self.diff_review.request_id();
-                        let action = match &event.logical_key {
-                            Key::Named(NamedKey::Enter | NamedKey::Escape) => {
-                                DiffReviewAction::Dismiss { request_id }
-                            }
-                            Key::Named(NamedKey::ArrowUp) => DiffReviewAction::ScrollRows {
-                                request_id,
-                                delta: -1,
-                            },
-                            Key::Named(NamedKey::ArrowDown) => DiffReviewAction::ScrollRows {
-                                request_id,
-                                delta: 1,
-                            },
-                            Key::Character(key) if key.as_str().eq_ignore_ascii_case("k") => {
-                                DiffReviewAction::ScrollRows {
-                                    request_id,
-                                    delta: -3,
-                                }
-                            }
-                            Key::Character(key) if key.as_str().eq_ignore_ascii_case("j") => {
-                                DiffReviewAction::ScrollRows {
-                                    request_id,
-                                    delta: 3,
-                                }
-                            }
-                            Key::Named(NamedKey::PageUp) => DiffReviewAction::ScrollRows {
-                                request_id,
-                                delta: -(self.diff_review.viewport_rows() as isize),
-                            },
-                            Key::Named(NamedKey::PageDown) => DiffReviewAction::ScrollRows {
-                                request_id,
-                                delta: self.diff_review.viewport_rows() as isize,
-                            },
-                            Key::Named(NamedKey::ArrowLeft) => DiffReviewAction::ScrollColumns {
-                                request_id,
-                                delta: -4,
-                            },
-                            Key::Named(NamedKey::ArrowRight) => DiffReviewAction::ScrollColumns {
-                                request_id,
-                                delta: 4,
-                            },
-                            Key::Named(NamedKey::Home) if self.modifiers.control_key() => {
-                                DiffReviewAction::ScrollToTop { request_id }
-                            }
-                            Key::Named(NamedKey::End) if self.modifiers.control_key() => {
-                                DiffReviewAction::ScrollToBottom { request_id }
-                            }
-                            Key::Named(NamedKey::Home) => {
-                                DiffReviewAction::ScrollToLeft { request_id }
-                            }
-                            Key::Named(NamedKey::End) => {
-                                DiffReviewAction::ScrollToRight { request_id }
-                            }
-                            Key::Character(key) if key.as_str().eq_ignore_ascii_case("c") => {
-                                DiffReviewAction::Copy { request_id }
-                            }
-                            Key::Character(key)
-                                if key.as_str().eq_ignore_ascii_case("s")
-                                    && self.diff_review.has_change_actions() =>
-                            {
-                                DiffReviewAction::Stage { request_id }
-                            }
-                            Key::Character(key)
-                                if key.as_str().eq_ignore_ascii_case("r")
-                                    && self.diff_review.has_change_actions() =>
-                            {
-                                DiffReviewAction::Revert { request_id }
-                            }
-                            _ => DiffReviewAction::None,
-                        };
-                        self.apply_diff_review_action(action);
-                        self.request_redraw(RedrawReason::KeyboardInput);
+                        self.handle_diff_review_key(&event.logical_key);
                     }
                     return;
                 }
@@ -543,67 +301,7 @@ impl App {
                 // Handle context picker input
                 if self.modal_layer_on_top(ModalLayer::ContextPicker) {
                     if event.state == winit::event::ElementState::Pressed {
-                        use crate::ui::context_picker::{ContextPickerAction, ContextPickerPhase};
-                        use winit::keyboard::{Key, NamedKey};
-                        let request_id = self.context_picker.request_id();
-                        let action = match (self.context_picker.phase(), &event.logical_key) {
-                            (_, Key::Named(NamedKey::Escape)) => {
-                                ContextPickerAction::Cancel { request_id }
-                            }
-                            (_, Key::Named(NamedKey::Enter)) => {
-                                ContextPickerAction::Primary { request_id }
-                            }
-                            (ContextPickerPhase::Sources, Key::Named(NamedKey::ArrowUp)) => {
-                                ContextPickerAction::Move {
-                                    request_id,
-                                    delta: -1,
-                                }
-                            }
-                            (ContextPickerPhase::Sources, Key::Named(NamedKey::ArrowDown)) => {
-                                ContextPickerAction::Move {
-                                    request_id,
-                                    delta: 1,
-                                }
-                            }
-                            (ContextPickerPhase::Sources, Key::Named(NamedKey::PageUp)) => {
-                                ContextPickerAction::Move {
-                                    request_id,
-                                    delta: -(self.context_picker.viewport_rows() as isize),
-                                }
-                            }
-                            (ContextPickerPhase::Sources, Key::Named(NamedKey::PageDown)) => {
-                                ContextPickerAction::Move {
-                                    request_id,
-                                    delta: self.context_picker.viewport_rows() as isize,
-                                }
-                            }
-                            (ContextPickerPhase::Sources, Key::Named(NamedKey::Space)) => self
-                                .context_picker
-                                .selected_source()
-                                .map_or(ContextPickerAction::None, |source| {
-                                    ContextPickerAction::Toggle { request_id, source }
-                                }),
-                            (ContextPickerPhase::Sources, Key::Character(key))
-                                if key.as_str().eq_ignore_ascii_case("e") =>
-                            {
-                                ContextPickerAction::EditFiles { request_id }
-                            }
-                            (ContextPickerPhase::FilePaths, Key::Named(NamedKey::Backspace)) => {
-                                ContextPickerAction::BackspaceFileInput { request_id }
-                            }
-                            (ContextPickerPhase::FilePaths, Key::Character(text)) => text
-                                .chars()
-                                .next()
-                                .map_or(ContextPickerAction::None, |character| {
-                                    ContextPickerAction::AppendFileInput {
-                                        request_id,
-                                        character,
-                                    }
-                                }),
-                            _ => ContextPickerAction::None,
-                        };
-                        self.apply_context_picker_action(action);
-                        self.request_redraw(RedrawReason::KeyboardInput);
+                        self.handle_context_picker_key(&event.logical_key);
                     }
                     return;
                 }
@@ -615,119 +313,13 @@ impl App {
                     })
                 {
                     if event.state == winit::event::ElementState::Pressed {
-                        use winit::keyboard::{Key, NamedKey};
-                        match &event.logical_key {
-                            Key::Named(NamedKey::Escape) => {
-                                self.dismiss_sprout_request(request_id);
-                            }
-                            Key::Named(NamedKey::ArrowUp) => {
-                                if let Some(menu) = self
-                                    .harvest
-                                    .as_mut()
-                                    .and_then(|harvest| harvest.sprout_menu.as_mut())
-                                {
-                                    menu.select_up();
-                                }
-                            }
-                            Key::Named(NamedKey::ArrowDown) => {
-                                if let Some(menu) = self
-                                    .harvest
-                                    .as_mut()
-                                    .and_then(|harvest| harvest.sprout_menu.as_mut())
-                                {
-                                    menu.select_down();
-                                }
-                            }
-                            Key::Named(NamedKey::Home) => {
-                                if let Some(menu) = self
-                                    .harvest
-                                    .as_mut()
-                                    .and_then(|harvest| harvest.sprout_menu.as_mut())
-                                {
-                                    menu.select_first();
-                                }
-                            }
-                            Key::Named(NamedKey::End) => {
-                                if let Some(menu) = self
-                                    .harvest
-                                    .as_mut()
-                                    .and_then(|harvest| harvest.sprout_menu.as_mut())
-                                {
-                                    menu.select_last();
-                                }
-                            }
-                            Key::Named(NamedKey::Enter) => {
-                                let action = self
-                                    .harvest
-                                    .as_ref()
-                                    .and_then(|harvest| harvest.sprout_menu.as_ref())
-                                    .and_then(|menu| menu.selected_action().copied());
-                                if let Some(action) = action {
-                                    self.execute_sprout_request(request_id, action);
-                                }
-                            }
-                            _ => {}
-                        }
-                        self.request_redraw(RedrawReason::KeyboardInput);
+                        self.handle_sprout_menu_key(request_id, &event.logical_key);
                     }
                     return;
                 }
                 if self.modal_layer_on_top(ModalLayer::Cellar) {
                     if event.state == winit::event::ElementState::Pressed {
-                        use winit::keyboard::{Key, NamedKey};
-                        let activate = match &event.logical_key {
-                            Key::Named(NamedKey::Escape) => {
-                                if let Some(harvest) = &mut self.harvest {
-                                    harvest.cellar.close();
-                                }
-                                None
-                            }
-                            Key::Named(NamedKey::ArrowUp) => {
-                                if let Some(harvest) = &mut self.harvest {
-                                    harvest.cellar.select_up();
-                                }
-                                None
-                            }
-                            Key::Named(NamedKey::ArrowDown) => {
-                                if let Some(harvest) = &mut self.harvest {
-                                    harvest.cellar.select_down();
-                                }
-                                None
-                            }
-                            Key::Named(NamedKey::PageUp) => {
-                                if let Some(harvest) = &mut self.harvest {
-                                    harvest.cellar.select_page(-1);
-                                }
-                                None
-                            }
-                            Key::Named(NamedKey::PageDown) => {
-                                if let Some(harvest) = &mut self.harvest {
-                                    harvest.cellar.select_page(1);
-                                }
-                                None
-                            }
-                            Key::Named(NamedKey::Home) => {
-                                if let Some(harvest) = &mut self.harvest {
-                                    harvest.cellar.select_first();
-                                }
-                                None
-                            }
-                            Key::Named(NamedKey::End) => {
-                                if let Some(harvest) = &mut self.harvest {
-                                    harvest.cellar.select_last();
-                                }
-                                None
-                            }
-                            Key::Named(NamedKey::Enter) => self
-                                .harvest
-                                .as_ref()
-                                .and_then(|harvest| harvest.cellar.selected_id()),
-                            _ => None,
-                        };
-                        if let Some(id) = activate {
-                            self.apply_cellar_action(crate::harvest::CellarAction::Activate(id));
-                        }
-                        self.request_redraw(RedrawReason::KeyboardInput);
+                        self.handle_cellar_key(&event.logical_key);
                     }
                     return;
                 }
@@ -748,113 +340,15 @@ impl App {
                 // Handle shortcuts panel input (centered modal)
                 if self.modal_layer_on_top(ModalLayer::ShortcutsPanel) {
                     if event.state == winit::event::ElementState::Pressed {
-                        use crate::ui::shortcuts_panel::ShortcutsKey;
-                        use winit::keyboard::{Key, NamedKey};
-
-                        // In recording mode, capture the raw key
-                        if self.shortcuts_panel.is_recording() {
-                            let shortcuts_key = match &event.logical_key {
-                                Key::Named(NamedKey::Escape) => Some(ShortcutsKey::Escape),
-                                Key::Named(NamedKey::Backspace) | Key::Named(NamedKey::Delete) => {
-                                    Some(ShortcutsKey::Delete)
-                                }
-                                _ => match &event.logical_key {
-                                    Key::Named(
-                                        NamedKey::Control
-                                        | NamedKey::Shift
-                                        | NamedKey::Alt
-                                        | NamedKey::Super,
-                                    ) => None,
-                                    _ => {
-                                        KeyChord::from_key_event(&event.logical_key, self.modifiers)
-                                            .map(ShortcutsKey::RecordedChord)
-                                    }
-                                },
-                            };
-                            if let Some(key) = shortcuts_key {
-                                let action = self
-                                    .shortcuts_panel
-                                    .handle_key(key, &self.shortcut_registry);
-                                self.apply_shortcuts_action(action);
-                                self.request_redraw(RedrawReason::KeyboardInput);
-                            }
-                            return;
-                        }
-
-                        if self.handle_shortcuts_filter_key(&event.logical_key) {
-                            return;
-                        }
-                        let shortcuts_key = match &event.logical_key {
-                            Key::Named(NamedKey::Escape) => Some(ShortcutsKey::Escape),
-                            Key::Named(NamedKey::ArrowUp) => Some(ShortcutsKey::Up),
-                            Key::Named(NamedKey::ArrowDown) => Some(ShortcutsKey::Down),
-                            Key::Named(NamedKey::Enter) => Some(ShortcutsKey::Enter),
-                            Key::Named(NamedKey::Backspace) => Some(ShortcutsKey::Backspace),
-                            Key::Named(NamedKey::Delete) => Some(ShortcutsKey::Delete),
-                            _ => None,
-                        };
-
-                        if let Some(key) = shortcuts_key {
-                            let action = self
-                                .shortcuts_panel
-                                .handle_key(key, &self.shortcut_registry);
-                            self.apply_shortcuts_action(action);
-                            self.request_redraw(RedrawReason::KeyboardInput);
-                        }
+                        self.handle_shortcuts_panel_key(&event.logical_key);
                     }
                     return;
                 }
 
-                // Handle settings panel input (highest priority when open)
+                // Settings owns every key while it is the top layer.
                 if self.modal_layer_on_top(ModalLayer::Settings) {
                     if event.state == winit::event::ElementState::Pressed {
-                        use winit::keyboard::{Key, NamedKey};
-
-                        // The same shortcut opens and closes Settings. Check it
-                        // before treating character keys as filter input.
-                        if self
-                            .shortcut_registry
-                            .check(&event.logical_key, self.modifiers)
-                            == Some(crate::input::keybindings::BindableAction::ToggleSettings)
-                        {
-                            self.toggle_settings_surface();
-                            self.request_redraw(RedrawReason::KeyboardInput);
-                            return;
-                        }
-
-                        if self.handle_settings_filter_key(&event.logical_key) {
-                            return;
-                        }
-                        let settings_key = match &event.logical_key {
-                            Key::Named(NamedKey::Escape) => Some(SettingsKey::Escape),
-                            Key::Named(NamedKey::ArrowUp) => Some(SettingsKey::Up),
-                            Key::Named(NamedKey::ArrowDown) => Some(SettingsKey::Down),
-                            Key::Named(NamedKey::ArrowLeft) => Some(SettingsKey::Left),
-                            Key::Named(NamedKey::ArrowRight) => Some(SettingsKey::Right),
-                            Key::Named(NamedKey::Enter) => Some(SettingsKey::Enter),
-                            Key::Named(NamedKey::Tab) if self.modifiers.shift_key() => {
-                                Some(SettingsKey::BackTab)
-                            }
-                            Key::Named(NamedKey::Tab) => Some(SettingsKey::Tab),
-                            Key::Named(NamedKey::Backspace) => Some(SettingsKey::FilterBackspace),
-                            Key::Named(NamedKey::Delete) => Some(SettingsKey::Delete),
-                            Key::Character(c) if self.modifiers.control_key() => match c.as_str() {
-                                "s" | "S" => Some(SettingsKey::Save),
-                                "r" | "R" => Some(SettingsKey::Reset),
-                                _ => None,
-                            },
-                            _ => None,
-                        };
-
-                        if let Some(key) = settings_key {
-                            let action = self.settings_panel.handle_key(
-                                key,
-                                &self.config,
-                                &self.shortcut_registry,
-                            );
-                            self.apply_settings_action(action);
-                            self.request_redraw(RedrawReason::KeyboardInput);
-                        }
+                        self.handle_settings_panel_key(&event.logical_key);
                     }
                     return;
                 }
@@ -864,25 +358,7 @@ impl App {
                 // through to the focused PTY while it is open.
                 if self.modal_layer_on_top(ModalLayer::SessionPanel) {
                     if event.state == winit::event::ElementState::Pressed {
-                        use crate::session::panel::SessionPanelKey;
-                        use winit::keyboard::{Key, NamedKey};
-                        if self.handle_session_rename_key(&event.logical_key) {
-                            return;
-                        }
-                        let panel_key = match &event.logical_key {
-                            Key::Named(NamedKey::Escape) => Some(SessionPanelKey::Escape),
-                            Key::Named(NamedKey::ArrowUp) => Some(SessionPanelKey::Up),
-                            Key::Named(NamedKey::ArrowDown) => Some(SessionPanelKey::Down),
-                            Key::Named(NamedKey::Enter) => Some(SessionPanelKey::Enter),
-                            Key::Named(NamedKey::Delete) => Some(SessionPanelKey::Delete),
-                            Key::Named(NamedKey::F2) => Some(SessionPanelKey::Rename),
-                            _ => None,
-                        };
-                        if let Some(key) = panel_key {
-                            let action = self.session_panel.handle_key(key);
-                            self.apply_session_panel_action(action);
-                        }
-                        self.request_redraw(RedrawReason::KeyboardInput);
+                        self.handle_session_panel_key(&event.logical_key);
                     }
                     return;
                 }

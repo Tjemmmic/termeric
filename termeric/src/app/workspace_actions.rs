@@ -1253,6 +1253,64 @@ impl App {
         ))
     }
 
+    /// Keys for the Harvest cellar list.
+    pub(super) fn handle_cellar_key(&mut self, key: &winit::keyboard::Key) {
+        use winit::keyboard::{Key, NamedKey};
+        let activate = match key {
+            Key::Named(NamedKey::Escape) => {
+                if let Some(harvest) = &mut self.harvest {
+                    harvest.cellar.close();
+                }
+                None
+            }
+            Key::Named(NamedKey::ArrowUp) => {
+                if let Some(harvest) = &mut self.harvest {
+                    harvest.cellar.select_up();
+                }
+                None
+            }
+            Key::Named(NamedKey::ArrowDown) => {
+                if let Some(harvest) = &mut self.harvest {
+                    harvest.cellar.select_down();
+                }
+                None
+            }
+            Key::Named(NamedKey::PageUp) => {
+                if let Some(harvest) = &mut self.harvest {
+                    harvest.cellar.select_page(-1);
+                }
+                None
+            }
+            Key::Named(NamedKey::PageDown) => {
+                if let Some(harvest) = &mut self.harvest {
+                    harvest.cellar.select_page(1);
+                }
+                None
+            }
+            Key::Named(NamedKey::Home) => {
+                if let Some(harvest) = &mut self.harvest {
+                    harvest.cellar.select_first();
+                }
+                None
+            }
+            Key::Named(NamedKey::End) => {
+                if let Some(harvest) = &mut self.harvest {
+                    harvest.cellar.select_last();
+                }
+                None
+            }
+            Key::Named(NamedKey::Enter) => self
+                .harvest
+                .as_ref()
+                .and_then(|harvest| harvest.cellar.selected_id()),
+            _ => None,
+        };
+        if let Some(id) = activate {
+            self.apply_cellar_action(crate::harvest::CellarAction::Activate(id));
+        }
+        self.request_redraw(RedrawReason::KeyboardInput);
+    }
+
     pub(super) fn apply_cellar_action(&mut self, action: crate::harvest::CellarAction) {
         use crate::harvest::CellarAction;
         match action {
@@ -1361,6 +1419,64 @@ impl App {
             source_alternate_screen,
             retained_output_truncated: target.output_truncated,
         }
+    }
+
+    /// Keys for the sprout menu of request `request_id`.
+    pub(super) fn handle_sprout_menu_key(&mut self, request_id: u64, key: &winit::keyboard::Key) {
+        use winit::keyboard::{Key, NamedKey};
+        match key {
+            Key::Named(NamedKey::Escape) => {
+                self.dismiss_sprout_request(request_id);
+            }
+            Key::Named(NamedKey::ArrowUp) => {
+                if let Some(menu) = self
+                    .harvest
+                    .as_mut()
+                    .and_then(|harvest| harvest.sprout_menu.as_mut())
+                {
+                    menu.select_up();
+                }
+            }
+            Key::Named(NamedKey::ArrowDown) => {
+                if let Some(menu) = self
+                    .harvest
+                    .as_mut()
+                    .and_then(|harvest| harvest.sprout_menu.as_mut())
+                {
+                    menu.select_down();
+                }
+            }
+            Key::Named(NamedKey::Home) => {
+                if let Some(menu) = self
+                    .harvest
+                    .as_mut()
+                    .and_then(|harvest| harvest.sprout_menu.as_mut())
+                {
+                    menu.select_first();
+                }
+            }
+            Key::Named(NamedKey::End) => {
+                if let Some(menu) = self
+                    .harvest
+                    .as_mut()
+                    .and_then(|harvest| harvest.sprout_menu.as_mut())
+                {
+                    menu.select_last();
+                }
+            }
+            Key::Named(NamedKey::Enter) => {
+                let action = self
+                    .harvest
+                    .as_ref()
+                    .and_then(|harvest| harvest.sprout_menu.as_ref())
+                    .and_then(|menu| menu.selected_action().copied());
+                if let Some(action) = action {
+                    self.execute_sprout_request(request_id, action);
+                }
+            }
+            _ => {}
+        }
+        self.request_redraw(RedrawReason::KeyboardInput);
     }
 
     pub(super) fn execute_sprout_request(

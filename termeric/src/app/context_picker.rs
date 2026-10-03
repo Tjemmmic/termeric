@@ -4,6 +4,68 @@
 use super::*;
 
 impl App {
+    /// Keys for the context picker: choosing sources, then typing file paths.
+    pub(super) fn handle_context_picker_key(&mut self, key: &winit::keyboard::Key) {
+        use crate::ui::context_picker::{ContextPickerAction, ContextPickerPhase};
+        use winit::keyboard::{Key, NamedKey};
+        let request_id = self.context_picker.request_id();
+        let action = match (self.context_picker.phase(), key) {
+            (_, Key::Named(NamedKey::Escape)) => ContextPickerAction::Cancel { request_id },
+            (_, Key::Named(NamedKey::Enter)) => ContextPickerAction::Primary { request_id },
+            (ContextPickerPhase::Sources, Key::Named(NamedKey::ArrowUp)) => {
+                ContextPickerAction::Move {
+                    request_id,
+                    delta: -1,
+                }
+            }
+            (ContextPickerPhase::Sources, Key::Named(NamedKey::ArrowDown)) => {
+                ContextPickerAction::Move {
+                    request_id,
+                    delta: 1,
+                }
+            }
+            (ContextPickerPhase::Sources, Key::Named(NamedKey::PageUp)) => {
+                ContextPickerAction::Move {
+                    request_id,
+                    delta: -(self.context_picker.viewport_rows() as isize),
+                }
+            }
+            (ContextPickerPhase::Sources, Key::Named(NamedKey::PageDown)) => {
+                ContextPickerAction::Move {
+                    request_id,
+                    delta: self.context_picker.viewport_rows() as isize,
+                }
+            }
+            (ContextPickerPhase::Sources, Key::Named(NamedKey::Space)) => self
+                .context_picker
+                .selected_source()
+                .map_or(ContextPickerAction::None, |source| {
+                    ContextPickerAction::Toggle { request_id, source }
+                }),
+            (ContextPickerPhase::Sources, Key::Character(key))
+                if key.as_str().eq_ignore_ascii_case("e") =>
+            {
+                ContextPickerAction::EditFiles { request_id }
+            }
+            (ContextPickerPhase::FilePaths, Key::Named(NamedKey::Backspace)) => {
+                ContextPickerAction::BackspaceFileInput { request_id }
+            }
+            (ContextPickerPhase::FilePaths, Key::Character(text)) => {
+                text.chars()
+                    .next()
+                    .map_or(ContextPickerAction::None, |character| {
+                        ContextPickerAction::AppendFileInput {
+                            request_id,
+                            character,
+                        }
+                    })
+            }
+            _ => ContextPickerAction::None,
+        };
+        self.apply_context_picker_action(action);
+        self.request_redraw(RedrawReason::KeyboardInput);
+    }
+
     /// Open the context picker for the agent in `terminal`. Terminal output
     /// comes from another pane of the same tab when there is one, else from
     /// the first shell tab.
