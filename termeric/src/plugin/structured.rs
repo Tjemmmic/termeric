@@ -1102,7 +1102,6 @@ mod tests {
         )
     }
 
-    #[cfg(unix)]
     fn persistent_fixture(plugin_id: &str, script: &str) -> StructuredHandlerInvocation {
         StructuredHandlerInvocation {
             plugin_id: plugin_id.into(),
@@ -1478,7 +1477,6 @@ mod tests {
         assert!(check(&authority, enter_only).is_ok());
     }
 
-    #[cfg(unix)]
     #[test]
     fn persistent_query_then_action_then_result_reuses_one_bounded_handler() {
         let mut invocation = persistent_fixture(
@@ -1534,7 +1532,6 @@ done"#,
         assert_eq!(handlers.len(), 1);
     }
 
-    #[cfg(unix)]
     #[test]
     fn persistent_result_that_repeats_its_operation_fails_closed() {
         let mut invocation = persistent_fixture(
@@ -1591,7 +1588,6 @@ done"#,
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn persistent_handler_reuses_one_stateful_process() {
         let invocation = persistent_fixture(
@@ -1625,7 +1621,6 @@ done"#,
         assert_eq!(handlers.len(), 1);
     }
 
-    #[cfg(unix)]
     #[test]
     fn persistent_handler_is_replaced_when_its_grants_change() {
         let mut invocation = persistent_fixture(
@@ -1647,7 +1642,6 @@ done"#,
         assert!(handlers.is_empty());
     }
 
-    #[cfg(unix)]
     #[test]
     fn persistent_protocol_failure_discards_process_and_allows_restart() {
         let mismatched = persistent_fixture(
@@ -1677,7 +1671,6 @@ done"#,
         assert_eq!(handlers.len(), 1);
     }
 
-    #[cfg(unix)]
     #[test]
     fn persistent_timeout_and_generation_change_terminate_handlers() {
         let invocation = persistent_fixture("cancel-fixture", "IFS= read -r event\nsleep 10");
@@ -1699,7 +1692,6 @@ done"#,
         assert!(handlers.is_empty());
     }
 
-    #[cfg(unix)]
     #[test]
     fn persistent_timeout_and_crash_discard_the_failed_process() {
         let shutdown = AtomicBool::new(false);
@@ -1721,7 +1713,6 @@ done"#,
         assert!(handlers.is_empty());
     }
 
-    #[cfg(unix)]
     #[test]
     fn persistent_handler_count_is_bounded() {
         let mut handlers = HashMap::new();
@@ -1753,7 +1744,6 @@ done"#,
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn exited_idle_handlers_do_not_consume_process_capacity() {
         let mut handlers = HashMap::new();
@@ -1792,15 +1782,6 @@ done"#,
         assert!(!error.chars().any(char::is_control));
     }
 
-    fn python3_available() -> bool {
-        Command::new("python3")
-            .arg("--version")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|status| status.success())
-    }
-
     /// Start a conversation with a checked-in example's handler, granted
     /// everything its manifest requests.
     fn example_invocation(example: &str, command_invoked: bool) -> StructuredHandlerInvocation {
@@ -1819,12 +1800,8 @@ done"#,
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn rerun_in_sibling_example_sends_the_last_command_to_the_next_pane() {
-        if !python3_available() {
-            return;
-        }
         let mut handlers = HashMap::new();
         let shutdown = AtomicBool::new(false);
         let generation = AtomicU64::new(1);
@@ -1879,12 +1856,8 @@ done"#,
         assert_eq!(handlers.len(), 1);
     }
 
-    #[cfg(unix)]
     #[test]
     fn command_notifier_example_reports_only_unexpected_failures() {
-        if !python3_available() {
-            return;
-        }
         let mut handlers = HashMap::new();
         let shutdown = AtomicBool::new(false);
         let generation = AtomicU64::new(1);
@@ -2039,12 +2012,8 @@ done"#,
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn window_switcher_example_cycles_windows_and_jumps_to_a_tab_by_title() {
-        if !python3_available() {
-            return;
-        }
         let tab = |id: u64, title: &str, active: bool| {
             serde_json::json!({
                 "id": id,
@@ -2138,13 +2107,9 @@ done"#,
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn pane_layouts_example_arranges_the_origin_windows_active_tab() {
         use crate::panes::SplitDirection;
-        if !python3_available() {
-            return;
-        }
         // Window 3 is the origin; its active tab 5 holds `pane_count` panes,
         // the last one focused. Window 2's active tab must be ignored.
         let windows = |pane_count: u32| {

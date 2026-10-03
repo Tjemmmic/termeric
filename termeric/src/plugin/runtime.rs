@@ -3542,7 +3542,6 @@ events = ["command-invoked"]
         assert_eq!(value["event"]["output"]["text"], "");
     }
 
-    #[cfg(unix)]
     #[test]
     fn symlinked_installed_directory_never_becomes_a_runtime_plugin() {
         use std::os::unix::fs::symlink;
@@ -3590,7 +3589,6 @@ events = ["command-invoked"]
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn administrative_temporary_symlinks_are_never_followed() {
         use std::os::unix::fs::symlink;
@@ -3624,7 +3622,6 @@ events = ["command-invoked"]
         assert_eq!(fs::read_to_string(&sentinel).unwrap(), "do-not-replace");
     }
 
-    #[cfg(unix)]
     #[test]
     fn symlinked_plugin_root_is_rejected_before_installation() {
         use std::os::unix::fs::symlink;
