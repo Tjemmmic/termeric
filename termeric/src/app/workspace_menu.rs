@@ -3,7 +3,7 @@
 
 use winit::keyboard::{Key, NamedKey};
 
-use super::App;
+use super::{App, RedrawReason};
 use crate::renderer::{PopupMenuInfo, TabBarClick};
 use crate::ui::popup_menu::{PopupMenu, PopupMenuLayout};
 use crate::ui::workspace_menu::{WorkspaceMenuAction, workspace_menu_rows};
@@ -13,7 +13,7 @@ impl App {
     /// Keyboard opening highlights the first entry so Enter works at once.
     pub(super) fn toggle_workspace_menu(&mut self, from_keyboard: bool) {
         if self.workspace_menu.take().is_some() {
-            self.request_workspace_menu_redraw();
+            self.request_redraw(RedrawReason::Action);
             return;
         }
         let rows = workspace_menu_rows(
@@ -21,12 +21,12 @@ impl App {
             self.current_workspace_id.as_deref(),
         );
         self.workspace_menu = Some(PopupMenu::new(rows, from_keyboard));
-        self.request_workspace_menu_redraw();
+        self.request_redraw(RedrawReason::Action);
     }
 
     pub(super) fn close_workspace_menu(&mut self) {
         if self.workspace_menu.take().is_some() {
-            self.request_workspace_menu_redraw();
+            self.request_redraw(RedrawReason::Action);
         }
     }
 
@@ -75,7 +75,7 @@ impl App {
             }
             _ => return,
         }
-        self.request_workspace_menu_redraw();
+        self.request_redraw(RedrawReason::Action);
     }
 
     /// Highlight the row under the pointer. Returns whether it changed.
@@ -124,13 +124,7 @@ impl App {
                 self.session_panel.open_workspaces();
             }
         }
-        self.request_workspace_menu_redraw();
-    }
-
-    fn request_workspace_menu_redraw(&self) {
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.request_redraw(RedrawReason::Action);
     }
 }
 

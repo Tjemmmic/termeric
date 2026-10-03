@@ -155,7 +155,7 @@ impl App {
         #[cfg(not(target_os = "linux"))]
         window.focus_window();
 
-        window.request_redraw();
+        self.request_redraw(RedrawReason::Action);
         true
     }
 
@@ -578,9 +578,7 @@ impl App {
                 ),
             );
         }
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.request_redraw(RedrawReason::BackgroundTask);
     }
 
     pub(super) fn cancel_file_upload(&mut self) {
@@ -605,9 +603,7 @@ impl App {
                 None => format!("Cancelling preparation of {}…", active.name),
             },
         );
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.request_redraw(RedrawReason::Action);
     }
 
     pub(super) fn file_drop_input_blocked(&self) -> bool {

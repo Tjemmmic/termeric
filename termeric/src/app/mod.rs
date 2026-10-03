@@ -66,7 +66,7 @@ use winit::{
 
 use termeric_core::TerminalEvent;
 
-use self::redraw_scheduler::RedrawScheduler;
+use self::redraw_scheduler::{RedrawReason, RedrawScheduler};
 use self::state::AppState;
 use crate::config::theme::Theme;
 use crate::config::{Config, SplashMode};
@@ -1648,9 +1648,7 @@ impl App {
                         renderer.diagnostics().summary()
                     );
                 }
-                self.redraw_scheduler
-                    .request(redraw_scheduler::RedrawReason::SurfaceRecovery);
-                window.request_redraw();
+                self.request_redraw(RedrawReason::SurfaceRecovery);
             }
             Err(error) => {
                 log::error!(
@@ -1764,9 +1762,7 @@ impl App {
 
             self.info_overlay
                 .show(format!("{} failed to start", display_name), overlay_lines);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::TerminalOutput);
             log::warn!("Plugin '{}' exited within 5 seconds of launch", plugin_id);
         }
 
@@ -2000,6 +1996,14 @@ impl App {
         self.finish_copy_mode_reflow();
     }
 
+    /// Record why this window must be redrawn and ask for a frame.
+    fn request_redraw(&mut self, reason: RedrawReason) {
+        self.redraw_scheduler.request(reason);
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+    }
+
     /// Render the terminal
     fn render(&mut self) {
         self.finish_obscured_native_pointer_gesture();
@@ -2035,11 +2039,7 @@ impl App {
             self.jump_copy_cursor_to_search();
         }
         if search_pending {
-            self.redraw_scheduler
-                .request(redraw_scheduler::RedrawReason::Search);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::Search);
         }
 
         // Completing a filter scan may replace the displayed row projection.
@@ -2148,6 +2148,9 @@ impl App {
         let Some(terminal) = tab.focused_terminal() else {
             return;
         };
+        // Animations ask for the next frame once rendering lets go of the
+        // renderer.
+        let mut animating = false;
         let mut tab_info = tabs.tab_info();
         if let Some((tab_id, _, state)) = &broadcast_render
             && tab.id == *tab_id
@@ -2192,20 +2195,12 @@ impl App {
 
         // Update settings panel animation
         if self.settings_panel.update_animation() {
-            self.redraw_scheduler
-                .request(redraw_scheduler::RedrawReason::Animation);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            animating = true;
         }
 
         // Update session panel animation
         if self.session_panel.needs_redraw() {
-            self.redraw_scheduler
-                .request(redraw_scheduler::RedrawReason::Animation);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            animating = true;
         }
 
         // Collect image placements for rendering
@@ -2243,20 +2238,12 @@ impl App {
         };
         // Update commands and agents panel animation
         if self.commands_panel.needs_redraw() || self.agents_panel.needs_redraw() {
-            self.redraw_scheduler
-                .request(redraw_scheduler::RedrawReason::Animation);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            animating = true;
         }
         // Update visual bell animation
         self.bell.update();
         if self.bell.is_visual_active() {
-            self.redraw_scheduler
-                .request(redraw_scheduler::RedrawReason::Animation);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            animating = true;
         }
 
         // Update harvest mode animations
@@ -2272,11 +2259,7 @@ impl App {
                     || has_active_harvest_indicator
             };
             if animation_active {
-                self.redraw_scheduler
-                    .request(redraw_scheduler::RedrawReason::Animation);
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
+                animating = true;
             }
         }
 
@@ -2289,25 +2272,13 @@ impl App {
 
         // Update command palette animation
         if self.command_palette.update_animation() {
-            self.redraw_scheduler
-                .request(redraw_scheduler::RedrawReason::Animation);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            animating = true;
         }
         if self.domain_picker.update_animation() {
-            self.redraw_scheduler
-                .request(redraw_scheduler::RedrawReason::Animation);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            animating = true;
         }
         if self.unicode_picker.update_animation() {
-            self.redraw_scheduler
-                .request(redraw_scheduler::RedrawReason::Animation);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            animating = true;
         }
         // These workflows use the same proven palette renderer and geometry,
         // but only one modal can own input and rendering at a time.
@@ -2353,11 +2324,7 @@ impl App {
 
         // Update shortcuts panel animation
         if self.shortcuts_panel.update_animation() {
-            self.redraw_scheduler
-                .request(redraw_scheduler::RedrawReason::Animation);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            animating = true;
         }
         // Auto-cancel shortcut recording after 15s of no input so users
         // can't get stuck in recording mode.
@@ -2365,11 +2332,7 @@ impl App {
             .shortcuts_panel
             .tick_recording_timeout(std::time::Duration::from_secs(15))
         {
-            self.redraw_scheduler
-                .request(redraw_scheduler::RedrawReason::Animation);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            animating = true;
         }
         // Build shortcuts panel info if visible
         let shortcuts_info = if self.shortcuts_panel.is_visible() {
@@ -2450,20 +2413,12 @@ impl App {
 
         // Update info overlay animation
         if self.info_overlay.update_animation() {
-            self.redraw_scheduler
-                .request(redraw_scheduler::RedrawReason::Animation);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            animating = true;
         }
 
         // Toast lifecycle: prune expired, push snapshot into renderer.
         if self.toasts.update() {
-            self.redraw_scheduler
-                .request(redraw_scheduler::RedrawReason::Animation);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            animating = true;
         }
         renderer.set_toasts(self.toasts.build_info());
 
@@ -2506,11 +2461,7 @@ impl App {
 
         // Update diff review animation
         if self.diff_review.update_animation() {
-            self.redraw_scheduler
-                .request(redraw_scheduler::RedrawReason::Animation);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            animating = true;
         }
 
         // Build context picker overlay if visible
@@ -2539,11 +2490,7 @@ impl App {
 
         // Update context picker animation
         if self.context_picker.update_animation() {
-            self.redraw_scheduler
-                .request(redraw_scheduler::RedrawReason::Animation);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            animating = true;
         }
 
         // Build guardrail overlay if visible
@@ -2566,11 +2513,7 @@ impl App {
 
         // Update guardrail animation
         if self.guardrail.update_animation() {
-            self.redraw_scheduler
-                .request(redraw_scheduler::RedrawReason::Animation);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            animating = true;
         }
 
         renderer.set_tab_bar_hover(self.tab_bar_hover, tab_bar_hover_progress);
@@ -2853,6 +2796,9 @@ impl App {
         };
         self.keep_dragged_tab_picture(presented);
         self.refresh_accessibility();
+        if animating {
+            self.request_redraw(RedrawReason::Animation);
+        }
     }
 
     fn desired_native_window_title(&self) -> String {
@@ -3450,9 +3396,7 @@ impl App {
             terminal.next_failed_command()
         };
         if found.is_some() {
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::Action);
         } else if !integrated {
             self.toasts
                 .info("Failed-command jumps need shell integration (bash, zsh, or fish)");
@@ -3577,9 +3521,7 @@ impl App {
                     self.search.start();
                     self.search_cursor_pos = 0;
                 }
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
+                self.request_redraw(RedrawReason::Action);
             }
             Action::ToggleCopyMode => {
                 if self.copy_mode.is_active() {
@@ -3596,9 +3538,7 @@ impl App {
             }
             Action::ToggleSettings => {
                 self.toggle_settings_surface();
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
+                self.request_redraw(RedrawReason::Action);
             }
             Action::PreviousPrompt => {
                 if let Some(terminal) = self.active_terminal_mut() {
@@ -3616,9 +3556,7 @@ impl App {
             }
             Action::NewAgent => {
                 self.open_agent_picker(crate::ui::command_palette::palette::AgentPlacement::NewTab);
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
+                self.request_redraw(RedrawReason::Action);
             }
             Action::ToggleAgentView => self.toggle_agent_view(),
             Action::PreviousFailedCommand | Action::NextFailedCommand => {
@@ -3633,9 +3571,7 @@ impl App {
                 } else {
                     self.open_command_palette();
                 }
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
+                self.request_redraw(RedrawReason::Action);
             }
             Action::SplitVertical => {
                 self.split_pane(SplitDirection::Vertical);
@@ -3732,8 +3668,8 @@ impl App {
                 window.id()
             );
             window.set_fullscreen(next.then_some(winit::window::Fullscreen::Borderless(None)));
-            window.request_redraw();
         }
+        self.request_redraw(RedrawReason::Action);
     }
 
     /// Handle the result of executing a command from the palette
@@ -3798,9 +3734,7 @@ impl App {
                     "core.settings" => Action::ToggleSettings,
                     "core.shortcuts" => {
                         self.shortcuts_panel.toggle();
-                        if let Some(window) = &self.window {
-                            window.request_redraw();
-                        }
+                        self.request_redraw(RedrawReason::Action);
                         return;
                     }
                     "core.save-config" => {
@@ -3852,9 +3786,7 @@ impl App {
                             self.agents_panel.close();
                             self.session_panel.open_workspaces();
                         }
-                        if let Some(window) = &self.window {
-                            window.request_redraw();
-                        }
+                        self.request_redraw(RedrawReason::Action);
                         return;
                     }
                     "core.save-workspace" => {
@@ -3865,9 +3797,7 @@ impl App {
                         use crate::ui::settings::SettingsSection;
                         self.settings_panel
                             .open_to_section(SettingsSection::Plugins);
-                        if let Some(window) = &self.window {
-                            window.request_redraw();
-                        }
+                        self.request_redraw(RedrawReason::Action);
                         return;
                     }
                     "core.font-size-increase" => Action::IncreaseFontSize,
@@ -4001,9 +3931,7 @@ impl App {
             }
             PaletteResult::Cancelled => {}
         }
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.request_redraw(RedrawReason::Action);
     }
 
     /// Copy selection to clipboard. Returns true if anything was copied so
@@ -4203,9 +4131,7 @@ impl App {
         match key {
             Key::Named(NamedKey::Escape) => {
                 self.search.cancel();
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
+                self.request_redraw(RedrawReason::Search);
             }
             Key::Named(NamedKey::Enter) => {
                 // Confirm search and close input (but keep highlights)
@@ -4213,25 +4139,19 @@ impl App {
                 if self.copy_mode.is_active() {
                     self.jump_copy_cursor_to_search();
                 }
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
+                self.request_redraw(RedrawReason::Search);
             }
             Key::Named(NamedKey::ArrowUp) => {
                 // Previous match
                 self.search.prev();
                 self.scroll_to_current_match();
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
+                self.request_redraw(RedrawReason::Search);
             }
             Key::Named(NamedKey::ArrowDown) => {
                 // Next match
                 self.search.next();
                 self.scroll_to_current_match();
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
+                self.request_redraw(RedrawReason::Search);
             }
             Key::Character(c) => {
                 // Check for special key combinations
@@ -4242,9 +4162,7 @@ impl App {
                             self.with_search_and_active_grid(|search, grid| {
                                 search.toggle_case_sensitive(grid);
                             });
-                            if let Some(window) = &self.window {
-                                window.request_redraw();
-                            }
+                            self.request_redraw(RedrawReason::Search);
                             return true;
                         }
                         "r" | "R" => {
@@ -4252,9 +4170,7 @@ impl App {
                             self.with_search_and_active_grid(|search, grid| {
                                 search.toggle_regex(grid);
                             });
-                            if let Some(window) = &self.window {
-                                window.request_redraw();
-                            }
+                            self.request_redraw(RedrawReason::Search);
                             return true;
                         }
                         "f" | "F" => {
@@ -4266,9 +4182,7 @@ impl App {
                             } else {
                                 self.search.toggle_filter();
                             }
-                            if let Some(window) = &self.window {
-                                window.request_redraw();
-                            }
+                            self.request_redraw(RedrawReason::Search);
                             return true;
                         }
                         _ => {}
@@ -4283,9 +4197,7 @@ impl App {
                 {
                     self.search_cursor_pos += c.len();
                 }
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
+                self.request_redraw(RedrawReason::Search);
             }
             _ => {}
         }

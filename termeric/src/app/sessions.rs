@@ -371,9 +371,7 @@ impl App {
                 "Terminal profile {name:?} could not start: {error:#}"
             )),
         }
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.request_redraw(RedrawReason::Action);
     }
 
     /// Check splash mode and show splash if appropriate

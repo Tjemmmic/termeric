@@ -58,11 +58,7 @@ impl App {
     pub(super) fn scroll_commands_panel(&mut self, delta: isize) {
         let layout = self.commands_panel_layout();
         if self.commands_panel.scroll_rows(delta, layout) {
-            self.redraw_scheduler
-                .request(redraw_scheduler::RedrawReason::PointerInput);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::PointerInput);
         }
     }
 
@@ -113,11 +109,8 @@ impl App {
         }
         self.clear_commands_accessibility_focus();
         self.ime.clear_preedit();
-        self.redraw_scheduler
-            .request(redraw_scheduler::RedrawReason::KeyboardInput);
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.request_redraw(RedrawReason::KeyboardInput);
+
         true
     }
 
@@ -163,11 +156,8 @@ impl App {
         }
         self.clear_commands_accessibility_focus();
         self.ime.clear_preedit();
-        self.redraw_scheduler
-            .request(redraw_scheduler::RedrawReason::KeyboardInput);
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.request_redraw(RedrawReason::KeyboardInput);
+
         true
     }
 }

@@ -88,7 +88,7 @@ impl App {
         }
         let rows = self.agents_panel_rows();
         self.agents_panel.toggle(&rows);
-        self.request_agents_panel_redraw(redraw_scheduler::RedrawReason::Animation);
+        self.request_redraw(RedrawReason::Animation);
     }
 
     pub(super) fn agents_panel_layout(&self) -> AgentsPanelLayout {
@@ -157,7 +157,7 @@ impl App {
         }
         self.clear_agents_accessibility_focus();
         self.ime.clear_preedit();
-        self.request_agents_panel_redraw(redraw_scheduler::RedrawReason::KeyboardInput);
+        self.request_redraw(RedrawReason::KeyboardInput);
         true
     }
 
@@ -165,13 +165,13 @@ impl App {
     pub(super) fn handle_agents_panel_click(&mut self, x: f32, y: f32) {
         let action = self.agents_panel_layout().click(x, y);
         self.apply_agents_panel_action(action);
-        self.request_agents_panel_redraw(redraw_scheduler::RedrawReason::PointerInput);
+        self.request_redraw(RedrawReason::PointerInput);
     }
 
     pub(super) fn update_agents_panel_hover(&mut self, x: f32, y: f32) {
         let control = self.agents_panel_layout().control_at(x, y);
         self.agents_panel.set_hover(control);
-        self.request_agents_panel_redraw(redraw_scheduler::RedrawReason::PointerInput);
+        self.request_redraw(RedrawReason::PointerInput);
     }
 
     /// Wheel events stay with the panel while it is open.
@@ -194,7 +194,7 @@ impl App {
             };
             let layout = self.agents_panel_layout();
             if self.agents_panel.scroll_rows(rows, layout) {
-                self.request_agents_panel_redraw(redraw_scheduler::RedrawReason::PointerInput);
+                self.request_redraw(RedrawReason::PointerInput);
             }
         }
         true
@@ -234,12 +234,5 @@ impl App {
             }
         }
         self.clear_agents_accessibility_focus();
-    }
-
-    fn request_agents_panel_redraw(&mut self, reason: redraw_scheduler::RedrawReason) {
-        self.redraw_scheduler.request(reason);
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
     }
 }

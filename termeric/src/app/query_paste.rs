@@ -165,11 +165,8 @@ impl App {
         } else {
             self.toasts.warning("Field paste was not inserted: the field is read-only or its size limit was exceeded");
         }
-        self.redraw_scheduler
-            .request(redraw_scheduler::RedrawReason::KeyboardInput);
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.request_redraw(RedrawReason::KeyboardInput);
+
         accepted
     }
 }

@@ -25,10 +25,13 @@ pub(super) enum RedrawReason {
     BackgroundTask,
     Accessibility,
     WindowEvent,
+    /// A command, shortcut, panel choice, or control request changed what
+    /// is shown.
+    Action,
 }
 
 impl RedrawReason {
-    const ALL: [Self; 16] = [
+    const ALL: [Self; 17] = [
         Self::Startup,
         Self::TerminalOutput,
         Self::KeyboardInput,
@@ -45,6 +48,7 @@ impl RedrawReason {
         Self::BackgroundTask,
         Self::Accessibility,
         Self::WindowEvent,
+        Self::Action,
     ];
 
     const fn bit(self) -> u32 {
@@ -69,6 +73,7 @@ impl RedrawReason {
             Self::BackgroundTask => "background-task",
             Self::Accessibility => "accessibility",
             Self::WindowEvent => "window-event",
+            Self::Action => "action",
         }
     }
 }

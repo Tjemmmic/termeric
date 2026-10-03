@@ -212,9 +212,7 @@ impl App {
                 if recovering_surface {
                     self.redraw_scheduler.request(RedrawReason::SurfaceRecovery);
                 }
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
+                self.request_redraw(RedrawReason::Resize);
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 // Use renderer-owned dimensions rather than querying the native
@@ -227,9 +225,7 @@ impl App {
                 if let Some(size) = size {
                     self.handle_scale_factor_change(scale_factor, size);
                 }
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
+                self.request_redraw(RedrawReason::Resize);
             }
 
             WindowEvent::ModifiersChanged(modifiers) => {
@@ -294,9 +290,7 @@ impl App {
                             _ => crate::terminal::guardrails::GuardrailAction::None,
                         };
                         self.apply_guardrail_action(action);
-                        if let Some(window) = &self.window {
-                            window.request_redraw();
-                        }
+                        self.request_redraw(RedrawReason::KeyboardInput);
                     }
                     return;
                 }
@@ -459,9 +453,7 @@ impl App {
                             }
                         };
                         self.apply_info_overlay_action(action);
-                        if let Some(window) = &self.window {
-                            window.request_redraw();
-                        }
+                        self.request_redraw(RedrawReason::KeyboardInput);
                     }
                     return;
                 }
@@ -542,9 +534,7 @@ impl App {
                             _ => DiffReviewAction::None,
                         };
                         self.apply_diff_review_action(action);
-                        if let Some(window) = &self.window {
-                            window.request_redraw();
-                        }
+                        self.request_redraw(RedrawReason::KeyboardInput);
                     }
                     return;
                 }
@@ -612,9 +602,7 @@ impl App {
                             _ => ContextPickerAction::None,
                         };
                         self.apply_context_picker_action(action);
-                        if let Some(window) = &self.window {
-                            window.request_redraw();
-                        }
+                        self.request_redraw(RedrawReason::KeyboardInput);
                     }
                     return;
                 }
@@ -679,9 +667,7 @@ impl App {
                             }
                             _ => {}
                         }
-                        if let Some(window) = &self.window {
-                            window.request_redraw();
-                        }
+                        self.request_redraw(RedrawReason::KeyboardInput);
                     }
                     return;
                 }
@@ -744,9 +730,7 @@ impl App {
                         if let Some(id) = activate {
                             self.apply_cellar_action(crate::harvest::CellarAction::Activate(id));
                         }
-                        if let Some(window) = &self.window {
-                            window.request_redraw();
-                        }
+                        self.request_redraw(RedrawReason::KeyboardInput);
                     }
                     return;
                 }
@@ -804,9 +788,7 @@ impl App {
                         if let Some(command) = command {
                             self.handle_domain_picker_command(command);
                         }
-                        if let Some(window) = &self.window {
-                            window.request_redraw();
-                        }
+                        self.request_redraw(RedrawReason::KeyboardInput);
                     }
                     return;
                 }
@@ -851,9 +833,7 @@ impl App {
                         } else if !self.unicode_picker.is_active() {
                             self.pending_unicode_picker = None;
                         }
-                        if let Some(window) = &self.window {
-                            window.request_redraw();
-                        }
+                        self.request_redraw(RedrawReason::KeyboardInput);
                     }
                     return;
                 }
@@ -898,9 +878,7 @@ impl App {
                             }
                             _ => {}
                         }
-                        if let Some(window) = &self.window {
-                            window.request_redraw();
-                        }
+                        self.request_redraw(RedrawReason::KeyboardInput);
                     }
                     return;
                 }
@@ -935,9 +913,7 @@ impl App {
                                     .shortcuts_panel
                                     .handle_key(key, &self.shortcut_registry);
                                 self.apply_shortcuts_action(action);
-                                if let Some(window) = &self.window {
-                                    window.request_redraw();
-                                }
+                                self.request_redraw(RedrawReason::KeyboardInput);
                             }
                             return;
                         }
@@ -960,9 +936,7 @@ impl App {
                                 .shortcuts_panel
                                 .handle_key(key, &self.shortcut_registry);
                             self.apply_shortcuts_action(action);
-                            if let Some(window) = &self.window {
-                                window.request_redraw();
-                            }
+                            self.request_redraw(RedrawReason::KeyboardInput);
                         }
                     }
                     return;
@@ -981,9 +955,7 @@ impl App {
                             == Some(crate::input::keybindings::BindableAction::ToggleSettings)
                         {
                             self.toggle_settings_surface();
-                            if let Some(window) = &self.window {
-                                window.request_redraw();
-                            }
+                            self.request_redraw(RedrawReason::KeyboardInput);
                             return;
                         }
 
@@ -1018,9 +990,7 @@ impl App {
                                 &self.shortcut_registry,
                             );
                             self.apply_settings_action(action);
-                            if let Some(window) = &self.window {
-                                window.request_redraw();
-                            }
+                            self.request_redraw(RedrawReason::KeyboardInput);
                         }
                     }
                     return;
@@ -1049,9 +1019,7 @@ impl App {
                             let action = self.session_panel.handle_key(key);
                             self.apply_session_panel_action(action);
                         }
-                        if let Some(window) = &self.window {
-                            window.request_redraw();
-                        }
+                        self.request_redraw(RedrawReason::KeyboardInput);
                     }
                     return;
                 }
@@ -1215,9 +1183,7 @@ impl App {
                             crate::terminal::guardrails::GuardrailAction::Cancel { request_id }
                         };
                         self.apply_guardrail_action(action);
-                        if let Some(window) = &self.window {
-                            window.request_redraw();
-                        }
+                        self.request_redraw(RedrawReason::PointerInput);
                     }
                     return;
                 }
@@ -1300,9 +1266,7 @@ impl App {
                                 crate::ui::info_overlay::InfoOverlayAction::None
                             };
                             self.apply_info_overlay_action(action);
-                            if let Some(window) = &self.window {
-                                window.request_redraw();
-                            }
+                            self.request_redraw(RedrawReason::PointerInput);
                         }
                     }
                     return;
@@ -1330,9 +1294,7 @@ impl App {
                             self.diff_review.request_id(),
                         );
                         self.apply_diff_review_action(action);
-                        if let Some(window) = &self.window {
-                            window.request_redraw();
-                        }
+                        self.request_redraw(RedrawReason::PointerInput);
                     }
                     return;
                 }
@@ -1354,9 +1316,7 @@ impl App {
                         );
                         let action = layout.hit_test(pos.0 as f32, pos.1 as f32, &snapshot);
                         self.apply_context_picker_action(action);
-                        if let Some(window) = &self.window {
-                            window.request_redraw();
-                        }
+                        self.request_redraw(RedrawReason::PointerInput);
                     }
                     return;
                 }
@@ -1401,9 +1361,7 @@ impl App {
                         {
                             self.dismiss_sprout_request(request_id);
                         }
-                        if let Some(window) = &self.window {
-                            window.request_redraw();
-                        }
+                        self.request_redraw(RedrawReason::PointerInput);
                     }
                     return;
                 }
@@ -1419,9 +1377,7 @@ impl App {
                     {
                         let action = layout.hit_test(pos.0 as f32, pos.1 as f32, true);
                         self.apply_cellar_action(action);
-                        if let Some(window) = &self.window {
-                            window.request_redraw();
-                        }
+                        self.request_redraw(RedrawReason::PointerInput);
                     }
                     return;
                 }
@@ -1453,9 +1409,7 @@ impl App {
                         if let Some(command) = command {
                             self.handle_domain_picker_command(command);
                         }
-                        if let Some(window) = &self.window {
-                            window.request_redraw();
-                        }
+                        self.request_redraw(RedrawReason::PointerInput);
                     }
                     return;
                 }
@@ -1489,9 +1443,7 @@ impl App {
                         } else if !self.unicode_picker.is_active() {
                             self.pending_unicode_picker = None;
                         }
-                        if let Some(window) = &self.window {
-                            window.request_redraw();
-                        }
+                        self.request_redraw(RedrawReason::PointerInput);
                     }
                     return;
                 }
@@ -1527,9 +1479,7 @@ impl App {
                         } else {
                             self.command_palette.close();
                         }
-                        if let Some(window) = &self.window {
-                            window.request_redraw();
-                        }
+                        self.request_redraw(RedrawReason::PointerInput);
                     }
                     return;
                 }
@@ -1567,9 +1517,7 @@ impl App {
                         } else {
                             self.shortcuts_panel.close();
                         }
-                        if let Some(window) = &self.window {
-                            window.request_redraw();
-                        }
+                        self.request_redraw(RedrawReason::PointerInput);
                     }
                     return;
                 }
@@ -1585,9 +1533,7 @@ impl App {
                 self.last_cursor_pos = Some((position.x, position.y));
                 // Redraw for hover effects on overlays
                 if self.info_overlay.is_active() || self.diff_review.is_active() {
-                    if let Some(window) = &self.window {
-                        window.request_redraw();
-                    }
+                    self.request_redraw(RedrawReason::PointerInput);
                 }
                 self.handle_mouse_move((position.x, position.y));
             }
@@ -1608,19 +1554,13 @@ impl App {
                     self.ime.clear_preedit();
                 }
                 self.handle_window_focus_change(focused);
-                self.redraw_scheduler.request(RedrawReason::Focus);
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
+                self.request_redraw(RedrawReason::Focus);
             }
 
             WindowEvent::Occluded(occluded) => {
                 self.handle_window_occlusion_change(occluded);
                 if !occluded {
-                    self.redraw_scheduler.request(RedrawReason::WindowEvent);
-                    if let Some(window) = &self.window {
-                        window.request_redraw();
-                    }
+                    self.request_redraw(RedrawReason::WindowEvent);
                 }
             }
 
@@ -1681,9 +1621,7 @@ impl App {
                 }
             };
             self.apply_info_overlay_action(action);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::PointerInput);
             return;
         }
         if self.diff_review.is_active() {
@@ -1710,9 +1648,7 @@ impl App {
                 }
             };
             self.apply_diff_review_action(action);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::PointerInput);
             return;
         }
         if self.context_picker.is_active() {
@@ -1733,9 +1669,7 @@ impl App {
                     delta,
                 },
             );
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::PointerInput);
             return;
         }
         if self.session_panel.is_open() {
@@ -1748,9 +1682,7 @@ impl App {
             } else if lines < 0.0 {
                 self.session_panel.scroll_down((-lines).ceil() as usize);
             }
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::PointerInput);
             return;
         }
         // Scroll settings panel when active
@@ -1769,9 +1701,7 @@ impl App {
                 self.settings_panel
                     .scroll_down((-lines).ceil() as usize, total);
             }
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::PointerInput);
             return;
         }
         // Scroll shortcuts panel when active
@@ -1786,9 +1716,7 @@ impl App {
                 self.shortcuts_panel
                     .scroll_down((-lines).ceil() as usize, &self.shortcut_registry);
             }
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::PointerInput);
             return;
         }
         if self.domain_picker.is_active() {
@@ -1801,9 +1729,7 @@ impl App {
             } else if lines < 0.0 {
                 self.domain_picker.scroll_down((-lines).ceil() as usize);
             }
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::PointerInput);
             return;
         }
         if self.unicode_picker.is_active() {
@@ -1816,9 +1742,7 @@ impl App {
             } else if lines < 0.0 {
                 self.unicode_picker.scroll_down((-lines).ceil() as usize);
             }
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::PointerInput);
             return;
         }
         // Scroll palette list when palette is active
@@ -1832,9 +1756,7 @@ impl App {
             } else if lines < 0.0 {
                 self.command_palette.scroll_down((-lines).ceil() as usize);
             }
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::PointerInput);
             return;
         }
         // Root Cellar owns the wheel while open; positive deltas move
@@ -1855,9 +1777,7 @@ impl App {
                     harvest.cellar.scroll_by((-lines).ceil() as isize);
                 }
             }
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::PointerInput);
             return;
         }
         // Every remaining modal/context surface owns the wheel while

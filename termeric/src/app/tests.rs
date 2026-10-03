@@ -9151,6 +9151,8 @@ fn idle_deadline_releases_stalled_synchronized_output_and_requests_the_final_fra
     app.surface_lost = true;
 
     assert_eq!(app.next_synchronized_output_deadline(), Some(deadline));
+    // Construction asks for its first frame; this test starts after it.
+    app.redraw_scheduler.begin_frame();
     assert!(!app.redraw_scheduler.has_pending());
 
     app.poll_idle_sources(deadline);

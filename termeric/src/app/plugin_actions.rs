@@ -639,11 +639,7 @@ impl App {
                 self.inject_context_to_target(&target, &text);
             }
         }
-        self.redraw_scheduler
-            .request(super::redraw_scheduler::RedrawReason::WindowEvent);
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.request_redraw(RedrawReason::WindowEvent);
     }
 
     /// The last 50 lines of the terminal to draw context from: a non-agent
@@ -764,9 +760,7 @@ impl App {
                                 format!("Failed to launch '{}'", program),
                                 vec![format!("{}", e)],
                             );
-                            if let Some(window) = &self.window {
-                                window.request_redraw();
-                            }
+                            self.request_redraw(RedrawReason::Action);
                             log::error!("Plugin failed to open tab for '{}': {}", program, e);
                         }
                     }
@@ -779,9 +773,7 @@ impl App {
             PluginAction::ShowNotice { title, lines } => {
                 log::info!("Plugin notice [{}]: {}", title, lines.join(" / "));
                 self.info_overlay.show(title, lines);
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
+                self.request_redraw(RedrawReason::Action);
             }
         }
     }

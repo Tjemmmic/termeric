@@ -265,10 +265,8 @@ impl App {
             self.toasts.info("Tab rename cancelled");
         }
         self.ime.clear_preedit();
-        self.redraw_scheduler.request(RedrawReason::KeyboardInput);
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.request_redraw(RedrawReason::KeyboardInput);
+
         true
     }
 
@@ -290,9 +288,7 @@ impl App {
             self.toasts
                 .warning("This action requires at least two panes");
         }
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.request_redraw(RedrawReason::Action);
     }
 
     pub(super) fn request_swap_focused_pane_next(&mut self) {
@@ -412,9 +408,7 @@ impl App {
                 self.toasts
                     .warning("Pane was not moved: A second live-domain tab is required");
             }
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::Action);
             return;
         }
         let result = self
@@ -995,9 +989,7 @@ impl App {
         } else {
             "Pane input unlocked"
         });
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.request_redraw(RedrawReason::Action);
     }
     /// Get pane render info from the active tab's pane manager (if in pane mode)
     pub(super) fn pane_render_info(&self) -> Vec<PaneRenderInfo> {
@@ -1050,9 +1042,7 @@ impl App {
         if !tab.allows_pane_splits() {
             self.toasts
                 .warning("Serial terminal tabs cannot be split into panes");
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::Action);
             return;
         }
 
@@ -1111,9 +1101,7 @@ impl App {
         self.refresh_focused_terminal_surfaces();
 
         // Request redraw to show new pane layout
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.request_redraw(RedrawReason::Action);
     }
 
     /// Split one exact local pane for the private running-GUI control plane.
@@ -1217,9 +1205,7 @@ impl App {
             new_id.0
         );
         self.refresh_focused_terminal_surfaces();
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.request_redraw(RedrawReason::Action);
         Ok(new_id.0)
     }
 
@@ -1577,9 +1563,7 @@ impl App {
                     let offset = usize::try_from(region.prompt_row.saturating_neg()).unwrap_or(0);
                     terminal.grid_mut().set_scroll_offset(offset);
                 }
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
+                self.request_redraw(RedrawReason::Action);
             }
             SproutAction::SearchOutput => {
                 let Some(region) = region.as_ref() else {
@@ -1608,9 +1592,7 @@ impl App {
                     return;
                 }
                 self.toasts.info("Search scoped to command output");
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
+                self.request_redraw(RedrawReason::Action);
             }
             SproutAction::Explain => {
                 let cmd = command_text;
@@ -1803,9 +1785,7 @@ impl App {
             self.persist_live_domain_focus();
             self.refresh_focused_terminal_surfaces();
         }
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.request_redraw(RedrawReason::Action);
     }
 
     pub(super) fn persist_live_domain_focus(&self) {
@@ -2406,9 +2386,7 @@ impl App {
             self.restore_live_domain_preview(&control);
             self.toasts
                 .error(format!("Live-domain change failed: {error}"));
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::BackgroundTask);
             return;
         };
         let topology = crate::domain::model::DomainTopology::from(&snapshot);
@@ -2584,9 +2562,7 @@ impl App {
                 self.refresh_focused_terminal_surfaces();
             }
             self.toasts.success(message);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::BackgroundTask);
         }
     }
 
@@ -2603,9 +2579,7 @@ impl App {
                     self.toasts
                         .warning(format!("Live {route} disconnected; retrying: {error}"));
                 }
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
+                self.request_redraw(RedrawReason::BackgroundTask);
                 return;
             }
         };
@@ -2616,9 +2590,7 @@ impl App {
                         "Rejected live-domain topology for {}; expected {domain_id}",
                         domain.domain_id
                     ));
-                    if let Some(window) = &self.window {
-                        window.request_redraw();
-                    }
+                    self.request_redraw(RedrawReason::BackgroundTask);
                     return;
                 }
                 let applied_revision = self.live_domain_revisions.get(&domain.domain_id).copied();
@@ -2711,9 +2683,7 @@ impl App {
                     self.toasts.error(format!(
                         "Rejected live-domain close for {domain}; expected {domain_id}"
                     ));
-                    if let Some(window) = &self.window {
-                        window.request_redraw();
-                    }
+                    self.request_redraw(RedrawReason::BackgroundTask);
                     return;
                 }
                 self.disconnected_live_domains.remove(&domain);
@@ -2731,9 +2701,7 @@ impl App {
                     .info(format!("Live domain {domain} closed: {message}"));
             }
         }
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.request_redraw(RedrawReason::BackgroundTask);
     }
 
     fn live_domain_route_label(&self, domain_id: &str) -> String {
@@ -2874,10 +2842,7 @@ impl App {
         } else {
             // A quiet child may never emit a PTY wake. Update tab chrome without
             // invalidating the current pane's IME/search/selection surfaces.
-            self.redraw_scheduler.request(RedrawReason::WindowEvent);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::WindowEvent);
         }
         u64::try_from(id).map_err(|_| "Created tab ID does not fit the control protocol".into())
     }
@@ -2981,9 +2946,7 @@ impl App {
             if dispatch_hook {
                 self.dispatch_plugin_hook(crate::plugin::Hook::TabSwitched { from, to: index });
             }
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::Action);
         }
         Ok(changed)
     }
@@ -3005,9 +2968,7 @@ impl App {
             .map_err(|error| format!("Could not move tab {tab_id}: {error:#}"))?;
         if changed {
             self.tab_dragging = None;
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::Action);
         }
         Ok(changed)
     }
@@ -3041,9 +3002,7 @@ impl App {
         self.leave_copy_mode(false);
         self.terminal_mouse_capture = None;
         self.refresh_focused_terminal_surfaces();
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.request_redraw(RedrawReason::Action);
         Ok(id.0)
     }
 
@@ -3134,9 +3093,7 @@ impl App {
         );
         self.divider_dragging = None;
         self.refresh_focused_terminal_surfaces();
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.request_redraw(RedrawReason::Action);
     }
 
     pub(super) fn resize_control_divider(
@@ -3171,9 +3128,7 @@ impl App {
             .map_err(|error| format!("Could not resize divider {divider_id}: {error:#}"))?;
         if result.1 {
             self.divider_dragging = None;
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::Action);
         }
         Ok(result)
     }
@@ -3389,9 +3344,7 @@ impl App {
                     wire,
                 )],
             );
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::Action);
             return Ok((
                 input_bytes,
                 wire_bytes,
@@ -3509,9 +3462,7 @@ impl App {
             if tab_changed && dispatch_hook {
                 self.dispatch_plugin_hook(crate::plugin::Hook::TabSwitched { from, to: index });
             }
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::Action);
         }
         Ok((tab_changed, pane_changed))
     }
@@ -3587,9 +3538,7 @@ impl App {
             self.dispatch_plugin_hook(crate::plugin::Hook::TabClosed { tab_id });
         }
         self.refresh_focused_terminal_surfaces();
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.request_redraw(RedrawReason::Action);
         let active_local = self
             .tabs
             .as_ref()
@@ -3716,9 +3665,7 @@ impl App {
             self.toasts.info("Broadcast cancelled after pane closure");
         }
         self.refresh_focused_terminal_surfaces();
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.request_redraw(RedrawReason::Action);
         Ok((
             u16::try_from(remaining).expect("pane count is bounded below u16::MAX"),
             focused,
@@ -3796,9 +3743,7 @@ impl App {
             self.toasts
                 .warning("Cannot close the last pane; close the tab instead");
         }
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.request_redraw(RedrawReason::Action);
     }
 }
 

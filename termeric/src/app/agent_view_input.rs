@@ -240,7 +240,7 @@ impl App {
                 self.start_agent_session(None);
             }
         }
-        self.request_agent_view_redraw();
+        self.request_redraw(RedrawReason::Action);
     }
 
     fn apply_agent_view_menu(&mut self, action: MenuAction) {
@@ -589,12 +589,12 @@ impl App {
 
         if self.agent_view.state.menu.is_some() {
             self.handle_agent_view_menu_key(key, text);
-            self.request_agent_view_redraw();
+            self.request_redraw(RedrawReason::Action);
             return true;
         }
         if self.handle_agent_command_menu_key(key) {
             self.agent_view.state.touch_caret();
-            self.request_agent_view_redraw();
+            self.request_redraw(RedrawReason::Action);
             return true;
         }
         let typed_before = self.agent_view_typed_command();
@@ -640,7 +640,7 @@ impl App {
         }
         self.agent_view.state.touch_caret();
         self.ime.clear_preedit();
-        self.request_agent_view_redraw();
+        self.request_redraw(RedrawReason::Action);
         true
     }
 
@@ -1222,7 +1222,7 @@ impl App {
         }
         self.agent_view.state.composer_mut().insert(text);
         self.agent_view.state.touch_caret();
-        self.request_agent_view_redraw();
+        self.request_redraw(RedrawReason::Action);
         true
     }
 
@@ -1271,7 +1271,7 @@ impl App {
             // unless the panel covers them.
             if self.agent_view.state.has_keyboard() && !self.agent_view_fills_tab() {
                 self.set_agent_view_keyboard(false);
-                self.request_agent_view_redraw();
+                self.request_redraw(RedrawReason::Action);
             }
             return false;
         }
@@ -1331,7 +1331,7 @@ impl App {
             None => self.agent_view.state.menu = None,
         }
         self.agent_view.state.touch_caret();
-        self.request_agent_view_redraw();
+        self.request_redraw(RedrawReason::Action);
         true
     }
 
@@ -1371,14 +1371,14 @@ impl App {
             };
             if self.agent_view.state.drag_resize(x, room, scale) {
                 self.sync_agent_dock();
-                self.request_agent_view_redraw();
+                self.request_redraw(RedrawReason::Action);
             }
             self.set_agent_view_cursor(true);
             return true;
         }
         if self.agent_view.selecting {
             self.place_agent_caret(x, y, true);
-            self.request_agent_view_redraw();
+            self.request_redraw(RedrawReason::Action);
             return true;
         }
         let inside = self.agent_view_contains(x, y);
@@ -1396,7 +1396,7 @@ impl App {
         };
         if hover != self.agent_view.state.hover {
             self.agent_view.state.hover = hover;
-            self.request_agent_view_redraw();
+            self.request_redraw(RedrawReason::Action);
         }
         inside
     }
@@ -1446,7 +1446,7 @@ impl App {
             return true;
         }
         if self.scroll_agent_view_menu(x, y, pixels) {
-            self.request_agent_view_redraw();
+            self.request_redraw(RedrawReason::Action);
             return true;
         }
         let max = (scene.feed_height - scene.feed_viewport.height).max(0.0);
@@ -1454,7 +1454,7 @@ impl App {
         if let Some(scroll) = self.agent_view_scroll_mut() {
             scroll.scroll_by(pixels, max, now);
         }
-        self.request_agent_view_redraw();
+        self.request_redraw(RedrawReason::Action);
         true
     }
 }

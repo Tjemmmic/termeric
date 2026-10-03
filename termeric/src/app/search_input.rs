@@ -19,10 +19,8 @@ impl App {
         }
         self.search_cursor_pos = cursor;
         self.ime.clear_preedit();
-        self.redraw_scheduler.request(reason);
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.request_redraw(reason);
+
         true
     }
 
@@ -39,11 +37,8 @@ impl App {
             self.search_cursor_pos = cursor;
         }
         self.ime.clear_preedit();
-        self.redraw_scheduler
-            .request(redraw_scheduler::RedrawReason::KeyboardInput);
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.request_redraw(RedrawReason::KeyboardInput);
+
         true
     }
 }

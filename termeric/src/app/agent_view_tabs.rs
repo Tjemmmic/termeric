@@ -72,7 +72,7 @@ impl App {
         // their size until they show.
         self.apply_agent_dock_width();
         self.sync_active_terminal_geometry();
-        self.request_agent_view_redraw();
+        self.request_redraw(RedrawReason::Action);
     }
 
     /// Ends the conversations of tabs that closed.
@@ -178,7 +178,7 @@ impl App {
         self.agent_view.state.screen = Screen::NewSession;
         self.agent_view.state.new_session.cwd = None;
         self.agent_view.state.new_session.choose_agent(agent);
-        self.request_agent_view_redraw();
+        self.request_redraw(RedrawReason::Action);
     }
 
     /// Switches how the panel shares the tab with its terminal.
@@ -191,7 +191,7 @@ impl App {
         }
         self.report_terminal_focus(terminal_had_focus);
         self.sync_agent_dock();
-        self.request_agent_view_redraw();
+        self.request_redraw(RedrawReason::Action);
     }
 
     /// Starts a session ahead of the first message on an open new-session

@@ -261,14 +261,14 @@ impl App {
             config.mode.label().to_lowercase()
         ));
         self.supervisor = Some(started);
-        self.request_agent_view_redraw();
+        self.request_redraw(RedrawReason::Action);
         Ok(())
     }
 
     /// Forget the supervisor, and any message it left waiting.
     fn end_supervision(&mut self) {
         self.supervisor = None;
-        self.request_agent_view_redraw();
+        self.request_redraw(RedrawReason::Action);
     }
 
     /// Tell the supervisor that text meant for another agent was dropped.
@@ -515,7 +515,7 @@ impl App {
         {
             supervisor.note(format!("Could not reach the supervisor: {error}"));
         }
-        self.request_agent_view_redraw();
+        self.request_redraw(RedrawReason::Action);
         true
     }
 
@@ -660,7 +660,7 @@ impl App {
                 &format!("The supervisor wants to message {name}"),
             );
         }
-        self.request_agent_view_redraw();
+        self.request_redraw(RedrawReason::Action);
         Ok(true)
     }
 
@@ -685,7 +685,7 @@ impl App {
         } else {
             ApprovalOutcome::Decline
         });
-        self.request_agent_view_redraw();
+        self.request_redraw(RedrawReason::Action);
     }
 
     /// Settle a waiting message whose recipient ended, which can no longer
@@ -901,7 +901,7 @@ impl App {
                 format!("Suggested you {verb} a request in \"{title}\"")
             });
         }
-        self.request_agent_view_redraw();
+        self.request_redraw(RedrawReason::Action);
         Ok(decided)
     }
 

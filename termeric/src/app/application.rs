@@ -2335,8 +2335,7 @@ impl Application {
             native.set_minimized(false);
             native.focus_window();
             native.request_user_attention(Some(winit::window::UserAttentionType::Critical));
-            native.request_redraw();
-            window.redraw_scheduler.request(RedrawReason::WindowEvent);
+            window.request_redraw(RedrawReason::WindowEvent);
         }
         Ok(crate::control::protocol::Response::QuickAccessChanged {
             process_id: std::process::id(),
@@ -2590,12 +2589,8 @@ impl Application {
             .tabs
             .as_ref()
             .is_none_or(crate::tabs::TabManager::is_empty);
-        if let Some(window) = &source.window {
-            window.request_redraw();
-        }
-        if let Some(window) = &destination.window {
-            window.request_redraw();
-        }
+        source.request_redraw(RedrawReason::Action);
+        destination.request_redraw(RedrawReason::Action);
         Ok((destination_tab_id, source.should_exit))
     }
 
@@ -2723,12 +2718,8 @@ impl Application {
         destination.terminal_mouse_capture = None;
         source.refresh_focused_terminal_surfaces();
         destination.refresh_focused_terminal_surfaces();
-        if let Some(window) = &source.window {
-            window.request_redraw();
-        }
-        if let Some(window) = &destination.window {
-            window.request_redraw();
-        }
+        source.request_redraw(RedrawReason::Action);
+        destination.request_redraw(RedrawReason::Action);
         Ok(destination_pane_id.0)
     }
 
@@ -3026,12 +3017,8 @@ impl Application {
         destination.refresh_focused_terminal_surfaces();
         source.toasts.success("Pane moved to the next window");
         destination.toasts.info("Pane received from another window");
-        if let Some(window) = &source.window {
-            window.request_redraw();
-        }
-        if let Some(window) = &destination.window {
-            window.request_redraw();
-        }
+        source.request_redraw(RedrawReason::Action);
+        destination.request_redraw(RedrawReason::Action);
         Ok(id)
     }
 
@@ -3119,12 +3106,8 @@ impl Application {
             source.toasts.success("Tab moved to the next window");
         }
         destination.toasts.info("Tab received from another window");
-        if let Some(window) = &source.window {
-            window.request_redraw();
-        }
-        if let Some(window) = &destination.window {
-            window.request_redraw();
-        }
+        source.request_redraw(RedrawReason::Action);
+        destination.request_redraw(RedrawReason::Action);
         Ok(id)
     }
 

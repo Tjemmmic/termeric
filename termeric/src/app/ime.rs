@@ -63,11 +63,7 @@ impl App {
                 self.commit_ime_text(&text);
             }
         }
-        self.redraw_scheduler
-            .request(redraw_scheduler::RedrawReason::KeyboardInput);
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.request_redraw(RedrawReason::KeyboardInput);
     }
 
     /// Return whether the current focus owner is a text destination. Modal

@@ -898,9 +898,7 @@ impl App {
         if let Some(renderer) = &mut self.renderer {
             renderer.set_tab_bar_keyboard_focus(focus.render_target());
         }
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.request_redraw(RedrawReason::Accessibility);
         self.refresh_accessibility();
     }
 
@@ -948,8 +946,8 @@ impl App {
         }
         if !matches!(self.accessibility.keyboard_focus, ChromeFocus::Tab(_)) {
             self.set_chrome_focus(ChromeFocus::Terminal);
-        } else if let Some(window) = &self.window {
-            window.request_redraw();
+        } else {
+            self.request_redraw(RedrawReason::Accessibility);
         }
     }
 
@@ -985,37 +983,27 @@ impl App {
     fn handle_accessibility_action(&mut self, request: ActionRequest) {
         if self.guardrail.is_active() {
             self.handle_guardrail_accessibility_action(request);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::Accessibility);
             return;
         }
         if self.info_overlay.is_active() {
             self.handle_info_accessibility_action(request);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::Accessibility);
             return;
         }
         if self.diff_review.is_active() {
             self.handle_diff_accessibility_action(request);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::Accessibility);
             return;
         }
         if self.workspace_menu.is_some() {
             self.handle_workspace_menu_accessibility_action(request);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::Accessibility);
             return;
         }
         if self.context_picker.is_active() {
             self.handle_context_accessibility_action(request);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::Accessibility);
             return;
         }
         if self
@@ -1024,78 +1012,56 @@ impl App {
             .is_some_and(|harvest| harvest.sprout_menu.is_some() || harvest.cellar.is_expanded())
         {
             self.handle_harvest_accessibility_action(request);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::Accessibility);
             return;
         }
         if self.domain_picker.is_active() {
             self.handle_domain_picker_accessibility_action(request);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::Accessibility);
             return;
         }
         if self.unicode_picker.is_active() {
             self.handle_unicode_picker_accessibility_action(request);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::Accessibility);
             return;
         }
         if self.command_palette.is_active() {
             self.handle_command_palette_accessibility_action(request);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::Accessibility);
             return;
         }
         if self.shortcuts_panel.is_active() {
             self.handle_shortcuts_accessibility_action(request);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::Accessibility);
             return;
         }
         if self.settings_panel.is_active() {
             self.handle_settings_accessibility_action(request);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::Accessibility);
             return;
         }
         if self.commands_panel.is_open() {
             self.handle_commands_accessibility_action(request);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::Accessibility);
             return;
         }
         if self.agents_panel.is_open() {
             self.handle_agents_accessibility_action(request);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::Accessibility);
             return;
         }
         if self.session_panel.is_open() {
             self.handle_session_accessibility_action(request);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::Accessibility);
             return;
         }
         if self.handle_agent_view_accessibility_action(&request) {
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::Accessibility);
             return;
         }
         if self.search_is_visible() && is_search_node(request.target_node) {
             self.handle_search_accessibility_action(request);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::Accessibility);
             return;
         }
         if !matches!(request.action, Action::Click | Action::Focus) {
@@ -1155,9 +1121,7 @@ impl App {
                 renderer.set_tab_bar_keyboard_focus(focus.render_target());
             }
             if request.action != Action::Click {
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
+                self.request_redraw(RedrawReason::Accessibility);
                 return;
             }
             match request.target_node {
@@ -1187,9 +1151,7 @@ impl App {
                 renderer.set_tab_bar_keyboard_focus(None);
             }
         }
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.request_redraw(RedrawReason::Accessibility);
     }
 
     fn handle_search_accessibility_action(&mut self, request: ActionRequest) {
@@ -2797,7 +2759,7 @@ impl App {
                 self.agent_view.state.focus = focus;
                 self.agent_view.state.focus_visible = true;
                 self.reveal_agent_view_target(&target);
-                self.request_agent_view_redraw();
+                self.request_redraw(RedrawReason::Action);
             }
             _ => {}
         }

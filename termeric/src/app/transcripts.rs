@@ -110,8 +110,6 @@ impl App {
                 }
             }
         }
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.request_redraw(RedrawReason::Action);
     }
 }

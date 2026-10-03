@@ -244,9 +244,7 @@ impl App {
             ));
         }
         self.refresh_focused_terminal_surfaces();
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.request_redraw(RedrawReason::Action);
         Ok(outcome)
     }
 

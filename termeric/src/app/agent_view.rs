@@ -482,7 +482,7 @@ impl App {
                 .remember_sent(prompt);
         }
         self.set_agent_view_keyboard(true);
-        self.request_agent_view_redraw();
+        self.request_redraw(RedrawReason::Action);
         true
     }
 
@@ -490,7 +490,7 @@ impl App {
     pub(super) fn process_agent_view_events(&mut self) {
         if std::mem::take(&mut self.agent_view.looking) {
             // The search for an agent's program may have finished.
-            self.request_agent_view_redraw();
+            self.request_redraw(RedrawReason::Action);
         }
         let mut changed = false;
         for session in &mut self.agent_view.sessions {
@@ -533,7 +533,7 @@ impl App {
         self.announce_agent_view_attention();
         let events = self.agent_view_supervisor_events();
         self.supervise_agent_view(events);
-        self.request_agent_view_redraw();
+        self.request_redraw(RedrawReason::Action);
     }
 
     /// What the supervisor has not yet heard: new approval requests and
@@ -791,7 +791,7 @@ impl App {
                     && self.agent_view.state.next_caret_toggle(now)
                         <= now + std::time::Duration::from_millis(5)))
         {
-            self.request_agent_view_redraw();
+            self.request_redraw(RedrawReason::Action);
         }
     }
 
@@ -921,14 +921,6 @@ impl App {
             .is_some_and(|view| view.scroll.animating(now))
     }
 
-    pub(super) fn request_agent_view_redraw(&mut self) {
-        self.redraw_scheduler
-            .request(redraw_scheduler::RedrawReason::Animation);
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
-    }
-
     // ── Opening and focus ────────────────────────────────────────────────
 
     /// Opens the panel with keyboard focus, or, if it already has focus,
@@ -956,7 +948,7 @@ impl App {
                 .info("The window is too narrow for the agent view; it shows when there is room");
         }
         self.set_agent_view_keyboard(keyboard && docked);
-        self.request_agent_view_redraw();
+        self.request_redraw(RedrawReason::Action);
     }
 
     pub(super) fn close_agent_view(&mut self) {
@@ -974,7 +966,7 @@ impl App {
         self.agent_view.state.close();
         self.report_terminal_focus(terminal_had_focus);
         self.sync_agent_dock();
-        self.request_agent_view_redraw();
+        self.request_redraw(RedrawReason::Action);
     }
 
     /// Whether keys go to a terminal: the window is focused and the panel
@@ -1027,7 +1019,7 @@ impl App {
         // finished, since the page last showed.
         self.agent_view.installed.clear();
         self.agent_view.past = None;
-        self.request_agent_view_redraw();
+        self.request_redraw(RedrawReason::Action);
     }
 
     /// Applies `[agent_view]` settings to the panel and every session.
@@ -1048,7 +1040,7 @@ impl App {
         // The mode menu reads the setting each frame; an open panel shows
         // the change on its next one.
         if self.agent_view.state.is_open() {
-            self.request_agent_view_redraw();
+            self.request_redraw(RedrawReason::Action);
         }
     }
 
@@ -1079,7 +1071,7 @@ impl App {
         }
         // The tab keeps its panel, now on a new-session page.
         window.state.forget(id, Screen::NewSession);
-        self.request_agent_view_redraw();
+        self.request_redraw(RedrawReason::Action);
     }
 
     /// Shows a session in its tab, switching to that tab.
@@ -1097,7 +1089,7 @@ impl App {
         }
         self.open_agent_view(true);
         self.agent_view.state.show(id);
-        self.request_agent_view_redraw();
+        self.request_redraw(RedrawReason::Action);
     }
 }
 
@@ -1522,7 +1514,7 @@ impl App {
         if !answered {
             return Err(format!("Approval {approval_id} is no longer pending"));
         }
-        self.request_agent_view_redraw();
+        self.request_redraw(RedrawReason::Action);
         Ok(true)
     }
 
@@ -1572,7 +1564,7 @@ impl App {
         session
             .prompt(text, Vec::new())
             .map_err(|error| error.to_string())?;
-        self.request_agent_view_redraw();
+        self.request_redraw(RedrawReason::Action);
         Ok(())
     }
 }

@@ -26,9 +26,7 @@ impl App {
         self.command_palette.close();
         self.pending_unicode_picker = Some(PendingUnicodePicker { terminal });
         self.unicode_picker.open();
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.request_redraw(RedrawReason::Action);
     }
 
     pub(super) fn close_unicode_picker(&mut self) {

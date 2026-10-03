@@ -39,8 +39,7 @@ impl App {
             self.rows
         );
 
-        // Request redraw
-        window.request_redraw();
+        self.request_redraw(RedrawReason::ConfigReload);
     }
 
     /// Apply layout changes immediately and schedule at most one bounded
@@ -50,9 +49,7 @@ impl App {
         if let Some(renderer) = &mut self.renderer {
             renderer.set_background_image_layout(policy.fit, policy.opacity);
         }
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.request_redraw(RedrawReason::ConfigReload);
 
         let path_changed = self.background_image_path != policy.path;
         if !force_reload && !path_changed {
@@ -133,9 +130,7 @@ impl App {
                         );
                     }
                     log::info!("Background image loaded: {}", path.display());
-                    if let Some(window) = &self.window {
-                        window.request_redraw();
-                    }
+                    self.request_redraw(RedrawReason::ConfigReload);
                 }
                 Err(error) => {
                     log::warn!(
@@ -377,9 +372,7 @@ impl App {
         self.refresh_launch_profile_commands();
         self.keybinding_manager
             .load(self.config.keybindings.clone());
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.request_redraw(RedrawReason::ConfigReload);
     }
 
     /// Hand Settings the installed and enabled state of each built-in agent.
@@ -573,11 +566,7 @@ impl App {
             return;
         }
         self.sync_accessibility_preferences();
-        self.redraw_scheduler
-            .request(super::redraw_scheduler::RedrawReason::ConfigReload);
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.request_redraw(RedrawReason::ConfigReload);
     }
 
     pub(super) fn apply_theme(&mut self, theme: Theme, source: Option<std::path::PathBuf>) {
@@ -594,9 +583,7 @@ impl App {
         if let Some(renderer) = &mut self.renderer {
             renderer.set_theme(&self.theme);
         }
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.request_redraw(RedrawReason::ConfigReload);
     }
 
     /// Apply a settings panel action to the app config
@@ -610,11 +597,7 @@ impl App {
             SettingsAction::PlaceFilterCaret(cursor) => {
                 if self.settings_panel.place_filter_caret(cursor) {
                     self.ime.clear_preedit();
-                    self.redraw_scheduler
-                        .request(redraw_scheduler::RedrawReason::KeyboardInput);
-                    if let Some(window) = &self.window {
-                        window.request_redraw();
-                    }
+                    self.request_redraw(RedrawReason::KeyboardInput);
                 }
                 return;
             }
@@ -755,9 +738,7 @@ impl App {
             SettingsAction::OpenKeyboardShortcuts => {
                 self.settings_panel.close();
                 self.shortcuts_panel.open();
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
+                self.request_redraw(RedrawReason::ConfigReload);
                 return;
             }
             SettingsAction::None => return,
@@ -932,11 +913,7 @@ impl App {
             SessionPanelAction::PlaceRenameCaret { cursor } => {
                 if self.session_panel.place_rename_caret(cursor) {
                     self.ime.clear_preedit();
-                    self.redraw_scheduler
-                        .request(redraw_scheduler::RedrawReason::PointerInput);
-                    if let Some(window) = &self.window {
-                        window.request_redraw();
-                    }
+                    self.request_redraw(RedrawReason::PointerInput);
                 }
             }
             SessionPanelAction::Close => {

@@ -1,6 +1,6 @@
 //! Asynchronous orchestration for the in-app live-domain picker.
 
-use super::{App, AppEvent, EVENT_LOOP_PROXY};
+use super::{App, AppEvent, EVENT_LOOP_PROXY, RedrawReason};
 use crate::domain::protocol::{Request, Response};
 use crate::ui::domain_picker::{DomainPickerCommand, DomainPickerPrepared};
 
@@ -26,9 +26,7 @@ impl App {
         self.ime.clear_preedit();
         self.command_palette.close();
         self.domain_picker.open(&self.config.domains);
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.request_redraw(RedrawReason::Action);
     }
 
     pub(super) fn handle_domain_picker_command(&mut self, command: DomainPickerCommand) {
@@ -51,11 +49,7 @@ impl App {
     ) {
         if self.domain_picker.complete(generation, result) {
             self.ime.clear_preedit();
-            self.redraw_scheduler
-                .request(super::redraw_scheduler::RedrawReason::WindowEvent);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::WindowEvent);
         }
     }
 
@@ -77,11 +71,7 @@ impl App {
             }
         }
         self.ime.clear_preedit();
-        self.redraw_scheduler
-            .request(super::redraw_scheduler::RedrawReason::WindowEvent);
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.request_redraw(RedrawReason::WindowEvent);
     }
 
     pub(super) fn close_domain_picker(&mut self) {

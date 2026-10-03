@@ -304,9 +304,7 @@ impl App {
                         }
                         self.begin_scrollbar_drag();
                         self.scroll_to_scrollbar_position(position.1);
-                        if let Some(window) = &self.window {
-                            window.request_redraw();
-                        }
+                        self.request_redraw(RedrawReason::PointerInput);
                         return;
                     }
 
@@ -356,9 +354,7 @@ impl App {
                                             last_ratio_millis: divider.ratio_millis,
                                         });
                                     }
-                                    if let Some(window) = &self.window {
-                                        window.request_redraw();
-                                    }
+                                    self.request_redraw(RedrawReason::PointerInput);
                                     return;
                                 }
                             }
@@ -390,9 +386,7 @@ impl App {
                                 ) == crate::renderer::TabBarClick::Gear
                                 {
                                     self.toggle_settings_surface();
-                                    if let Some(window) = &self.window {
-                                        window.request_redraw();
-                                    }
+                                    self.request_redraw(RedrawReason::PointerInput);
                                     return;
                                 }
                             }
@@ -411,9 +405,7 @@ impl App {
                                     size.height as f32,
                                 );
                                 self.apply_commands_panel_action(action);
-                                if let Some(window) = &self.window {
-                                    window.request_redraw();
-                                }
+                                self.request_redraw(RedrawReason::PointerInput);
                                 return;
                             }
                         }
@@ -439,9 +431,7 @@ impl App {
                                 );
                                 let action = self.promote_session_double_click(action);
                                 self.apply_session_panel_action(action);
-                                if let Some(window) = &self.window {
-                                    window.request_redraw();
-                                }
+                                self.request_redraw(RedrawReason::PointerInput);
                                 return;
                             }
                         }
@@ -470,9 +460,7 @@ impl App {
                                     cell_height,
                                 );
                                 self.apply_settings_action(action);
-                                if let Some(window) = &self.window {
-                                    window.request_redraw();
-                                }
+                                self.request_redraw(RedrawReason::PointerInput);
                                 return;
                             }
                         }
@@ -585,9 +573,7 @@ impl App {
                                     TabBarClick::None => {}
                                 }
                                 if click != TabBarClick::None {
-                                    if let Some(window) = &self.window {
-                                        window.request_redraw();
-                                    }
+                                    self.request_redraw(RedrawReason::PointerInput);
                                     return;
                                 }
                             }
@@ -623,18 +609,14 @@ impl App {
                                         self.with_search_and_active_grid(|search, grid| {
                                             search.toggle_case_sensitive(grid);
                                         });
-                                        if let Some(window) = &self.window {
-                                            window.request_redraw();
-                                        }
+                                        self.request_redraw(RedrawReason::PointerInput);
                                         return;
                                     }
                                     SearchBarClick::ToggleRegex => {
                                         self.with_search_and_active_grid(|search, grid| {
                                             search.toggle_regex(grid);
                                         });
-                                        if let Some(window) = &self.window {
-                                            window.request_redraw();
-                                        }
+                                        self.request_redraw(RedrawReason::PointerInput);
                                         return;
                                     }
                                     SearchBarClick::ToggleFilter => {
@@ -645,33 +627,25 @@ impl App {
                                         } else {
                                             self.search.toggle_filter();
                                         }
-                                        if let Some(window) = &self.window {
-                                            window.request_redraw();
-                                        }
+                                        self.request_redraw(RedrawReason::PointerInput);
                                         return;
                                     }
                                     SearchBarClick::PrevMatch => {
                                         self.search.prev();
                                         self.scroll_to_current_match();
-                                        if let Some(window) = &self.window {
-                                            window.request_redraw();
-                                        }
+                                        self.request_redraw(RedrawReason::PointerInput);
                                         return;
                                     }
                                     SearchBarClick::NextMatch => {
                                         self.search.next();
                                         self.scroll_to_current_match();
-                                        if let Some(window) = &self.window {
-                                            window.request_redraw();
-                                        }
+                                        self.request_redraw(RedrawReason::PointerInput);
                                         return;
                                     }
                                     SearchBarClick::Close => {
                                         self.search.cancel();
                                         self.search_cursor_pos = 0;
-                                        if let Some(window) = &self.window {
-                                            window.request_redraw();
-                                        }
+                                        self.request_redraw(RedrawReason::PointerInput);
                                         return;
                                     }
                                     SearchBarClick::None => {}
@@ -683,9 +657,7 @@ impl App {
                 if button == MouseButton::Left
                     && self.toggle_armed_broadcast_target_at(position, content_top, padding)
                 {
-                    if let Some(window) = &self.window {
-                        window.request_redraw();
-                    }
+                    self.request_redraw(RedrawReason::PointerInput);
                     return;
                 }
                 if self.focus_pane_at(position, content_top, padding) {
@@ -770,9 +742,7 @@ impl App {
         self.refresh_terminal_pointer_cursor();
 
         // Request redraw to show selection changes
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.request_redraw(RedrawReason::PointerInput);
     }
 
     /// Handle mouse movement
@@ -836,9 +806,7 @@ impl App {
         self.update_tab_drag_scroll(self.tab_bar_hover, Instant::now());
         if self.scrollbar_dragging.is_some() {
             self.scroll_to_scrollbar_position(position.1);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::PointerInput);
             return;
         }
 
@@ -847,9 +815,7 @@ impl App {
             let local_x = position.0 as f32 - content_left - padding;
             let local_y = position.1 as f32 - content_top;
             self.apply_divider_drag_position(local_x, local_y);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::PointerInput);
             return;
         }
 
@@ -955,9 +921,7 @@ impl App {
                     }
                 }
             }
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::PointerInput);
             return;
         }
 
@@ -966,9 +930,7 @@ impl App {
             let py = position.1 as f32;
             let layout = self.commands_panel_layout();
             self.commands_panel.set_hover(layout.control_at(px, py));
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::PointerInput);
             return;
         }
         if self.agents_panel.is_open() {
@@ -1006,17 +968,13 @@ impl App {
                     self.session_panel.set_hover(hovered, control);
                 }
             }
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::PointerInput);
             return;
         }
 
         if self.workspace_menu.is_some() {
-            if self.hover_workspace_menu(position.0 as f32, position.1 as f32)
-                && let Some(window) = &self.window
-            {
-                window.request_redraw();
+            if self.hover_workspace_menu(position.0 as f32, position.1 as f32) {
+                self.request_redraw(RedrawReason::PointerInput);
             }
             return;
         }
@@ -1030,9 +988,7 @@ impl App {
         // Only update selection when mouse is pressed (dragging)
         if self.mouse_pressed {
             self.extend_native_selection(grid_pos);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::PointerInput);
         } else {
             // Just update position tracking when not dragging
             self.mouse_state.last_position = Some(grid_pos);
@@ -1053,9 +1009,7 @@ impl App {
                 .map(|terminal| terminal.grid().rows())
                 .unwrap_or(0);
             self.search.scroll_filter(delta, viewport_rows);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::PointerInput);
             return;
         }
 
@@ -1089,9 +1043,7 @@ impl App {
 
             terminal.grid_mut().set_scroll_offset(new_offset);
 
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.request_redraw(RedrawReason::PointerInput);
         }
     }
 
@@ -1600,9 +1552,7 @@ impl App {
         self.bind_agent_view_to_active_tab();
         self.reset_cursor_blink();
         self.refresh_terminal_pointer_cursor();
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.request_redraw(RedrawReason::Focus);
     }
 
     /// Check if a click position is within the scrollbar area

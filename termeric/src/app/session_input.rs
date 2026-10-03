@@ -42,11 +42,8 @@ impl App {
             }
         }
         self.ime.clear_preedit();
-        self.redraw_scheduler
-            .request(redraw_scheduler::RedrawReason::KeyboardInput);
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.request_redraw(RedrawReason::KeyboardInput);
+
         true
     }
 }
