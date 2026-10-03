@@ -28,7 +28,7 @@ Termeric checks the file for changes about once a second and applies a saved edi
 - `[shell]` changes apply to new tabs and panes. Running shells keep going.
 - `window.width`, `window.height`, and `window.share_process` apply to windows opened later.
 - `renderer.backend` applies the next time Termeric starts.
-- Session and splash settings apply the next time they are used (at startup or exit).
+- Session and splash settings apply the next time Termeric saves, restores, or shows the splash screen.
 
 You can also reload on demand with **Reload Configuration** in the command palette (Ctrl+Shift+P). An active custom theme file and a background image are watched the same way.
 
@@ -52,11 +52,22 @@ Open Settings with Ctrl+, (Ctrl+comma), the Settings button at the right end of 
 - If you close Settings without saving, the changes stay in effect in that window until the file is next reloaded, then they are gone.
 - Ctrl+R inside Settings resets every setting to its default and saves immediately.
 
-Saving writes the complete configuration back to `config.toml`, including values you never changed. Comments and custom formatting in the file are not preserved. If you like a hand-commented file, make your changes there instead of saving from Settings. Choosing a theme with **Change Theme…** and adding or deleting a custom command also save the file.
+Saving writes the complete configuration back to `config.toml`, including values you never changed. Comments and custom formatting in the file are not preserved. If you like a hand-commented file, make your changes there instead of saving from Settings. Choosing a theme with **Change Theme…**, adding or deleting a saved command in the Commands panel, and **Cycle New Pane Directory** also save the file.
 
 The font size you save is the current size of that window, so a zoom you made with Ctrl+= or Ctrl+- becomes the saved size.
 
-Some settings are only available in the file: the background image path, launch profiles, custom keybindings, SSH host names, custom agents, and security policy.
+Some settings are not in the Settings dialog, so you change them in the file:
+
+- `window.width`, `window.height`, `window.share_process`, and `window.background_image.path` (Settings shows the image path but can't change it);
+- `theme.path`;
+- everything under `[shell]` (Settings shows the program and its arguments but can't change them);
+- `keyboard.xterm_type`, everything under `[copy_mode]`, and `renderer.backend`;
+- `session.enabled`;
+- everything under `[security]`;
+- launch profiles, `[[keybindings]]`, and SSH host names;
+- custom agents, every built-in agent key except turning the agent on or off, and `supervisor.max_sends_per_minute`.
+
+`panes.cwd` is also set by **Cycle New Pane Directory** in the command palette. A few Settings controls offer a narrower range, or a list of common values, than the file accepts; the reference below gives the full ranges.
 
 ## Reference
 
@@ -173,7 +184,7 @@ env = { EDITOR = "nvim" }
 
 | Setting | Default | Description |
 | --- | --- | --- |
-| `xterm_type` | `"normal"` | xterm keyboard type for new terminals: `normal`, `legacy`, or `vt220`. Programs can switch it while they run. |
+| `xterm_type` | `"normal"` | xterm keyboard type: `normal`, `legacy`, or `vt220`. Programs can switch it while they run; changing this setting applies it to every open terminal. |
 
 ### [copy_mode]
 
@@ -211,10 +222,10 @@ See [Workspaces and sessions](workspaces-and-sessions.md).
 
 | Setting | Default | Description |
 | --- | --- | --- |
-| `enabled` | `true` | Allow saving and restoring workspaces. |
-| `auto_restore` | `false` | Restore the last workspace when Termeric starts. |
-| `auto_save` | `true` | Save the complete workspace when Termeric exits. |
-| `save_scrollback` | `true` | Include terminal history when saving. |
+| `enabled` | `true` | `false` turns off all automatic saving and restoring, as if `auto_save` and `auto_restore` were both off. **Save Workspace** and opening a workspace by hand still work. |
+| `auto_restore` | `false` | Reopen the windows from your last session when Termeric starts with no arguments. |
+| `auto_save` | `true` | Save a window's workspace when the window closes, and save a [tab snapshot](workspaces-and-sessions.md#tab-snapshots) when a tab with output closes. |
+| `save_scrollback` | `true` | Include terminal history in workspaces and tab snapshots. |
 
 ### [splash]
 
@@ -273,7 +284,7 @@ Saved commands for the Commands panel and command palette. You normally manage t
 | Setting | Default | Description |
 | --- | --- | --- |
 | `name` | required | Name shown in the panel and palette. |
-| `command` | required | Text typed into the focused terminal and run. |
+| `command` | required | Command run in the focused terminal: Termeric clears the current input line, types this text, and presses Enter. |
 | `alias` | unset | Short name to find it in the palette. |
 
 ```toml
@@ -302,19 +313,19 @@ ctrl = true
 
 ### [[keybindings]]
 
-Extra keys that type text, run a saved command, or call a plugin command.
+Extra keys that type text, run a command, or call a plugin command. See [Keyboard and mouse](keyboard-and-mouse.md#keys-that-type-text-or-run-commands).
 
 | Setting | Default | Description |
 | --- | --- | --- |
 | `key` | required | A character such as `k`, or a named key: `Enter`, `Tab`, `Space`, `Backspace`, `Escape`, `Delete`, `Insert`, `Home`, `End`, `PageUp`, `PageDown`, `Up`, `Down`, `Left`, `Right`, `F1`–`F12`. |
 | `modifiers` | none | `{ ctrl, alt, shift, super }`; the held modifiers must match exactly. |
-| `action` | required | `{ type = "send_text", text = "…" }`, `{ type = "run_command", command = "…" }`, or `{ type = "plugin_command", command_id = "…" }`. |
+| `action` | required | `{ type = "send_text", text = "…" }` sends the text exactly as written (add `\r` to press Enter); `{ type = "run_command", command = "…" }` clears the current input line, types the command, and presses Enter; `{ type = "plugin_command", command_id = "…" }` runs a plugin's command. |
 
 ```toml
 [[keybindings]]
 key = "F5"
 modifiers = { ctrl = true }
-action = { type = "send_text", text = "make\n" }
+action = { type = "send_text", text = "make\r" }
 ```
 
 ### [domains.ssh_hosts.NAME]
@@ -332,23 +343,38 @@ Friendly names for remote hosts, at most 64. OpenSSH settings stay in `~/.ssh/co
 
 > **Experimental.** Coding-agent support may change between releases. See [Agents in terminals](agents.md).
 
-Settings for the built-in agents (`claude-code`, `codex`, `gemini`, `opencode`) or a custom agent under any other ID. For a built-in agent every key is an override.
+Settings for the built-in agents (`claude-code`, `codex`, `gemini`, `opencode`), or a custom agent under any other ID. For a built-in agent every key is an override; [Agents in terminals](agents.md) lists each built-in agent's program and arguments. IDs are 1 to 64 letters, digits, `-`, and `_`.
 
 | Setting | Default | Description |
 | --- | --- | --- |
-| `enabled` | `true` | Offer and detect this agent. |
+| `enabled` | `true` | `false` hides the agent from pickers and detection. |
 | `name` | built-in name, or the ID | Display name. |
-| `program` | built-in program, or the ID | Executable to launch. Its file name is also used to recognize the agent. |
+| `program` | built-in program, or the ID | Executable to launch. Its file name also identifies the agent, unless it is a launcher such as `npx`, `docker`, `node`, or `sh`; then add the agent's own name to `detect`. |
 | `detect` | `[]` | Extra program names that identify the agent, such as a wrapper script. |
-| `args` | `[]` | Arguments passed on every launch. |
-| `resume_args` | agent's own | Arguments that continue the most recent conversation. |
-| `new_conversation` | agent's own | Text typed into the agent to start a new conversation. |
+| `args` | `[]` | Arguments passed on every launch in a terminal. |
+| `resume_args` | built-in agent's own; none for a custom agent | Arguments that continue the most recent conversation. Without them the agent can't resume. |
+| `new_conversation` | built-in agent's own; none for a custom agent | Text typed into the agent to start a new conversation. An empty string removes the command. |
 | `inherit_cwd` | `true` | Start in the focused pane's directory. |
-| `env` | `{}` | Extra environment variables. |
-| `profiles.NAME` | none | Named launch variants, each with `description`, `args`, and `env`. |
+| `env` | `{}` | Extra environment variables on every launch. |
+| `profiles.NAME` | none | Named launch variants, each with `description`, `args`, and `env`. A profile's arguments follow `args`, and resume arguments come last. |
 | `default_profile` | unset | Profile used when a launch names none. Must exist in `profiles`. |
 
+```toml
+# Offer Claude Code a read-only planning variant.
+[agents.claude-code.profiles.review]
+description = "Read-only review"
+args = ["--permission-mode", "plan"]
+
+# An agent Termeric doesn't ship.
+[agents.aider]
+name = "Aider"
+resume_args = ["--restore-chat-history"]
+new_conversation = "/clear"
+```
+
 ### [agent_status]
+
+See [Agent status](agents.md#agent-status).
 
 | Setting | Default | Description |
 | --- | --- | --- |
@@ -365,7 +391,7 @@ Settings for the built-in agents (`claude-code`, `codex`, `gemini`, `opencode`) 
 
 ### [supervisor]
 
-> **Experimental.** See [Agents in terminals](agents.md).
+> **Experimental.** See [The supervisor](agents.md#the-supervisor).
 
 | Setting | Default | Description |
 | --- | --- | --- |

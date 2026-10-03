@@ -15,20 +15,15 @@ Each tab has its own agent view holding one conversation. Switching tabs switche
 
 The panel sits beside the tab's terminal, or fills the tab. The **Fill the tab** button in the panel's header, which becomes **Show the terminal beside**, switches between the two. Beside the terminal, drag the panel's left edge to resize it; the terminal keeps at least 360 pixels, and when the window is too narrow for both, the panel hides until there is room. When the panel fills the tab, the terminal keeps running underneath.
 
-To have **New Agent…** and **Resume Agent Conversation…** open Claude Code, Codex, and OpenCode here instead of in a terminal, set **Open Agents In** on the Settings **Agents** page:
+To have **New Agent…** and **Resume Agent Conversation…** open Claude Code, Codex, and OpenCode here instead of in a terminal, set **Open Agents In** on the Settings **Agents** page, or `open_agents_in` under [`[agent_view]`](configuration.md#agent_view):
 
-| Setting value | Config value | Effect |
-| --- | --- | --- |
-| Terminal | `terminal` | The agent opens in a terminal tab (default). |
-| Agent View Beside Terminal | `split` | A new tab opens with the agent view beside its terminal. |
-| Agent View Filling Tab | `full` | A new tab opens with the agent view filling it. |
+| Setting value | Effect |
+| --- | --- |
+| Terminal | The agent opens in a terminal tab (default). |
+| Agent View Beside Terminal | A new tab opens with the agent view beside its terminal. |
+| Agent View Filling Tab | A new tab opens with the agent view filling it. |
 
 In the agent view, both commands open the new-session page, where you pick an earlier conversation to continue. Choosing an agent profile always opens a terminal.
-
-```toml
-[agent_view]
-open_agents_in = "split"
-```
 
 ## Starting a session
 
@@ -99,12 +94,7 @@ The permission chip picks the agent's mode:
 | Codex | **Ask before changes** (default), **Auto** (edits and runs commands inside the folder), **Full access** |
 | OpenCode | **Build** (default), **Plan**, and any agents you configured in OpenCode, each with an optional **Auto-approve** |
 
-**Bypass permissions**, **Full access**, and OpenCode's **Auto-approve** run everything without asking. They are offered only after you turn on **Allow Bypass Permissions** on the Settings **Agents** page, and turning it off returns every session to asking. Use them only where nothing can be harmed, such as a container or a throwaway checkout.
-
-```toml
-[agent_view]
-allow_bypass_permissions = true
-```
+**Bypass permissions**, **Full access**, and OpenCode's **Auto-approve** run everything without asking. They are offered only after you turn on **Allow Bypass Permissions** on the Settings **Agents** page (`allow_bypass_permissions` under [`[agent_view]`](configuration.md#agent_view)), and turning it off returns every session to asking. Use them only where nothing can be harmed, such as a container or a throwaway checkout.
 
 OpenCode asks only where its own `permission` settings say to, and by default it edits and runs commands without asking. To approve them in the panel, set them to ask in `opencode.json`:
 

@@ -139,14 +139,7 @@ The supervisor reads agents' screens and conversations, and it can send messages
 | **Edit Supervisor Rules** | Opens your rules in `$VISUAL` or `$EDITOR` in a new tab. |
 | **Stop Supervisor** | Ends it and closes its tab. Closing the tab stops it too. |
 
-Choose the supervisor's agent and its starting mode with **Supervisor** and **Supervisor Mode** on the Settings **Agents** page, or in your configuration:
-
-```toml
-[supervisor]
-agent = "claude-code"      # or "codex"
-mode = "assist"            # "watch", "assist", or "auto"
-max_sends_per_minute = 6   # 1 to 60
-```
+Choose the supervisor's agent and its starting mode with **Supervisor** and **Supervisor Mode** on the Settings **Agents** page. The send limit is set only in the configuration file; [`[supervisor]`](configuration.md#supervisor) lists all three keys.
 
 Your rules are plain language in `supervisor.md`, next to `config.toml`. The file is created with examples the first time and may be at most 16 KiB. The supervisor reads it when it starts, so restart it after editing.
 
@@ -185,38 +178,7 @@ Messages follow the same rules as the supervisor's: plain text within the size l
 
 ## Configuration
 
-An `[agents.<id>]` entry in `config.toml` changes a built-in agent; an entry with any other id adds a new one. Every key is optional:
-
-| Key | Meaning |
-| --- | --- |
-| `enabled` | `false` hides the agent from pickers and detection. |
-| `name` | Display name. A new agent defaults to its id. |
-| `program` | Executable to launch. Its file name is also recognized, unless it is a launcher such as `npx`, `docker`, `node`, or `sh`; then add the agent's own name to `detect`. A new agent defaults to its id. |
-| `detect` | Extra program names to recognize, such as a wrapper script. |
-| `args` | Arguments passed on every launch. |
-| `resume_args` | Arguments that continue the latest conversation. Without them the agent cannot resume. |
-| `new_conversation` | Text typed to start a new conversation. An empty string removes the command. |
-| `inherit_cwd` | Start in the focused terminal's directory. Defaults to `true`. |
-| `env` | Environment variables added on every launch. |
-| `profiles.<name>` | A named variant with `description`, `args`, and `env`. |
-| `default_profile` | The profile used when a launch names none. It must exist. |
-
-```toml
-# Offer Claude Code a read-only planning variant.
-[agents.claude-code.profiles.review]
-description = "Read-only review"
-args = ["--permission-mode", "plan"]
-
-# An agent Termeric doesn't ship.
-[agents.aider]
-name = "Aider"
-resume_args = ["--restore-chat-history"]
-new_conversation = "/clear"
-```
-
-Profile arguments follow the agent's `args`, and resume arguments come last. Agent ids use letters, digits, `-`, and `_`.
-
-Older `[plugins.claude_code]` and `[plugins.codex]` sections are still read and converted to `[agents.*]` entries; Settings drops the old sections the next time it saves.
+An `[agents.<id>]` entry in `config.toml` changes a built-in agent; an entry with any other id adds a new one, which Termeric then offers and recognizes like the built-in ones. Profiles you add there appear in **New Agent…** and work with `termeric --profile AGENT:PROFILE`. The **Agents** page of Settings turns built-in agents on and off; everything else is set in the file. [`[agents.ID]`](configuration.md#agentsid) lists every key, with an example of each kind of entry.
 
 ## Workspaces and moving panes
 
