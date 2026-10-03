@@ -1,5 +1,71 @@
 use super::*;
 
+thread_local! {
+    static SHELL_REFLOW_ROW_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Counts rows walked by `shell_anchor_rows`, so tests can prove that anchor
+/// mapping stays a single pass over history instead of one scan per command.
+pub(super) fn count_shell_reflow_row_visit() {
+    SHELL_REFLOW_ROW_VISITS.with(|visits| visits.set(visits.get() + 1));
+}
+
+// Scalar reference mappings that walk history once per call. The batched
+// production capture and restore must agree with them.
+fn shell_logical_anchor(grid: &Grid, target_row: i32) -> Option<ShellLogicalAnchor> {
+    let oldest = -(grid.scrollback_len() as i32);
+    let newest = grid.rows().saturating_sub(1) as i32;
+    if !(oldest..=newest).contains(&target_row) {
+        return None;
+    }
+    let mut line = 0_usize;
+    let mut cell = 0_usize;
+    for (row_index, row) in shell_anchor_rows(grid) {
+        if row_index == target_row {
+            return Some(ShellLogicalAnchor { line, cell });
+        }
+        if row.is_wrapped() {
+            cell = cell.saturating_add(row.reflow_unit_count());
+        } else {
+            line = line.saturating_add(1);
+            cell = 0;
+        }
+    }
+    None
+}
+
+fn shell_row_from_anchor(grid: &Grid, target: ShellLogicalAnchor) -> Option<i32> {
+    let mut line = 0_usize;
+    let mut remaining = target.cell;
+    for (row_index, row) in shell_anchor_rows(grid) {
+        if line == target.line {
+            let units = row.reflow_unit_count();
+            if remaining < units || !row.is_wrapped() {
+                return Some(row_index);
+            }
+            remaining = remaining.saturating_sub(units);
+        }
+        if !row.is_wrapped() {
+            if line == target.line {
+                return Some(row_index);
+            }
+            line = line.saturating_add(1);
+            remaining = target.cell;
+        }
+    }
+    None
+}
+
+#[test]
+fn shell_row_bookmark_tracks_wide_reflow_padding() {
+    let mut term = Terminal::new(5, 4);
+    term.process("ab界ZQ".as_bytes());
+    let anchor = shell_logical_anchor(term.grid(), 1).unwrap();
+    term.resize(3, 4);
+    assert_eq!(shell_row_from_anchor(term.grid(), anchor), Some(2));
+    assert_eq!(term.grid().row(2).unwrap().to_string(), "Q");
+}
+
 #[test]
 fn batched_shell_anchors_match_scalar_mapping_through_reflow_and_eviction() {
     for columns in [1, 2, 3, 5, 8] {

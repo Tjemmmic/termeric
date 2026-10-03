@@ -167,66 +167,14 @@ struct PromptNavigationState {
     scroll_offset: usize,
 }
 
-#[cfg(test)]
-fn shell_logical_anchor(grid: &Grid, target_row: i32) -> Option<ShellLogicalAnchor> {
-    let oldest = -(grid.scrollback_len() as i32);
-    let newest = grid.rows().saturating_sub(1) as i32;
-    if !(oldest..=newest).contains(&target_row) {
-        return None;
-    }
-    let mut line = 0_usize;
-    let mut cell = 0_usize;
-    for (row_index, row) in shell_anchor_rows(grid) {
-        if row_index == target_row {
-            return Some(ShellLogicalAnchor { line, cell });
-        }
-        if row.is_wrapped() {
-            cell = cell.saturating_add(row.reflow_unit_count());
-        } else {
-            line = line.saturating_add(1);
-            cell = 0;
-        }
-    }
-    None
-}
-
-#[cfg(test)]
-fn shell_row_from_anchor(grid: &Grid, target: ShellLogicalAnchor) -> Option<i32> {
-    let mut line = 0_usize;
-    let mut remaining = target.cell;
-    for (row_index, row) in shell_anchor_rows(grid) {
-        if line == target.line {
-            let units = row.reflow_unit_count();
-            if remaining < units || !row.is_wrapped() {
-                return Some(row_index);
-            }
-            remaining = remaining.saturating_sub(units);
-        }
-        if !row.is_wrapped() {
-            if line == target.line {
-                return Some(row_index);
-            }
-            line = line.saturating_add(1);
-            remaining = target.cell;
-        }
-    }
-    None
-}
-
-#[cfg(test)]
-thread_local! {
-    static SHELL_REFLOW_ROW_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
 fn shell_anchor_rows(grid: &Grid) -> impl Iterator<Item = (i32, crate::grid::RowView<'_>)> {
     let oldest = -(grid.scrollback_len() as i32);
     let newest = grid.rows().saturating_sub(1) as i32;
-    (oldest..=newest)
-        .map_while(|index| grid.row_at_offset(index).map(|row| (index, row)))
-        .inspect(|_| {
-            #[cfg(test)]
-            SHELL_REFLOW_ROW_VISITS.with(|visits| visits.set(visits.get() + 1));
-        })
+    let rows =
+        (oldest..=newest).map_while(|index| grid.row_at_offset(index).map(|row| (index, row)));
+    #[cfg(test)]
+    let rows = rows.inspect(|_| reflow_prompts::count_shell_reflow_row_visit());
+    rows
 }
 
 fn capture_shell_anchors(grid: &Grid, mut rows: Vec<i32>) -> Vec<(i32, ShellLogicalAnchor)> {
@@ -6506,16 +6454,6 @@ mod tests {
         one_column.resize(4, 4);
         assert!(one_column.rows_text(0, 3).contains('界'));
         assert_wide_invariants(&one_column);
-    }
-
-    #[test]
-    fn shell_row_bookmark_tracks_wide_reflow_padding() {
-        let mut term = Terminal::new(5, 4);
-        term.process("ab界ZQ".as_bytes());
-        let anchor = shell_logical_anchor(term.grid(), 1).unwrap();
-        term.resize(3, 4);
-        assert_eq!(shell_row_from_anchor(term.grid(), anchor), Some(2));
-        assert_eq!(term.grid().row(2).unwrap().to_string(), "Q");
     }
 
     #[test]
