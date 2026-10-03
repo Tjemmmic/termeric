@@ -2338,6 +2338,69 @@ impl App {
         })
     }
 
+    /// This window's tabs of `domain_id`, by remote tab ID.
+    fn live_tab_ids(&self, domain_id: &str) -> std::collections::HashMap<u32, usize> {
+        self.tabs
+            .as_ref()
+            .map(|tabs| {
+                tabs.live_domain_tabs(domain_id)
+                    .filter_map(|tab| {
+                        tab.live_domain_tab_route()
+                            .map(|(_, remote)| (remote, tab.id))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Make this window's tabs match `topology`, remember it, keep a rename
+    /// draft's title over the domain's, tell plugins which tabs appeared and
+    /// went away, and resize if anything changed.
+    fn reconcile_live_domain_and_notify(
+        &mut self,
+        topology: &crate::domain::model::DomainTopology,
+    ) -> anyhow::Result<()> {
+        let before = self.live_tab_ids(&topology.domain_id);
+        let relay = self
+            .live_domain_relay_command
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("live-domain relay state is unavailable"))?;
+        let changed = self
+            .tabs
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("tab manager is unavailable"))?
+            .reconcile_live_domain(topology, relay)?;
+        self.live_domain_topologies
+            .insert(topology.domain_id.clone(), topology.clone());
+        if let Some(rename) = &self.tab_rename
+            && let Some(tab) = self
+                .tabs
+                .as_mut()
+                .and_then(|tabs| tabs.tab_mut_by_id(rename.tab_id))
+        {
+            tab.set_user_title(Some(rename.input.text().to_owned()));
+        }
+        let after = self.live_tab_ids(&topology.domain_id);
+        for (remote, tab_id) in &after {
+            if !before.contains_key(remote) {
+                self.dispatch_plugin_hook(crate::plugin::Hook::TabCreated { tab_id: *tab_id });
+            }
+        }
+        for (remote, tab_id) in &before {
+            if !topology.tabs.iter().any(|tab| tab.id == *remote) {
+                self.dispatch_plugin_hook(crate::plugin::Hook::TabClosed { tab_id: *tab_id });
+            }
+        }
+        if changed {
+            self.reconcile_broadcast_state();
+            if let Some(size) = self.window.as_ref().map(|window| window.inner_size()) {
+                self.sync_terminal_geometry(size.width, size.height);
+            }
+            self.refresh_focused_terminal_surfaces();
+        }
+        Ok(())
+    }
+
     pub(super) fn handle_live_domain_control_completed(
         &mut self,
         control: LiveDomainControl,
@@ -2353,63 +2416,10 @@ impl App {
             return;
         };
         let topology = crate::domain::model::DomainTopology::from(&snapshot);
-        let before: std::collections::HashMap<_, _> = self
-            .tabs
-            .as_ref()
-            .into_iter()
-            .flat_map(TabManager::iter)
-            .filter_map(|(_, tab)| {
-                tab.live_domain_tab_route().and_then(|(candidate, remote)| {
-                    (candidate == topology.domain_id).then_some((remote, tab.id))
-                })
-            })
-            .collect();
-        let remote_tabs: std::collections::HashSet<_> =
-            topology.tabs.iter().map(|tab| tab.id).collect();
-        let reconcile = self
-            .tabs
-            .as_mut()
-            .zip(self.live_domain_relay_command.as_ref())
-            .ok_or_else(|| anyhow::anyhow!("live-domain relay state is unavailable"))
-            .and_then(|(tabs, relay)| tabs.reconcile_live_domain(&topology, relay));
-        match reconcile {
-            Ok(changed) => {
-                self.live_domain_topologies
-                    .insert(topology.domain_id.clone(), topology.clone());
-                let after: std::collections::HashMap<_, _> = self
-                    .tabs
-                    .as_ref()
-                    .into_iter()
-                    .flat_map(TabManager::iter)
-                    .filter_map(|(_, tab)| {
-                        tab.live_domain_tab_route().and_then(|(candidate, remote)| {
-                            (candidate == topology.domain_id).then_some((remote, tab.id))
-                        })
-                    })
-                    .collect();
-                for tab_id in after
-                    .iter()
-                    .filter_map(|(remote, local)| (!before.contains_key(remote)).then_some(*local))
-                {
-                    self.dispatch_plugin_hook(crate::plugin::Hook::TabCreated { tab_id });
-                }
-                for tab_id in before
-                    .iter()
-                    .filter_map(|(remote, local)| (!remote_tabs.contains(remote)).then_some(*local))
-                {
-                    self.dispatch_plugin_hook(crate::plugin::Hook::TabClosed { tab_id });
-                }
-                if changed {
-                    self.reconcile_broadcast_state();
-                    if let Some(size) = self.window.as_ref().map(|window| window.inner_size()) {
-                        self.sync_terminal_geometry(size.width, size.height);
-                    }
-                    self.refresh_focused_terminal_surfaces();
-                }
-            }
-            Err(error) => self.toasts.error(format!(
+        if let Err(error) = self.reconcile_live_domain_and_notify(&topology) {
+            self.toasts.error(format!(
                 "Live-domain mutation succeeded but GUI reconciliation failed: {error:#}"
-            )),
+            ));
         }
         {
             let (changed, message, closed_tab) = match control {
@@ -2563,74 +2573,16 @@ impl App {
                 }) {
                     return;
                 }
-                let Some(relay_command) = self.live_domain_relay_command.as_ref() else {
+                if self.live_domain_relay_command.is_none() {
                     self.toasts.error(
                         "Live-domain topology arrived without a configured relay executable",
                     );
                     return;
-                };
-                let before: std::collections::HashMap<_, _> = self
-                    .tabs
-                    .as_ref()
-                    .into_iter()
-                    .flat_map(TabManager::iter)
-                    .filter_map(|(_, tab)| {
-                        tab.live_domain_tab_route().and_then(|(candidate, remote)| {
-                            (candidate == domain.domain_id).then_some((remote, tab.id))
-                        })
-                    })
-                    .collect();
-                let remote_tabs: std::collections::HashSet<_> =
-                    domain.tabs.iter().map(|tab| tab.id).collect();
-                let reconcile = self
-                    .tabs
-                    .as_mut()
-                    .ok_or_else(|| anyhow::anyhow!("tab manager is unavailable"))
-                    .and_then(|tabs| tabs.reconcile_live_domain(&domain, relay_command));
-                match reconcile {
-                    Ok(changed) => {
+                }
+                match self.reconcile_live_domain_and_notify(&domain) {
+                    Ok(()) => {
                         self.live_domain_revisions
                             .insert(domain.domain_id.clone(), revision);
-                        self.live_domain_topologies
-                            .insert(domain.domain_id.clone(), domain.clone());
-                        if let Some(rename) = &self.tab_rename
-                            && let Some(tab) = self
-                                .tabs
-                                .as_mut()
-                                .and_then(|tabs| tabs.tab_mut_by_id(rename.tab_id))
-                        {
-                            tab.set_user_title(Some(rename.input.text().to_owned()));
-                        }
-                        let after: std::collections::HashMap<_, _> = self
-                            .tabs
-                            .as_ref()
-                            .into_iter()
-                            .flat_map(TabManager::iter)
-                            .filter_map(|(_, tab)| {
-                                tab.live_domain_tab_route().and_then(|(candidate, remote)| {
-                                    (candidate == domain.domain_id).then_some((remote, tab.id))
-                                })
-                            })
-                            .collect();
-                        for tab_id in after.iter().filter_map(|(remote, local)| {
-                            (!before.contains_key(remote)).then_some(*local)
-                        }) {
-                            self.dispatch_plugin_hook(crate::plugin::Hook::TabCreated { tab_id });
-                        }
-                        for tab_id in before.iter().filter_map(|(remote, local)| {
-                            (!remote_tabs.contains(remote)).then_some(*local)
-                        }) {
-                            self.dispatch_plugin_hook(crate::plugin::Hook::TabClosed { tab_id });
-                        }
-                        if changed {
-                            self.reconcile_broadcast_state();
-                            if let Some(size) =
-                                self.window.as_ref().map(|window| window.inner_size())
-                            {
-                                self.sync_terminal_geometry(size.width, size.height);
-                            }
-                            self.refresh_focused_terminal_surfaces();
-                        }
                         if self.disconnected_live_domains.remove(&domain_id) {
                             let route = self.live_domain_route_label(&domain_id);
                             self.toasts.success(format!("Reconnected live {route}"));
