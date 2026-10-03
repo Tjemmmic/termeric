@@ -205,41 +205,13 @@ pub fn parse_utc_timestamp(timestamp: &str) -> Option<u64> {
         .checked_add(hour * 3_600 + minute * 60 + second)
 }
 
-/// A short, human description of how long ago `timestamp` was, relative to
-/// `now` (Unix seconds): "Just now", "5 minutes ago", "Yesterday", "Sep 12",
-/// with the year added once it differs. Relative forms count elapsed time;
-/// calendar dates are UTC, so one saved near midnight may show the adjacent
-/// local day.
+/// How long ago `timestamp` was, relative to `now` (Unix seconds), in the
+/// words of [`crate::ui::age::prose_age`]; `None` when it can't be read.
 pub fn describe_age(timestamp: &str, now: u64) -> Option<String> {
-    const MONTHS: [&str; 12] = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-    ];
-    let then = parse_utc_timestamp(timestamp)?;
-    let elapsed = now.saturating_sub(then);
-    let plural = |count: u64, unit: &str| {
-        if count == 1 {
-            format!("1 {unit} ago")
-        } else {
-            format!("{count} {unit}s ago")
-        }
-    };
-    Some(match elapsed {
-        0..60 => "Just now".into(),
-        60..3_600 => plural(elapsed / 60, "minute"),
-        3_600..86_400 => plural(elapsed / 3_600, "hour"),
-        86_400..172_800 => "Yesterday".into(),
-        172_800..604_800 => plural(elapsed / 86_400, "day"),
-        _ => {
-            let (year, month, day) = civil_from_days((then / 86_400) as i64);
-            let (current_year, _, _) = civil_from_days((now / 86_400) as i64);
-            let month = MONTHS[month as usize - 1];
-            if year == current_year {
-                format!("{month} {day}")
-            } else {
-                format!("{month} {day}, {year}")
-            }
-        }
-    })
+    Some(crate::ui::age::prose_age(
+        parse_utc_timestamp(timestamp)?,
+        now,
+    ))
 }
 
 // Inverse of `civil_from_days`: days since 1970-01-01 for a civil date.
@@ -254,7 +226,7 @@ fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
 }
 
 // Howard Hinnant's civil-from-days algorithm, with day zero at 1970-01-01.
-fn civil_from_days(days_since_epoch: i64) -> (i64, u32, u32) {
+pub(crate) fn civil_from_days(days_since_epoch: i64) -> (i64, u32, u32) {
     let z = days_since_epoch + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
     let day_of_era = z - era * 146_097;
@@ -408,19 +380,9 @@ mod tests {
         assert_eq!(parse_utc_timestamp("unreadable"), None);
 
         let now = parse_utc_timestamp("2026-09-23T12:00:00Z").unwrap();
-        let age = |stamp: &str| describe_age(stamp, now).unwrap();
-        assert_eq!(age("2026-09-23T11:59:30Z"), "Just now");
-        assert_eq!(age("2026-09-23T11:59:00Z"), "1 minute ago");
-        assert_eq!(age("2026-09-23T11:15:00.500Z"), "45 minutes ago");
-        assert_eq!(age("2026-09-23T09:00:00Z"), "3 hours ago");
-        assert_eq!(age("2026-09-22T10:00:00Z"), "Yesterday");
-        assert_eq!(age("2026-09-19T12:00:00Z"), "4 days ago");
-        assert_eq!(age("2026-09-02T12:00:00Z"), "Sep 2");
-        assert_eq!(age("2025-12-31T23:00:00Z"), "Dec 31, 2025");
         assert_eq!(
-            age("2026-09-24T00:00:00Z"),
-            "Just now",
-            "clock skew is not negative"
+            describe_age("2026-09-23T09:00:00Z", now).as_deref(),
+            Some("3 hours ago")
         );
         assert_eq!(describe_age("unreadable", now), None);
     }

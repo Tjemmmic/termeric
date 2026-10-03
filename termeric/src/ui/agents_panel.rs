@@ -326,7 +326,7 @@ pub struct AgentsPanel {
     /// The agents in the order last shown. Clicks and keys act on what the
     /// person saw, even when the list has changed since.
     shown: Vec<AgentOrigin>,
-    /// When the rows were last described, to keep "3 min" current.
+    /// When the rows were last described, to keep "3m" current.
     described_at: Option<std::time::Instant>,
 }
 

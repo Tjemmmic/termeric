@@ -52,7 +52,7 @@ impl App {
                         let mut summary = format!(
                             "{} · {}",
                             status.activity.label(),
-                            super::supervisor::ago(status.since.elapsed())
+                            crate::ui::age::compact_age(status.since.elapsed())
                         );
                         if let Some(what) = what.filter(|what| !what.is_empty()) {
                             summary.push_str(" · ");

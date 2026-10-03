@@ -185,6 +185,11 @@ impl AgentViewWindow {
     }
 }
 
+/// Seconds since the Unix epoch, or zero for a time before it.
+fn unix_seconds(time: SystemTime) -> u64 {
+    time.duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs())
+}
 impl App {
     // ── Sessions ─────────────────────────────────────────────────────────
 
@@ -359,7 +364,7 @@ impl App {
             .take(PAST_LIMIT)
             .map(|past| PastSession {
                 agent,
-                when: history::ago(past.modified, now),
+                when: crate::ui::age::prose_age(unix_seconds(past.modified), unix_seconds(now)),
                 id: past.id,
                 title: past.title,
             })

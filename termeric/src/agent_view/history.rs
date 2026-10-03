@@ -9,7 +9,7 @@
 
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 use serde_json::Value;
 
@@ -200,24 +200,6 @@ fn shorten(text: &str) -> String {
     }
 }
 
-/// How long ago, in words: "just now", "5m ago", "Yesterday", "3 days ago".
-pub fn ago(modified: SystemTime, now: SystemTime) -> String {
-    let elapsed = now
-        .duration_since(modified)
-        .unwrap_or(Duration::ZERO)
-        .as_secs();
-    const HOUR: u64 = 3600;
-    const DAY: u64 = 24 * HOUR;
-    match elapsed {
-        0..60 => "just now".to_owned(),
-        60..HOUR => format!("{}m ago", elapsed / 60),
-        HOUR..DAY => format!("{}h ago", elapsed / HOUR),
-        DAY..172_800 => "Yesterday".to_owned(),
-        172_800..1_209_600 => format!("{} days ago", elapsed / DAY),
-        _ => format!("{} weeks ago", elapsed / (7 * DAY)),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -295,18 +277,5 @@ mod tests {
         let short = shorten(&long);
         assert_eq!(short.chars().count(), TITLE_CHARS + 1);
         assert!(short.ends_with('…'));
-    }
-
-    #[test]
-    fn ages_read_naturally() {
-        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000_000);
-        let before = |seconds: u64| now - Duration::from_secs(seconds);
-        assert_eq!(ago(before(5), now), "just now");
-        assert_eq!(ago(before(300), now), "5m ago");
-        assert_eq!(ago(before(7200), now), "2h ago");
-        assert_eq!(ago(before(100_000), now), "Yesterday");
-        assert_eq!(ago(before(300_000), now), "3 days ago");
-        assert_eq!(ago(before(2_000_000), now), "3 weeks ago");
-        assert_eq!(ago(now + Duration::from_secs(5), now), "just now");
     }
 }

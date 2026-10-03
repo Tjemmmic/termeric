@@ -209,7 +209,7 @@ impl Builder<'_, '_> {
             self.short_path(session.cwd()),
             session.model_label()
         );
-        let when = ago(session.last_change().elapsed());
+        let when = crate::ui::age::compact_age(session.last_change().elapsed());
         let target = Target::OpenSession(session.id());
         let current = self.input.state.active == Some(session.id());
         let height = self.list_row(
@@ -831,16 +831,5 @@ pub fn session_summary(session: &AgentSession) -> String {
             .last_answer()
             .and_then(|answer| answer.lines().map(str::trim).find(|line| !line.is_empty()))
             .map_or_else(|| "Ready".to_owned(), str::to_owned),
-    }
-}
-
-/// "now", "2m", "3h", "4d".
-pub(super) fn ago(elapsed: std::time::Duration) -> String {
-    let seconds = elapsed.as_secs();
-    match seconds {
-        0..60 => "now".to_owned(),
-        60..3600 => format!("{}m", seconds / 60),
-        3600..86_400 => format!("{}h", seconds / 3600),
-        _ => format!("{}d", seconds / 86_400),
     }
 }

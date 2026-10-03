@@ -457,7 +457,9 @@ impl App {
                 .log
                 .iter()
                 .rev()
-                .map(|(when, entry)| format!("{} · {entry}", ago(when.elapsed())))
+                .map(|(when, entry)| {
+                    format!("{} · {entry}", crate::ui::age::compact_age(when.elapsed()))
+                })
                 .collect(),
         })
     }
@@ -983,15 +985,5 @@ fn one_line(text: &str) -> String {
     match line.char_indices().nth(80) {
         Some((cut, _)) => format!("{}…", &line[..cut]),
         None => line.to_owned(),
-    }
-}
-
-/// How long ago, coarsely.
-pub(super) fn ago(elapsed: Duration) -> String {
-    let minutes = elapsed.as_secs() / 60;
-    match minutes {
-        0 => "now".into(),
-        1..=59 => format!("{minutes} min"),
-        _ => format!("{} h", minutes / 60),
     }
 }
