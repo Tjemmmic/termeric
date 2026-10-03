@@ -1349,7 +1349,6 @@ impl Terminal {
 
     /// Whether the terminal is currently presenting its alternate screen.
     #[cfg(test)]
-    #[cfg(test)]
     pub(crate) fn alternate_screen_active(&self) -> bool {
         self.alt_screen_active
     }
@@ -1692,7 +1691,6 @@ impl Terminal {
         self.xterm_user_defined_keys.iter()
     }
 
-    #[cfg(test)]
     #[cfg(test)]
     pub(crate) fn xterm_user_defined_key_bytes(&self) -> usize {
         self.xterm_user_defined_keys.bytes()
@@ -4318,7 +4316,6 @@ impl Terminal {
 
     /// Resolve an OSC 8 target at a visual cell in the presented viewport,
     /// including scrolled history and a frozen synchronized-output snapshot.
-    #[cfg(test)]
     #[cfg(test)]
     pub(crate) fn presentation_hyperlink_at(&self, row: usize, col: usize) -> Option<&str> {
         let grid = self.presentation_grid();
