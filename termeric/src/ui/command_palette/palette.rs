@@ -8,6 +8,7 @@ use sublime_fuzzy::FuzzySearch;
 use super::super::animation::OverlayAnimation;
 use super::super::text_input::{TextInput, TextInputEdit};
 use crate::input::keybindings::{BindableAction, ShortcutRegistry};
+use crate::ui::scroll::reveal_row;
 
 const MAX_QUERY_CHARACTERS: usize = 256;
 
@@ -560,10 +561,7 @@ impl CommandPalette {
     pub fn select_prev(&mut self) {
         if self.selected > 0 {
             self.selected -= 1;
-            // Scroll up if needed
-            if self.selected < self.scroll_offset {
-                self.scroll_offset = self.selected;
-            }
+            self.scroll_offset = reveal_row(self.scroll_offset, self.selected, self.max_visible);
         }
     }
 
@@ -571,10 +569,7 @@ impl CommandPalette {
     pub fn select_next(&mut self) {
         if self.selected + 1 < self.entries.len() {
             self.selected += 1;
-            // Scroll down if needed
-            if self.selected >= self.scroll_offset + self.max_visible {
-                self.scroll_offset = self.selected - self.max_visible + 1;
-            }
+            self.scroll_offset = reveal_row(self.scroll_offset, self.selected, self.max_visible);
         }
     }
 
@@ -679,11 +674,7 @@ impl CommandPalette {
             return false;
         };
         self.selected = index;
-        if self.selected < self.scroll_offset {
-            self.scroll_offset = self.selected;
-        } else if self.selected >= self.scroll_offset + self.max_visible {
-            self.scroll_offset = self.selected + 1 - self.max_visible;
-        }
+        self.scroll_offset = reveal_row(self.scroll_offset, self.selected, self.max_visible);
         true
     }
 

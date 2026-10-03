@@ -535,13 +535,8 @@ impl AgentsPanel {
         if current.visible_count == 0 {
             return;
         }
-        self.scroll_offset = if index < current.scroll_offset {
-            index
-        } else if index >= current.visible_range().end {
-            index + 1 - current.visible_count
-        } else {
-            current.scroll_offset
-        };
+        self.scroll_offset =
+            crate::ui::scroll::reveal_row(current.scroll_offset, index, current.visible_count);
         self.hovered = None;
     }
 

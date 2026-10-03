@@ -452,11 +452,8 @@ impl InfoOverlay {
             Some(InfoOverlayFocus::Input) => self.ensure_input_visible(),
             Some(InfoOverlayFocus::Choice(id)) => {
                 let line = self.choice(self.request_id, id).unwrap().source_line;
-                if line < self.scroll_offset {
-                    self.scroll_offset = line;
-                } else if line >= self.scroll_offset.saturating_add(self.viewport_rows) {
-                    self.scroll_offset = line.saturating_add(1).saturating_sub(self.viewport_rows);
-                }
+                self.scroll_offset =
+                    crate::ui::scroll::reveal_row(self.scroll_offset, line, self.viewport_rows);
                 self.clamp_scroll();
             }
             _ => {}
@@ -617,13 +614,8 @@ impl InfoOverlay {
         let Some(source_line) = self.input.as_ref().map(|input| input.source_line) else {
             return;
         };
-        if source_line < self.scroll_offset {
-            self.scroll_offset = source_line;
-        } else if source_line >= self.scroll_offset.saturating_add(self.viewport_rows) {
-            self.scroll_offset = source_line
-                .saturating_add(1)
-                .saturating_sub(self.viewport_rows);
-        }
+        self.scroll_offset =
+            crate::ui::scroll::reveal_row(self.scroll_offset, source_line, self.viewport_rows);
         self.ensure_input_cursor_visible();
     }
 

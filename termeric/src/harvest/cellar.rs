@@ -571,12 +571,7 @@ impl RootCellar {
             self.clamp_viewport();
             return;
         };
-        let rows = self.viewport_rows.max(1);
-        if index < self.scroll {
-            self.scroll = index;
-        } else if index >= self.scroll.saturating_add(rows) {
-            self.scroll = index + 1 - rows;
-        }
+        self.scroll = crate::ui::scroll::reveal_row(self.scroll, index, self.viewport_rows.max(1));
         self.clamp_viewport();
     }
 

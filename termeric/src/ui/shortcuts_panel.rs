@@ -567,11 +567,8 @@ impl ShortcutsPanel {
     /// Ensure the selected item is visible within the scroll window
     fn ensure_visible(&mut self, entries: &[ShortcutEntry]) {
         let selected_row = self.selectable_index(entries, self.selected);
-        if selected_row < self.scroll_offset {
-            self.scroll_offset = selected_row;
-        } else if selected_row >= self.scroll_offset + self.max_visible {
-            self.scroll_offset = selected_row + 1 - self.max_visible;
-        }
+        self.scroll_offset =
+            crate::ui::scroll::reveal_row(self.scroll_offset, selected_row, self.max_visible);
     }
 
     pub fn set_max_visible(&mut self, max_visible: usize) {

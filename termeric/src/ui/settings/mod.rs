@@ -1980,11 +1980,11 @@ impl SettingsPanel {
         } else {
             abs
         };
-        if desired_top < self.scroll_offset {
-            self.scroll_offset = desired_top;
-        } else if abs >= self.scroll_offset + self.max_visible {
-            self.scroll_offset = abs + 1 - self.max_visible;
-        }
+        self.scroll_offset = if desired_top < self.scroll_offset {
+            desired_top
+        } else {
+            crate::ui::scroll::reveal_row(self.scroll_offset, abs, self.max_visible)
+        };
         self.clamp_scroll(entries.len());
     }
 

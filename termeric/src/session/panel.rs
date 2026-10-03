@@ -726,14 +726,12 @@ impl SessionPanel {
             self.scroll_offset = 0;
             return;
         }
-        if self.selected_index < self.scroll_offset {
-            self.scroll_offset = self.selected_index;
-        } else if self.selected_index >= self.scroll_offset + self.max_visible {
-            self.scroll_offset = self.selected_index + 1 - self.max_visible;
-        }
-        self.scroll_offset = self
-            .scroll_offset
-            .min(self.sessions.len().saturating_sub(self.max_visible));
+        self.scroll_offset = crate::ui::scroll::reveal_row(
+            self.scroll_offset,
+            self.selected_index,
+            self.max_visible,
+        )
+        .min(self.sessions.len().saturating_sub(self.max_visible));
     }
 
     #[cfg(test)]

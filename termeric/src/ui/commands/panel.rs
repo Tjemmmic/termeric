@@ -527,13 +527,8 @@ impl CommandsPanel {
             return false;
         }
         let current = layout.scrolled(self.scroll_offset);
-        self.scroll_offset = if index < current.scroll_offset {
-            index
-        } else if index >= current.visible_range().end {
-            index + 1 - current.visible_count
-        } else {
-            current.scroll_offset
-        };
+        self.scroll_offset =
+            crate::ui::scroll::reveal_row(current.scroll_offset, index, current.visible_count);
         self.set_hover(None);
         true
     }

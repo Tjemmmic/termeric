@@ -21,6 +21,7 @@ pub mod diff_review;
 pub mod domain_picker;
 pub mod info_overlay;
 pub mod popup_menu;
+pub mod scroll;
 pub mod settings;
 pub mod shortcuts_panel;
 pub mod text_area;

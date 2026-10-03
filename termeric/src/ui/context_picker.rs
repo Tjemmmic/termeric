@@ -639,11 +639,11 @@ impl ContextPicker {
     }
 
     fn reveal_selection(&mut self) {
-        if self.selected_index < self.scroll_offset {
-            self.scroll_offset = self.selected_index;
-        } else if self.selected_index >= self.scroll_offset.saturating_add(self.viewport_rows) {
-            self.scroll_offset = self.selected_index + 1 - self.viewport_rows;
-        }
+        self.scroll_offset = crate::ui::scroll::reveal_row(
+            self.scroll_offset,
+            self.selected_index,
+            self.viewport_rows,
+        );
         self.clamp_scroll();
     }
 
