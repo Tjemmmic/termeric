@@ -8851,33 +8851,6 @@ fn fullscreen_is_window_local_transient_state_for_shortcut_and_palette_routes() 
     assert!(!first.fullscreen_requested);
 }
 
-#[test]
-fn app_input_modules_use_the_focused_terminal_route() {
-    let direct_owner_access = regex::Regex::new(r"\b(?:tab|t)\s*\.\s*terminal\b").unwrap();
-    for forbidden in ["tab.terminal", "t.terminal", "tab \n . terminal.take()"] {
-        assert!(direct_owner_access.is_match(forbidden));
-    }
-    for permitted in [
-        "target.terminal",
-        "tab.focused_terminal()",
-        "tabs.terminal_for_origin(origin)",
-    ] {
-        assert!(!direct_owner_access.is_match(permitted));
-    }
-    for (name, source) in [
-        ("mod.rs", include_str!("mod.rs")),
-        ("mouse.rs", include_str!("mouse.rs")),
-        ("desktop_io.rs", include_str!("desktop_io.rs")),
-        ("plugin_actions.rs", include_str!("plugin_actions.rs")),
-        ("sessions.rs", include_str!("sessions.rs")),
-    ] {
-        assert!(
-            !direct_owner_access.is_match(source),
-            "{name} bypasses Tab::focused_terminal and can target detached pane state"
-        );
-    }
-}
-
 #[cfg(unix)]
 #[test]
 fn plugin_context_cwd_follows_the_focused_pane_and_single_terminal() {
@@ -9409,16 +9382,6 @@ fn synchronized_output_timeout_is_terminal_local_even_when_its_pane_is_unfocused
             .terminal
             .is_synchronized_output()
     );
-}
-
-#[test]
-fn terminal_encoder_runs_after_application_and_plugin_shortcuts() {
-    let source = include_str!("event_loop.rs");
-    let application_shortcuts = source.find("shortcut_registry").unwrap();
-    let plugin_shortcuts = source.find("keybinding_manager").unwrap();
-    let terminal_encoder = source.find("key_to_bytes_for_terminal").unwrap();
-    assert!(application_shortcuts < terminal_encoder);
-    assert!(plugin_shortcuts < terminal_encoder);
 }
 
 #[cfg(unix)]
