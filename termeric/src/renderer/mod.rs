@@ -372,6 +372,11 @@ impl UiPalette {
         self.palette_text_dim = palette_text;
         self.palette_border = palette_text;
         self.palette_accent = palette_text;
+        // Matched characters keep their own color only while it stays
+        // readable, so a search still shows what it matched.
+        if contrast_ratio(self.palette_match_highlight, self.palette_bg) < 4.5 {
+            self.palette_match_highlight = palette_text;
+        }
         self.scrim[3] = self.scrim[3].max(0.65);
         self.palette_scrim[3] = self.palette_scrim[3].max(0.72);
     }
@@ -4182,6 +4187,7 @@ mod ui_palette_accessibility_tests {
                 (palette.palette_text, palette.palette_bg),
                 (palette.palette_text, palette.palette_input_bg),
                 (palette.palette_text_dim, palette.palette_bg),
+                (palette.palette_match_highlight, palette.palette_bg),
             ] {
                 assert!(
                     contrast_ratio(foreground, background) >= 4.5,
