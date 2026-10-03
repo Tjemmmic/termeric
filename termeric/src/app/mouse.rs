@@ -1650,50 +1650,6 @@ pub(super) const fn native_pointer_icon(
     }
 }
 
-#[cfg(test)]
-mod pointer_tests {
-    use super::native_pointer_icon;
-    use termeric_core::PointerShape;
-    use winit::window::CursorIcon;
-
-    #[test]
-    fn every_protocol_pointer_shape_has_an_exact_native_mapping() {
-        let expected = [
-            CursorIcon::Alias,
-            CursorIcon::Cell,
-            CursorIcon::Copy,
-            CursorIcon::Crosshair,
-            CursorIcon::Default,
-            CursorIcon::EResize,
-            CursorIcon::EwResize,
-            CursorIcon::Grab,
-            CursorIcon::Grabbing,
-            CursorIcon::Help,
-            CursorIcon::Move,
-            CursorIcon::NResize,
-            CursorIcon::NeResize,
-            CursorIcon::NeswResize,
-            CursorIcon::NoDrop,
-            CursorIcon::NotAllowed,
-            CursorIcon::NsResize,
-            CursorIcon::NwResize,
-            CursorIcon::NwseResize,
-            CursorIcon::Pointer,
-            CursorIcon::Progress,
-            CursorIcon::SResize,
-            CursorIcon::SeResize,
-            CursorIcon::SwResize,
-            CursorIcon::Text,
-            CursorIcon::VerticalText,
-            CursorIcon::WResize,
-            CursorIcon::Wait,
-            CursorIcon::ZoomIn,
-            CursorIcon::ZoomOut,
-        ];
-        assert_eq!(PointerShape::ALL.map(native_pointer_icon), expected);
-    }
-}
-
 fn protocol_cell_from_viewport(
     position: (f64, f64),
     origin: (f32, f32),
@@ -1739,6 +1695,46 @@ fn screen_to_pane_grid(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_protocol_pointer_shape_has_an_exact_native_mapping() {
+        use termeric_core::PointerShape;
+        use winit::window::CursorIcon;
+
+        let expected = [
+            CursorIcon::Alias,
+            CursorIcon::Cell,
+            CursorIcon::Copy,
+            CursorIcon::Crosshair,
+            CursorIcon::Default,
+            CursorIcon::EResize,
+            CursorIcon::EwResize,
+            CursorIcon::Grab,
+            CursorIcon::Grabbing,
+            CursorIcon::Help,
+            CursorIcon::Move,
+            CursorIcon::NResize,
+            CursorIcon::NeResize,
+            CursorIcon::NeswResize,
+            CursorIcon::NoDrop,
+            CursorIcon::NotAllowed,
+            CursorIcon::NsResize,
+            CursorIcon::NwResize,
+            CursorIcon::NwseResize,
+            CursorIcon::Pointer,
+            CursorIcon::Progress,
+            CursorIcon::SResize,
+            CursorIcon::SeResize,
+            CursorIcon::SwResize,
+            CursorIcon::Text,
+            CursorIcon::VerticalText,
+            CursorIcon::WResize,
+            CursorIcon::Wait,
+            CursorIcon::ZoomIn,
+            CursorIcon::ZoomOut,
+        ];
+        assert_eq!(PointerShape::ALL.map(native_pointer_icon), expected);
+    }
 
     #[cfg(unix)]
     fn mouse_report_position(app: &App) -> (f64, f64) {
