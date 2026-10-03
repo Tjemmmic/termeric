@@ -499,7 +499,7 @@ impl PluginRegistry {
         let text = std::str::from_utf8(&bytes).context("plugin registry must be UTF-8")?;
         let registry: Self = toml::from_str(text).with_context(|| {
             format!(
-                "invalid plugin registry {}; if it records permissions this Termeric no longer recognizes, delete the affected [[plugins]] entry (or the whole file), then reinstall the plugin with `termeric plugin install <directory> --replace`, since its installed copy remains",
+                "invalid plugin registry {}; delete the affected [[plugins]] entry (or the whole file), then reinstall the plugin with `termeric plugin install <directory> --replace`, since its installed copy remains",
                 path.display()
             )
         })?;
@@ -2734,37 +2734,6 @@ events = ["command-invoked"]
     }
 
     #[test]
-    fn registry_with_removed_permissions_fails_with_reinstall_guidance() {
-        let (_temp, _source, _root, registry_path) = fixture();
-        fs::write(
-            &registry_path,
-            r#"schema_version = 1
-
-[[plugins]]
-id = "sample-tools"
-enabled = true
-source = "/tmp/sample-tools"
-source_fingerprint = "fnv1a64:0123456789abcdef"
-grants = ["process-spawn", "process-query"]
-"#,
-        )
-        .unwrap();
-        let error = format!(
-            "{:#}",
-            PluginRegistry::load_from(&registry_path).unwrap_err()
-        );
-        assert!(
-            error.contains("unknown plugin permission \"process-query\""),
-            "{error}"
-        );
-        assert!(error.contains("reinstall the plugin"), "{error}");
-        assert!(
-            error.contains(&registry_path.display().to_string()),
-            "{error}"
-        );
-    }
-
-    #[test]
     fn launch_context_is_gated_by_workspace_query_and_bounded() {
         let parsed: PluginManifest = toml::from_str(&manifest(
             "2.0.0",
@@ -3816,7 +3785,7 @@ grants = ["process-spawn", "process-query"]
     }
 
     #[test]
-    fn unrecognized_registry_grants_explain_the_replacing_reinstall() {
+    fn an_unloadable_registry_explains_the_replacing_reinstall() {
         let (_temp, source, root, registry_path) = fixture();
         install(
             &source,
@@ -3838,7 +3807,8 @@ grants = ["process-spawn", "process-query"]
             PluginRegistry::load_from(&registry_path).unwrap_err()
         );
         assert!(
-            error.contains("delete the affected [[plugins]] entry")
+            error.contains(&registry_path.display().to_string())
+                && error.contains("delete the affected [[plugins]] entry")
                 && error.contains("termeric plugin install <directory> --replace"),
             "{error}"
         );
