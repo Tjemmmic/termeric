@@ -7,20 +7,13 @@ use winit::keyboard::{Key, NamedKey};
 
 impl App {
     pub(super) fn commands_panel_layout(&self) -> crate::ui::commands::panel::CommandsPanelLayout {
-        let (width, height, top, cell_width, cell_height) = self
-            .renderer
-            .as_ref()
-            .map(|renderer| {
-                let (width, height) = renderer.window_size();
-                (
-                    width as f32,
-                    height as f32,
-                    renderer.tab_bar_height(),
-                    renderer.cell_width(),
-                    renderer.cell_height(),
-                )
-            })
-            .unwrap_or((800.0, 600.0, 0.0, 8.0, 16.0));
+        let UiMetrics {
+            width,
+            height,
+            tab_bar_height: top,
+            cell_width,
+            cell_height,
+        } = self.ui_metrics();
         // Read only panel state, without copying command/form strings on wheel events.
         self.commands_panel.layout(
             width,

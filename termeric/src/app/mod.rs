@@ -102,6 +102,18 @@ use crate::ui::unicode_picker::UnicodePicker;
 
 pub use application::Application;
 
+/// Window and cell sizes for laying out UI outside a frame. Before a
+/// renderer exists (headless tests) a nominal 800×600 window with 8×16
+/// cells and no tab bar stands in.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct UiMetrics {
+    pub width: f32,
+    pub height: f32,
+    pub tab_bar_height: f32,
+    pub cell_width: f32,
+    pub cell_height: f32,
+}
+
 #[derive(Debug)]
 pub(crate) enum AppEvent {
     Pty,
@@ -2177,6 +2189,28 @@ impl App {
                 None
             }
         }
+    }
+
+    pub(super) fn ui_metrics(&self) -> UiMetrics {
+        self.renderer.as_ref().map_or(
+            UiMetrics {
+                width: 800.0,
+                height: 600.0,
+                tab_bar_height: 0.0,
+                cell_width: 8.0,
+                cell_height: 16.0,
+            },
+            |renderer| {
+                let (width, height) = renderer.window_size();
+                UiMetrics {
+                    width: width as f32,
+                    height: height as f32,
+                    tab_bar_height: renderer.tab_bar_height(),
+                    cell_width: renderer.cell_width(),
+                    cell_height: renderer.cell_height(),
+                }
+            },
+        )
     }
 
     /// Record why this window must be redrawn and ask for a frame.

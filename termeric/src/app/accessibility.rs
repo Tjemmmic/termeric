@@ -1658,19 +1658,13 @@ impl App {
     }
 
     fn info_accessibility_layout(&self) -> crate::ui::info_overlay::InfoOverlayLayout {
-        let (width, height, cell_width, cell_height) = self
-            .renderer
-            .as_ref()
-            .map(|renderer| {
-                let (width, height) = renderer.window_size();
-                (
-                    width as f32,
-                    height as f32,
-                    renderer.cell_width(),
-                    renderer.cell_height(),
-                )
-            })
-            .unwrap_or((800.0, 600.0, 8.0, 16.0));
+        let UiMetrics {
+            width,
+            height,
+            cell_width,
+            cell_height,
+            ..
+        } = self.ui_metrics();
         crate::ui::info_overlay::InfoOverlayLayout::calculate(
             width,
             height,
@@ -1684,19 +1678,13 @@ impl App {
     }
 
     fn diff_accessibility_layout(&self) -> crate::ui::diff_review::DiffReviewLayout {
-        let (width, height, cell_width, cell_height) = self
-            .renderer
-            .as_ref()
-            .map(|renderer| {
-                let (width, height) = renderer.window_size();
-                (
-                    width as f32,
-                    height as f32,
-                    renderer.cell_width(),
-                    renderer.cell_height(),
-                )
-            })
-            .unwrap_or((800.0, 600.0, 8.0, 16.0));
+        let UiMetrics {
+            width,
+            height,
+            cell_width,
+            cell_height,
+            ..
+        } = self.ui_metrics();
         crate::ui::diff_review::DiffReviewLayout::calculate(
             width,
             height,
@@ -1711,19 +1699,13 @@ impl App {
     }
 
     fn context_accessibility_layout(&self) -> crate::ui::context_picker::ContextPickerLayout {
-        let (width, height, cell_width, cell_height) = self
-            .renderer
-            .as_ref()
-            .map(|renderer| {
-                let (width, height) = renderer.window_size();
-                (
-                    width as f32,
-                    height as f32,
-                    renderer.cell_width(),
-                    renderer.cell_height(),
-                )
-            })
-            .unwrap_or((800.0, 600.0, 8.0, 16.0));
+        let UiMetrics {
+            width,
+            height,
+            cell_width,
+            cell_height,
+            ..
+        } = self.ui_metrics();
         crate::ui::context_picker::ContextPickerLayout::calculate(
             width,
             height,
@@ -1736,19 +1718,13 @@ impl App {
     }
 
     fn guardrail_accessibility_layout(&self) -> crate::terminal::guardrails::GuardrailLayout {
-        let (width, height, cell_width, cell_height) = self
-            .renderer
-            .as_ref()
-            .map(|renderer| {
-                let (width, height) = renderer.window_size();
-                (
-                    width as f32,
-                    height as f32,
-                    renderer.cell_width(),
-                    renderer.cell_height(),
-                )
-            })
-            .unwrap_or((800.0, 600.0, 8.0, 16.0));
+        let UiMetrics {
+            width,
+            height,
+            cell_width,
+            cell_height,
+            ..
+        } = self.ui_metrics();
         crate::terminal::guardrails::GuardrailLayout::calculate(
             width,
             height,
@@ -1996,19 +1972,13 @@ impl App {
         &self,
         info: &crate::ui::shortcuts_panel::ShortcutsPanelInfo,
     ) -> crate::ui::shortcuts_panel::ShortcutsPanelLayout {
-        let (width, height, cell_width, cell_height) = self
-            .renderer
-            .as_ref()
-            .map(|renderer| {
-                let (width, height) = renderer.window_size();
-                (
-                    width as f32,
-                    height as f32,
-                    renderer.cell_width(),
-                    renderer.cell_height(),
-                )
-            })
-            .unwrap_or((800.0, 600.0, 8.0, 16.0));
+        let UiMetrics {
+            width,
+            height,
+            cell_width,
+            cell_height,
+            ..
+        } = self.ui_metrics();
         crate::ui::shortcuts_panel::ShortcutsPanelLayout::calculate(
             width,
             height,
@@ -2023,19 +1993,13 @@ impl App {
         &self,
         info: &crate::ui::settings::SettingsPanelInfo,
     ) -> crate::ui::settings::SettingsModalLayout {
-        let (width, height, cell_width, cell_height) = self
-            .renderer
-            .as_ref()
-            .map(|renderer| {
-                let (width, height) = renderer.window_size();
-                (
-                    width as f32,
-                    height as f32,
-                    renderer.cell_width(),
-                    renderer.cell_height(),
-                )
-            })
-            .unwrap_or((800.0, 600.0, 8.0, 16.0));
+        let UiMetrics {
+            width,
+            height,
+            cell_width,
+            cell_height,
+            ..
+        } = self.ui_metrics();
         crate::ui::settings::SettingsModalLayout::calculate(
             width,
             height,
@@ -2410,20 +2374,13 @@ impl App {
         &self,
         info: &crate::session::panel::SessionPanelInfo,
     ) -> crate::session::panel::SessionPanelLayout {
-        let (width, height, top, cell_width, cell_height) = self
-            .renderer
-            .as_ref()
-            .map(|renderer| {
-                let (width, height) = renderer.window_size();
-                (
-                    width as f32,
-                    height as f32,
-                    renderer.tab_bar_height(),
-                    renderer.cell_width(),
-                    renderer.cell_height(),
-                )
-            })
-            .unwrap_or((800.0, 600.0, 0.0, 8.0, 16.0));
+        let UiMetrics {
+            width,
+            height,
+            tab_bar_height: top,
+            cell_width,
+            cell_height,
+        } = self.ui_metrics();
         crate::session::panel::SessionPanelLayout::calculate(
             width,
             height,
@@ -2441,19 +2398,13 @@ impl App {
         &self,
         info: &crate::ui::command_palette::PaletteInfo,
     ) -> crate::ui::command_palette::PaletteLayout {
-        let (width, height, cell_width, cell_height) = self
-            .renderer
-            .as_ref()
-            .map(|renderer| {
-                let (width, height) = renderer.window_size();
-                (
-                    width as f32,
-                    height as f32,
-                    renderer.cell_width(),
-                    renderer.cell_height(),
-                )
-            })
-            .unwrap_or((800.0, 600.0, 8.0, 16.0));
+        let UiMetrics {
+            width,
+            height,
+            cell_width,
+            cell_height,
+            ..
+        } = self.ui_metrics();
         crate::ui::command_palette::PaletteLayout::calculate(
             width,
             height,
@@ -2644,19 +2595,17 @@ impl App {
             return snapshot;
         }
         // Toasts sit in the terminal area's corner, clear of the dock.
-        let (window_width, window_height, cell_width, cell_height) = self
+        let UiMetrics {
+            width,
+            height: window_height,
+            cell_width,
+            cell_height,
+            ..
+        } = self.ui_metrics();
+        let window_width = self
             .renderer
             .as_ref()
-            .map(|renderer| {
-                let (_, height) = renderer.window_size();
-                (
-                    renderer.content_right(),
-                    height as f32,
-                    renderer.cell_width(),
-                    renderer.cell_height(),
-                )
-            })
-            .unwrap_or((800.0, 600.0, 8.0, 16.0));
+            .map_or(width, crate::renderer::Renderer::content_right);
         let placements = crate::ui::toast::toast_layout(
             &toasts,
             window_width,
@@ -3106,19 +3055,13 @@ impl App {
     }
 
     fn cellar_accessibility_layout(&mut self) -> crate::harvest::CellarLayout {
-        let (width, height, cell_width, cell_height) = self
-            .renderer
-            .as_ref()
-            .map(|renderer| {
-                let (width, height) = renderer.window_size();
-                (
-                    width as f32,
-                    height as f32,
-                    renderer.cell_width(),
-                    renderer.cell_height(),
-                )
-            })
-            .unwrap_or((800.0, 600.0, 8.0, 16.0));
+        let UiMetrics {
+            width,
+            height,
+            cell_width,
+            cell_height,
+            ..
+        } = self.ui_metrics();
         let animation = self
             .harvest
             .as_ref()
