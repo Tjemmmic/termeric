@@ -8,8 +8,6 @@ use winit::keyboard::ModifiersState;
 pub struct MouseState {
     /// Current selection being made
     pub selection: Option<Selection>,
-    /// Last mouse position in grid coordinates
-    pub last_position: Option<Point>,
     /// Number of rapid clicks (for double/triple click detection)
     pub click_count: u32,
     /// Time of last click (for double/triple click detection)
@@ -28,7 +26,6 @@ impl MouseState {
     pub fn new() -> Self {
         Self {
             selection: None,
-            last_position: None,
             click_count: 0,
             last_click_time: std::time::Instant::now(),
             last_click_pos: None,
@@ -83,8 +80,6 @@ impl MouseState {
 
     /// Handle mouse movement (drag)
     pub fn handle_move(&mut self, position: Point) -> Option<Selection> {
-        self.last_position = Some(position);
-
         if let Some(ref mut selection) = self.selection {
             selection.update(position);
             return Some(selection.clone());

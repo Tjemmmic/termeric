@@ -946,9 +946,6 @@ impl App {
         if self.mouse_pressed {
             self.extend_native_selection(grid_pos);
             self.request_redraw(RedrawReason::PointerInput);
-        } else {
-            // Just update position tracking when not dragging
-            self.mouse_state.last_position = Some(grid_pos);
         }
     }
 
