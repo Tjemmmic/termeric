@@ -305,6 +305,14 @@ impl Application {
     pub fn new(launch: LaunchPlan) -> Result<Self> {
         let (config, warning) = Config::load_for_startup();
         let state = super::state::AppState::load();
+        // Automatic archives from earlier exits are kept only while the
+        // startup state can still restore them.
+        let mut restorable = state.restore_workspace_ids();
+        restorable.extend(state.last_workspace_id.clone());
+        let pruned = crate::workspace::prune_automatic_workspaces(&restorable);
+        if pruned > 0 {
+            log::info!("Pruned {pruned} automatic workspace archives no longer restorable");
+        }
         let automatic_restore = launch == LaunchPlan::default()
             && config.session.enabled
             && config.session.auto_restore

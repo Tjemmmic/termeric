@@ -37,13 +37,13 @@ Each save creates a new workspace named after the active tab: with a tab titled 
 
 Opening a workspace replaces the tabs in the current window. The processes in those tabs are closed, so save first if you want to keep what's there.
 
-When you quit, the window is saved back into the workspace it last opened or saved. Opening "Project A", working for a while, and quitting updates "Project A".
+When you quit, the window is saved back into the workspace it last opened or saved. Opening "Project A", working for a while, and quitting updates "Project A". A window that never opened or saved a workspace is saved as "Last workspace" instead. Termeric keeps only the "Last workspace" entries from your most recent quit, the ones it can reopen; renaming one keeps it for good.
 
 ## Restore windows when Termeric starts
 
 With **Auto Restore Workspace** on, starting Termeric with no arguments reopens every window that was open when you last quit, each with its own workspace. Starting with explicit options such as `--tab`, `--command`, or `--workspace` skips the automatic restore.
 
-If you close one window while others stay open, that window is not reopened next time. If a saved workspace can't be restored at startup, Termeric opens a normal shell and shows an error. With `--workspace`, a workspace that can't be restored stops Termeric from starting instead.
+If you close one window while others stay open, that window is not reopened next time, and unless it belongs to a workspace you opened or saved, nothing is saved for it. If a saved workspace can't be restored at startup, Termeric opens a normal shell and shows an error. With `--workspace`, a workspace that can't be restored stops Termeric from starting instead.
 
 Automatic saving happens when a window closes with tabs still open. If you end the last shell in a window (for example by typing `exit`), the window closes with nothing left to save, and its workspace keeps whatever was saved before.
 

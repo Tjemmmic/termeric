@@ -11558,6 +11558,41 @@ fn headless_font_settings_preserve_order_and_apply_without_a_window() {
     assert!(app.config.font.fallback.is_empty());
 }
 
+#[cfg(unix)]
+#[test]
+fn a_window_closed_beside_others_leaves_no_automatic_archive() {
+    let temp = tempfile::tempdir().unwrap();
+    crate::workspace::set_test_workspaces_base_dir(Some(temp.path().join("workspaces")));
+    AppState::set_test_state_path(Some(temp.path().join("state/state.json")));
+    {
+        let mut config = Config::default();
+        config.shell.program = Some("/bin/sh".into());
+        config.shell.args = vec!["-c".into(), "sleep 30".into()];
+        let mut app = App::new_headless(config).unwrap();
+        app.automatic_persistence = true;
+        app.allow_auto_restore = false;
+        app.init_tabs().unwrap();
+
+        app.retain_workspace_on_exit = false;
+        app.auto_save_workspace();
+        assert!(crate::workspace::list_workspaces().is_empty());
+
+        // The last window's archive is kept, marked as automatic.
+        app.retain_workspace_on_exit = true;
+        app.auto_save_workspace();
+        let listed = crate::workspace::list_workspaces();
+        assert_eq!(listed.len(), 1);
+        assert!(
+            crate::workspace::load_workspace(&listed[0].id)
+                .unwrap()
+                .workspace
+                .automatic
+        );
+    }
+    crate::workspace::set_test_workspaces_base_dir(None);
+    AppState::set_test_state_path(None);
+}
+
 #[test]
 fn only_agent_settings_reregister_plugins() {
     let mut app = App::new_headless(Config::default()).unwrap();

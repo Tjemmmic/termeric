@@ -148,28 +148,7 @@ pub fn load_workspace(id: &str) -> Result<WorkspaceLoadReport> {
 }
 
 pub fn load_workspace_from_dir(dir: &Path) -> Result<WorkspaceLoadReport> {
-    ensure_real_directory(dir, false, "workspace")?;
-    let primary = dir.join("workspace.toml");
-    let backup = dir.join("workspace.toml.bak");
-    let (mut workspace, recovered_from_backup) = match parse_workspace(&primary) {
-        Ok(workspace) => (workspace, false),
-        Err(primary_error) => match parse_workspace(&backup) {
-            Ok(workspace) => (workspace, true),
-            Err(backup_error) => {
-                return Err(primary_error).with_context(|| {
-                    format!("workspace backup could not be recovered either: {backup_error:#}")
-                });
-            }
-        },
-    };
-
-    migrate_workspace(&mut workspace)?;
-    let mut warnings = Vec::new();
-    recover_usable_tabs(&mut workspace, &mut warnings);
-    if workspace.tabs.is_empty() {
-        anyhow::bail!("workspace contains no recoverable tabs");
-    }
-
+    let (mut workspace, recovered_from_backup, mut warnings) = read_workspace_metadata(dir)?;
     let mut loaded_scrollback_bytes = 0usize;
     for tab in &mut workspace.tabs {
         for pane in &mut tab.panes {
@@ -207,6 +186,34 @@ pub fn load_workspace_from_dir(dir: &Path) -> Result<WorkspaceLoadReport> {
     })
 }
 
+/// The archive's metadata, without reading any pane's scrollback: enough to
+/// list or prune workspaces cheaply.
+fn read_workspace_metadata(dir: &Path) -> Result<(WorkspaceSnapshot, bool, Vec<String>)> {
+    ensure_real_directory(dir, false, "workspace")?;
+    let primary = dir.join("workspace.toml");
+    let backup = dir.join("workspace.toml.bak");
+    let (mut workspace, recovered_from_backup) = match parse_workspace(&primary) {
+        Ok(workspace) => (workspace, false),
+        Err(primary_error) => match parse_workspace(&backup) {
+            Ok(workspace) => (workspace, true),
+            Err(backup_error) => {
+                return Err(primary_error).with_context(|| {
+                    format!("workspace backup could not be recovered either: {backup_error:#}")
+                });
+            }
+        },
+    };
+
+    migrate_workspace(&mut workspace)?;
+    let mut warnings = Vec::new();
+    recover_usable_tabs(&mut workspace, &mut warnings);
+    if workspace.tabs.is_empty() {
+        anyhow::bail!("workspace contains no recoverable tabs");
+    }
+
+    Ok((workspace, recovered_from_backup, warnings))
+}
+
 pub fn list_workspaces() -> Vec<WorkspaceListEntry> {
     let Some(base) = workspaces_base_dir() else {
         return Vec::new();
@@ -219,18 +226,13 @@ pub fn list_workspaces() -> Vec<WorkspaceListEntry> {
         .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
         .filter_map(|entry| {
             let path = entry.path();
-            match load_workspace_from_dir(&path) {
-                Ok(report) => Some(WorkspaceListEntry {
-                    id: report.workspace.id,
-                    name: report.workspace.name,
-                    updated_at: report.workspace.updated_at,
-                    tab_count: report.workspace.tabs.len(),
-                    pane_count: report
-                        .workspace
-                        .tabs
-                        .iter()
-                        .map(|tab| tab.panes.len())
-                        .sum(),
+            match read_workspace_metadata(&path) {
+                Ok((workspace, ..)) => Some(WorkspaceListEntry {
+                    pane_count: workspace.tabs.iter().map(|tab| tab.panes.len()).sum(),
+                    tab_count: workspace.tabs.len(),
+                    id: workspace.id,
+                    name: workspace.name,
+                    updated_at: workspace.updated_at,
                     warning: None,
                 }),
                 Err(error) => {
@@ -252,11 +254,40 @@ pub fn list_workspaces() -> Vec<WorkspaceListEntry> {
     workspaces
 }
 
+/// Delete the automatic archives (each saved when a window closed) that
+/// `keep` no longer names. Workspaces the person saved or renamed, and
+/// archives that can't be read, are never touched. Returns how many went.
+pub fn prune_automatic_workspaces(keep: &[String]) -> usize {
+    let Some(base) = workspaces_base_dir() else {
+        return 0;
+    };
+    let Ok(entries) = fs::read_dir(base) else {
+        return 0;
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| read_workspace_metadata(&entry.path()).ok())
+        .filter(|(workspace, ..)| workspace.automatic && !keep.contains(&workspace.id))
+        .filter(|(workspace, ..)| match delete_workspace(&workspace.id) {
+            Ok(()) => true,
+            Err(error) => {
+                log::warn!(
+                    "Could not prune automatic workspace {}: {error:#}",
+                    workspace.id
+                );
+                false
+            }
+        })
+        .count()
+}
+
 pub fn rename_workspace(id: &str, new_name: &str) -> Result<()> {
     validate_workspace_name(new_name)?;
     let dir = workspace_dir(id)?;
     let mut report = load_workspace_from_dir(&dir)?;
     report.workspace.name = new_name.trim().to_string();
+    // Naming a workspace makes it the person's; it is never pruned.
+    report.workspace.automatic = false;
     // A recovered archive has a corrupt/missing primary and one known-good
     // backup. Replacing that backup with the bad primary before installing the
     // repaired metadata would leave no recovery point if the write is
@@ -908,6 +939,67 @@ mod tests {
             assert!(rename_workspace("workspace-1", "../bad\nname").is_err());
             delete_workspace("workspace-1").unwrap();
             assert!(list_workspaces().is_empty());
+        });
+        set_test_workspaces_base_dir(None);
+        result.unwrap();
+    }
+
+    #[test]
+    fn only_unrestorable_automatic_archives_are_pruned() {
+        let temp = tempfile::tempdir().unwrap();
+        set_test_workspaces_base_dir(Some(temp.path().to_path_buf()));
+        let result = std::panic::catch_unwind(|| {
+            for (id, automatic) in [
+                ("workspace-old", true),
+                ("workspace-last", true),
+                ("workspace-renamed", true),
+                ("workspace-named", false),
+            ] {
+                let mut workspace = sample_workspace();
+                workspace.id = id.into();
+                workspace.automatic = automatic;
+                save_workspace(&mut workspace).unwrap();
+            }
+            rename_workspace("workspace-renamed", "Mine now").unwrap();
+
+            assert_eq!(prune_automatic_workspaces(&["workspace-last".into()]), 1);
+            let mut kept: Vec<_> = list_workspaces()
+                .into_iter()
+                .map(|entry| entry.id)
+                .collect();
+            kept.sort();
+            assert_eq!(
+                kept,
+                ["workspace-last", "workspace-named", "workspace-renamed"]
+            );
+            assert_eq!(prune_automatic_workspaces(&["workspace-last".into()]), 0);
+        });
+        set_test_workspaces_base_dir(None);
+        result.unwrap();
+    }
+
+    #[test]
+    fn listing_reads_metadata_without_touching_scrollback() {
+        let temp = tempfile::tempdir().unwrap();
+        set_test_workspaces_base_dir(Some(temp.path().to_path_buf()));
+        let result = std::panic::catch_unwind(|| {
+            let mut workspace = sample_workspace();
+            workspace.tabs[0].panes[0].scrollback_lines = vec!["history".into()];
+            save_workspace(&mut workspace).unwrap();
+            let scrollback = workspace_dir(&workspace.id).unwrap().join(
+                workspace.tabs[0].panes[0]
+                    .scrollback_file
+                    .as_deref()
+                    .expect("saved scrollback"),
+            );
+            // Loading notices a broken scrollback file; listing never opens one.
+            fs::remove_file(&scrollback).unwrap();
+            fs::create_dir(&scrollback).unwrap();
+            assert!(!load_workspace(&workspace.id).unwrap().warnings.is_empty());
+            let listed = list_workspaces();
+            assert_eq!(listed.len(), 1);
+            assert!(listed[0].warning.is_none());
+            assert_eq!(listed[0].pane_count, workspace.tabs[0].panes.len());
         });
         set_test_workspaces_base_dir(None);
         result.unwrap();

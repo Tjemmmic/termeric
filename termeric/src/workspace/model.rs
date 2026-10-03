@@ -15,6 +15,11 @@ pub struct WorkspaceSnapshot {
     pub active_tab: usize,
     #[serde(default)]
     pub config: WorkspaceConfigReference,
+    /// Saved automatically when a window closed, not by the person. Only the
+    /// archives the startup state still names are kept; saving or renaming
+    /// one makes it the person's.
+    #[serde(default)]
+    pub automatic: bool,
     pub tabs: Vec<WorkspaceTabSnapshot>,
 }
 
@@ -35,6 +40,7 @@ impl WorkspaceSnapshot {
             updated_at: now,
             active_tab: 0,
             config: WorkspaceConfigReference::default(),
+            automatic: false,
             tabs,
         }
     }
@@ -412,6 +418,7 @@ pub(crate) mod tests {
                 theme: Some("turmeric".into()),
                 shell_program: Some("/bin/bash".into()),
             },
+            automatic: false,
             tabs: vec![WorkspaceTabSnapshot {
                 id: 7,
                 title: "nested".into(),

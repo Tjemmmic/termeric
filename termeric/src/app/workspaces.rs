@@ -55,6 +55,11 @@ impl App {
         {
             return;
         }
+        // A window closed while others stay open is not restored. Unless it
+        // belongs to a saved workspace, an archive of it would only pile up.
+        if !self.retain_workspace_on_exit && self.current_workspace_id.is_none() {
+            return;
+        }
         let existing = self
             .current_workspace_id
             .as_deref()
@@ -71,9 +76,13 @@ impl App {
                 return;
             }
         };
-        if let Some(existing) = existing {
-            workspace.id = existing.id;
-            workspace.created_at = existing.created_at;
+        match existing {
+            Some(existing) => {
+                workspace.id = existing.id;
+                workspace.created_at = existing.created_at;
+                workspace.automatic = existing.automatic;
+            }
+            None => workspace.automatic = true,
         }
         match crate::workspace::save_workspace(&mut workspace) {
             Ok(_) => {
