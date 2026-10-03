@@ -155,7 +155,6 @@ mod tests {
     use crate::session::Session;
     use std::io::Write;
 
-    #[cfg(unix)]
     #[test]
     fn legacy_metadata_staging_symlink_does_not_modify_target() {
         let dir = tempfile::tempdir().unwrap();
@@ -166,7 +165,6 @@ mod tests {
         assert_eq!(fs::read_to_string(target).unwrap(), "must remain unchanged");
     }
 
-    #[cfg(unix)]
     #[test]
     fn legacy_scrollback_destination_symlink_does_not_modify_target() {
         let root = tempfile::tempdir().unwrap();

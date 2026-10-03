@@ -207,7 +207,6 @@ updated_at = "2020-01-01T00:00:00Z"
         assert!(format!("{:#}", oversized.unwrap_err()).contains("limit"));
     }
 
-    #[cfg(unix)]
     #[test]
     fn named_restore_reports_a_broken_metadata_symlink_as_an_error() {
         let root = tempfile::tempdir().unwrap();

@@ -169,7 +169,6 @@ fn export_verified(
     // is atomically installed. No existing destination is ever reused.
     let mut builder = tempfile::Builder::new();
     builder.prefix("transcript-export-");
-    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         builder.permissions(fs::Permissions::from_mode(0o700));
@@ -233,7 +232,6 @@ fn export_verified(
 fn create_private(path: &Path) -> io::Result<File> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
-    #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
@@ -254,7 +252,6 @@ fn copy_verified_prefix(
     }
     let mut options = OpenOptions::new();
     options.read(true);
-    #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
         options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW | libc::O_CLOEXEC);
@@ -389,7 +386,6 @@ mod tests {
         super::super::export::render_markdown(&mut io::Cursor::new(raw), &mut expected, &|| Ok(()))
             .unwrap();
         assert_eq!(fs::read(&result.markdown).unwrap(), expected);
-        #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(
@@ -605,7 +601,6 @@ mod tests {
         assert_eq!(counter.load(Ordering::Acquire), 0);
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn fifo_source_is_rejected_without_waiting_for_a_writer() {
         use std::os::unix::ffi::OsStrExt;

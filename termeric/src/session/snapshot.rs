@@ -158,34 +158,29 @@ fn read_payload(mut file: File, session: &Session) -> Result<Vec<String>> {
 }
 
 fn private_options() -> OpenOptions {
+    use std::os::unix::fs::OpenOptionsExt;
     let mut options = OpenOptions::new();
-    options.read(true).write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC);
-    }
+    options
+        .read(true)
+        .write(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC);
     options
 }
 
 fn check_owned(file: &File) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
     let metadata = file.metadata()?;
     ensure!(
         metadata.is_file(),
         "snapshot staging/lock must be a regular file"
     );
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        ensure!(
-            metadata.uid() == unsafe { libc::geteuid() }
-                && metadata.mode() & 0o077 == 0
-                && metadata.nlink() == 1,
-            "snapshot staging/lock must be private, owned, and not hard-linked"
-        );
-    }
+    ensure!(
+        metadata.uid() == unsafe { libc::geteuid() }
+            && metadata.mode() & 0o077 == 0
+            && metadata.nlink() == 1,
+        "snapshot staging/lock must be private, owned, and not hard-linked"
+    );
     Ok(())
 }
 
@@ -208,10 +203,6 @@ impl Drop for WriterLock {
 
 fn writer_lock(directory: &Path) -> Result<WriterLock> {
     let path = directory.join(LOCK);
-    #[cfg(not(unix))]
-    if fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
-        anyhow::bail!("snapshot lock must not be a symlink");
-    }
     let file = private_options().create(true).truncate(false).open(path)?;
     check_owned(&file)?;
     ensure!(
@@ -318,7 +309,6 @@ fn save_with_hook(
     pending.as_file().sync_all()?;
     before_commit()?;
     pending.persist(&destination).map_err(|error| error.error)?;
-    #[cfg(unix)]
     if let Err(error) = File::open(directory).and_then(|file| file.sync_all()) {
         log::warn!("Snapshot published but directory sync failed: {error}");
     }
@@ -449,7 +439,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn reserved_paths_never_follow_symlinks_and_committed_file_is_private() {
         use std::os::unix::fs::{PermissionsExt, symlink};
@@ -617,7 +606,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(target_os = "linux")]
     fn writer_scope_ends_lock_even_with_duplicate_descriptor_alive() {
         use std::os::unix::fs::MetadataExt;
         let dir = tempfile::tempdir().unwrap();
@@ -642,7 +630,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(target_os = "linux")]
     fn writer_scope_unlocks_after_error_and_unwind_with_duplicate_alive() {
         for panic in [false, true] {
             let dir = tempfile::tempdir().unwrap();

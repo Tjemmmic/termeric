@@ -598,7 +598,6 @@ mod tests {
         result.unwrap();
     }
 
-    #[cfg(unix)]
     #[test]
     fn workspace_and_atomic_temporary_symlinks_are_never_followed() {
         use std::os::unix::fs::symlink;
@@ -638,7 +637,6 @@ mod tests {
         assert_eq!(fs::read_to_string(&final_target).unwrap(), "do-not-replace");
     }
 
-    #[cfg(unix)]
     #[test]
     fn metadata_and_scrollback_symlinks_fail_closed_without_disclosing_targets() {
         use std::os::unix::fs::symlink;
@@ -668,7 +666,6 @@ mod tests {
         assert!(load_workspace_from_dir(temp.path()).is_err());
     }
 
-    #[cfg(unix)]
     #[test]
     fn delete_refuses_a_symlinked_workspace_before_touching_its_target() {
         use std::os::unix::fs::symlink;

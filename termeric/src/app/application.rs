@@ -4252,9 +4252,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn control_launch_tab_targets_one_stable_window_and_returns_its_tab_id() {
-        if !std::path::Path::new("/bin/sh").exists() {
-            return;
-        }
         let mut application =
             Application::from_config(Config::default(), None, LaunchPlan::default()).unwrap();
         application.pending.clear();
@@ -4447,9 +4444,6 @@ mod tests {
     fn control_launch_window_prepares_one_exact_local_command_and_real_pty() {
         use std::os::unix::fs::PermissionsExt;
 
-        if !std::path::Path::new("/bin/sh").exists() {
-            return;
-        }
         let temp = tempfile::tempdir().unwrap();
         let helper = temp.path().join("capture-window-argv.sh");
         std::fs::write(
