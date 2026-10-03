@@ -1984,9 +1984,20 @@ mod tests {
         // Escape clears a search before it closes the menu; Backspace edits it.
         open(&mut app);
         key(&mut app, character("z"), Some("z"));
-        key(&mut app, character("x"), Some("x"));
+        key(&mut app, character("e\u{301}"), Some("e\u{301}"));
         key(&mut app, Key::Named(NamedKey::Backspace), None);
         assert_eq!(app.agent_view.state.menu.as_ref().unwrap().filter, "z");
+        // The search is one bounded line.
+        key(&mut app, character("\u{2028}"), Some("\u{2028}"));
+        for _ in 0..200 {
+            key(&mut app, character("x"), Some("x"));
+        }
+        assert_eq!(
+            app.agent_view.state.menu.as_ref().unwrap().filter,
+            format!("z{}", "x".repeat(127))
+        );
+        key(&mut app, Key::Named(NamedKey::Escape), None);
+        key(&mut app, character("z"), Some("z"));
         key(&mut app, Key::Named(NamedKey::Escape), None);
         let menu = app.agent_view.state.menu.as_ref().unwrap();
         assert!(menu.filter.is_empty());

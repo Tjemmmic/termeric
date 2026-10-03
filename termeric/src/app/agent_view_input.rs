@@ -2,6 +2,7 @@
 
 use std::time::Instant;
 
+use unicode_segmentation::UnicodeSegmentation;
 use winit::keyboard::{Key, NamedKey};
 
 use super::*;
@@ -29,6 +30,8 @@ const DENIED_HINT: &str = "Say what to do instead…";
 const PLAN_HINT: &str = "Say what to change in the plan…";
 const ANSWER_HINT: &str = "Type your answer…";
 
+/// A long menu's search keeps at most this many characters.
+const MAX_MENU_FILTER_CHARS: usize = 128;
 impl App {
     // ── Actions ──────────────────────────────────────────────────────────
 
@@ -743,7 +746,8 @@ impl App {
             searchable
                 && !control
                 && !text.is_empty()
-                && text.chars().all(|character| !character.is_control())
+                && !text.chars().any(crate::safe_text::breaks_single_line)
+                && menu.filter.chars().count() + text.chars().count() <= MAX_MENU_FILTER_CHARS
         });
         match key {
             Key::Named(NamedKey::Escape) if !menu.filter.is_empty() => {
@@ -760,7 +764,11 @@ impl App {
             }
             Key::Named(NamedKey::Backspace) if searchable => {
                 let mut filter = menu.filter.clone();
-                filter.pop();
+                let last = filter
+                    .grapheme_indices(true)
+                    .next_back()
+                    .map_or(0, |(start, _)| start);
+                filter.truncate(last);
                 self.set_agent_view_menu_filter(filter);
             }
             Key::Named(NamedKey::Enter) => {
