@@ -460,42 +460,10 @@ impl Renderer {
             return;
         };
 
-        // ── Menu surface: soft shadow, hairline border ──
         let scale = self.scale_factor;
         let px = |logical: f32| (logical * scale).round().max(1.0);
         let fade = |color: [f32; 4]| scale_alpha(color, anim);
-        let radius = px(8.0);
-        self.rect_pipeline.push_rounded_rect(
-            rect.bounds.x,
-            rect.bounds.y + px(2.0),
-            rect.bounds.width,
-            rect.bounds.height,
-            [0.0, 0.0, 0.0, 0.25 * anim],
-            radius,
-        );
-        let line = px(1.0);
-        self.rect_pipeline.push_rounded_rect(
-            rect.bounds.x,
-            rect.bounds.y,
-            rect.bounds.width,
-            rect.bounds.height,
-            fade(self.ui.menu_border),
-            radius,
-        );
-        let surface = [
-            self.ui.menu_bg[0],
-            self.ui.menu_bg[1],
-            self.ui.menu_bg[2],
-            anim,
-        ];
-        self.rect_pipeline.push_rounded_rect(
-            rect.bounds.x + line,
-            rect.bounds.y + line,
-            rect.bounds.width - line * 2.0,
-            rect.bounds.height - line * 2.0,
-            surface,
-            radius - line,
-        );
+        self.push_menu_surface(rect.bounds, scale, anim);
 
         // ── Options in the UI face ──
         let size = self.ui_label_px();

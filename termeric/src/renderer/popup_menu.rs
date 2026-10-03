@@ -53,15 +53,17 @@ impl PopupMenuInfo {
 }
 
 impl Renderer {
-    pub(super) fn build_popup_menu(&mut self, menu: &PopupMenuInfo) {
-        let scale = menu.layout.scale;
+    /// The surface every anchored menu sits on (popup menus and the Settings
+    /// dropdown): a soft two-layer shadow, a hairline border, and the menu
+    /// background, all faded by `opacity`.
+    pub(super) fn push_menu_surface(&mut self, bounds: Bounds, scale: f32, opacity: f32) {
         let px = |logical: f32| (logical * scale).round().max(1.0);
         let Bounds {
             x,
             y,
             width,
             height,
-        } = menu.layout.panel;
+        } = bounds;
         let radius = px(8.0);
         for (spread, alpha) in [(px(2.0), 0.16), (px(8.0), 0.08)] {
             self.rect_pipeline.push_rounded_rect(
@@ -69,21 +71,34 @@ impl Renderer {
                 y - spread / 2.0 + px(2.0),
                 width + spread * 2.0,
                 height + spread * 2.0,
-                [0.0, 0.0, 0.0, alpha],
+                [0.0, 0.0, 0.0, alpha * opacity],
                 radius + spread,
             );
         }
         let line = px(1.0);
-        self.rect_pipeline
-            .push_rounded_rect(x, y, width, height, self.ui.menu_border, radius);
+        self.rect_pipeline.push_rounded_rect(
+            x,
+            y,
+            width,
+            height,
+            scale_alpha(self.ui.menu_border, opacity),
+            radius,
+        );
         self.rect_pipeline.push_rounded_rect(
             x + line,
             y + line,
             width - line * 2.0,
             height - line * 2.0,
-            self.ui.menu_bg,
+            scale_alpha(self.ui.menu_bg, opacity),
             radius - line,
         );
+    }
+
+    pub(super) fn build_popup_menu(&mut self, menu: &PopupMenuInfo) {
+        let scale = menu.layout.scale;
+        let px = |logical: f32| (logical * scale).round().max(1.0);
+        self.push_menu_surface(menu.layout.panel, scale, 1.0);
+        let line = px(1.0);
 
         let size = self.ui_label_px();
         let inset = px(4.0);
