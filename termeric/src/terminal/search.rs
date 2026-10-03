@@ -19,9 +19,21 @@ fn valid_query_text(text: &str) -> bool {
     text.len() <= MAX_SEARCH_QUERY_BYTES && !text.chars().any(crate::safe_text::breaks_single_line)
 }
 
+/// One logical line: a row and the rows it soft-wraps into.
 struct SearchLine {
     text: String,
-    byte_to_col: Option<Vec<usize>>,
+    first_row: i32,
+    /// Each cell's first byte, row, and columns. Absent while bytes map one
+    /// to one onto the first row's columns, the common case.
+    cells: Option<Vec<LineCell>>,
+}
+
+#[derive(Clone, Copy)]
+struct LineCell {
+    byte: usize,
+    row: i32,
+    start_col: usize,
+    end_col: usize,
 }
 
 #[derive(Debug)]
@@ -43,6 +55,8 @@ struct PendingSearch {
     history_len: usize,
     visible_rows: usize,
     rows: SearchRows,
+    /// Last row of the latest logical line searched; rows up to it are done.
+    searched_through: Option<i32>,
 }
 
 impl PendingSearch {
@@ -59,6 +73,7 @@ impl PendingSearch {
                 },
                 |rows| SearchRows::Candidates { rows, next: 0 },
             ),
+            searched_through: None,
         }
     }
 
@@ -107,62 +122,132 @@ impl PendingSearch {
 }
 
 impl SearchLine {
-    fn from_row(row: &termeric_core::RowView<'_>, cols: usize) -> Self {
-        let mut text = String::with_capacity(cols);
-        let mut byte_to_col: Option<Vec<usize>> = None;
-        for col in 0..cols {
-            let Some(cell) = row.get(col) else { continue };
-            if cell.is_wide_char_spacer()
-                || (cell.multicell.is_present() && !cell.multicell.is_leader())
-            {
-                continue;
-            }
-            let start = text.len();
-            match &cell.content {
-                CellContent::Empty => text.push(' '),
-                CellContent::Char(character) => text.push(*character),
-                CellContent::Grapheme(grapheme) => text.push_str(grapheme),
-            }
-            let end = text.len();
-            if byte_to_col.is_none() && (start != col || end - start != cell.width()) {
-                byte_to_col = Some((0..=start).collect());
-            }
-            if let Some(byte_to_col) = &mut byte_to_col {
-                byte_to_col.resize(end + 1, col);
-                byte_to_col[start] = col;
-                byte_to_col[end] = col + cell.width();
-            }
+    /// The logical line holding `row`: back to the row after the last hard
+    /// break and on through the rows it wraps into, never outside `scope`.
+    fn around(grid: &Grid, row: i32, scope: Option<&RangeInclusive<i32>>) -> Self {
+        let first_stored = -(grid.scrollback_len().min(i32::MAX as usize) as i32);
+        let first_allowed = scope.map_or(first_stored, |scope| (*scope.start()).max(first_stored));
+        let last_allowed = scope.map_or(i32::MAX, |scope| *scope.end());
+        let mut first = row;
+        while first > first_allowed
+            && grid
+                .row_at_offset(first - 1)
+                .is_some_and(|previous| previous.is_wrapped())
+        {
+            first -= 1;
         }
-        Self { text, byte_to_col }
+        let mut line = Self {
+            text: String::new(),
+            first_row: first,
+            cells: None,
+        };
+        let mut current = first;
+        while let Some(view) = grid.row_at_offset(current) {
+            line.push_row(current, &view);
+            if !view.is_wrapped() || current >= last_allowed {
+                break;
+            }
+            current += 1;
+        }
+        line
     }
 
-    fn columns_for(&self, start: usize, end: usize) -> (usize, usize) {
-        self.byte_to_col
+    fn last_row(&self) -> i32 {
+        self.cells
             .as_ref()
-            .map_or((start, end), |byte_to_col| {
-                (
-                    byte_to_col[start.min(byte_to_col.len() - 1)],
-                    byte_to_col[end.min(byte_to_col.len() - 1)],
-                )
-            })
+            .and_then(|cells| cells.last())
+            .map_or(self.first_row, |cell| cell.row)
+    }
+
+    fn push_row(&mut self, row_index: i32, row: &termeric_core::RowView<'_>) {
+        for col in row.reflow_columns() {
+            let Some(cell) = row.get(col) else { continue };
+            if cell.multicell.is_present() && !cell.multicell.is_leader() {
+                continue;
+            }
+            let start = self.text.len();
+            match &cell.content {
+                CellContent::Empty => self.text.push(' '),
+                CellContent::Char(character) => self.text.push(*character),
+                CellContent::Grapheme(grapheme) => self.text.push_str(grapheme),
+            }
+            let width = cell.width();
+            let linear = row_index == self.first_row
+                && start == col
+                && self.text.len() == start + 1
+                && width == 1;
+            if !linear && self.cells.is_none() {
+                self.cells = Some(
+                    (0..start)
+                        .map(|byte| LineCell {
+                            byte,
+                            row: self.first_row,
+                            start_col: byte,
+                            end_col: byte + 1,
+                        })
+                        .collect(),
+                );
+            }
+            if let Some(cells) = &mut self.cells {
+                cells.push(LineCell {
+                    byte: start,
+                    row: row_index,
+                    start_col: col,
+                    end_col: col + width,
+                });
+            }
+        }
+    }
+
+    /// The cells under bytes `start..end` of the text.
+    fn span(&self, start: usize, end: usize) -> SearchMatch {
+        let Some(cells) = &self.cells else {
+            return SearchMatch {
+                row: self.first_row,
+                start_col: start,
+                end_row: self.first_row,
+                end_col: end,
+            };
+        };
+        let cell_at =
+            |byte: usize| cells[cells.partition_point(|cell| cell.byte <= byte).max(1) - 1];
+        let first = cell_at(start);
+        if end <= start {
+            return SearchMatch {
+                row: first.row,
+                start_col: first.start_col,
+                end_row: first.row,
+                end_col: first.start_col,
+            };
+        }
+        let last = cell_at(end - 1);
+        SearchMatch {
+            row: first.row,
+            start_col: first.start_col,
+            end_row: last.row,
+            end_col: last.end_col,
+        }
     }
 }
 
-/// A search match in the terminal
+/// A search match in the terminal. It continues across soft-wrapped rows,
+/// from `(row, start_col)` up to `(end_row, end_col)`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SearchMatch {
-    /// Row of the match (negative for scrollback, 0+ for visible grid)
+    /// Row of the first matched cell (negative for scrollback, 0+ for visible grid)
     pub row: i32,
-    /// Starting column
+    /// Column of the first matched cell
     pub start_col: usize,
-    /// Ending column (exclusive)
+    /// Row of the last matched cell
+    pub end_row: i32,
+    /// Column just past the last matched cell, on `end_row`
     pub end_col: usize,
 }
 
 impl SearchMatch {
     /// Check if a position is within this match
     pub fn contains(&self, row: i32, col: usize) -> bool {
-        self.row == row && col >= self.start_col && col < self.end_col
+        (row, col) >= (self.row, self.start_col) && (row, col) < (self.end_row, self.end_col)
     }
 }
 
@@ -641,17 +726,25 @@ impl Search {
         let Some(mut pending) = self.pending_search.take() else {
             return false;
         };
-        for _ in 0..max_rows {
+        let mut rows_read = 0;
+        while rows_read < max_rows {
             let Some(row_index) = pending.next_row() else {
                 break;
             };
-            if !self.row_is_in_scope(row_index) {
+            rows_read += 1;
+            if pending
+                .searched_through
+                .is_some_and(|through| row_index <= through)
+                || !self.row_is_in_scope(row_index)
+                || grid.row_at_offset(row_index).is_none()
+            {
                 continue;
             }
-            if let Some(row) = grid.row_at_offset(row_index) {
-                let line = SearchLine::from_row(&row, grid.cols());
-                self.find_matches_in_line(&line, row_index);
-            }
+            let line = SearchLine::around(grid, row_index, self.row_scope.as_ref());
+            let last_row = line.last_row();
+            rows_read += usize::try_from(last_row - row_index).unwrap_or(0);
+            pending.searched_through = Some(last_row);
+            self.find_matches_in_line(&line);
         }
 
         if pending.is_complete() {
@@ -729,22 +822,14 @@ impl Search {
     }
 
     /// Find all matches in a line and add them to self.matches
-    fn find_matches_in_line(&mut self, line: &SearchLine, row: i32) {
-        let previous_total = self.total_match_count;
+    fn find_matches_in_line(&mut self, line: &SearchLine) {
+        let mut found = Vec::new();
         if !self.use_regex && self.case_sensitive {
-            for (start, found) in line.text.match_indices(&self.query) {
-                let (start_col, end_col) = line.columns_for(start, start + found.len());
-                record_retained_match(
-                    &mut self.matches,
-                    &mut self.retained_match_start,
-                    &mut self.total_match_count,
-                    SearchMatch {
-                        row,
-                        start_col,
-                        end_col,
-                    },
-                );
-            }
+            found.extend(
+                line.text
+                    .match_indices(&self.query)
+                    .map(|(start, text)| (start, start + text.len())),
+            );
         } else if !self.use_regex && self.query.is_ascii() && line.text.is_ascii() {
             let query = self.query.as_bytes();
             let mut search_start = 0;
@@ -753,40 +838,29 @@ impl Search {
                 .position(|candidate| candidate.eq_ignore_ascii_case(query))
             {
                 let start = search_start + relative_start;
-                let end = start + query.len();
-                let (start_col, end_col) = line.columns_for(start, end);
-                record_retained_match(
-                    &mut self.matches,
-                    &mut self.retained_match_start,
-                    &mut self.total_match_count,
-                    SearchMatch {
-                        row,
-                        start_col,
-                        end_col,
-                    },
-                );
-                search_start = end;
+                found.push((start, start + query.len()));
+                search_start = start + query.len();
             }
         } else if let Some(regex) = &self.compiled_regex {
-            for found in regex.find_iter(&line.text) {
-                let (start_col, end_col) = line.columns_for(found.start(), found.end());
-                record_retained_match(
-                    &mut self.matches,
-                    &mut self.retained_match_start,
-                    &mut self.total_match_count,
-                    SearchMatch {
-                        row,
-                        start_col,
-                        end_col,
-                    },
-                );
-            }
+            found.extend(
+                regex
+                    .find_iter(&line.text)
+                    .map(|found| (found.start(), found.end())),
+            );
         }
-
-        if self.total_match_count > previous_total {
-            if self.matching_rows.last() != Some(&row) {
-                self.matching_rows.push(row);
+        for (start, end) in found {
+            let search_match = line.span(start, end);
+            for row in search_match.row..=search_match.end_row {
+                if self.matching_rows.last() != Some(&row) {
+                    self.matching_rows.push(row);
+                }
             }
+            record_retained_match(
+                &mut self.matches,
+                &mut self.retained_match_start,
+                &mut self.total_match_count,
+                search_match,
+            );
         }
     }
 }
@@ -814,9 +888,8 @@ fn record_retained_match(
 }
 
 fn match_in_sorted_slice(matches: &[SearchMatch], row: i32, col: usize) -> bool {
-    let index = matches.partition_point(|search_match| {
-        search_match.row < row || (search_match.row == row && search_match.end_col <= col)
-    });
+    let index = matches
+        .partition_point(|search_match| (search_match.end_row, search_match.end_col) <= (row, col));
     matches
         .get(index)
         .is_some_and(|search_match| search_match.contains(row, col))
@@ -1170,6 +1243,7 @@ mod tests {
     fn test_match_contains() {
         let m = SearchMatch {
             row: 5,
+            end_row: 5,
             start_col: 10,
             end_col: 15,
         };
@@ -1187,16 +1261,19 @@ mod tests {
         search.matches = vec![
             SearchMatch {
                 row: 0,
+                end_row: 0,
                 start_col: 0,
                 end_col: 4,
             },
             SearchMatch {
                 row: 1,
+                end_row: 1,
                 start_col: 5,
                 end_col: 9,
             },
             SearchMatch {
                 row: 2,
+                end_row: 2,
                 start_col: 0,
                 end_col: 4,
             },
@@ -1367,6 +1444,7 @@ mod tests {
             search.current(),
             Some(&SearchMatch {
                 row: 0,
+                end_row: 0,
                 start_col: 0,
                 end_col: 6,
             })
@@ -1609,12 +1687,13 @@ mod tests {
         search.start();
         search.query = "a".to_string();
         search.compile_regex_if_needed();
-        let line = SearchLine {
-            text: "a".repeat(100),
-            byte_to_col: None,
-        };
         for row in 0..3_000 {
-            search.find_matches_in_line(&line, row);
+            let line = SearchLine {
+                text: "a".repeat(100),
+                first_row: row,
+                cells: None,
+            };
+            search.find_matches_in_line(&line);
         }
         search.finish_update();
 
@@ -1659,6 +1738,7 @@ mod tests {
                 &mut search.total_match_count,
                 SearchMatch {
                     row: index as i32,
+                    end_row: index as i32,
                     start_col: 0,
                     end_col: 1,
                 },
@@ -1676,9 +1756,66 @@ mod tests {
 fn multicell_text_is_indexed_once_across_its_full_column_span() {
     let mut terminal = termeric_core::Terminal::new(10, 3);
     terminal.process(b"\x1b]66;s=2:w=2;title\x07!");
-    let row = terminal.grid().row_at_offset(0).unwrap();
-    let line = SearchLine::from_row(&row, terminal.cols());
+    let line = SearchLine::around(terminal.grid(), 0, None);
     assert_eq!(line.text.trim_end(), "title!");
-    assert_eq!(line.columns_for(0, 5), (0, 4));
-    assert_eq!(line.columns_for(5, 6), (4, 5));
+    assert_eq!((line.span(0, 5).start_col, line.span(0, 5).end_col), (0, 4));
+    assert_eq!((line.span(5, 6).start_col, line.span(5, 6).end_col), (4, 5));
+}
+
+#[test]
+fn matches_continue_across_soft_wraps_but_not_hard_line_breaks() {
+    let search_for = |output: &[u8], query: &str| {
+        let mut terminal = termeric_core::Terminal::new(8, 4);
+        terminal.process(output);
+        let mut search = Search::new();
+        search.start();
+        search.set_query(query, terminal.grid());
+        search.finish(terminal.grid());
+        search
+    };
+
+    // "hello" wraps after its third letter.
+    let search = search_for(b"xxxxxhello world", "hello");
+    assert_eq!(search.match_count(), 1);
+    assert_eq!(
+        search.current(),
+        Some(&SearchMatch {
+            row: 0,
+            start_col: 5,
+            end_row: 1,
+            end_col: 2,
+        })
+    );
+    for (row, col) in [(0, 5), (0, 7), (1, 0), (1, 1)] {
+        assert!(search.is_match(row, col) && search.is_current_match(row, col));
+    }
+    assert!(!search.is_match(0, 4) && !search.is_match(1, 2));
+    // Filter mode shows both rows the match touches.
+    assert_eq!(search.matching_rows, [0, 1]);
+    // The rest of the wrapped line is searched once, not again from row 1.
+    assert_eq!(search_for(b"xxxxxhello hello", "hello").match_count(), 2);
+
+    assert_eq!(search_for(b"xxxxxhel\r\nlo", "hello").match_count(), 0);
+
+    // Extending a literal rescans only matching rows; one in the middle of a
+    // wrapped line is searched from the start of that line.
+    let mut terminal = termeric_core::Terminal::new(8, 4);
+    terminal.process(b"abcdefghijhello!");
+    let mut search = Search::new();
+    search.start();
+    search.set_query("hel", terminal.grid());
+    search.finish(terminal.grid());
+    assert_eq!(search.matching_rows, [1]);
+    search.set_query("hello!", terminal.grid());
+    search.finish(terminal.grid());
+    assert_eq!(search.match_count(), 1);
+    assert_eq!(search.current().map(|found| found.row), Some(1));
+
+    // A wide character pushed to the next row leaves padding that isn't text.
+    let search = search_for("abcdefg界x".as_bytes(), "g界");
+    assert_eq!(search.match_count(), 1);
+    assert_eq!(
+        search.current().map(|found| (found.end_row, found.end_col)),
+        Some((1, 2))
+    );
 }
