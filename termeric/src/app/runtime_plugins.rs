@@ -4,25 +4,23 @@ use super::*;
 use crate::plugin::permission::{PluginPermission, PluginPermissions};
 use crate::plugin::runtime::{
     DeclarativeSetting, PluginAdminCommand, PluginConfigurationChange, PluginInstallPreview,
-    PluginSettingValue, PluginUpdatePreview, RuntimePluginStatus, preview_install, preview_update,
+    PluginSettingValue, PluginUpdatePreview, RuntimePluginStatus, preview_install,
 };
 use crate::ui::info_overlay::{InfoOverlayChoice, OverlayPage, push_key_choice};
 
-const PLUGIN_MANAGER_PAGE_SIZE: usize = 24;
-const PLUGIN_SETTINGS_PAGE_SIZE: usize = 24;
-const PLUGIN_SETTING_VALUES_PAGE_SIZE: usize = 24;
-const PLUGIN_PROFILE_PAGE_SIZE: usize = 24;
+/// Plugins, settings, setting values, and profiles shown per page.
+const PLUGIN_PAGE_SIZE: usize = 24;
 /// Install and update reviews list every permission on one page beside at
 /// most six action choices.
 const _: () = assert!(
     crate::plugin::permission::Capability::ALL.len() + 6
         <= crate::ui::info_overlay::MAX_INFO_CHOICES
 );
-const PLUGIN_LIST_SHORTCUTS: [char; PLUGIN_MANAGER_PAGE_SIZE] = [
+const PLUGIN_LIST_SHORTCUTS: [char; PLUGIN_PAGE_SIZE] = [
     '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'd', 'e', 'f', 'g', 'h', 't', 'j', 'k', 'l',
     'm', 'o', 'q', 'r', 's',
 ];
-const PLUGIN_PROFILE_SHORTCUTS: [char; PLUGIN_PROFILE_PAGE_SIZE] = [
+const PLUGIN_PROFILE_SHORTCUTS: [char; PLUGIN_PAGE_SIZE] = [
     '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm',
     'o', 'q', 'r', 's', 't',
 ];
@@ -34,40 +32,27 @@ impl App {
         Vec<crate::plugin::runtime::DeclarativePlugin>,
         Vec<RuntimePluginStatus>,
     )> {
-        #[cfg(test)]
-        if let Some((registry, root)) = &self.runtime_plugin_test_paths {
-            return crate::plugin::runtime::discover_runtime_plugins_at(registry, root);
-        }
-        crate::plugin::runtime::discover_runtime_plugins()
+        let paths = &self.runtime_plugin_paths;
+        crate::plugin::runtime::discover_runtime_plugins_at(&paths.registry, &paths.root)
     }
 
     fn execute_runtime_plugin_admin(&self, command: PluginAdminCommand) -> Result<String> {
-        #[cfg(test)]
-        if let Some((registry, root)) = &self.runtime_plugin_test_paths {
-            return crate::plugin::runtime::execute_admin_at(command, registry, root);
-        }
-        crate::plugin::runtime::execute_admin(command)
+        let paths = &self.runtime_plugin_paths;
+        crate::plugin::runtime::execute_admin_at(command, &paths.registry, &paths.root)
     }
 
     fn preview_runtime_plugin_update(&self, plugin_id: &str) -> Result<PluginUpdatePreview> {
-        #[cfg(test)]
-        if let Some((registry, root)) = &self.runtime_plugin_test_paths {
-            return crate::plugin::runtime::preview_update_at(plugin_id, registry, root);
-        }
-        preview_update(plugin_id)
+        let paths = &self.runtime_plugin_paths;
+        crate::plugin::runtime::preview_update_at(plugin_id, &paths.registry, &paths.root)
     }
 
     fn runtime_plugin_registry_path_for_app(&self) -> PathBuf {
-        #[cfg(test)]
-        if let Some((registry, _)) = &self.runtime_plugin_test_paths {
-            return registry.clone();
-        }
-        crate::plugin::runtime::registry_path()
+        self.runtime_plugin_paths.registry.clone()
     }
 
     #[cfg(test)]
     pub(crate) fn set_runtime_plugin_test_paths(&mut self, registry: PathBuf, root: PathBuf) {
-        self.runtime_plugin_test_paths = Some((registry, root));
+        self.runtime_plugin_paths = crate::plugin::runtime::PluginPaths { registry, root };
         self.sync_plugins_from_config();
     }
 
@@ -94,7 +79,7 @@ impl App {
             count: page_count,
             start,
             end,
-        } = OverlayPage::of(statuses.len(), PLUGIN_MANAGER_PAGE_SIZE, requested_page);
+        } = OverlayPage::of(statuses.len(), PLUGIN_PAGE_SIZE, requested_page);
         let mut lines = vec![
             format!(
                 "Installed third-party plugins: {} · page {}/{}",
@@ -634,7 +619,7 @@ impl App {
             end,
         } = OverlayPage::of(
             status.profiles.len(),
-            PLUGIN_PROFILE_PAGE_SIZE,
+            PLUGIN_PAGE_SIZE,
             requested_profile_page,
         );
         let effective_id = status
@@ -749,7 +734,7 @@ impl App {
             end,
         } = OverlayPage::of(
             status.setting_definitions.len(),
-            PLUGIN_SETTINGS_PAGE_SIZE,
+            PLUGIN_PAGE_SIZE,
             requested_settings_page,
         );
         let mut lines = vec![
@@ -977,11 +962,7 @@ impl App {
                     count: page_count,
                     start,
                     end,
-                } = OverlayPage::of(
-                    values.len(),
-                    PLUGIN_SETTING_VALUES_PAGE_SIZE,
-                    requested_value_page,
-                );
+                } = OverlayPage::of(values.len(), PLUGIN_PAGE_SIZE, requested_value_page);
                 let mut overlay_choices = Vec::new();
                 for (local_index, value) in values[start..end].iter().enumerate() {
                     let shortcut = PLUGIN_LIST_SHORTCUTS[local_index];

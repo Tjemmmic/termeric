@@ -1317,9 +1317,9 @@ pub struct App {
     guardrail: GuardrailOverlay,
     /// The multi-step flow the info overlay is running, if any.
     overlay_flow: Option<OverlayFlow>,
-    /// Temporary registry and installation roots used only by hermetic tests.
-    #[cfg(test)]
-    runtime_plugin_test_paths: Option<(PathBuf, PathBuf)>,
+    /// Where third-party plugins and their registry live; tests point this
+    /// at a temporary directory.
+    runtime_plugin_paths: crate::plugin::runtime::PluginPaths,
     /// Agent status hooks awaiting the person's confirmation.
     pending_hook_change: Option<agent_hooks::PendingHookChange>,
     /// Git work comparing an agent's changes, running on a worker thread.
@@ -1614,8 +1614,7 @@ impl App {
             guardrail: GuardrailOverlay::new(),
 
             overlay_flow: None,
-            #[cfg(test)]
-            runtime_plugin_test_paths: None,
+            runtime_plugin_paths: crate::plugin::runtime::PluginPaths::configured(),
             pending_hook_change: None,
             agent_change_job: None,
             agent_change_list: None,

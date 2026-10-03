@@ -481,10 +481,6 @@ impl Default for PluginRegistry {
 }
 
 impl PluginRegistry {
-    pub fn load() -> Result<Self> {
-        Self::load_from(&registry_path())
-    }
-
     fn load_from(path: &Path) -> Result<Self> {
         let metadata = match fs::symlink_metadata(path) {
             Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
@@ -635,13 +631,21 @@ pub struct RuntimePluginStatus {
     pub diagnostic: Option<String>,
 }
 
-pub fn discover_runtime_plugins() -> Result<(Vec<DeclarativePlugin>, Vec<RuntimePluginStatus>)> {
-    let registry = PluginRegistry::load().context("third-party plugin registry rejected")?;
-    Ok(discover_from_registry(&registry, &plugins_dir()))
+/// Where the plugin registry and installed plugins live.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginPaths {
+    pub registry: PathBuf,
+    pub root: PathBuf,
 }
 
-pub(crate) fn preview_update(id: &str) -> Result<PluginUpdatePreview> {
-    preview_update_at(id, &registry_path(), &plugins_dir())
+impl PluginPaths {
+    /// Beside the configuration file.
+    pub fn configured() -> Self {
+        Self {
+            registry: registry_path(),
+            root: plugins_dir(),
+        }
+    }
 }
 
 pub(crate) fn preview_update_at(
@@ -694,7 +698,6 @@ pub(crate) fn preview_update_at(
     })
 }
 
-#[cfg(test)]
 pub(crate) fn discover_runtime_plugins_at(
     registry_path: &Path,
     root: &Path,
