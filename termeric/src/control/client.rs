@@ -2300,7 +2300,7 @@ mod tests {
             processes: Vec::new(),
         })
         .unwrap();
-        assert_eq!(output["schema_version"], 3);
+        assert_eq!(output["schema_version"], 1);
         assert_eq!(output["processes"], serde_json::json!([]));
     }
 
@@ -2315,7 +2315,7 @@ mod tests {
             window_id: 9,
         })
         .unwrap();
-        assert_eq!(output["schema_version"], 3);
+        assert_eq!(output["schema_version"], 1);
         assert_eq!(output["request_id"], request_id);
         assert_eq!(output["window_id"], 9);
 
@@ -2327,7 +2327,7 @@ mod tests {
             tab_id: 0,
         })
         .unwrap();
-        assert_eq!(output["schema_version"], 3);
+        assert_eq!(output["schema_version"], 1);
         assert_eq!(output["window_id"], 10);
         assert_eq!(output["tab_id"], 0);
 
@@ -2339,7 +2339,7 @@ mod tests {
             tab_id: 3,
         })
         .unwrap();
-        assert_eq!(output["schema_version"], 3);
+        assert_eq!(output["schema_version"], 1);
         assert_eq!(output["window_id"], 9);
         assert_eq!(output["tab_id"], 3);
 
@@ -2352,7 +2352,7 @@ mod tests {
             pane_id: 1,
         })
         .unwrap();
-        assert_eq!(output["schema_version"], 3);
+        assert_eq!(output["schema_version"], 1);
         assert_eq!(output["tab_id"], 3);
         assert_eq!(output["pane_id"], 1);
 

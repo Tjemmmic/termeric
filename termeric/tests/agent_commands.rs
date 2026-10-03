@@ -12,7 +12,7 @@ use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 const TOKEN: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-const VERSION: u32 = 24;
+const VERSION: u32 = 1;
 
 /// A private runtime directory holding a fake GUI endpoint for this process.
 struct Gui {

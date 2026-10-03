@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 const ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const TOKEN: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-const VERSION: u32 = 24;
+const VERSION: u32 = 1;
 
 struct Fixture {
     root: tempfile::TempDir,
@@ -714,7 +714,7 @@ fn wait_progresses_and_propagates_portable_child_exit() {
         assert!(output.stderr.is_empty());
         let value: Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(value["state"]["exit_code"], code);
-        assert_eq!(value["schema_version"], 3);
+        assert_eq!(value["schema_version"], 1);
         assert_eq!(value["terminal_closed"], false);
     }
     let fixture = Fixture::new();

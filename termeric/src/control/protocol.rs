@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::collections::HashSet;
 use std::io::{Read, Write};
 
-pub const PROTOCOL_VERSION: u32 = 24;
-pub const JSON_SCHEMA_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 1;
+pub const JSON_SCHEMA_VERSION: u32 = 1;
 pub const MAX_FRAME_BYTES: usize = 256 * 1024;
 pub const MAX_WINDOWS: usize = 32;
 pub const MAX_TABS_PER_WINDOW: usize = 256;
