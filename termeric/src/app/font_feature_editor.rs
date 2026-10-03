@@ -340,7 +340,9 @@ impl App {
                 page,
                 None,
                 input,
-                Some("the maximum of 32 overrides is already configured"),
+                Some(&format!(
+                    "the maximum of {MAX_FONT_FEATURES} overrides is already configured"
+                )),
             );
             return true;
         }
@@ -560,7 +562,7 @@ mod tests {
             app.info_overlay
                 .lines()
                 .iter()
-                .any(|line| line.contains("maximum of 32"))
+                .any(|line| line.contains(&format!("maximum of {MAX_FONT_FEATURES}")))
         );
         assert!(
             app.info_overlay

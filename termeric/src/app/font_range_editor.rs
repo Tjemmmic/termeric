@@ -498,7 +498,9 @@ impl App {
                     page,
                     None,
                     value,
-                    Some("the maximum of 64 rules is already configured"),
+                    Some(&format!(
+                        "the maximum of {MAX_FONT_RANGE_OVERRIDES} rules is already configured"
+                    )),
                 );
                 return true;
             }
