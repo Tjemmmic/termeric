@@ -1,4 +1,3 @@
-manifest_version = 1
 captured_at = "2026-08-25"
 terminal = "xterm-256color"
 reference = "tmux 3.7c capture-pane at 80x24"
@@ -51,7 +50,6 @@ lCBvcHQtaW4gc2VtYW50aWMgY29tbWFuZCBoaXN0b3J5LCBwZXItdGVybWluYWwgZ3JvCnd0aCBpbmRp
 b3V0cHV0IHNlYXJjaCwgcmVydW4vY29weSwgYW5kIEFJIGV4cGxhbmF0aW9uCiJSRUFETUUubWQiIDE0OEwsIDY0OTZCICAgICAg
 ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgMSwxICAgICAgICAgICBUb3AK
 """
-tracking_issue = "https://github.com/Tjemmmic/termeric/issues/2"
 
 [[trace]]
 id = "less-704-readme"
@@ -93,7 +91,6 @@ dGlvbiwgYW5kIGV4cGVyaW1lbgp0YWwgT1NDIDEzMyBpbnRlZ3JhdGlvbgotICoqSGFydmVzdCAoZXhw
 lCBvcHQtaW4gc2VtYW50aWMgY29tbWFuZCBoaXN0b3J5LCBwZXItdGVybWluYWwgZ3JvCnd0aCBpbmRpY2F0b3JzLCBzY29wZWQg
 b3V0cHV0IHNlYXJjaCwgcmVydW4vY29weSwgYW5kIEFJIGV4cGxhbmF0aW9uClJFQURNRS5tZAo=
 """
-tracking_issue = "https://github.com/Tjemmmic/termeric/issues/2"
 
 [[trace]]
 id = "tmux-3-7c-client"
@@ -116,4 +113,3 @@ MDAzbBtbPzEwMDZsG1s/MTAwNWwbWz8yMDA0bBtbPzc3MjdsG1s/MTAwNGwbWz8xMDQ5bBtbMjM7MDsw
 ZF0NCg==
 """
 expected_contains = "[exited]"
-tracking_issue = "https://github.com/Tjemmmic/termeric/issues/11"

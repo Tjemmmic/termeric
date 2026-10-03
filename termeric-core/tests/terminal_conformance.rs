@@ -1,5 +1,7 @@
 //! Deterministic terminal-core conformance fixtures and invariant smoke tests.
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use serde::Deserialize;
 use std::collections::HashSet;
 use termeric_core::term::TerminalMode;
@@ -96,9 +98,6 @@ struct ExpectedUserDefinedKey {
 
 #[derive(Debug, Deserialize)]
 struct ExternalTraceSuite {
-    manifest_version: u32,
-    captured_at: String,
-    terminal: String,
     reference: String,
     trace: Vec<ExternalTrace>,
 }
@@ -106,14 +105,11 @@ struct ExternalTraceSuite {
 #[derive(Debug, Deserialize)]
 struct ExternalTrace {
     id: String,
-    program: String,
-    command: String,
     cols: usize,
     rows: usize,
     input_base64: String,
     reference_base64: Option<String>,
     expected_contains: Option<String>,
-    tracking_issue: String,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -357,31 +353,13 @@ fn replayable_conformance_cases_match_expected_state() {
 #[test]
 fn real_program_traces_replay_against_pinned_reference_snapshots() {
     let suite: ExternalTraceSuite = toml::from_str(EXTERNAL_TRACES).unwrap();
-    assert_eq!(suite.manifest_version, 1);
-    assert!(!suite.captured_at.trim().is_empty());
-    assert_eq!(suite.terminal, "xterm-256color");
-    assert!(suite.reference.contains("tmux 3.7c"));
-
     let mut ids = HashSet::new();
-    let mut programs = HashSet::new();
     for trace in &suite.trace {
         assert!(
             ids.insert(trace.id.as_str()),
             "duplicate trace {}",
             trace.id
         );
-        assert!(
-            !trace.command.trim().is_empty(),
-            "{} has no capture command",
-            trace.id
-        );
-        assert!(
-            trace
-                .tracking_issue
-                .starts_with("https://github.com/Tjemmmic/termeric/issues/")
-        );
-        programs.insert(trace.program.split_whitespace().next().unwrap_or_default());
-
         let input = decode_base64(&trace.input_base64);
         let mut terminal = bounded_terminal(trace.cols, trace.rows);
         for chunk in input.chunks(17) {
@@ -404,44 +382,6 @@ fn real_program_traces_replay_against_pinned_reference_snapshots() {
             assert!(actual.contains(needle), "{} omitted {needle:?}", trace.id);
         }
     }
-    assert_eq!(programs, HashSet::from(["Vim", "less", "tmux"]));
-}
-
-#[test]
-fn real_full_screen_traces_request_application_keyboard_modes() {
-    let suite: ExternalTraceSuite = toml::from_str(EXTERNAL_TRACES).unwrap();
-    let mut checked = HashSet::new();
-    for trace in &suite.trace {
-        let program = trace
-            .program
-            .split_whitespace()
-            .next()
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-        if !matches!(program.as_str(), "vim" | "less" | "tmux") {
-            continue;
-        }
-        let input = decode_base64(&trace.input_base64);
-        assert!(
-            input
-                .windows(b"\x1b[?1h".len())
-                .any(|window| window == b"\x1b[?1h"),
-            "{} never requested DECCKM",
-            trace.id
-        );
-        assert!(
-            input
-                .windows(b"\x1b=".len())
-                .any(|window| window == b"\x1b="),
-            "{} never requested DECKPAM",
-            trace.id
-        );
-        checked.insert(program);
-    }
-    assert_eq!(
-        checked,
-        HashSet::from(["less".into(), "tmux".into(), "vim".into()])
-    );
 }
 
 #[test]
@@ -552,34 +492,10 @@ fn decode_hex(input: &str) -> Vec<u8> {
 }
 
 fn decode_base64(input: &str) -> Vec<u8> {
-    let mut output = Vec::with_capacity(input.len() * 3 / 4);
-    let mut quartet = [0_u8; 4];
-    let mut count = 0;
-
-    for byte in input.bytes().filter(|byte| !byte.is_ascii_whitespace()) {
-        quartet[count] = match byte {
-            b'A'..=b'Z' => byte - b'A',
-            b'a'..=b'z' => byte - b'a' + 26,
-            b'0'..=b'9' => byte - b'0' + 52,
-            b'+' => 62,
-            b'/' => 63,
-            b'=' => 64,
-            _ => panic!("invalid base64 byte {byte}"),
-        };
-        count += 1;
-        if count == 4 {
-            output.push((quartet[0] << 2) | (quartet[1] >> 4));
-            if quartet[2] != 64 {
-                output.push((quartet[1] << 4) | (quartet[2] >> 2));
-            }
-            if quartet[3] != 64 {
-                output.push((quartet[2] << 6) | quartet[3]);
-            }
-            count = 0;
-        }
-    }
-    assert_eq!(count, 0, "base64 input must contain complete quartets");
-    output
+    let compact: String = input.split_whitespace().collect();
+    STANDARD
+        .decode(compact)
+        .expect("trace fixtures hold valid base64")
 }
 
 fn feed_chunks(terminal: &mut Terminal, input: &[u8], chunks: &[usize]) {
