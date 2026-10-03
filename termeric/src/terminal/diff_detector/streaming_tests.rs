@@ -239,16 +239,3 @@ fn history_evicts_by_count_and_owned_capacity_without_reusing_ids() {
         }
     }
 }
-
-#[test]
-fn id_exhaustion_stops_capture_instead_of_aliasing_old_reviews() {
-    let mut detector = DiffDetector::new();
-    detector.next_id = Some(u64::MAX);
-    for _ in 0..3 {
-        detector.feed_bytes(PATCH.as_bytes(), |_| {});
-        detector.finish_stream(|diff| assert_eq!(diff.id, u64::MAX));
-    }
-    assert_eq!(detector.detected.len(), 1);
-    assert!(detector.detected_by_id(1).is_none());
-    assert_eq!(detector.take_notices().count(), 1);
-}

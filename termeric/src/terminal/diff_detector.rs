@@ -19,7 +19,6 @@ const MAX_HISTORY_BYTES: usize = 4 * 1024 * 1024;
 const MAX_HISTORY_COUNT: usize = 64;
 const REJECTED: u8 = 1;
 const EVICTED: u8 = 2;
-const EXHAUSTED: u8 = 4;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum DiffLine {
@@ -161,7 +160,7 @@ enum ScanState {
 pub struct DiffDetector {
     state: ScanState,
     framer: Framer,
-    next_id: Option<u64>,
+    next_id: u64,
     detected: VecDeque<DetectedDiff>,
     history_bytes: usize,
     notices: u8,
@@ -176,7 +175,7 @@ impl DiffDetector {
         Self {
             state: ScanState::Idle,
             framer: Framer::default(),
-            next_id: Some(1),
+            next_id: 1,
             detected,
             history_bytes,
             notices: 0,
@@ -288,19 +287,12 @@ impl DiffDetector {
 
     fn start_file(&mut self, line: &str) {
         if file_header(line, "--- ").is_some() {
-            if self.next_id.is_some() {
-                self.state = ScanState::SeenMinus(line.to_owned());
-            } else {
-                self.notices |= EXHAUSTED;
-            }
+            self.state = ScanState::SeenMinus(line.to_owned());
         }
     }
 
     fn finalize(&mut self, capture: Capture, completed: &mut impl FnMut(&DetectedDiff)) {
-        let Some(id) = self.next_id else {
-            self.notices |= EXHAUSTED;
-            return;
-        };
+        let id = self.next_id;
         let mut lines = capture.raw.lines();
         let minus = file_header(lines.next().unwrap(), "--- ").unwrap();
         let plus = file_header(lines.next().unwrap(), "+++ ").unwrap();
@@ -339,7 +331,7 @@ impl DiffDetector {
             self.reject();
             return;
         }
-        self.next_id = id.checked_add(1);
+        self.next_id += 1;
         while self.detected.len() == MAX_HISTORY_COUNT
             || self.history_bytes + bytes > MAX_HISTORY_BYTES
         {
@@ -352,13 +344,12 @@ impl DiffDetector {
         self.detected.push_back(diff);
     }
 
-    /// At most three coalesced messages, regardless of hostile stream size.
+    /// At most two coalesced messages, regardless of hostile stream size.
     pub fn take_notices(&mut self) -> impl Iterator<Item = &'static str> + use<> {
         let flags = std::mem::take(&mut self.notices);
         [
             (REJECTED, "Diff capture skipped an incomplete, malformed, edited, or oversized patch/line; terminal output is unchanged"),
             (EVICTED, "Old diff reviews were evicted to keep terminal memory bounded"),
-            (EXHAUSTED, "Diff capture stopped because its stable review identities are exhausted"),
         ].into_iter().filter_map(move |(flag, message)| (flags & flag != 0).then_some(message))
     }
 
