@@ -1,6 +1,7 @@
 //! Shared query scroll/caret geometry for painting and native IME positioning.
 
-use super::{PaletteInputViewport, PaletteLayout};
+use super::PaletteLayout;
+use crate::ui::text_input_viewport::TextInputViewport;
 #[cfg(test)]
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -27,12 +28,12 @@ impl PaletteLayout {
 
     /// Keep the caret visible without splitting a grapheme or drawing outside
     /// the field. The full query remains in the model and accessibility tree.
-    pub fn input_viewport(&self, text: &str, cursor: usize) -> Option<PaletteInputViewport> {
+    pub fn input_viewport(&self, text: &str, cursor: usize) -> Option<TextInputViewport> {
         let text_x = self.panel_x
             + self.padding
             + self.cell_width * crate::ui::constants::FILTER_TEXT_INSET_CELLS;
         let right = self.panel_x + self.panel_width - self.padding - self.cell_width * 0.8;
-        PaletteInputViewport::calculate(
+        TextInputViewport::calculate(
             text,
             cursor,
             text_x,

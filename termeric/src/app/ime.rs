@@ -156,7 +156,7 @@ impl App {
         height: f32,
         cell_width: f32,
         cell_height: f32,
-    ) -> Option<crate::ui::command_palette::PaletteInputViewport> {
+    ) -> Option<crate::ui::text_input_viewport::TextInputViewport> {
         let owner = self.palette_owner(self.open_palette_modal()?);
         if !owner.query_editable() {
             return None;
