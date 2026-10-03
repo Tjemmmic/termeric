@@ -13009,10 +13009,7 @@ fn complete_workspace_round_trip_restores_nested_panes_plugin_profile_and_focus(
                 .and_then(|(_, profile)| profile),
             Some("archived")
         );
-        assert_eq!(
-            app.app_state.last_workspace_id.as_deref(),
-            Some(report.id.as_str())
-        );
+        assert_eq!(app.app_state.last_workspace_id(), Some(report.id.as_str()));
     }
 
     crate::workspace::set_test_workspaces_base_dir(None);

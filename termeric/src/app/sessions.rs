@@ -106,7 +106,7 @@ impl App {
             && !explicit_launch
             && self.config.session.enabled
             && self.config.session.auto_restore
-            && let Some(workspace_id) = self.app_state.last_workspace_id.clone()
+            && let Some(workspace_id) = self.app_state.last_workspace_id().map(str::to_owned)
         {
             restored = self.restore_saved_workspace(&workspace_id);
         }

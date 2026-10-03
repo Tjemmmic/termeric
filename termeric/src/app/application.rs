@@ -307,16 +307,14 @@ impl Application {
         let state = super::state::AppState::load();
         // Automatic archives from earlier exits are kept only while the
         // startup state can still restore them.
-        let mut restorable = state.restore_workspace_ids();
-        restorable.extend(state.last_workspace_id.clone());
-        let pruned = crate::workspace::prune_automatic_workspaces(&restorable);
+        let pruned = crate::workspace::prune_automatic_workspaces(&state.last_workspace_ids);
         if pruned > 0 {
             log::info!("Pruned {pruned} automatic workspace archives no longer restorable");
         }
         let automatic_restore = launch == LaunchPlan::default()
             && config.session.enabled
             && config.session.auto_restore
-            && !state.restore_workspace_ids().is_empty();
+            && !state.last_workspace_ids.is_empty();
         let launch = expand_auto_restore_plan(&config, &state, launch);
         let mut application = Self::from_config(config, warning, launch)?;
         if automatic_restore {
@@ -3224,15 +3222,15 @@ fn expand_auto_restore_plan(
     {
         return launch;
     }
-    let ids = state.restore_workspace_ids();
-    if ids.is_empty() {
+    if state.last_workspace_ids.is_empty() {
         return launch;
     }
     LaunchPlan {
-        windows: ids
-            .into_iter()
+        windows: state
+            .last_workspace_ids
+            .iter()
             .map(|id| WindowLaunch {
-                workspace: Some(id),
+                workspace: Some(id.clone()),
                 ..WindowLaunch::default()
             })
             .collect(),

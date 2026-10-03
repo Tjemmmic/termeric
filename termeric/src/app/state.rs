@@ -23,11 +23,9 @@ pub struct AppState {
     /// Whether the first boot splash has been shown
     #[serde(default)]
     pub first_boot_complete: bool,
-    /// Stable ID of the last workspace explicitly saved or restored. Startup
-    /// recovery uses this reference; it never guesses from file timestamps.
-    #[serde(default)]
-    pub last_workspace_id: Option<String>,
-    /// Complete set of windows to relaunch on automatic multi-window restore.
+    /// Workspaces to relaunch on automatic restore, one per window, the one
+    /// saved or restored last at the end. Startup never guesses from file
+    /// timestamps.
     #[serde(default)]
     pub last_workspace_ids: Vec<String>,
 }
@@ -94,7 +92,6 @@ impl AppState {
             .last_workspace_ids
             .retain(|candidate| candidate != id);
         latest.last_workspace_ids.push(id.to_string());
-        latest.last_workspace_id = Some(id.to_string());
         latest.save()?;
         *self = latest;
         Ok(())
@@ -106,20 +103,14 @@ impl AppState {
         latest
             .last_workspace_ids
             .retain(|candidate| candidate != id);
-        if latest.last_workspace_id.as_deref() == Some(id) {
-            latest.last_workspace_id = latest.last_workspace_ids.last().cloned();
-        }
         latest.save()?;
         *self = latest;
         Ok(())
     }
 
-    pub fn restore_workspace_ids(&self) -> Vec<String> {
-        if self.last_workspace_ids.is_empty() {
-            self.last_workspace_id.iter().cloned().collect()
-        } else {
-            self.last_workspace_ids.clone()
-        }
+    /// The workspace saved or restored last.
+    pub fn last_workspace_id(&self) -> Option<&str> {
+        self.last_workspace_ids.last().map(String::as_str)
     }
 }
 
@@ -164,24 +155,15 @@ mod tests {
             first.remember_workspace("workspace-a").unwrap();
             second.remember_workspace("workspace-b").unwrap();
             assert_eq!(
-                AppState::load().restore_workspace_ids(),
+                AppState::load().last_workspace_ids,
                 ["workspace-a", "workspace-b"]
             );
             first.forget_workspace("workspace-a").unwrap();
             let loaded = AppState::load();
-            assert_eq!(loaded.restore_workspace_ids(), ["workspace-b"]);
-            assert_eq!(loaded.last_workspace_id.as_deref(), Some("workspace-b"));
+            assert_eq!(loaded.last_workspace_ids, ["workspace-b"]);
+            assert_eq!(loaded.last_workspace_id(), Some("workspace-b"));
         });
         AppState::set_test_state_path(None);
         result.unwrap();
-    }
-
-    #[test]
-    fn legacy_single_workspace_reference_migrates_without_rewrite() {
-        let state = AppState {
-            last_workspace_id: Some("workspace-legacy".into()),
-            ..AppState::default()
-        };
-        assert_eq!(state.restore_workspace_ids(), ["workspace-legacy"]);
     }
 }
