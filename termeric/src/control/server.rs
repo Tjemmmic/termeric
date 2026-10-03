@@ -200,7 +200,21 @@ fn serve_client(
             );
         }
     };
-    let frame = match response {
+    // The GUI may already have acted on the request, so a reply that fails
+    // validation is reported as such rather than dropping the connection,
+    // which the client would read as a request that never completed.
+    let frame = response_frame(response).unwrap_or_else(|error| ServerFrame::Error {
+        version: protocol::PROTOCOL_VERSION,
+        message: bounded_error(&format!(
+            "the GUI's reply was invalid, so the request may already have taken effect: {error:#}"
+        )),
+    });
+    protocol::write_frame(&mut stream, &frame)
+}
+
+/// Re-validate the GUI's reply before it leaves the process.
+fn response_frame(response: Response) -> anyhow::Result<ServerFrame> {
+    Ok(match response {
         Response::Agents {
             process_id,
             agents,
@@ -722,8 +736,7 @@ fn serve_client(
                 changed,
             }
         }
-    };
-    protocol::write_frame(&mut stream, &frame)
+    })
 }
 
 fn validate_action_response(
@@ -1280,6 +1293,45 @@ mod tests {
             protocol::read_frame::<ServerFrame>(&mut client).unwrap(),
             ServerFrame::Error { message, .. }
                 if message == "missingwindow" && !message.chars().any(char::is_control)
+        ));
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn an_invalid_gui_reply_is_reported_as_possibly_applied_not_dropped() {
+        const REQUEST_ID: &str = "0123456789abcdef0123456789abcdef";
+        let (mut client, server) = UnixStream::pair().unwrap();
+        let worker = thread::spawn(move || {
+            serve_client(server, "secret", |_, _| {
+                Ok(Response::PaneCreated {
+                    process_id: 42,
+                    request_id: REQUEST_ID.into(),
+                    window_id: 0,
+                    tab_id: 3,
+                    pane_id: 1,
+                })
+            })
+            .unwrap();
+        });
+        protocol::write_frame(
+            &mut client,
+            &ClientFrame {
+                version: protocol::PROTOCOL_VERSION,
+                token: "secret".into(),
+                request: Request::SplitPane {
+                    request_id: REQUEST_ID.into(),
+                    window_id: 7,
+                    tab_id: 3,
+                    pane_id: 0,
+                    direction: protocol::SplitDirection::Vertical,
+                },
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            protocol::read_frame::<ServerFrame>(&mut client).unwrap(),
+            ServerFrame::Error { message, .. }
+                if message.contains("may already have taken effect")
         ));
         worker.join().unwrap();
     }
