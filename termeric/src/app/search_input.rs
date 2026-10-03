@@ -1,8 +1,8 @@
 //! Query editing after higher-priority surfaces have intercepted keyboard input.
 
+use super::text_field_keys::FieldKey;
 use super::*;
-use crate::ui::text_input::TextInputEdit;
-use winit::keyboard::{Key, NamedKey};
+use winit::keyboard::Key;
 
 impl App {
     /// Called only after higher-priority pointer or semantic owners intercept input.
@@ -27,32 +27,10 @@ impl App {
     }
 
     pub(super) fn handle_search_edit_key(&mut self, key: &Key) -> bool {
-        let edit = match key {
-            Key::Named(NamedKey::ArrowLeft) => TextInputEdit::Left,
-            Key::Named(NamedKey::ArrowRight) => TextInputEdit::Right,
-            Key::Named(NamedKey::Home) => TextInputEdit::Home,
-            Key::Named(NamedKey::End) => TextInputEdit::End,
-            Key::Named(NamedKey::Backspace) => TextInputEdit::Backspace,
-            Key::Named(NamedKey::Delete) => TextInputEdit::Delete,
-            _ => return false,
-        };
-        if self.alt_graph_active {
-            return true;
-        }
-        let edit = if self.modifiers == ModifiersState::CONTROL {
-            match edit {
-                TextInputEdit::Left => TextInputEdit::WordLeft,
-                TextInputEdit::Right => TextInputEdit::WordRight,
-                TextInputEdit::Backspace => TextInputEdit::BackspaceWord,
-                TextInputEdit::Delete => TextInputEdit::DeleteWord,
-                _ => return true,
-            }
-        } else if !self.modifiers.is_empty() {
-            // Selection and other modified edits remain unsupported. Do not
-            // reinterpret them as plain edits or leak them into the PTY.
-            return true;
-        } else {
-            edit
+        let edit = match self.text_edit_for_key(key) {
+            Some(FieldKey::Edit(edit)) => edit,
+            Some(FieldKey::Consume) => return true,
+            None => return false,
         };
         let cursor = self.search_cursor_pos;
         if let Some(Some(cursor)) =
@@ -73,6 +51,7 @@ impl App {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use winit::keyboard::NamedKey;
 
     #[test]
     fn search_query_keys_edit_graphemes_and_keep_all_input_out_of_the_pty() {

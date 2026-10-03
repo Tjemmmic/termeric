@@ -44,6 +44,7 @@ mod system_accessibility;
 mod tab_drag;
 #[cfg(test)]
 mod tests;
+mod text_field_keys;
 mod theme_picker;
 mod transcripts;
 mod unicode_picker;

@@ -2,7 +2,7 @@
 
 use super::animation::OverlayAnimation;
 use super::constants::CONTENT_CHAR_SCALE;
-use super::text_input::TextInput;
+use super::text_input::{TextInput, TextInputEdit, grapheme_boundary};
 
 pub const MAX_INFO_TITLE_CHARS: usize = 256;
 pub const MAX_INFO_LINES: usize = 512;
@@ -485,31 +485,22 @@ impl InfoOverlay {
         Some(input.value.text())
     }
 
+    /// Insert typed or committed text at the caret. Like every other field,
+    /// text that would overflow the bound or contains controls is rejected
+    /// whole rather than truncated or filtered.
     pub fn insert_input_text(&mut self, request_id: u64, text: &str) -> bool {
-        if !self.is_awaiting(request_id) {
+        if !self.is_awaiting(request_id) || text.is_empty() || text.chars().any(char::is_control) {
             return false;
         }
         let Some(input) = self.input.as_mut() else {
             return false;
         };
-        let mut changed = false;
-        for character in text.chars().filter(|character| !character.is_control()) {
-            if input
-                .value
-                .text()
-                .len()
-                .saturating_add(character.len_utf8())
-                > input.max_bytes
-            {
-                break;
-            }
-            input.value.insert_char(character);
-            changed = true;
+        if input.value.text().len().saturating_add(text.len()) > input.max_bytes {
+            return false;
         }
-        if changed {
-            self.refresh_input_line();
-        }
-        changed
+        input.value.insert_text(text);
+        self.refresh_input_line();
+        true
     }
 
     pub fn replace_input_text(&mut self, request_id: u64, text: &str) -> bool {
@@ -530,32 +521,25 @@ impl InfoOverlay {
         true
     }
 
-    pub fn backspace_input(&mut self, request_id: u64) -> bool {
-        self.mutate_input(request_id, TextInput::backspace)
-    }
-
-    pub fn delete_input(&mut self, request_id: u64) -> bool {
-        self.mutate_input(request_id, TextInput::delete)
-    }
-
-    pub fn move_input_left(&mut self, request_id: u64) -> bool {
-        self.mutate_input(request_id, TextInput::cursor_left)
-    }
-
-    pub fn move_input_right(&mut self, request_id: u64) -> bool {
-        self.mutate_input(request_id, TextInput::cursor_right)
-    }
-
-    pub fn move_input_home(&mut self, request_id: u64) -> bool {
-        self.set_input_cursor(request_id, 0)
-    }
-
-    pub fn move_input_end(&mut self, request_id: u64) -> bool {
-        let end = self
-            .input
-            .as_ref()
-            .map_or(0, |input| input.value.text().len());
-        self.set_input_cursor(request_id, end)
+    /// Apply a grapheme edit. True when the text or the caret changed; a
+    /// caret-only move still scrolls the caret into view.
+    pub fn edit_input(&mut self, request_id: u64, edit: TextInputEdit) -> bool {
+        if !self.is_awaiting(request_id) {
+            return false;
+        }
+        let Some(input) = self.input.as_mut() else {
+            return false;
+        };
+        let caret = input.value.cursor();
+        if input.value.edit_grapheme(edit) {
+            self.refresh_input_line();
+            return true;
+        }
+        if input.value.cursor() == caret {
+            return false;
+        }
+        self.ensure_input_cursor_visible();
+        true
     }
 
     pub fn set_input_cursor_from_column(&mut self, request_id: u64, column: usize) -> bool {
@@ -565,14 +549,15 @@ impl InfoOverlay {
         let Some(input) = self.input.as_ref() else {
             return false;
         };
+        // Columns are chars, but the caret only rests between graphemes, so a
+        // click inside a cluster lands at its start.
+        let value = input.value.text();
         let value_column = column.saturating_sub(input.label.chars().count());
-        let byte = input
-            .value
-            .text()
+        let byte = value
             .char_indices()
             .nth(value_column)
-            .map_or(input.value.text().len(), |(byte, _)| byte);
-        self.set_input_cursor(request_id, byte)
+            .map_or(value.len(), |(byte, _)| byte);
+        self.set_input_cursor(request_id, grapheme_boundary(value, byte, true))
     }
 
     pub fn input_cursor_source_column(&self, request_id: u64) -> Option<usize> {
@@ -598,24 +583,6 @@ impl InfoOverlay {
         }
         self.ensure_input_cursor_visible();
         true
-    }
-
-    fn mutate_input(
-        &mut self,
-        request_id: u64,
-        mutation: impl FnOnce(&mut TextInput) -> bool,
-    ) -> bool {
-        if !self.is_awaiting(request_id) {
-            return false;
-        }
-        let Some(input) = self.input.as_mut() else {
-            return false;
-        };
-        let changed = mutation(&mut input.value);
-        if changed {
-            self.refresh_input_line();
-        }
-        changed
     }
 
     fn refresh_input_line(&mut self) {
@@ -1199,37 +1166,84 @@ mod tests {
         assert!((calculate(0.0).card.y - settled.card.y + 30.0).abs() < 0.001);
     }
 
-    #[test]
-    fn input_is_request_scoped_bounded_and_utf8_cursor_safe() {
+    fn input_overlay(value: &str, max_bytes: usize) -> (InfoOverlay, u64) {
         let mut overlay = InfoOverlay::new();
         let request = overlay.show_input(
             "Edit",
             vec!["Setting".into(), String::new()],
             1,
             "Value: ",
-            "a🫚",
-            8,
+            value,
+            max_bytes,
             Vec::new(),
         );
+        (overlay, request)
+    }
+
+    #[test]
+    fn input_is_request_scoped_and_rejects_oversized_or_control_text_whole() {
+        let (mut overlay, request) = input_overlay("a🫚", 8);
         let input = overlay.input_info(request).unwrap();
         assert_eq!(input.value, "a🫚");
         assert_eq!(input.cursor_byte, "a🫚".len());
         assert_eq!(overlay.lines()[1], "Value: a🫚");
 
-        assert!(overlay.move_input_left(request));
+        assert!(overlay.edit_input(request, TextInputEdit::Left));
         assert!(overlay.insert_input_text(request, "é"));
         assert_eq!(overlay.input_value(request), Some("aé🫚"));
-        overlay.insert_input_text(request, "root");
-        assert!(overlay.input_value(request).unwrap().len() <= 8);
+        assert_eq!(overlay.lines()[1], "Value: aé🫚");
+        for rejected in ["root", "x\u{7}", ""] {
+            assert!(!overlay.insert_input_text(request, rejected));
+            assert_eq!(overlay.input_value(request), Some("aé🫚"));
+        }
         assert!(!overlay.replace_input_text(request, "bad\nvalue"));
-        assert!(overlay.set_input_cursor_from_column(request, "Value: ".chars().count()));
-        assert!(overlay.delete_input(request));
-        assert!(!overlay.input_value(request).unwrap().starts_with('a'));
 
         let replacement = overlay.show("Replacement", vec!["body".into()]);
         assert_ne!(request, replacement);
         assert!(overlay.input_info(request).is_none());
         assert!(!overlay.insert_input_text(request, "stale"));
+        assert!(!overlay.edit_input(request, TextInputEdit::Home));
+    }
+
+    #[test]
+    fn input_edits_and_clicks_keep_the_caret_between_graphemes() {
+        let cluster = "e\u{301}";
+        let (mut overlay, request) = input_overlay(&format!("{cluster}x"), 32);
+        let caret = |overlay: &InfoOverlay| overlay.input_info(request).unwrap().cursor_byte;
+
+        assert!(overlay.edit_input(request, TextInputEdit::Left));
+        assert_eq!(caret(&overlay), cluster.len());
+        assert!(overlay.edit_input(request, TextInputEdit::Left));
+        assert_eq!(caret(&overlay), 0);
+        assert!(!overlay.edit_input(request, TextInputEdit::Left));
+        assert!(overlay.edit_input(request, TextInputEdit::Delete));
+        assert_eq!(overlay.input_value(request), Some("x"));
+
+        assert!(overlay.replace_input_text(request, &format!("{cluster}x")));
+        let label = "Value: ".chars().count();
+        // The combining mark's column is inside the cluster.
+        assert!(overlay.set_input_cursor_from_column(request, label + 1));
+        assert_eq!(caret(&overlay), 0);
+        assert!(overlay.set_input_cursor_from_column(request, label + 40));
+        assert_eq!(caret(&overlay), cluster.len() + 1);
+        assert!(!overlay.set_input_cursor_from_column(request, label + 40));
+
+        assert!(overlay.replace_input_text(request, "one two"));
+        assert!(overlay.edit_input(request, TextInputEdit::BackspaceWord));
+        assert_eq!(overlay.input_value(request), Some("one "));
+    }
+
+    #[test]
+    fn caret_only_moves_scroll_the_caret_into_view() {
+        let (mut overlay, request) = input_overlay(&"x".repeat(40), 64);
+        overlay.set_viewport(5, 10);
+        let label = "Value: ".chars().count();
+        assert!(overlay.horizontal_offset() > label);
+
+        assert!(overlay.edit_input(request, TextInputEdit::Home));
+        assert_eq!(overlay.horizontal_offset(), label);
+        assert!(overlay.edit_input(request, TextInputEdit::End));
+        assert!(overlay.horizontal_offset() > label);
     }
 
     #[test]

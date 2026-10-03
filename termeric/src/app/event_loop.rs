@@ -15,6 +15,7 @@ use crate::ui::settings::SettingsKey;
 
 use super::App;
 use super::redraw_scheduler::RedrawReason;
+use super::text_field_keys::FieldKey;
 
 impl App {
     pub(super) fn resumed(&mut self, event_loop: &ActiveEventLoop) {
@@ -322,78 +323,69 @@ impl App {
                                 self.info_overlay.activate_focused(request_id)
                             }
                         } else if self.info_overlay.input_focused() {
-                            match &event.logical_key {
-                                Key::Named(NamedKey::Escape) => {
-                                    InfoOverlayAction::CancelInput { request_id }
+                            if let Some(field_key) = self.text_edit_for_key(&event.logical_key) {
+                                if let FieldKey::Edit(edit) = field_key {
+                                    self.info_overlay.edit_input(request_id, edit);
                                 }
-                                Key::Named(NamedKey::Backspace) => {
-                                    self.info_overlay.backspace_input(request_id);
-                                    InfoOverlayAction::None
-                                }
-                                Key::Named(NamedKey::Delete) => {
-                                    self.info_overlay.delete_input(request_id);
-                                    InfoOverlayAction::None
-                                }
-                                Key::Named(NamedKey::ArrowLeft) => {
-                                    self.info_overlay.move_input_left(request_id);
-                                    InfoOverlayAction::None
-                                }
-                                Key::Named(NamedKey::ArrowRight) => {
-                                    self.info_overlay.move_input_right(request_id);
-                                    InfoOverlayAction::None
-                                }
-                                Key::Named(NamedKey::Home) => {
-                                    self.info_overlay.move_input_home(request_id);
-                                    InfoOverlayAction::None
-                                }
-                                Key::Named(NamedKey::End) => {
-                                    self.info_overlay.move_input_end(request_id);
-                                    InfoOverlayAction::None
-                                }
-                                Key::Named(NamedKey::ArrowUp) => InfoOverlayAction::ScrollLines {
-                                    request_id,
-                                    delta: -1,
-                                },
-                                Key::Named(NamedKey::ArrowDown) => InfoOverlayAction::ScrollLines {
-                                    request_id,
-                                    delta: 1,
-                                },
-                                Key::Named(NamedKey::PageUp) => InfoOverlayAction::ScrollLines {
-                                    request_id,
-                                    delta: -(self.info_overlay.viewport_rows() as isize),
-                                },
-                                Key::Named(NamedKey::PageDown) => InfoOverlayAction::ScrollLines {
-                                    request_id,
-                                    delta: self.info_overlay.viewport_rows() as isize,
-                                },
-                                Key::Character(character)
-                                    if self.modifiers.control_key()
-                                        && character.as_str().eq_ignore_ascii_case("c") =>
-                                {
-                                    InfoOverlayAction::Copy { request_id }
-                                }
-                                Key::Character(character)
-                                    if self.modifiers.control_key()
-                                        && character.as_str().eq_ignore_ascii_case("d") =>
-                                {
-                                    self.info_overlay.choice(request_id, "unset").map_or(
-                                        InfoOverlayAction::None,
-                                        |_| InfoOverlayAction::Choose {
+                                InfoOverlayAction::None
+                            } else {
+                                match &event.logical_key {
+                                    Key::Named(NamedKey::Escape) => {
+                                        InfoOverlayAction::CancelInput { request_id }
+                                    }
+                                    Key::Named(NamedKey::ArrowUp) => {
+                                        InfoOverlayAction::ScrollLines {
                                             request_id,
-                                            choice_id: "unset".into(),
-                                        },
-                                    )
+                                            delta: -1,
+                                        }
+                                    }
+                                    Key::Named(NamedKey::ArrowDown) => {
+                                        InfoOverlayAction::ScrollLines {
+                                            request_id,
+                                            delta: 1,
+                                        }
+                                    }
+                                    Key::Named(NamedKey::PageUp) => {
+                                        InfoOverlayAction::ScrollLines {
+                                            request_id,
+                                            delta: -(self.info_overlay.viewport_rows() as isize),
+                                        }
+                                    }
+                                    Key::Named(NamedKey::PageDown) => {
+                                        InfoOverlayAction::ScrollLines {
+                                            request_id,
+                                            delta: self.info_overlay.viewport_rows() as isize,
+                                        }
+                                    }
+                                    Key::Character(character)
+                                        if self.modifiers.control_key()
+                                            && character.as_str().eq_ignore_ascii_case("c") =>
+                                    {
+                                        InfoOverlayAction::Copy { request_id }
+                                    }
+                                    Key::Character(character)
+                                        if self.modifiers.control_key()
+                                            && character.as_str().eq_ignore_ascii_case("d") =>
+                                    {
+                                        self.info_overlay.choice(request_id, "unset").map_or(
+                                            InfoOverlayAction::None,
+                                            |_| InfoOverlayAction::Choose {
+                                                request_id,
+                                                choice_id: "unset".into(),
+                                            },
+                                        )
+                                    }
+                                    Key::Character(character)
+                                        if !self.modifiers.control_key()
+                                            && !self.modifiers.super_key()
+                                            && !self.modifiers.alt_key() =>
+                                    {
+                                        self.info_overlay
+                                            .insert_input_text(request_id, character.as_str());
+                                        InfoOverlayAction::None
+                                    }
+                                    _ => InfoOverlayAction::None,
                                 }
-                                Key::Character(character)
-                                    if !self.modifiers.control_key()
-                                        && !self.modifiers.super_key()
-                                        && !self.modifiers.alt_key() =>
-                                {
-                                    self.info_overlay
-                                        .insert_input_text(request_id, character.as_str());
-                                    InfoOverlayAction::None
-                                }
-                                _ => InfoOverlayAction::None,
                             }
                         } else {
                             match &event.logical_key {

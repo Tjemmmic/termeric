@@ -1,8 +1,8 @@
 //! Workspace rename keyboard ownership after higher-priority modal surfaces.
 
+use super::text_field_keys::FieldKey;
 use super::*;
 use crate::session::panel::SessionPanelAction;
-use crate::ui::text_input::TextInputEdit;
 use winit::keyboard::{Key, NamedKey};
 
 impl App {
@@ -10,33 +10,9 @@ impl App {
         if !self.session_panel.is_open() || !self.session_panel.is_renaming() {
             return false;
         }
-        let edit = match key {
-            Key::Named(NamedKey::ArrowLeft) => Some(TextInputEdit::Left),
-            Key::Named(NamedKey::ArrowRight) => Some(TextInputEdit::Right),
-            Key::Named(NamedKey::Home) => Some(TextInputEdit::Home),
-            Key::Named(NamedKey::End) => Some(TextInputEdit::End),
-            Key::Named(NamedKey::Backspace) => Some(TextInputEdit::Backspace),
-            Key::Named(NamedKey::Delete) => Some(TextInputEdit::Delete),
-            _ => None,
-        };
-        if let Some(edit) = edit {
-            if self.alt_graph_active {
+        if let Some(field_key) = self.text_edit_for_key(key) {
+            let FieldKey::Edit(edit) = field_key else {
                 return true;
-            }
-            let edit = if self.modifiers == ModifiersState::CONTROL {
-                match edit {
-                    TextInputEdit::Left => TextInputEdit::WordLeft,
-                    TextInputEdit::Right => TextInputEdit::WordRight,
-                    TextInputEdit::Backspace => TextInputEdit::BackspaceWord,
-                    TextInputEdit::Delete => TextInputEdit::DeleteWord,
-                    _ => return true,
-                }
-            } else if !self.modifiers.is_empty() {
-                // Selection is not implemented. Never reinterpret modified
-                // edits as plain deletion or forward them to the terminal.
-                return true;
-            } else {
-                edit
             };
             self.session_panel.rename_edit(edit);
         } else {

@@ -1,8 +1,8 @@
 //! Shared query editing dispatch, after higher-priority modal interception.
 
+use super::text_field_keys::FieldKey;
 use super::*;
-use crate::ui::text_input::TextInputEdit;
-use winit::keyboard::{Key, NamedKey};
+use winit::keyboard::Key;
 
 impl App {
     /// True means the key belongs to a palette, even when its busy stage is
@@ -14,32 +14,10 @@ impl App {
         {
             return false;
         }
-        let edit = match key {
-            Key::Named(NamedKey::ArrowLeft) => TextInputEdit::Left,
-            Key::Named(NamedKey::ArrowRight) => TextInputEdit::Right,
-            Key::Named(NamedKey::Home) => TextInputEdit::Home,
-            Key::Named(NamedKey::End) => TextInputEdit::End,
-            Key::Named(NamedKey::Backspace) => TextInputEdit::Backspace,
-            Key::Named(NamedKey::Delete) => TextInputEdit::Delete,
-            _ => return false,
-        };
-        if self.alt_graph_active {
-            return true;
-        }
-        let edit = if self.modifiers == ModifiersState::CONTROL {
-            match edit {
-                TextInputEdit::Left => TextInputEdit::WordLeft,
-                TextInputEdit::Right => TextInputEdit::WordRight,
-                TextInputEdit::Backspace => TextInputEdit::BackspaceWord,
-                TextInputEdit::Delete => TextInputEdit::DeleteWord,
-                _ => return true,
-            }
-        } else if !self.modifiers.is_empty() {
-            // Unsupported modified edits are consumed, never reinterpreted as
-            // unmodified deletion or passed to a terminal behind the modal.
-            return true;
-        } else {
-            edit
+        let edit = match self.text_edit_for_key(key) {
+            Some(FieldKey::Edit(edit)) => edit,
+            Some(FieldKey::Consume) => return true,
+            None => return false,
         };
         if self.domain_picker.is_active() {
             self.domain_picker.edit_input(edit);
@@ -63,6 +41,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use winit::keyboard::NamedKey;
 
     #[test]
     fn palette_query_keys_edit_only_the_active_model_and_insert_at_its_caret() {
