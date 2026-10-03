@@ -482,6 +482,28 @@ impl Application {
         }
     }
 
+    /// The window a request names by control ID `window_id`, unless it is
+    /// closing.
+    fn live_window(&self, native_id: WindowId, window_id: u64) -> Result<&App, String> {
+        self.windows
+            .get(&native_id)
+            .filter(|window| !window.should_exit)
+            .ok_or_else(|| format!("GUI window {window_id} is closing"))
+    }
+
+    fn live_window_mut(&mut self, native_id: WindowId, window_id: u64) -> Result<&mut App, String> {
+        self.windows
+            .get_mut(&native_id)
+            .filter(|window| !window.should_exit)
+            .ok_or_else(|| format!("GUI window {window_id} is closing"))
+    }
+
+    /// The live window a request names by control ID, with its native ID.
+    fn live_control_window(&self, window_id: u64) -> Result<(WindowId, &App), String> {
+        let native_id = self.control_native_window_id(window_id)?;
+        Ok((native_id, self.live_window(native_id, window_id)?))
+    }
+
     fn plugin_process_inventory(&self) -> crate::control::protocol::ProcessInventory {
         let windows: Vec<_> = self
             .window_order
@@ -525,10 +547,7 @@ impl Application {
             }
             self.control_native_window_id(window_id)?
         };
-        self.windows
-            .get(&native_id)
-            .filter(|window| !window.should_exit)
-            .ok_or_else(|| format!("GUI window {window_id} is closing"))?;
+        self.live_window(native_id, window_id)?;
         Ok(native_id)
     }
 
@@ -1004,10 +1023,7 @@ impl Application {
         {
             let native_id = self.control_native_window_id(window_id)?;
             let (text, truncated) = self
-                .windows
-                .get(&native_id)
-                .filter(|window| !window.should_exit)
-                .ok_or_else(|| format!("GUI window {window_id} is closing"))?
+                .live_window(native_id, window_id)?
                 .read_agent_view_conversation(session_id)?;
             return Ok(Response::Conversation {
                 process_id: std::process::id(),
@@ -1317,15 +1333,7 @@ impl Application {
 
         let (window_id, control, context) = match request {
             Request::CreateTab { window_id, .. } => {
-                let native_id = match self.control_native_window_id(*window_id) {
-                    Ok(id) => id,
-                    Err(_) => return Some(responder),
-                };
-                let Some(window) = self
-                    .windows
-                    .get(&native_id)
-                    .filter(|window| !window.should_exit)
-                else {
+                let Ok((native_id, window)) = self.live_control_window(*window_id) else {
                     return Some(responder);
                 };
                 match window.control_live_domain_create_tab() {
@@ -1340,15 +1348,7 @@ impl Application {
                 direction,
                 ..
             } => {
-                let native_id = match self.control_native_window_id(*window_id) {
-                    Ok(id) => id,
-                    Err(_) => return Some(responder),
-                };
-                let Some(window) = self
-                    .windows
-                    .get(&native_id)
-                    .filter(|window| !window.should_exit)
-                else {
+                let Ok((native_id, window)) = self.live_control_window(*window_id) else {
                     return Some(responder);
                 };
                 match window.control_live_domain_split(*tab_id, *pane_id, *direction) {
@@ -1359,15 +1359,7 @@ impl Application {
             Request::CloseTab {
                 window_id, tab_id, ..
             } => {
-                let native_id = match self.control_native_window_id(*window_id) {
-                    Ok(id) => id,
-                    Err(_) => return Some(responder),
-                };
-                let Some(window) = self
-                    .windows
-                    .get(&native_id)
-                    .filter(|window| !window.should_exit)
-                else {
+                let Ok((native_id, window)) = self.live_control_window(*window_id) else {
                     return Some(responder);
                 };
                 match window.control_live_domain_close_tab(*tab_id) {
@@ -1387,15 +1379,7 @@ impl Application {
                 pane_id,
                 ..
             } => {
-                let native_id = match self.control_native_window_id(*window_id) {
-                    Ok(id) => id,
-                    Err(_) => return Some(responder),
-                };
-                let Some(window) = self
-                    .windows
-                    .get(&native_id)
-                    .filter(|window| !window.should_exit)
-                else {
+                let Ok((native_id, window)) = self.live_control_window(*window_id) else {
                     return Some(responder);
                 };
                 match window.control_live_domain_close_pane(*tab_id, *pane_id) {
@@ -1416,15 +1400,7 @@ impl Application {
                 ratio_millis,
                 ..
             } => {
-                let native_id = match self.control_native_window_id(*window_id) {
-                    Ok(id) => id,
-                    Err(_) => return Some(responder),
-                };
-                let Some(window) = self
-                    .windows
-                    .get(&native_id)
-                    .filter(|window| !window.should_exit)
-                else {
+                let Ok((native_id, window)) = self.live_control_window(*window_id) else {
                     return Some(responder);
                 };
                 match window.control_live_domain_resize_divider(*tab_id, *divider_id, *ratio_millis)
@@ -1452,15 +1428,7 @@ impl Application {
                 destination_index,
                 ..
             } if source_window_id == destination_window_id => {
-                let native_id = match self.control_native_window_id(*source_window_id) {
-                    Ok(id) => id,
-                    Err(_) => return Some(responder),
-                };
-                let Some(window) = self
-                    .windows
-                    .get(&native_id)
-                    .filter(|window| !window.should_exit)
-                else {
+                let Ok((native_id, window)) = self.live_control_window(*source_window_id) else {
                     return Some(responder);
                 };
                 match window.control_live_domain_move_tab(*tab_id, *destination_index) {
@@ -1488,15 +1456,7 @@ impl Application {
                 direction,
                 ..
             } if source_window_id == destination_window_id => {
-                let native_id = match self.control_native_window_id(*source_window_id) {
-                    Ok(id) => id,
-                    Err(_) => return Some(responder),
-                };
-                let Some(window) = self
-                    .windows
-                    .get(&native_id)
-                    .filter(|window| !window.should_exit)
-                else {
+                let Ok((native_id, window)) = self.live_control_window(*source_window_id) else {
                     return Some(responder);
                 };
                 match window.control_live_domain_move_pane(
@@ -1870,11 +1830,7 @@ impl Application {
                 (*control_id == source_window).then_some(*native_id)
             })
             .ok_or_else(|| format!("GUI window {source_window} does not exist"))?;
-        let source = self
-            .windows
-            .get(&source_native_id)
-            .filter(|window| !window.should_exit)
-            .ok_or_else(|| format!("GUI window {source_window} is closing"))?;
+        let source = self.live_window(source_native_id, source_window)?;
         let config = source.config.clone();
         let cwd = source
             .tabs
@@ -2066,11 +2022,7 @@ impl Application {
             })
             .ok_or_else(|| format!("GUI window {source_window} does not exist"))?;
         let (config, inherited_cwd) = {
-            let source = self
-                .windows
-                .get(&source_native_id)
-                .filter(|window| !window.should_exit)
-                .ok_or_else(|| format!("GUI window {source_window} is closing"))?;
+            let source = self.live_window(source_native_id, source_window)?;
             let inherited_cwd = source
                 .tabs
                 .as_ref()
@@ -2135,11 +2087,7 @@ impl Application {
             .iter()
             .find_map(|(native_id, control_id)| (*control_id == window_id).then_some(*native_id))
             .ok_or_else(|| format!("GUI window {window_id} does not exist"))?;
-        let target = self
-            .windows
-            .get(&native_id)
-            .filter(|window| !window.should_exit)
-            .ok_or_else(|| format!("GUI window {window_id} is closing"))?;
+        let target = self.live_window(native_id, window_id)?;
         let target_tabs = target
             .tabs
             .as_ref()
@@ -2183,11 +2131,7 @@ impl Application {
             .iter()
             .find_map(|(native_id, control_id)| (*control_id == window_id).then_some(*native_id))
             .ok_or_else(|| format!("GUI window {window_id} does not exist"))?;
-        let target = self
-            .windows
-            .get(&native_id)
-            .filter(|window| !window.should_exit)
-            .ok_or_else(|| format!("GUI window {window_id} is closing"))?;
+        let target = self.live_window(native_id, window_id)?;
         let target_tabs = target
             .tabs
             .as_ref()
@@ -2235,10 +2179,7 @@ impl Application {
             .iter()
             .find_map(|(native_id, control_id)| (*control_id == window_id).then_some(*native_id))
             .ok_or_else(|| format!("GUI window {window_id} does not exist"))?;
-        self.windows
-            .get(&native_id)
-            .filter(|window| !window.should_exit)
-            .ok_or_else(|| format!("GUI window {window_id} is closing"))?;
+        self.live_window(native_id, window_id)?;
         validate_process_pane_creation_capacity(process_pane_count(&self.windows))?;
         let created_pane = self
             .windows
@@ -2260,11 +2201,7 @@ impl Application {
         window_id: u64,
     ) -> std::result::Result<crate::control::protocol::Response, String> {
         let native_id = self.control_native_window_id(window_id)?;
-        let window = self
-            .windows
-            .get(&native_id)
-            .filter(|window| !window.should_exit)
-            .ok_or_else(|| format!("GUI window {window_id} is closing"))?;
+        let window = self.live_window(native_id, window_id)?;
         let native = window
             .window
             .as_ref()
@@ -2307,11 +2244,7 @@ impl Application {
         visible: bool,
     ) -> std::result::Result<crate::control::protocol::Response, String> {
         let native_id = self.control_native_window_id(window_id)?;
-        let window = self
-            .windows
-            .get_mut(&native_id)
-            .filter(|window| !window.should_exit)
-            .ok_or_else(|| format!("GUI window {window_id} is closing"))?;
+        let window = self.live_window_mut(native_id, window_id)?;
         if !window.launch.quick_access {
             return Err(format!(
                 "GUI window {window_id} is not a quick-access terminal"
@@ -2346,10 +2279,7 @@ impl Application {
     ) -> std::result::Result<crate::control::protocol::Response, String> {
         let native_id = self.control_native_window_id(window_id)?;
         let changed = self
-            .windows
-            .get_mut(&native_id)
-            .filter(|window| !window.should_exit)
-            .ok_or_else(|| format!("GUI window {window_id} is closing"))?
+            .live_window_mut(native_id, window_id)?
             .select_control_tab(tab_id)?;
         Ok(crate::control::protocol::Response::TabSelected {
             process_id: std::process::id(),
@@ -2369,10 +2299,7 @@ impl Application {
     ) -> std::result::Result<crate::control::protocol::Response, String> {
         let native_id = self.control_native_window_id(window_id)?;
         let (tab_changed, pane_changed) = self
-            .windows
-            .get_mut(&native_id)
-            .filter(|window| !window.should_exit)
-            .ok_or_else(|| format!("GUI window {window_id} is closing"))?
+            .live_window_mut(native_id, window_id)?
             .focus_control_pane(tab_id, pane_id)?;
         Ok(crate::control::protocol::Response::PaneFocused {
             process_id: std::process::id(),
@@ -2411,10 +2338,7 @@ impl Application {
         tab_id: u64,
     ) -> std::result::Result<crate::control::protocol::Response, String> {
         let native_id = self.control_native_window_id(window_id)?;
-        self.windows
-            .get_mut(&native_id)
-            .filter(|window| !window.should_exit)
-            .ok_or_else(|| format!("GUI window {window_id} is closing"))?
+        self.live_window_mut(native_id, window_id)?
             .close_control_tab(tab_id)?;
         Ok(crate::control::protocol::Response::TabCloseRequested {
             process_id: std::process::id(),
@@ -2433,10 +2357,7 @@ impl Application {
     ) -> std::result::Result<crate::control::protocol::Response, String> {
         let native_id = self.control_native_window_id(window_id)?;
         let (remaining_panes, focused_pane_id) = self
-            .windows
-            .get_mut(&native_id)
-            .filter(|window| !window.should_exit)
-            .ok_or_else(|| format!("GUI window {window_id} is closing"))?
+            .live_window_mut(native_id, window_id)?
             .close_control_pane(tab_id, pane_id)?;
         Ok(crate::control::protocol::Response::PaneClosed {
             process_id: std::process::id(),
@@ -2461,10 +2382,7 @@ impl Application {
         let destination_native = self.control_native_window_id(destination_window_id)?;
         if source_native == destination_native {
             let changed = self
-                .windows
-                .get_mut(&source_native)
-                .filter(|window| !window.should_exit)
-                .ok_or_else(|| format!("GUI window {source_window_id} is closing"))?
+                .live_window_mut(source_native, source_window_id)?
                 .move_control_tab_within_window(tab_id, destination_index)?;
             return Ok(crate::control::protocol::Response::TabMoved {
                 process_id: std::process::id(),
@@ -2479,19 +2397,13 @@ impl Application {
             });
         }
 
-        self.windows
-            .get(&destination_native)
-            .filter(|window| !window.should_exit)
-            .ok_or_else(|| format!("GUI window {destination_window_id} is closing"))?;
+        self.live_window(destination_native, destination_window_id)?;
         let mut destination = self
             .windows
             .remove(&destination_native)
             .expect("validated destination window remains present");
         let result = self
-            .windows
-            .get_mut(&source_native)
-            .filter(|window| !window.should_exit)
-            .ok_or_else(|| format!("GUI window {source_window_id} is closing"))
+            .live_window_mut(source_native, source_window_id)
             .and_then(|source| {
                 Self::transfer_control_tab(
                     source,
@@ -2601,10 +2513,7 @@ impl Application {
         let source_native = self.control_native_window_id(source_window_id)?;
         let destination_native = self.control_native_window_id(destination_window_id)?;
         let destination_pane_id = if source_native == destination_native {
-            self.windows
-                .get_mut(&source_native)
-                .filter(|window| !window.should_exit)
-                .ok_or_else(|| format!("GUI window {source_window_id} is closing"))?
+            self.live_window_mut(source_native, source_window_id)?
                 .move_control_pane_within_window(
                     source_tab_id,
                     pane_id,
@@ -2613,19 +2522,13 @@ impl Application {
                     direction,
                 )?
         } else {
-            self.windows
-                .get(&destination_native)
-                .filter(|window| !window.should_exit)
-                .ok_or_else(|| format!("GUI window {destination_window_id} is closing"))?;
+            self.live_window(destination_native, destination_window_id)?;
             let mut destination = self
                 .windows
                 .remove(&destination_native)
                 .expect("validated destination window remains present");
             let result = self
-                .windows
-                .get_mut(&source_native)
-                .filter(|window| !window.should_exit)
-                .ok_or_else(|| format!("GUI window {source_window_id} is closing"))
+                .live_window_mut(source_native, source_window_id)
                 .and_then(|source| {
                     Self::transfer_control_pane(
                         source,
@@ -2724,11 +2627,7 @@ impl Application {
         height: u32,
     ) -> std::result::Result<crate::control::protocol::Response, String> {
         let native_id = self.control_native_window_id(window_id)?;
-        let window = self
-            .windows
-            .get(&native_id)
-            .filter(|window| !window.should_exit)
-            .ok_or_else(|| format!("GUI window {window_id} is closing"))?;
+        let window = self.live_window(native_id, window_id)?;
         let native = window
             .window
             .as_ref()
@@ -2755,10 +2654,7 @@ impl Application {
     ) -> std::result::Result<crate::control::protocol::Response, String> {
         let native_id = self.control_native_window_id(window_id)?;
         let (previous_ratio_millis, changed) = self
-            .windows
-            .get_mut(&native_id)
-            .filter(|window| !window.should_exit)
-            .ok_or_else(|| format!("GUI window {window_id} is closing"))?
+            .live_window_mut(native_id, window_id)?
             .resize_control_divider(tab_id, divider_id, ratio_millis)?;
         Ok(crate::control::protocol::Response::DividerResized {
             process_id: std::process::id(),
@@ -2782,10 +2678,7 @@ impl Application {
     ) -> std::result::Result<crate::control::protocol::Response, String> {
         let native_id = self.control_native_window_id(window_id)?;
         let (screen, history_lines, text, truncated) = self
-            .windows
-            .get(&native_id)
-            .filter(|window| !window.should_exit)
-            .ok_or_else(|| format!("GUI window {window_id} is closing"))?
+            .live_window(native_id, window_id)?
             .read_control_text(tab_id, pane_id, history_lines, max_bytes)?;
         Ok(crate::control::protocol::Response::Text {
             process_id: std::process::id(),
@@ -2811,10 +2704,7 @@ impl Application {
     ) -> std::result::Result<crate::control::protocol::Response, String> {
         let native_id = self.control_native_window_id(window_id)?;
         let (input_bytes, wire_bytes, disposition, confirmation_id) = self
-            .windows
-            .get_mut(&native_id)
-            .filter(|window| !window.should_exit)
-            .ok_or_else(|| format!("GUI window {window_id} is closing"))?
+            .live_window_mut(native_id, window_id)?
             .send_control_text(tab_id, pane_id, text, paste, enter)?;
         Ok(crate::control::protocol::Response::InputAccepted {
             process_id: std::process::id(),
@@ -2844,10 +2734,7 @@ impl Application {
     ) -> std::result::Result<crate::control::protocol::Response, String> {
         let native_id = self.control_native_window_id(window_id)?;
         let pending_approval = self
-            .windows
-            .get_mut(&native_id)
-            .filter(|window| !window.should_exit)
-            .ok_or_else(|| format!("GUI window {window_id} is closing"))?
+            .live_window_mut(native_id, window_id)?
             .submit_control_text_to_agent(
                 tab_id,
                 pane_id,
@@ -2879,10 +2766,7 @@ impl Application {
     ) -> std::result::Result<crate::control::protocol::Response, String> {
         let native_id = self.control_native_window_id(window_id)?;
         let answered = self
-            .windows
-            .get_mut(&native_id)
-            .filter(|window| !window.should_exit)
-            .ok_or_else(|| format!("GUI window {window_id} is closing"))?
+            .live_window_mut(native_id, window_id)?
             .answer_agent_view_approval(
                 session_id,
                 approval_id,
@@ -2911,10 +2795,7 @@ impl Application {
     ) -> std::result::Result<crate::control::protocol::Response, String> {
         let native_id = self.control_native_window_id(window_id)?;
         let pending_approval = self
-            .windows
-            .get_mut(&native_id)
-            .filter(|window| !window.should_exit)
-            .ok_or_else(|| format!("GUI window {window_id} is closing"))?
+            .live_window_mut(native_id, window_id)?
             .submit_to_agent_view(session_id, text, supervisor, peer_process)?;
         Ok(crate::control::protocol::Response::SessionInputAccepted {
             process_id: std::process::id(),
