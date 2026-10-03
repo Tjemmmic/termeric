@@ -5,9 +5,10 @@
 //! eliminate duplicated scrim, card, text, scrollbar, and button rendering
 //! across 17+ `build_*` functions in the renderer.
 
+use super::UiPalette;
 use super::rect::RectPipeline;
 use super::text::TextPipeline;
-use super::{UiPalette, adjust_alpha};
+use crate::ui::color::{scale_alpha, with_alpha};
 use crate::ui::constants::*;
 
 /// Drawing context — borrows the pipelines and carries layout metrics.
@@ -30,8 +31,8 @@ impl<'a> DrawCtx<'a> {
     /// For slide-in panels that only dim the area left of the panel,
     /// pass the panel x position as `width`.
     pub fn draw_scrim(&mut self, width: f32, height: f32, color: [f32; 4], anim: f32) {
-        let c = [color[0], color[1], color[2], color[3] * anim];
-        self.rect.push_rect(0.0, 0.0, width, height, c);
+        self.rect
+            .push_rect(0.0, 0.0, width, height, scale_alpha(color, anim));
     }
 
     // ── Card ───────────────────────────────────────────────────
@@ -226,7 +227,7 @@ impl<'a> DrawCtx<'a> {
         }
 
         // Track
-        let track_color = adjust_alpha(self.ui.palette_border, 0.15 * anim);
+        let track_color = with_alpha(self.ui.palette_border, 0.15 * anim);
         self.rect
             .push_rounded_rect(x, y, width, height, track_color, 2.0);
 
@@ -240,7 +241,7 @@ impl<'a> DrawCtx<'a> {
             0.0
         };
         let thumb_y = y + scroll_frac * (height - thumb_h);
-        let thumb_color = adjust_alpha(self.ui.palette_accent, 0.5 * anim);
+        let thumb_color = with_alpha(self.ui.palette_accent, 0.5 * anim);
         self.rect
             .push_rounded_rect(x, thumb_y, width, thumb_h, thumb_color, 2.0);
     }
@@ -281,18 +282,18 @@ impl<'a> DrawCtx<'a> {
         let bh = h - inset * 2.0;
 
         // Background
-        let btn_bg = adjust_alpha(self.ui.palette_accent, bg_alpha * anim);
+        let btn_bg = with_alpha(self.ui.palette_accent, bg_alpha * anim);
         self.rect
             .push_rounded_rect(bx, by, bw, bh, btn_bg, BUTTON_CORNER_RADIUS);
 
         // Border
         let border_alpha = if hovered { 0.65 } else { 0.35 };
-        let btn_border = adjust_alpha(self.ui.palette_accent, border_alpha * anim);
+        let btn_border = with_alpha(self.ui.palette_accent, border_alpha * anim);
         self.draw_card_border(bx, by, bw, bh, btn_border, BUTTON_CORNER_RADIUS);
 
         // Hover glow
         if hovered && !pressed {
-            let glow = adjust_alpha(self.ui.palette_accent, 0.06 * anim);
+            let glow = with_alpha(self.ui.palette_accent, 0.06 * anim);
             self.rect.push_rounded_rect(
                 bx - 2.0,
                 by - 2.0,
@@ -305,7 +306,7 @@ impl<'a> DrawCtx<'a> {
 
         // Centered text
         let text_alpha = if hovered { 1.0 } else { 0.8 };
-        let text_color = adjust_alpha(self.ui.palette_accent, text_alpha * anim);
+        let text_color = with_alpha(self.ui.palette_accent, text_alpha * anim);
         let text_x = bx + (bw - label.chars().count() as f32 * self.cell_width) / 2.0;
         let text_y = by + (bh - self.cell_height) / 2.0;
         self.draw_text(label, text_x, text_y, text_color);

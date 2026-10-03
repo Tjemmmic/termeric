@@ -1,9 +1,10 @@
 //! Search bar rendering and hit-testing.
 
+use super::Renderer;
 use super::icons::Icon;
 use super::types::*;
-use super::{Renderer, adjust_alpha};
 use crate::terminal::search::{SearchBarInfo, SearchBarLayout};
+use crate::ui::color::{scale_alpha, with_alpha};
 use crate::ui::text_input_viewport::TextInputViewport;
 
 impl Renderer {
@@ -36,7 +37,7 @@ impl Renderer {
 
         // ── Floating surface with a hairline border ──
         let border = if info.regex_error.is_some() {
-            adjust_alpha(error_color, 0.7)
+            with_alpha(error_color, 0.7)
         } else {
             self.ui.menu_border
         };
@@ -82,7 +83,7 @@ impl Renderer {
                         &hint[hint_view.text_range],
                         view.text_x,
                         view.text_y,
-                        adjust_alpha(dim, dim[3] * 0.7),
+                        scale_alpha(dim, 0.7),
                         self.cell_width,
                         clip,
                     );
@@ -143,7 +144,7 @@ impl Renderer {
                     rect.y,
                     rect.width,
                     rect.height,
-                    adjust_alpha(accent, 0.28),
+                    with_alpha(accent, 0.28),
                     px(5.0),
                 );
             }
@@ -173,7 +174,7 @@ impl Renderer {
         let navigation_color = if layout.navigable {
             dim
         } else {
-            adjust_alpha(dim, dim[3] * 0.4)
+            scale_alpha(dim, 0.4)
         };
         for (rect, icon) in [
             (layout.previous, Icon::ChevronUp),

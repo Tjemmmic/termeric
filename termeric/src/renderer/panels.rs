@@ -1,7 +1,8 @@
 //! Slide-in panel rendering — commands panel, session management panel
 
+use super::Renderer;
 use super::icons::Icon;
-use super::{Renderer, adjust_alpha};
+use crate::ui::color::{scale_alpha, with_alpha};
 
 /// Bounds of a side-panel control, whichever panel's layout produced it.
 #[derive(Debug, Clone, Copy)]
@@ -231,7 +232,7 @@ impl Renderer {
                     );
                     (
                         placeholder,
-                        adjust_alpha(dim, dim[3] * 0.6),
+                        scale_alpha(dim, 0.6),
                         hint.map_or(0..0, |hint| hint.text_range),
                     )
                 } else {
@@ -312,7 +313,7 @@ impl Renderer {
                 let danger = if info.hovered == Some(CommandControl::Delete(index)) {
                     self.ui.search_error
                 } else {
-                    adjust_alpha(self.ui.search_error, 0.85)
+                    with_alpha(self.ui.search_error, 0.85)
                 };
                 self.build_panel_button(delete, "Delete", false, danger);
             }
@@ -331,7 +332,7 @@ impl Renderer {
                 thumb_top,
                 px(3.0),
                 thumb_height,
-                adjust_alpha(dim, 0.45),
+                with_alpha(dim, 0.45),
                 px(1.5),
             );
         }
@@ -452,7 +453,7 @@ impl Renderer {
             // for a request, a result, or a failure.
             let fill = match row_info.state {
                 AgentRowState::Unknown => None,
-                AgentRowState::Idle => Some(adjust_alpha(dim, 0.5)),
+                AgentRowState::Idle => Some(with_alpha(dim, 0.5)),
                 AgentRowState::Working => Some(text),
                 AgentRowState::NeedsYou => Some(self.ui.warning),
                 AgentRowState::Done => Some(self.ui.success),
@@ -520,7 +521,7 @@ impl Renderer {
                 thumb_top,
                 px(3.0),
                 thumb_height,
-                adjust_alpha(dim, 0.45),
+                with_alpha(dim, 0.45),
                 px(1.5),
             );
         }
@@ -552,7 +553,7 @@ impl Renderer {
             let color = if info.hovered == Some(AgentsControl::Supervisor) {
                 text
             } else {
-                adjust_alpha(text, 0.9)
+                with_alpha(text, 0.9)
             };
             self.build_panel_button(section.button, label, true, color);
             for (index, entry) in supervisor
@@ -604,7 +605,7 @@ impl Renderer {
         let hairline = self.scale_factor.round().max(1.0);
         let scrim = self.ui.scrim;
         self.rect_pipeline
-            .push_rect(0.0, y, x, height, adjust_alpha(scrim, scrim[3] * animation));
+            .push_rect(0.0, y, x, height, scale_alpha(scrim, animation));
         self.rect_pipeline
             .push_rect(x, y, width, height, self.ui.menu_bg);
         self.rect_pipeline
@@ -935,7 +936,7 @@ impl Renderer {
                 if let Some(rename) = entry.rename_button {
                     self.build_panel_button(rename, "Rename", false, text);
                 }
-                let danger = adjust_alpha(self.ui.search_error, 0.95);
+                let danger = with_alpha(self.ui.search_error, 0.95);
                 self.build_panel_button(entry.delete_button, "Delete", false, danger);
             }
         }

@@ -59,6 +59,7 @@ use crate::config::theme::Theme;
 use crate::config::{CursorStyle, RendererBackend, TabBarPosition};
 use crate::terminal::search::{Search, SearchBarInfo};
 use crate::terminal::url::UrlCache;
+use crate::ui::color::{luminance, mix, scale_rgb, with_alpha};
 use crate::ui::settings::SettingsPanelInfo;
 use anyhow::Result;
 use std::collections::BTreeMap;
@@ -286,14 +287,14 @@ impl UiPalette {
         // hover surfaces step from it toward the foreground (so light and dark
         // themes both work), and the theme's active-tab color is reserved for
         // the thin active indicator.
-        let strip = adjust_alpha(tab_inactive.to_f32_array(), 1.0);
+        let strip = with_alpha(tab_inactive.to_f32_array(), 1.0);
         let chrome = |amount: f32| mix(strip, fg.to_f32_array(), amount);
         let tab_text_active = fg.to_f32_array();
-        let tab_text_inactive = adjust_alpha(fg.to_f32_array(), 0.62);
+        let tab_text_inactive = with_alpha(fg.to_f32_array(), 0.62);
         let mut palette = Self {
             background: bg.to_wgpu(),
             selection: selection.to_f32_array(),
-            selection_flash: adjust_alpha(fg.to_f32_array(), 0.85),
+            selection_flash: with_alpha(fg.to_f32_array(), 0.85),
             selection_text: theme.ui.selection_text.map(|c| c.to_f32_array()),
             cursor: cursor.to_f32_array(),
             cursor_text: theme.ui.cursor_text.to_f32_array(),
@@ -305,7 +306,7 @@ impl UiPalette {
             menu_border: chrome(0.14),
             menu_highlight: chrome(0.11),
             menu_text: fg.to_f32_array(),
-            menu_text_dim: adjust_alpha(fg.to_f32_array(), 0.55),
+            menu_text_dim: with_alpha(fg.to_f32_array(), 0.55),
             tab_activity: theme.primary.yellow.to_f32_array(),
             warning: theme.primary.yellow.to_f32_array(),
             error: theme.primary.red.to_f32_array(),
@@ -314,14 +315,14 @@ impl UiPalette {
             tab_text_active,
             tab_text_inactive,
             // Settings panel
-            settings_bg: adjust_alpha(shade(bg.to_f32_array(), 0.85), 0.97),
+            settings_bg: with_alpha(scale_rgb(bg.to_f32_array(), 0.85), 0.97),
             settings_header: fg.to_f32_array(),
             settings_text: fg.to_f32_array(),
-            settings_text_dim: adjust_alpha(fg.to_f32_array(), 0.55),
+            settings_text_dim: with_alpha(fg.to_f32_array(), 0.55),
             settings_accent: tab_active.to_f32_array(),
-            settings_separator: adjust_alpha(tab_border.to_f32_array(), 0.4),
+            settings_separator: with_alpha(tab_border.to_f32_array(), 0.4),
             // Warm scrim derived from theme background
-            scrim: adjust_alpha(shade(bg.to_f32_array(), 0.3), 0.30),
+            scrim: with_alpha(scale_rgb(bg.to_f32_array(), 0.3), 0.30),
             // Search highlights and the find box's error color
             search_match: theme.ui.search_match.with_alpha(0.35).to_f32_array(),
             search_match_current: theme.ui.search_match.with_alpha(0.65).to_f32_array(),
@@ -329,14 +330,14 @@ impl UiPalette {
             // URL/hyperlink color from theme
             url: theme.ui.url.to_f32_array(),
             // Command palette — fully theme-derived
-            palette_scrim: adjust_alpha(shade(bg.to_f32_array(), 0.0), 0.3),
-            palette_bg: shade(bg.to_f32_array(), 0.65),
-            palette_input_bg: shade(bg.to_f32_array(), 0.50),
+            palette_scrim: with_alpha(scale_rgb(bg.to_f32_array(), 0.0), 0.3),
+            palette_bg: scale_rgb(bg.to_f32_array(), 0.65),
+            palette_input_bg: scale_rgb(bg.to_f32_array(), 0.50),
             palette_accent: cursor.to_f32_array(),
             palette_text: fg.to_f32_array(),
-            palette_text_dim: adjust_alpha(fg.to_f32_array(), 0.50),
+            palette_text_dim: with_alpha(fg.to_f32_array(), 0.50),
             palette_match_highlight: cursor.to_f32_array(),
-            palette_border: adjust_alpha(tab_border.to_f32_array(), 0.5),
+            palette_border: with_alpha(tab_border.to_f32_array(), 0.5),
         };
         if high_contrast {
             palette.enforce_high_contrast();
@@ -381,30 +382,6 @@ impl UiPalette {
         self.scrim[3] = self.scrim[3].max(0.65);
         self.palette_scrim[3] = self.palette_scrim[3].max(0.72);
     }
-}
-
-fn shade(color: [f32; 4], factor: f32) -> [f32; 4] {
-    [
-        (color[0] * factor).clamp(0.0, 1.0),
-        (color[1] * factor).clamp(0.0, 1.0),
-        (color[2] * factor).clamp(0.0, 1.0),
-        color[3],
-    ]
-}
-
-pub(crate) fn adjust_alpha(mut color: [f32; 4], alpha: f32) -> [f32; 4] {
-    color[3] = alpha;
-    color
-}
-
-pub(super) fn mix(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
-    let t = t.clamp(0.0, 1.0);
-    [
-        a[0] + (b[0] - a[0]) * t,
-        a[1] + (b[1] - a[1]) * t,
-        a[2] + (b[2] - a[2]) * t,
-        a[3] + (b[3] - a[3]) * t,
-    ]
 }
 
 /// Logical height of the tab bar, sized for 10pt UI labels.
@@ -513,18 +490,8 @@ mod surface_format_tests {
     }
 }
 
-fn apply_brightness(color: [f32; 4], brightness: f32) -> [f32; 4] {
-    [
-        (color[0] * brightness).clamp(0.0, 1.0),
-        (color[1] * brightness).clamp(0.0, 1.0),
-        (color[2] * brightness).clamp(0.0, 1.0),
-        color[3],
-    ]
-}
-
 fn contrast_text(bg: [f32; 4]) -> [f32; 4] {
-    let luminance = 0.2126 * bg[0] + 0.7152 * bg[1] + 0.0722 * bg[2];
-    if luminance > 0.6 {
+    if luminance(bg) > 0.6 {
         [0.12, 0.09, 0.07, 1.0]
     } else {
         [0.95, 0.92, 0.88, 1.0]
@@ -1640,9 +1607,9 @@ impl Renderer {
                     } else if pane.read_only {
                         [0.30, 0.78, 0.72, 1.0]
                     } else if pane.is_zoomed {
-                        adjust_alpha(self.ui.palette_accent, 0.9)
+                        with_alpha(self.ui.palette_accent, 0.9)
                     } else {
-                        adjust_alpha(self.ui.cursor, 0.5)
+                        with_alpha(self.ui.cursor, 0.5)
                     };
                     let bw = if pane.broadcast_target.is_some() || pane.read_only {
                         4.0
@@ -1952,7 +1919,7 @@ impl Renderer {
         let selection_base = self.ui.selection;
         let selection_flash = self.ui.selection_flash;
         let selection_color =
-            apply_brightness(mix(selection_base, selection_flash, copy_flash), brightness);
+            scale_rgb(mix(selection_base, selection_flash, copy_flash), brightness);
 
         let scroll_offset = grid.scroll_offset();
         let scroll_offset_i32 = i32::try_from(scroll_offset).unwrap_or(i32::MAX);
@@ -2117,7 +2084,7 @@ impl Renderer {
                         y,
                         cell_width,
                         cell_height,
-                        apply_brightness(self.ui.search_match_current, brightness),
+                        scale_rgb(self.ui.search_match_current, brightness),
                     );
                 } else if is_search_match {
                     self.rect_pipeline.push_rect(
@@ -2125,7 +2092,7 @@ impl Renderer {
                         y,
                         cell_width,
                         cell_height,
-                        apply_brightness(self.ui.search_match, brightness),
+                        scale_rgb(self.ui.search_match, brightness),
                     );
                 } else if style.background != default_bg {
                     self.rect_pipeline.push_rect(
@@ -2133,12 +2100,7 @@ impl Renderer {
                         y,
                         cell_width,
                         cell_height,
-                        [
-                            style.background.r as f32 / 255.0 * brightness,
-                            style.background.g as f32 / 255.0 * brightness,
-                            style.background.b as f32 / 255.0 * brightness,
-                            1.0,
-                        ],
+                        scale_rgb(style.background.to_f32_array(), brightness),
                     );
                 }
 
@@ -2221,7 +2183,7 @@ impl Renderer {
                     && (is_hyperlink || is_detected_url)
                     && style.underline.is_none()
                 {
-                    let link_color = apply_brightness(self.ui.url, brightness);
+                    let link_color = scale_rgb(self.ui.url, brightness);
                     let underline_y = y + cell_height - 2.0;
                     self.draw_dotted_underline(x, underline_y, cell_width, link_color);
                 }
@@ -2270,7 +2232,7 @@ impl Renderer {
                 let cursor_height = cursor_rows as f32 * cell_height;
 
                 if y + cursor_height <= max_grid_y {
-                    let cursor_color = apply_brightness(
+                    let cursor_color = scale_rgb(
                         dynamic_colors
                             .cursor()
                             .map_or(self.ui.cursor, |color| color.to_f32_array()),

@@ -2,10 +2,11 @@
 //!
 //! These are centered modal overlays that dim the background with a scrim.
 
+use super::Renderer;
 use super::draw::DrawCtx;
 use super::types::*;
-use super::{Renderer, adjust_alpha, mix};
 use crate::terminal::guardrails::GuardrailLayout;
+use crate::ui::color::{mix, scale_alpha, with_alpha};
 use crate::ui::constants::*;
 
 impl Renderer {
@@ -21,10 +22,7 @@ impl Renderer {
         let cell_height = self.cell_height;
 
         // ── Scrim ──
-        let scrim = adjust_alpha(
-            self.ui.palette_scrim,
-            self.ui.palette_scrim[3] * 0.85 * anim,
-        );
+        let scrim = scale_alpha(self.ui.palette_scrim, 0.85 * anim);
         self.rect_pipeline
             .push_rect(0.0, 0.0, window_width, window_height, scrim);
 
@@ -57,7 +55,7 @@ impl Renderer {
         }
 
         // ── Card background ──
-        let card_bg = adjust_alpha(self.ui.palette_bg, anim);
+        let card_bg = with_alpha(self.ui.palette_bg, anim);
         self.rect_pipeline.push_rounded_rect(
             card_x,
             card_y,
@@ -68,7 +66,7 @@ impl Renderer {
         );
 
         // ── Card border (subtle) ──
-        let border = adjust_alpha(self.ui.palette_border, 0.3 * anim);
+        let border = with_alpha(self.ui.palette_border, 0.3 * anim);
         // Top/bottom
         self.rect_pipeline.push_rect(
             card_x + CARD_CORNER_RADIUS,
@@ -101,7 +99,7 @@ impl Renderer {
         );
 
         // ── Outer glow accent line at top ──
-        let glow_color = adjust_alpha(self.ui.palette_accent, 0.2 * anim);
+        let glow_color = with_alpha(self.ui.palette_accent, 0.2 * anim);
         self.rect_pipeline.push_rect(
             card_x + 24.0,
             card_y,
@@ -112,7 +110,7 @@ impl Renderer {
 
         // ── Title — centered, accent ──
         let title_y = card_y + padding;
-        let title_color = adjust_alpha(self.ui.palette_accent, anim);
+        let title_color = with_alpha(self.ui.palette_accent, anim);
         let max_title_chars = ((card_width - padding * 2.0) / cell_width).floor().max(1.0) as usize;
         let visible_title: String = info.title.chars().take(max_title_chars).collect();
         let title_x =
@@ -128,7 +126,7 @@ impl Renderer {
         let sep_fade_w = sep_full * 0.15;
 
         // Center segment (full opacity)
-        let sep_color = adjust_alpha(self.ui.palette_border, 0.25 * anim);
+        let sep_color = with_alpha(self.ui.palette_border, 0.25 * anim);
         self.rect_pipeline.push_rect(
             card_x + padding + sep_fade_w,
             sep_y,
@@ -137,7 +135,7 @@ impl Renderer {
             sep_color,
         );
         // Left fade
-        let sep_dim = adjust_alpha(self.ui.palette_border, 0.08 * anim);
+        let sep_dim = with_alpha(self.ui.palette_border, 0.08 * anim);
         self.rect_pipeline
             .push_rect(card_x + padding, sep_y, sep_fade_w, 1.0, sep_dim);
         // Right fade
@@ -151,8 +149,8 @@ impl Renderer {
 
         // ── Content lines ──
         let content_start_y = layout.content.y;
-        let text_color = adjust_alpha(self.ui.palette_text, 0.9 * anim);
-        let dim_color = adjust_alpha(self.ui.palette_text_dim, 0.7 * anim);
+        let text_color = with_alpha(self.ui.palette_text, 0.9 * anim);
+        let dim_color = with_alpha(self.ui.palette_text_dim, 0.7 * anim);
         let content_x = layout.content.x;
         let (mouse_x, mouse_y) = info.mouse_pos.unwrap_or((-1.0, -1.0));
 
@@ -177,7 +175,7 @@ impl Renderer {
                     line_y,
                     layout.content.width,
                     line_height,
-                    adjust_alpha(self.ui.palette_accent, 0.08 * anim),
+                    with_alpha(self.ui.palette_accent, 0.08 * anim),
                     BUTTON_CORNER_RADIUS,
                 );
                 self.rect_pipeline.push_rect(
@@ -185,7 +183,7 @@ impl Renderer {
                     line_y + line_height - BORDER_WIDTH,
                     layout.content.width,
                     BORDER_WIDTH,
-                    adjust_alpha(self.ui.palette_accent, 0.55 * anim),
+                    with_alpha(self.ui.palette_accent, 0.55 * anim),
                 );
             } else if choice.is_some() {
                 let alpha = if choice_hovered { 0.14 } else { 0.06 };
@@ -194,7 +192,7 @@ impl Renderer {
                     line_y,
                     layout.content.width,
                     line_height,
-                    adjust_alpha(self.ui.palette_accent, alpha * anim),
+                    with_alpha(self.ui.palette_accent, alpha * anim),
                     BUTTON_CORNER_RADIUS,
                 );
             }
@@ -202,7 +200,7 @@ impl Renderer {
                 continue;
             }
             let color = if choice_hovered {
-                adjust_alpha(self.ui.palette_accent, anim)
+                with_alpha(self.ui.palette_accent, anim)
             } else if line.starts_with("  ") {
                 dim_color
             } else {
@@ -230,7 +228,7 @@ impl Renderer {
                         line_y + cell_height * 0.12,
                         2.0_f32.max(char_scale * 0.12),
                         (line_height - cell_height * 0.24).max(1.0),
-                        adjust_alpha(self.ui.palette_accent, anim),
+                        with_alpha(self.ui.palette_accent, anim),
                         1.0,
                     );
                 }
@@ -321,12 +319,12 @@ impl Renderer {
             let bw = bw - inset * 2.0;
             let bh = bh - inset * 2.0;
 
-            let btn_bg = adjust_alpha(this.ui.palette_accent, bg_alpha * anim);
+            let btn_bg = with_alpha(this.ui.palette_accent, bg_alpha * anim);
             this.rect_pipeline
                 .push_rounded_rect(bx, by, bw, bh, btn_bg, BUTTON_CORNER_RADIUS);
 
             let border_alpha = if hovered { 0.65 } else { 0.35 };
-            let btn_border = adjust_alpha(this.ui.palette_accent, border_alpha * anim);
+            let btn_border = with_alpha(this.ui.palette_accent, border_alpha * anim);
             this.rect_pipeline.push_rect(
                 bx + BUTTON_CORNER_RADIUS,
                 by,
@@ -357,7 +355,7 @@ impl Renderer {
             );
 
             if hovered && !pressed {
-                let glow = adjust_alpha(this.ui.palette_accent, 0.06 * anim);
+                let glow = with_alpha(this.ui.palette_accent, 0.06 * anim);
                 this.rect_pipeline.push_rounded_rect(
                     bx - 2.0,
                     by - 2.0,
@@ -369,7 +367,7 @@ impl Renderer {
             }
 
             let text_alpha = if hovered { 1.0 } else { 0.8 };
-            let text_color = adjust_alpha(this.ui.palette_accent, text_alpha * anim);
+            let text_color = with_alpha(this.ui.palette_accent, text_alpha * anim);
             let text_x = bx + (bw - label.chars().count() as f32 * cell_width) / 2.0;
             let text_y = by + (bh - cell_height) / 2.0;
             for (i, c) in label.chars().enumerate() {
@@ -423,7 +421,7 @@ impl Renderer {
                 InfoOverlayFocus::Continue => Some(layout.continue_button),
             };
             if let Some(bounds) = bounds {
-                let color = adjust_alpha(self.ui.palette_accent, anim);
+                let color = with_alpha(self.ui.palette_accent, anim);
                 self.rect_pipeline
                     .push_rect(bounds.x, bounds.y, bounds.width, 2.0, color);
                 self.rect_pipeline.push_rect(
@@ -447,7 +445,7 @@ impl Renderer {
 
         // ── Keyboard hint ──
         let hint_y = btn_y + btn_h + cell_height * 0.5;
-        let hint_color = adjust_alpha(self.ui.palette_text_dim, 0.35 * anim);
+        let hint_color = with_alpha(self.ui.palette_text_dim, 0.35 * anim);
         let first_line = info
             .scroll_offset
             .saturating_add(1)
@@ -492,10 +490,7 @@ impl Renderer {
         let layout = info.layout;
         let char_scale = layout.char_scale;
 
-        let scrim = adjust_alpha(
-            self.ui.palette_scrim,
-            self.ui.palette_scrim[3] * 0.85 * anim,
-        );
+        let scrim = scale_alpha(self.ui.palette_scrim, 0.85 * anim);
         self.rect_pipeline
             .push_rect(0.0, 0.0, window_width, window_height, scrim);
         let card_x = layout.card.x;
@@ -504,7 +499,7 @@ impl Renderer {
         let card_height = layout.card.height;
         let padding = layout.padding;
 
-        let card_bg = adjust_alpha(self.ui.palette_bg, anim);
+        let card_bg = with_alpha(self.ui.palette_bg, anim);
         self.rect_pipeline.push_rounded_rect(
             card_x,
             card_y,
@@ -514,13 +509,13 @@ impl Renderer {
             CARD_CORNER_RADIUS,
         );
 
-        let border = adjust_alpha(self.ui.palette_border, 0.4 * anim);
+        let border = with_alpha(self.ui.palette_border, 0.4 * anim);
         self.rect_pipeline
             .push_rounded_rect(card_x, card_y, card_width, 1.0, border, 0.0);
 
         let title_y = card_y + padding;
         let title = format!("Diff: {}", info.filename);
-        let title_color = adjust_alpha(self.ui.palette_accent, anim);
+        let title_color = with_alpha(self.ui.palette_accent, anim);
         let title_x = card_x + padding;
         for (i, c) in title.chars().enumerate() {
             let cx = title_x + i as f32 * char_scale;
@@ -531,13 +526,13 @@ impl Renderer {
         }
 
         let content_start_y = layout.content.y;
-        let dim_color = adjust_alpha(self.ui.palette_text_dim, 0.7 * anim);
-        let added_color = adjust_alpha(self.ui.success, anim);
-        let removed_color = adjust_alpha(self.ui.error, anim);
-        let header_color = adjust_alpha(self.ui.palette_accent, anim);
-        let omitted_color = adjust_alpha(self.ui.warning, anim);
-        let added_bg = adjust_alpha(self.ui.success, 0.15 * anim);
-        let removed_bg = adjust_alpha(self.ui.error, 0.15 * anim);
+        let dim_color = with_alpha(self.ui.palette_text_dim, 0.7 * anim);
+        let added_color = with_alpha(self.ui.success, anim);
+        let removed_color = with_alpha(self.ui.error, anim);
+        let header_color = with_alpha(self.ui.palette_accent, anim);
+        let omitted_color = with_alpha(self.ui.warning, anim);
+        let added_bg = with_alpha(self.ui.success, 0.15 * anim);
+        let removed_bg = with_alpha(self.ui.error, 0.15 * anim);
 
         for (visible_row, (_, row)) in info.visible_rows.iter().enumerate() {
             let line_y = content_start_y + visible_row as f32 * layout.line_height;
@@ -665,7 +660,7 @@ impl Renderer {
             .chars()
             .take(((card_width - padding * 2.0) / char_scale).floor().max(1.0) as usize)
             .collect();
-        let hint_color = adjust_alpha(self.ui.palette_text_dim, 0.5 * anim);
+        let hint_color = with_alpha(self.ui.palette_text_dim, 0.5 * anim);
         let hint_x = card_x + (card_width - hint.chars().count() as f32 * char_scale) / 2.0;
         let hint_y = layout.done_button.y + layout.done_button.height + cell_height * 0.45;
         for (index, character) in hint.chars().enumerate() {
@@ -695,7 +690,7 @@ impl Renderer {
         let char_scale = layout.char_scale;
 
         // Scrim
-        let scrim = adjust_alpha(self.ui.palette_scrim, self.ui.palette_scrim[3] * anim);
+        let scrim = scale_alpha(self.ui.palette_scrim, anim);
         self.rect_pipeline
             .push_rect(0.0, 0.0, window_width, window_height, scrim);
 
@@ -706,7 +701,7 @@ impl Renderer {
         let padding = layout.padding;
 
         // Card background
-        let card_bg = adjust_alpha(self.ui.palette_bg, anim);
+        let card_bg = with_alpha(self.ui.palette_bg, anim);
         self.rect_pipeline.push_rounded_rect(
             card_x,
             card_y,
@@ -717,7 +712,7 @@ impl Renderer {
         );
 
         // Card border
-        let border = adjust_alpha(self.ui.palette_border, 0.4 * anim);
+        let border = with_alpha(self.ui.palette_border, 0.4 * anim);
         self.rect_pipeline
             .push_rounded_rect(card_x, card_y, card_width, 1.0, border, 0.0);
 
@@ -728,7 +723,7 @@ impl Renderer {
             ContextPickerPhase::FilePaths => "Choose Workspace Files",
             ContextPickerPhase::Gathering => "Gathering Context",
         };
-        let title_color = adjust_alpha(self.ui.palette_accent, anim);
+        let title_color = with_alpha(self.ui.palette_accent, anim);
         let title_x = card_x + (card_width - title.chars().count() as f32 * cell_width) / 2.0;
         for (i, c) in title.chars().enumerate() {
             self.text_pipeline
@@ -736,10 +731,10 @@ impl Renderer {
         }
 
         let content_start_y = layout.content.y;
-        let text_color = adjust_alpha(self.ui.palette_text, anim);
-        let dim_color = adjust_alpha(self.ui.palette_text_dim, 0.5 * anim);
-        let highlight_color = adjust_alpha(self.ui.palette_accent, 0.12 * anim);
-        let check_color = adjust_alpha(self.ui.palette_accent, anim);
+        let text_color = with_alpha(self.ui.palette_text, anim);
+        let dim_color = with_alpha(self.ui.palette_text_dim, 0.5 * anim);
+        let highlight_color = with_alpha(self.ui.palette_accent, 0.12 * anim);
+        let check_color = with_alpha(self.ui.palette_accent, anim);
 
         match snapshot.phase {
             ContextPickerPhase::Sources => {
@@ -805,7 +800,7 @@ impl Renderer {
                     layout.file_input.y,
                     layout.file_input.width,
                     layout.file_input.height,
-                    adjust_alpha(self.ui.palette_input_bg, anim),
+                    with_alpha(self.ui.palette_input_bg, anim),
                     BUTTON_CORNER_RADIUS,
                 );
                 let columns = (layout.file_input.width / char_scale).floor().max(1.0) as usize;
@@ -910,7 +905,7 @@ impl Renderer {
             .chars()
             .take(((card_width - padding * 2.0) / char_scale).floor().max(1.0) as usize)
             .collect();
-        let hint_color = adjust_alpha(self.ui.palette_text_dim, 0.5 * anim);
+        let hint_color = with_alpha(self.ui.palette_text_dim, 0.5 * anim);
         let hint_x = card_x + (card_width - hint.chars().count() as f32 * char_scale) / 2.0;
         let hint_y = layout.cancel_button.y + layout.cancel_button.height + cell_height * 0.45;
         for (i, c) in hint.chars().enumerate() {
@@ -955,11 +950,11 @@ impl Renderer {
             } else {
                 "REVIEW"
             };
-            let label_color = adjust_alpha(ctx.ui.palette_text_dim, 0.12 * anim);
+            let label_color = with_alpha(ctx.ui.palette_text_dim, 0.12 * anim);
             let label_y = window_height * 0.15;
             ctx.draw_centered_text(severity_label, window_width / 2.0, label_y, label_color);
             // Thin separator line under the scrim label, spaced by cell_height
-            let sep_color = adjust_alpha(ctx.ui.palette_border, 0.06 * anim);
+            let sep_color = with_alpha(ctx.ui.palette_border, 0.06 * anim);
             ctx.draw_separator(
                 window_width * 0.3,
                 label_y + ctx.cell_height,
@@ -987,8 +982,8 @@ impl Renderer {
         } else {
             self.ui.warning
         };
-        let card_bg = adjust_alpha(mix(self.ui.palette_bg, severity_color, 0.12), anim);
-        let border_color = adjust_alpha(severity_color, 0.8 * anim);
+        let card_bg = with_alpha(mix(self.ui.palette_bg, severity_color, 0.12), anim);
+        let border_color = with_alpha(severity_color, 0.8 * anim);
 
         {
             let mut ctx = DrawCtx {
@@ -1032,7 +1027,7 @@ impl Renderer {
             // Command display — clipped
             let cmd_y = title_y + title_height;
             let cmd_label = format!("> {}", info.command);
-            let cmd_color = adjust_alpha(ctx.ui.palette_text, anim);
+            let cmd_color = with_alpha(ctx.ui.palette_text, anim);
             ctx.draw_clipped_text_scaled(
                 &cmd_label,
                 card_x + padding,
@@ -1044,7 +1039,7 @@ impl Renderer {
 
             // Reason text — clipped
             let reason_y = cmd_y + cmd_height;
-            let reason_color = adjust_alpha(ctx.ui.palette_text_dim, 0.8 * anim);
+            let reason_color = with_alpha(ctx.ui.palette_text_dim, 0.8 * anim);
             ctx.draw_clipped_text_scaled(
                 &info.reason,
                 card_x + padding,
@@ -1057,7 +1052,7 @@ impl Renderer {
             // Context line — clipped at cell_width scale (uses draw_clipped_text)
             let context_y = reason_y + reason_height;
             let context_label = format!("Where: {} · As: {}", info.target, info.user);
-            let context_color = adjust_alpha(ctx.ui.palette_text_dim, 0.6 * anim);
+            let context_color = with_alpha(ctx.ui.palette_text_dim, 0.6 * anim);
             ctx.draw_clipped_text(
                 &context_label,
                 card_x + padding,
@@ -1066,7 +1061,7 @@ impl Renderer {
                 card_x + card_width - padding,
             );
             // Also render separator text via draw_text_scaled
-            let mid_sep_color = adjust_alpha(ctx.ui.palette_border, 0.15 * anim);
+            let mid_sep_color = with_alpha(ctx.ui.palette_border, 0.15 * anim);
             ctx.draw_text_scaled(
                 "---",
                 card_x + padding,
@@ -1076,7 +1071,7 @@ impl Renderer {
             );
 
             // Close icon in top-right corner
-            let close_color = adjust_alpha(ctx.ui.palette_text_dim, 0.4 * anim);
+            let close_color = with_alpha(ctx.ui.palette_text_dim, 0.4 * anim);
             ctx.draw_close_icon(
                 card_x + card_width - padding,
                 card_y + padding,
@@ -1088,7 +1083,7 @@ impl Renderer {
             // Footer hint keeps the keyboard path discoverable without making
             // Enter the visually preferred destructive choice.
             let footer_y = layout.cancel_button.y - cell_height * 1.25;
-            let hint_color = adjust_alpha(ctx.ui.palette_text_dim, 0.5 * anim);
+            let hint_color = with_alpha(ctx.ui.palette_text_dim, 0.5 * anim);
             ctx.draw_centered_text_scaled(
                 "Enter/Esc Cancel  Ctrl+Enter Run anyway",
                 card_x + card_width / 2.0,

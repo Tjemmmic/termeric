@@ -45,8 +45,8 @@ impl Renderer {
                 self.resolve_extra_cursor_color(colors.text, dynamic_colors, self.ui.cursor_text);
             let (cursor_color, text_color) = extra_cursor_color_pair(
                 colors,
-                term_color_array(style.foreground),
-                term_color_array(style.background),
+                style.foreground.to_f32_array(),
+                style.background.to_f32_array(),
                 resolved_cursor,
                 resolved_text,
             );
@@ -118,7 +118,7 @@ impl Renderer {
             return;
         }
 
-        let mut painted_cursor = apply_brightness(cursor_color, brightness);
+        let mut painted_cursor = scale_rgb(cursor_color, brightness);
         painted_cursor[3] = opacity;
         match shape {
             CursorStyle::Block => {
@@ -202,10 +202,6 @@ impl Renderer {
             }
         }
     }
-}
-
-fn term_color_array(color: termeric_core::Color) -> [f32; 4] {
-    color.to_f32_array()
 }
 
 fn effective_extra_cursor_shape(shape: ExtraCursorShape, main: CursorStyle) -> CursorStyle {

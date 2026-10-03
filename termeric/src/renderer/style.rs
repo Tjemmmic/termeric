@@ -3,6 +3,7 @@
 use super::TerminalPalette;
 use super::glyph_cache::FontStyle;
 use super::types::{TextBlinkPhases, VisibleTextBlink};
+use crate::ui::color::scale_rgb;
 use termeric_core::{Cell, CellAttrs, Color as TermColor};
 
 const DIM_FACTOR: f32 = 0.66;
@@ -79,12 +80,12 @@ impl ResolvedCellStyle {
     /// Resolve terminal foreground, selection/cursor override, dim, and pane
     /// focus brightness in that order.
     pub(super) fn text_color(self, override_color: Option<[f32; 4]>, brightness: f32) -> [f32; 4] {
-        let color = override_color.unwrap_or_else(|| color_array(self.foreground));
+        let color = override_color.unwrap_or_else(|| self.foreground.to_f32_array());
         shade_foreground(color, self.dim, brightness)
     }
 
     pub(super) fn decoration_color(self, brightness: f32) -> [f32; 4] {
-        shade_foreground(color_array(self.underline_color), self.dim, brightness)
+        shade_foreground(self.underline_color.to_f32_array(), self.dim, brightness)
     }
 }
 
@@ -228,21 +229,8 @@ pub(super) fn visible_blink_for_cell(cell: &Cell) -> VisibleTextBlink {
     }
 }
 
-fn color_array(color: TermColor) -> [f32; 4] {
-    [
-        color.r as f32 / 255.0,
-        color.g as f32 / 255.0,
-        color.b as f32 / 255.0,
-        1.0,
-    ]
-}
-
-fn shade_foreground(mut color: [f32; 4], dim: bool, brightness: f32) -> [f32; 4] {
-    let factor = brightness * if dim { DIM_FACTOR } else { 1.0 };
-    color[0] = (color[0] * factor).clamp(0.0, 1.0);
-    color[1] = (color[1] * factor).clamp(0.0, 1.0);
-    color[2] = (color[2] * factor).clamp(0.0, 1.0);
-    color
+fn shade_foreground(color: [f32; 4], dim: bool, brightness: f32) -> [f32; 4] {
+    scale_rgb(color, brightness * if dim { DIM_FACTOR } else { 1.0 })
 }
 
 #[cfg(test)]

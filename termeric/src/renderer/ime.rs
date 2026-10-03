@@ -2,7 +2,8 @@
 
 use unicode_segmentation::UnicodeSegmentation;
 
-use super::{ImePreeditRenderInfo, Renderer, adjust_alpha};
+use super::{ImePreeditRenderInfo, Renderer};
+use crate::ui::color::with_alpha;
 
 /// Where the preedit is drawn: its box in window pixels and the text that
 /// fits in it.
@@ -95,7 +96,7 @@ impl Renderer {
             y,
             width,
             height,
-            adjust_alpha(self.ui.palette_input_bg, 0.98),
+            with_alpha(self.ui.palette_input_bg, 0.98),
             5.0,
         );
         self.rect_pipeline.push_rect(
@@ -103,7 +104,7 @@ impl Renderer {
             y + height - 2.0,
             (width - 6.0).max(1.0),
             1.0,
-            adjust_alpha(self.ui.palette_accent, 0.75),
+            with_alpha(self.ui.palette_accent, 0.75),
         );
 
         let text_x = x + padding;

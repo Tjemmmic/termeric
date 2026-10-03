@@ -1,8 +1,9 @@
 //! Settings dialog rendering — header with search, page sidebar, rows, and a
 //! footer with Save.
 
+use super::Renderer;
 use super::icons::Icon;
-use super::{Renderer, adjust_alpha};
+use crate::ui::color::scale_alpha;
 use crate::ui::constants::*;
 use crate::ui::settings::{
     SettingKind, SettingsControl, SettingsModalLayout, SettingsPage, SettingsPanelInfo,
@@ -26,7 +27,7 @@ impl Renderer {
         let cell_height = self.cell_height;
         let scale = self.scale_factor;
         let px = |logical: f32| (logical * scale).round().max(1.0);
-        let fade = |color: [f32; 4], alpha: f32| adjust_alpha(color, color[3] * alpha * anim);
+        let fade = |color: [f32; 4], alpha: f32| scale_alpha(color, alpha * anim);
 
         let scrim = fade(self.ui.palette_scrim, 1.0);
         self.rect_pipeline
@@ -462,7 +463,7 @@ impl Renderer {
         // ── Menu surface: soft shadow, hairline border ──
         let scale = self.scale_factor;
         let px = |logical: f32| (logical * scale).round().max(1.0);
-        let fade = |color: [f32; 4]| adjust_alpha(color, color[3] * anim);
+        let fade = |color: [f32; 4]| scale_alpha(color, anim);
         let radius = px(8.0);
         self.rect_pipeline.push_rounded_rect(
             rect.x,
@@ -516,10 +517,7 @@ impl Renderer {
                     if highlighted {
                         fade(self.ui.menu_highlight)
                     } else {
-                        adjust_alpha(
-                            self.ui.menu_highlight,
-                            self.ui.menu_highlight[3] * 0.55 * anim,
-                        )
+                        scale_alpha(self.ui.menu_highlight, 0.55 * anim)
                     },
                     px(5.0),
                 );

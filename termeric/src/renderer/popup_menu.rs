@@ -1,6 +1,7 @@
 //! Anchored popup menus drawn in the desktop UI face.
 
-use super::{Renderer, adjust_alpha};
+use super::Renderer;
+use crate::ui::color::scale_alpha;
 use crate::ui::popup_menu::{MenuRow, PopupMenuLayout};
 
 /// A menu row as drawn, independent of the action it triggers.
@@ -118,7 +119,7 @@ impl Renderer {
                     let text = if *enabled {
                         self.ui.menu_text
                     } else {
-                        adjust_alpha(self.ui.menu_text_dim, self.ui.menu_text_dim[3] * 0.6)
+                        scale_alpha(self.ui.menu_text_dim, 0.6)
                     };
                     let check_x = row_x + side;
                     if *checked {

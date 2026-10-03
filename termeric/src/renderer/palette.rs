@@ -1,6 +1,7 @@
 //! Command palette rendering — centered modal with search and results list
 
-use super::{Renderer, adjust_alpha};
+use super::Renderer;
+use crate::ui::color::scale_alpha;
 use crate::ui::command_palette::{PaletteInfo, PaletteLayout};
 
 #[cfg(test)]
@@ -121,7 +122,7 @@ impl Renderer {
         animation: f32,
     ) {
         let px = |logical: f32| (logical * self.scale_factor).round().max(1.0);
-        let fade = |color: [f32; 4]| adjust_alpha(color, color[3] * animation);
+        let fade = |color: [f32; 4]| scale_alpha(color, animation);
         let radius = px(10.0);
         for (spread, alpha) in [(px(2.0), 0.18), (px(10.0), 0.10)] {
             self.rect_pipeline.push_rounded_rect(
@@ -166,7 +167,7 @@ impl Renderer {
         let cell_height = self.cell_height;
         let scale = self.scale_factor;
         let px = |logical: f32| (logical * scale).round().max(1.0);
-        let fade = |color: [f32; 4], alpha: f32| adjust_alpha(color, color[3] * alpha * anim);
+        let fade = |color: [f32; 4], alpha: f32| scale_alpha(color, alpha * anim);
 
         let scrim = fade(self.ui.palette_scrim, 1.0);
         self.rect_pipeline

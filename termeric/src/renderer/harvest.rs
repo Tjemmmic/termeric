@@ -5,9 +5,10 @@
 //! - `build_root_cellar()` — slide-in command history panel
 //! - `build_sprout_menu()` — context menu for command actions
 
+use super::Renderer;
 use super::draw::DrawCtx;
-use super::{Renderer, adjust_alpha};
 use crate::renderer::types::{CellarRenderInfo, IndicatorRenderInfo, SproutMenuRenderInfo};
+use crate::ui::color::{scale_alpha, with_alpha};
 
 /// Return the sprout action row under a pointer. Geometry intentionally uses
 /// the same padding and item-height math as `build_sprout_menu`.
@@ -32,12 +33,7 @@ impl Renderer {
 
         for ind in indicators {
             let y = content_y + ind.row as f32 * cell_height;
-            let color = [
-                ind.color[0],
-                ind.color[1],
-                ind.color[2],
-                ind.color[3] * ind.opacity,
-            ];
+            let color = scale_alpha(ind.color, ind.opacity);
 
             // Scale effect: slightly enlarge during pulse
             // We can't truly scale text in the pipeline, but we can adjust
@@ -73,8 +69,8 @@ impl Renderer {
         let panel_height = layout.panel.height;
 
         // Use DrawCtx for card and text rendering
-        let bg = adjust_alpha(self.ui.settings_bg, 0.95 * anim);
-        let border = adjust_alpha(self.ui.tab_border, 0.5 * anim);
+        let bg = with_alpha(self.ui.settings_bg, 0.95 * anim);
+        let border = with_alpha(self.ui.tab_border, 0.5 * anim);
 
         {
             let mut ctx = DrawCtx {
@@ -93,8 +89,8 @@ impl Renderer {
 
             // Header
             let header_y = panel_y + cell_height * 0.5;
-            let text_color = adjust_alpha(ctx.ui.settings_header, anim);
-            let dim_color = adjust_alpha(ctx.ui.settings_text_dim, anim);
+            let text_color = with_alpha(ctx.ui.settings_header, anim);
+            let dim_color = with_alpha(ctx.ui.settings_text_dim, anim);
             ctx.draw_text("Root Cellar", panel_x + cell_width, header_y, text_color);
             ctx.text
                 .push_char('×', layout.close.x, layout.close.y, text_color);
@@ -115,11 +111,11 @@ impl Renderer {
                 )
             };
             let rate_color = if cellar.success_rate > 0.8 {
-                adjust_alpha(self.ui.success, anim)
+                with_alpha(self.ui.success, anim)
             } else if cellar.success_rate > 0.5 {
-                adjust_alpha(self.ui.warning, anim)
+                with_alpha(self.ui.warning, anim)
             } else {
-                adjust_alpha(self.ui.error, anim)
+                with_alpha(self.ui.error, anim)
             };
             ctx.draw_text(
                 &rate_text,
@@ -140,7 +136,7 @@ impl Renderer {
             // Entry list
             for (entry, (_, row)) in cellar.entries.iter().zip(&layout.rows) {
                 let entry_y = row.y;
-                let entry_color = adjust_alpha(entry.health_color, anim);
+                let entry_color = with_alpha(entry.health_color, anim);
 
                 if cellar.selected_id == Some(entry.id) {
                     ctx.rect.push_rounded_rect(
@@ -148,7 +144,7 @@ impl Renderer {
                         row.y,
                         row.width,
                         row.height,
-                        adjust_alpha(ctx.ui.palette_accent, 0.14 * anim),
+                        with_alpha(ctx.ui.palette_accent, 0.14 * anim),
                         4.0,
                     );
                 }
@@ -217,11 +213,11 @@ impl Renderer {
         let cell_height = self.cell_height;
         let anim = menu.opacity;
 
-        let bg = adjust_alpha(self.ui.palette_bg, 0.95 * anim);
-        let border = adjust_alpha(self.ui.palette_border, 0.6 * anim);
-        let text_color = adjust_alpha(self.ui.palette_text, anim);
-        let highlight_bg = adjust_alpha(self.ui.palette_accent, 0.15 * anim);
-        let icon_color = adjust_alpha(self.ui.palette_accent, 0.8 * anim);
+        let bg = with_alpha(self.ui.palette_bg, 0.95 * anim);
+        let border = with_alpha(self.ui.palette_border, 0.6 * anim);
+        let text_color = with_alpha(self.ui.palette_text, anim);
+        let highlight_bg = with_alpha(self.ui.palette_accent, 0.15 * anim);
+        let icon_color = with_alpha(self.ui.palette_accent, 0.8 * anim);
 
         {
             let mut ctx = DrawCtx {
@@ -263,7 +259,7 @@ impl Renderer {
                     if *enabled {
                         icon_color
                     } else {
-                        adjust_alpha(ctx.ui.palette_text, 0.35 * anim)
+                        with_alpha(ctx.ui.palette_text, 0.35 * anim)
                     },
                 );
 
@@ -275,7 +271,7 @@ impl Renderer {
                     if *enabled {
                         text_color
                     } else {
-                        adjust_alpha(ctx.ui.palette_text, 0.45 * anim)
+                        with_alpha(ctx.ui.palette_text, 0.45 * anim)
                     },
                 );
             }

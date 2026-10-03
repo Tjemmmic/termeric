@@ -1,6 +1,7 @@
 //! Toast rendering — bottom-right stacked cards with severity-tinted border.
 
-use super::{Renderer, adjust_alpha};
+use super::Renderer;
+use crate::ui::color::with_alpha;
 use crate::ui::constants::CARD_CORNER_RADIUS;
 use crate::ui::toast::{ToastInfo, ToastSeverity, toast_layout};
 
@@ -32,20 +33,20 @@ impl Renderer {
             // Severity colors — pull from the theme palette.
             let (border_color, accent_color) = match toast.severity {
                 ToastSeverity::Info => (
-                    adjust_alpha(self.ui.palette_border, 0.45 * opacity),
-                    adjust_alpha(self.ui.palette_accent, opacity),
+                    with_alpha(self.ui.palette_border, 0.45 * opacity),
+                    with_alpha(self.ui.palette_accent, opacity),
                 ),
                 ToastSeverity::Success => (
-                    adjust_alpha(self.ui.success, 0.45 * opacity),
-                    adjust_alpha(self.ui.success, opacity),
+                    with_alpha(self.ui.success, 0.45 * opacity),
+                    with_alpha(self.ui.success, opacity),
                 ),
                 ToastSeverity::Warning => (
-                    adjust_alpha(self.ui.warning, 0.55 * opacity),
-                    adjust_alpha(self.ui.warning, opacity),
+                    with_alpha(self.ui.warning, 0.55 * opacity),
+                    with_alpha(self.ui.warning, opacity),
                 ),
                 ToastSeverity::Error => (
-                    adjust_alpha(self.ui.error, 0.65 * opacity),
-                    adjust_alpha(self.ui.error, opacity),
+                    with_alpha(self.ui.error, 0.65 * opacity),
+                    with_alpha(self.ui.error, opacity),
                 ),
             };
 
@@ -95,7 +96,7 @@ impl Renderer {
             // Message text
             let text_x = x + padding + cell_width * 0.8;
             let text_y = y + (row_h - cell_height) / 2.0;
-            let text_color = adjust_alpha(self.ui.palette_text, opacity);
+            let text_color = with_alpha(self.ui.palette_text, opacity);
             let max_chars = ((w - padding * 2.0 - cell_width) / cell_width) as usize;
             let mut cx = text_x;
             for (i, c) in toast.message.chars().enumerate() {

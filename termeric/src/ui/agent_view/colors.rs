@@ -5,6 +5,7 @@
 //! semantic hues: yellow asks for attention, green succeeded, red failed.
 
 use crate::config::theme::Theme;
+use crate::ui::color::{luminance, mix, with_alpha};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Colors {
@@ -46,34 +47,16 @@ pub struct Colors {
     pub scrim: [f32; 4],
 }
 
-fn mix(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
-    [
-        a[0] + (b[0] - a[0]) * t,
-        a[1] + (b[1] - a[1]) * t,
-        a[2] + (b[2] - a[2]) * t,
-        a[3] + (b[3] - a[3]) * t,
-    ]
-}
-
-fn alpha(mut color: [f32; 4], value: f32) -> [f32; 4] {
-    color[3] = value;
-    color
-}
-
-fn luminance(color: [f32; 4]) -> f32 {
-    0.2126 * color[0] + 0.7152 * color[1] + 0.0722 * color[2]
-}
-
 impl Colors {
     pub fn from_theme(theme: &Theme, high_contrast: bool) -> Self {
-        let bg = alpha(theme.ui.background.to_f32_array(), 1.0);
-        let fg = alpha(theme.ui.foreground.to_f32_array(), 1.0);
-        let strong = alpha(theme.bright.white.to_f32_array(), 1.0);
-        let accent = alpha(theme.ui.tab_active.to_f32_array(), 1.0);
-        let yellow = alpha(theme.bright.yellow.to_f32_array(), 1.0);
-        let green = alpha(theme.bright.green.to_f32_array(), 1.0);
-        let red = alpha(theme.bright.red.to_f32_array(), 1.0);
-        let cyan = alpha(theme.bright.cyan.to_f32_array(), 1.0);
+        let bg = with_alpha(theme.ui.background.to_f32_array(), 1.0);
+        let fg = with_alpha(theme.ui.foreground.to_f32_array(), 1.0);
+        let strong = with_alpha(theme.bright.white.to_f32_array(), 1.0);
+        let accent = with_alpha(theme.ui.tab_active.to_f32_array(), 1.0);
+        let yellow = with_alpha(theme.bright.yellow.to_f32_array(), 1.0);
+        let green = with_alpha(theme.bright.green.to_f32_array(), 1.0);
+        let red = with_alpha(theme.bright.red.to_f32_array(), 1.0);
+        let cyan = with_alpha(theme.bright.cyan.to_f32_array(), 1.0);
         // Text on the accent must read: dark on a light accent, light on a
         // dark one.
         let on_accent = if luminance(accent) > 0.45 {
@@ -94,8 +77,8 @@ impl Colors {
             border: mix(bg, fg, 0.16),
             text_strong: strong,
             text: mix(fg, strong, 0.35),
-            text_secondary: alpha(fg, 0.78),
-            text_muted: alpha(fg, 0.6),
+            text_secondary: with_alpha(fg, 0.78),
+            text_muted: with_alpha(fg, 0.6),
             accent,
             on_accent,
             attention: yellow,
@@ -108,15 +91,15 @@ impl Colors {
             code_surface: mix(bg, fg, 0.09),
             well: bg,
             code_text: mix(fg, yellow, 0.25),
-            link: alpha(theme.ui.url.to_f32_array(), 1.0),
-            added_surface: alpha(green, 0.14),
+            link: with_alpha(theme.ui.url.to_f32_array(), 1.0),
+            added_surface: with_alpha(green, 0.14),
             added_text: mix(fg, green, 0.45),
-            removed_surface: alpha(red, 0.14),
+            removed_surface: with_alpha(red, 0.14),
             removed_text: mix(fg, red, 0.45),
-            gutter_text: alpha(fg, 0.42),
+            gutter_text: with_alpha(fg, 0.42),
             focus_ring: accent,
             selection: theme.ui.selection.to_f32_array(),
-            scrim: alpha(bg, 0.55),
+            scrim: with_alpha(bg, 0.55),
         };
         if high_contrast {
             colors.enforce_high_contrast(bg);

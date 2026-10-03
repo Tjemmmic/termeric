@@ -2,6 +2,7 @@
 
 use crate::agent_view::transcript::{Activity, Item};
 use crate::agent_view::{present, session::AgentSession};
+use crate::ui::color::with_alpha;
 use crate::ui::text_layout::UiFace;
 
 use super::super::scene::{Bounds, HitRole, Icon, MenuKind, Prim, SpanPaint, Target, TextNode};
@@ -665,7 +666,7 @@ impl Builder<'_, '_> {
             region.prims.push(Prim::Fill {
                 bounds,
                 radius: self.m.radius,
-                color: with_accent(self.c.accent, 0.08),
+                color: with_alpha(self.c.accent, 0.08),
             });
         } else if hovered {
             region.prims.push(Prim::Fill {
@@ -764,11 +765,6 @@ enum CardAction {
     Menu(Target),
     /// Chooses the card among its siblings.
     Choose(Target),
-}
-
-fn with_accent(mut color: [f32; 4], alpha: f32) -> [f32; 4] {
-    color[3] = alpha;
-    color
 }
 
 /// What a session is doing, in a few words.

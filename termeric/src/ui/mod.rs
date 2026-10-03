@@ -11,6 +11,7 @@ pub mod age;
 pub mod agent_view;
 pub mod agents_panel;
 pub mod animation;
+pub mod color;
 pub mod command_palette;
 pub mod commands;
 pub mod constants;

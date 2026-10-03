@@ -21,6 +21,7 @@ use crate::agent_view::event::{
 };
 use crate::agent_view::session::AgentSession;
 use crate::agent_view::transcript::Activity;
+use crate::ui::color::scale_alpha;
 use crate::ui::text_layout::{
     TextLayout, TextMeasure, TextSize, TextSpan, UiFace, fit_with_ellipsis,
 };
@@ -882,7 +883,7 @@ impl Builder<'_, '_> {
                 radius,
                 stroke: self.m.stroke,
                 color: if dashed {
-                    with_alpha(self.c.border, 0.9)
+                    scale_alpha(self.c.border, 0.9)
                 } else {
                     self.c.border
                 },
@@ -976,11 +977,6 @@ fn merge(region: &mut Region, other: Region) {
             RegionNode::Hit(index) => RegionNode::Hit(index + offset),
             text => text,
         }));
-}
-
-fn with_alpha(mut color: [f32; 4], alpha: f32) -> [f32; 4] {
-    color[3] *= alpha;
-    color
 }
 
 // ── Header and banner ────────────────────────────────────────────────────
@@ -1354,7 +1350,7 @@ impl Builder<'_, '_> {
                 length.round(),
             ),
             radius: width / 2.0,
-            color: with_alpha(self.c.text_muted, 0.45),
+            color: scale_alpha(self.c.text_muted, 0.45),
         });
     }
 
@@ -1600,7 +1596,7 @@ impl Builder<'_, '_> {
             radius: self.m.px(10.0),
             stroke: self.m.stroke,
             color: if focused {
-                with_alpha(self.c.accent, 0.8)
+                scale_alpha(self.c.accent, 0.8)
             } else {
                 self.c.border
             },
@@ -1876,7 +1872,7 @@ impl Builder<'_, '_> {
         let fill = if enabled {
             fill
         } else {
-            with_alpha(fill, 0.45)
+            scale_alpha(fill, 0.45)
         };
         region.prims.push(Prim::Fill {
             bounds: send,

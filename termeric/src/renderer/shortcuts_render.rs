@@ -1,8 +1,9 @@
 //! Shortcuts panel rendering — centered modal with a filter, category
 //! headings, and key recording, styled like the command palette.
 
-use super::{Renderer, adjust_alpha};
+use super::Renderer;
 use crate::input::keybindings::BindableAction;
+use crate::ui::color::scale_alpha;
 use crate::ui::shortcuts_panel::{ShortcutsPanelInfo, ShortcutsPanelLayout};
 
 impl Renderer {
@@ -20,7 +21,7 @@ impl Renderer {
         let cell_height = self.cell_height;
         let scale = self.scale_factor;
         let px = |logical: f32| (logical * scale).round().max(1.0);
-        let fade = |color: [f32; 4], alpha: f32| adjust_alpha(color, color[3] * alpha * anim);
+        let fade = |color: [f32; 4], alpha: f32| scale_alpha(color, alpha * anim);
 
         let scrim = fade(self.ui.palette_scrim, 1.0);
         self.rect_pipeline

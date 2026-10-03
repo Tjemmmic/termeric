@@ -1,9 +1,10 @@
 //! Tab bar rendering and hit-testing
 
 use super::types::*;
-use super::{Renderer, adjust_alpha, contrast_text, mix};
+use super::{Renderer, contrast_text};
 use crate::agents::AgentBadge;
 use crate::tabs::{TabInfo, TabType};
+use crate::ui::color::{mix, scale_alpha, with_alpha};
 
 /// Logical tab widths before display scaling.
 const MIN_TAB_WIDTH: f32 = 96.0;
@@ -583,7 +584,7 @@ impl Renderer {
             tab_bar_height - separator,
             window_width,
             separator,
-            adjust_alpha(self.ui.tab_border, 0.6),
+            with_alpha(self.ui.tab_border, 0.6),
         );
 
         let overflow = layout.previous_x.is_some() || layout.next_x.is_some();
@@ -651,10 +652,10 @@ impl Renderer {
                 y,
                 width,
                 height,
-                adjust_alpha(self.ui.tab_active, self.ui.tab_active[3] * animation),
+                scale_alpha(self.ui.tab_active, animation),
                 radius,
             );
-            let accent = adjust_alpha(self.ui.tab_accent, animation);
+            let accent = with_alpha(self.ui.tab_accent, animation);
             let thickness = chrome.px(2.0);
             let inset = chrome.px(10.0);
             match edge {
@@ -682,7 +683,7 @@ impl Renderer {
                 y,
                 width,
                 height,
-                adjust_alpha(self.ui.tab_inactive, hover * animation),
+                with_alpha(self.ui.tab_inactive, hover * animation),
                 radius,
             );
         }
@@ -696,7 +697,7 @@ impl Renderer {
         } else {
             mix(self.ui.tab_text_inactive, self.ui.tab_text_active, hover)
         };
-        let text_color = adjust_alpha(base_text, base_text[3] * text_alpha);
+        let text_color = scale_alpha(base_text, text_alpha);
         let center_y = y + height / 2.0;
         let close = chrome.close_rect(surface);
         let mut text_x = x + chrome.px(10.0);
@@ -708,7 +709,7 @@ impl Renderer {
                 (center_y - dot / 2.0).round(),
                 dot,
                 dot,
-                adjust_alpha(self.ui.palette_accent, text_alpha),
+                with_alpha(self.ui.palette_accent, text_alpha),
                 dot / 2.0,
             );
             text_x += dot + chrome.px(6.0);
@@ -756,7 +757,7 @@ impl Renderer {
             let badge_x = (text_x + drawn + chrome.px(6.0)).round();
             let badge_y = (center_y - badge_height / 2.0).round();
             if badge_x + badge_width <= close.0 - chrome.px(4.0) {
-                let fill = adjust_alpha(self.ui.palette_accent, 0.9 * text_alpha);
+                let fill = with_alpha(self.ui.palette_accent, 0.9 * text_alpha);
                 self.rect_pipeline.push_rounded_rect(
                     badge_x,
                     badge_y,
@@ -767,7 +768,7 @@ impl Renderer {
                 );
                 let count_size = size_px * 0.85;
                 let count_width = self.ui_text_width(&count, count_size);
-                let count_color = adjust_alpha(contrast_text(self.ui.palette_accent), text_alpha);
+                let count_color = with_alpha(contrast_text(self.ui.palette_accent), text_alpha);
                 self.push_ui_label(
                     &count,
                     badge_x + (badge_width - count_width) / 2.0,
@@ -788,11 +789,11 @@ impl Renderer {
                     close.1,
                     close.2,
                     close.3,
-                    adjust_alpha(self.ui.tab_text_active, 0.14 * close_hover * text_alpha),
+                    with_alpha(self.ui.tab_text_active, 0.14 * close_hover * text_alpha),
                     close.2 / 2.0,
                 );
             }
-            let color = adjust_alpha(
+            let color = with_alpha(
                 mix(
                     self.ui.tab_text_inactive,
                     self.ui.tab_text_active,
@@ -814,7 +815,7 @@ impl Renderer {
                 (close.1 + (close.3 - dot) / 2.0).round(),
                 dot,
                 dot,
-                adjust_alpha(self.ui.tab_activity, text_alpha),
+                with_alpha(self.ui.tab_activity, text_alpha),
                 dot / 2.0,
             );
         }
@@ -835,7 +836,7 @@ impl Renderer {
         match status {
             TabStatus::BroadcastActive | TabStatus::BroadcastArmed => {
                 let dot = (size * 0.66).round();
-                let dot_color = adjust_alpha(self.ui.tab_activity, color[3]);
+                let dot_color = with_alpha(self.ui.tab_activity, color[3]);
                 self.rect_pipeline.push_rounded_rect(
                     (cx - dot / 2.0).round(),
                     (cy - dot / 2.0).round(),
@@ -922,7 +923,7 @@ impl Renderer {
                     top,
                     dot,
                     dot,
-                    adjust_alpha(fill, color[3]),
+                    with_alpha(fill, color[3]),
                     dot / 2.0,
                 );
                 if badge == AgentBadge::Working {
@@ -963,14 +964,14 @@ impl Renderer {
                 (y + (height - side) / 2.0).round(),
                 side,
                 side,
-                adjust_alpha(self.ui.tab_inactive, hover),
+                with_alpha(self.ui.tab_inactive, hover),
                 chrome.corner_radius(),
             );
         }
         let base = if enabled {
             mix(self.ui.tab_text_inactive, self.ui.tab_text_active, hover)
         } else {
-            adjust_alpha(self.ui.tab_text_inactive, 0.25)
+            with_alpha(self.ui.tab_text_inactive, 0.25)
         };
         let (cx, cy) = ((x + width / 2.0).round(), (y + height / 2.0).round());
         let unit = chrome.scale;
@@ -1070,7 +1071,7 @@ impl Renderer {
             }
         }
 
-        let border = adjust_alpha(self.ui.tab_border, 0.6);
+        let border = with_alpha(self.ui.tab_border, 0.6);
         let line = chrome.px(1.0);
         self.rect_pipeline
             .push_rect(0.0, row_height - line, window_width, line, border);
@@ -1104,7 +1105,7 @@ impl Renderer {
         if right <= left || bottom <= top {
             return;
         }
-        let color = adjust_alpha(contrast_text(self.ui.tab_bar_bg), 0.98);
+        let color = with_alpha(contrast_text(self.ui.tab_bar_bg), 0.98);
         let thickness = 2.0;
         self.rect_pipeline
             .push_line(left, top, right, top, thickness, color);

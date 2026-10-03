@@ -5,6 +5,8 @@
 
 use std::time::Instant;
 
+use crate::ui::color::scale_alpha;
+
 /// Growth phase of the indicator
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GrowthPhase {
@@ -147,7 +149,7 @@ impl GrowthIndicator {
         if self.completed && fade_elapsed > 1.0 {
             // Fade out
             let fade = 1.0 - (fade_elapsed - 1.0).min(1.0);
-            [base[0], base[1], base[2], base[3] * fade]
+            scale_alpha(base, fade)
         } else {
             base
         }

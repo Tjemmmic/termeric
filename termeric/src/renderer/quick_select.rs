@@ -1,6 +1,7 @@
 //! Non-color-only keyboard copy cursor, mode status, and quick-select labels.
 
-use super::{CopyModeRenderInfo, Renderer, adjust_alpha};
+use super::{CopyModeRenderInfo, Renderer};
+use crate::ui::color::with_alpha;
 
 fn visible_row(row: i32, scroll_offset: usize, pane_rows: usize) -> Option<usize> {
     let offset = i32::try_from(scroll_offset).unwrap_or(i32::MAX);
@@ -54,7 +55,7 @@ impl Renderer {
             let accent = if hint.matches_prefix {
                 self.ui.palette_accent
             } else {
-                adjust_alpha(self.ui.palette_border, 0.92)
+                with_alpha(self.ui.palette_border, 0.92)
             };
             let background = [
                 self.ui.palette_bg[0],
