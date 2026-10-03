@@ -9,8 +9,10 @@ use std::path::Path;
 #[cfg(test)]
 use super::MAX_SCROLLBACK_FILE_SIZE;
 #[cfg(test)]
-use super::file_io::{MAX_SESSION_METADATA_BYTES, atomic_replace};
+use super::MAX_SESSION_METADATA_BYTES;
 use super::{Session, session_dir};
+#[cfg(test)]
+use crate::safe_fs::atomic_replace;
 
 /// Styled scrollback and screen rows to save with a session. Blank rows and
 /// a final bare prompt, `exit`, or `logout` are dropped from the end, so the

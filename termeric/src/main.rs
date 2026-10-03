@@ -23,6 +23,7 @@ mod panes;
 mod paths;
 mod plugin;
 mod renderer;
+mod safe_fs;
 mod safe_text;
 mod serial;
 mod session;

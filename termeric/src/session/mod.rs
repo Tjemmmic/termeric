@@ -8,9 +8,11 @@
 //! Sessions are identified by a timestamp-based ID (e.g., "2026-02-24_21h59m43").
 //! Each tab independently tracks its own session identity.
 
+/// The most a tab snapshot's metadata may hold.
+pub(crate) const MAX_SESSION_METADATA_BYTES: usize = 1024 * 1024;
+
 pub mod export;
 pub(crate) mod export_job;
-mod file_io;
 pub mod panel;
 pub mod restore;
 pub mod save;

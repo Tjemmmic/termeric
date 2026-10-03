@@ -11,8 +11,9 @@ use anyhow::{Context, Result, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use sha2::{Digest, Sha256};
 
-use super::file_io::{MAX_SESSION_METADATA_BYTES, open_regular};
+use super::MAX_SESSION_METADATA_BYTES;
 use super::{MAX_SCROLLBACK_FILE_SIZE, Session, SnapshotContent};
+use crate::safe_fs::open_regular;
 
 const MAGIC: &str = "# termeric-snapshot-v5 metadata-bytes=";
 const HEADER_LEN: usize = MAGIC.len() + 8 + 1;

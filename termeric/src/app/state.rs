@@ -5,8 +5,10 @@
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::io::Write;
 use std::path::PathBuf;
+
+/// More than the state ever holds; a larger file is not this state.
+const MAX_STATE_BYTES: usize = 64 * 1024;
 
 #[cfg(test)]
 thread_local! {
@@ -34,22 +36,18 @@ impl AppState {
     /// Load state from file or return default
     pub fn load() -> Self {
         let state_path = Self::state_path();
-
-        if state_path.exists() {
-            match std::fs::read_to_string(&state_path) {
-                Ok(content) => match serde_json::from_str(&content) {
-                    Ok(state) => return state,
-                    Err(e) => {
-                        log::warn!("Failed to parse state file: {}", e);
-                    }
-                },
-                Err(e) => {
-                    log::warn!("Failed to read state file: {}", e);
-                }
+        let content = match crate::safe_fs::read_text(&state_path, MAX_STATE_BYTES) {
+            Ok(content) => content,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Self::default(),
+            Err(error) => {
+                log::warn!("Failed to read state file: {error}");
+                return Self::default();
             }
-        }
-
-        Self::default()
+        };
+        serde_json::from_str(&content).unwrap_or_else(|error| {
+            log::warn!("Failed to parse state file: {error}");
+            Self::default()
+        })
     }
 
     /// Save state to file
@@ -62,16 +60,7 @@ impl AppState {
         }
 
         let content = serde_json::to_vec_pretty(self)?;
-        let temp_path = state_path.with_extension("json.tmp");
-        let mut file = std::fs::File::create(&temp_path)?;
-        file.write_all(&content)?;
-        file.sync_all()?;
-        std::fs::rename(&temp_path, &state_path)?;
-        if let Some(parent) = state_path.parent()
-            && let Ok(directory) = std::fs::File::open(parent)
-        {
-            let _ = directory.sync_all();
-        }
+        crate::safe_fs::atomic_replace(&state_path, |file| file.write_all(&content))?;
 
         log::debug!("Saved state to {}", state_path.display());
         Ok(())
@@ -137,6 +126,33 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn state_is_saved_over_a_symlink_and_never_read_unbounded() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("state.json");
+        AppState::set_test_state_path(Some(path.clone()));
+        let result = std::panic::catch_unwind(|| {
+            let target = temp.path().join("target");
+            std::fs::write(&target, "unchanged").unwrap();
+            std::os::unix::fs::symlink(&target, &path).unwrap();
+            // A symlink is neither followed when loading nor written through.
+            assert!(AppState::load().last_workspace_ids.is_empty());
+            let state = AppState {
+                first_boot_complete: true,
+                ..AppState::default()
+            };
+            state.save().unwrap();
+            assert!(std::fs::symlink_metadata(&path).unwrap().is_file());
+            assert_eq!(std::fs::read_to_string(&target).unwrap(), "unchanged");
+            assert!(AppState::load().first_boot_complete);
+
+            std::fs::write(&path, " ".repeat(MAX_STATE_BYTES + 1)).unwrap();
+            assert!(!AppState::load().first_boot_complete);
+        });
+        AppState::set_test_state_path(None);
+        result.unwrap();
+    }
 
     #[test]
     fn concurrent_window_state_merges_and_forgets_workspace_ids() {

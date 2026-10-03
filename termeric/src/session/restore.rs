@@ -4,8 +4,8 @@ use anyhow::{Context, Result};
 use std::fs;
 use std::path::Path;
 
-use super::file_io::read_text;
 use super::{Session, session_dir};
+use crate::safe_fs::read_text;
 
 /// Restore a named session by its ID
 pub fn restore_named_session(name: &str) -> Result<Option<Session>> {

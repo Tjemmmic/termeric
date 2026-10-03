@@ -82,6 +82,7 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 | `mcp.rs` | `termeric mcp`, an MCP server over stdio backed by the control protocol |
 | `serial.rs` | Serial transport for serial terminal profiles |
 | `paths.rs` | Configuration and data directories; test builds resolve them under a per-process temporary directory |
+| `safe_fs.rs` | Hardened reads (no symlinks, FIFOs, or unbounded reads) and atomic private-staging writes for Termeric's own files |
 | `safe_text.rs` | Character classes and bounding for untrusted text shown in chrome or sent over protocols |
 
 ### Key Modules (termeric-core/)

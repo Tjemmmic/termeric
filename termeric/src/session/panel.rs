@@ -819,7 +819,7 @@ mod tests {
         std::fs::create_dir(&dir).unwrap();
         let mut file = std::fs::File::create(dir.join("session.toml")).unwrap();
         file.write_all(b"title = \"must not be parsed\"\n").unwrap();
-        file.set_len(super::super::file_io::MAX_SESSION_METADATA_BYTES as u64 + 1)
+        file.set_len(super::super::MAX_SESSION_METADATA_BYTES as u64 + 1)
             .unwrap();
         super::super::set_test_sessions_base_dir(Some(root.path().to_owned()));
         let restored = super::super::restore::restore_named_session("oversized-fixture");

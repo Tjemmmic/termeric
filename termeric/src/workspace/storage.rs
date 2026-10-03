@@ -4,8 +4,6 @@ use super::{
 use anyhow::{Context, Result};
 use std::collections::HashSet;
 use std::fs;
-use std::io::Read;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 pub const MAX_WORKSPACE_SCROLLBACK_BYTES_PER_PANE: usize = 5 * 1024 * 1024;
@@ -313,24 +311,8 @@ pub fn delete_workspace(id: &str) -> Result<()> {
 }
 
 fn parse_workspace(path: &Path) -> Result<WorkspaceSnapshot> {
-    let metadata = fs::symlink_metadata(path)
-        .with_context(|| format!("inspect workspace metadata {}", path.display()))?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        anyhow::bail!("workspace metadata must be a regular, non-symlink file");
-    }
-    let file = fs::File::open(path)
-        .with_context(|| format!("open workspace metadata {}", path.display()))?;
-    let mut content = String::new();
-    file.take(MAX_WORKSPACE_METADATA_BYTES as u64 + 1)
-        .read_to_string(&mut content)
+    let content = crate::safe_fs::read_text(path, MAX_WORKSPACE_METADATA_BYTES)
         .with_context(|| format!("read workspace metadata {}", path.display()))?;
-    if content.len() > MAX_WORKSPACE_METADATA_BYTES {
-        anyhow::bail!(
-            "workspace metadata {} exceeds the {} byte limit",
-            path.display(),
-            MAX_WORKSPACE_METADATA_BYTES
-        );
-    }
     toml::from_str(&content).with_context(|| format!("parse workspace metadata {}", path.display()))
 }
 
@@ -436,7 +418,10 @@ fn deduplicated_scrollback_name(directory: &Path, payload: &[u8]) -> Result<Stri
                     path.display()
                 )
             }
-            Ok(_) if fs::read(&path).is_ok_and(|existing| existing == payload) => {
+            Ok(_)
+                if crate::safe_fs::read_bytes(&path, payload.len())
+                    .is_ok_and(|existing| existing == payload) =>
+            {
                 return Ok(filename);
             }
             Ok(_) => {}
@@ -466,13 +451,8 @@ fn safe_scrollback_path(directory: &Path, relative: &str) -> Result<PathBuf> {
     }
     let scrollback = directory.join("scrollback");
     ensure_real_directory(&scrollback, false, "workspace scrollback")?;
-    let resolved = directory.join(path);
-    let metadata = fs::symlink_metadata(&resolved)
-        .with_context(|| format!("inspect workspace scrollback {}", resolved.display()))?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        anyhow::bail!("workspace scrollback must be a regular, non-symlink file");
-    }
-    Ok(resolved)
+    // The read itself refuses a symlink or anything but a regular file.
+    Ok(directory.join(path))
 }
 
 fn atomic_write(path: &Path, payload: &[u8], keep_backup: bool) -> Result<()> {
@@ -480,18 +460,23 @@ fn atomic_write(path: &Path, payload: &[u8], keep_backup: bool) -> Result<()> {
         .parent()
         .ok_or_else(|| anyhow::anyhow!("atomic write target has no parent"))?;
     ensure_real_directory(parent, true, "atomic-write parent")?;
-    let existing = regular_file_metadata(path)?;
-    if keep_backup && existing.is_some() {
-        let previous = fs::read(path)?;
-        let backup = path.with_extension("toml.bak");
-        let backup_temp = path.with_extension("toml.bak.tmp");
-        replace_with_temporary(&backup, &backup_temp, &previous)?;
+    if keep_backup {
+        match crate::safe_fs::read_text(path, MAX_WORKSPACE_METADATA_BYTES) {
+            Ok(previous) => {
+                crate::safe_fs::atomic_replace(&path.with_extension("toml.bak"), |file| {
+                    file.write_all(previous.as_bytes())
+                })
+                .with_context(|| format!("keep a backup of {}", path.display()))?
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("read {} for its backup", path.display()));
+            }
+        }
     }
-    replace_with_temporary(path, &path.with_extension("tmp"), payload)?;
-    if let Ok(directory) = fs::File::open(parent) {
-        let _ = directory.sync_all();
-    }
-    Ok(())
+    crate::safe_fs::atomic_replace(path, |file| file.write_all(payload))
+        .with_context(|| format!("write {}", path.display()))
 }
 
 fn ensure_real_directory(path: &Path, create: bool, label: &str) -> Result<()> {
@@ -510,49 +495,11 @@ fn ensure_real_directory(path: &Path, create: bool, label: &str) -> Result<()> {
     }
 }
 
-fn regular_file_metadata(path: &Path) -> Result<Option<fs::Metadata>> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
-            anyhow::bail!("atomic write target must be a regular, non-symlink file")
-        }
-        Ok(metadata) => Ok(Some(metadata)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error.into()),
-    }
-}
-
-fn replace_with_temporary(path: &Path, temporary: &Path, payload: &[u8]) -> Result<()> {
-    regular_file_metadata(path)?;
-    match fs::symlink_metadata(temporary) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
-            anyhow::bail!("atomic temporary path must be a regular, non-symlink file")
-        }
-        Ok(_) => fs::remove_file(temporary)?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error.into()),
-    }
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(temporary)?;
-    file.write_all(payload)?;
-    file.sync_all()?;
-    fs::rename(temporary, path)?;
-    Ok(())
-}
-
 fn read_bounded_scrollback(path: &Path, limit: usize) -> Result<String> {
     if limit == 0 {
         anyhow::bail!("workspace scrollback exceeds the total byte limit");
     }
-    let mut content = String::new();
-    fs::File::open(path)?
-        .take(limit as u64 + 1)
-        .read_to_string(&mut content)?;
-    if content.len() > limit {
-        anyhow::bail!("workspace scrollback exceeds the remaining {limit} byte limit");
-    }
-    Ok(content)
+    Ok(crate::safe_fs::read_text(path, limit)?)
 }
 
 fn cleanup_unreferenced_scrollback(workspace: &WorkspaceSnapshot, directory: &Path) -> Result<()> {
@@ -679,11 +626,25 @@ mod tests {
         fs::create_dir(&archive).unwrap();
         let sentinel = temp.path().join("sentinel");
         fs::write(&sentinel, "do-not-replace").unwrap();
+        // Staging files get fresh private names, so a link planted at a
+        // predictable temporary name is never written through.
         symlink(&sentinel, archive.join("workspace.tmp")).unwrap();
-        let error = save_workspace_to_dir(&mut workspace, &archive).unwrap_err();
-        assert!(format!("{error:#}").contains("non-symlink file"));
+        save_workspace_to_dir(&mut workspace, &archive).unwrap();
         assert_eq!(fs::read_to_string(&sentinel).unwrap(), "do-not-replace");
-        assert!(!archive.join("workspace.toml").exists());
+        assert!(
+            fs::symlink_metadata(archive.join("workspace.toml"))
+                .unwrap()
+                .is_file()
+        );
+
+        // A link at the final name fails the save closed: its backup can't be
+        // read, and the link's target is never written.
+        let final_target = temp.path().join("final-target");
+        fs::write(&final_target, "do-not-replace").unwrap();
+        fs::remove_file(archive.join("workspace.toml")).unwrap();
+        symlink(&final_target, archive.join("workspace.toml")).unwrap();
+        assert!(save_workspace_to_dir(&mut workspace, &archive).is_err());
+        assert_eq!(fs::read_to_string(&final_target).unwrap(), "do-not-replace");
     }
 
     #[cfg(unix)]
@@ -708,7 +669,7 @@ mod tests {
                 .is_empty()
         );
         assert!(loaded.warnings.iter().any(|warning| {
-            warning.contains("scrollback was skipped") && warning.contains("non-symlink file")
+            warning.contains("scrollback was skipped") && !warning.contains("private-sentinel")
         }));
 
         fs::remove_file(temp.path().join("workspace.toml")).unwrap();

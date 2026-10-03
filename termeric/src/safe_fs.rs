@@ -1,33 +1,41 @@
-//! Per-file legacy snapshot safety. This is not a cross-file transaction.
+//! Hardened access to Termeric's own files: reads never follow a symlink,
+//! block on a FIFO, or read past a limit, and writes replace a file
+//! atomically through a private staging file beside it.
 
 use std::fs::{self, OpenOptions};
-use std::io::{self, Read};
-#[cfg(test)]
-use std::io::{BufWriter, Write};
+use std::io::{self, BufWriter, Read, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
-pub(crate) const MAX_SESSION_METADATA_BYTES: usize = 1024 * 1024;
-
-pub(super) fn read_text(path: &Path, limit: usize) -> io::Result<String> {
+/// The whole of `path` as UTF-8, opened through [`open_regular`] and capped at
+/// `limit` bytes even if the file grows while it is read.
+pub(crate) fn read_text(path: &Path, limit: usize) -> io::Result<String> {
     read_capped_text(open_regular(path, limit)?, limit)
 }
 
-pub(super) fn open_regular(path: &Path, limit: usize) -> io::Result<fs::File> {
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW | libc::O_CLOEXEC);
+/// The whole of `path`, opened through [`open_regular`] and capped at `limit`
+/// bytes even if the file grows while it is read.
+pub(crate) fn read_bytes(path: &Path, limit: usize) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    open_regular(path, limit)?
+        .take(limit as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > limit {
+        return Err(size_error(limit));
     }
-    #[cfg(not(unix))]
-    if fs::symlink_metadata(path)?.file_type().is_symlink() {
-        return Err(io::Error::other("snapshot input must not be a symlink"));
-    }
-    let file = options.open(path)?;
+    Ok(bytes)
+}
+
+/// Open `path` for reading only if it is a regular file of at most `limit`
+/// bytes, without following a symlink or waiting on a FIFO.
+pub(crate) fn open_regular(path: &Path, limit: usize) -> io::Result<fs::File> {
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)?;
     let metadata = file.metadata()?;
     if !metadata.is_file() {
-        return Err(io::Error::other("snapshot input must be a regular file"));
+        return Err(io::Error::other("input must be a regular file"));
     }
     if metadata.len() > limit as u64 {
         return Err(size_error(limit));
@@ -51,36 +59,39 @@ fn read_capped_text(reader: impl Read, limit: usize) -> io::Result<String> {
 fn size_error(limit: usize) -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidData,
-        format!("snapshot file exceeds its {limit}-byte limit"),
+        format!("file exceeds its {limit}-byte limit"),
     )
 }
 
-/// Write only to an exclusive same-directory staging file. Persistence replaces
-/// a final symlink itself, never follows it to truncate the link's target.
-#[cfg(test)]
-pub(super) fn atomic_replace<T>(
+/// Replace `path` with what `write` produces: write a private (0600)
+/// staging file beside it, sync it, and rename it over `path`. A symlink at
+/// `path` is replaced, never written through. Until the rename nothing at
+/// `path` changes, so a failed write leaves the old file whole.
+pub(crate) fn atomic_replace<T>(
     path: &Path,
     write: impl FnOnce(&mut dyn Write) -> io::Result<T>,
 ) -> io::Result<T> {
     let directory = path
         .parent()
-        .ok_or_else(|| io::Error::other("snapshot path has no parent"))?;
-    let mut temporary = tempfile::Builder::new()
-        .prefix(".snapshot-")
+        .ok_or_else(|| io::Error::other("replaced file has no parent directory"))?;
+    let mut staging = tempfile::Builder::new()
+        .prefix(".termeric-")
         .tempfile_in(directory)?;
     let result = {
-        let mut writer = BufWriter::new(temporary.as_file_mut());
+        let mut writer = BufWriter::new(staging.as_file_mut());
         let result = write(&mut writer)?;
         writer.flush()?;
         result
     };
-    temporary.as_file().sync_all()?;
-    temporary.persist(path).map_err(|error| error.error)?;
-    // A failure after publication cannot truthfully mean the old file survived.
-    // Directory durability is best effort and separately logged, as elsewhere.
-    #[cfg(unix)]
+    staging.as_file().sync_all()?;
+    staging.persist(path).map_err(|error| error.error)?;
+    // The new file is already in place, so failing here would wrongly say
+    // the old one survived. Directory durability is reported, not returned.
     if let Err(error) = fs::File::open(directory).and_then(|file| file.sync_all()) {
-        log::warn!("Snapshot file was replaced but directory sync failed: {error}");
+        log::warn!(
+            "{} was replaced, but its directory could not be synced: {error}",
+            path.display()
+        );
     }
     Ok(result)
 }
@@ -177,10 +188,8 @@ mod tests {
         fs::write(&path, [0xff]).unwrap();
         assert!(read_text(&path, 300).is_err());
         let sparse = fs::File::create(&path).unwrap();
-        sparse
-            .set_len(MAX_SESSION_METADATA_BYTES as u64 + 1)
-            .unwrap();
-        assert!(read_text(&path, MAX_SESSION_METADATA_BYTES).is_err());
+        sparse.set_len(1024 * 1024 + 1).unwrap();
+        assert!(read_text(&path, 1024 * 1024).is_err());
     }
 
     #[test]
@@ -200,7 +209,6 @@ mod tests {
         assert_eq!(read.load(Ordering::Relaxed), 4097);
     }
 
-    #[cfg(unix)]
     #[test]
     fn reads_reject_symlinks_and_replacements_create_private_regular_files() {
         use std::os::unix::fs::{PermissionsExt, symlink};
@@ -249,7 +257,7 @@ mod tests {
             Err(error) => panic!("FIFO worker failed: {error}"),
         };
         worker.join().unwrap();
-        assert!(!rescued, "snapshot read waited for a FIFO writer");
+        assert!(!rescued, "the read waited for a FIFO writer");
         assert!(result.unwrap_err().to_string().contains("regular file"));
         assert!(path.exists());
     }
