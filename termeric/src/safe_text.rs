@@ -2,7 +2,10 @@
 //! classes from `termeric_core::safe_text`. Terminal grid content is never
 //! filtered with these.
 
-pub use termeric_core::safe_text::{breaks_single_line, is_bidi_format, is_unsafe_display_char};
+pub use termeric_core::safe_text::{
+    breaks_single_line, ceil_char_boundary, floor_char_boundary, is_bidi_format,
+    is_unsafe_display_char,
+};
 
 /// `text` without the characters [`is_unsafe_display_char`] rejects, cut at
 /// a character boundary to at most `max_bytes` UTF-8 bytes. For text from
@@ -21,16 +24,34 @@ pub fn single_line_within(text: &str, max_bytes: usize) -> String {
     output
 }
 
+/// The longest prefix of `text` within `max_bytes` UTF-8 bytes.
+pub fn prefix_within(text: &str, max_bytes: usize) -> &str {
+    &text[..floor_char_boundary(text, max_bytes)]
+}
+
 /// At most `max_chars` characters of `text`; when it is cut, the last kept
-/// character becomes `…`.
+/// character becomes `…`, after any whitespace the cut left at the end.
 pub fn truncate_with_ellipsis(text: &str, max_chars: usize) -> String {
     let mut characters = text.chars();
     let mut kept: String = characters.by_ref().take(max_chars).collect();
     if characters.next().is_some() && max_chars > 0 {
         kept.pop();
+        kept.truncate(kept.trim_end().len());
         kept.push('…');
     }
     kept
+}
+
+/// The first line of `text` that is not blank, trimmed, within `max_chars`
+/// characters as [`truncate_with_ellipsis`] cuts them: how a message or
+/// command is quoted in a title, log, or notification.
+pub fn first_line_truncated(text: &str, max_chars: usize) -> String {
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default();
+    truncate_with_ellipsis(line, max_chars)
 }
 
 /// One displayed line of untrusted text: a tab becomes `tab_width` spaces
@@ -71,6 +92,21 @@ mod tests {
         assert_eq!(truncate_with_ellipsis("abcd", 4), "abcd");
         assert_eq!(truncate_with_ellipsis("界界界", 2), "界…");
         assert_eq!(truncate_with_ellipsis("abc", 0), "");
+        assert_eq!(truncate_with_ellipsis("ab cdef", 4), "ab…");
+    }
+
+    #[test]
+    fn prefixes_stay_within_their_bytes_on_a_character_boundary() {
+        assert_eq!(prefix_within("aé界", 2), "a");
+        assert_eq!(prefix_within("aé界", 3), "aé");
+        assert_eq!(prefix_within("aé界", 99), "aé界");
+    }
+
+    #[test]
+    fn first_lines_skip_blank_lines_and_are_trimmed_and_cut() {
+        assert_eq!(first_line_truncated("\n  \n  first  \nsecond", 10), "first");
+        assert_eq!(first_line_truncated("abcdefgh\nmore", 4), "abc…");
+        assert_eq!(first_line_truncated("  \n", 4), "");
     }
 
     #[test]

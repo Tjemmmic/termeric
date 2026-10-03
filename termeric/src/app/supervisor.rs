@@ -979,11 +979,7 @@ impl App {
     }
 }
 
-/// The first line of `text`, shortened for the activity log.
+/// `text` as the activity log quotes it.
 fn one_line(text: &str) -> String {
-    let line = text.lines().next().unwrap_or_default();
-    match line.char_indices().nth(80) {
-        Some((cut, _)) => format!("{}…", &line[..cut]),
-        None => line.to_owned(),
-    }
+    crate::safe_text::first_line_truncated(text, 80)
 }

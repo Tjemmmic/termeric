@@ -1406,7 +1406,8 @@ mod tests {
         let AgentEvent::Unrecognized(text) = only_event_raw(&mut codec, &long) else {
             panic!()
         };
-        assert_eq!(text.chars().count(), 201);
+        assert_eq!(text.chars().count(), 200);
+        assert!(text.ends_with('…'));
         assert!(
             decode(&mut codec, json!({"type": "rate_limit_event"}))
                 .events

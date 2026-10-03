@@ -23,9 +23,9 @@ use serde_json::{Map, Value, json};
 
 use super::event::{
     AgentCommand, AgentEvent, ApprovalDecision, ApprovalRequest, BlockStart, ContentBlock,
-    ContextUsage, DECLINED_MESSAGE, EarlierConversation, Handshake, ModeChoice, ModelChoice,
-    RememberOption, Retry, SessionInfo, SlashCommand, StreamDelta, Thread, ToolResult, TurnOutcome,
-    invoked_name,
+    ContextUsage, DECLINED_MESSAGE, EARLIER_TITLE_CHARS, EarlierConversation, Handshake,
+    ModeChoice, ModelChoice, RememberOption, Retry, SessionInfo, SlashCommand, StreamDelta, Thread,
+    ToolResult, TurnOutcome, invoked_name,
 };
 use super::present::PATCH_TOOL;
 use super::protocol::{Exchange, Protocol, line, preview};
@@ -102,8 +102,6 @@ pub struct Setup {
 
 /// Earlier threads listed for the folder, newest first.
 const EARLIER_LIMIT: u32 = 20;
-/// Longest title kept for an earlier thread.
-const TITLE_CHARS: usize = 80;
 /// Where the threads a person can continue come from: Codex's terminal
 /// interface, its editor extension, and app servers like this one. Scripted
 /// `codex exec` runs and sub-agents are left out.
@@ -1344,17 +1342,10 @@ fn earlier(listed: Option<&Value>) -> Vec<EarlierConversation> {
         .filter_map(|thread| {
             let id = text(thread, "id")?;
             let named = text(thread, "name").filter(|name| !name.trim().is_empty());
-            let title = named.or_else(|| {
-                text(thread, "preview")?
-                    .lines()
-                    .map(str::trim)
-                    .find(|line| !line.is_empty())
-                    .map(str::to_owned)
-            })?;
-            let title = match title.char_indices().nth(TITLE_CHARS) {
-                Some((end, _)) => format!("{}…", title[..end].trim_end()),
-                None => title.trim().to_owned(),
-            };
+            let title = named
+                .or_else(|| text(thread, "preview"))
+                .map(|title| crate::safe_text::first_line_truncated(&title, EARLIER_TITLE_CHARS))
+                .filter(|title| !title.is_empty())?;
             let seconds = thread
                 .get("updatedAt")
                 .and_then(Value::as_u64)
@@ -1892,7 +1883,7 @@ mod tests {
             3,
             "untitled and unidentified threads are left out"
         );
-        assert_eq!(earlier[2].title.chars().count(), TITLE_CHARS + 1);
+        assert_eq!(earlier[2].title.chars().count(), EARLIER_TITLE_CHARS);
         assert_eq!(
             earlier[0].modified,
             std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(60)

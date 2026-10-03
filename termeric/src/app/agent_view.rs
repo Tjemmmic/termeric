@@ -1398,12 +1398,7 @@ impl App {
 
 /// A long command, shortened for a chip.
 fn shorten_command(command: &str) -> String {
-    const LIMIT: usize = 40;
-    let first = command.lines().next().unwrap_or_default().trim();
-    match first.char_indices().nth(LIMIT) {
-        Some((end, _)) => format!("{}…", first[..end].trim_end()),
-        None => first.to_owned(),
-    }
+    crate::safe_text::first_line_truncated(command, 40)
 }
 
 impl App {

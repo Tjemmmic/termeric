@@ -4387,6 +4387,7 @@ impl App {
     }
 
     fn refresh_launch_profile_commands(&mut self) {
+        use crate::safe_text::truncate_with_ellipsis;
         use crate::ui::command_palette::palette::{CommandSource, RegisteredCommand};
 
         let mut commands: Vec<RegisteredCommand> = self
@@ -4394,13 +4395,10 @@ impl App {
             .profiles
             .iter()
             .map(|(name, profile)| {
-                let detail = profile.description.as_deref().map(|description| {
-                    let mut value: String = description.chars().take(72).collect();
-                    if description.chars().count() > 72 {
-                        value.push('…');
-                    }
-                    value
-                });
+                let detail = profile
+                    .description
+                    .as_deref()
+                    .map(|description| truncate_with_ellipsis(description, 72));
                 RegisteredCommand {
                     id: format!("profile.open.{name}"),
                     title: detail.map_or_else(

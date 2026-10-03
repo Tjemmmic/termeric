@@ -218,7 +218,7 @@ impl TextArea {
 
     /// Places the caret at a byte offset, optionally extending the selection.
     pub fn place(&mut self, offset: usize, extend: bool) {
-        let offset = floor_boundary(&self.text, offset.min(self.text.len()));
+        let offset = crate::safe_text::floor_char_boundary(&self.text, offset);
         self.begin_move(extend);
         self.caret = offset;
         self.preferred_x = None;
@@ -329,13 +329,6 @@ fn normalize(text: &str) -> String {
         .chars()
         .filter(|character| !character.is_control() || matches!(character, '\n' | '\t'))
         .collect()
-}
-
-fn floor_boundary(text: &str, mut offset: usize) -> usize {
-    while offset > 0 && !text.is_char_boundary(offset) {
-        offset -= 1;
-    }
-    offset
 }
 
 /// The byte range each visual line covers. Lines with no glyphs (empty

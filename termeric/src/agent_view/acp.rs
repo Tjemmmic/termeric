@@ -27,9 +27,9 @@ use serde_json::{Map, Value, json};
 
 use super::event::{
     AgentCommand, AgentEvent, ApprovalDecision, ApprovalRequest, AssistantMessage, BlockStart,
-    ContentBlock, ContextUsage, DECLINED_MESSAGE, EarlierConversation, EffortChoice, Handshake,
-    ModeChoice, ModelChoice, RememberOption, SessionInfo, SlashCommand, StreamDelta, Thread,
-    ToolResult, TurnOutcome,
+    ContentBlock, ContextUsage, DECLINED_MESSAGE, EARLIER_TITLE_CHARS, EarlierConversation,
+    EffortChoice, Handshake, ModeChoice, ModelChoice, RememberOption, SessionInfo, SlashCommand,
+    StreamDelta, Thread, ToolResult, TurnOutcome,
 };
 use super::present::PATCH_TOOL;
 use super::protocol::{Exchange, Protocol, line, preview};
@@ -38,8 +38,6 @@ use super::protocol::{Exchange, Protocol, line, preview};
 const PROTOCOL_VERSION: u64 = 1;
 /// Earlier sessions listed for the folder, newest first.
 const EARLIER_LIMIT: usize = 20;
-/// Longest title kept for an earlier session.
-const TITLE_CHARS: usize = 80;
 /// The error an agent answers with until its person signs in.
 const AUTH_REQUIRED: i64 = -32000;
 
@@ -1589,13 +1587,9 @@ fn earlier(listed: Option<&Value>) -> Vec<EarlierConversation> {
         .filter_map(|session| {
             let id = text(session, "sessionId")?;
             let title = text(session, "title")
-                .map(|title| title.trim().to_owned())
+                .map(|title| crate::safe_text::first_line_truncated(&title, EARLIER_TITLE_CHARS))
                 .filter(|title| !title.is_empty())
                 .unwrap_or_else(|| "Untitled conversation".to_owned());
-            let title = match title.char_indices().nth(TITLE_CHARS) {
-                Some((end, _)) => format!("{}…", title[..end].trim_end()),
-                None => title,
-            };
             let seconds = text(session, "updatedAt")
                 .and_then(|updated| crate::session::parse_utc_timestamp(&updated))
                 .unwrap_or_default();

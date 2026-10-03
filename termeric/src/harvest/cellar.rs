@@ -331,11 +331,10 @@ impl RootCellar {
             .take()
             .unwrap_or_else(|| std::mem::take(&mut entry.command));
         if snapshot.len() > MAX_HARVEST_COMMAND_BYTES {
-            let mut end = MAX_HARVEST_COMMAND_BYTES;
-            while !snapshot.is_char_boundary(end) {
-                end -= 1;
-            }
-            snapshot.truncate(end);
+            snapshot.truncate(crate::safe_text::floor_char_boundary(
+                &snapshot,
+                MAX_HARVEST_COMMAND_BYTES,
+            ));
             entry.command_truncated = true;
         }
         snapshot.shrink_to_fit();
@@ -627,11 +626,11 @@ fn bounded_output(mut output: String) -> (String, bool) {
         output.shrink_to_fit();
         return (output, false);
     }
-    let mut end = MAX_HARVEST_OUTPUT_BYTES.saturating_sub('…'.len_utf8());
-    while !output.is_char_boundary(end) {
-        end = end.saturating_sub(1);
-    }
-    let mut bounded = output[..end].to_owned();
+    let mut bounded = crate::safe_text::prefix_within(
+        &output,
+        MAX_HARVEST_OUTPUT_BYTES.saturating_sub('…'.len_utf8()),
+    )
+    .to_owned();
     bounded.push('…');
     bounded.shrink_to_fit();
     (bounded, true)

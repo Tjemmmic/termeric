@@ -13,14 +13,12 @@ use std::time::SystemTime;
 
 use serde_json::Value;
 
-use super::event::EarlierConversation;
+use super::event::{EARLIER_TITLE_CHARS, EarlierConversation};
 
 /// How much of a log's start is searched for its first prompt.
 const HEAD_BYTES: u64 = 256 * 1024;
 /// How much of a log's end is searched for a title.
 const TAIL_BYTES: u64 = 64 * 1024;
-/// Longest title kept.
-const TITLE_CHARS: usize = 80;
 
 /// The log folder name Claude Code uses for a working directory.
 pub fn project_folder_name(cwd: &Path) -> String {
@@ -189,15 +187,7 @@ fn first_prompt(entry: &Value) -> Option<String> {
 }
 
 fn shorten(text: &str) -> String {
-    let line = text
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .unwrap_or_default();
-    match line.char_indices().nth(TITLE_CHARS) {
-        Some((end, _)) => format!("{}…", line[..end].trim_end()),
-        None => line.to_owned(),
-    }
+    crate::safe_text::first_line_truncated(text, EARLIER_TITLE_CHARS)
 }
 
 #[cfg(test)]
@@ -275,7 +265,7 @@ mod tests {
     fn long_titles_are_shortened_on_a_character_boundary() {
         let long = "é".repeat(100);
         let short = shorten(&long);
-        assert_eq!(short.chars().count(), TITLE_CHARS + 1);
+        assert_eq!(short.chars().count(), EARLIER_TITLE_CHARS);
         assert!(short.ends_with('…'));
     }
 }

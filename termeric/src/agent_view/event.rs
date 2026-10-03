@@ -127,6 +127,9 @@ pub fn invoked_name(message: &str) -> Option<&str> {
     (starts_well && rest_valid).then_some(name)
 }
 
+/// Longest title kept for an earlier conversation.
+pub const EARLIER_TITLE_CHARS: usize = 80;
+
 /// An earlier conversation in a folder, which the agent can continue.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EarlierConversation {

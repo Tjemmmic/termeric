@@ -806,13 +806,7 @@ pub fn conversation_text(
     max_bytes: usize,
 ) -> (String, bool) {
     const MESSAGE_LIMIT: usize = 4000;
-    let cut = |text: &str| -> String {
-        let text = text.trim();
-        match text.char_indices().nth(MESSAGE_LIMIT) {
-            Some((end, _)) => format!("{}…", &text[..end]),
-            None => text.to_owned(),
-        }
-    };
+    let cut = |text: &str| crate::safe_text::truncate_with_ellipsis(text.trim(), MESSAGE_LIMIT);
     let mut parts: Vec<String> = items
         .iter()
         .filter_map(|item| match item {
@@ -865,11 +859,8 @@ pub fn conversation_text(
         if used + part.len() + 1 > max_bytes {
             truncated = true;
             if kept.is_empty() {
-                let mut end = max_bytes.saturating_sub('…'.len_utf8()).min(part.len());
-                while !part.is_char_boundary(end) {
-                    end -= 1;
-                }
-                kept.push(format!("{}…", &part[..end]));
+                let end = max_bytes.saturating_sub('…'.len_utf8());
+                kept.push(format!("{}…", crate::safe_text::prefix_within(&part, end)));
             }
             break;
         }

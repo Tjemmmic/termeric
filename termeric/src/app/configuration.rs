@@ -433,10 +433,7 @@ impl App {
                     log::error!("{error}");
                     self.toasts
                         .error(format!("Third-party plugin registry rejected: {error}"));
-                    let mut summary: String = error.chars().take(511).collect();
-                    if summary.chars().count() < error.chars().count() {
-                        summary.push('…');
-                    }
+                    let summary = crate::safe_text::truncate_with_ellipsis(&error, 512);
                     (Vec::new(), Vec::new(), Some(summary))
                 }
             };

@@ -53,9 +53,5 @@ pub fn line(value: &Value) -> String {
 
 /// The start of a line the panel could not read, for the log.
 pub fn preview(text: &str) -> String {
-    const LIMIT: usize = 200;
-    match text.char_indices().nth(LIMIT) {
-        Some((end, _)) => format!("{}…", &text[..end]),
-        None => text.to_owned(),
-    }
+    crate::safe_text::truncate_with_ellipsis(text, 200)
 }

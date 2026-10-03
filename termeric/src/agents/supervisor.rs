@@ -247,20 +247,13 @@ pub fn launch_args(
     }
 }
 
+/// How much of a message, request, or error the supervisor is told.
+const QUOTE_CHARS: usize = 300;
+
 /// What the supervisor is told when another agent's state changes, if it is
 /// worth telling.
 pub fn event_message(name: &str, where_: &str, status: &AgentStatus) -> Option<String> {
-    let first_line = |text: &str| {
-        let line = text
-            .lines()
-            .map(str::trim)
-            .find(|line| !line.is_empty())
-            .unwrap_or("");
-        match line.char_indices().nth(300) {
-            Some((cut, _)) => format!("{}…", &line[..cut]),
-            None => line.to_owned(),
-        }
-    };
+    let first_line = |text: &str| crate::safe_text::first_line_truncated(text, QUOTE_CHARS);
     let what = match status.activity {
         AgentActivity::NeedsInput => format!(
             "needs input: {}",
@@ -316,17 +309,7 @@ pub enum SessionEvent {
 
 /// What the supervisor is told about an agent view session.
 pub fn session_message(window_id: u64, event: &SessionEvent) -> String {
-    let first_line = |text: &str| {
-        let line = text
-            .lines()
-            .map(str::trim)
-            .find(|line| !line.is_empty())
-            .unwrap_or("");
-        match line.char_indices().nth(300) {
-            Some((cut, _)) => format!("{}…", &line[..cut]),
-            None => line.to_owned(),
-        }
-    };
+    let first_line = |text: &str| crate::safe_text::first_line_truncated(text, QUOTE_CHARS);
     let (session, title, what) = match event {
         SessionEvent::Approval {
             session,

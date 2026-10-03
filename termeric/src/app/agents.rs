@@ -231,11 +231,11 @@ impl App {
                     last_message: status
                         .and_then(|status| status.last_message.as_deref())
                         .map(|message| {
-                            let mut end = message.len().min(MAX_AGENT_SUMMARY_MESSAGE_BYTES);
-                            while !message.is_char_boundary(end) {
-                                end -= 1;
-                            }
-                            message[..end].to_owned()
+                            crate::safe_text::prefix_within(
+                                message,
+                                MAX_AGENT_SUMMARY_MESSAGE_BYTES,
+                            )
+                            .to_owned()
                         }),
                     seconds_in_state: status.map(|status| status.since.elapsed().as_secs()),
                 }
@@ -758,7 +758,12 @@ fn attention_notification(
     let body = status
         .detail
         .clone()
-        .or_else(|| status.last_message.as_deref().map(first_line))
+        .or_else(|| {
+            status
+                .last_message
+                .as_deref()
+                .map(|message| crate::safe_text::first_line_truncated(message, 160))
+        })
         .unwrap_or_default();
     termeric_core::NotificationRequest {
         title: Some(title),
@@ -768,20 +773,6 @@ fn attention_notification(
         occasion: termeric_core::NotificationOccasion::Unfocused,
         focus_on_activation: true,
         ..termeric_core::NotificationRequest::default()
-    }
-}
-
-/// The first non-empty line of `text`, shortened for a notification.
-fn first_line(text: &str) -> String {
-    const LIMIT: usize = 160;
-    let line = text
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .unwrap_or_default();
-    match line.char_indices().nth(LIMIT) {
-        Some((cut, _)) => format!("{}…", &line[..cut]),
-        None => line.to_string(),
     }
 }
 

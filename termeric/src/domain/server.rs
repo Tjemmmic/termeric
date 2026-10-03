@@ -2943,10 +2943,7 @@ fn newest_utf8_bytes(text: &str, maximum: usize) -> (String, bool) {
     if text.len() <= maximum {
         return (text.to_string(), false);
     }
-    let mut start = text.len() - maximum;
-    while !text.is_char_boundary(start) {
-        start += 1;
-    }
+    let start = crate::safe_text::ceil_char_boundary(text, text.len() - maximum);
     (text[start..].to_string(), true)
 }
 

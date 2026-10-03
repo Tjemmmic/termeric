@@ -197,7 +197,7 @@ fn build_report(
                 .chars()
                 .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
                 .collect();
-            truncate(&printable, MAX_AGENT_LAST_MESSAGE_BYTES).to_owned()
+            crate::safe_text::prefix_within(&printable, MAX_AGENT_LAST_MESSAGE_BYTES).to_owned()
         })
     } else {
         None
@@ -209,23 +209,12 @@ fn build_report(
         terminal_id,
         agent_id: invocation.agent_id.clone(),
         event: invocation.event.kind(),
-        detail: detail.map(|detail| truncate(&detail, MAX_AGENT_EVENT_DETAIL_BYTES).to_owned()),
+        detail: detail.map(|detail| {
+            crate::safe_text::prefix_within(&detail, MAX_AGENT_EVENT_DETAIL_BYTES).to_owned()
+        }),
         last_message,
         transcript_path,
     })
-}
-
-/// The longest prefix of `text` within `limit` bytes, on a character
-/// boundary.
-fn truncate(text: &str, limit: usize) -> &str {
-    if text.len() <= limit {
-        return text;
-    }
-    let mut end = limit;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    &text[..end]
 }
 
 #[cfg(test)]

@@ -902,10 +902,7 @@ fn last_meaningful_line(text: &str) -> Option<&str> {
 
 fn bounded_result(mut result: ToolResult) -> ToolResult {
     if result.content.len() > MAX_RESULT_BYTES {
-        let mut end = MAX_RESULT_BYTES;
-        while !result.content.is_char_boundary(end) {
-            end -= 1;
-        }
+        let end = crate::safe_text::floor_char_boundary(&result.content, MAX_RESULT_BYTES);
         result.content.truncate(end);
         result.content.push_str("\n…");
     }

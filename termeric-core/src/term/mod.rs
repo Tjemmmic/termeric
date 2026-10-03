@@ -1414,10 +1414,10 @@ impl Terminal {
 
             truncated = true;
             if remaining > 0 {
-                let mut start_byte = line.len().saturating_sub(remaining);
-                while start_byte < line.len() && !line.is_char_boundary(start_byte) {
-                    start_byte += 1;
-                }
+                let start_byte = crate::safe_text::ceil_char_boundary(
+                    line,
+                    line.len().saturating_sub(remaining),
+                );
                 if start_byte < line.len() {
                     newest_first.push(line[start_byte..].to_string());
                     if row_index < 0 {
@@ -5540,11 +5540,7 @@ impl Terminal {
                 output.push_str(line);
                 continue;
             }
-            let mut end = remaining;
-            while !line.is_char_boundary(end) {
-                end = end.saturating_sub(1);
-            }
-            output.push_str(&line[..end]);
+            output.push_str(&line[..crate::safe_text::floor_char_boundary(line, remaining)]);
             truncated = true;
             break;
         }
