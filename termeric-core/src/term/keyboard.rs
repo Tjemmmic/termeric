@@ -102,15 +102,6 @@ pub enum XtermKeyboardType {
 }
 
 impl XtermKeyboardType {
-    /// DEC private mode that selects this non-default keyboard type.
-    pub const fn private_mode(self) -> Option<u16> {
-        match self {
-            Self::Normal => None,
-            Self::Legacy => Some(1060),
-            Self::Vt220 => Some(1061),
-        }
-    }
-
     pub const fn uses_resource_zero(self) -> bool {
         !matches!(self, Self::Normal)
     }
