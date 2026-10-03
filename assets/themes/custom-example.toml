@@ -1,54 +1,56 @@
-# Custom Theme Example for Termeric
-# Place custom themes in ~/.config/termeric/themes/
+# Custom theme example for Termeric.
+# Copy this file to ~/.config/termeric/themes/<name>.toml and edit the colors.
+# Colors are "#RRGGBB" or "#RRGGBBAA". Every key is required unless marked optional.
 
 [meta]
 name = "Custom Example"
 author = "Your Name"
-description = "A custom theme template"
+# Optional: shown beside the theme in Settings
+description = "A starting point for your own theme"
 
-# Primary colors (ANSI 0-7)
+# ANSI colors 0-7. Programs rely on their meaning (red for errors, green for
+# success, yellow for warnings, blue for directories), so keep each in its hue.
 [primary]
-black = "#1A1A1A"
-red = "#FF5555"
-green = "#50FA7B"
-yellow = "#F1FA8C"
-blue = "#BD93F9"
-magenta = "#FF79C6"
-cyan = "#8BE9FD"
-white = "#F8F8F2"
+black = "#2A3035"
+red = "#D9605A"
+green = "#8CBF6A"
+yellow = "#D9B25A"
+blue = "#5A8FD9"
+magenta = "#B57AD1"
+cyan = "#4FB3B3"
+white = "#C4CBD2"
 
-# Bright colors (ANSI 8-15)
+# ANSI colors 8-15, lighter than their primary counterparts.
 [bright]
-black = "#6272A4"
-red = "#FF6E6E"
-green = "#69FF94"
-yellow = "#FFFFA5"
-blue = "#D6ACFF"
-magenta = "#FF92DF"
-cyan = "#A4FFFF"
-white = "#FFFFFF"
+black = "#6B757E"
+red = "#EA7F79"
+green = "#A6D486"
+yellow = "#EBCB7D"
+blue = "#7FA9EA"
+magenta = "#C99AE0"
+cyan = "#72CACA"
+white = "#F2F5F7"
 
-# UI-specific colors
 [ui]
-# Terminal background
-background = "#282A36"
-# Default text color
-foreground = "#F8F8F2"
-# Cursor color
-cursor = "#F8F8F2"
-# Text under cursor
-cursor_text = "#282A36"
-# Selection highlight
-selection = "#44475A"
-# Optional: text color when selected (uncomment to use)
+# Terminal background, and the base for dialogs, the palette, and Settings
+background = "#1C2023"
+# Default text, and the interface's text
+foreground = "#D8DEE4"
+# The cursor, and the command palette's accent
+cursor = "#E8B65C"
+# Text under a block cursor
+cursor_text = "#1C2023"
+# Background of selected text; an alpha value makes it translucent
+selection = "#3A4A5C"
+# Optional: color of selected text (leave it out to keep each character's color)
 # selection_text = "#FFFFFF"
-# Border/separator color
-border = "#44475A"
-# Active tab color
-tab_active = "#BD93F9"
-# Inactive tab color
-tab_inactive = "#44475A"
-# Search match highlight
-search_match = "#F1FA8C80"  # with alpha
-# URL underline color
-url = "#8BE9FD"
+# Tab separators, dividers, and dialog borders
+border = "#2E3439"
+# The active tab's accent line, and the accent in Settings
+tab_active = "#E8B65C"
+# The tab bar; keep it close to the background
+tab_inactive = "#23282C"
+# Search highlights; Termeric applies its own transparency, so alpha is ignored
+search_match = "#E8B65C"
+# Hyperlinks and detected links
+url = "#6CB6D9"
