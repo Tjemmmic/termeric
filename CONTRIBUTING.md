@@ -34,7 +34,7 @@ Add tests with your change. A bug fix should come with a test that fails without
 - **Commits:** use [Conventional Commits](https://www.conventionalcommits.org/) (`feat(scope): …`, `fix(scope): …`, `docs: …`, `refactor(scope): …`, `test(scope): …`, `ci: …`, `chore(scope): …`). Keep each commit to one logical change.
 - **Markdown:** write each paragraph and list item on one line; don't hard-wrap prose.
 - **Documentation:** the user guide is an mdBook in `docs/`. Update the relevant page when you change behavior a person can see, and update [Feature status](docs/src/status.md) when a feature's support level changes.
-- **Changelog:** add a line to the `[Unreleased]` section of [CHANGELOG.md](CHANGELOG.md) for user-visible changes.
+- **Changelog:** [CHANGELOG.md](CHANGELOG.md) summarizes what each release ships for the people using it, not every commit. Until 0.1.0 is released, update its `[0.1.0]` section only when a feature is added or removed or its support level changes; after that, add user-visible changes under `[Unreleased]`. Leave out internal changes such as refactors, tests, tooling, and protocol version bumps.
 
 ## Dependencies
 
