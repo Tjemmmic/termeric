@@ -10,7 +10,6 @@ authors = ["Termeric Contributors"]
 license = "MIT"
 repository = "https://github.com/Tjemmmic/termeric"
 homepage = "https://github.com/Tjemmmic/termeric"
-description = "A GPU-accelerated terminal emulator with a warm, turmeric-inspired theme"
 keywords = ["terminal", "emulator", "gpu", "rust"]
 categories = ["command-line-utilities"]
 

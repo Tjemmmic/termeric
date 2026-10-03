@@ -1,5 +1,5 @@
 pkgbase = termeric-git
-	pkgdesc = GPU-accelerated terminal emulator with a warm, turmeric-inspired theme
+	pkgdesc = GPU-accelerated terminal emulator themed around roots and rhizomes
 	pkgver = 0.1.0.r0.g0000000
 	pkgrel = 1
 	url = https://github.com/Tjemmmic/termeric

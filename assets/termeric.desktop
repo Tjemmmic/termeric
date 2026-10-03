@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Termeric
-Comment=GPU-accelerated terminal emulator with integrated AI workflows
+Comment=GPU-accelerated terminal emulator themed around roots and rhizomes
 Exec=termeric
 Icon=termeric
 Terminal=false

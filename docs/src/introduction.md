@@ -1,8 +1,8 @@
 # Introduction
 
-Termeric is a GPU-accelerated terminal emulator for Linux, written in Rust. It draws your terminal with the graphics card, keeps many shells organized in tabs, panes, and windows, and understands what your shell and your tools are doing, so you can jump between commands, open links, show images, and keep an eye on coding agents without leaving the terminal.
+Termeric is a GPU-accelerated terminal emulator for Linux, written in Rust and themed around roots and rhizomes. It draws your terminal with the graphics card, keeps many shells organized in tabs, panes, and windows, and understands what your shell and your tools are doing, so you can jump between commands, open links, show images, and keep an eye on coding agents without leaving the terminal.
 
-Termeric is for people who live in a terminal on a Linux desktop: developers, system administrators, and anyone who wants a fast, keyboard-friendly terminal that still has a point-and-click side when you want one. Its look and naming are themed around roots and rhizomes.
+Termeric is for people who live in a terminal on a Linux desktop: developers, system administrators, and anyone who wants a fast, keyboard-friendly terminal that still has a point-and-click side when you want one.
 
 ## Highlights
 

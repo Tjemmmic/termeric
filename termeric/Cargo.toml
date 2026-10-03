@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "A GPU-accelerated terminal emulator with a warm, turmeric-inspired theme"
+description = "GPU-accelerated terminal emulator themed around roots and rhizomes"
 repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
@@ -90,8 +90,8 @@ maintainer = "Termeric Contributors <Tjemmmic@users.noreply.github.com>"
 copyright = "2026, Termeric Contributors"
 license-file = ["../LICENSE", "4"]
 extended-description = """\
-Termeric is a modern, GPU-accelerated terminal emulator built with Rust.
-It features a warm, turmeric-inspired color theme and smooth rendering."""
+Termeric is a GPU-accelerated terminal emulator for Linux, written in Rust
+and themed around roots and rhizomes."""
 depends = "$auto"
 recommends = "mesa-vulkan-drivers"
 section = "utils"
