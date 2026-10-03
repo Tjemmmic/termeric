@@ -321,39 +321,78 @@ pub fn validate_sha256(digest: &str) -> anyhow::Result<()> {
 }
 
 pub fn write_frame<T: Serialize>(writer: &mut impl Write, frame: &T) -> anyhow::Result<()> {
-    let payload = serde_json::to_vec(frame).context("serialize domain protocol frame")?;
-    if payload.len() > MAX_FRAME_BYTES {
-        anyhow::bail!("domain protocol frame exceeds {MAX_FRAME_BYTES} bytes");
-    }
-    writer
-        .write_all(&(payload.len() as u32).to_be_bytes())
-        .context("write domain protocol frame length")?;
-    writer
-        .write_all(&payload)
-        .context("write domain protocol frame payload")?;
-    writer.flush().context("flush domain protocol frame")?;
-    Ok(())
+    write_json_frame(writer, frame, MAX_FRAME_BYTES, "domain protocol")
 }
 
 pub fn read_frame<T: DeserializeOwned>(reader: &mut impl Read) -> anyhow::Result<T> {
+    read_json_frame(reader, MAX_FRAME_BYTES, "domain protocol")
+}
+
+/// Write `frame` as JSON behind a big-endian `u32` length, refusing frames
+/// over `max_bytes`. `protocol` names the protocol in errors.
+pub fn write_json_frame<T: Serialize>(
+    writer: &mut impl Write,
+    frame: &T,
+    max_bytes: usize,
+    protocol: &str,
+) -> anyhow::Result<()> {
+    let payload =
+        serde_json::to_vec(frame).with_context(|| format!("serialize {protocol} frame"))?;
+    if payload.len() > max_bytes {
+        anyhow::bail!("{protocol} frame exceeds {max_bytes} bytes");
+    }
+    writer
+        .write_all(&(payload.len() as u32).to_be_bytes())
+        .with_context(|| format!("write {protocol} frame length"))?;
+    writer
+        .write_all(&payload)
+        .with_context(|| format!("write {protocol} frame payload"))?;
+    writer
+        .flush()
+        .with_context(|| format!("flush {protocol} frame"))
+}
+
+/// Read one frame written by [`write_json_frame`], refusing an empty frame or
+/// one over `max_bytes` before allocating for it.
+pub fn read_json_frame<T: DeserializeOwned>(
+    reader: &mut impl Read,
+    max_bytes: usize,
+    protocol: &str,
+) -> anyhow::Result<T> {
     let mut length = [0u8; 4];
     reader
         .read_exact(&mut length)
-        .context("read domain protocol frame length")?;
+        .with_context(|| format!("read {protocol} frame length"))?;
     let length = u32::from_be_bytes(length) as usize;
-    if length == 0 || length > MAX_FRAME_BYTES {
-        anyhow::bail!("invalid domain protocol frame length {length}");
+    if length == 0 || length > max_bytes {
+        anyhow::bail!("invalid {protocol} frame length {length}");
     }
     let mut payload = vec![0u8; length];
     reader
         .read_exact(&mut payload)
-        .context("read domain protocol frame payload")?;
-    serde_json::from_slice(&payload).context("decode domain protocol frame")
+        .with_context(|| format!("read {protocol} frame payload"))?;
+    serde_json::from_slice(&payload).with_context(|| format!("decode {protocol} frame"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn json_frames_round_trip_within_their_limit_and_refuse_the_rest() {
+        let mut wire = Vec::new();
+        write_json_frame(&mut wire, &"hello", 16, "test").unwrap();
+        assert_eq!(&wire[..4], &7_u32.to_be_bytes());
+        let read: String = read_json_frame(&mut wire.as_slice(), 16, "test").unwrap();
+        assert_eq!(read, "hello");
+
+        let error = write_json_frame(&mut Vec::new(), &"x".repeat(32), 16, "test").unwrap_err();
+        assert_eq!(error.to_string(), "test frame exceeds 16 bytes");
+        assert!(read_json_frame::<String>(&mut wire.as_slice(), 6, "test").is_err());
+        let empty = 0_u32.to_be_bytes();
+        let error = read_json_frame::<String>(&mut empty.as_slice(), 16, "test").unwrap_err();
+        assert_eq!(error.to_string(), "invalid test frame length 0");
+    }
 
     #[test]
     fn every_frame_round_trips_through_the_versioned_wire_shape() {

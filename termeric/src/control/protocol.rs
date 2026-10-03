@@ -1704,33 +1704,11 @@ fn validate_metadata(value: Option<&str>, total: &mut usize) -> anyhow::Result<(
 }
 
 pub fn write_frame<T: Serialize>(writer: &mut impl Write, frame: &T) -> anyhow::Result<()> {
-    let payload = serde_json::to_vec(frame).context("serialize GUI control frame")?;
-    if payload.len() > MAX_FRAME_BYTES {
-        anyhow::bail!("GUI control frame exceeds {MAX_FRAME_BYTES} bytes");
-    }
-    writer
-        .write_all(&(payload.len() as u32).to_be_bytes())
-        .context("write GUI control frame length")?;
-    writer
-        .write_all(&payload)
-        .context("write GUI control frame payload")?;
-    writer.flush().context("flush GUI control frame")
+    crate::domain::protocol::write_json_frame(writer, frame, MAX_FRAME_BYTES, "GUI control")
 }
 
 pub fn read_frame<T: DeserializeOwned>(reader: &mut impl Read) -> anyhow::Result<T> {
-    let mut length = [0u8; 4];
-    reader
-        .read_exact(&mut length)
-        .context("read GUI control frame length")?;
-    let length = u32::from_be_bytes(length) as usize;
-    if length == 0 || length > MAX_FRAME_BYTES {
-        anyhow::bail!("invalid GUI control frame length {length}");
-    }
-    let mut payload = vec![0u8; length];
-    reader
-        .read_exact(&mut payload)
-        .context("read GUI control frame payload")?;
-    serde_json::from_slice(&payload).context("decode GUI control frame")
+    crate::domain::protocol::read_json_frame(reader, MAX_FRAME_BYTES, "GUI control")
 }
 
 #[cfg(test)]
