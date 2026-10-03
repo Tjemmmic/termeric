@@ -1419,6 +1419,7 @@ mod tests {
             show_delay: Duration::from_millis(20),
             ..FakeBackend::default()
         });
+        let requested = Instant::now();
         assert!(
             state
                 .show(
@@ -1428,7 +1429,13 @@ mod tests {
                 .is_empty()
         );
 
-        assert!(state.expire_due(Instant::now()).is_empty());
+        // A clock started at the request would have run out by now; one
+        // started at the display, at least 20 ms later, cannot have.
+        assert!(
+            state
+                .expire_due(requested + Duration::from_millis(10))
+                .is_empty()
+        );
         assert!(state.backend.closes.is_empty());
         assert!(state.entries.contains_key(&key(origin(1, 1), "slow")));
     }
