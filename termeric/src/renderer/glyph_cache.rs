@@ -4163,9 +4163,12 @@ mod tests {
 
     #[test]
     fn cell_height_uses_configured_line_height() {
-        let mut font_system = FontSystem::new();
+        // A bundled face, so the test doesn't depend on the machine's fonts.
+        let mut font_system = FontSystem::new_with_fonts([cosmic_text::fontdb::Source::Binary(
+            Arc::new(deterministic_test_font_data_named("FiraMono-Medium.ttf")),
+        )]);
         let metrics = Metrics::new(14.0, 21.0);
-        let cell = measure_cell(&mut font_system, &metrics, "monospace", Weight::NORMAL);
+        let cell = measure_cell(&mut font_system, &metrics, "Fira Mono", Weight::NORMAL);
         assert_eq!(cell.height, 21.0);
         // The baseline comes from the face, not a fixed fraction of the cell,
         // and is whole so glyph rows cannot straddle pixel boundaries.
