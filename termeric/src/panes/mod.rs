@@ -1120,21 +1120,15 @@ impl PaneManager {
         let geometry = self
             .split_geometry(self.focused, direction)
             .expect("validated focused split target");
-        let working_dir = match self.cwd_mode {
-            crate::config::PaneCwdMode::Focused => self.panes.get(&self.focused).and_then(|pane| {
+        let pane_cwd = |id: PaneId| {
+            self.panes.get(&id).and_then(|pane| {
                 crate::tabs::terminal_working_directory(&pane.terminal)
                     .or_else(|| pane.pty.child_id().and_then(crate::tabs::get_process_cwd))
-            }),
-            crate::config::PaneCwdMode::Tab => {
-                self.panes.get(&self.primary_id()).and_then(|pane| {
-                    crate::tabs::terminal_working_directory(&pane.terminal)
-                        .or_else(|| pane.pty.child_id().and_then(crate::tabs::get_process_cwd))
-                })
-            }
-            crate::config::PaneCwdMode::Process => std::env::current_dir()
-                .ok()
-                .map(|path| path.to_string_lossy().into_owned()),
+            })
         };
+        let working_dir = self
+            .cwd_mode
+            .resolve(|| pane_cwd(self.focused), || pane_cwd(self.primary_id()));
         let shell = launch.map_or(&self.shell, |launch| &launch.shell);
         let cwd = launch.map_or(working_dir.as_deref(), |launch| launch.cwd.as_deref());
         let mut pane = match Pane::new_local(

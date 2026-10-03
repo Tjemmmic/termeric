@@ -94,6 +94,23 @@ pub enum PaneCwdMode {
 }
 
 impl PaneCwdMode {
+    /// The folder a new pane starts in: the source pane's, the tab's first
+    /// pane's, or Termeric's own. `None` when that folder is unknown, and the
+    /// shell starts where it would by default.
+    pub fn resolve(
+        self,
+        source_cwd: impl FnOnce() -> Option<String>,
+        primary_cwd: impl FnOnce() -> Option<String>,
+    ) -> Option<String> {
+        match self {
+            Self::Focused => source_cwd(),
+            Self::Tab => primary_cwd(),
+            Self::Process => std::env::current_dir()
+                .ok()
+                .map(|path| path.to_string_lossy().into_owned()),
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Self::Focused => "focused pane",

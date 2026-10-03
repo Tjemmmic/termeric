@@ -100,17 +100,16 @@ impl App {
             .ok_or_else(|| anyhow::anyhow!("no tab manager"))?;
         let geometry = tabs.plugin_pane_geometry(target, direction)?;
         let tab = tabs.tab_by_id(target.tab_id).expect("validated target");
-        let cwd = match self.config.panes.cwd {
-            crate::config::PaneCwdMode::Focused => tab.pane_working_directory(target.pane_id),
-            crate::config::PaneCwdMode::Tab => tab.pane_working_directory(
-                tab.pane_manager
-                    .as_ref()
-                    .map_or(tab.single_pane_id(), PaneManager::primary_id),
-            ),
-            crate::config::PaneCwdMode::Process => {
-                Some(std::env::current_dir()?.to_string_lossy().into_owned())
-            }
-        };
+        let cwd = self.config.panes.cwd.resolve(
+            || tab.pane_working_directory(target.pane_id),
+            || {
+                tab.pane_working_directory(
+                    tab.pane_manager
+                        .as_ref()
+                        .map_or(tab.single_pane_id(), PaneManager::primary_id),
+                )
+            },
+        );
         if cwd
             .as_ref()
             .is_some_and(|cwd| !std::path::Path::new(cwd).is_dir())
