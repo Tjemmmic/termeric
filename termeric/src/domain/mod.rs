@@ -230,7 +230,10 @@ impl DomainRelayCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DomainCommand {
     ServerForeground,
-    ProxyStdio,
+    /// The SSH bridge; without `start_server` it refuses when no daemon runs.
+    ProxyStdio {
+        start_server: bool,
+    },
     ProtocolVersion {
         json: bool,
     },
@@ -377,8 +380,8 @@ pub fn execute(command: DomainCommand) -> anyhow::Result<Option<String>> {
         run_server_foreground()?;
         return Ok(None);
     }
-    if command == DomainCommand::ProxyStdio {
-        run_proxy_stdio()?;
+    if let DomainCommand::ProxyStdio { start_server } = command {
+        run_proxy_stdio(start_server)?;
         return Ok(None);
     }
     if let DomainCommand::Hosts { json } = &command {
@@ -396,9 +399,21 @@ pub fn execute(command: DomainCommand) -> anyhow::Result<Option<String>> {
         command,
     } = command
     {
-        return execute_with_client(*command, DomainClient::for_ssh(destination)?);
+        // Stopping must not start a daemon just to stop it.
+        let client = if *command == DomainCommand::StopServer {
+            DomainClient::for_running_ssh(destination)?
+        } else {
+            DomainClient::for_ssh(destination)?
+        };
+        return execute_with_client(*command, client);
     }
-    execute_with_client(command, DomainClient::connect_or_start()?)
+    let client = if command == DomainCommand::StopServer {
+        DomainClient::connect_running()?
+            .ok_or_else(|| anyhow::anyhow!(client::NO_SERVER_RUNNING))?
+    } else {
+        DomainClient::connect_or_start()?
+    };
+    execute_with_client(command, client)
 }
 
 fn execute_with_client(
@@ -546,7 +561,7 @@ fn execute_with_client(
         DomainCommand::Kill { domain } => (Request::KillDomain { domain }, false),
         DomainCommand::StopServer => (Request::Shutdown, false),
         DomainCommand::ServerForeground
-        | DomainCommand::ProxyStdio
+        | DomainCommand::ProxyStdio { .. }
         | DomainCommand::ProtocolVersion { .. }
         | DomainCommand::Hosts { .. }
         | DomainCommand::Remote { .. }
@@ -579,12 +594,12 @@ fn format_ssh_hosts(
 }
 
 #[cfg(unix)]
-fn run_proxy_stdio() -> anyhow::Result<()> {
-    run_ssh_stdio_bridge()
+fn run_proxy_stdio(start_server: bool) -> anyhow::Result<()> {
+    run_ssh_stdio_bridge(start_server)
 }
 
 #[cfg(not(unix))]
-fn run_proxy_stdio() -> anyhow::Result<()> {
+fn run_proxy_stdio(start_server: bool) -> anyhow::Result<()> {
     anyhow::bail!("the SSH domain bridge currently requires Unix-domain sockets")
 }
 

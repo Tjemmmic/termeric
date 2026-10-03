@@ -1540,10 +1540,13 @@ fn parse_domain(
             require_exact(values, &["--foreground"], "domain server --foreground")?;
             DomainCommand::ServerForeground
         }
-        "proxy-stdio" => {
-            require_len(values, 0, "domain proxy-stdio")?;
-            DomainCommand::ProxyStdio
-        }
+        "proxy-stdio" => match values {
+            [] => DomainCommand::ProxyStdio { start_server: true },
+            [flag] if flag.to_str() == Some("--no-start") => DomainCommand::ProxyStdio {
+                start_server: false,
+            },
+            _ => anyhow::bail!("usage: termeric domain proxy-stdio [--no-start]"),
+        },
         "list" => DomainCommand::List {
             json: parse_only_json(values, "domain list")?,
         },
@@ -1798,7 +1801,7 @@ fn apply_remote_authority(
     match outcome {
         ParseOutcome::Domain(
             crate::domain::DomainCommand::ServerForeground
-            | crate::domain::DomainCommand::ProxyStdio
+            | crate::domain::DomainCommand::ProxyStdio { .. }
             | crate::domain::DomainCommand::ProtocolVersion { .. }
             | crate::domain::DomainCommand::Hosts { .. }
             | crate::domain::DomainCommand::Remote { .. },
@@ -2127,7 +2130,8 @@ Create and control:\n  \
   attach DOMAIN [WINDOW OPTIONS]        Open the domain in a GUI\n  \
   kill DOMAIN                           Terminate its processes\n  \
   stop-server                           Stop an empty daemon\n\n\
-Launch OPTIONS: --working-directory PATH, --title TITLE, --size COLSxROWS\n\n\
+Launch OPTIONS: --working-directory PATH (or --cwd PATH), --title TITLE,\n  \
+  --size COLSxROWS, --json\n\n\
 Attach WINDOW OPTIONS: --geometry WIDTHxHEIGHT, --app-id NAME\n\n\
 The daemon socket always remains local and user-private. `--host` starts a\n\
 non-interactive OpenSSH stdio bridge using an already trusted host key and\n\
@@ -3526,7 +3530,18 @@ mod tests {
         ));
         assert!(matches!(
             parse(["domain", "proxy-stdio"].into_iter().map(OsString::from)).unwrap(),
-            ParseOutcome::Domain(crate::domain::DomainCommand::ProxyStdio)
+            ParseOutcome::Domain(crate::domain::DomainCommand::ProxyStdio { start_server: true })
+        ));
+        assert!(matches!(
+            parse(
+                ["domain", "proxy-stdio", "--no-start"]
+                    .into_iter()
+                    .map(OsString::from)
+            )
+            .unwrap(),
+            ParseOutcome::Domain(crate::domain::DomainCommand::ProxyStdio {
+                start_server: false
+            })
         ));
         assert!(matches!(
             parse(
@@ -3815,6 +3830,35 @@ mod tests {
             .map(OsString::from)
             .collect();
         assert!(parse_collected(nested, &config.domains).is_err());
+    }
+
+    #[test]
+    fn a_remote_working_directory_is_left_for_the_remote_daemon_to_check() {
+        let outcome = parse(
+            [
+                "domain",
+                "--host",
+                "developer@build.example",
+                "spawn",
+                "domain-1",
+                "--cwd",
+                "/only/on/the/remote/computer",
+            ]
+            .into_iter()
+            .map(OsString::from),
+        )
+        .unwrap();
+        let ParseOutcome::Domain(crate::domain::DomainCommand::Remote { command, .. }) = outcome
+        else {
+            panic!("expected a remote domain command");
+        };
+        let crate::domain::DomainCommand::Spawn { spawn, .. } = *command else {
+            panic!("expected domain spawn");
+        };
+        assert_eq!(
+            spawn.working_directory.as_deref(),
+            Some("/only/on/the/remote/computer")
+        );
     }
 
     #[test]

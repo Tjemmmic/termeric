@@ -2940,6 +2940,11 @@ impl PaneRuntime {
     ) -> anyhow::Result<(Self, Box<dyn Read + Send>)> {
         let mut environment = Vec::new();
         if let Some(cwd) = &spec.working_directory {
+            // Checked here, on the computer that runs the process; clients
+            // can't tell whether a remote folder exists.
+            if !std::path::Path::new(cwd).is_dir() {
+                anyhow::bail!("working directory {cwd:?} does not exist");
+            }
             environment.push(("PWD".to_string(), cwd.clone()));
         }
         let initial_size = default_pty_size(spec.cols, spec.rows);
@@ -3922,6 +3927,19 @@ mod tests {
             enabled.terminal.xterm_keyboard_type(),
             XtermKeyboardType::Vt220
         );
+    }
+
+    #[test]
+    fn the_daemon_refuses_a_working_directory_missing_on_its_computer() {
+        let spec = SpawnSpec {
+            program: Some("/bin/true".into()),
+            working_directory: Some("/path/that/does/not/exist/here".into()),
+            ..SpawnSpec::default()
+        };
+        let error = PaneRuntime::spawn(0, &spec, false, XtermKeyboardType::Normal)
+            .err()
+            .expect("a missing working directory must be refused");
+        assert!(error.to_string().contains("does not exist"), "{error}");
     }
 
     #[cfg(unix)]

@@ -140,11 +140,11 @@ A saved host holds only a name, a destination, and an optional description. Keep
 | `close-pane DOMAIN PANE` | End a pane's program and remove the pane. Refused for a tab's last pane; use `close-tab`. |
 | `close-tab DOMAIN TAB` | End every program in a tab and remove it. Refused for a domain's last tab; use `kill`. |
 | `kill DOMAIN` | End every program in the domain and remove it. |
-| `stop-server` | Stop the daemon. Refused while any domain remains. |
+| `stop-server` | Stop the daemon. Refused while any domain remains, and an error when no daemon is running (it never starts one to stop it). |
 | `hosts [--json]` | List your [saved SSH hosts](#saved-hosts). Can't be combined with `--host` or `--host-profile`. |
 | `protocol-version [--json]` | Print the domain protocol version this `termeric` speaks. Can't be combined with `--host` or `--host-profile`. |
 
-The launch options for `create`, `spawn`, and `split` come before any `--`: `--working-directory PATH` (or `--cwd PATH`), a directory that must exist; `--title TITLE`; and `--size COLSxROWS`, from 1x1 to 1000x1000 cells (80x24 by default). Commands that change a domain's tabs or panes print a one-line summary of the domain, starting with its ID.
+The launch options for `create`, `spawn`, and `split` come before any `--`: `--working-directory PATH` (or `--cwd PATH`), a directory that must exist on the computer running the domain (with `--host`, the remote one); `--title TITLE`; and `--size COLSxROWS`, from 1x1 to 1000x1000 cells (80x24 by default). Commands that change a domain's tabs or panes print a one-line summary of the domain, starting with its ID.
 
 ## Limits
 

@@ -21,6 +21,9 @@ use termeric_core::pty::PtySize;
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_UPLOAD_ATTEMPTS: usize = 4;
 const UPLOAD_RETRY_DELAY: Duration = Duration::from_millis(100);
+/// What `stop-server` reports, locally or through the SSH bridge, when no
+/// daemon is running.
+pub(super) const NO_SERVER_RUNNING: &str = "no domain server is running";
 
 #[path = "client_attachment_snapshot.rs"]
 mod attachment_snapshot;
@@ -49,7 +52,10 @@ pub struct DomainClient {
 
 enum DomainEndpoint {
     Local(RuntimePaths),
-    Ssh { destination: String },
+    Ssh {
+        destination: String,
+        start_server: bool,
+    },
 }
 
 enum DomainStream {
@@ -347,23 +353,8 @@ impl DomainClient {
         let client = Self {
             endpoint: DomainEndpoint::Local(paths),
         };
-        match client.connect() {
-            Ok(_) => return Ok(client),
-            Err(error) => {
-                let daemon_can_be_started =
-                    error.downcast_ref::<std::io::Error>().is_some_and(|io| {
-                        matches!(
-                            io.kind(),
-                            std::io::ErrorKind::NotFound
-                                | std::io::ErrorKind::ConnectionRefused
-                                | std::io::ErrorKind::ConnectionReset
-                        )
-                    });
-                if !daemon_can_be_started {
-                    return Err(error)
-                        .context("existing local domain endpoint rejected negotiation");
-                }
-            }
+        if client.connect_if_running()? {
+            return Ok(client);
         }
         client.spawn_server()?;
         let deadline = Instant::now() + Duration::from_secs(3);
@@ -378,6 +369,37 @@ impl DomainClient {
         }
     }
 
+    /// The local daemon if one is running; never starts one.
+    pub fn connect_running() -> anyhow::Result<Option<Self>> {
+        let client = Self {
+            endpoint: DomainEndpoint::Local(RuntimePaths::discover()?),
+        };
+        Ok(client.connect_if_running()?.then_some(client))
+    }
+
+    /// Whether a daemon answered; `false` when nothing is listening, an error
+    /// when something answered but refused us.
+    fn connect_if_running(&self) -> anyhow::Result<bool> {
+        match self.connect() {
+            Ok(_) => Ok(true),
+            Err(error) => {
+                let nothing_listening = error.downcast_ref::<std::io::Error>().is_some_and(|io| {
+                    matches!(
+                        io.kind(),
+                        std::io::ErrorKind::NotFound
+                            | std::io::ErrorKind::ConnectionRefused
+                            | std::io::ErrorKind::ConnectionReset
+                    )
+                });
+                if nothing_listening {
+                    Ok(false)
+                } else {
+                    Err(error).context("existing local domain endpoint rejected negotiation")
+                }
+            }
+        }
+    }
+
     #[cfg(test)]
     pub fn for_paths(paths: RuntimePaths) -> Self {
         Self {
@@ -388,7 +410,22 @@ impl DomainClient {
     pub fn for_ssh(destination: String) -> anyhow::Result<Self> {
         validate_ssh_destination(&destination)?;
         Ok(Self {
-            endpoint: DomainEndpoint::Ssh { destination },
+            endpoint: DomainEndpoint::Ssh {
+                destination,
+                start_server: true,
+            },
+        })
+    }
+
+    /// Like [`Self::for_ssh`], but the remote bridge refuses rather than
+    /// starting a daemon when none is running there.
+    pub fn for_running_ssh(destination: String) -> anyhow::Result<Self> {
+        validate_ssh_destination(&destination)?;
+        Ok(Self {
+            endpoint: DomainEndpoint::Ssh {
+                destination,
+                start_server: false,
+            },
         })
     }
 
@@ -1001,7 +1038,10 @@ impl DomainClient {
     fn connect(&self) -> anyhow::Result<DomainStream> {
         match &self.endpoint {
             DomainEndpoint::Local(paths) => connect_local(paths),
-            DomainEndpoint::Ssh { destination } => connect_ssh(destination),
+            DomainEndpoint::Ssh {
+                destination,
+                start_server,
+            } => connect_ssh(destination, *start_server),
         }
     }
 
@@ -1132,26 +1172,30 @@ fn connect_local(paths: &RuntimePaths) -> anyhow::Result<DomainStream> {
     Ok(DomainStream::Local(stream))
 }
 
-fn connect_ssh(destination: &str) -> anyhow::Result<DomainStream> {
+fn connect_ssh(destination: &str, start_server: bool) -> anyhow::Result<DomainStream> {
     validate_ssh_destination(destination)?;
-    let mut child = Command::new("ssh")
-        .args([
-            "-T",
-            "-oBatchMode=yes",
-            "-oStrictHostKeyChecking=yes",
-            "-oConnectTimeout=10",
-            "-oServerAliveInterval=15",
-            "-oServerAliveCountMax=2",
-            "-oClearAllForwardings=yes",
-            "-oPermitLocalCommand=no",
-            "-oRequestTTY=no",
-            "-oEscapeChar=none",
-            "--",
-            destination,
-            "termeric",
-            "domain",
-            "proxy-stdio",
-        ])
+    let mut command = Command::new("ssh");
+    command.args([
+        "-T",
+        "-oBatchMode=yes",
+        "-oStrictHostKeyChecking=yes",
+        "-oConnectTimeout=10",
+        "-oServerAliveInterval=15",
+        "-oServerAliveCountMax=2",
+        "-oClearAllForwardings=yes",
+        "-oPermitLocalCommand=no",
+        "-oRequestTTY=no",
+        "-oEscapeChar=none",
+        "--",
+        destination,
+        "termeric",
+        "domain",
+        "proxy-stdio",
+    ]);
+    if !start_server {
+        command.arg("--no-start");
+    }
+    let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
@@ -1180,7 +1224,7 @@ fn connect_ssh(destination: &str) -> anyhow::Result<DomainStream> {
     match read_frame_with_timeout(&mut stream, RESPONSE_TIMEOUT)? {
         ServerFrame::Hello { version } if version == protocol::PROTOCOL_VERSION => Ok(stream),
         ServerFrame::Error { message } => {
-            anyhow::bail!("SSH domain bridge rejected access: {message}")
+            anyhow::bail!("SSH domain bridge on {destination}: {message}")
         }
         frame => anyhow::bail!("invalid SSH domain negotiation response {frame:?}"),
     }
@@ -1285,8 +1329,9 @@ fn read_frame_with_timeout<T: serde::de::DeserializeOwned>(
 /// Bridge one authenticated SSH stdio channel to this user's private local
 /// daemon socket. The outer handshake deliberately requires an empty token:
 /// only this helper reads the remote token, and it never writes that secret to
-/// stdout or across the SSH connection.
-pub fn run_ssh_stdio_bridge() -> anyhow::Result<()> {
+/// stdout or across the SSH connection. Without `start_server` it refuses
+/// instead of starting a daemon (`stop-server`).
+pub fn run_ssh_stdio_bridge(start_server: bool) -> anyhow::Result<()> {
     let mut stdin = bridge::clone_input(libc::STDIN_FILENO)?;
     let mut stdout = std::io::stdout().lock();
     let hello = read_frame_with_timeout::<ClientFrame>(&mut stdin, RESPONSE_TIMEOUT)
@@ -1324,8 +1369,22 @@ pub fn run_ssh_stdio_bridge() -> anyhow::Result<()> {
             return Ok(());
         }
     }
-    let client = match DomainClient::connect_or_start() {
-        Ok(client) => client,
+    let client = if start_server {
+        DomainClient::connect_or_start().map(Some)
+    } else {
+        DomainClient::connect_running()
+    };
+    let client = match client {
+        Ok(Some(client)) => client,
+        Ok(None) => {
+            protocol::write_frame(
+                &mut stdout,
+                &ServerFrame::Error {
+                    message: NO_SERVER_RUNNING.into(),
+                },
+            )?;
+            return Ok(());
+        }
         Err(error) => {
             protocol::write_frame(
                 &mut stdout,
@@ -1482,6 +1541,18 @@ mod tests {
     use std::process::{Command, Stdio};
     use std::sync::atomic::AtomicBool;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn a_missing_or_stale_daemon_socket_is_not_a_running_daemon() {
+        let temporary = tempfile::tempdir().unwrap();
+        let paths = RuntimePaths::from_directory(temporary.path().join("runtime")).unwrap();
+        let client = DomainClient::for_paths(paths.clone());
+        assert!(!client.connect_if_running().unwrap());
+        // A stale socket with nobody listening is not a running daemon either.
+        paths.load_or_create_token().unwrap();
+        drop(UnixListener::bind(&paths.socket).unwrap());
+        assert!(!client.connect_if_running().unwrap());
+    }
 
     #[test]
     fn ssh_destinations_are_bounded_and_cannot_be_options_or_uris() {

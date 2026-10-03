@@ -189,6 +189,9 @@ pub fn validate_name(label: &str, value: &str) -> anyhow::Result<()> {
 }
 
 impl SpawnSpec {
+    /// Checks the request's shape, wherever it is built. Whether the working
+    /// directory exists is for the daemon that spawns it to say: with
+    /// `--host`, it names a folder on the remote computer.
     pub fn validate(&self) -> anyhow::Result<()> {
         if self.cols == 0 || self.rows == 0 || self.cols > 1_000 || self.rows > 1_000 {
             anyhow::bail!("terminal geometry must be between 1x1 and 1000x1000 cells");
@@ -210,9 +213,6 @@ impl SpawnSpec {
         if let Some(cwd) = &self.working_directory {
             if cwd.len() > 4_096 || cwd.chars().any(char::is_control) {
                 anyhow::bail!("working directory exceeds the domain resource policy");
-            }
-            if !std::path::Path::new(cwd).is_dir() {
-                anyhow::bail!("working directory {cwd:?} does not exist");
             }
         }
         Ok(())
@@ -239,13 +239,18 @@ mod tests {
                 ..SpawnSpec::default()
             },
             SpawnSpec {
-                working_directory: Some("/path/that/does/not/exist".into()),
+                working_directory: Some("two\nlines".into()),
                 ..SpawnSpec::default()
             },
         ] {
             assert!(spawn.validate().is_err());
         }
         assert!(SpawnSpec::default().validate().is_ok());
+        let elsewhere = SpawnSpec {
+            working_directory: Some("/path/that/does/not/exist/here".into()),
+            ..SpawnSpec::default()
+        };
+        assert!(elsewhere.validate().is_ok());
     }
 
     #[test]
