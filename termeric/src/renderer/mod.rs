@@ -904,12 +904,12 @@ impl Renderer {
         }
     }
 
-    /// Get the cell dimensions
     /// Display scale factor the renderer lays out chrome for.
     pub fn scale_factor(&self) -> f32 {
         self.scale_factor
     }
 
+    /// Cell width and height in physical pixels.
     pub fn cell_size(&self) -> (f32, f32) {
         (self.cell_width, self.cell_height)
     }
@@ -1050,12 +1050,12 @@ impl Renderer {
         self.size
     }
 
-    /// Get cell width in logical pixels
+    /// Cell width in physical pixels.
     pub fn cell_width(&self) -> f32 {
         self.cell_width
     }
 
-    /// Get cell height in logical pixels
+    /// Cell height in physical pixels.
     pub fn cell_height(&self) -> f32 {
         self.cell_height
     }
@@ -1849,7 +1849,7 @@ impl Renderer {
             }
         }
 
-        // ── Toasts (always on top — transient status notices) ──
+        // ── Toasts, above every modal layer and below only the IME preedit ──
         self.rect_pipeline.mark_layer();
         self.text_pipeline.mark_layer();
         if !self.toasts.is_empty() {
