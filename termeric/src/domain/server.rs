@@ -2790,8 +2790,6 @@ fn terminal_snapshot(terminal: &Terminal, max_bytes: usize) -> Vec<u8> {
         snapshot.extend_from_slice(b"\x1b[?1049h");
     }
     snapshot.extend_from_slice(selected.join("\r\n").as_bytes());
-    let cursor = terminal.grid().cursor();
-    snapshot.extend_from_slice(format!("\x1b[{};{}H", cursor.row + 1, cursor.col + 1).as_bytes());
     push_private_mode(
         &mut snapshot,
         1,
@@ -2906,6 +2904,9 @@ fn terminal_snapshot(terminal: &Terminal, max_bytes: usize) -> Vec<u8> {
     snapshot.extend_from_slice(
         format!("\x1b[{}\"q", terminal.character_protection_parameter()).as_bytes(),
     );
+    // Last, because replaying DECOM above homes the cursor.
+    let cursor = terminal.grid().cursor();
+    snapshot.extend_from_slice(format!("\x1b[{};{}H", cursor.row + 1, cursor.col + 1).as_bytes());
     snapshot.extend_from_slice(&multiple_cursors);
     debug_assert!(snapshot.len() <= max_bytes || max_bytes < 512);
     snapshot
@@ -3968,7 +3969,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_attach_snapshot_replays_an_idle_prompt_and_a_cleared_screen() {
+    fn terminal_attach_snapshot_replays_an_idle_prompt_and_a_cleared_screen_exactly() {
         for output in [
             &b"older\r\noutput\r\nuser@host:~$ "[..],
             &b"line 1\r\nline 2\r\nline 3\r\nline 4\x1b[H\x1b[2J$ "[..],
@@ -3980,6 +3981,10 @@ mod tests {
             for row in 0..4 {
                 assert_eq!(replica.rows_text(row, row), terminal.rows_text(row, row));
             }
+            assert_eq!(
+                (replica.grid().cursor().row, replica.grid().cursor().col),
+                (terminal.grid().cursor().row, terminal.grid().cursor().col)
+            );
         }
     }
 
