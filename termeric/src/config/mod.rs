@@ -3,7 +3,7 @@
 pub mod theme;
 
 use anyhow::{Context, Result, bail};
-use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -192,9 +192,9 @@ pub struct RendererConfig {
 }
 
 /// Whether an accessibility presentation preference follows the desktop or
-/// uses an explicit application override. Boolean values from older config
-/// files remain accepted as explicit on/off choices.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// uses an explicit application override.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum AccessibilityPreference {
     #[default]
     System,
@@ -218,44 +218,6 @@ impl AccessibilityPreference {
             Self::System => matches!(system, Some(true)),
             Self::On => true,
             Self::Off => false,
-        }
-    }
-}
-
-impl Serialize for AccessibilityPreference {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(match self {
-            Self::System => "system",
-            Self::On => "on",
-            Self::Off => "off",
-        })
-    }
-}
-
-impl<'de> Deserialize<'de> for AccessibilityPreference {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum WireValue {
-            LegacyBool(bool),
-            Name(String),
-        }
-
-        match WireValue::deserialize(deserializer)? {
-            WireValue::LegacyBool(true) => Ok(Self::On),
-            WireValue::LegacyBool(false) => Ok(Self::Off),
-            WireValue::Name(name) => match name.as_str() {
-                "system" => Ok(Self::System),
-                "on" => Ok(Self::On),
-                "off" => Ok(Self::Off),
-                _ => Err(de::Error::unknown_variant(&name, &["system", "on", "off"])),
-            },
         }
     }
 }
@@ -1463,21 +1425,6 @@ mod tests {
         assert!(encoded.contains("high_contrast = \"off\""));
         let decoded: Config = toml::from_str(&encoded).unwrap();
         assert_eq!(decoded.accessibility, config.accessibility);
-    }
-
-    #[test]
-    fn accessibility_preferences_accept_legacy_booleans_as_explicit_overrides() {
-        let config: Config =
-            toml::from_str("[accessibility]\nreduce_motion = true\nhigh_contrast = false\n")
-                .unwrap();
-        assert_eq!(
-            config.accessibility.reduce_motion,
-            AccessibilityPreference::On
-        );
-        assert_eq!(
-            config.accessibility.high_contrast,
-            AccessibilityPreference::Off
-        );
     }
 
     #[test]
