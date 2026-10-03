@@ -483,15 +483,6 @@ impl Application {
     }
 
     fn plugin_process_inventory(&self) -> crate::control::protocol::ProcessInventory {
-        let live_window_count = self
-            .window_order
-            .iter()
-            .filter(|native_id| {
-                self.windows
-                    .get(native_id)
-                    .is_some_and(|window| !window.should_exit)
-            })
-            .count();
         let windows: Vec<_> = self
             .window_order
             .iter()
@@ -502,11 +493,13 @@ impl Application {
             })
             .collect();
         let mut inventory = build_plugin_process_inventory(&windows);
-        inventory.truncated |= windows
-            .iter()
-            .filter(|(_, window)| !window.should_exit)
-            .count()
-            != live_window_count;
+        // A live window without a control ID is missing from the list.
+        inventory.truncated |= self.window_order.iter().any(|native_id| {
+            self.windows
+                .get(native_id)
+                .is_some_and(|window| !window.should_exit)
+                && !self.control_window_ids.contains_key(native_id)
+        });
         inventory
     }
 

@@ -418,10 +418,7 @@ impl App {
         id: u64,
         budget: &mut ControlInventoryBudget,
     ) -> crate::control::protocol::WindowInventory {
-        use crate::control::protocol::{
-            DividerInventory, DividerKind, MAX_DIVIDERS_PER_TAB, MAX_PANES_PER_TAB,
-            MAX_TABS_PER_WINDOW, PaneInventory, TabInventory, TabKind, WindowInventory,
-        };
+        use crate::control::protocol::WindowInventory;
 
         let (pixel_width, pixel_height) = self
             .renderer
@@ -429,38 +426,55 @@ impl App {
             .map(crate::renderer::Renderer::window_size)
             .unwrap_or((self.config.window.width, self.config.window.height));
 
-        let Some(tabs) = self.tabs.as_ref() else {
-            let (workspace_id, truncated) =
-                self.current_workspace_id
-                    .as_deref()
-                    .map_or((None, false), |workspace| {
-                        let (workspace, truncated) =
-                            control_metadata(workspace, &mut budget.metadata_bytes);
-                        (Some(workspace), truncated)
-                    });
-            return WindowInventory {
-                id,
-                focused: self.window_focused,
-                visible: if self.launch.quick_access {
-                    self.quick_access_visible
-                } else {
-                    self.window
-                        .as_ref()
-                        .and_then(|window| window.is_visible())
-                        .unwrap_or(self.window.is_some())
-                },
-                quick_access: self.launch.quick_access,
-                workspace_id,
-                pixel_width,
-                pixel_height,
-                tabs: Vec::new(),
-                truncated,
-            };
+        let (tabs, mut truncated) = match self.tabs.as_ref() {
+            Some(tabs) => self.control_tab_inventory(tabs, budget),
+            None => (Vec::new(), false),
         };
+        let (workspace_id, workspace_truncated) =
+            self.current_workspace_id
+                .as_deref()
+                .map_or((None, false), |workspace| {
+                    let (workspace, was_truncated) =
+                        control_metadata(workspace, &mut budget.metadata_bytes);
+                    (Some(workspace), was_truncated)
+                });
+        truncated |= workspace_truncated;
+        WindowInventory {
+            id,
+            focused: self.window_focused,
+            visible: if self.launch.quick_access {
+                self.quick_access_visible
+            } else {
+                self.window
+                    .as_ref()
+                    .and_then(|window| window.is_visible())
+                    .unwrap_or(self.window.is_some())
+            },
+            quick_access: self.launch.quick_access,
+            workspace_id,
+            pixel_width,
+            pixel_height,
+            tabs,
+            truncated,
+        }
+    }
+
+    /// The window's tabs as control inventory, and whether any were left out
+    /// for the budget.
+    fn control_tab_inventory(
+        &self,
+        tabs: &TabManager,
+        budget: &mut ControlInventoryBudget,
+    ) -> (Vec<crate::control::protocol::TabInventory>, bool) {
+        use crate::control::protocol::{
+            DividerInventory, DividerKind, MAX_DIVIDERS_PER_TAB, MAX_PANES_PER_TAB,
+            MAX_TABS_PER_WINDOW, PaneInventory, TabInventory, TabKind,
+        };
+
         let active = tabs.active_tab_id();
         let all_tabs = tabs.all_tabs();
         let tab_limit = MAX_TABS_PER_WINDOW.min(budget.tabs);
-        let mut truncated = all_tabs.len() > tab_limit;
+        let truncated = all_tabs.len() > tab_limit;
         budget.tabs -= all_tabs.len().min(tab_limit);
         let tabs = all_tabs
             .iter()
@@ -578,33 +592,7 @@ impl App {
                 }
             })
             .collect();
-        let (workspace_id, workspace_truncated) =
-            self.current_workspace_id
-                .as_deref()
-                .map_or((None, false), |workspace| {
-                    let (workspace, was_truncated) =
-                        control_metadata(workspace, &mut budget.metadata_bytes);
-                    (Some(workspace), was_truncated)
-                });
-        truncated |= workspace_truncated;
-        WindowInventory {
-            id,
-            focused: self.window_focused,
-            visible: if self.launch.quick_access {
-                self.quick_access_visible
-            } else {
-                self.window
-                    .as_ref()
-                    .and_then(|window| window.is_visible())
-                    .unwrap_or(self.window.is_some())
-            },
-            quick_access: self.launch.quick_access,
-            workspace_id,
-            pixel_width,
-            pixel_height,
-            tabs,
-            truncated,
-        }
+        (tabs, truncated)
     }
 }
 
