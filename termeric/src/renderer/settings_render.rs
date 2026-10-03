@@ -2,9 +2,9 @@
 //! footer with Save.
 
 use super::Renderer;
-use super::icons::Icon;
 use crate::ui::color::scale_alpha;
 use crate::ui::constants::*;
+use crate::ui::icon::Icon;
 use crate::ui::settings::{
     SettingKind, SettingsControl, SettingsModalLayout, SettingsPage, SettingsPanelInfo,
 };

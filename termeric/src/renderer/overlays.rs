@@ -4,10 +4,12 @@
 
 use super::Renderer;
 use super::draw::DrawCtx;
+use super::icons::draw_icon;
 use super::types::*;
 use crate::terminal::guardrails::GuardrailLayout;
 use crate::ui::color::{mix, scale_alpha, with_alpha};
 use crate::ui::constants::*;
+use crate::ui::icon::Icon;
 
 impl Renderer {
     /// Build the info overlay (error/info centered card with Copy/Continue buttons)
@@ -1072,12 +1074,13 @@ impl Renderer {
 
             // Close icon in top-right corner
             let close_color = with_alpha(ctx.ui.palette_text_dim, 0.4 * anim);
-            ctx.draw_close_icon(
-                card_x + card_width - padding,
-                card_y + padding,
-                cell_height * 0.4,
+            // The close cross spans 9 of its icon's 16 units.
+            draw_icon(
+                ctx.rect,
+                Icon::Close,
+                [card_x + card_width - padding, card_y + padding],
+                cell_height * 0.4 * 16.0 / 9.0,
                 close_color,
-                1.5,
             );
 
             // Footer hint keeps the keyboard path discoverable without making

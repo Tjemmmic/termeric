@@ -1,10 +1,12 @@
 //! Tab bar rendering and hit-testing
 
+use super::icons::draw_icon;
 use super::types::*;
 use super::{Renderer, contrast_text};
 use crate::agents::AgentBadge;
 use crate::tabs::{TabInfo, TabType};
 use crate::ui::color::{mix, scale_alpha, with_alpha};
+use crate::ui::icon::Icon;
 
 /// Logical tab widths before display scaling.
 const MIN_TAB_WIDTH: f32 = 96.0;
@@ -801,13 +803,14 @@ impl Renderer {
                 ),
                 text_alpha,
             );
-            let arm = 3.5 * chrome.scale;
-            let (cx, cy) = (close.0 + close.2 / 2.0, close.1 + close.3 / 2.0);
-            let stroke = chrome.stroke() * 0.9;
-            self.rect_pipeline
-                .push_line(cx - arm, cy - arm, cx + arm, cy + arm, stroke, color);
-            self.rect_pipeline
-                .push_line(cx + arm, cy - arm, cx - arm, cy + arm, stroke, color);
+            // Smaller than a toolbar icon, to sit inside the tab.
+            draw_icon(
+                &mut self.rect_pipeline,
+                Icon::Close,
+                [close.0 + close.2 / 2.0, close.1 + close.3 / 2.0],
+                12.5 * chrome.scale,
+                color,
+            );
         } else if tab.has_activity {
             let dot = chrome.px(6.0);
             self.rect_pipeline.push_rounded_rect(
@@ -973,45 +976,23 @@ impl Renderer {
         } else {
             with_alpha(self.ui.tab_text_inactive, 0.25)
         };
-        let (cx, cy) = ((x + width / 2.0).round(), (y + height / 2.0).round());
-        let unit = chrome.scale;
-        let stroke = chrome.stroke();
-        let mut segment = |points: &[(f32, f32)]| {
-            for pair in points.windows(2) {
-                self.rect_pipeline.push_line(
-                    cx + pair[0].0 * unit,
-                    cy + pair[0].1 * unit,
-                    cx + pair[1].0 * unit,
-                    cy + pair[1].1 * unit,
-                    stroke,
-                    base,
-                );
-            }
+        let icon = match target {
+            TabBarClick::NewTab => Icon::Plus,
+            TabBarClick::PreviousTab if vertical => Icon::ChevronUp,
+            TabBarClick::NextTab if vertical => Icon::ChevronDown,
+            TabBarClick::PreviousTab => Icon::Back,
+            TabBarClick::NextTab => Icon::ChevronRight,
+            TabBarClick::SessionDropdown => Icon::ChevronDown,
+            TabBarClick::CommandsButton => Icon::Prompt,
+            TabBarClick::Gear => Icon::Menu,
+            TabBarClick::Tab(_) | TabBarClick::CloseTab(_) | TabBarClick::None => return,
         };
-        match target {
-            TabBarClick::NewTab => {
-                segment(&[(-5.5, 0.0), (5.5, 0.0)]);
-                segment(&[(0.0, -5.5), (0.0, 5.5)]);
-            }
-            TabBarClick::PreviousTab if vertical => {
-                segment(&[(-4.5, 2.0), (0.0, -2.5), (4.5, 2.0)])
-            }
-            TabBarClick::NextTab if vertical => segment(&[(-4.5, -2.0), (0.0, 2.5), (4.5, -2.0)]),
-            TabBarClick::PreviousTab => segment(&[(2.0, -4.5), (-2.5, 0.0), (2.0, 4.5)]),
-            TabBarClick::NextTab => segment(&[(-2.0, -4.5), (2.5, 0.0), (-2.0, 4.5)]),
-            TabBarClick::SessionDropdown => segment(&[(-4.5, -2.0), (0.0, 2.5), (4.5, -2.0)]),
-            TabBarClick::CommandsButton => {
-                // A shell prompt, "›_", for the custom commands panel.
-                segment(&[(-6.0, -4.5), (-1.5, 0.0), (-6.0, 4.5)]);
-                segment(&[(1.0, 4.5), (6.5, 4.5)]);
-            }
-            TabBarClick::Gear => {
-                for row in [-4.5, 0.0, 4.5] {
-                    segment(&[(-6.5, row), (6.5, row)]);
-                }
-            }
-            TabBarClick::Tab(_) | TabBarClick::CloseTab(_) | TabBarClick::None => {}
-        }
+        self.push_icon(
+            icon,
+            (x + width / 2.0).round(),
+            (y + height / 2.0).round(),
+            base,
+        );
     }
 
     fn build_vertical_tab_bar(

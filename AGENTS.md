@@ -120,7 +120,7 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 | `tab_bar.rs` | Top strip and vertical rail, `tab_bar_hit_test()` |
 | `drag_picture.rs` | The picture of a dragged tab |
 | `search_bar.rs` | Floating find box, `search_bar_hit_test()` |
-| `icons.rs` | Vector chrome icons (`Icon`, `push_icon`, `push_magnifier`) |
+| `icons.rs` | The one stroke table for `ui::icon::Icon`, used by chrome and the agent view (`draw_icon`, `push_icon`, `draw_arc`, `push_magnifier`) |
 | `palette.rs` | Command palette and the shared modal frame (`build_modal_frame`) |
 | `settings_render.rs` | Settings dialog and its dropdown overlay |
 | `shortcuts_render.rs` | Shortcuts panel |

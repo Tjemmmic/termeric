@@ -1,8 +1,8 @@
 //! Slide-in panel rendering — commands panel, session management panel
 
 use super::Renderer;
-use super::icons::Icon;
 use crate::ui::color::{scale_alpha, with_alpha};
+use crate::ui::icon::Icon;
 
 /// Bounds of a side-panel control, whichever panel's layout produced it.
 #[derive(Debug, Clone, Copy)]

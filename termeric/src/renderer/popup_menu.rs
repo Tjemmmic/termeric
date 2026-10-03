@@ -2,6 +2,7 @@
 
 use super::Renderer;
 use crate::ui::color::scale_alpha;
+use crate::ui::icon::Icon;
 use crate::ui::popup_menu::{MenuRow, PopupMenuLayout};
 
 /// A menu row as drawn, independent of the action it triggers.
@@ -123,23 +124,10 @@ impl Renderer {
                     };
                     let check_x = row_x + side;
                     if *checked {
-                        let (cx, cy) = (check_x + px(6.0), row_y + row_height / 2.0);
-                        let stroke = (1.5 * scale).max(1.0);
-                        let unit = scale;
-                        self.rect_pipeline.push_line(
-                            cx - 4.0 * unit,
-                            cy,
-                            cx - 1.0 * unit,
-                            cy + 3.0 * unit,
-                            stroke,
-                            text,
-                        );
-                        self.rect_pipeline.push_line(
-                            cx - 1.0 * unit,
-                            cy + 3.0 * unit,
-                            cx + 4.5 * unit,
-                            cy - 3.5 * unit,
-                            stroke,
+                        self.push_icon(
+                            Icon::Check,
+                            check_x + px(6.0),
+                            row_y + row_height / 2.0,
                             text,
                         );
                     }

@@ -27,9 +27,11 @@ use crate::ui::text_layout::{
 };
 
 use super::colors::Colors;
+use crate::ui::icon::Icon;
+
 use super::scene::{
-    Bounds, Caret, ComposerGeometry, Hit, HitRole, Icon, Layer, MenuAction, MenuKind, Node, Prim,
-    Scene, SpanPaint, Target, TextNode, composer_layout,
+    Bounds, Caret, ComposerGeometry, Hit, HitRole, Layer, MenuAction, MenuKind, Node, Prim, Scene,
+    SpanPaint, Target, TextNode, composer_layout,
 };
 use super::{AgentViewState, Focus, Layout, OpenMenu, Screen};
 

@@ -10,10 +10,11 @@ use crate::agent_view::session::AgentSession;
 use crate::agent_view::transcript::{
     Activity, Attachment, DecidedBy, Item, Notice, NoticeKind, ToolCall, ToolState, TurnEnd,
 };
+use crate::ui::icon::Icon;
 use crate::ui::text_layout::{TextSize, TextSpan, UiFace};
 
 use super::super::ConversationView;
-use super::super::scene::{Bounds, ExpandKey, HitRole, Icon, Prim, SpanPaint, Target, TextNode};
+use super::super::scene::{Bounds, ExpandKey, HitRole, Prim, SpanPaint, Target, TextNode};
 use super::{Builder, ButtonKind, Region, RegionNode, merge, plural};
 
 /// Diff lines shown before the rest is summarized.

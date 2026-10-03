@@ -3,9 +3,10 @@
 use crate::agent_view::transcript::{Activity, Item};
 use crate::agent_view::{present, session::AgentSession};
 use crate::ui::color::with_alpha;
+use crate::ui::icon::Icon;
 use crate::ui::text_layout::UiFace;
 
-use super::super::scene::{Bounds, HitRole, Icon, MenuKind, Prim, SpanPaint, Target, TextNode};
+use super::super::scene::{Bounds, HitRole, MenuKind, Prim, SpanPaint, Target, TextNode};
 use super::feed::duration;
 use super::{AgentAvailability, Builder, ButtonKind, Region, RegionNode};
 

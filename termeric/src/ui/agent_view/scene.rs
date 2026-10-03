@@ -8,6 +8,7 @@
 use std::sync::Arc;
 
 use crate::agent_view::session::SessionId;
+use crate::ui::icon::Icon;
 use crate::ui::text_layout::{TextLayout, TextMeasure, TextSize, TextSpan, UiFace};
 
 /// A rectangle in physical window pixels.
@@ -61,36 +62,6 @@ impl Bounds {
     pub fn center(self) -> [f32; 2] {
         [self.x + self.width / 2.0, self.y + self.height / 2.0]
     }
-}
-
-/// Line icons, drawn by the renderer from strokes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Icon {
-    Plus,
-    Close,
-    ChevronDown,
-    ChevronRight,
-    ChevronUp,
-    Back,
-    History,
-    More,
-    Send,
-    Stop,
-    Terminal,
-    File,
-    Pencil,
-    Search,
-    Shield,
-    Check,
-    Cross,
-    Eye,
-    Plan,
-    Copy,
-    Globe,
-    Agent,
-    Folder,
-    Warning,
-    Expand,
 }
 
 /// How one span of a paragraph is painted.

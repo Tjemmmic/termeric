@@ -311,24 +311,4 @@ impl<'a> DrawCtx<'a> {
         let text_y = by + (bh - self.cell_height) / 2.0;
         self.draw_text(label, text_x, text_y, text_color);
     }
-
-    // ── Close icon ─────────────────────────────────────────────
-
-    /// Draw an × close icon using two diagonal lines.
-    ///
-    /// `cx, cy` is the center of the icon. `size` controls the arm length.
-    pub fn draw_close_icon(
-        &mut self,
-        cx: f32,
-        cy: f32,
-        size: f32,
-        color: [f32; 4],
-        thickness: f32,
-    ) {
-        let arm = size / 2.0;
-        self.rect
-            .push_line(cx - arm, cy - arm, cx + arm, cy + arm, thickness, color);
-        self.rect
-            .push_line(cx + arm, cy - arm, cx - arm, cy + arm, thickness, color);
-    }
 }

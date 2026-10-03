@@ -1,8 +1,10 @@
 //! Git branch completion dropdown rendering and bounded viewport layout.
 
 use super::glyph_cache::FontStyle;
+use super::icons::draw_icon;
 use super::types::*;
 use super::{Renderer, TextClip};
+use crate::ui::icon::Icon;
 
 const EDGE: f32 = 2.0;
 const MAX_ITEMS: usize = 8;
@@ -308,15 +310,13 @@ impl Renderer {
             let header_y = layout.y + EDGE + text_offset;
             let icon_cx = layout.x + cw * 1.3;
             let icon_cy = header_y + cell_h * 0.5;
+            // The branch's stem spans 10 of its icon's 16 units.
             let arm = (cell_h * 0.25).min(cw);
-            self.rect_pipeline
-                .push_rect(icon_cx, icon_cy - arm, 1.3, arm * 2.0, accent);
-            self.rect_pipeline.push_line(
-                icon_cx + arm * 0.7,
-                icon_cy - arm * 0.8,
-                icon_cx,
-                icon_cy - arm * 0.1,
-                1.2,
+            draw_icon(
+                &mut self.rect_pipeline,
+                Icon::Branch,
+                [icon_cx, icon_cy],
+                arm * 2.0 * 16.0 / 10.0,
                 accent,
             );
             self.git_completion_text(
