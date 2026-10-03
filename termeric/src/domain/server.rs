@@ -2801,27 +2801,16 @@ fn terminal_snapshot(terminal: &Terminal, max_bytes: usize) -> Vec<u8> {
     let keyboard_resource = terminal.xterm_keyboard_resource();
     snapshot.extend_from_slice(format!("\x1b[>0;{}m", keyboard_resource.modify()).as_bytes());
     snapshot.extend_from_slice(format!("\x1b[>0;{}f", keyboard_resource.format()).as_bytes());
-    let cursor_keys = terminal.xterm_cursor_keys();
-    snapshot.extend_from_slice(format!("\x1b[>1;{}m", cursor_keys.mode().parameter()).as_bytes());
-    snapshot.extend_from_slice(format!("\x1b[>1;{}f", cursor_keys.format().parameter()).as_bytes());
-    let function_keys = terminal.xterm_function_keys();
-    snapshot.extend_from_slice(format!("\x1b[>2;{}m", function_keys.mode().parameter()).as_bytes());
-    snapshot
-        .extend_from_slice(format!("\x1b[>2;{}f", function_keys.format().parameter()).as_bytes());
-    let keypad_keys = terminal.xterm_keypad_keys();
-    snapshot.extend_from_slice(format!("\x1b[>3;{}m", keypad_keys.mode().parameter()).as_bytes());
-    snapshot.extend_from_slice(format!("\x1b[>3;{}f", keypad_keys.format().parameter()).as_bytes());
-    let string_keys = terminal.xterm_string_keys();
-    snapshot.extend_from_slice(format!("\x1b[>5;{}m", string_keys.mode().parameter()).as_bytes());
-    snapshot.extend_from_slice(format!("\x1b[>5;{}f", string_keys.format().parameter()).as_bytes());
-    let modifier_keys = terminal.xterm_modifier_keys();
-    snapshot.extend_from_slice(format!("\x1b[>6;{}m", modifier_keys.mode().parameter()).as_bytes());
-    snapshot
-        .extend_from_slice(format!("\x1b[>6;{}f", modifier_keys.format().parameter()).as_bytes());
-    let special_keys = terminal.xterm_special_keys();
-    snapshot.extend_from_slice(format!("\x1b[>7;{}m", special_keys.mode().parameter()).as_bytes());
-    snapshot
-        .extend_from_slice(format!("\x1b[>7;{}f", special_keys.format().parameter()).as_bytes());
+    for resource in termeric_core::term::XtermKeyResource::ALL {
+        let setting = terminal.xterm_key_resource(resource);
+        let number = resource.number();
+        snapshot.extend_from_slice(
+            format!("\x1b[>{number};{}m", setting.mode().parameter()).as_bytes(),
+        );
+        snapshot.extend_from_slice(
+            format!("\x1b[>{number};{}f", setting.format().parameter()).as_bytes(),
+        );
+    }
     let modify_other = terminal.xterm_modify_other_keys();
     snapshot.extend_from_slice(
         format!(
@@ -3775,54 +3764,16 @@ mod tests {
             replica.xterm_keyboard_resource(),
             termeric_core::term::XtermKeyboardResource::new(15, 42)
         );
-        assert_eq!(
-            replica.xterm_cursor_keys().mode(),
-            termeric_core::term::XtermKeyMode::Extended
-        );
-        assert_eq!(
-            replica.xterm_cursor_keys().format(),
-            termeric_core::term::XtermKeyFormat::CsiU
-        );
-        assert_eq!(
-            replica.xterm_function_keys().mode(),
-            termeric_core::term::XtermKeyMode::Extended
-        );
-        assert_eq!(
-            replica.xterm_function_keys().format(),
-            termeric_core::term::XtermKeyFormat::CsiU
-        );
-        assert_eq!(
-            replica.xterm_keypad_keys().mode(),
-            termeric_core::term::XtermKeyMode::Extended
-        );
-        assert_eq!(
-            replica.xterm_keypad_keys().format(),
-            termeric_core::term::XtermKeyFormat::CsiU
-        );
-        assert_eq!(
-            replica.xterm_string_keys().mode(),
-            termeric_core::term::XtermKeyMode::Extended
-        );
-        assert_eq!(
-            replica.xterm_string_keys().format(),
-            termeric_core::term::XtermKeyFormat::CsiU
-        );
-        assert_eq!(
-            replica.xterm_modifier_keys().mode(),
-            termeric_core::term::XtermKeyMode::Extended
-        );
-        assert_eq!(
-            replica.xterm_modifier_keys().format(),
-            termeric_core::term::XtermKeyFormat::CsiU
-        );
-        assert_eq!(
-            replica.xterm_special_keys().mode(),
-            termeric_core::term::XtermKeyMode::Extended
-        );
-        assert_eq!(
-            replica.xterm_special_keys().format(),
-            termeric_core::term::XtermKeyFormat::CsiU
-        );
+        for resource in termeric_core::term::XtermKeyResource::ALL {
+            assert_eq!(
+                replica.xterm_key_resource(resource),
+                termeric_core::term::XtermKeySetting::new(
+                    termeric_core::term::XtermKeyMode::Extended,
+                    termeric_core::term::XtermKeyFormat::CsiU,
+                ),
+                "{resource:?}"
+            );
+        }
         assert_eq!(replica.xterm_modify_other_keys().level(), 2);
         assert_eq!(replica.xterm_modify_other_keys().modifier_mask(), 1);
         assert_eq!(

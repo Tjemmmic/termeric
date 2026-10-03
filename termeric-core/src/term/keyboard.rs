@@ -186,12 +186,11 @@ impl XtermKeyFormat {
 /// Xterm represents the disabled state internally as `-1` and reports that
 /// through its unsigned CSI parameter path as 65535. Keeping it as an enum
 /// makes the terminal state bounded while preserving that wire behavior.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum XtermKeyMode {
     Disabled,
     Original,
     Control,
-    #[default]
     Parameter,
     Private,
     Extended,
@@ -222,167 +221,85 @@ impl XtermKeyMode {
     }
 }
 
-/// Terminal-local xterm cursor-key encoding policy.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct XtermCursorKeys {
-    mode: XtermKeyMode,
-    format: XtermKeyFormat,
-}
-
-impl XtermCursorKeys {
-    pub const fn new(mode: XtermKeyMode, format: XtermKeyFormat) -> Self {
-        Self { mode, format }
-    }
-
-    pub const fn mode(self) -> XtermKeyMode {
-        self.mode
-    }
-
-    pub const fn format(self) -> XtermKeyFormat {
-        self.format
-    }
-
-    pub const fn with_mode(mut self, mode: XtermKeyMode) -> Self {
-        self.mode = mode;
-        self
-    }
-
-    pub const fn with_format(mut self, format: XtermKeyFormat) -> Self {
-        self.format = format;
-        self
-    }
-
-    pub(super) fn set_mode(&mut self, parameter: u16) {
-        if let Some(mode) = XtermKeyMode::from_parameter(parameter) {
-            self.mode = mode;
-        }
-    }
-
-    pub(super) fn set_format(&mut self, parameter: u16) {
-        if let Some(format) = XtermKeyFormat::from_parameter(parameter) {
-            self.format = format;
-        }
-    }
-}
-
-/// Terminal-local xterm numbered-function-key encoding policy.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct XtermFunctionKeys {
-    mode: XtermKeyMode,
-    format: XtermKeyFormat,
-}
-
-/// Xterm's reserved resource 5. It is negotiable state but has no defined
-/// encoder behavior. Unlike the neighboring cursor/function resources, xterm
-/// initializes `modifyStringKeys` to the original mode (0).
+/// Xterm's key resources that share one mode-and-format shape under
+/// XTMODKEYS/XTFMTKEYS and their queries. Resources 0 (`modifyKeyboard`) and
+/// 4 (`modifyOtherKeys`) keep their own state and are not listed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct XtermStringKeys {
-    mode: XtermKeyMode,
-    format: XtermKeyFormat,
+pub enum XtermKeyResource {
+    /// `modifyCursorKeys`/`formatCursorKeys`, resource 1.
+    Cursor,
+    /// `modifyFunctionKeys`/`formatFunctionKeys`, resource 2.
+    Function,
+    /// `modifyKeypadKeys`/`formatKeypadKeys`, resource 3. Modes -1 and 0
+    /// through 3 keep the conventional keypad path; mode 4 reports the keypad
+    /// keysym in the selected extended format.
+    Keypad,
+    /// Xterm's reserved resource 5: negotiable state with no defined encoder
+    /// behavior.
+    String,
+    /// `modifyModifierKeys`/`formatModifierKeys`, resource 6. Modifier keys
+    /// stay silent in modes -1 and 0 through 3; mode 4 reports the modifier
+    /// keysym in the selected extended format.
+    Modifier,
+    /// `modifySpecialKeys`/`formatSpecialKeys`, resource 7. Modes -1 and 0
+    /// through 3 keep each key's conventional path; mode 4 reports the
+    /// special keysym in the selected extended format.
+    Special,
 }
 
-impl Default for XtermStringKeys {
-    fn default() -> Self {
-        Self {
-            mode: XtermKeyMode::Original,
-            format: XtermKeyFormat::default(),
-        }
-    }
-}
+impl XtermKeyResource {
+    pub const ALL: [Self; 6] = [
+        Self::Cursor,
+        Self::Function,
+        Self::Keypad,
+        Self::String,
+        Self::Modifier,
+        Self::Special,
+    ];
 
-impl XtermStringKeys {
-    pub const fn new(mode: XtermKeyMode, format: XtermKeyFormat) -> Self {
-        Self { mode, format }
-    }
-
-    pub const fn mode(self) -> XtermKeyMode {
-        self.mode
-    }
-
-    pub const fn format(self) -> XtermKeyFormat {
-        self.format
-    }
-
-    pub const fn with_mode(mut self, mode: XtermKeyMode) -> Self {
-        self.mode = mode;
-        self
-    }
-
-    pub const fn with_format(mut self, format: XtermKeyFormat) -> Self {
-        self.format = format;
-        self
-    }
-
-    pub(super) fn set_mode(&mut self, parameter: u16) {
-        if let Some(mode) = XtermKeyMode::from_parameter(parameter) {
-            self.mode = mode;
+    /// The resource number used on the wire.
+    pub const fn number(self) -> u16 {
+        match self {
+            Self::Cursor => 1,
+            Self::Function => 2,
+            Self::Keypad => 3,
+            Self::String => 5,
+            Self::Modifier => 6,
+            Self::Special => 7,
         }
     }
 
-    pub(super) fn set_format(&mut self, parameter: u16) {
-        if let Some(format) = XtermKeyFormat::from_parameter(parameter) {
-            self.format = format;
-        }
-    }
-}
-
-impl XtermFunctionKeys {
-    pub const fn new(mode: XtermKeyMode, format: XtermKeyFormat) -> Self {
-        Self { mode, format }
-    }
-
-    pub const fn mode(self) -> XtermKeyMode {
-        self.mode
-    }
-
-    pub const fn format(self) -> XtermKeyFormat {
-        self.format
-    }
-
-    pub const fn with_mode(mut self, mode: XtermKeyMode) -> Self {
-        self.mode = mode;
-        self
-    }
-
-    pub const fn with_format(mut self, format: XtermKeyFormat) -> Self {
-        self.format = format;
-        self
-    }
-
-    pub(super) fn set_mode(&mut self, parameter: u16) {
-        if let Some(mode) = XtermKeyMode::from_parameter(parameter) {
-            self.mode = mode;
+    pub(crate) const fn from_number(number: u16) -> Option<Self> {
+        match number {
+            1 => Some(Self::Cursor),
+            2 => Some(Self::Function),
+            3 => Some(Self::Keypad),
+            5 => Some(Self::String),
+            6 => Some(Self::Modifier),
+            7 => Some(Self::Special),
+            _ => None,
         }
     }
 
-    pub(super) fn set_format(&mut self, parameter: u16) {
-        if let Some(format) = XtermKeyFormat::from_parameter(parameter) {
-            self.format = format;
-        }
+    /// Xterm starts cursor and function keys in parameter mode (2) and every
+    /// other resource in the original mode (0).
+    pub const fn default_setting(self) -> XtermKeySetting {
+        let mode = match self {
+            Self::Cursor | Self::Function => XtermKeyMode::Parameter,
+            Self::Keypad | Self::String | Self::Modifier | Self::Special => XtermKeyMode::Original,
+        };
+        XtermKeySetting::new(mode, XtermKeyFormat::FunctionKey27)
     }
 }
 
-/// Terminal-local xterm numeric-keypad encoding policy.
-///
-/// Unlike cursor and function keys, xterm initializes `modifyKeypadKeys` to
-/// mode 0. Modes -1 and 0 through 3 retain the conventional keypad path;
-/// mode 4 reports the keypad keysym in the selected extended format.
+/// One key resource's terminal-local mode and output format.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct XtermKeypadKeys {
+pub struct XtermKeySetting {
     mode: XtermKeyMode,
     format: XtermKeyFormat,
 }
 
-impl Default for XtermKeypadKeys {
-    fn default() -> Self {
-        Self {
-            mode: XtermKeyMode::Original,
-            format: XtermKeyFormat::default(),
-        }
-    }
-}
-
-impl XtermKeypadKeys {
+impl XtermKeySetting {
     pub const fn new(mode: XtermKeyMode, format: XtermKeyFormat) -> Self {
         Self { mode, format }
     }
@@ -404,129 +321,44 @@ impl XtermKeypadKeys {
         self.format = format;
         self
     }
-
-    pub(super) fn set_mode(&mut self, parameter: u16) {
-        if let Some(mode) = XtermKeyMode::from_parameter(parameter) {
-            self.mode = mode;
-        }
-    }
-
-    pub(super) fn set_format(&mut self, parameter: u16) {
-        if let Some(format) = XtermKeyFormat::from_parameter(parameter) {
-            self.format = format;
-        }
-    }
 }
 
-/// Terminal-local xterm modifier-key encoding policy.
-///
-/// Xterm initializes `modifyModifierKeys` to mode 0. Modifier keys remain
-/// silent in modes -1 and 0 through 3; mode 4 reports the modifier keysym in
-/// the selected extended format.
+/// Every resource in [`XtermKeyResource`], each starting at its xterm
+/// default. The state applies across both screen buffers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct XtermModifierKeys {
-    mode: XtermKeyMode,
-    format: XtermKeyFormat,
-}
+pub(crate) struct XtermKeyResources([XtermKeySetting; XtermKeyResource::ALL.len()]);
 
-impl Default for XtermModifierKeys {
+impl Default for XtermKeyResources {
     fn default() -> Self {
-        Self {
-            mode: XtermKeyMode::Original,
-            format: XtermKeyFormat::default(),
-        }
+        Self(XtermKeyResource::ALL.map(XtermKeyResource::default_setting))
     }
 }
 
-impl XtermModifierKeys {
-    pub const fn new(mode: XtermKeyMode, format: XtermKeyFormat) -> Self {
-        Self { mode, format }
+impl XtermKeyResources {
+    pub(crate) fn get(&self, resource: XtermKeyResource) -> XtermKeySetting {
+        self.0[resource as usize]
     }
 
-    pub const fn mode(self) -> XtermKeyMode {
-        self.mode
-    }
-
-    pub const fn format(self) -> XtermKeyFormat {
-        self.format
-    }
-
-    pub const fn with_mode(mut self, mode: XtermKeyMode) -> Self {
-        self.mode = mode;
-        self
-    }
-
-    pub const fn with_format(mut self, format: XtermKeyFormat) -> Self {
-        self.format = format;
-        self
-    }
-
-    pub(super) fn set_mode(&mut self, parameter: u16) {
+    /// Out-of-range parameters leave the mode unchanged.
+    pub(super) fn set_mode(&mut self, resource: XtermKeyResource, parameter: u16) {
         if let Some(mode) = XtermKeyMode::from_parameter(parameter) {
-            self.mode = mode;
+            self.0[resource as usize].mode = mode;
         }
     }
 
-    pub(super) fn set_format(&mut self, parameter: u16) {
+    /// Out-of-range parameters leave the format unchanged.
+    pub(super) fn set_format(&mut self, resource: XtermKeyResource, parameter: u16) {
         if let Some(format) = XtermKeyFormat::from_parameter(parameter) {
-            self.format = format;
-        }
-    }
-}
-
-/// Terminal-local xterm special-key encoding policy.
-///
-/// Xterm initializes `modifySpecialKeys` to mode 0. Modes -1 and 0 through 3
-/// retain each key's conventional path; mode 4 reports the special keysym in
-/// the selected extended format.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct XtermSpecialKeys {
-    mode: XtermKeyMode,
-    format: XtermKeyFormat,
-}
-
-impl Default for XtermSpecialKeys {
-    fn default() -> Self {
-        Self {
-            mode: XtermKeyMode::Original,
-            format: XtermKeyFormat::default(),
-        }
-    }
-}
-
-impl XtermSpecialKeys {
-    pub const fn new(mode: XtermKeyMode, format: XtermKeyFormat) -> Self {
-        Self { mode, format }
-    }
-
-    pub const fn mode(self) -> XtermKeyMode {
-        self.mode
-    }
-
-    pub const fn format(self) -> XtermKeyFormat {
-        self.format
-    }
-
-    pub const fn with_mode(mut self, mode: XtermKeyMode) -> Self {
-        self.mode = mode;
-        self
-    }
-
-    pub const fn with_format(mut self, format: XtermKeyFormat) -> Self {
-        self.format = format;
-        self
-    }
-
-    pub(super) fn set_mode(&mut self, parameter: u16) {
-        if let Some(mode) = XtermKeyMode::from_parameter(parameter) {
-            self.mode = mode;
+            self.0[resource as usize].format = format;
         }
     }
 
-    pub(super) fn set_format(&mut self, parameter: u16) {
-        if let Some(format) = XtermKeyFormat::from_parameter(parameter) {
-            self.format = format;
-        }
+    pub(super) fn reset_mode(&mut self, resource: XtermKeyResource) {
+        self.0[resource as usize].mode = resource.default_setting().mode;
+    }
+
+    pub(super) fn reset_format(&mut self, resource: XtermKeyResource) {
+        self.0[resource as usize].format = resource.default_setting().format;
     }
 }
 

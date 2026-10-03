@@ -1,9 +1,8 @@
 //! Mode-aware keyboard input to PTY byte conversion.
 
 use termeric_core::term::{
-    KittyKeyboardFlags, TerminalMode, XtermCursorKeys, XtermFunctionKeys, XtermKeyFormat,
-    XtermKeyMode, XtermKeyboardResource, XtermKeyboardType, XtermKeypadKeys, XtermModifierKeys,
-    XtermModifyOtherKeys, XtermSpecialKeys,
+    KittyKeyboardFlags, TerminalMode, XtermKeyFormat, XtermKeyMode, XtermKeyResource,
+    XtermKeySetting, XtermKeyboardResource, XtermKeyboardType, XtermModifyOtherKeys,
 };
 use winit::event::{ElementState, KeyEvent};
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, NativeKey, PhysicalKey};
@@ -21,11 +20,11 @@ pub enum KeyboardProtocol {
     Xterm {
         keyboard_type: XtermKeyboardType,
         keyboard_resource: XtermKeyboardResource,
-        cursor_keys: XtermCursorKeys,
-        function_keys: XtermFunctionKeys,
-        keypad_keys: XtermKeypadKeys,
-        modifier_keys: XtermModifierKeys,
-        special_keys: XtermSpecialKeys,
+        cursor_keys: XtermKeySetting,
+        function_keys: XtermKeySetting,
+        keypad_keys: XtermKeySetting,
+        modifier_keys: XtermKeySetting,
+        special_keys: XtermKeySetting,
         other_keys: XtermModifyOtherKeys,
     },
     /// Kitty progressive keyboard protocol with terminal-negotiated flags.
@@ -107,11 +106,11 @@ fn key_to_bytes_with_modifiers(
     xterm_keyboard_type: XtermKeyboardType,
     xterm_keyboard_resource: XtermKeyboardResource,
     xterm_modify_other_keys: XtermModifyOtherKeys,
-    xterm_cursor_keys: XtermCursorKeys,
-    xterm_function_keys: XtermFunctionKeys,
-    xterm_keypad_keys: XtermKeypadKeys,
-    xterm_modifier_keys: XtermModifierKeys,
-    xterm_special_keys: XtermSpecialKeys,
+    xterm_cursor_keys: XtermKeySetting,
+    xterm_function_keys: XtermKeySetting,
+    xterm_keypad_keys: XtermKeySetting,
+    xterm_modifier_keys: XtermKeySetting,
+    xterm_special_keys: XtermKeySetting,
 ) -> Option<Vec<u8>> {
     KeyboardEncoder::new(keyboard_protocol_with_profile(
         kitty_flags,
@@ -151,11 +150,11 @@ pub fn key_to_bytes_for_terminal(
         keyboard_type,
         terminal.xterm_keyboard_resource(),
         terminal.xterm_modify_other_keys(),
-        terminal.xterm_cursor_keys(),
-        terminal.xterm_function_keys(),
-        terminal.xterm_keypad_keys(),
-        terminal.xterm_modifier_keys(),
-        terminal.xterm_special_keys(),
+        terminal.xterm_key_resource(XtermKeyResource::Cursor),
+        terminal.xterm_key_resource(XtermKeyResource::Function),
+        terminal.xterm_key_resource(XtermKeyResource::Keypad),
+        terminal.xterm_key_resource(XtermKeyResource::Modifier),
+        terminal.xterm_key_resource(XtermKeyResource::Special),
     )
 }
 
@@ -175,11 +174,11 @@ fn encode_xterm_user_defined_key(
 fn keyboard_protocol(
     kitty_flags: KittyKeyboardFlags,
     xterm_modify_other_keys: XtermModifyOtherKeys,
-    xterm_cursor_keys: XtermCursorKeys,
-    xterm_function_keys: XtermFunctionKeys,
-    xterm_keypad_keys: XtermKeypadKeys,
-    xterm_modifier_keys: XtermModifierKeys,
-    xterm_special_keys: XtermSpecialKeys,
+    xterm_cursor_keys: XtermKeySetting,
+    xterm_function_keys: XtermKeySetting,
+    xterm_keypad_keys: XtermKeySetting,
+    xterm_modifier_keys: XtermKeySetting,
+    xterm_special_keys: XtermKeySetting,
 ) -> KeyboardProtocol {
     keyboard_protocol_with_profile(
         kitty_flags,
@@ -199,22 +198,22 @@ fn keyboard_protocol_with_profile(
     xterm_keyboard_type: XtermKeyboardType,
     xterm_keyboard_resource: XtermKeyboardResource,
     xterm_modify_other_keys: XtermModifyOtherKeys,
-    xterm_cursor_keys: XtermCursorKeys,
-    xterm_function_keys: XtermFunctionKeys,
-    xterm_keypad_keys: XtermKeypadKeys,
-    xterm_modifier_keys: XtermModifierKeys,
-    xterm_special_keys: XtermSpecialKeys,
+    xterm_cursor_keys: XtermKeySetting,
+    xterm_function_keys: XtermKeySetting,
+    xterm_keypad_keys: XtermKeySetting,
+    xterm_modifier_keys: XtermKeySetting,
+    xterm_special_keys: XtermKeySetting,
 ) -> KeyboardProtocol {
     if !kitty_flags.is_empty() {
         KeyboardProtocol::Kitty(kitty_flags)
     } else if xterm_modify_other_keys.level() != 0
         || xterm_keyboard_type != XtermKeyboardType::default()
         || xterm_keyboard_resource != XtermKeyboardResource::default()
-        || xterm_cursor_keys != XtermCursorKeys::default()
-        || xterm_function_keys != XtermFunctionKeys::default()
-        || xterm_keypad_keys != XtermKeypadKeys::default()
-        || xterm_modifier_keys != XtermModifierKeys::default()
-        || xterm_special_keys != XtermSpecialKeys::default()
+        || xterm_cursor_keys != XtermKeyResource::Cursor.default_setting()
+        || xterm_function_keys != XtermKeyResource::Function.default_setting()
+        || xterm_keypad_keys != XtermKeyResource::Keypad.default_setting()
+        || xterm_modifier_keys != XtermKeyResource::Modifier.default_setting()
+        || xterm_special_keys != XtermKeyResource::Special.default_setting()
     {
         KeyboardProtocol::Xterm {
             keyboard_type: xterm_keyboard_type,
@@ -736,11 +735,11 @@ fn encode_legacy_xterm(
         modifiers,
         alt_graph_active,
         mode,
-        XtermCursorKeys::default(),
-        XtermFunctionKeys::default(),
-        XtermKeypadKeys::default(),
-        XtermModifierKeys::default(),
-        XtermSpecialKeys::default(),
+        XtermKeyResource::Cursor.default_setting(),
+        XtermKeyResource::Function.default_setting(),
+        XtermKeyResource::Keypad.default_setting(),
+        XtermKeyResource::Modifier.default_setting(),
+        XtermKeyResource::Special.default_setting(),
     )
 }
 
@@ -751,11 +750,11 @@ fn encode_legacy_xterm_with_resources(
     modifiers: ModifiersState,
     alt_graph_active: bool,
     mode: TerminalMode,
-    cursor_policy: XtermCursorKeys,
-    function_policy: XtermFunctionKeys,
-    keypad_policy: XtermKeypadKeys,
-    modifier_policy: XtermModifierKeys,
-    special_policy: XtermSpecialKeys,
+    cursor_policy: XtermKeySetting,
+    function_policy: XtermKeySetting,
+    keypad_policy: XtermKeySetting,
+    modifier_policy: XtermKeySetting,
+    special_policy: XtermKeySetting,
 ) -> Option<Vec<u8>> {
     encode_legacy_xterm_with_profile(
         logical_key,
@@ -782,11 +781,11 @@ fn encode_legacy_xterm_with_profile(
     modifiers: ModifiersState,
     alt_graph_active: bool,
     mode: TerminalMode,
-    cursor_policy: XtermCursorKeys,
-    function_policy: XtermFunctionKeys,
-    keypad_policy: XtermKeypadKeys,
-    modifier_policy: XtermModifierKeys,
-    special_policy: XtermSpecialKeys,
+    cursor_policy: XtermKeySetting,
+    function_policy: XtermKeySetting,
+    keypad_policy: XtermKeySetting,
+    modifier_policy: XtermKeySetting,
+    special_policy: XtermKeySetting,
     keyboard_type: XtermKeyboardType,
     keyboard_resource: XtermKeyboardResource,
     other_keys_active: bool,
@@ -868,11 +867,11 @@ fn encode_xterm_modify_other_keys(
     alt_graph_active: bool,
     mode: TerminalMode,
     policy: XtermModifyOtherKeys,
-    cursor_policy: XtermCursorKeys,
-    function_policy: XtermFunctionKeys,
-    keypad_policy: XtermKeypadKeys,
-    modifier_policy: XtermModifierKeys,
-    special_policy: XtermSpecialKeys,
+    cursor_policy: XtermKeySetting,
+    function_policy: XtermKeySetting,
+    keypad_policy: XtermKeySetting,
+    modifier_policy: XtermKeySetting,
+    special_policy: XtermKeySetting,
 ) -> Option<Vec<u8>> {
     encode_xterm_with_profile(
         logical_key,
@@ -900,11 +899,11 @@ fn encode_xterm_with_profile(
     alt_graph_active: bool,
     mode: TerminalMode,
     policy: XtermModifyOtherKeys,
-    cursor_policy: XtermCursorKeys,
-    function_policy: XtermFunctionKeys,
-    keypad_policy: XtermKeypadKeys,
-    modifier_policy: XtermModifierKeys,
-    special_policy: XtermSpecialKeys,
+    cursor_policy: XtermKeySetting,
+    function_policy: XtermKeySetting,
+    keypad_policy: XtermKeySetting,
+    modifier_policy: XtermKeySetting,
+    special_policy: XtermKeySetting,
     keyboard_type: XtermKeyboardType,
     keyboard_resource: XtermKeyboardResource,
 ) -> Option<Vec<u8>> {
@@ -1010,7 +1009,7 @@ fn encode_xterm_modifier_named(
     named: NamedKey,
     physical_key: PhysicalKey,
     modifiers: ModifiersState,
-    policy: XtermModifierKeys,
+    policy: XtermKeySetting,
 ) -> Option<Vec<u8>> {
     if policy.mode() != XtermKeyMode::Extended {
         return None;
@@ -1062,7 +1061,7 @@ fn encode_xterm_special_key(
     logical_key: &Key,
     physical_key: PhysicalKey,
     modifiers: ModifiersState,
-    policy: XtermSpecialKeys,
+    policy: XtermKeySetting,
 ) -> Option<Vec<u8>> {
     if policy.mode() != XtermKeyMode::Extended {
         return None;
@@ -1431,7 +1430,7 @@ fn encode_unmodified_xterm_function(number: u8) -> Vec<u8> {
 fn encode_xterm_function_named_profile(
     named: NamedKey,
     mut modifiers: ModifiersState,
-    policy: XtermFunctionKeys,
+    policy: XtermKeySetting,
     keyboard_type: XtermKeyboardType,
     keyboard_resource: XtermKeyboardResource,
     other_keys_active: bool,
@@ -1542,7 +1541,7 @@ fn encode_unmodified_xterm_function_profile(
 fn encode_xterm_misc_function_named(
     named: NamedKey,
     modifiers: ModifiersState,
-    policy: XtermFunctionKeys,
+    policy: XtermKeySetting,
     keyboard_type: XtermKeyboardType,
     keyboard_resource: XtermKeyboardResource,
     other_keys_active: bool,
@@ -1650,7 +1649,7 @@ fn encode_xterm_cursor_named_profile(
     named: NamedKey,
     modifiers: ModifiersState,
     mode: TerminalMode,
-    policy: XtermCursorKeys,
+    policy: XtermKeySetting,
     keyboard_type: XtermKeyboardType,
     keyboard_resource: XtermKeyboardResource,
     other_keys_active: bool,
@@ -1895,7 +1894,7 @@ impl KeypadKey {
         mode: TerminalMode,
         produced_text: Option<&str>,
         modifiers: ModifiersState,
-        policy: XtermKeypadKeys,
+        policy: XtermKeySetting,
     ) -> Vec<u8> {
         if policy.mode() != XtermKeyMode::Extended {
             return self.encode(mode, produced_text, modifiers);
@@ -2030,11 +2029,11 @@ mod tests {
             false,
             TerminalMode::default(),
             XtermModifyOtherKeys::new(level, mask).unwrap(),
-            XtermCursorKeys::default(),
-            XtermFunctionKeys::default(),
-            XtermKeypadKeys::default(),
-            XtermModifierKeys::default(),
-            XtermSpecialKeys::default(),
+            XtermKeyResource::Cursor.default_setting(),
+            XtermKeyResource::Function.default_setting(),
+            XtermKeyResource::Keypad.default_setting(),
+            XtermKeyResource::Modifier.default_setting(),
+            XtermKeyResource::Special.default_setting(),
         )
         .unwrap()
     }
@@ -2043,7 +2042,7 @@ mod tests {
         key: NamedKey,
         modifiers: ModifiersState,
         mode: TerminalMode,
-        policy: XtermCursorKeys,
+        policy: XtermKeySetting,
     ) -> Vec<u8> {
         encode_legacy_xterm_with_resources(
             &Key::Named(key),
@@ -2053,10 +2052,10 @@ mod tests {
             false,
             mode,
             policy,
-            XtermFunctionKeys::default(),
-            XtermKeypadKeys::default(),
-            XtermModifierKeys::default(),
-            XtermSpecialKeys::default(),
+            XtermKeyResource::Function.default_setting(),
+            XtermKeyResource::Keypad.default_setting(),
+            XtermKeyResource::Modifier.default_setting(),
+            XtermKeyResource::Special.default_setting(),
         )
         .unwrap()
     }
@@ -2064,7 +2063,7 @@ mod tests {
     fn function_key_with_policy(
         key: NamedKey,
         modifiers: ModifiersState,
-        policy: XtermFunctionKeys,
+        policy: XtermKeySetting,
     ) -> Vec<u8> {
         encode_legacy_xterm_with_resources(
             &Key::Named(key),
@@ -2073,11 +2072,11 @@ mod tests {
             modifiers,
             false,
             TerminalMode::default(),
-            XtermCursorKeys::default(),
+            XtermKeyResource::Cursor.default_setting(),
             policy,
-            XtermKeypadKeys::default(),
-            XtermModifierKeys::default(),
-            XtermSpecialKeys::default(),
+            XtermKeyResource::Keypad.default_setting(),
+            XtermKeyResource::Modifier.default_setting(),
+            XtermKeyResource::Special.default_setting(),
         )
         .unwrap()
     }
@@ -2086,7 +2085,7 @@ mod tests {
         key: KeyCode,
         modifiers: ModifiersState,
         mode: TerminalMode,
-        policy: XtermKeypadKeys,
+        policy: XtermKeySetting,
     ) -> Vec<u8> {
         keypad_key_with_logical_policy(
             Key::Character("logical-keypad-value".into()),
@@ -2102,7 +2101,7 @@ mod tests {
         key: KeyCode,
         modifiers: ModifiersState,
         mode: TerminalMode,
-        policy: XtermKeypadKeys,
+        policy: XtermKeySetting,
     ) -> Vec<u8> {
         encode_legacy_xterm_with_resources(
             &logical,
@@ -2111,11 +2110,11 @@ mod tests {
             modifiers,
             false,
             mode,
-            XtermCursorKeys::default(),
-            XtermFunctionKeys::default(),
+            XtermKeyResource::Cursor.default_setting(),
+            XtermKeyResource::Function.default_setting(),
             policy,
-            XtermModifierKeys::default(),
-            XtermSpecialKeys::default(),
+            XtermKeyResource::Modifier.default_setting(),
+            XtermKeyResource::Special.default_setting(),
         )
         .unwrap()
     }
@@ -2124,7 +2123,7 @@ mod tests {
         logical: Key,
         physical: PhysicalKey,
         modifiers: ModifiersState,
-        policy: XtermSpecialKeys,
+        policy: XtermKeySetting,
     ) -> Option<Vec<u8>> {
         encode_legacy_xterm_with_resources(
             &logical,
@@ -2133,10 +2132,10 @@ mod tests {
             modifiers,
             false,
             TerminalMode::default(),
-            XtermCursorKeys::default(),
-            XtermFunctionKeys::default(),
-            XtermKeypadKeys::default(),
-            XtermModifierKeys::default(),
+            XtermKeyResource::Cursor.default_setting(),
+            XtermKeyResource::Function.default_setting(),
+            XtermKeyResource::Keypad.default_setting(),
+            XtermKeyResource::Modifier.default_setting(),
             policy,
         )
     }
@@ -2157,11 +2156,11 @@ mod tests {
             false,
             mode,
             XtermModifyOtherKeys::default(),
-            XtermCursorKeys::default(),
-            XtermFunctionKeys::default(),
-            XtermKeypadKeys::default(),
-            XtermModifierKeys::default(),
-            XtermSpecialKeys::default(),
+            XtermKeyResource::Cursor.default_setting(),
+            XtermKeyResource::Function.default_setting(),
+            XtermKeyResource::Keypad.default_setting(),
+            XtermKeyResource::Modifier.default_setting(),
+            XtermKeyResource::Special.default_setting(),
             keyboard_type,
             XtermKeyboardResource::new(modify_keyboard, 0),
         )
@@ -2449,7 +2448,7 @@ mod tests {
                 function_key_with_policy(
                     NamedKey::F1,
                     modified,
-                    XtermFunctionKeys::default().with_mode(mode),
+                    XtermKeyResource::Function.default_setting().with_mode(mode),
                 ),
                 expected,
                 "mode {mode:?}"
@@ -2459,14 +2458,18 @@ mod tests {
             function_key_with_policy(
                 NamedKey::F5,
                 modified,
-                XtermFunctionKeys::default().with_mode(XtermKeyMode::Private),
+                XtermKeyResource::Function
+                    .default_setting()
+                    .with_mode(XtermKeyMode::Private),
             ),
             b"\x1b[>15;7~"
         );
 
         // Disabled mode uses xterm's default ctrlFKeys=10 remapping and then
         // discards any remaining Alt/Meta state.
-        let disabled = XtermFunctionKeys::default().with_mode(XtermKeyMode::Disabled);
+        let disabled = XtermKeyResource::Function
+            .default_setting()
+            .with_mode(XtermKeyMode::Disabled);
         assert_eq!(
             function_key_with_policy(NamedKey::F1, mods(true, false, false), disabled),
             b"\x1b[23~"
@@ -2494,14 +2497,13 @@ mod tests {
                 function_key_with_policy(
                     key,
                     ModifiersState::empty(),
-                    XtermFunctionKeys::default()
+                    XtermKeyResource::Function.default_setting()
                 ),
                 expected
             );
         }
 
-        let extended =
-            XtermFunctionKeys::new(XtermKeyMode::Extended, XtermKeyFormat::FunctionKey27);
+        let extended = XtermKeySetting::new(XtermKeyMode::Extended, XtermKeyFormat::FunctionKey27);
         let all_function_keys = [
             NamedKey::F1,
             NamedKey::F2,
@@ -2577,7 +2579,7 @@ mod tests {
                     NamedKey::ArrowUp,
                     modified,
                     TerminalMode::default(),
-                    XtermCursorKeys::default().with_mode(mode),
+                    XtermKeyResource::Cursor.default_setting().with_mode(mode),
                 ),
                 expected,
                 "mode {mode:?}"
@@ -2590,7 +2592,9 @@ mod tests {
                 NamedKey::ArrowUp,
                 modified,
                 TerminalMode::CURSOR_KEYS_APPLICATION,
-                XtermCursorKeys::default().with_mode(XtermKeyMode::Original),
+                XtermKeyResource::Cursor
+                    .default_setting()
+                    .with_mode(XtermKeyMode::Original),
             ),
             b"\x1bO7A"
         );
@@ -2599,7 +2603,9 @@ mod tests {
                 NamedKey::ArrowUp,
                 modified,
                 TerminalMode::CURSOR_KEYS_APPLICATION,
-                XtermCursorKeys::default().with_mode(XtermKeyMode::Disabled),
+                XtermKeyResource::Cursor
+                    .default_setting()
+                    .with_mode(XtermKeyMode::Disabled),
             ),
             b"\x1bOA"
         );
@@ -2608,12 +2614,14 @@ mod tests {
                 NamedKey::PageUp,
                 modified,
                 TerminalMode::default(),
-                XtermCursorKeys::default().with_mode(XtermKeyMode::Private),
+                XtermKeyResource::Cursor
+                    .default_setting()
+                    .with_mode(XtermKeyMode::Private),
             ),
             b"\x1b[>5;7~"
         );
 
-        let extended = XtermCursorKeys::new(XtermKeyMode::Extended, XtermKeyFormat::FunctionKey27);
+        let extended = XtermKeySetting::new(XtermKeyMode::Extended, XtermKeyFormat::FunctionKey27);
         let mappings = [
             (NamedKey::Home, 57_936),
             (NamedKey::ArrowLeft, 57_937),
@@ -2767,11 +2775,11 @@ mod tests {
             true,
             TerminalMode::default(),
             XtermModifyOtherKeys::new(2, 0).unwrap(),
-            XtermCursorKeys::default(),
-            XtermFunctionKeys::default(),
-            XtermKeypadKeys::default(),
-            XtermModifierKeys::default(),
-            XtermSpecialKeys::default(),
+            XtermKeyResource::Cursor.default_setting(),
+            XtermKeyResource::Function.default_setting(),
+            XtermKeyResource::Keypad.default_setting(),
+            XtermKeyResource::Modifier.default_setting(),
+            XtermKeyResource::Special.default_setting(),
         );
         assert_eq!(altgr, Some("€".as_bytes().to_vec()));
 
@@ -2787,11 +2795,11 @@ mod tests {
                 true,
                 TerminalMode::default(),
                 XtermModifyOtherKeys::new(level, 0).unwrap(),
-                XtermCursorKeys::default(),
-                XtermFunctionKeys::default(),
-                XtermKeypadKeys::default(),
-                XtermModifierKeys::default(),
-                XtermSpecialKeys::default(),
+                XtermKeyResource::Cursor.default_setting(),
+                XtermKeyResource::Function.default_setting(),
+                XtermKeyResource::Keypad.default_setting(),
+                XtermKeyResource::Modifier.default_setting(),
+                XtermKeyResource::Special.default_setting(),
             );
             let legacy = encode_legacy_xterm(
                 &Key::Character("e".into()),
@@ -2820,11 +2828,11 @@ mod tests {
                 false,
                 TerminalMode::default(),
                 program,
-                XtermCursorKeys::default(),
-                XtermFunctionKeys::default(),
-                XtermKeypadKeys::default(),
-                XtermModifierKeys::default(),
-                XtermSpecialKeys::default(),
+                XtermKeyResource::Cursor.default_setting(),
+                XtermKeyResource::Function.default_setting(),
+                XtermKeyResource::Keypad.default_setting(),
+                XtermKeyResource::Modifier.default_setting(),
+                XtermKeyResource::Special.default_setting(),
             ),
             Some(b"\x1b[105;5u".to_vec())
         );
@@ -2841,11 +2849,11 @@ mod tests {
                 false,
                 TerminalMode::default(),
                 all_keys,
-                XtermCursorKeys::default(),
-                XtermFunctionKeys::default(),
-                XtermKeypadKeys::default(),
-                XtermModifierKeys::default(),
-                XtermSpecialKeys::default(),
+                XtermKeyResource::Cursor.default_setting(),
+                XtermKeyResource::Function.default_setting(),
+                XtermKeyResource::Keypad.default_setting(),
+                XtermKeyResource::Modifier.default_setting(),
+                XtermKeyResource::Special.default_setting(),
             ),
             Some(b"\x1b[955;1u".to_vec())
         );
@@ -2853,7 +2861,7 @@ mod tests {
 
     #[test]
     fn xterm_modifier_key_mode_four_matches_portable_xterm_keysym_codes() {
-        let policy = XtermModifierKeys::new(XtermKeyMode::Extended, XtermKeyFormat::FunctionKey27);
+        let policy = XtermKeySetting::new(XtermKeyMode::Extended, XtermKeyFormat::FunctionKey27);
         for (named, physical, code) in [
             (NamedKey::Shift, KeyCode::ShiftLeft, 0xe2e1),
             (NamedKey::Shift, KeyCode::ShiftRight, 0xe2e2),
@@ -2903,7 +2911,7 @@ mod tests {
                     NamedKey::Shift,
                     PhysicalKey::Code(KeyCode::ShiftLeft),
                     ModifiersState::SHIFT,
-                    XtermModifierKeys::new(mode, XtermKeyFormat::FunctionKey27),
+                    XtermKeySetting::new(mode, XtermKeyFormat::FunctionKey27),
                 ),
                 None
             );
@@ -2916,7 +2924,7 @@ mod tests {
                 NamedKey::Super,
                 PhysicalKey::Code(KeyCode::SuperRight),
                 modified,
-                XtermModifierKeys::new(XtermKeyMode::Extended, XtermKeyFormat::CsiU),
+                XtermKeySetting::new(XtermKeyMode::Extended, XtermKeyFormat::CsiU),
             ),
             Some(b"\x1b[58092;10u".to_vec())
         );
@@ -2925,7 +2933,7 @@ mod tests {
                 NamedKey::Meta,
                 PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified),
                 ModifiersState::empty(),
-                XtermModifierKeys::new(XtermKeyMode::Extended, XtermKeyFormat::CsiU),
+                XtermKeySetting::new(XtermKeyMode::Extended, XtermKeyFormat::CsiU),
             ),
             Some(b"\x1b[58087;1u".to_vec())
         );
@@ -2933,7 +2941,7 @@ mod tests {
 
     #[test]
     fn xterm_special_mode_four_covers_control_compose_and_ime_keysyms() {
-        let policy = XtermSpecialKeys::new(XtermKeyMode::Extended, XtermKeyFormat::FunctionKey27);
+        let policy = XtermKeySetting::new(XtermKeyMode::Extended, XtermKeyFormat::FunctionKey27);
         for (named, keysym_code) in [
             (NamedKey::Backspace, 0x08),
             (NamedKey::Tab, 0x09),
@@ -2984,7 +2992,7 @@ mod tests {
 
     #[test]
     fn xterm_special_mode_four_covers_unambiguous_xf86_named_keys() {
-        let policy = XtermSpecialKeys::new(XtermKeyMode::Extended, XtermKeyFormat::CsiU);
+        let policy = XtermKeySetting::new(XtermKeyMode::Extended, XtermKeyFormat::CsiU);
         for (named, codepoint) in [
             (NamedKey::BrightnessUp, 0xf6102),
             (NamedKey::BrightnessDown, 0xf6103),
@@ -3099,7 +3107,7 @@ mod tests {
             XtermKeyMode::Parameter,
             XtermKeyMode::Private,
         ] {
-            let policy = XtermSpecialKeys::new(mode, XtermKeyFormat::CsiU);
+            let policy = XtermKeySetting::new(mode, XtermKeyFormat::CsiU);
             assert_eq!(
                 special_key_with_policy(
                     Key::Named(NamedKey::Backspace),
@@ -3128,11 +3136,11 @@ mod tests {
             false,
             TerminalMode::default(),
             XtermModifyOtherKeys::new(3, 0).unwrap(),
-            XtermCursorKeys::default(),
-            XtermFunctionKeys::default(),
-            XtermKeypadKeys::default(),
-            XtermModifierKeys::default(),
-            XtermSpecialKeys::new(XtermKeyMode::Extended, XtermKeyFormat::CsiU),
+            XtermKeyResource::Cursor.default_setting(),
+            XtermKeyResource::Function.default_setting(),
+            XtermKeyResource::Keypad.default_setting(),
+            XtermKeyResource::Modifier.default_setting(),
+            XtermKeySetting::new(XtermKeyMode::Extended, XtermKeyFormat::CsiU),
         );
         assert_eq!(encoded, Some(b"\x1b[8;1u".to_vec()));
     }
@@ -3150,7 +3158,7 @@ mod tests {
                     function_keys,
                     keypad_keys,
                     modifier_keys,
-                    XtermSpecialKeys::default(),
+                    XtermKeyResource::Special.default_setting(),
                 )
             };
 
@@ -3158,10 +3166,10 @@ mod tests {
             protocol(
                 kitty,
                 xterm,
-                XtermCursorKeys::default(),
-                XtermFunctionKeys::default(),
-                XtermKeypadKeys::default(),
-                XtermModifierKeys::default(),
+                XtermKeyResource::Cursor.default_setting(),
+                XtermKeyResource::Function.default_setting(),
+                XtermKeyResource::Keypad.default_setting(),
+                XtermKeyResource::Modifier.default_setting(),
             ),
             KeyboardProtocol::Kitty(kitty)
         );
@@ -3169,19 +3177,19 @@ mod tests {
             protocol(
                 KittyKeyboardFlags::empty(),
                 xterm,
-                XtermCursorKeys::default(),
-                XtermFunctionKeys::default(),
-                XtermKeypadKeys::default(),
-                XtermModifierKeys::default(),
+                XtermKeyResource::Cursor.default_setting(),
+                XtermKeyResource::Function.default_setting(),
+                XtermKeyResource::Keypad.default_setting(),
+                XtermKeyResource::Modifier.default_setting(),
             ),
             KeyboardProtocol::Xterm {
                 keyboard_type: XtermKeyboardType::Normal,
                 keyboard_resource: XtermKeyboardResource::default(),
-                cursor_keys: XtermCursorKeys::default(),
-                function_keys: XtermFunctionKeys::default(),
-                keypad_keys: XtermKeypadKeys::default(),
-                modifier_keys: XtermModifierKeys::default(),
-                special_keys: XtermSpecialKeys::default(),
+                cursor_keys: XtermKeyResource::Cursor.default_setting(),
+                function_keys: XtermKeyResource::Function.default_setting(),
+                keypad_keys: XtermKeyResource::Keypad.default_setting(),
+                modifier_keys: XtermKeyResource::Modifier.default_setting(),
+                special_keys: XtermKeyResource::Special.default_setting(),
                 other_keys: xterm,
             }
         );
@@ -3189,32 +3197,34 @@ mod tests {
             protocol(
                 KittyKeyboardFlags::empty(),
                 XtermModifyOtherKeys::default(),
-                XtermCursorKeys::default(),
-                XtermFunctionKeys::default(),
-                XtermKeypadKeys::default(),
-                XtermModifierKeys::default(),
+                XtermKeyResource::Cursor.default_setting(),
+                XtermKeyResource::Function.default_setting(),
+                XtermKeyResource::Keypad.default_setting(),
+                XtermKeyResource::Modifier.default_setting(),
             ),
             KeyboardProtocol::LegacyXterm
         );
 
-        let cursor = XtermCursorKeys::default().with_mode(XtermKeyMode::Private);
+        let cursor = XtermKeyResource::Cursor
+            .default_setting()
+            .with_mode(XtermKeyMode::Private);
         assert_eq!(
             protocol(
                 KittyKeyboardFlags::empty(),
                 XtermModifyOtherKeys::default(),
                 cursor,
-                XtermFunctionKeys::default(),
-                XtermKeypadKeys::default(),
-                XtermModifierKeys::default(),
+                XtermKeyResource::Function.default_setting(),
+                XtermKeyResource::Keypad.default_setting(),
+                XtermKeyResource::Modifier.default_setting(),
             ),
             KeyboardProtocol::Xterm {
                 keyboard_type: XtermKeyboardType::Normal,
                 keyboard_resource: XtermKeyboardResource::default(),
                 cursor_keys: cursor,
-                function_keys: XtermFunctionKeys::default(),
-                keypad_keys: XtermKeypadKeys::default(),
-                modifier_keys: XtermModifierKeys::default(),
-                special_keys: XtermSpecialKeys::default(),
+                function_keys: XtermKeyResource::Function.default_setting(),
+                keypad_keys: XtermKeyResource::Keypad.default_setting(),
+                modifier_keys: XtermKeyResource::Modifier.default_setting(),
+                special_keys: XtermKeyResource::Special.default_setting(),
                 other_keys: XtermModifyOtherKeys::default(),
             }
         );
@@ -3223,31 +3233,33 @@ mod tests {
                 kitty,
                 XtermModifyOtherKeys::default(),
                 cursor,
-                XtermFunctionKeys::default(),
-                XtermKeypadKeys::default(),
-                XtermModifierKeys::default(),
+                XtermKeyResource::Function.default_setting(),
+                XtermKeyResource::Keypad.default_setting(),
+                XtermKeyResource::Modifier.default_setting(),
             ),
             KeyboardProtocol::Kitty(kitty)
         );
 
-        let function = XtermFunctionKeys::default().with_mode(XtermKeyMode::Private);
+        let function = XtermKeyResource::Function
+            .default_setting()
+            .with_mode(XtermKeyMode::Private);
         assert_eq!(
             protocol(
                 KittyKeyboardFlags::empty(),
                 XtermModifyOtherKeys::default(),
-                XtermCursorKeys::default(),
+                XtermKeyResource::Cursor.default_setting(),
                 function,
-                XtermKeypadKeys::default(),
-                XtermModifierKeys::default(),
+                XtermKeyResource::Keypad.default_setting(),
+                XtermKeyResource::Modifier.default_setting(),
             ),
             KeyboardProtocol::Xterm {
                 keyboard_type: XtermKeyboardType::Normal,
                 keyboard_resource: XtermKeyboardResource::default(),
-                cursor_keys: XtermCursorKeys::default(),
+                cursor_keys: XtermKeyResource::Cursor.default_setting(),
                 function_keys: function,
-                keypad_keys: XtermKeypadKeys::default(),
-                modifier_keys: XtermModifierKeys::default(),
-                special_keys: XtermSpecialKeys::default(),
+                keypad_keys: XtermKeyResource::Keypad.default_setting(),
+                modifier_keys: XtermKeyResource::Modifier.default_setting(),
+                special_keys: XtermKeyResource::Special.default_setting(),
                 other_keys: XtermModifyOtherKeys::default(),
             }
         );
@@ -3255,32 +3267,34 @@ mod tests {
             protocol(
                 kitty,
                 XtermModifyOtherKeys::default(),
-                XtermCursorKeys::default(),
+                XtermKeyResource::Cursor.default_setting(),
                 function,
-                XtermKeypadKeys::default(),
-                XtermModifierKeys::default(),
+                XtermKeyResource::Keypad.default_setting(),
+                XtermKeyResource::Modifier.default_setting(),
             ),
             KeyboardProtocol::Kitty(kitty)
         );
 
-        let keypad = XtermKeypadKeys::default().with_mode(XtermKeyMode::Extended);
+        let keypad = XtermKeyResource::Keypad
+            .default_setting()
+            .with_mode(XtermKeyMode::Extended);
         assert_eq!(
             protocol(
                 KittyKeyboardFlags::empty(),
                 XtermModifyOtherKeys::default(),
-                XtermCursorKeys::default(),
-                XtermFunctionKeys::default(),
+                XtermKeyResource::Cursor.default_setting(),
+                XtermKeyResource::Function.default_setting(),
                 keypad,
-                XtermModifierKeys::default(),
+                XtermKeyResource::Modifier.default_setting(),
             ),
             KeyboardProtocol::Xterm {
                 keyboard_type: XtermKeyboardType::Normal,
                 keyboard_resource: XtermKeyboardResource::default(),
-                cursor_keys: XtermCursorKeys::default(),
-                function_keys: XtermFunctionKeys::default(),
+                cursor_keys: XtermKeyResource::Cursor.default_setting(),
+                function_keys: XtermKeyResource::Function.default_setting(),
                 keypad_keys: keypad,
-                modifier_keys: XtermModifierKeys::default(),
-                special_keys: XtermSpecialKeys::default(),
+                modifier_keys: XtermKeyResource::Modifier.default_setting(),
+                special_keys: XtermKeyResource::Special.default_setting(),
                 other_keys: XtermModifyOtherKeys::default(),
             }
         );
@@ -3288,32 +3302,34 @@ mod tests {
             protocol(
                 kitty,
                 XtermModifyOtherKeys::default(),
-                XtermCursorKeys::default(),
-                XtermFunctionKeys::default(),
+                XtermKeyResource::Cursor.default_setting(),
+                XtermKeyResource::Function.default_setting(),
                 keypad,
-                XtermModifierKeys::default(),
+                XtermKeyResource::Modifier.default_setting(),
             ),
             KeyboardProtocol::Kitty(kitty)
         );
 
-        let modifier = XtermModifierKeys::default().with_mode(XtermKeyMode::Extended);
+        let modifier = XtermKeyResource::Modifier
+            .default_setting()
+            .with_mode(XtermKeyMode::Extended);
         assert_eq!(
             protocol(
                 KittyKeyboardFlags::empty(),
                 XtermModifyOtherKeys::default(),
-                XtermCursorKeys::default(),
-                XtermFunctionKeys::default(),
-                XtermKeypadKeys::default(),
+                XtermKeyResource::Cursor.default_setting(),
+                XtermKeyResource::Function.default_setting(),
+                XtermKeyResource::Keypad.default_setting(),
                 modifier,
             ),
             KeyboardProtocol::Xterm {
                 keyboard_type: XtermKeyboardType::Normal,
                 keyboard_resource: XtermKeyboardResource::default(),
-                cursor_keys: XtermCursorKeys::default(),
-                function_keys: XtermFunctionKeys::default(),
-                keypad_keys: XtermKeypadKeys::default(),
+                cursor_keys: XtermKeyResource::Cursor.default_setting(),
+                function_keys: XtermKeyResource::Function.default_setting(),
+                keypad_keys: XtermKeyResource::Keypad.default_setting(),
                 modifier_keys: modifier,
-                special_keys: XtermSpecialKeys::default(),
+                special_keys: XtermKeyResource::Special.default_setting(),
                 other_keys: XtermModifyOtherKeys::default(),
             }
         );
@@ -3321,32 +3337,34 @@ mod tests {
             protocol(
                 kitty,
                 XtermModifyOtherKeys::default(),
-                XtermCursorKeys::default(),
-                XtermFunctionKeys::default(),
-                XtermKeypadKeys::default(),
+                XtermKeyResource::Cursor.default_setting(),
+                XtermKeyResource::Function.default_setting(),
+                XtermKeyResource::Keypad.default_setting(),
                 modifier,
             ),
             KeyboardProtocol::Kitty(kitty)
         );
 
-        let special = XtermSpecialKeys::default().with_mode(XtermKeyMode::Extended);
+        let special = XtermKeyResource::Special
+            .default_setting()
+            .with_mode(XtermKeyMode::Extended);
         assert_eq!(
             keyboard_protocol(
                 KittyKeyboardFlags::empty(),
                 XtermModifyOtherKeys::default(),
-                XtermCursorKeys::default(),
-                XtermFunctionKeys::default(),
-                XtermKeypadKeys::default(),
-                XtermModifierKeys::default(),
+                XtermKeyResource::Cursor.default_setting(),
+                XtermKeyResource::Function.default_setting(),
+                XtermKeyResource::Keypad.default_setting(),
+                XtermKeyResource::Modifier.default_setting(),
                 special,
             ),
             KeyboardProtocol::Xterm {
                 keyboard_type: XtermKeyboardType::Normal,
                 keyboard_resource: XtermKeyboardResource::default(),
-                cursor_keys: XtermCursorKeys::default(),
-                function_keys: XtermFunctionKeys::default(),
-                keypad_keys: XtermKeypadKeys::default(),
-                modifier_keys: XtermModifierKeys::default(),
+                cursor_keys: XtermKeyResource::Cursor.default_setting(),
+                function_keys: XtermKeyResource::Function.default_setting(),
+                keypad_keys: XtermKeyResource::Keypad.default_setting(),
+                modifier_keys: XtermKeyResource::Modifier.default_setting(),
                 special_keys: special,
                 other_keys: XtermModifyOtherKeys::default(),
             }
@@ -3355,10 +3373,10 @@ mod tests {
             keyboard_protocol(
                 kitty,
                 XtermModifyOtherKeys::default(),
-                XtermCursorKeys::default(),
-                XtermFunctionKeys::default(),
-                XtermKeypadKeys::default(),
-                XtermModifierKeys::default(),
+                XtermKeyResource::Cursor.default_setting(),
+                XtermKeyResource::Function.default_setting(),
+                XtermKeyResource::Keypad.default_setting(),
+                XtermKeyResource::Modifier.default_setting(),
                 special,
             ),
             KeyboardProtocol::Kitty(kitty)
@@ -3370,20 +3388,20 @@ mod tests {
                 XtermKeyboardType::Vt220,
                 XtermKeyboardResource::new(15, 42),
                 XtermModifyOtherKeys::default(),
-                XtermCursorKeys::default(),
-                XtermFunctionKeys::default(),
-                XtermKeypadKeys::default(),
-                XtermModifierKeys::default(),
-                XtermSpecialKeys::default(),
+                XtermKeyResource::Cursor.default_setting(),
+                XtermKeyResource::Function.default_setting(),
+                XtermKeyResource::Keypad.default_setting(),
+                XtermKeyResource::Modifier.default_setting(),
+                XtermKeyResource::Special.default_setting(),
             ),
             KeyboardProtocol::Xterm {
                 keyboard_type: XtermKeyboardType::Vt220,
                 keyboard_resource: XtermKeyboardResource::new(15, 42),
-                cursor_keys: XtermCursorKeys::default(),
-                function_keys: XtermFunctionKeys::default(),
-                keypad_keys: XtermKeypadKeys::default(),
-                modifier_keys: XtermModifierKeys::default(),
-                special_keys: XtermSpecialKeys::default(),
+                cursor_keys: XtermKeyResource::Cursor.default_setting(),
+                function_keys: XtermKeyResource::Function.default_setting(),
+                keypad_keys: XtermKeyResource::Keypad.default_setting(),
+                modifier_keys: XtermKeyResource::Modifier.default_setting(),
+                special_keys: XtermKeyResource::Special.default_setting(),
                 other_keys: XtermModifyOtherKeys::default(),
             }
         );
@@ -3393,11 +3411,11 @@ mod tests {
                 XtermKeyboardType::Vt220,
                 XtermKeyboardResource::new(15, 42),
                 XtermModifyOtherKeys::default(),
-                XtermCursorKeys::default(),
-                XtermFunctionKeys::default(),
-                XtermKeypadKeys::default(),
-                XtermModifierKeys::default(),
-                XtermSpecialKeys::default(),
+                XtermKeyResource::Cursor.default_setting(),
+                XtermKeyResource::Function.default_setting(),
+                XtermKeyResource::Keypad.default_setting(),
+                XtermKeyResource::Modifier.default_setting(),
+                XtermKeyResource::Special.default_setting(),
             ),
             KeyboardProtocol::Kitty(kitty)
         );
@@ -3687,7 +3705,7 @@ mod tests {
             XtermKeyMode::Parameter,
             XtermKeyMode::Private,
         ] {
-            let policy = XtermKeypadKeys::default().with_mode(mode);
+            let policy = XtermKeyResource::Keypad.default_setting().with_mode(mode);
             assert_eq!(
                 keypad_key_with_policy(
                     KeyCode::Numpad7,
@@ -3710,7 +3728,7 @@ mod tests {
             );
         }
 
-        let extended = XtermKeypadKeys::new(XtermKeyMode::Extended, XtermKeyFormat::FunctionKey27);
+        let extended = XtermKeySetting::new(XtermKeyMode::Extended, XtermKeyFormat::FunctionKey27);
         let keys = [
             (KeyCode::NumpadEnter, 0xe28d),
             (KeyCode::NumpadMultiply, 0xe2aa),

@@ -7,7 +7,7 @@ use crate::event::{
 use crate::grid::{CellAttrs, Color, ColorSpec};
 use crate::term::{
     MAX_NOTIFICATION_BODY_BYTES, MAX_NOTIFICATION_TITLE_BYTES, MAX_TITLE_BYTES,
-    ReportedWorkingDirectory, Terminal, TerminalMode,
+    ReportedWorkingDirectory, Terminal, TerminalMode, XtermKeyResource,
 };
 use base64::Engine as _;
 use vte::{Params, Perform};
@@ -266,26 +266,22 @@ impl<'a> Handler<'a> {
         match final_byte {
             b'm' => {
                 self.terminal.reset_xterm_keyboard_modify();
-                self.terminal.reset_xterm_cursor_key_mode();
-                self.terminal.reset_xterm_function_key_mode();
-                self.terminal.reset_xterm_keypad_key_mode();
-                self.terminal.reset_xterm_string_key_mode();
-                self.terminal.reset_xterm_modifier_key_mode();
-                self.terminal.reset_xterm_special_key_mode();
+                for resource in XtermKeyResource::ALL {
+                    self.terminal.reset_xterm_key_mode(resource);
+                }
                 self.terminal.set_xterm_modify_other_keys(0, 0);
             }
             b'f' => {
                 self.terminal.reset_xterm_keyboard_format();
-                self.terminal.reset_xterm_cursor_key_format();
-                self.terminal.reset_xterm_function_key_format();
-                self.terminal.reset_xterm_keypad_key_format();
-                self.terminal.reset_xterm_string_key_format();
-                self.terminal.reset_xterm_modifier_key_format();
-                self.terminal.reset_xterm_special_key_format();
+                for resource in XtermKeyResource::ALL {
+                    self.terminal.reset_xterm_key_format(resource);
+                }
                 self.terminal.set_xterm_other_key_format(0);
             }
             // Xterm assigns omitted Ps in the disable control to resource 2.
-            b'n' => self.terminal.set_xterm_function_key_mode(u16::MAX),
+            b'n' => self
+                .terminal
+                .set_xterm_key_mode(XtermKeyResource::Function, u16::MAX),
             _ => unreachable!("only xterm m/f/n controls are intercepted"),
         }
     }
@@ -611,20 +607,18 @@ impl Perform for Handler<'_> {
             'f' if !ignore && intermediates == b">" && scalar_params => match params {
                 [0] => self.terminal.reset_xterm_keyboard_format(),
                 [0, format] => self.terminal.set_xterm_keyboard_format(*format),
-                [1] => self.terminal.reset_xterm_cursor_key_format(),
-                [1, format] => self.terminal.set_xterm_cursor_key_format(*format),
-                [2] => self.terminal.reset_xterm_function_key_format(),
-                [2, format] => self.terminal.set_xterm_function_key_format(*format),
-                [3] => self.terminal.reset_xterm_keypad_key_format(),
-                [3, format] => self.terminal.set_xterm_keypad_key_format(*format),
                 [4] => self.terminal.set_xterm_other_key_format(0),
                 [4, format] => self.terminal.set_xterm_other_key_format(*format),
-                [5] => self.terminal.reset_xterm_string_key_format(),
-                [5, format] => self.terminal.set_xterm_string_key_format(*format),
-                [6] => self.terminal.reset_xterm_modifier_key_format(),
-                [6, format] => self.terminal.set_xterm_modifier_key_format(*format),
-                [7] => self.terminal.reset_xterm_special_key_format(),
-                [7, format] => self.terminal.set_xterm_special_key_format(*format),
+                [resource] => {
+                    if let Some(resource) = XtermKeyResource::from_number(*resource) {
+                        self.terminal.reset_xterm_key_format(resource);
+                    }
+                }
+                [resource, format] => {
+                    if let Some(resource) = XtermKeyResource::from_number(*resource) {
+                        self.terminal.set_xterm_key_format(resource, *format);
+                    }
+                }
                 _ => {}
             },
 
@@ -863,13 +857,12 @@ impl Perform for Handler<'_> {
             {
                 match params[0] {
                     0 => self.terminal.report_xterm_keyboard_format(),
-                    1 => self.terminal.report_xterm_cursor_key_format(),
-                    2 => self.terminal.report_xterm_function_key_format(),
-                    3 => self.terminal.report_xterm_keypad_key_format(),
                     4 => self.terminal.report_xterm_other_key_format(),
-                    5 => self.terminal.report_xterm_string_key_format(),
-                    6 => self.terminal.report_xterm_modifier_key_format(),
-                    _ => self.terminal.report_xterm_special_key_format(),
+                    number => {
+                        if let Some(resource) = XtermKeyResource::from_number(number) {
+                            self.terminal.report_xterm_key_format(resource);
+                        }
+                    }
                 }
             }
 
@@ -911,18 +904,6 @@ impl Perform for Handler<'_> {
                 match parameters.as_slice() {
                     [[0]] => self.terminal.reset_xterm_keyboard_modify(),
                     [[0], [value]] => self.terminal.set_xterm_keyboard_modify(*value),
-                    [[1]] => self.terminal.reset_xterm_cursor_key_mode(),
-                    [[1], [mode]] => self.terminal.set_xterm_cursor_key_mode(*mode),
-                    [[2]] => self.terminal.reset_xterm_function_key_mode(),
-                    [[2], [mode]] => self.terminal.set_xterm_function_key_mode(*mode),
-                    [[3]] => self.terminal.reset_xterm_keypad_key_mode(),
-                    [[3], [mode]] => self.terminal.set_xterm_keypad_key_mode(*mode),
-                    [[5]] => self.terminal.reset_xterm_string_key_mode(),
-                    [[5], [mode]] => self.terminal.set_xterm_string_key_mode(*mode),
-                    [[6]] => self.terminal.reset_xterm_modifier_key_mode(),
-                    [[6], [mode]] => self.terminal.set_xterm_modifier_key_mode(*mode),
-                    [[7]] => self.terminal.reset_xterm_special_key_mode(),
-                    [[7], [mode]] => self.terminal.set_xterm_special_key_mode(*mode),
                     // Omitted Pv restores xterm's default (disabled).
                     [[4]] => self.terminal.set_xterm_modify_other_keys(0, 0),
                     [[4], [level]] => {
@@ -941,6 +922,16 @@ impl Perform for Handler<'_> {
                     [[4], [level, mask]] | [[4, mask], [level]] => {
                         self.terminal.set_xterm_modify_other_keys(*level, *mask);
                     }
+                    [[resource]] => {
+                        if let Some(resource) = XtermKeyResource::from_number(*resource) {
+                            self.terminal.reset_xterm_key_mode(resource);
+                        }
+                    }
+                    [[resource], [mode]] => {
+                        if let Some(resource) = XtermKeyResource::from_number(*resource) {
+                            self.terminal.set_xterm_key_mode(resource, *mode);
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -951,13 +942,12 @@ impl Perform for Handler<'_> {
             {
                 match params[0] {
                     0 => self.terminal.report_xterm_keyboard_modify(),
-                    1 => self.terminal.report_xterm_cursor_key_mode(),
-                    2 => self.terminal.report_xterm_function_key_mode(),
-                    3 => self.terminal.report_xterm_keypad_key_mode(),
                     4 => self.terminal.report_xterm_modify_other_keys(),
-                    5 => self.terminal.report_xterm_string_key_mode(),
-                    6 => self.terminal.report_xterm_modifier_key_mode(),
-                    _ => self.terminal.report_xterm_special_key_mode(),
+                    number => {
+                        if let Some(resource) = XtermKeyResource::from_number(number) {
+                            self.terminal.report_xterm_key_mode(resource);
+                        }
+                    }
                 }
             }
             // SGR - Select Graphic Rendition
@@ -1108,18 +1098,17 @@ impl Perform for Handler<'_> {
             {
                 match params[0] {
                     0 => self.terminal.set_xterm_keyboard_modify(u16::MAX),
-                    1 => self.terminal.set_xterm_cursor_key_mode(u16::MAX),
-                    2 => self.terminal.set_xterm_function_key_mode(u16::MAX),
-                    3 => self.terminal.set_xterm_keypad_key_mode(u16::MAX),
                     4 => {
                         // Xterm stores -1, but modifyOtherKeys levels 0 and -1
                         // are behaviorally equivalent and resource 4's bounded
                         // public state uses 0 through 3.
                         self.terminal.set_xterm_modify_other_keys(0, 0);
                     }
-                    5 => self.terminal.set_xterm_string_key_mode(u16::MAX),
-                    6 => self.terminal.set_xterm_modifier_key_mode(u16::MAX),
-                    _ => self.terminal.set_xterm_special_key_mode(u16::MAX),
+                    number => {
+                        if let Some(resource) = XtermKeyResource::from_number(number) {
+                            self.terminal.set_xterm_key_mode(resource, u16::MAX);
+                        }
+                    }
                 }
             }
 

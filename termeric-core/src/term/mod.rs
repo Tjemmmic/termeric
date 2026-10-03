@@ -35,11 +35,10 @@ mod title;
 pub(crate) use cursor::SavedCursor;
 pub use cursor::{TerminalCursorShape, TerminalCursorStyle};
 pub use keyboard::{
-    KittyKeyboardFlags, XtermCursorKeys, XtermFunctionKeys, XtermKeyFormat, XtermKeyMode,
-    XtermKeyboardResource, XtermKeyboardType, XtermKeypadKeys, XtermModifierKeys,
-    XtermModifyOtherKeys, XtermSpecialKeys,
+    KittyKeyboardFlags, XtermKeyFormat, XtermKeyMode, XtermKeyResource, XtermKeySetting,
+    XtermKeyboardResource, XtermKeyboardType, XtermModifyOtherKeys,
 };
-pub(crate) use keyboard::{MAX_USER_DEFINED_KEY_BYTES, XtermStringKeys, XtermUserDefinedKeys};
+pub(crate) use keyboard::{MAX_USER_DEFINED_KEY_BYTES, XtermKeyResources, XtermUserDefinedKeys};
 pub use mode::TerminalMode;
 use multicell::Osc66Command;
 pub use multiple_cursors::{
@@ -730,18 +729,8 @@ pub struct Terminal {
     /// both screen buffers. Under Termeric's normal keyboard profile it is
     /// queryable compatibility state and does not alter key encoding.
     xterm_keyboard_resource: XtermKeyboardResource,
-    /// Xterm modifyCursorKeys applies across both screen buffers.
-    xterm_cursor_keys: XtermCursorKeys,
-    /// Xterm modifyFunctionKeys applies across both screen buffers.
-    xterm_function_keys: XtermFunctionKeys,
-    /// Xterm modifyKeypadKeys applies across both screen buffers.
-    xterm_keypad_keys: XtermKeypadKeys,
-    /// Xterm's reserved modifyStringKeys/formatStringKeys resource 5.
-    xterm_string_keys: XtermStringKeys,
-    /// Xterm modifyModifierKeys applies across both screen buffers.
-    xterm_modifier_keys: XtermModifierKeys,
-    /// Xterm modifySpecialKeys applies across both screen buffers.
-    xterm_special_keys: XtermSpecialKeys,
+    /// Xterm's mode-and-format key resources 1-3 and 5-7.
+    xterm_key_resources: XtermKeyResources,
     /// Xterm modifyOtherKeys applies to this terminal owner across both
     /// screen buffers and is reset by DECSTR/RIS like xterm's modifier resources.
     xterm_modify_other_keys: XtermModifyOtherKeys,
@@ -885,12 +874,7 @@ impl Terminal {
             saved_xterm_keyboard_type: None,
             xterm_user_defined_keys: XtermUserDefinedKeys::default(),
             xterm_keyboard_resource: XtermKeyboardResource::default(),
-            xterm_cursor_keys: XtermCursorKeys::default(),
-            xterm_function_keys: XtermFunctionKeys::default(),
-            xterm_keypad_keys: XtermKeypadKeys::default(),
-            xterm_string_keys: XtermStringKeys::default(),
-            xterm_modifier_keys: XtermModifierKeys::default(),
-            xterm_special_keys: XtermSpecialKeys::default(),
+            xterm_key_resources: XtermKeyResources::default(),
             xterm_modify_other_keys: XtermModifyOtherKeys::default(),
             tabs,
             saved_cursor: None,
@@ -1718,226 +1702,38 @@ impl Terminal {
         ));
     }
 
-    /// Get xterm's terminal-local `modifyCursorKeys` and `formatCursorKeys`
-    /// policy.
-    pub fn xterm_cursor_keys(&self) -> XtermCursorKeys {
-        self.xterm_cursor_keys
+    /// One of xterm's terminal-local mode-and-format key resources.
+    pub fn xterm_key_resource(&self, resource: XtermKeyResource) -> XtermKeySetting {
+        self.xterm_key_resources.get(resource)
     }
 
-    pub(crate) fn set_xterm_cursor_key_mode(&mut self, parameter: u16) {
-        self.xterm_cursor_keys.set_mode(parameter);
+    pub(crate) fn set_xterm_key_mode(&mut self, resource: XtermKeyResource, parameter: u16) {
+        self.xterm_key_resources.set_mode(resource, parameter);
     }
 
-    pub(crate) fn reset_xterm_cursor_key_mode(&mut self) {
-        self.xterm_cursor_keys = self.xterm_cursor_keys.with_mode(XtermKeyMode::default());
+    pub(crate) fn reset_xterm_key_mode(&mut self, resource: XtermKeyResource) {
+        self.xterm_key_resources.reset_mode(resource);
     }
 
-    pub(crate) fn report_xterm_cursor_key_mode(&mut self) {
+    pub(crate) fn report_xterm_key_mode(&mut self, resource: XtermKeyResource) {
+        let mode = self.xterm_key_resources.get(resource).mode().parameter();
         self.push_event(TerminalEvent::PtyWrite(
-            format!("\x1b[>1;{}m", self.xterm_cursor_keys.mode().parameter()).into_bytes(),
+            format!("\x1b[>{};{mode}m", resource.number()).into_bytes(),
         ));
     }
 
-    pub(crate) fn set_xterm_cursor_key_format(&mut self, parameter: u16) {
-        self.xterm_cursor_keys.set_format(parameter);
+    pub(crate) fn set_xterm_key_format(&mut self, resource: XtermKeyResource, parameter: u16) {
+        self.xterm_key_resources.set_format(resource, parameter);
     }
 
-    pub(crate) fn reset_xterm_cursor_key_format(&mut self) {
-        self.xterm_cursor_keys = self
-            .xterm_cursor_keys
-            .with_format(XtermKeyFormat::default());
+    pub(crate) fn reset_xterm_key_format(&mut self, resource: XtermKeyResource) {
+        self.xterm_key_resources.reset_format(resource);
     }
 
-    pub(crate) fn report_xterm_cursor_key_format(&mut self) {
+    pub(crate) fn report_xterm_key_format(&mut self, resource: XtermKeyResource) {
+        let format = self.xterm_key_resources.get(resource).format().parameter();
         self.push_event(TerminalEvent::PtyWrite(
-            format!("\x1b[>1;{}f", self.xterm_cursor_keys.format().parameter()).into_bytes(),
-        ));
-    }
-
-    /// Get xterm's terminal-local `modifyFunctionKeys` and
-    /// `formatFunctionKeys` policy.
-    pub fn xterm_function_keys(&self) -> XtermFunctionKeys {
-        self.xterm_function_keys
-    }
-
-    pub(crate) fn set_xterm_function_key_mode(&mut self, parameter: u16) {
-        self.xterm_function_keys.set_mode(parameter);
-    }
-
-    pub(crate) fn reset_xterm_function_key_mode(&mut self) {
-        self.xterm_function_keys = self.xterm_function_keys.with_mode(XtermKeyMode::default());
-    }
-
-    pub(crate) fn report_xterm_function_key_mode(&mut self) {
-        self.push_event(TerminalEvent::PtyWrite(
-            format!("\x1b[>2;{}m", self.xterm_function_keys.mode().parameter()).into_bytes(),
-        ));
-    }
-
-    pub(crate) fn set_xterm_function_key_format(&mut self, parameter: u16) {
-        self.xterm_function_keys.set_format(parameter);
-    }
-
-    pub(crate) fn reset_xterm_function_key_format(&mut self) {
-        self.xterm_function_keys = self
-            .xterm_function_keys
-            .with_format(XtermKeyFormat::default());
-    }
-
-    pub(crate) fn report_xterm_function_key_format(&mut self) {
-        self.push_event(TerminalEvent::PtyWrite(
-            format!("\x1b[>2;{}f", self.xterm_function_keys.format().parameter()).into_bytes(),
-        ));
-    }
-
-    /// Get xterm's terminal-local `modifyKeypadKeys` and
-    /// `formatKeypadKeys` policy.
-    pub fn xterm_keypad_keys(&self) -> XtermKeypadKeys {
-        self.xterm_keypad_keys
-    }
-
-    pub(crate) fn set_xterm_keypad_key_mode(&mut self, parameter: u16) {
-        self.xterm_keypad_keys.set_mode(parameter);
-    }
-
-    pub(crate) fn reset_xterm_keypad_key_mode(&mut self) {
-        self.xterm_keypad_keys = self
-            .xterm_keypad_keys
-            .with_mode(XtermKeypadKeys::default().mode());
-    }
-
-    pub(crate) fn report_xterm_keypad_key_mode(&mut self) {
-        self.push_event(TerminalEvent::PtyWrite(
-            format!("\x1b[>3;{}m", self.xterm_keypad_keys.mode().parameter()).into_bytes(),
-        ));
-    }
-
-    pub(crate) fn set_xterm_keypad_key_format(&mut self, parameter: u16) {
-        self.xterm_keypad_keys.set_format(parameter);
-    }
-
-    pub(crate) fn reset_xterm_keypad_key_format(&mut self) {
-        self.xterm_keypad_keys = self
-            .xterm_keypad_keys
-            .with_format(XtermKeyFormat::default());
-    }
-
-    pub(crate) fn report_xterm_keypad_key_format(&mut self) {
-        self.push_event(TerminalEvent::PtyWrite(
-            format!("\x1b[>3;{}f", self.xterm_keypad_keys.format().parameter()).into_bytes(),
-        ));
-    }
-
-    /// Get xterm's reserved `modifyStringKeys` and `formatStringKeys` state.
-    pub fn xterm_string_keys(&self) -> XtermStringKeys {
-        self.xterm_string_keys
-    }
-
-    pub(crate) fn set_xterm_string_key_mode(&mut self, parameter: u16) {
-        self.xterm_string_keys.set_mode(parameter);
-    }
-
-    pub(crate) fn reset_xterm_string_key_mode(&mut self) {
-        self.xterm_string_keys = self
-            .xterm_string_keys
-            .with_mode(XtermStringKeys::default().mode());
-    }
-
-    pub(crate) fn report_xterm_string_key_mode(&mut self) {
-        self.push_event(TerminalEvent::PtyWrite(
-            format!("\x1b[>5;{}m", self.xterm_string_keys.mode().parameter()).into_bytes(),
-        ));
-    }
-
-    pub(crate) fn set_xterm_string_key_format(&mut self, parameter: u16) {
-        self.xterm_string_keys.set_format(parameter);
-    }
-
-    pub(crate) fn reset_xterm_string_key_format(&mut self) {
-        self.xterm_string_keys = self
-            .xterm_string_keys
-            .with_format(XtermKeyFormat::default());
-    }
-
-    pub(crate) fn report_xterm_string_key_format(&mut self) {
-        self.push_event(TerminalEvent::PtyWrite(
-            format!("\x1b[>5;{}f", self.xterm_string_keys.format().parameter()).into_bytes(),
-        ));
-    }
-
-    /// Get xterm's terminal-local `modifyModifierKeys` and
-    /// `formatModifierKeys` policy.
-    pub fn xterm_modifier_keys(&self) -> XtermModifierKeys {
-        self.xterm_modifier_keys
-    }
-
-    pub(crate) fn set_xterm_modifier_key_mode(&mut self, parameter: u16) {
-        self.xterm_modifier_keys.set_mode(parameter);
-    }
-
-    pub(crate) fn reset_xterm_modifier_key_mode(&mut self) {
-        self.xterm_modifier_keys = self
-            .xterm_modifier_keys
-            .with_mode(XtermModifierKeys::default().mode());
-    }
-
-    pub(crate) fn report_xterm_modifier_key_mode(&mut self) {
-        self.push_event(TerminalEvent::PtyWrite(
-            format!("\x1b[>6;{}m", self.xterm_modifier_keys.mode().parameter()).into_bytes(),
-        ));
-    }
-
-    pub(crate) fn set_xterm_modifier_key_format(&mut self, parameter: u16) {
-        self.xterm_modifier_keys.set_format(parameter);
-    }
-
-    pub(crate) fn reset_xterm_modifier_key_format(&mut self) {
-        self.xterm_modifier_keys = self
-            .xterm_modifier_keys
-            .with_format(XtermKeyFormat::default());
-    }
-
-    pub(crate) fn report_xterm_modifier_key_format(&mut self) {
-        self.push_event(TerminalEvent::PtyWrite(
-            format!("\x1b[>6;{}f", self.xterm_modifier_keys.format().parameter()).into_bytes(),
-        ));
-    }
-
-    /// Get xterm's terminal-local `modifySpecialKeys` and
-    /// `formatSpecialKeys` policy.
-    pub fn xterm_special_keys(&self) -> XtermSpecialKeys {
-        self.xterm_special_keys
-    }
-
-    pub(crate) fn set_xterm_special_key_mode(&mut self, parameter: u16) {
-        self.xterm_special_keys.set_mode(parameter);
-    }
-
-    pub(crate) fn reset_xterm_special_key_mode(&mut self) {
-        self.xterm_special_keys = self
-            .xterm_special_keys
-            .with_mode(XtermSpecialKeys::default().mode());
-    }
-
-    pub(crate) fn report_xterm_special_key_mode(&mut self) {
-        self.push_event(TerminalEvent::PtyWrite(
-            format!("\x1b[>7;{}m", self.xterm_special_keys.mode().parameter()).into_bytes(),
-        ));
-    }
-
-    pub(crate) fn set_xterm_special_key_format(&mut self, parameter: u16) {
-        self.xterm_special_keys.set_format(parameter);
-    }
-
-    pub(crate) fn reset_xterm_special_key_format(&mut self) {
-        self.xterm_special_keys = self
-            .xterm_special_keys
-            .with_format(XtermKeyFormat::default());
-    }
-
-    pub(crate) fn report_xterm_special_key_format(&mut self) {
-        self.push_event(TerminalEvent::PtyWrite(
-            format!("\x1b[>7;{}f", self.xterm_special_keys.format().parameter()).into_bytes(),
+            format!("\x1b[>{};{format}f", resource.number()).into_bytes(),
         ));
     }
 
@@ -4018,45 +3814,21 @@ impl Terminal {
             b"*|" => Some(format!("{}*|", self.rows).into_bytes()),
             b">0m" => Some(format!(">0;{}m", self.xterm_keyboard_resource.modify()).into_bytes()),
             b">0f" => Some(format!(">0;{}f", self.xterm_keyboard_resource.format()).into_bytes()),
-            b">1m" => {
-                Some(format!(">1;{}m", self.xterm_cursor_keys.mode().parameter()).into_bytes())
-            }
-            b">1f" => {
-                Some(format!(">1;{}f", self.xterm_cursor_keys.format().parameter()).into_bytes())
-            }
-            b">2m" => {
-                Some(format!(">2;{}m", self.xterm_function_keys.mode().parameter()).into_bytes())
-            }
-            b">2f" => {
-                Some(format!(">2;{}f", self.xterm_function_keys.format().parameter()).into_bytes())
-            }
-            b">3m" => {
-                Some(format!(">3;{}m", self.xterm_keypad_keys.mode().parameter()).into_bytes())
-            }
-            b">3f" => {
-                Some(format!(">3;{}f", self.xterm_keypad_keys.format().parameter()).into_bytes())
-            }
-            b">5m" => {
-                Some(format!(">5;{}m", self.xterm_string_keys.mode().parameter()).into_bytes())
-            }
-            b">5f" => {
-                Some(format!(">5;{}f", self.xterm_string_keys.format().parameter()).into_bytes())
-            }
-            b">6m" => {
-                Some(format!(">6;{}m", self.xterm_modifier_keys.mode().parameter()).into_bytes())
-            }
-            b">6f" => {
-                Some(format!(">6;{}f", self.xterm_modifier_keys.format().parameter()).into_bytes())
-            }
-            b">7m" => {
-                Some(format!(">7;{}m", self.xterm_special_keys.mode().parameter()).into_bytes())
-            }
-            b">7f" => {
-                Some(format!(">7;{}f", self.xterm_special_keys.format().parameter()).into_bytes())
-            }
             b">4f" => Some(
                 format!(">4;{}f", self.xterm_modify_other_keys.format().parameter()).into_bytes(),
             ),
+            // The shared-shape resources 1-3 and 5-7.
+            [b'>', number, kind @ (b'm' | b'f')] => {
+                let number = char::from(*number).to_digit(10)?;
+                let resource = XtermKeyResource::from_number(number as u16)?;
+                let setting = self.xterm_key_resources.get(resource);
+                let value = if *kind == b'm' {
+                    setting.mode().parameter()
+                } else {
+                    u16::from(setting.format().parameter())
+                };
+                Some(format!(">{number};{value}{}", char::from(*kind)).into_bytes())
+            }
             _ => None,
         }
     }
@@ -5290,12 +5062,7 @@ impl Terminal {
         self.cursor_blink_override = None;
         self.clear_extra_cursors();
         self.xterm_keyboard_resource = XtermKeyboardResource::default();
-        self.xterm_cursor_keys = XtermCursorKeys::default();
-        self.xterm_function_keys = XtermFunctionKeys::default();
-        self.xterm_keypad_keys = XtermKeypadKeys::default();
-        self.xterm_string_keys = XtermStringKeys::default();
-        self.xterm_modifier_keys = XtermModifierKeys::default();
-        self.xterm_special_keys = XtermSpecialKeys::default();
+        self.xterm_key_resources = XtermKeyResources::default();
         self.xterm_modify_other_keys = XtermModifyOtherKeys::default();
 
         self.scroll_top = 0;
@@ -5355,12 +5122,7 @@ impl Terminal {
         self.saved_xterm_keyboard_type = None;
         self.xterm_user_defined_keys.clear();
         self.xterm_keyboard_resource = XtermKeyboardResource::default();
-        self.xterm_cursor_keys = XtermCursorKeys::default();
-        self.xterm_function_keys = XtermFunctionKeys::default();
-        self.xterm_keypad_keys = XtermKeypadKeys::default();
-        self.xterm_string_keys = XtermStringKeys::default();
-        self.xterm_modifier_keys = XtermModifierKeys::default();
-        self.xterm_special_keys = XtermSpecialKeys::default();
+        self.xterm_key_resources = XtermKeyResources::default();
         self.xterm_modify_other_keys = XtermModifyOtherKeys::default();
         self.reset_attrs();
         self.current_character_protected = false;
@@ -7925,8 +7687,8 @@ mod tests {
             b"\x1b[?5m\x1b[?5g\x1b[>5;4m\x1b[>5;1f\x1b[?5m\x1b[?5g\x1bP$q>5m\x1b\\\x1bP$q>5f\x1b\\",
         );
         assert_eq!(
-            term.xterm_string_keys(),
-            XtermStringKeys::new(XtermKeyMode::Extended, XtermKeyFormat::CsiU)
+            term.xterm_key_resource(XtermKeyResource::String),
+            XtermKeySetting::new(XtermKeyMode::Extended, XtermKeyFormat::CsiU)
         );
         assert_eq!(
             term.drain_events(),
@@ -7944,19 +7706,31 @@ mod tests {
         // global across screens and has no effect on ordinary screen content.
         term.process(b"\x1b[>5;9m\x1b[>5;2f\x1b[>5:1m\x1b[?1049hX");
         assert_eq!(
-            term.xterm_string_keys(),
-            XtermStringKeys::new(XtermKeyMode::Extended, XtermKeyFormat::CsiU)
+            term.xterm_key_resource(XtermKeyResource::String),
+            XtermKeySetting::new(XtermKeyMode::Extended, XtermKeyFormat::CsiU)
         );
         assert_eq!(term.grid().cell(0, 0).unwrap().content.char(), Some('X'));
 
         term.process(b"\x1b[>5n");
-        assert_eq!(term.xterm_string_keys().mode(), XtermKeyMode::Disabled);
+        assert_eq!(
+            term.xterm_key_resource(XtermKeyResource::String).mode(),
+            XtermKeyMode::Disabled
+        );
         term.process(b"\x1b[>5m");
-        assert_eq!(term.xterm_string_keys().mode(), XtermKeyMode::Original);
+        assert_eq!(
+            term.xterm_key_resource(XtermKeyResource::String).mode(),
+            XtermKeyMode::Original
+        );
         term.process(b"\x1b[>5;4m\x1b[>5;1f\x1b[!p");
-        assert_eq!(term.xterm_string_keys(), XtermStringKeys::default());
+        assert_eq!(
+            term.xterm_key_resource(XtermKeyResource::String),
+            XtermKeyResource::String.default_setting()
+        );
         term.process(b"\x1b[>5;4m\x1b[>5;1f\x1bc");
-        assert_eq!(term.xterm_string_keys(), XtermStringKeys::default());
+        assert_eq!(
+            term.xterm_key_resource(XtermKeyResource::String),
+            XtermKeyResource::String.default_setting()
+        );
     }
 
     #[test]

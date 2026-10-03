@@ -9475,23 +9475,38 @@ fn keyboard_mode_snapshot_follows_the_focused_pane() {
         termeric_core::term::XtermKeyboardResource::new(5, 6)
     );
     assert_eq!(
-        app.active_terminal().unwrap().xterm_cursor_keys().mode(),
+        app.active_terminal()
+            .unwrap()
+            .xterm_key_resource(termeric_core::term::XtermKeyResource::Cursor)
+            .mode(),
         termeric_core::term::XtermKeyMode::Private
     );
     assert_eq!(
-        app.active_terminal().unwrap().xterm_function_keys().mode(),
+        app.active_terminal()
+            .unwrap()
+            .xterm_key_resource(termeric_core::term::XtermKeyResource::Function)
+            .mode(),
         termeric_core::term::XtermKeyMode::Private
     );
     assert_eq!(
-        app.active_terminal().unwrap().xterm_keypad_keys().mode(),
+        app.active_terminal()
+            .unwrap()
+            .xterm_key_resource(termeric_core::term::XtermKeyResource::Keypad)
+            .mode(),
         termeric_core::term::XtermKeyMode::Private
     );
     assert_eq!(
-        app.active_terminal().unwrap().xterm_modifier_keys().mode(),
+        app.active_terminal()
+            .unwrap()
+            .xterm_key_resource(termeric_core::term::XtermKeyResource::Modifier)
+            .mode(),
         termeric_core::term::XtermKeyMode::Private
     );
     assert_eq!(
-        app.active_terminal().unwrap().xterm_special_keys().mode(),
+        app.active_terminal()
+            .unwrap()
+            .xterm_key_resource(termeric_core::term::XtermKeyResource::Special)
+            .mode(),
         termeric_core::term::XtermKeyMode::Private
     );
     assert_eq!(
@@ -9539,50 +9554,49 @@ fn keyboard_mode_snapshot_follows_the_focused_pane() {
         termeric_core::term::XtermKeyboardResource::new(9, 10)
     );
     assert_eq!(
-        app.active_terminal().unwrap().xterm_cursor_keys().mode(),
-        termeric_core::term::XtermKeyMode::Extended
-    );
-    assert_eq!(
-        app.active_terminal().unwrap().xterm_cursor_keys().format(),
-        termeric_core::term::XtermKeyFormat::CsiU
-    );
-    assert_eq!(
-        app.active_terminal().unwrap().xterm_function_keys().mode(),
-        termeric_core::term::XtermKeyMode::Extended
+        app.active_terminal()
+            .unwrap()
+            .xterm_key_resource(termeric_core::term::XtermKeyResource::Cursor),
+        termeric_core::term::XtermKeySetting::new(
+            termeric_core::term::XtermKeyMode::Extended,
+            termeric_core::term::XtermKeyFormat::CsiU
+        )
     );
     assert_eq!(
         app.active_terminal()
             .unwrap()
-            .xterm_function_keys()
-            .format(),
-        termeric_core::term::XtermKeyFormat::CsiU
-    );
-    assert_eq!(
-        app.active_terminal().unwrap().xterm_keypad_keys().mode(),
-        termeric_core::term::XtermKeyMode::Extended
-    );
-    assert_eq!(
-        app.active_terminal().unwrap().xterm_keypad_keys().format(),
-        termeric_core::term::XtermKeyFormat::CsiU
-    );
-    assert_eq!(
-        app.active_terminal().unwrap().xterm_modifier_keys().mode(),
-        termeric_core::term::XtermKeyMode::Extended
+            .xterm_key_resource(termeric_core::term::XtermKeyResource::Function),
+        termeric_core::term::XtermKeySetting::new(
+            termeric_core::term::XtermKeyMode::Extended,
+            termeric_core::term::XtermKeyFormat::CsiU
+        )
     );
     assert_eq!(
         app.active_terminal()
             .unwrap()
-            .xterm_modifier_keys()
-            .format(),
-        termeric_core::term::XtermKeyFormat::CsiU
+            .xterm_key_resource(termeric_core::term::XtermKeyResource::Keypad),
+        termeric_core::term::XtermKeySetting::new(
+            termeric_core::term::XtermKeyMode::Extended,
+            termeric_core::term::XtermKeyFormat::CsiU
+        )
     );
     assert_eq!(
-        app.active_terminal().unwrap().xterm_special_keys().mode(),
-        termeric_core::term::XtermKeyMode::Extended
+        app.active_terminal()
+            .unwrap()
+            .xterm_key_resource(termeric_core::term::XtermKeyResource::Modifier),
+        termeric_core::term::XtermKeySetting::new(
+            termeric_core::term::XtermKeyMode::Extended,
+            termeric_core::term::XtermKeyFormat::CsiU
+        )
     );
     assert_eq!(
-        app.active_terminal().unwrap().xterm_special_keys().format(),
-        termeric_core::term::XtermKeyFormat::CsiU
+        app.active_terminal()
+            .unwrap()
+            .xterm_key_resource(termeric_core::term::XtermKeyResource::Special),
+        termeric_core::term::XtermKeySetting::new(
+            termeric_core::term::XtermKeyMode::Extended,
+            termeric_core::term::XtermKeyFormat::CsiU
+        )
     );
     assert_eq!(
         app.active_terminal()

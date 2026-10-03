@@ -605,7 +605,7 @@ impl Default for Processor {
 mod tests {
     use super::*;
     use crate::grid::{CellAttrs, Color, ColorSpec};
-    use crate::term::TerminalMode;
+    use crate::term::{TerminalMode, XtermKeyResource, XtermKeySetting};
 
     #[test]
     fn test_processor_creation() {
@@ -1578,25 +1578,28 @@ mod tests {
         );
         assert_eq!(terminal.xterm_keyboard_resource().modify(), 0);
         assert_eq!(terminal.xterm_keyboard_resource().format(), 17);
-        assert_eq!(terminal.xterm_cursor_keys().mode(), XtermKeyMode::Extended);
-        assert_eq!(terminal.xterm_cursor_keys().format(), XtermKeyFormat::CsiU);
+        assert_eq!(
+            terminal.xterm_key_resource(XtermKeyResource::Cursor),
+            XtermKeySetting::new(XtermKeyMode::Extended, XtermKeyFormat::CsiU)
+        );
         processor.process(&mut terminal, b"\x1b[>0f");
         assert_eq!(
             terminal.xterm_keyboard_resource(),
             XtermKeyboardResource::default()
         );
-        assert_eq!(terminal.xterm_cursor_keys().mode(), XtermKeyMode::Extended);
-        assert_eq!(terminal.xterm_cursor_keys().format(), XtermKeyFormat::CsiU);
+        assert_eq!(
+            terminal.xterm_key_resource(XtermKeyResource::Cursor),
+            XtermKeySetting::new(XtermKeyMode::Extended, XtermKeyFormat::CsiU)
+        );
 
         processor.process(&mut terminal, b"\x1b[>0;9m\x1b[>0;17f\x1b[>m\x1b[>f");
         assert_eq!(
             terminal.xterm_keyboard_resource(),
             XtermKeyboardResource::default()
         );
-        assert_eq!(terminal.xterm_cursor_keys().mode(), XtermKeyMode::Parameter);
         assert_eq!(
-            terminal.xterm_cursor_keys().format(),
-            XtermKeyFormat::FunctionKey27
+            terminal.xterm_key_resource(XtermKeyResource::Cursor),
+            XtermKeySetting::new(XtermKeyMode::Parameter, XtermKeyFormat::FunctionKey27)
         );
 
         // DECRQSS returns restorable bodies, S8C1T controls direct replies,
@@ -1642,8 +1645,10 @@ mod tests {
             &mut terminal,
             b"\x1b[?1m\x1b[?1g\x1b[>1;4m\x1b[>1;1f\x1b[?1m\x1b[?1g",
         );
-        assert_eq!(terminal.xterm_cursor_keys().mode(), XtermKeyMode::Extended);
-        assert_eq!(terminal.xterm_cursor_keys().format(), XtermKeyFormat::CsiU);
+        assert_eq!(
+            terminal.xterm_key_resource(XtermKeyResource::Cursor),
+            XtermKeySetting::new(XtermKeyMode::Extended, XtermKeyFormat::CsiU)
+        );
         assert_eq!(
             terminal.drain_events(),
             vec![
@@ -1660,8 +1665,10 @@ mod tests {
             &mut terminal,
             b"\x1b[>1;5m\x1b[>1;2f\x1b[>1:0m\x1b[>1;4;0m\x1b[?1049h\x1b[?1m",
         );
-        assert_eq!(terminal.xterm_cursor_keys().mode(), XtermKeyMode::Extended);
-        assert_eq!(terminal.xterm_cursor_keys().format(), XtermKeyFormat::CsiU);
+        assert_eq!(
+            terminal.xterm_key_resource(XtermKeyResource::Cursor),
+            XtermKeySetting::new(XtermKeyMode::Extended, XtermKeyFormat::CsiU)
+        );
         assert_eq!(
             terminal.drain_events(),
             vec![crate::event::TerminalEvent::PtyWrite(
@@ -1676,8 +1683,10 @@ mod tests {
             &mut terminal,
             b"\x1b[>1n\x1b[?1m\x1b[>4;2m\x1b[>4;1f\x1b[>m\x1b[>0m",
         );
-        assert_eq!(terminal.xterm_cursor_keys().mode(), XtermKeyMode::Parameter);
-        assert_eq!(terminal.xterm_cursor_keys().format(), XtermKeyFormat::CsiU);
+        assert_eq!(
+            terminal.xterm_key_resource(XtermKeyResource::Cursor),
+            XtermKeySetting::new(XtermKeyMode::Parameter, XtermKeyFormat::CsiU)
+        );
         assert_eq!(terminal.xterm_modify_other_keys().level(), 0);
         assert_eq!(
             terminal.xterm_modify_other_keys().format(),
@@ -1696,7 +1705,9 @@ mod tests {
             XtermKeyFormat::FunctionKey27
         );
         assert_eq!(
-            terminal.xterm_cursor_keys().format(),
+            terminal
+                .xterm_key_resource(XtermKeyResource::Cursor)
+                .format(),
             XtermKeyFormat::FunctionKey27
         );
 
@@ -1707,8 +1718,8 @@ mod tests {
             b"\x1b[>1;3m\x1b[>1;1f\x1bP$q>1m\x1b\\\x1bP$q>1f\x1b\\\x1b G\x1b[?1m\x1b[!p\x1b[?1mX",
         );
         assert_eq!(
-            terminal.xterm_cursor_keys(),
-            crate::term::XtermCursorKeys::default()
+            terminal.xterm_key_resource(XtermKeyResource::Cursor),
+            crate::term::XtermKeyResource::Cursor.default_setting()
         );
         assert_eq!(
             terminal.grid().cell(0, 0).unwrap().content.char(),
@@ -1726,8 +1737,8 @@ mod tests {
 
         processor.process(&mut terminal, b"\x1b[>1;4m\x1b[>1;1f\x1bc\x1b[?1m\x1b[?1g");
         assert_eq!(
-            terminal.xterm_cursor_keys(),
-            crate::term::XtermCursorKeys::default()
+            terminal.xterm_key_resource(XtermKeyResource::Cursor),
+            crate::term::XtermKeyResource::Cursor.default_setting()
         );
         assert_eq!(
             terminal.drain_events(),
@@ -1740,7 +1751,7 @@ mod tests {
 
     #[test]
     fn xterm_function_key_resources_are_bounded_queryable_and_resettable() {
-        use crate::term::{XtermFunctionKeys, XtermKeyFormat, XtermKeyMode};
+        use crate::term::{XtermKeyFormat, XtermKeyMode, XtermKeyResource};
 
         let mut processor = Processor::new();
         let mut terminal = Terminal::new(10, 2);
@@ -1750,12 +1761,8 @@ mod tests {
             b"\x1b[?2m\x1b[?2g\x1b[>2;4m\x1b[>2;1f\x1b[?2m\x1b[?2g",
         );
         assert_eq!(
-            terminal.xterm_function_keys().mode(),
-            XtermKeyMode::Extended
-        );
-        assert_eq!(
-            terminal.xterm_function_keys().format(),
-            XtermKeyFormat::CsiU
+            terminal.xterm_key_resource(XtermKeyResource::Function),
+            XtermKeySetting::new(XtermKeyMode::Extended, XtermKeyFormat::CsiU)
         );
         assert_eq!(
             terminal.drain_events(),
@@ -1772,12 +1779,8 @@ mod tests {
             b"\x1b[>2;5m\x1b[>2;2f\x1b[>2:0m\x1b[>2;4;0m\x1b[?1049h\x1b[?2m",
         );
         assert_eq!(
-            terminal.xterm_function_keys().mode(),
-            XtermKeyMode::Extended
-        );
-        assert_eq!(
-            terminal.xterm_function_keys().format(),
-            XtermKeyFormat::CsiU
+            terminal.xterm_key_resource(XtermKeyResource::Function),
+            XtermKeySetting::new(XtermKeyMode::Extended, XtermKeyFormat::CsiU)
         );
         assert_eq!(
             terminal.drain_events(),
@@ -1788,7 +1791,9 @@ mod tests {
 
         processor.process(&mut terminal, b"\x1b[>2n\x1b[?2m");
         assert_eq!(
-            terminal.xterm_function_keys().mode(),
+            terminal
+                .xterm_key_resource(XtermKeyResource::Function)
+                .mode(),
             XtermKeyMode::Disabled
         );
         assert_eq!(
@@ -1800,7 +1805,9 @@ mod tests {
 
         processor.process(&mut terminal, b"\x1b[>2;4m\x1b[>0n\x1b[?2m\x1b[>n\x1b[?2m");
         assert_eq!(
-            terminal.xterm_function_keys().mode(),
+            terminal
+                .xterm_key_resource(XtermKeyResource::Function)
+                .mode(),
             XtermKeyMode::Disabled
         );
         assert_eq!(
@@ -1817,23 +1824,40 @@ mod tests {
             &mut terminal,
             b"\x1b[>1;3m\x1b[>1;1f\x1b[>2;4m\x1b[>2;1f\x1b[>4;2m\x1b[>4;1f\x1b[>65535m\x1b[>>m",
         );
-        assert_eq!(terminal.xterm_cursor_keys().mode(), XtermKeyMode::Private);
         assert_eq!(
-            terminal.xterm_function_keys().mode(),
+            terminal.xterm_key_resource(XtermKeyResource::Cursor).mode(),
+            XtermKeyMode::Private
+        );
+        assert_eq!(
+            terminal
+                .xterm_key_resource(XtermKeyResource::Function)
+                .mode(),
             XtermKeyMode::Extended
         );
         assert_eq!(terminal.xterm_modify_other_keys().level(), 2);
 
         processor.process(&mut terminal, b"\x1b[>m\x1b[>0m");
-        assert_eq!(terminal.xterm_cursor_keys().mode(), XtermKeyMode::Parameter);
         assert_eq!(
-            terminal.xterm_function_keys().mode(),
+            terminal.xterm_key_resource(XtermKeyResource::Cursor).mode(),
+            XtermKeyMode::Parameter
+        );
+        assert_eq!(
+            terminal
+                .xterm_key_resource(XtermKeyResource::Function)
+                .mode(),
             XtermKeyMode::Parameter
         );
         assert_eq!(terminal.xterm_modify_other_keys().level(), 0);
-        assert_eq!(terminal.xterm_cursor_keys().format(), XtermKeyFormat::CsiU);
         assert_eq!(
-            terminal.xterm_function_keys().format(),
+            terminal
+                .xterm_key_resource(XtermKeyResource::Cursor)
+                .format(),
+            XtermKeyFormat::CsiU
+        );
+        assert_eq!(
+            terminal
+                .xterm_key_resource(XtermKeyResource::Function)
+                .format(),
             XtermKeyFormat::CsiU
         );
         assert_eq!(
@@ -1842,9 +1866,16 @@ mod tests {
         );
 
         processor.process(&mut terminal, b"\x1b[>65535f");
-        assert_eq!(terminal.xterm_cursor_keys().format(), XtermKeyFormat::CsiU);
         assert_eq!(
-            terminal.xterm_function_keys().format(),
+            terminal
+                .xterm_key_resource(XtermKeyResource::Cursor)
+                .format(),
+            XtermKeyFormat::CsiU
+        );
+        assert_eq!(
+            terminal
+                .xterm_key_resource(XtermKeyResource::Function)
+                .format(),
             XtermKeyFormat::CsiU
         );
         assert_eq!(
@@ -1854,11 +1885,15 @@ mod tests {
 
         processor.process(&mut terminal, b"\x1b[>f\x1b[>0f");
         assert_eq!(
-            terminal.xterm_cursor_keys().format(),
+            terminal
+                .xterm_key_resource(XtermKeyResource::Cursor)
+                .format(),
             XtermKeyFormat::FunctionKey27
         );
         assert_eq!(
-            terminal.xterm_function_keys().format(),
+            terminal
+                .xterm_key_resource(XtermKeyResource::Function)
+                .format(),
             XtermKeyFormat::FunctionKey27
         );
         assert_eq!(
@@ -1870,7 +1905,10 @@ mod tests {
             &mut terminal,
             b"\x1b[>2;3m\x1b[>2;1f\x1bP$q>2m\x1b\\\x1bP$q>2f\x1b\\\x1b G\x1b[?2m\x1b[!p\x1b[?2mX",
         );
-        assert_eq!(terminal.xterm_function_keys(), XtermFunctionKeys::default());
+        assert_eq!(
+            terminal.xterm_key_resource(XtermKeyResource::Function),
+            XtermKeyResource::Function.default_setting()
+        );
         assert_eq!(
             terminal.grid().cell(0, 0).unwrap().content.char(),
             Some('X')
@@ -1886,7 +1924,10 @@ mod tests {
         );
 
         processor.process(&mut terminal, b"\x1b[>2;4m\x1b[>2;1f\x1bc\x1b[?2m\x1b[?2g");
-        assert_eq!(terminal.xterm_function_keys(), XtermFunctionKeys::default());
+        assert_eq!(
+            terminal.xterm_key_resource(XtermKeyResource::Function),
+            XtermKeyResource::Function.default_setting()
+        );
         assert_eq!(
             terminal.drain_events(),
             vec![
@@ -1898,7 +1939,7 @@ mod tests {
 
     #[test]
     fn xterm_keypad_key_resources_are_bounded_queryable_and_resettable() {
-        use crate::term::{XtermKeyFormat, XtermKeyMode, XtermKeypadKeys};
+        use crate::term::{XtermKeyFormat, XtermKeyMode, XtermKeyResource};
 
         let mut processor = Processor::new();
         let mut terminal = Terminal::new(10, 2);
@@ -1907,8 +1948,10 @@ mod tests {
             &mut terminal,
             b"\x1b[?3m\x1b[?3g\x1b[>3;4m\x1b[>3;1f\x1b[?3m\x1b[?3g",
         );
-        assert_eq!(terminal.xterm_keypad_keys().mode(), XtermKeyMode::Extended);
-        assert_eq!(terminal.xterm_keypad_keys().format(), XtermKeyFormat::CsiU);
+        assert_eq!(
+            terminal.xterm_key_resource(XtermKeyResource::Keypad),
+            XtermKeySetting::new(XtermKeyMode::Extended, XtermKeyFormat::CsiU)
+        );
         assert_eq!(
             terminal.drain_events(),
             vec![
@@ -1923,8 +1966,10 @@ mod tests {
             &mut terminal,
             b"\x1b[>3;5m\x1b[>3;2f\x1b[>3:0m\x1b[>3;4;0m\x1b[?1049h\x1b[?3m",
         );
-        assert_eq!(terminal.xterm_keypad_keys().mode(), XtermKeyMode::Extended);
-        assert_eq!(terminal.xterm_keypad_keys().format(), XtermKeyFormat::CsiU);
+        assert_eq!(
+            terminal.xterm_key_resource(XtermKeyResource::Keypad),
+            XtermKeySetting::new(XtermKeyMode::Extended, XtermKeyFormat::CsiU)
+        );
         assert_eq!(
             terminal.drain_events(),
             vec![crate::event::TerminalEvent::PtyWrite(
@@ -1933,7 +1978,10 @@ mod tests {
         );
 
         processor.process(&mut terminal, b"\x1b[>3n\x1b[?3m");
-        assert_eq!(terminal.xterm_keypad_keys().mode(), XtermKeyMode::Disabled);
+        assert_eq!(
+            terminal.xterm_key_resource(XtermKeyResource::Keypad).mode(),
+            XtermKeyMode::Disabled
+        );
         assert_eq!(
             terminal.drain_events(),
             vec![crate::event::TerminalEvent::PtyWrite(
@@ -1945,28 +1993,37 @@ mod tests {
             &mut terminal,
             b"\x1b[>3;4m\x1b[>3;1f\x1b[>65535m\x1b[>>m\x1b[>65535f\x1b[>>f",
         );
-        assert_eq!(terminal.xterm_keypad_keys().mode(), XtermKeyMode::Extended);
-        assert_eq!(terminal.xterm_keypad_keys().format(), XtermKeyFormat::CsiU);
+        assert_eq!(
+            terminal.xterm_key_resource(XtermKeyResource::Keypad),
+            XtermKeySetting::new(XtermKeyMode::Extended, XtermKeyFormat::CsiU)
+        );
 
         processor.process(&mut terminal, b"\x1b[>m");
-        assert_eq!(terminal.xterm_keypad_keys().mode(), XtermKeyMode::Original);
-        assert_eq!(terminal.xterm_keypad_keys().format(), XtermKeyFormat::CsiU);
+        assert_eq!(
+            terminal.xterm_key_resource(XtermKeyResource::Keypad),
+            XtermKeySetting::new(XtermKeyMode::Original, XtermKeyFormat::CsiU)
+        );
 
         processor.process(&mut terminal, b"\x1b[>3;4m\x1b[>f");
-        assert_eq!(terminal.xterm_keypad_keys().mode(), XtermKeyMode::Extended);
         assert_eq!(
-            terminal.xterm_keypad_keys().format(),
-            XtermKeyFormat::FunctionKey27
+            terminal.xterm_key_resource(XtermKeyResource::Keypad),
+            XtermKeySetting::new(XtermKeyMode::Extended, XtermKeyFormat::FunctionKey27)
         );
 
         processor.process(&mut terminal, b"\x1b[>3m\x1b[>3f");
-        assert_eq!(terminal.xterm_keypad_keys(), XtermKeypadKeys::default());
+        assert_eq!(
+            terminal.xterm_key_resource(XtermKeyResource::Keypad),
+            XtermKeyResource::Keypad.default_setting()
+        );
 
         processor.process(
             &mut terminal,
             b"\x1b[>3;4m\x1b[>3;1f\x1bP$q>3m\x1b\\\x1bP$q>3f\x1b\\\x1b G\x1b[?3m\x1b[!p\x1b[?3mX",
         );
-        assert_eq!(terminal.xterm_keypad_keys(), XtermKeypadKeys::default());
+        assert_eq!(
+            terminal.xterm_key_resource(XtermKeyResource::Keypad),
+            XtermKeyResource::Keypad.default_setting()
+        );
         assert_eq!(
             terminal.grid().cell(0, 0).unwrap().content.char(),
             Some('X')
@@ -1982,7 +2039,10 @@ mod tests {
         );
 
         processor.process(&mut terminal, b"\x1b[>3;4m\x1b[>3;1f\x1bc\x1b[?3m\x1b[?3g");
-        assert_eq!(terminal.xterm_keypad_keys(), XtermKeypadKeys::default());
+        assert_eq!(
+            terminal.xterm_key_resource(XtermKeyResource::Keypad),
+            XtermKeyResource::Keypad.default_setting()
+        );
         assert_eq!(
             terminal.drain_events(),
             vec![
@@ -1994,7 +2054,7 @@ mod tests {
 
     #[test]
     fn xterm_modifier_key_resources_are_bounded_queryable_and_resettable() {
-        use crate::term::{XtermKeyFormat, XtermKeyMode, XtermModifierKeys};
+        use crate::term::{XtermKeyFormat, XtermKeyMode, XtermKeyResource};
 
         let mut processor = Processor::new();
         let mut terminal = Terminal::new(10, 2);
@@ -2004,12 +2064,8 @@ mod tests {
             b"\x1b[?6m\x1b[?6g\x1b[>6;4m\x1b[>6;1f\x1b[?6m\x1b[?6g",
         );
         assert_eq!(
-            terminal.xterm_modifier_keys().mode(),
-            XtermKeyMode::Extended
-        );
-        assert_eq!(
-            terminal.xterm_modifier_keys().format(),
-            XtermKeyFormat::CsiU
+            terminal.xterm_key_resource(XtermKeyResource::Modifier),
+            XtermKeySetting::new(XtermKeyMode::Extended, XtermKeyFormat::CsiU)
         );
         assert_eq!(
             terminal.drain_events(),
@@ -2029,12 +2085,8 @@ mod tests {
             b"\x1b[>6;5m\x1b[>6;2f\x1b[>6:0m\x1b[>6;4;0m\x1b[>8;4m\x1b[?8m\x1b[?1049h\x1b[?6m",
         );
         assert_eq!(
-            terminal.xterm_modifier_keys().mode(),
-            XtermKeyMode::Extended
-        );
-        assert_eq!(
-            terminal.xterm_modifier_keys().format(),
-            XtermKeyFormat::CsiU
+            terminal.xterm_key_resource(XtermKeyResource::Modifier),
+            XtermKeySetting::new(XtermKeyMode::Extended, XtermKeyFormat::CsiU)
         );
         assert_eq!(
             terminal.drain_events(),
@@ -2045,7 +2097,9 @@ mod tests {
 
         processor.process(&mut terminal, b"\x1b[>6n\x1b[?6m");
         assert_eq!(
-            terminal.xterm_modifier_keys().mode(),
+            terminal
+                .xterm_key_resource(XtermKeyResource::Modifier)
+                .mode(),
             XtermKeyMode::Disabled
         );
         assert_eq!(
@@ -2063,46 +2117,62 @@ mod tests {
             b"\x1b[>1;3m\x1b[>2;4m\x1b[>3;4m\x1b[>4;2m\x1b[>6;4m\x1b[>1;1f\x1b[>2;1f\x1b[>3;1f\x1b[>4;1f\x1b[>6;1f\x1b[>65535m\x1b[>>m\x1b[>0m",
         );
         assert_eq!(
-            terminal.xterm_modifier_keys().mode(),
+            terminal
+                .xterm_key_resource(XtermKeyResource::Modifier)
+                .mode(),
             XtermKeyMode::Extended
         );
         processor.process(&mut terminal, b"\x1b[>m");
         assert_eq!(
-            terminal.xterm_modifier_keys().mode(),
-            XtermKeyMode::Original
+            terminal.xterm_key_resource(XtermKeyResource::Modifier),
+            XtermKeySetting::new(XtermKeyMode::Original, XtermKeyFormat::CsiU)
         );
         assert_eq!(
-            terminal.xterm_modifier_keys().format(),
-            XtermKeyFormat::CsiU
-        );
-        assert_eq!(terminal.xterm_cursor_keys().mode(), XtermKeyMode::Parameter);
-        assert_eq!(
-            terminal.xterm_function_keys().mode(),
+            terminal.xterm_key_resource(XtermKeyResource::Cursor).mode(),
             XtermKeyMode::Parameter
         );
-        assert_eq!(terminal.xterm_keypad_keys().mode(), XtermKeyMode::Original);
+        assert_eq!(
+            terminal
+                .xterm_key_resource(XtermKeyResource::Function)
+                .mode(),
+            XtermKeyMode::Parameter
+        );
+        assert_eq!(
+            terminal.xterm_key_resource(XtermKeyResource::Keypad).mode(),
+            XtermKeyMode::Original
+        );
         assert_eq!(terminal.xterm_modify_other_keys().level(), 0);
 
         processor.process(&mut terminal, b"\x1b[>65535f\x1b[>>f\x1b[>0f");
         assert_eq!(
-            terminal.xterm_modifier_keys().format(),
+            terminal
+                .xterm_key_resource(XtermKeyResource::Modifier)
+                .format(),
             XtermKeyFormat::CsiU
         );
         processor.process(&mut terminal, b"\x1b[>f");
         assert_eq!(
-            terminal.xterm_modifier_keys().format(),
+            terminal
+                .xterm_key_resource(XtermKeyResource::Modifier)
+                .format(),
             XtermKeyFormat::FunctionKey27
         );
         assert_eq!(
-            terminal.xterm_cursor_keys().format(),
+            terminal
+                .xterm_key_resource(XtermKeyResource::Cursor)
+                .format(),
             XtermKeyFormat::FunctionKey27
         );
         assert_eq!(
-            terminal.xterm_function_keys().format(),
+            terminal
+                .xterm_key_resource(XtermKeyResource::Function)
+                .format(),
             XtermKeyFormat::FunctionKey27
         );
         assert_eq!(
-            terminal.xterm_keypad_keys().format(),
+            terminal
+                .xterm_key_resource(XtermKeyResource::Keypad)
+                .format(),
             XtermKeyFormat::FunctionKey27
         );
         assert_eq!(
@@ -2114,7 +2184,10 @@ mod tests {
             &mut terminal,
             b"\x1b[>6;4m\x1b[>6;1f\x1bP$q>6m\x1b\\\x1bP$q>6f\x1b\\\x1b G\x1b[?6m\x1b[!p\x1b[?6mX",
         );
-        assert_eq!(terminal.xterm_modifier_keys(), XtermModifierKeys::default());
+        assert_eq!(
+            terminal.xterm_key_resource(XtermKeyResource::Modifier),
+            XtermKeyResource::Modifier.default_setting()
+        );
         assert_eq!(
             terminal.grid().cell(0, 0).unwrap().content.char(),
             Some('X')
@@ -2130,7 +2203,10 @@ mod tests {
         );
 
         processor.process(&mut terminal, b"\x1b[>6;4m\x1b[>6;1f\x1bc\x1b[?6m\x1b[?6g");
-        assert_eq!(terminal.xterm_modifier_keys(), XtermModifierKeys::default());
+        assert_eq!(
+            terminal.xterm_key_resource(XtermKeyResource::Modifier),
+            XtermKeyResource::Modifier.default_setting()
+        );
         assert_eq!(
             terminal.drain_events(),
             vec![
@@ -2142,7 +2218,7 @@ mod tests {
 
     #[test]
     fn xterm_special_key_resources_are_bounded_queryable_and_resettable() {
-        use crate::term::{XtermKeyFormat, XtermKeyMode, XtermSpecialKeys};
+        use crate::term::{XtermKeyFormat, XtermKeyMode, XtermKeyResource};
 
         let mut processor = Processor::new();
         let mut terminal = Terminal::new(10, 2);
@@ -2151,8 +2227,10 @@ mod tests {
             &mut terminal,
             b"\x1b[?7m\x1b[?7g\x1b[>7;4m\x1b[>7;1f\x1b[?7m\x1b[?7g",
         );
-        assert_eq!(terminal.xterm_special_keys().mode(), XtermKeyMode::Extended);
-        assert_eq!(terminal.xterm_special_keys().format(), XtermKeyFormat::CsiU);
+        assert_eq!(
+            terminal.xterm_key_resource(XtermKeyResource::Special),
+            XtermKeySetting::new(XtermKeyMode::Extended, XtermKeyFormat::CsiU)
+        );
         assert_eq!(
             terminal.drain_events(),
             vec![
@@ -2169,8 +2247,10 @@ mod tests {
             &mut terminal,
             b"\x1b[>7;5m\x1b[>7;2f\x1b[>7:0m\x1b[>7;4;0m\x1b[>8;4m\x1b[?8m\x1b[?1049h\x1b[?7m",
         );
-        assert_eq!(terminal.xterm_special_keys().mode(), XtermKeyMode::Extended);
-        assert_eq!(terminal.xterm_special_keys().format(), XtermKeyFormat::CsiU);
+        assert_eq!(
+            terminal.xterm_key_resource(XtermKeyResource::Special),
+            XtermKeySetting::new(XtermKeyMode::Extended, XtermKeyFormat::CsiU)
+        );
         assert_eq!(
             terminal.drain_events(),
             vec![crate::event::TerminalEvent::PtyWrite(
@@ -2179,7 +2259,12 @@ mod tests {
         );
 
         processor.process(&mut terminal, b"\x1b[>7n\x1b[?7m");
-        assert_eq!(terminal.xterm_special_keys().mode(), XtermKeyMode::Disabled);
+        assert_eq!(
+            terminal
+                .xterm_key_resource(XtermKeyResource::Special)
+                .mode(),
+            XtermKeyMode::Disabled
+        );
         assert_eq!(
             terminal.drain_events(),
             vec![crate::event::TerminalEvent::PtyWrite(
@@ -2193,15 +2278,29 @@ mod tests {
             &mut terminal,
             b"\x1b[>7;4m\x1b[>7;1f\x1b[>65535m\x1b[>>m\x1b[>0m",
         );
-        assert_eq!(terminal.xterm_special_keys().mode(), XtermKeyMode::Extended);
+        assert_eq!(
+            terminal
+                .xterm_key_resource(XtermKeyResource::Special)
+                .mode(),
+            XtermKeyMode::Extended
+        );
         processor.process(&mut terminal, b"\x1b[>m");
-        assert_eq!(terminal.xterm_special_keys().mode(), XtermKeyMode::Original);
-        assert_eq!(terminal.xterm_special_keys().format(), XtermKeyFormat::CsiU);
+        assert_eq!(
+            terminal.xterm_key_resource(XtermKeyResource::Special),
+            XtermKeySetting::new(XtermKeyMode::Original, XtermKeyFormat::CsiU)
+        );
         processor.process(&mut terminal, b"\x1b[>65535f\x1b[>>f\x1b[>0f");
-        assert_eq!(terminal.xterm_special_keys().format(), XtermKeyFormat::CsiU);
+        assert_eq!(
+            terminal
+                .xterm_key_resource(XtermKeyResource::Special)
+                .format(),
+            XtermKeyFormat::CsiU
+        );
         processor.process(&mut terminal, b"\x1b[>f");
         assert_eq!(
-            terminal.xterm_special_keys().format(),
+            terminal
+                .xterm_key_resource(XtermKeyResource::Special)
+                .format(),
             XtermKeyFormat::FunctionKey27
         );
 
@@ -2209,7 +2308,10 @@ mod tests {
             &mut terminal,
             b"\x1b[>7;4m\x1b[>7;1f\x1bP$q>7m\x1b\\\x1bP$q>7f\x1b\\\x1b G\x1b[?7m\x1b[!p\x1b[?7mX",
         );
-        assert_eq!(terminal.xterm_special_keys(), XtermSpecialKeys::default());
+        assert_eq!(
+            terminal.xterm_key_resource(XtermKeyResource::Special),
+            XtermKeyResource::Special.default_setting()
+        );
         assert_eq!(
             terminal.grid().cell(0, 0).unwrap().content.char(),
             Some('X')
@@ -2225,7 +2327,10 @@ mod tests {
         );
 
         processor.process(&mut terminal, b"\x1b[>7;4m\x1b[>7;1f\x1bc\x1b[?7m\x1b[?7g");
-        assert_eq!(terminal.xterm_special_keys(), XtermSpecialKeys::default());
+        assert_eq!(
+            terminal.xterm_key_resource(XtermKeyResource::Special),
+            XtermKeyResource::Special.default_setting()
+        );
         assert_eq!(
             terminal.drain_events(),
             vec![
