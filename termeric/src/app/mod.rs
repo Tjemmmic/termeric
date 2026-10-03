@@ -994,7 +994,7 @@ struct PendingFileUpload {
     pane_id: u32,
     name: String,
     source_kind: FileUploadSourceKind,
-    source_identity: Option<(u64, u64)>,
+    source_identity: (u64, u64),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

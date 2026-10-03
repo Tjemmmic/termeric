@@ -16,14 +16,14 @@ enum DroppedPathAction {
         pane_id: u32,
         name: String,
         source_kind: FileUploadSourceKind,
-        source_identity: Option<(u64, u64)>,
+        source_identity: (u64, u64),
     },
 }
 
 struct ValidatedUploadSource {
     name: String,
     source_kind: FileUploadSourceKind,
-    identity: Option<(u64, u64)>,
+    identity: (u64, u64),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -137,24 +137,19 @@ impl App {
         }
         window.set_minimized(false);
 
-        #[cfg(target_os = "linux")]
-        {
-            use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
-            let is_wayland = window
-                .window_handle()
-                .ok()
-                .is_some_and(|handle| matches!(handle.as_raw(), RawWindowHandle::Wayland(_)));
-            if is_wayland {
-                // Raising an existing window on Wayland needs the daemon's
-                // activation token, which winit can't apply to an existing
-                // window. Asking for attention is the most it allows.
-                window.request_user_attention(Some(winit::window::UserAttentionType::Critical));
-            } else {
-                window.focus_window();
-            }
+        use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
+        let is_wayland = window
+            .window_handle()
+            .ok()
+            .is_some_and(|handle| matches!(handle.as_raw(), RawWindowHandle::Wayland(_)));
+        if is_wayland {
+            // Raising an existing window on Wayland needs the daemon's
+            // activation token, which winit can't apply to an existing
+            // window. Asking for attention is the most it allows.
+            window.request_user_attention(Some(winit::window::UserAttentionType::Critical));
+        } else {
+            window.focus_window();
         }
-        #[cfg(not(target_os = "linux"))]
-        window.focus_window();
 
         self.request_redraw(RedrawReason::Action);
         true
@@ -371,10 +366,9 @@ impl App {
                     {
                         anyhow::bail!("upload source changed after confirmation");
                     }
-                    #[cfg(unix)]
-                    if let Some((device, inode)) = upload.source_identity {
+                    {
                         use std::os::unix::fs::MetadataExt;
-                        if metadata.dev() != device || metadata.ino() != inode {
+                        if (metadata.dev(), metadata.ino()) != upload.source_identity {
                             anyhow::bail!("upload source identity changed after confirmation");
                         }
                     }
@@ -399,11 +393,9 @@ impl App {
                     };
                     let response = match upload.source_kind {
                         FileUploadSourceKind::File { .. } => {
-                            #[cfg(unix)]
                             use std::os::unix::fs::OpenOptionsExt;
                             let mut options = std::fs::OpenOptions::new();
                             options.read(true);
-                            #[cfg(unix)]
                             options.custom_flags(libc::O_NOFOLLOW);
                             let file = options.open(&upload.source).with_context(|| {
                                 format!("open confirmed upload source {}", upload.source.display())
@@ -422,7 +414,7 @@ impl App {
                             upload.pane_id,
                             &upload.source,
                             Some(upload.name),
-                            upload.source_identity,
+                            Some(upload.source_identity),
                             &cancellation,
                             progress,
                         )?,
@@ -500,30 +492,14 @@ impl App {
         self.toasts.dismiss(active.progress_toast_id);
         match result {
             Ok(FileUploadCompletion::Uploaded(outcome)) if outcome.insertion_error.is_none() => {
-                let summary = outcome.entries.map_or_else(
-                    || format!("{} bytes", outcome.bytes),
-                    |entries| {
-                        format!(
-                            "directory with {entries} entries ({} archive bytes)",
-                            outcome.bytes
-                        )
-                    },
-                );
+                let summary = upload_summary(outcome.bytes, outcome.entries);
                 self.toasts.success(format!(
                     "Uploaded {summary} and inserted {} without Enter",
                     outcome.path
                 ));
             }
             Ok(FileUploadCompletion::Uploaded(outcome)) => {
-                let summary = outcome.entries.map_or_else(
-                    || format!("{} bytes", outcome.bytes),
-                    |entries| {
-                        format!(
-                            "directory with {entries} entries ({} archive bytes)",
-                            outcome.bytes
-                        )
-                    },
-                );
+                let summary = upload_summary(outcome.bytes, outcome.entries);
                 self.toasts.warning(format!(
                     "Uploaded {summary} to {}, but could not insert the path: {}",
                     outcome.path,
@@ -1302,18 +1278,21 @@ fn validate_upload_source(
     } else {
         return Err("upload source must be one regular file or real directory".into());
     };
-    #[cfg(unix)]
-    let source_identity = {
-        use std::os::unix::fs::MetadataExt;
-        Some((metadata.dev(), metadata.ino()))
-    };
-    #[cfg(not(unix))]
-    let source_identity = None;
+    use std::os::unix::fs::MetadataExt;
     Ok(ValidatedUploadSource {
         name,
         source_kind,
-        identity: source_identity,
+        identity: (metadata.dev(), metadata.ino()),
     })
+}
+
+/// What a finished upload sent: a file's size, or a directory's entry count
+/// and archive size.
+fn upload_summary(bytes: u64, entries: Option<u32>) -> String {
+    match entries {
+        Some(entries) => format!("directory with {entries} entries ({bytes} archive bytes)"),
+        None => format!("{bytes} bytes"),
+    }
 }
 
 fn unsafe_drop_path_character(character: char) -> bool {
@@ -1339,7 +1318,6 @@ fn dynamic_color_reply(
     }
 }
 
-#[cfg(target_os = "linux")]
 fn clipboard_text(
     clipboard: &mut arboard::Clipboard,
     selection: termeric_core::ClipboardRequest,
@@ -1352,15 +1330,6 @@ fn clipboard_text(
     clipboard.get().clipboard(kind).text()
 }
 
-#[cfg(not(target_os = "linux"))]
-fn clipboard_text(
-    clipboard: &mut arboard::Clipboard,
-    _selection: termeric_core::ClipboardRequest,
-) -> Result<String, arboard::Error> {
-    clipboard.get_text()
-}
-
-#[cfg(target_os = "linux")]
 fn set_clipboard_text(
     clipboard: &mut arboard::Clipboard,
     selection: termeric_core::ClipboardRequest,
@@ -1374,20 +1343,10 @@ fn set_clipboard_text(
     clipboard.set().clipboard(kind).text(text)
 }
 
-#[cfg(not(target_os = "linux"))]
-fn set_clipboard_text(
-    clipboard: &mut arboard::Clipboard,
-    _selection: termeric_core::ClipboardRequest,
-    text: String,
-) -> Result<(), arboard::Error> {
-    clipboard.set_text(text)
-}
-
 #[cfg(test)]
 mod desktop_io_tests {
     use super::*;
 
-    #[cfg(unix)]
     fn raw_command_app(count: usize) -> App {
         let mut tabs = TabManager::new(
             256,
@@ -1410,7 +1369,6 @@ mod desktop_io_tests {
         app
     }
 
-    #[cfg(unix)]
     fn wait_command_output(app: &mut App, expected: &str) {
         let deadline = Instant::now() + Duration::from_secs(3);
         let mut last = String::new();
@@ -1434,7 +1392,6 @@ mod desktop_io_tests {
         }
     }
 
-    #[cfg(unix)]
     fn assert_command_bytes(app: &mut App, expected: &[u8]) {
         let expected = expected
             .iter()
@@ -1444,7 +1401,6 @@ mod desktop_io_tests {
         wait_command_output(app, &expected);
     }
 
-    #[cfg(unix)]
     fn seed_git_completion_cache(app: &mut App) -> tempfile::TempDir {
         let directory = tempfile::tempdir().unwrap();
         let repo = git2::Repository::init(directory.path()).unwrap();
@@ -1481,7 +1437,6 @@ mod desktop_io_tests {
         directory
     }
 
-    #[cfg(unix)]
     #[test]
     fn explicit_run_preserves_git_text_even_with_live_branch_suggestions() {
         let command = "git checkout ma";
@@ -1505,7 +1460,6 @@ mod desktop_io_tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn explicit_git_run_in_an_agent_tab_sends_the_exact_text_without_a_completion_rewrite() {
         let command = "git checkout rm -rf /synthetic-never-executed ma";
@@ -1527,7 +1481,6 @@ mod desktop_io_tests {
         assert_command_bytes(&mut app, expected.as_bytes());
     }
 
-    #[cfg(unix)]
     #[test]
     fn ordinary_typed_git_input_still_builds_and_accepts_real_cached_suggestions() {
         let expected = b"git checkout ma\x7f\x7fmain\rZ";
@@ -1544,7 +1497,6 @@ mod desktop_io_tests {
         assert_command_bytes(&mut app, expected);
     }
 
-    #[cfg(unix)]
     #[test]
     fn git_completion_enter_quotes_repository_text_before_pty_delivery() {
         let expected = b"git checkout to\x7f\x7f'topic;printf${IFS}UNEXPECTED'\rZ";
@@ -1565,7 +1517,6 @@ mod desktop_io_tests {
         assert_command_bytes(&mut app, expected);
     }
 
-    #[cfg(unix)]
     #[test]
     fn git_completion_tab_keeps_quoted_text_for_later_enter() {
         let expected = b"git checkout a\x7f'a'\\''b'\rZ";
@@ -1592,7 +1543,6 @@ mod desktop_io_tests {
         assert_command_bytes(&mut app, expected);
     }
 
-    #[cfg(unix)]
     #[test]
     fn completion_popup_does_not_steal_control_tab_or_write_edits() {
         use winit::keyboard::{Key, NamedKey};
@@ -1631,7 +1581,6 @@ mod desktop_io_tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn modified_enter_cannot_accept_a_completion_through_legacy_carriage_return() {
         use winit::keyboard::{Key, NamedKey};
@@ -1651,7 +1600,6 @@ mod desktop_io_tests {
         assert_command_bytes(&mut app, expected);
     }
 
-    #[cfg(unix)]
     #[test]
     fn git_completion_refusal_emits_neither_edits_nor_enter() {
         for submit in [false, true] {
@@ -1676,7 +1624,6 @@ mod desktop_io_tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn git_completion_tab_cannot_bypass_read_only_or_broadcast_arming() {
         for read_only in [true, false] {
@@ -1710,7 +1657,6 @@ mod desktop_io_tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn git_completion_uses_focused_pane_dialect_and_destination() {
         use crate::terminal::shell_integration::ShellIntegrationSupport;
@@ -1770,7 +1716,6 @@ mod desktop_io_tests {
         assert_command_bytes(&mut app, b"Z");
     }
 
-    #[cfg(unix)]
     #[test]
     fn explicit_run_preserves_text_when_saved_names_or_aliases_collide() {
         for (command, expected) in [
@@ -1787,7 +1732,6 @@ mod desktop_io_tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn ordinary_typed_names_and_aliases_still_expand_once() {
         for (name, guarded) in [("B", false), ("alias", false), ("B", true), ("alias", true)] {
@@ -1811,7 +1755,6 @@ mod desktop_io_tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn typed_and_pasted_input_in_agent_tabs_reaches_the_terminal_without_confirmation() {
         // Only automated input (control protocol, plugins) is confirmed; what
@@ -1849,7 +1792,6 @@ mod desktop_io_tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn git_completion_safe_enter_and_unselected_fallback_preserve_exact_bytes() {
         for (selected, expected) in [
@@ -1878,7 +1820,6 @@ mod desktop_io_tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn explicit_run_keeps_read_only_and_armed_broadcast_guards() {
         let mut app = raw_command_app(1);
@@ -1905,7 +1846,6 @@ mod desktop_io_tests {
         assert_command_bytes(&mut app, b"Z");
     }
 
-    #[cfg(unix)]
     #[test]
     fn explicit_run_still_broadcasts_literal_text_to_selected_panes() {
         let mut app = raw_command_app(4);
@@ -1979,7 +1919,6 @@ mod desktop_io_tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn dropped_paths_reject_non_utf8_names() {
         use std::os::unix::ffi::OsStringExt;
