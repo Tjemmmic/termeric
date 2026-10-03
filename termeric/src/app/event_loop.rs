@@ -1351,167 +1351,128 @@ impl App {
     }
 }
 
+/// Whole columns and rows a modal surface scrolls for one wheel event,
+/// positive toward the end; a pixel delta counts 20 pixels to a line. The
+/// terminal's own scrolling follows `scrollback.scroll_speed` instead.
+pub(super) fn modal_wheel_steps(delta: winit::event::MouseScrollDelta) -> (isize, isize) {
+    let (x, y) = match delta {
+        winit::event::MouseScrollDelta::LineDelta(x, y) => (f64::from(x), f64::from(y)),
+        winit::event::MouseScrollDelta::PixelDelta(position) => {
+            (position.x / 20.0, position.y / 20.0)
+        }
+    };
+    // A turn away from the person (positive) moves toward the start.
+    let steps = |lines: f64| {
+        if lines.is_finite() && lines != 0.0 {
+            -(lines.signum() * lines.abs().ceil()) as isize
+        } else {
+            0
+        }
+    };
+    (steps(x), steps(y))
+}
+
 impl App {
     /// Scroll whatever owns the wheel: the frontmost modal surface, a
     /// side panel, the agent view, or the terminal.
     pub(super) fn handle_mouse_wheel(&mut self, delta: winit::event::MouseScrollDelta) {
-        // The guardrail draws above every surface and can open over
-        // any of them, so nothing beneath it may scroll.
-        if self.modal_layer_on_top(ModalLayer::Guardrail) {
-            return;
-        }
-        if self.modal_layer_on_top(ModalLayer::InfoOverlay) {
-            let (mut horizontal, mut vertical) = match delta {
-                winit::event::MouseScrollDelta::LineDelta(x, y) => (x, y),
-                winit::event::MouseScrollDelta::PixelDelta(pos) => {
-                    ((pos.x / 20.0) as f32, (pos.y / 20.0) as f32)
-                }
-            };
-            if self.modifiers.shift_key() && horizontal == 0.0 {
-                horizontal = vertical;
-                vertical = 0.0;
+        let (columns, rows) = modal_wheel_steps(delta);
+        // Shift turns a vertical wheel sideways in views that scroll both ways.
+        let (columns, rows) = if self.modifiers.shift_key() && columns == 0 {
+            (rows, 0)
+        } else {
+            (columns, rows)
+        };
+        let sideways = columns.abs() > rows.abs();
+        match self.top_modal_layer() {
+            Some(ModalLayer::InfoOverlay) => {
+                use crate::ui::info_overlay::InfoOverlayAction;
+                let request_id = self.info_overlay.request_id();
+                self.apply_info_overlay_action(if sideways {
+                    InfoOverlayAction::ScrollColumns {
+                        request_id,
+                        delta: columns,
+                    }
+                } else {
+                    InfoOverlayAction::ScrollLines {
+                        request_id,
+                        delta: rows,
+                    }
+                });
             }
-            let request_id = self.info_overlay.request_id();
-            let action = if horizontal.abs() > vertical.abs() {
-                crate::ui::info_overlay::InfoOverlayAction::ScrollColumns {
-                    request_id,
-                    delta: -(horizontal.signum() * horizontal.abs().ceil().max(1.0)) as isize,
-                }
-            } else {
-                crate::ui::info_overlay::InfoOverlayAction::ScrollLines {
-                    request_id,
-                    delta: -(vertical.signum() * vertical.abs().ceil().max(1.0)) as isize,
-                }
-            };
-            self.apply_info_overlay_action(action);
-            self.request_redraw(RedrawReason::PointerInput);
-            return;
-        }
-        if self.modal_layer_on_top(ModalLayer::DiffReview) {
-            let (mut horizontal, mut vertical) = match delta {
-                winit::event::MouseScrollDelta::LineDelta(x, y) => (x, y),
-                winit::event::MouseScrollDelta::PixelDelta(pos) => {
-                    ((pos.x / 20.0) as f32, (pos.y / 20.0) as f32)
-                }
-            };
-            if self.modifiers.shift_key() && horizontal == 0.0 {
-                horizontal = vertical;
-                vertical = 0.0;
+            Some(ModalLayer::DiffReview) => {
+                use crate::ui::diff_review::DiffReviewAction;
+                let request_id = self.diff_review.request_id();
+                self.apply_diff_review_action(if sideways {
+                    DiffReviewAction::ScrollColumns {
+                        request_id,
+                        delta: columns,
+                    }
+                } else {
+                    DiffReviewAction::ScrollRows {
+                        request_id,
+                        delta: rows,
+                    }
+                });
             }
-            let request_id = self.diff_review.request_id();
-            let action = if horizontal.abs() > vertical.abs() {
-                crate::ui::diff_review::DiffReviewAction::ScrollColumns {
-                    request_id,
-                    delta: -(horizontal.signum() * horizontal.abs().ceil().max(1.0)) as isize,
-                }
-            } else {
-                crate::ui::diff_review::DiffReviewAction::ScrollRows {
-                    request_id,
-                    delta: -(vertical.signum() * vertical.abs().ceil().max(1.0)) as isize,
-                }
-            };
-            self.apply_diff_review_action(action);
-            self.request_redraw(RedrawReason::PointerInput);
-            return;
-        }
-        if self.modal_layer_on_top(ModalLayer::ContextPicker) {
-            let lines = match delta {
-                winit::event::MouseScrollDelta::LineDelta(_, y) => y,
-                winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
-            };
-            let delta = if lines > 0.0 {
-                -(lines.ceil() as isize)
-            } else if lines < 0.0 {
-                (-lines).ceil() as isize
-            } else {
-                0
-            };
-            self.apply_context_picker_action(
+            Some(ModalLayer::ContextPicker) => self.apply_context_picker_action(
                 crate::ui::context_picker::ContextPickerAction::Scroll {
                     request_id: self.context_picker.request_id(),
-                    delta,
+                    delta: rows,
                 },
-            );
-            self.request_redraw(RedrawReason::PointerInput);
-            return;
-        }
-        if self.modal_layer_on_top(ModalLayer::SessionPanel) {
-            let lines = match delta {
-                winit::event::MouseScrollDelta::LineDelta(_, y) => y,
-                winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
-            };
-            if lines > 0.0 {
-                self.session_panel.scroll_up(lines.ceil() as usize);
-            } else if lines < 0.0 {
-                self.session_panel.scroll_down((-lines).ceil() as usize);
+            ),
+            Some(ModalLayer::SessionPanel) if rows < 0 => {
+                self.session_panel.scroll_up(rows.unsigned_abs());
             }
-            self.request_redraw(RedrawReason::PointerInput);
-            return;
-        }
-        // Scroll settings panel when active
-        if self.modal_layer_on_top(ModalLayer::Settings) {
-            let lines = match delta {
-                winit::event::MouseScrollDelta::LineDelta(_, y) => y,
-                winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
-            };
-            if lines > 0.0 {
-                self.settings_panel.scroll_up(lines.ceil() as usize);
-            } else if lines < 0.0 {
+            Some(ModalLayer::SessionPanel) => self.session_panel.scroll_down(rows.unsigned_abs()),
+            Some(ModalLayer::Settings) if rows < 0 => {
+                self.settings_panel.scroll_up(rows.unsigned_abs());
+            }
+            Some(ModalLayer::Settings) => {
                 let total = self
                     .settings_panel
                     .build_entries(&self.config, &self.shortcut_registry)
                     .len();
-                self.settings_panel
-                    .scroll_down((-lines).ceil() as usize, total);
+                self.settings_panel.scroll_down(rows.unsigned_abs(), total);
             }
-            self.request_redraw(RedrawReason::PointerInput);
-            return;
-        }
-        // Scroll shortcuts panel when active
-        if self.modal_layer_on_top(ModalLayer::ShortcutsPanel) {
-            let lines = match delta {
-                winit::event::MouseScrollDelta::LineDelta(_, y) => y,
-                winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
-            };
-            if lines > 0.0 {
-                self.shortcuts_panel.scroll_up(lines.ceil() as usize);
-            } else if lines < 0.0 {
-                self.shortcuts_panel
-                    .scroll_down((-lines).ceil() as usize, &self.shortcut_registry);
+            Some(ModalLayer::ShortcutsPanel) if rows < 0 => {
+                self.shortcuts_panel.scroll_up(rows.unsigned_abs());
             }
-            self.request_redraw(RedrawReason::PointerInput);
-            return;
-        }
-        if self.handle_palette_modal_wheel(delta) {
-            return;
-        }
-        // Root Cellar owns the wheel while open; positive deltas move
-        // toward older commands, matching terminal scroll direction.
-        if self.modal_layer_on_top(ModalLayer::Cellar) {
-            let lines = match delta {
-                winit::event::MouseScrollDelta::LineDelta(_, y) => y,
-                winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
-            };
-            if let Some(harvest) = &mut self.harvest {
-                if lines > 0.0 {
-                    harvest.cellar.scroll_by(-(lines.ceil() as isize));
-                } else if lines < 0.0 {
-                    harvest.cellar.scroll_by((-lines).ceil() as isize);
+            Some(ModalLayer::ShortcutsPanel) => self
+                .shortcuts_panel
+                .scroll_down(rows.unsigned_abs(), &self.shortcut_registry),
+            Some(
+                ModalLayer::DomainPicker | ModalLayer::UnicodePicker | ModalLayer::CommandPalette,
+            ) => {
+                if let Some(modal) = self.open_palette_modal() {
+                    let palette = self.palette_owner_mut(modal).palette_mut();
+                    if rows < 0 {
+                        palette.scroll_up(rows.unsigned_abs());
+                    } else {
+                        palette.scroll_down(rows.unsigned_abs());
+                    }
                 }
             }
-            self.request_redraw(RedrawReason::PointerInput);
-            return;
+            Some(ModalLayer::Cellar) => {
+                if let Some(harvest) = &mut self.harvest {
+                    harvest.cellar.scroll_by(rows);
+                }
+            }
+            Some(ModalLayer::CommandsPanel) => self.scroll_commands_panel(rows),
+            Some(ModalLayer::AgentsPanel) => self.scroll_agents_panel(rows),
+            // Every other layer owns the wheel while on top, even with no
+            // scroll action of its own.
+            Some(ModalLayer::Guardrail | ModalLayer::SproutMenu | ModalLayer::WorkspaceMenu) => {}
+            None => {
+                self.scroll_beneath_modal_layers(delta);
+                return;
+            }
         }
-        // Every other modal layer owns the wheel while on top, even with no
-        // scroll action of its own; the side panels scroll under the pointer.
-        if self.top_modal_layer().is_some_and(|layer| {
-            !matches!(layer, ModalLayer::CommandsPanel | ModalLayer::AgentsPanel)
-        }) {
-            return;
-        }
-        if self.handle_commands_panel_scroll(delta) || self.handle_agents_panel_scroll(delta) {
-            return;
-        }
+        self.request_redraw(RedrawReason::PointerInput);
+    }
+
+    /// The wheel over the agent view or a terminal, once no modal layer owns it.
+    fn scroll_beneath_modal_layers(&mut self, delta: winit::event::MouseScrollDelta) {
         if let Some((x, y)) = self.last_cursor_pos
             && self.handle_agent_view_wheel(x as f32, y as f32, delta)
         {

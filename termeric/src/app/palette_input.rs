@@ -249,29 +249,6 @@ impl App {
         self.request_redraw(RedrawReason::PointerInput);
         true
     }
-
-    /// The wheel scrolls the open palette-style modal's list. Returns false
-    /// when none is open.
-    pub(super) fn handle_palette_modal_wheel(
-        &mut self,
-        delta: winit::event::MouseScrollDelta,
-    ) -> bool {
-        let Some(modal) = self.open_palette_modal() else {
-            return false;
-        };
-        let lines = match delta {
-            winit::event::MouseScrollDelta::LineDelta(_, y) => y,
-            winit::event::MouseScrollDelta::PixelDelta(position) => (position.y / 20.0) as f32,
-        };
-        let palette = self.palette_owner_mut(modal).palette_mut();
-        if lines > 0.0 {
-            palette.scroll_up(lines.ceil() as usize);
-        } else if lines < 0.0 {
-            palette.scroll_down((-lines).ceil() as usize);
-        }
-        self.request_redraw(RedrawReason::PointerInput);
-        true
-    }
 }
 
 #[cfg(test)]

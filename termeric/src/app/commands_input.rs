@@ -6,29 +6,6 @@ use crate::ui::commands::panel::CommandsPanelAction;
 use winit::keyboard::{Key, NamedKey};
 
 impl App {
-    /// Called after higher wheel owners; even a horizontal/invalid event stays modal.
-    pub(super) fn handle_commands_panel_scroll(
-        &mut self,
-        delta: winit::event::MouseScrollDelta,
-    ) -> bool {
-        if !self.commands_panel.is_open() {
-            return false;
-        }
-        let lines = match delta {
-            winit::event::MouseScrollDelta::LineDelta(_, y) => f64::from(y),
-            winit::event::MouseScrollDelta::PixelDelta(pos) => pos.y / 20.0,
-        };
-        if lines.is_finite() {
-            let rows = if lines > 0.0 {
-                -(lines.ceil() as isize)
-            } else {
-                (-lines).ceil() as isize
-            };
-            self.scroll_commands_panel(rows);
-        }
-        true
-    }
-
     pub(super) fn commands_panel_layout(&self) -> crate::ui::commands::panel::CommandsPanelLayout {
         let (width, height, top, cell_width, cell_height) = self
             .renderer
@@ -274,31 +251,28 @@ mod tests {
             })
             .collect();
         app.commands_panel.close();
-        assert!(!app.handle_commands_panel_scroll(MouseScrollDelta::LineDelta(0.0, -1.0)));
         app.commands_panel.toggle();
         app.commands_panel.start_add();
         assert!(app.commands_panel.form_name.replace("kept draft"));
         app.handle_ime_event(Ime::Preedit("kept preedit".into(), None));
         let initial = app.commands_panel_layout();
         app.redraw_scheduler.begin_frame();
-        assert!(app.handle_commands_panel_scroll(MouseScrollDelta::LineDelta(0.0, -3.0)));
+        app.handle_mouse_wheel(MouseScrollDelta::LineDelta(0.0, -3.0));
         assert_eq!(app.commands_panel_layout().scroll_offset, 3);
         assert_eq!(app.redraw_scheduler.begin_frame(), "pointer-input");
-        assert!(
-            app.handle_commands_panel_scroll(MouseScrollDelta::PixelDelta(PhysicalPosition::new(
-                0.0, 21.0
-            )))
-        );
+        app.handle_mouse_wheel(MouseScrollDelta::PixelDelta(PhysicalPosition::new(
+            0.0, 21.0,
+        )));
         assert_eq!(app.commands_panel_layout().scroll_offset, 1);
         for delta in [
             MouseScrollDelta::LineDelta(5.0, 0.0),
             MouseScrollDelta::LineDelta(0.0, f32::NAN),
             MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, f64::INFINITY)),
         ] {
-            assert!(app.handle_commands_panel_scroll(delta));
+            app.handle_mouse_wheel(delta);
             assert_eq!(app.commands_panel_layout().scroll_offset, 1);
         }
-        assert!(app.handle_commands_panel_scroll(MouseScrollDelta::LineDelta(0.0, -f32::MAX)));
+        app.handle_mouse_wheel(MouseScrollDelta::LineDelta(0.0, -f32::MAX));
         let last = app.commands_panel_layout();
         assert_eq!(last.visible_range().end, 100);
         assert_eq!(last.form, initial.form);

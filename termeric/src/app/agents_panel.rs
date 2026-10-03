@@ -174,30 +174,11 @@ impl App {
         self.request_redraw(RedrawReason::PointerInput);
     }
 
-    /// Wheel events stay with the panel while it is open.
-    pub(super) fn handle_agents_panel_scroll(
-        &mut self,
-        delta: winit::event::MouseScrollDelta,
-    ) -> bool {
-        if !self.agents_panel.is_open() {
-            return false;
+    pub(super) fn scroll_agents_panel(&mut self, rows: isize) {
+        let layout = self.agents_panel_layout();
+        if self.agents_panel.scroll_rows(rows, layout) {
+            self.request_redraw(RedrawReason::PointerInput);
         }
-        let lines = match delta {
-            winit::event::MouseScrollDelta::LineDelta(_, y) => f64::from(y),
-            winit::event::MouseScrollDelta::PixelDelta(pos) => pos.y / 20.0,
-        };
-        if lines.is_finite() {
-            let rows = if lines > 0.0 {
-                -(lines.ceil() as isize)
-            } else {
-                (-lines).ceil() as isize
-            };
-            let layout = self.agents_panel_layout();
-            if self.agents_panel.scroll_rows(rows, layout) {
-                self.request_redraw(RedrawReason::PointerInput);
-            }
-        }
-        true
     }
 
     /// One path for pointer, keyboard, and assistive actions.
