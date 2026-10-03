@@ -69,27 +69,8 @@ fn assert_invariants(terminal: &Terminal) {
     for row_index in 0..grid.rows() {
         let row = grid.row(row_index).unwrap();
         assert_eq!(row.len(), grid.cols());
-        for col in 0..grid.cols() {
-            let cell = row.get(col).unwrap();
-            if cell.flags.contains(CellFlags::WIDE_CHAR_SPACER) {
-                assert!(col > 0);
-                assert!(
-                    row.get(col - 1)
-                        .unwrap()
-                        .flags
-                        .contains(CellFlags::WIDE_CHAR)
-                );
-            }
-            if cell.flags.contains(CellFlags::WIDE_CHAR) {
-                assert!(col + 1 < grid.cols());
-                assert!(
-                    row.get(col + 1)
-                        .unwrap()
-                        .flags
-                        .contains(CellFlags::WIDE_CHAR_SPACER)
-                );
-            }
-        }
+        let flags: Vec<CellFlags> = row.iter().map(|cell| cell.flags).collect();
+        assert_wide_pairs_are_whole(&flags);
     }
 }
 
@@ -100,26 +81,24 @@ fn assert_history_invariants(terminal: &Terminal) {
             .row_at_offset(-(history_index as i32))
             .expect("retained scrollback row must exist");
         assert_eq!(row.len(), grid.cols());
-        for col in 0..grid.cols() {
-            let cell = row.get(col).expect("history cell must exist");
-            if cell.flags.contains(CellFlags::WIDE_CHAR_SPACER) {
-                assert!(col > 0);
-                assert!(
-                    row.get(col - 1)
-                        .unwrap()
-                        .flags
-                        .contains(CellFlags::WIDE_CHAR)
-                );
-            }
-            if cell.flags.contains(CellFlags::WIDE_CHAR) {
-                assert!(col + 1 < grid.cols());
-                assert!(
-                    row.get(col + 1)
-                        .unwrap()
-                        .flags
-                        .contains(CellFlags::WIDE_CHAR_SPACER)
-                );
-            }
+        let flags: Vec<CellFlags> = row.iter().map(|cell| cell.flags).collect();
+        assert_wide_pairs_are_whole(&flags);
+    }
+}
+
+/// Every wide cell must be followed by its spacer and every spacer preceded by
+/// its wide cell, so neither half of a pair can start or end a row.
+fn assert_wide_pairs_are_whole(flags: &[CellFlags]) {
+    for (col, cell) in flags.iter().enumerate() {
+        if cell.contains(CellFlags::WIDE_CHAR) {
+            assert!(
+                flags
+                    .get(col + 1)
+                    .is_some_and(|next| next.contains(CellFlags::WIDE_CHAR_SPACER))
+            );
+        }
+        if cell.contains(CellFlags::WIDE_CHAR_SPACER) {
+            assert!(col > 0 && flags[col - 1].contains(CellFlags::WIDE_CHAR));
         }
     }
 }
