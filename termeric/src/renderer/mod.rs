@@ -118,61 +118,65 @@ impl RendererDiagnostics {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct AdapterAttempt {
-    force_fallback: bool,
-    label: &'static str,
-}
-
-impl AdapterAttempt {
-    fn accepts(self, device_type: DeviceType) -> bool {
-        // `force_fallback_adapter: false` is a preference, not a guarantee:
-        // WGPU may return a CPU adapter when no GPU is available. Reject that
-        // candidate so `gpu` remains strict and `auto` advances to its explicit
-        // software attempt instead of reporting a CPU adapter as hardware.
-        self.force_fallback || device_type != DeviceType::Cpu
-    }
-}
-
-fn adapter_attempts(preference: RendererBackend) -> &'static [AdapterAttempt] {
-    const AUTO: &[AdapterAttempt] = &[
-        AdapterAttempt {
-            force_fallback: false,
-            label: "hardware",
-        },
-        AdapterAttempt {
-            force_fallback: true,
-            label: "software fallback",
-        },
-    ];
-    const GPU: &[AdapterAttempt] = &[AdapterAttempt {
-        force_fallback: false,
-        label: "hardware",
-    }];
-    const SOFTWARE: &[AdapterAttempt] = &[AdapterAttempt {
-        force_fallback: true,
-        label: "software fallback",
-    }];
+/// The adapter classes a backend preference tries, in order; `true` asks
+/// for WGPU's software fallback.
+fn fallback_attempts(preference: RendererBackend) -> &'static [bool] {
     match preference {
-        RendererBackend::Auto => AUTO,
-        RendererBackend::Gpu => GPU,
-        RendererBackend::Software => SOFTWARE,
+        RendererBackend::Auto => &[false, true],
+        RendererBackend::Gpu => &[false],
+        RendererBackend::Software => &[true],
     }
 }
 
-fn select_adapter<T>(
-    preference: RendererBackend,
-    mut request: impl FnMut(AdapterAttempt) -> std::result::Result<Option<T>, String>,
-) -> std::result::Result<(T, AdapterAttempt), Vec<String>> {
-    let mut failures = Vec::new();
-    for attempt in adapter_attempts(preference).iter().copied() {
-        match request(attempt) {
-            Ok(Some(selected)) => return Ok((selected, attempt)),
-            Ok(None) => failures.push(format!("{} adapter was unavailable", attempt.label)),
-            Err(error) => failures.push(format!("{} adapter failed: {error}", attempt.label)),
-        }
+fn attempt_label(force_fallback: bool) -> &'static str {
+    if force_fallback {
+        "software fallback"
+    } else {
+        "hardware"
     }
-    Err(failures)
+}
+
+/// `force_fallback_adapter: false` is a preference, not a guarantee: WGPU may
+/// return a CPU adapter when no GPU is available. Reject that candidate so
+/// `gpu` remains strict and `auto` advances to its explicit software attempt
+/// instead of reporting a CPU adapter as hardware.
+fn accepts_adapter(force_fallback: bool, device_type: DeviceType) -> bool {
+    force_fallback || device_type != DeviceType::Cpu
+}
+
+/// One adapter attempt: the adapter and its device, or why it failed.
+fn request_adapter_device(
+    instance: &Instance,
+    backends: Backends,
+    surface: &Surface<'_>,
+    force_fallback: bool,
+) -> std::result::Result<(Adapter, Device, Queue), String> {
+    let adapter = discover_adapter(
+        instance,
+        backends,
+        Some(surface),
+        PowerPreference::HighPerformance,
+        force_fallback,
+    )
+    .ok_or_else(|| "was unavailable".to_string())?;
+    let adapter_info = adapter.get_info();
+    if !accepts_adapter(force_fallback, adapter_info.device_type) {
+        return Err(format!(
+            "failed: WGPU returned CPU adapter {:?}; a GPU adapter is required",
+            adapter_info.name
+        ));
+    }
+    let (device, queue) = pollster::block_on(adapter.request_device(
+        &DeviceDescriptor {
+            required_features: Features::empty(),
+            required_limits: Limits::default(),
+            memory_hints: MemoryHints::default(),
+            label: Some("Termeric Device"),
+        },
+        None,
+    ))
+    .map_err(|error| format!("failed: could not create a device: {error}"))?;
+    Ok((adapter, device, queue))
 }
 
 /// Ask WGPU for the requested adapter class and recover from backends that
@@ -657,44 +661,28 @@ impl Renderer {
         // Create surface - window is Arc so it lives long enough
         let surface = instance.create_surface(window.clone())?;
 
-        let selection = select_adapter(backend_preference, |attempt| {
-            let Some(adapter) = discover_adapter(
-                &instance,
-                enabled_backends,
-                Some(&surface),
-                PowerPreference::HighPerformance,
-                attempt.force_fallback,
-            ) else {
-                return Ok(None);
-            };
-            let adapter_info = adapter.get_info();
-            if !attempt.accepts(adapter_info.device_type) {
-                return Err(format!(
-                    "WGPU returned CPU adapter {:?}; a GPU adapter is required",
-                    adapter_info.name
-                ));
+        let mut failures = Vec::new();
+        let mut selected = None;
+        for &force_fallback in fallback_attempts(backend_preference) {
+            match request_adapter_device(&instance, enabled_backends, &surface, force_fallback) {
+                Ok(found) => {
+                    selected = Some((found, force_fallback));
+                    break;
+                }
+                Err(reason) => failures.push(format!(
+                    "{} adapter {reason}",
+                    attempt_label(force_fallback)
+                )),
             }
-            pollster::block_on(adapter.request_device(
-                &DeviceDescriptor {
-                    required_features: Features::empty(),
-                    required_limits: Limits::default(),
-                    memory_hints: MemoryHints::default(),
-                    label: Some("Termeric Device"),
-                },
-                None,
-            ))
-            .map(|(device, queue)| Some((adapter, device, queue)))
-            .map_err(|error| format!("could not create a device: {error}"))
-        });
-        let ((adapter, device, queue), selected_attempt) = selection.map_err(|failures| {
-            anyhow::anyhow!(
+        }
+        let Some(((adapter, device, queue), fallback_requested)) = selected else {
+            anyhow::bail!(
                 "renderer initialization failed with preference {backend_preference}: {}. \
                  Try `termeric --renderer software`, install current graphics/Mesa drivers, \
                  or set renderer.backend = \"software\" in config.toml",
                 failures.join("; ")
-            )
-        })?;
-        let fallback_requested = selected_attempt.force_fallback;
+            );
+        };
         let adapter_info = adapter.get_info();
         let diagnostics = RendererDiagnostics {
             preference: backend_preference,
@@ -4190,50 +4178,20 @@ mod backend_selection_tests {
 
     #[test]
     fn automatic_selection_falls_back_but_forced_modes_do_not() {
-        assert_eq!(
-            adapter_attempts(RendererBackend::Auto),
-            [
-                AdapterAttempt {
-                    force_fallback: false,
-                    label: "hardware"
-                },
-                AdapterAttempt {
-                    force_fallback: true,
-                    label: "software fallback"
-                }
-            ]
-        );
-        assert!(!adapter_attempts(RendererBackend::Gpu)[0].force_fallback);
-        assert!(adapter_attempts(RendererBackend::Software)[0].force_fallback);
-        assert!(!adapter_attempts(RendererBackend::Gpu)[0].accepts(DeviceType::Cpu));
-        assert!(adapter_attempts(RendererBackend::Gpu)[0].accepts(DeviceType::DiscreteGpu));
-        assert!(adapter_attempts(RendererBackend::Software)[0].accepts(DeviceType::Cpu));
+        assert_eq!(fallback_attempts(RendererBackend::Auto), [false, true]);
+        assert_eq!(fallback_attempts(RendererBackend::Gpu), [false]);
+        assert_eq!(fallback_attempts(RendererBackend::Software), [true]);
+        assert!(!accepts_adapter(false, DeviceType::Cpu));
+        assert!(accepts_adapter(false, DeviceType::DiscreteGpu));
+        assert!(accepts_adapter(true, DeviceType::Cpu));
+        assert_eq!(attempt_label(false), "hardware");
+        assert_eq!(attempt_label(true), "software fallback");
         assert!(is_enumerated_software_candidate(DeviceType::Cpu, true));
         assert!(!is_enumerated_software_candidate(
             DeviceType::DiscreteGpu,
             true
         ));
         assert!(!is_enumerated_software_candidate(DeviceType::Cpu, false));
-    }
-
-    #[test]
-    fn simulated_adapter_and_device_failures_follow_the_declared_policy() {
-        let mut calls = Vec::new();
-        let (selected, attempt) = select_adapter(RendererBackend::Auto, |attempt| {
-            calls.push(attempt.label);
-            if attempt.force_fallback {
-                Ok(Some("llvmpipe"))
-            } else {
-                Err("device creation rejected".into())
-            }
-        })
-        .unwrap();
-        assert_eq!(selected, "llvmpipe");
-        assert!(attempt.force_fallback);
-        assert_eq!(calls, ["hardware", "software fallback"]);
-
-        let failures = select_adapter::<()>(RendererBackend::Gpu, |_| Ok(None)).unwrap_err();
-        assert_eq!(failures, ["hardware adapter was unavailable"]);
     }
 
     #[test]
