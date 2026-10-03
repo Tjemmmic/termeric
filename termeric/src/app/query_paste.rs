@@ -917,31 +917,11 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn search_clipboard_paste_is_bounded_and_query_pastes_never_reach_raw_pty() {
-        let mut tabs = TabManager::new(
-            80,
-            24,
-            crate::config::ShellConfig::default(),
-            100,
-            1024 * 1024,
+        let mut app = App::new_headless_running(
+            "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1; sleep 0.1",
+            "query-paste",
         );
-        tabs.new_tab_with_command("/bin/sh", &[
-            "-c".into(), "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1; sleep 0.1".into(),
-        ], None, Some("query-paste"), None, Default::default()).unwrap();
-        let mut app = App::new_headless(Config::default()).unwrap();
-        app.tabs = Some(tabs);
-        let wait_for = |app: &mut App, expected: &str| {
-            let deadline = Instant::now() + Duration::from_secs(3);
-            loop {
-                app.process_pty_events();
-                let output = app.active_terminal().unwrap().rows_text(0, 23);
-                if output.contains(expected) {
-                    break;
-                }
-                assert!(Instant::now() < deadline, "missing {expected}: {output}");
-                std::thread::yield_now();
-            }
-        };
-        wait_for(&mut app, "READY");
+        app.wait_for_screen_text("READY");
         app.search.start();
         assert!(app.paste_clipboard_payload("az"));
         app.search_cursor_pos = 1;
@@ -1002,6 +982,6 @@ mod tests {
         exercise_tab_rename_paste(&mut app);
         app.search.cancel();
         assert!(app.paste_clipboard_payload("Z"));
-        wait_for(&mut app, "5a");
+        app.wait_for_screen_text("5a");
     }
 }

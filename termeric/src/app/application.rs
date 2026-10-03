@@ -4713,7 +4713,7 @@ mod tests {
         source_tabs
             .new_tab_with_command(
                 "/bin/sh",
-                &["-c".into(), "sleep 2".into()],
+                &crate::test_support::sleeping_args(),
                 temp.path().to_str(),
                 Some("source"),
                 None,
@@ -5605,36 +5605,12 @@ mod tests {
             return;
         }
 
-        #[derive(Debug)]
-        struct TabSwitchObserver(std::sync::Arc<std::sync::atomic::AtomicUsize>);
-
-        impl crate::plugin::hooks::Plugin for TabSwitchObserver {
-            fn id(&self) -> &str {
-                "navigator"
-            }
-
-            fn name(&self) -> &str {
-                "Navigation Observer"
-            }
-
-            fn on_hook(
-                &mut self,
-                hook: &crate::plugin::Hook,
-                _context: &crate::plugin::PluginContext,
-            ) -> Option<crate::plugin::PluginAction> {
-                if matches!(hook, crate::plugin::Hook::TabSwitched { .. }) {
-                    self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                }
-                None
-            }
-        }
-
         let shell = crate::config::ShellConfig {
             program: Some("/bin/sh".into()),
             args: vec!["-c".into(), "exit 0".into()],
             env: Default::default(),
         };
-        let mut tabs = crate::tabs::TabManager::new(80, 24, shell, 1_000, 8 * 1024 * 1024);
+        let mut tabs = crate::tabs::TabManager::for_test(shell);
         let first = tabs
             .new_tab_with_command(
                 "/bin/sh",
@@ -5663,9 +5639,10 @@ mod tests {
         target.tabs = Some(tabs);
         target
             .plugin_manager
-            .register(Box::new(TabSwitchObserver(std::sync::Arc::clone(
+            .register(crate::test_support::hook_counter(
+                |hook| matches!(hook, crate::plugin::Hook::TabSwitched { .. }),
                 &observed_switches,
-            ))))
+            ))
             .unwrap();
 
         let mut application =
@@ -5891,45 +5868,22 @@ mod tests {
             return;
         }
 
-        #[derive(Debug)]
-        struct TabCreatedObserver(std::sync::Arc<std::sync::atomic::AtomicUsize>);
-
-        impl crate::plugin::hooks::Plugin for TabCreatedObserver {
-            fn id(&self) -> &str {
-                "tab-builder"
-            }
-
-            fn name(&self) -> &str {
-                "Tab Builder Observer"
-            }
-
-            fn on_hook(
-                &mut self,
-                hook: &crate::plugin::Hook,
-                _context: &crate::plugin::PluginContext,
-            ) -> Option<crate::plugin::PluginAction> {
-                if matches!(hook, crate::plugin::Hook::TabCreated { .. }) {
-                    self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                }
-                None
-            }
-        }
-
         let shell = crate::config::ShellConfig {
             program: Some("/bin/sh".into()),
             args: vec!["-c".into(), "exit 0".into()],
             env: Default::default(),
         };
-        let mut tabs = crate::tabs::TabManager::new(80, 24, shell, 1_000, 8 * 1024 * 1024);
+        let mut tabs = crate::tabs::TabManager::for_test(shell);
         let initial = tabs.new_tab().unwrap();
         let observed_creations = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut target = App::new_headless(Config::default()).unwrap();
         target.tabs = Some(tabs);
         target
             .plugin_manager
-            .register(Box::new(TabCreatedObserver(std::sync::Arc::clone(
+            .register(crate::test_support::hook_counter(
+                |hook| matches!(hook, crate::plugin::Hook::TabCreated { .. }),
                 &observed_creations,
-            ))))
+            ))
             .unwrap();
 
         let mut application =
@@ -6110,7 +6064,7 @@ mod tests {
             args: vec!["-c".into(), "exit 0".into()],
             env: Default::default(),
         };
-        let mut tabs = crate::tabs::TabManager::new(80, 24, shell.clone(), 1_000, 8 * 1024 * 1024);
+        let mut tabs = crate::tabs::TabManager::for_test(shell.clone());
         let tab_id = tabs.new_tab().unwrap();
         let tab = tabs.tab_mut_by_id(tab_id).unwrap();
         let owner = tab.take_terminal_owner().unwrap();
@@ -6369,7 +6323,7 @@ mod tests {
             args: vec!["-c".into(), "exit 0".into()],
             env: Default::default(),
         };
-        let mut tabs = crate::tabs::TabManager::new(80, 24, shell, 1_000, 8 * 1024 * 1024);
+        let mut tabs = crate::tabs::TabManager::for_test(shell);
         let target_tab = tabs
             .new_tab_with_command(
                 "/bin/sh",
@@ -6586,16 +6540,12 @@ mod tests {
             return;
         }
 
-        let shell = crate::config::ShellConfig {
-            program: Some("/bin/sh".into()),
-            args: vec!["-c".into(), "sleep 2".into()],
-            env: Default::default(),
-        };
-        let mut tabs = crate::tabs::TabManager::new(80, 24, shell, 1_000, 8 * 1024 * 1024);
+        let shell = crate::test_support::sleeping_shell();
+        let mut tabs = crate::tabs::TabManager::for_test(shell);
         let target_tab = tabs
             .new_tab_with_command(
                 "/bin/sh",
-                &["-c".into(), "sleep 2".into()],
+                &crate::test_support::sleeping_args(),
                 None,
                 Some("input target"),
                 None,
@@ -6605,7 +6555,7 @@ mod tests {
         let untouched_tab = tabs
             .new_tab_with_command(
                 "/bin/sh",
-                &["-c".into(), "sleep 2".into()],
+                &crate::test_support::sleeping_args(),
                 None,
                 Some("active tab"),
                 None,

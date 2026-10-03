@@ -10,6 +10,101 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use termeric_core::{CellFlags, Terminal};
 
+/// `sh -c` arguments for a child that stays alive through a test without
+/// printing anything: a real PTY whose process is still running when the
+/// test looks.
+pub(crate) fn sleeping_args() -> Vec<String> {
+    vec!["-c".into(), "sleep 2".into()]
+}
+
+/// `/bin/sh` running [`sleeping_args`].
+pub(crate) fn sleeping_shell() -> ShellConfig {
+    ShellConfig {
+        program: Some("/bin/sh".into()),
+        args: sleeping_args(),
+        env: Default::default(),
+    }
+}
+
+/// A plugin with nothing but an identity, so the manager accepts results
+/// addressed to it.
+pub(crate) fn identity_plugin(
+    id: &'static str,
+    name: &'static str,
+) -> Box<dyn crate::plugin::hooks::Plugin> {
+    #[derive(Debug)]
+    struct IdentityPlugin {
+        id: &'static str,
+        name: &'static str,
+    }
+
+    impl crate::plugin::hooks::Plugin for IdentityPlugin {
+        fn id(&self) -> &str {
+            self.id
+        }
+
+        fn name(&self) -> &str {
+            self.name
+        }
+    }
+
+    Box::new(IdentityPlugin { id, name })
+}
+
+/// A plugin that counts the hooks `counted` accepts into `seen`, for tests
+/// that check a hook fires exactly as often as it should.
+pub(crate) fn hook_counter(
+    counted: fn(&crate::plugin::Hook) -> bool,
+    seen: &std::sync::Arc<std::sync::atomic::AtomicUsize>,
+) -> Box<dyn crate::plugin::hooks::Plugin> {
+    #[derive(Debug)]
+    struct HookCounter {
+        counted: fn(&crate::plugin::Hook) -> bool,
+        seen: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl crate::plugin::hooks::Plugin for HookCounter {
+        fn id(&self) -> &str {
+            "hook-counter"
+        }
+
+        fn name(&self) -> &str {
+            "Hook Counter"
+        }
+
+        fn on_hook(
+            &mut self,
+            hook: &crate::plugin::Hook,
+            _ctx: &crate::plugin::PluginContext,
+        ) -> Option<crate::plugin::PluginAction> {
+            if (self.counted)(hook) {
+                self.seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            None
+        }
+    }
+
+    Box::new(HookCounter {
+        counted,
+        seen: std::sync::Arc::clone(seen),
+    })
+}
+
+/// Run `step` until it returns true or `timeout` passes, pausing briefly
+/// between tries. Returns whether it succeeded.
+pub(crate) fn poll_until(timeout: Duration, mut step: impl FnMut() -> bool) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if step() {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
 #[cfg(unix)]
 pub(crate) fn seed_pixel_geometry_retention_probe(terminal: &mut Terminal) {
     assert_eq!((terminal.grid().cols(), terminal.grid().rows()), (8, 5));

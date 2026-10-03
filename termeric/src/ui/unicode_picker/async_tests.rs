@@ -1,6 +1,6 @@
 use super::*;
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 fn controlled_picker() -> (UnicodePicker, Receiver<String>, Sender<()>) {
     let (started, observed) = mpsc::channel();
@@ -19,12 +19,13 @@ fn controlled_picker() -> (UnicodePicker, Receiver<String>, Sender<()>) {
 }
 
 fn poll_until(picker: &mut UnicodePicker, condition: impl Fn(&UnicodePicker) -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !condition(picker) {
-        picker.poll_search();
-        assert!(Instant::now() < deadline, "search lifecycle timed out");
-        std::thread::yield_now();
-    }
+    let done = crate::test_support::poll_until(Duration::from_secs(5), || {
+        condition(picker) || {
+            picker.poll_search();
+            false
+        }
+    });
+    assert!(done, "search lifecycle timed out");
 }
 
 #[test]

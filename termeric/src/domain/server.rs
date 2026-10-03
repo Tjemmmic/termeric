@@ -3276,17 +3276,6 @@ mod topology_lifecycle_tests;
 mod tests {
     use super::*;
 
-    fn wait_for(timeout: Duration, mut condition: impl FnMut() -> bool) -> bool {
-        let deadline = std::time::Instant::now() + timeout;
-        while std::time::Instant::now() < deadline {
-            if condition() {
-                return true;
-            }
-            thread::sleep(Duration::from_millis(20));
-        }
-        condition()
-    }
-
     fn read_graphics_attachment_snapshot(stream: &mut UnixStream) -> Vec<u8> {
         let mut snapshot = Vec::new();
         loop {
@@ -4089,7 +4078,10 @@ mod tests {
         let server = thread::spawn(move || {
             run_foreground(server_paths, false, XtermKeyboardType::Normal).unwrap()
         });
-        assert!(wait_for(Duration::from_secs(2), || paths.socket.exists()));
+        assert!(crate::test_support::poll_until(
+            Duration::from_secs(2),
+            || paths.socket.exists()
+        ));
         let client = crate::domain::DomainClient::for_paths(paths.clone());
 
         // Version negotiation fails closed before a request is accepted.
@@ -4161,16 +4153,19 @@ mod tests {
                 }
             } if domain.tabs.len() == 1
         ));
-        assert!(wait_for(Duration::from_secs(2), || {
-            matches!(
-                client.request(Request::GetText {
-                    domain: domain_id.clone(),
-                    pane: 0,
-                    max_bytes: 4096,
-                }),
-                Ok(Response::Text { text, .. }) if text.contains("root-ready")
-            )
-        }));
+        assert!(crate::test_support::poll_until(
+            Duration::from_secs(2),
+            || {
+                matches!(
+                    client.request(Request::GetText {
+                        domain: domain_id.clone(),
+                        pane: 0,
+                        max_bytes: 4096,
+                    }),
+                    Ok(Response::Text { text, .. }) if text.contains("root-ready")
+                )
+            }
+        ));
 
         let upload_source = temporary.path().join("local-upload-source.bin");
         let upload_bytes = (0..150_000)
@@ -4325,15 +4320,18 @@ mod tests {
                 .all(|pair| pair[0].0 <= pair[1].0 && pair[0].1 == pair[1].1)
         );
         assert!(!reported_cwd.join("cancelled.bin").exists());
-        assert!(wait_for(Duration::from_secs(2), || {
-            fs::read_dir(&reported_cwd).unwrap().all(|entry| {
-                !entry
-                    .unwrap()
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with(".termeric-upload-")
-            })
-        }));
+        assert!(crate::test_support::poll_until(
+            Duration::from_secs(2),
+            || {
+                fs::read_dir(&reported_cwd).unwrap().all(|entry| {
+                    !entry
+                        .unwrap()
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(".termeric-upload-")
+                })
+            }
+        ));
 
         // A disconnected partial stream never publishes a destination. Its
         // private staging file remains bounded and can be resumed only by the
@@ -4383,16 +4381,19 @@ mod tests {
         )
         .unwrap();
         drop(partial);
-        assert!(wait_for(Duration::from_secs(2), || {
-            !reported_cwd.join("partial.bin").exists()
-                && fs::read_dir(&reported_cwd).unwrap().any(|entry| {
-                    entry
-                        .unwrap()
-                        .file_name()
-                        .to_string_lossy()
-                        .starts_with(".termeric-upload-")
-                })
-        }));
+        assert!(crate::test_support::poll_until(
+            Duration::from_secs(2),
+            || {
+                !reported_cwd.join("partial.bin").exists()
+                    && fs::read_dir(&reported_cwd).unwrap().any(|entry| {
+                        entry
+                            .unwrap()
+                            .file_name()
+                            .to_string_lossy()
+                            .starts_with(".termeric-upload-")
+                    })
+            }
+        ));
         let resume_source = temporary.path().join("resume-source.bin");
         fs::write(&resume_source, b"abcdefghij").unwrap();
         let missing_resume = client
@@ -4422,7 +4423,7 @@ mod tests {
         assert!(format!("{wrong_prefix:#}").contains("retained prefix"));
         let mut observed_uploads = Vec::new();
         assert!(
-            wait_for(Duration::from_secs(2), || {
+            crate::test_support::poll_until(Duration::from_secs(2), || {
                 let Ok(Response::Uploads { uploads }) = client.request(Request::ListUploads) else {
                     return false;
                 };
@@ -4793,16 +4794,19 @@ mod tests {
                 data: CLOSURE_MARKER.as_bytes().to_vec(),
             })
             .unwrap();
-        assert!(wait_for(Duration::from_secs(2), || {
-            matches!(
-                client.request(Request::GetText {
-                    domain: domain_id.clone(),
-                    pane: 1,
-                    max_bytes: 4096,
-                }).unwrap(),
-                Response::Text { text, .. } if text.contains(CLOSURE_MARKER)
-            )
-        }));
+        assert!(crate::test_support::poll_until(
+            Duration::from_secs(2),
+            || {
+                matches!(
+                    client.request(Request::GetText {
+                        domain: domain_id.clone(),
+                        pane: 1,
+                        max_bytes: 4096,
+                    }).unwrap(),
+                    Response::Text { text, .. } if text.contains(CLOSURE_MARKER)
+                )
+            }
+        ));
         let Response::Domain { domain } = client
             .request(Request::ClosePane {
                 domain: domain_id.clone(),
@@ -5060,16 +5064,19 @@ mod tests {
         ] {
             assert!(client.request(request).is_err());
         }
-        assert!(wait_for(Duration::from_secs(2), || {
-            matches!(
-                client.request(Request::Describe {
-                    domain: domain_id.clone(),
-                }),
-                Ok(Response::Domain { domain })
-                    if domain.workspace.tabs[1].title == "temporary"
-                        && domain.workspace.tabs[1].panes[0].title == "runtime title"
-            )
-        }));
+        assert!(crate::test_support::poll_until(
+            Duration::from_secs(2),
+            || {
+                matches!(
+                    client.request(Request::Describe {
+                        domain: domain_id.clone(),
+                    }),
+                    Ok(Response::Domain { domain })
+                        if domain.workspace.tabs[1].title == "temporary"
+                            && domain.workspace.tabs[1].panes[0].title == "runtime title"
+                )
+            }
+        ));
         let Response::Domain { domain } = client
             .request(Request::RenameTab {
                 domain: domain_id.clone(),

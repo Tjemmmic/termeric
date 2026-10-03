@@ -108,26 +108,7 @@ mod tests {
         let mut config = Config::default();
         config.shell.program = Some("/bin/sh".into());
         config.shell.args = vec!["-c".into(), script.into()];
-        let mut app = App::new_headless(config).unwrap();
-        app.allow_auto_restore = false;
-        app.init_tabs().unwrap();
-        app
-    }
-
-    #[cfg(unix)]
-    fn wait_for_text(app: &mut App, needle: &str) -> bool {
-        let deadline = Instant::now() + Duration::from_secs(3);
-        while Instant::now() < deadline {
-            app.process_pty_events();
-            if app
-                .active_terminal()
-                .is_some_and(|terminal| terminal.grid().plain_lines().join("\n").contains(needle))
-            {
-                return true;
-            }
-            std::thread::yield_now();
-        }
-        false
+        App::new_headless_with_tabs(config)
     }
 
     #[cfg(unix)]
@@ -140,12 +121,12 @@ mod tests {
                       bytes=$(dd bs=1 count=3 2>/dev/null | od -An -tx1); \
                       printf '\runicode=%s\r\n' \"$bytes\"; sleep 1";
         let mut app = shell_app(script);
-        assert!(wait_for_text(&mut app, "READY"));
+        app.wait_for_screen_text("READY");
 
         app.open_unicode_picker();
         assert!(app.unicode_picker.is_active());
         assert!(app.apply_unicode_picker_selection(selection("→")));
-        assert!(wait_for_text(&mut app, "unicode= e2 86 92"));
+        app.wait_for_screen_text("unicode= e2 86 92");
         assert_eq!(app.input_line_buffer, "→");
     }
 
@@ -168,7 +149,7 @@ mod tests {
             expected.len()
         );
         let mut app = shell_app(&script);
-        assert!(wait_for_text(&mut app, "READY"));
+        app.wait_for_screen_text("READY");
 
         app.open_unicode_picker();
         assert!(
@@ -185,7 +166,7 @@ mod tests {
         let selection = app.unicode_picker.execute_command(&entry.id).unwrap();
         assert_eq!(selection.text.as_bytes(), expected.as_bytes());
         assert!(app.apply_unicode_picker_selection(selection));
-        assert!(wait_for_text(&mut app, &format!("unicode={expected_hex}")));
+        app.wait_for_screen_text(&format!("unicode={expected_hex}"));
         assert_eq!(app.input_line_buffer, expected);
     }
 

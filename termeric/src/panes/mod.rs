@@ -1951,11 +1951,7 @@ mod tests {
 
     #[cfg(unix)]
     fn property_manager(panes: usize) -> PaneManager {
-        let shell = ShellConfig {
-            program: Some("/bin/sh".into()),
-            args: vec!["-c".into(), "sleep 2".into()],
-            env: Default::default(),
-        };
+        let shell = crate::test_support::sleeping_shell();
         let mut manager = PaneManager::new(
             120,
             40,

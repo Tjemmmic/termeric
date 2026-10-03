@@ -790,18 +790,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn search_ime_commit_inserts_at_query_caret_without_leaking_into_pty() {
-        let mut tabs = TabManager::new(
-            80,
-            24,
-            crate::config::ShellConfig::default(),
-            100,
-            1024 * 1024,
+        let mut app = App::new_headless_running(
+            "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1; sleep 0.1",
+            "search-ime",
         );
-        tabs.new_tab_with_command("/bin/sh", &[
-            "-c".into(), "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1; sleep 0.1".into(),
-        ], None, Some("search-ime"), None, Default::default()).unwrap();
-        let mut app = App::new_headless(Config::default()).unwrap();
-        app.tabs = Some(tabs);
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
             app.process_pty_events();
@@ -1243,31 +1235,11 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn modal_atomic_commits_never_fall_through_to_a_live_pty() {
-        let mut tabs = TabManager::new(
-            80,
-            24,
-            crate::config::ShellConfig::default(),
-            100,
-            1024 * 1024,
+        let mut app = App::new_headless_running(
+            "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1; sleep 0.1",
+            "palette-ime",
         );
-        tabs.new_tab_with_command("/bin/sh", &[
-            "-c".into(), "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1; sleep 0.1".into(),
-        ], None, Some("palette-ime"), None, Default::default()).unwrap();
-        let mut app = App::new_headless(Config::default()).unwrap();
-        app.tabs = Some(tabs);
-        let wait_for = |app: &mut App, expected: &str| {
-            let deadline = Instant::now() + Duration::from_secs(3);
-            loop {
-                app.process_pty_events();
-                let output = app.active_terminal().unwrap().rows_text(0, 23);
-                if output.contains(expected) {
-                    break;
-                }
-                assert!(Instant::now() < deadline, "missing {expected}: {output}");
-                std::thread::yield_now();
-            }
-        };
-        wait_for(&mut app, "READY");
+        app.wait_for_screen_text("READY");
         for kind in ["command", "unicode", "domain"] {
             match kind {
                 "command" => app.command_palette.open(),
@@ -1440,7 +1412,7 @@ mod tests {
         );
         assert!(app.handle_tab_rename_key(&Key::Named(NamedKey::Escape)));
         app.write_to_pty(b"Z");
-        wait_for(&mut app, "5a");
+        app.wait_for_screen_text("5a");
     }
 
     #[test]
@@ -1529,7 +1501,7 @@ mod tests {
         let mut tabs = TabManager::new(40, 8, ShellConfig::default(), 100, 1024 * 1024);
         tabs.new_tab_with_command(
             "/bin/sh",
-            &["-c".into(), "sleep 2".into()],
+            &crate::test_support::sleeping_args(),
             None,
             Some("ime-routing"),
             None,

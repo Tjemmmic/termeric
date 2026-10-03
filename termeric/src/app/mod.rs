@@ -1285,6 +1285,56 @@ impl App {
         Self::from_config(config, None, false)
     }
 
+    /// A headless app whose only tab runs `script` under `/bin/sh -c` in an
+    /// 80×24 terminal: a probe for exactly what reaches a PTY.
+    #[cfg(test)]
+    pub(crate) fn new_headless_running(script: &str, title: &str) -> Self {
+        let mut tabs = TabManager::new(
+            80,
+            24,
+            crate::config::ShellConfig::default(),
+            100,
+            1024 * 1024,
+        );
+        tabs.new_tab_with_command(
+            "/bin/sh",
+            &["-c".into(), script.into()],
+            None,
+            Some(title),
+            None,
+            Default::default(),
+        )
+        .unwrap();
+        let mut app = Self::new_headless(Config::default()).unwrap();
+        app.tabs = Some(tabs);
+        app
+    }
+
+    /// Process PTY output until the active terminal's screen shows
+    /// `expected`; fails the test after three seconds with what it shows.
+    #[cfg(test)]
+    pub(crate) fn wait_for_screen_text(&mut self, expected: &str) {
+        let mut output = String::new();
+        let shown = crate::test_support::poll_until(Duration::from_secs(3), || {
+            self.process_pty_events();
+            output = self.active_terminal().map_or_else(String::new, |terminal| {
+                terminal.rows_text(0, terminal.grid().rows() as i32 - 1)
+            });
+            output.contains(expected)
+        });
+        assert!(shown, "missing {expected}: {output}");
+    }
+
+    /// A headless app with its first tab running, and no workspace restored
+    /// over it.
+    #[cfg(test)]
+    pub(crate) fn new_headless_with_tabs(config: Config) -> Self {
+        let mut app = Self::new_headless(config).unwrap();
+        app.allow_auto_restore = false;
+        app.init_tabs().unwrap();
+        app
+    }
+
     fn from_config(
         mut config: Config,
         mut startup_config_warning: Option<String>,

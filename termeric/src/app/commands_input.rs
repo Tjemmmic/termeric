@@ -506,31 +506,11 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn keyboard_run_activates_only_the_selected_command_in_an_inert_raw_pty() {
-        let mut tabs = TabManager::new(
-            80,
-            24,
-            crate::config::ShellConfig::default(),
-            100,
-            1024 * 1024,
+        let mut app = App::new_headless_running(
+            "stty raw -echo; printf READY; dd bs=1 count=3 2>/dev/null | od -An -tx1; sleep 0.1",
+            "command-navigation",
         );
-        tabs.new_tab_with_command("/bin/sh", &[
-            "-c".into(), "stty raw -echo; printf READY; dd bs=1 count=3 2>/dev/null | od -An -tx1; sleep 0.1".into(),
-        ], None, Some("command-navigation"), None, Default::default()).unwrap();
-        let mut app = App::new_headless(Config::default()).unwrap();
-        app.tabs = Some(tabs);
-        let wait_for = |app: &mut App, expected: &str| {
-            let deadline = Instant::now() + Duration::from_secs(3);
-            loop {
-                app.process_pty_events();
-                let output = app.active_terminal().unwrap().rows_text(0, 23);
-                if output.contains(expected) {
-                    break;
-                }
-                assert!(Instant::now() < deadline, "missing {expected}: {output}");
-                std::thread::yield_now();
-            }
-        };
-        wait_for(&mut app, "READY");
+        app.wait_for_screen_text("READY");
         app.config.commands = ["A", "B"]
             .into_iter()
             .map(|text| crate::config::CustomCommand {
@@ -552,38 +532,18 @@ mod tests {
         assert!(app.handle_commands_panel_key(&Key::Named(NamedKey::Enter)));
         assert!(!app.commands_panel.is_open());
         // These bytes go to `dd`, not a shell command interpreter: clear line, B, Enter.
-        wait_for(&mut app, "15 42 0d");
+        app.wait_for_screen_text("15 42 0d");
         assert_eq!(app.config.commands.len(), 3);
     }
 
     #[cfg(unix)]
     #[test]
     fn editing_and_ime_commit_stay_in_the_form_and_leave_the_raw_pty_untouched() {
-        let mut tabs = TabManager::new(
-            80,
-            24,
-            crate::config::ShellConfig::default(),
-            100,
-            1024 * 1024,
+        let mut app = App::new_headless_running(
+            "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1; sleep 0.1",
+            "command-editor",
         );
-        tabs.new_tab_with_command("/bin/sh", &[
-            "-c".into(), "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1; sleep 0.1".into(),
-        ], None, Some("command-editor"), None, Default::default()).unwrap();
-        let mut app = App::new_headless(Config::default()).unwrap();
-        app.tabs = Some(tabs);
-        let wait_for = |app: &mut App, expected: &str| {
-            let deadline = Instant::now() + Duration::from_secs(3);
-            loop {
-                app.process_pty_events();
-                let output = app.active_terminal().unwrap().rows_text(0, 23);
-                if output.contains(expected) {
-                    break;
-                }
-                assert!(Instant::now() < deadline, "missing {expected}: {output}");
-                std::thread::yield_now();
-            }
-        };
-        wait_for(&mut app, "READY");
+        app.wait_for_screen_text("READY");
         app.commands_panel.toggle();
         exercise_atomic_form_input(&mut app);
         app.commands_panel.start_add();
@@ -643,6 +603,6 @@ mod tests {
         exercise_browse_navigation(&mut app);
         app.commands_panel.close();
         app.write_to_pty(b"Z");
-        wait_for(&mut app, "5a"); // first raw byte: no editing/IME bytes leaked
+        app.wait_for_screen_text("5a"); // first raw byte: no editing/IME bytes leaked
     }
 }

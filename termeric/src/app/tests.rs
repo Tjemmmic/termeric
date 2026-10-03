@@ -3306,17 +3306,11 @@ fn losing_window_focus_finishes_native_pointer_gestures_without_a_release_event(
 #[test]
 fn finishing_native_drags_extracts_exact_live_domain_controls_once() {
     let mut app = App::new_headless(Config::default()).unwrap();
-    let mut tabs = TabManager::new(
-        80,
-        24,
-        crate::config::ShellConfig::default(),
-        1_000,
-        8 * 1024 * 1024,
-    );
+    let mut tabs = TabManager::for_test(crate::config::ShellConfig::default());
     for (domain, remote) in [("a", 10), ("b", 99), ("a", 20)] {
         tabs.new_tab_with_command(
             "/bin/sh",
-            &["-c".into(), "sleep 2".into()],
+            &crate::test_support::sleeping_args(),
             None,
             None,
             None,
@@ -3400,54 +3394,6 @@ fn clipboard_base64_preserves_full_groups_and_every_padding_case() {
     assert_eq!(base64_encode_standard(&[0xfb, 0xff, 0xff]), "+///");
 }
 
-#[derive(Debug)]
-struct CountingTabClosedPlugin(std::sync::Arc<std::sync::atomic::AtomicUsize>);
-
-impl Plugin for CountingTabClosedPlugin {
-    fn id(&self) -> &str {
-        "tab-closed-observer"
-    }
-
-    fn name(&self) -> &str {
-        "Tab Closed Observer"
-    }
-
-    fn on_hook(
-        &mut self,
-        hook: &crate::plugin::Hook,
-        _ctx: &crate::plugin::PluginContext,
-    ) -> Option<PluginAction> {
-        if matches!(hook, crate::plugin::Hook::TabClosed { .. }) {
-            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        }
-        None
-    }
-}
-
-#[derive(Debug)]
-struct CountingTabSwitchedPlugin(std::sync::Arc<std::sync::atomic::AtomicUsize>);
-
-impl Plugin for CountingTabSwitchedPlugin {
-    fn id(&self) -> &str {
-        "tab-switched-observer"
-    }
-
-    fn name(&self) -> &str {
-        "Tab Switched Observer"
-    }
-
-    fn on_hook(
-        &mut self,
-        hook: &crate::plugin::Hook,
-        _ctx: &crate::plugin::PluginContext,
-    ) -> Option<PluginAction> {
-        if matches!(hook, crate::plugin::Hook::TabSwitched { .. }) {
-            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        }
-        None
-    }
-}
-
 #[test]
 fn native_window_title_tracks_the_active_tab_without_losing_product_identity() {
     assert_eq!(native_window_title(false, None), "Termeric");
@@ -3524,12 +3470,11 @@ fn local_file_drop_is_quoted_and_refuses_unsafe_terminal_routes() {
     if !std::path::Path::new("/bin/sh").exists() {
         return;
     }
-    let mut config = Config::default();
-    config.shell.program = Some("/bin/sh".into());
-    config.shell.args = vec!["-c".into(), "sleep 2".into()];
-    let mut app = App::new_headless(config).unwrap();
-    app.allow_auto_restore = false;
-    app.init_tabs().unwrap();
+    let config = Config {
+        shell: crate::test_support::sleeping_shell(),
+        ..Config::default()
+    };
+    let mut app = App::new_headless_with_tabs(config);
 
     let path = std::path::Path::new("/tmp/project file's.txt");
     assert_eq!(
@@ -3604,9 +3549,7 @@ fn local_file_drop_writes_one_bracketed_payload_without_enter() {
     let mut config = Config::default();
     config.shell.program = Some("/bin/sh".into());
     config.shell.args = vec!["-c".into(), script];
-    let mut app = App::new_headless(config).unwrap();
-    app.allow_auto_restore = false;
-    app.init_tabs().unwrap();
+    let mut app = App::new_headless_with_tabs(config);
     app.active_terminal_mut()
         .unwrap()
         .set_mode(termeric_core::term::TerminalMode::BRACKETED_PASTE, true);
@@ -3666,12 +3609,11 @@ fn live_domain_drop_requires_request_scoped_confirmation_without_reading_content
     let temp = tempfile::tempdir().unwrap();
     let source = temp.path().join("upload λ.bin");
     std::fs::write(&source, b"never sent by this headless test").unwrap();
-    let mut config = Config::default();
-    config.shell.program = Some("/bin/sh".into());
-    config.shell.args = vec!["-c".into(), "sleep 2".into()];
-    let mut app = App::new_headless(config).unwrap();
-    app.allow_auto_restore = false;
-    app.init_tabs().unwrap();
+    let config = Config {
+        shell: crate::test_support::sleeping_shell(),
+        ..Config::default()
+    };
+    let mut app = App::new_headless_with_tabs(config);
     app.live_domain_authority = Some(crate::domain::DomainAuthority::Local);
     app.tabs
         .as_mut()
@@ -3746,12 +3688,11 @@ fn kitty_download_consent_is_request_scoped_and_terminal_type_gated() {
     if !std::path::Path::new("/bin/sh").exists() {
         return;
     }
-    let mut config = Config::default();
-    config.shell.program = Some("/bin/sh".into());
-    config.shell.args = vec!["-c".into(), "sleep 2".into()];
-    let mut app = App::new_headless(config).unwrap();
-    app.allow_auto_restore = false;
-    app.init_tabs().unwrap();
+    let config = Config {
+        shell: crate::test_support::sleeping_shell(),
+        ..Config::default()
+    };
+    let mut app = App::new_headless_with_tabs(config);
     let tab_id = app.tabs.as_ref().unwrap().active_tab_id().unwrap();
     let origin = TerminalEventOrigin::Tab { tab_id };
     let request = termeric_core::KittyFileTransferCommand {
@@ -3851,12 +3792,11 @@ fn kitty_upload_collects_exact_paths_before_request_scoped_consent() {
     if !std::path::Path::new("/bin/sh").exists() {
         return;
     }
-    let mut config = Config::default();
-    config.shell.program = Some("/bin/sh".into());
-    config.shell.args = vec!["-c".into(), "sleep 2".into()];
-    let mut app = App::new_headless(config).unwrap();
-    app.allow_auto_restore = false;
-    app.init_tabs().unwrap();
+    let config = Config {
+        shell: crate::test_support::sleeping_shell(),
+        ..Config::default()
+    };
+    let mut app = App::new_headless_with_tabs(config);
     let tab_id = app.tabs.as_ref().unwrap().active_tab_id().unwrap();
     let origin = TerminalEventOrigin::Tab { tab_id };
     let command =
@@ -4119,12 +4059,11 @@ fn empty_upload_progress_is_complete_without_dividing_by_zero() {
 
 #[test]
 fn desktop_delivery_failures_become_deduplicated_visible_toasts() {
-    let mut config = Config::default();
-    config.shell.program = Some("/bin/sh".into());
-    config.shell.args = vec!["-c".into(), "sleep 2".into()];
-    let mut app = App::new_headless(config).unwrap();
-    app.allow_auto_restore = false;
-    app.init_tabs().unwrap();
+    let config = Config {
+        shell: crate::test_support::sleeping_shell(),
+        ..Config::default()
+    };
+    let mut app = App::new_headless_with_tabs(config);
     app.bell.set_config(crate::notifications::BellConfig {
         audio: true,
         ..Default::default()
@@ -4187,12 +4126,8 @@ fn notification_occasions_use_exact_tab_pane_zoom_focus_and_visibility_state() {
     }
     use termeric_core::NotificationOccasion::{Always, Invisible, Unfocused};
 
-    let shell = ShellConfig {
-        program: Some("/bin/sh".into()),
-        args: vec!["-c".into(), "sleep 2".into()],
-        env: Default::default(),
-    };
-    let mut tabs = TabManager::new(80, 24, shell.clone(), 1_000, 8 * 1024 * 1024);
+    let shell = crate::test_support::sleeping_shell();
+    let mut tabs = TabManager::for_test(shell.clone());
     let split_tab_id = tabs.new_tab().unwrap();
     let split_tab = tabs.tab_mut_by_id(split_tab_id).unwrap();
     let owner = split_tab.take_terminal_owner().unwrap();
@@ -4265,12 +4200,11 @@ fn suppressed_notification_has_no_delivery_or_tracked_worker_side_effects() {
     if !std::path::Path::new("/bin/sh").exists() {
         return;
     }
-    let mut config = Config::default();
-    config.shell.program = Some("/bin/sh".into());
-    config.shell.args = vec!["-c".into(), "sleep 2".into()];
-    let mut app = App::new_headless(config).unwrap();
-    app.allow_auto_restore = false;
-    app.init_tabs().unwrap();
+    let config = Config {
+        shell: crate::test_support::sleeping_shell(),
+        ..Config::default()
+    };
+    let mut app = App::new_headless_with_tabs(config);
     let origin = TerminalEventOrigin::Tab {
         tab_id: app.tabs.as_ref().unwrap().active_tab_id().unwrap(),
     };
@@ -4350,16 +4284,12 @@ fn control_selection_validates_complete_stable_paths_before_changing_focus() {
     if !std::path::Path::new("/bin/sh").exists() {
         return;
     }
-    let shell = ShellConfig {
-        program: Some("/bin/sh".into()),
-        args: vec!["-c".into(), "sleep 2".into()],
-        env: Default::default(),
-    };
-    let mut tabs = TabManager::new(80, 24, shell.clone(), 1_000, 8 * 1024 * 1024);
+    let shell = crate::test_support::sleeping_shell();
+    let mut tabs = TabManager::for_test(shell.clone());
     let first = tabs
         .new_tab_with_command(
             "/bin/sh",
-            &["-c".into(), "sleep 2".into()],
+            &crate::test_support::sleeping_args(),
             None,
             Some("first"),
             None,
@@ -4369,7 +4299,7 @@ fn control_selection_validates_complete_stable_paths_before_changing_focus() {
     let second = tabs
         .new_tab_with_command(
             "/bin/sh",
-            &["-c".into(), "sleep 2".into()],
+            &crate::test_support::sleeping_args(),
             None,
             Some("second"),
             None,
@@ -4784,12 +4714,8 @@ fn plugin_pane_creation_is_exact_correlated_and_rejects_unsupported_tabs() {
     if !std::path::Path::new("/bin/sh").exists() {
         return;
     }
-    let shell = ShellConfig {
-        program: Some("/bin/sh".into()),
-        args: vec!["-c".into(), "sleep 2".into()],
-        env: Default::default(),
-    };
-    let mut tabs = TabManager::new(80, 24, shell.clone(), 1_000, 8 * 1024 * 1024);
+    let shell = crate::test_support::sleeping_shell();
+    let mut tabs = TabManager::for_test(shell.clone());
     let tab_id = tabs.new_tab().unwrap();
     let tab = tabs.tab_mut_by_id(tab_id).unwrap();
     let owner = tab.take_terminal_owner().unwrap();
@@ -4934,12 +4860,8 @@ fn plugin_pane_movement_preserves_pty_and_returns_exact_destination_state() {
     if !std::path::Path::new("/bin/sh").exists() {
         return;
     }
-    let shell = ShellConfig {
-        program: Some("/bin/sh".into()),
-        args: vec!["-c".into(), "sleep 2".into()],
-        env: Default::default(),
-    };
-    let mut tabs = TabManager::new(80, 24, shell.clone(), 1_000, 8 * 1024 * 1024);
+    let shell = crate::test_support::sleeping_shell();
+    let mut tabs = TabManager::for_test(shell.clone());
     let source_tab_id = tabs.new_tab().unwrap();
     let source = tabs.tab_mut_by_id(source_tab_id).unwrap();
     let owner = source.take_terminal_owner().unwrap();
@@ -4965,9 +4887,10 @@ fn plugin_pane_movement_preserves_pty_and_returns_exact_destination_state() {
     app.plugin_manager.clear();
     let observed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     app.plugin_manager
-        .register(Box::new(CountingTabSwitchedPlugin(std::sync::Arc::clone(
+        .register(crate::test_support::hook_counter(
+            |hook| matches!(hook, crate::plugin::Hook::TabSwitched { .. }),
             &observed,
-        ))))
+        ))
         .unwrap();
     app.copy_mode_target = Some(CopyModeTarget {
         tab: source_tab_id,
@@ -5019,12 +4942,8 @@ fn plugin_pane_layout_controls_background_tab_without_changing_terminal_owners()
     if !std::path::Path::new("/bin/sh").exists() {
         return;
     }
-    let shell = ShellConfig {
-        program: Some("/bin/sh".into()),
-        args: vec!["-c".into(), "sleep 2".into()],
-        env: Default::default(),
-    };
-    let mut tabs = TabManager::new(80, 24, shell.clone(), 1_000, 8 * 1024 * 1024);
+    let shell = crate::test_support::sleeping_shell();
+    let mut tabs = TabManager::for_test(shell.clone());
     let target_tab_id = tabs.new_tab().unwrap();
     let target = tabs.tab_mut_by_id(target_tab_id).unwrap();
     let owner = target.take_terminal_owner().unwrap();
@@ -5163,12 +5082,8 @@ fn plugin_pane_layout_refuses_unsupported_or_incomplete_tabs_atomically() {
     if !std::path::Path::new("/bin/sh").exists() {
         return;
     }
-    let shell = ShellConfig {
-        program: Some("/bin/sh".into()),
-        args: vec!["-c".into(), "sleep 2".into()],
-        env: Default::default(),
-    };
-    let mut tabs = TabManager::new(80, 24, shell.clone(), 1_000, 8 * 1024 * 1024);
+    let shell = crate::test_support::sleeping_shell();
+    let mut tabs = TabManager::for_test(shell.clone());
     let tab_id = tabs.new_tab().unwrap();
     let tab = tabs.tab_mut_by_id(tab_id).unwrap();
     let owner = tab.take_terminal_owner().unwrap();
@@ -5281,12 +5196,8 @@ fn plugin_pane_movement_refuses_unsupported_targets_before_detaching() {
     }
 
     fn fixture() -> (App, usize, usize, PaneId) {
-        let shell = ShellConfig {
-            program: Some("/bin/sh".into()),
-            args: vec!["-c".into(), "sleep 2".into()],
-            env: Default::default(),
-        };
-        let mut tabs = TabManager::new(80, 24, shell.clone(), 1_000, 8 * 1024 * 1024);
+        let shell = crate::test_support::sleeping_shell();
+        let mut tabs = TabManager::for_test(shell.clone());
         let source_tab_id = tabs.new_tab().unwrap();
         let source = tabs.tab_mut_by_id(source_tab_id).unwrap();
         let owner = source.take_terminal_owner().unwrap();
@@ -5449,11 +5360,7 @@ fn plugin_pane_movement_refuses_unsupported_targets_before_detaching() {
     assert_source_intact(&serial, source);
 
     let (mut closed_anchor, source, destination, _) = fixture();
-    let shell = ShellConfig {
-        program: Some("/bin/sh".into()),
-        args: vec!["-c".into(), "sleep 2".into()],
-        env: Default::default(),
-    };
+    let shell = crate::test_support::sleeping_shell();
     let destination_tab = closed_anchor
         .tabs
         .as_mut()
@@ -5523,12 +5430,8 @@ fn plugin_pane_closure_is_exact_correlated_and_preserves_last_pane() {
     if !std::path::Path::new("/bin/sh").exists() {
         return;
     }
-    let shell = ShellConfig {
-        program: Some("/bin/sh".into()),
-        args: vec!["-c".into(), "sleep 2".into()],
-        env: Default::default(),
-    };
-    let mut tabs = TabManager::new(80, 24, shell.clone(), 1_000, 8 * 1024 * 1024);
+    let shell = crate::test_support::sleeping_shell();
+    let mut tabs = TabManager::for_test(shell.clone());
     let target_tab_id = tabs.new_tab().unwrap();
     let tab = tabs.tab_mut_by_id(target_tab_id).unwrap();
     let owner = tab.take_terminal_owner().unwrap();
@@ -5766,12 +5669,8 @@ fn plugin_tab_closure_is_scheduled_exact_bounded_and_hook_suppressed() {
     if !std::path::Path::new("/bin/sh").exists() {
         return;
     }
-    let shell = ShellConfig {
-        program: Some("/bin/sh".into()),
-        args: vec!["-c".into(), "sleep 2".into()],
-        env: Default::default(),
-    };
-    let mut tabs = TabManager::new(80, 24, shell, 1_000, 8 * 1024 * 1024);
+    let shell = crate::test_support::sleeping_shell();
+    let mut tabs = TabManager::for_test(shell);
     let survivor = tabs.new_tab().unwrap();
     let serial = tabs.new_tab().unwrap();
     let live_candidate = tabs.new_tab().unwrap();
@@ -5786,9 +5685,10 @@ fn plugin_tab_closure_is_scheduled_exact_bounded_and_hook_suppressed() {
     app.plugin_manager.clear();
     let observed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     app.plugin_manager
-        .register(Box::new(CountingTabClosedPlugin(std::sync::Arc::clone(
+        .register(crate::test_support::hook_counter(
+            |hook| matches!(hook, crate::plugin::Hook::TabClosed { .. }),
             &observed,
-        ))))
+        ))
         .unwrap();
 
     let background = plugin_action_event(
@@ -6008,21 +5908,18 @@ fn control_tab_closure_retains_final_tab_authority() {
     if !std::path::Path::new("/bin/sh").exists() {
         return;
     }
-    let shell = ShellConfig {
-        program: Some("/bin/sh".into()),
-        args: vec!["-c".into(), "sleep 2".into()],
-        env: Default::default(),
-    };
-    let mut tabs = TabManager::new(80, 24, shell, 1_000, 8 * 1024 * 1024);
+    let shell = crate::test_support::sleeping_shell();
+    let mut tabs = TabManager::for_test(shell);
     let tab_id = tabs.new_tab().unwrap();
     let mut app = App::new_headless(Config::default()).unwrap();
     app.tabs = Some(tabs);
     app.plugin_manager.clear();
     let observed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     app.plugin_manager
-        .register(Box::new(CountingTabClosedPlugin(std::sync::Arc::clone(
+        .register(crate::test_support::hook_counter(
+            |hook| matches!(hook, crate::plugin::Hook::TabClosed { .. }),
             &observed,
-        ))))
+        ))
         .unwrap();
 
     app.close_control_tab(tab_id as u64).unwrap();
@@ -6044,45 +5941,19 @@ fn plugin_tab_creation_returns_stable_identity_without_lifecycle_redispatch() {
     if !std::path::Path::new("/bin/sh").exists() {
         return;
     }
-    #[derive(Debug)]
-    struct TabCreatedObserver(std::sync::Arc<std::sync::atomic::AtomicUsize>);
 
-    impl crate::plugin::hooks::Plugin for TabCreatedObserver {
-        fn id(&self) -> &str {
-            "tab-created-observer"
-        }
-
-        fn name(&self) -> &str {
-            "Tab Created Observer"
-        }
-
-        fn on_hook(
-            &mut self,
-            hook: &crate::plugin::Hook,
-            _ctx: &crate::plugin::PluginContext,
-        ) -> Option<crate::plugin::PluginAction> {
-            if matches!(hook, crate::plugin::Hook::TabCreated { .. }) {
-                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            }
-            None
-        }
-    }
-
-    let shell = ShellConfig {
-        program: Some("/bin/sh".into()),
-        args: vec!["-c".into(), "sleep 2".into()],
-        env: Default::default(),
-    };
-    let mut tabs = TabManager::new(80, 24, shell, 1_000, 8 * 1024 * 1024);
+    let shell = crate::test_support::sleeping_shell();
+    let mut tabs = TabManager::for_test(shell);
     let initial_tab_id = tabs.new_tab().unwrap();
     let mut app = App::new_headless(Config::default()).unwrap();
     app.tabs = Some(tabs);
     app.plugin_manager.clear();
     let observed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     app.plugin_manager
-        .register(Box::new(TabCreatedObserver(std::sync::Arc::clone(
+        .register(crate::test_support::hook_counter(
+            |hook| matches!(hook, crate::plugin::Hook::TabCreated { .. }),
             &observed,
-        ))))
+        ))
         .unwrap();
 
     let created = plugin_action_event(
@@ -6199,7 +6070,7 @@ fn control_input_is_opt_in_exact_paste_aware_and_guarded_without_provider_execut
         "printf '\rinput=%s\r\n' \"$bytes\"; ",
         "sleep 0.1"
     );
-    let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+    let mut tabs = TabManager::for_test(ShellConfig::default());
     let tab_id = tabs
         .new_tab_with_command(
             "/bin/sh",
@@ -6313,11 +6184,11 @@ fn diff_review_done_marks_only_its_original_tab_and_exact_diff() {
     if !std::path::Path::new("/bin/sh").exists() {
         return;
     }
-    let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+    let mut tabs = TabManager::for_test(ShellConfig::default());
     for title in ["first-diff-tab", "active-other-tab"] {
         tabs.new_tab_with_command(
             "/bin/sh",
-            &["-c".into(), "sleep 2".into()],
+            &crate::test_support::sleeping_args(),
             None,
             Some(title),
             None,
@@ -6372,11 +6243,11 @@ fn harvest_search_switches_to_the_exact_producing_terminal() {
     if !std::path::Path::new("/bin/sh").exists() {
         return;
     }
-    let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+    let mut tabs = TabManager::for_test(ShellConfig::default());
     let source_tab = tabs
         .new_tab_with_command(
             "/bin/sh",
-            &["-c".into(), "sleep 2".into()],
+            &crate::test_support::sleeping_args(),
             None,
             Some("harvest-source"),
             None,
@@ -6421,7 +6292,7 @@ fn harvest_search_switches_to_the_exact_producing_terminal() {
     let other_tab = tabs
         .new_tab_with_command(
             "/bin/sh",
-            &["-c".into(), "sleep 2".into()],
+            &crate::test_support::sleeping_args(),
             None,
             Some("other-active-tab"),
             None,
@@ -7402,7 +7273,7 @@ fn prompt_actions_walk_the_focused_terminals_scrollback_in_both_directions() {
     let mut tabs = TabManager::new(14, 4, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
     tabs.new_tab_with_command(
         "/bin/sh",
-        &["-c".into(), "sleep 2".into()],
+        &crate::test_support::sleeping_args(),
         None,
         Some("prompt-navigation"),
         None,
@@ -7484,7 +7355,7 @@ fn semantic_command_completion_reaches_plugins_with_exact_bounded_source_text() 
     let mut tabs = TabManager::new(20, 4, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
     tabs.new_tab_with_command(
         "/bin/sh",
-        &["-c".into(), "sleep 2".into()],
+        &crate::test_support::sleeping_args(),
         None,
         Some("command-event"),
         None,
@@ -7537,7 +7408,7 @@ fn clear_scrollback_action_retires_shell_metadata_with_the_erased_history() {
     let mut tabs = TabManager::new(16, 4, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
     tabs.new_tab_with_command(
         "/bin/sh",
-        &["-c".into(), "sleep 2".into()],
+        &crate::test_support::sleeping_args(),
         None,
         Some("clear-history"),
         None,
@@ -8016,11 +7887,11 @@ fn completed_context_never_falls_back_to_a_replacement_plugin_tab() {
     if !std::path::Path::new("/bin/sh").exists() {
         return;
     }
-    let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+    let mut tabs = TabManager::for_test(ShellConfig::default());
     for title in ["original-context-target", "replacement-context-target"] {
         tabs.new_tab_with_command(
             "/bin/sh",
-            &["-c".into(), "sleep 2".into()],
+            &crate::test_support::sleeping_args(),
             None,
             Some(title),
             Some(crate::tabs::TabType::Plugin {
@@ -8079,7 +7950,7 @@ fn typed_agent_input_is_submitted_separately_and_only_to_the_same_agent() {
         .unwrap();
     let codex = temp.path().join("codex");
     std::os::unix::fs::symlink(cat, &codex).unwrap();
-    let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+    let mut tabs = TabManager::for_test(ShellConfig::default());
     // Raw mode: bytes reach the capture file exactly as written.
     let tab_id = tabs
         .new_tab_with_command(
@@ -8309,7 +8180,7 @@ fn hook_reports_track_an_agent_started_from_a_shell_until_it_exits() {
     };
     // Outside any repository, so noticing the agent snapshots nothing real.
     let directory = tempfile::tempdir().unwrap();
-    let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+    let mut tabs = TabManager::for_test(ShellConfig::default());
     let tab_id = tabs
         .new_tab_with_command(
             bash,
@@ -8480,7 +8351,7 @@ fn agent_list_puts_waiting_agents_first_and_answers_come_from_reports_or_logs() 
     use crate::agents::{AgentReport, AgentStatus};
     use crate::control::protocol::AgentEventKind;
     let temp = tempfile::tempdir().unwrap();
-    let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+    let mut tabs = TabManager::for_test(ShellConfig::default());
     let mut open = |title: &str, agent: &str, event: Option<AgentEventKind>| {
         let tab_id = tabs
             .new_tab_with_command(
@@ -8609,7 +8480,7 @@ fn agent_changes_are_listed_reviewed_staged_and_reverted_for_their_terminal() {
     repo.commit(Some("HEAD"), &signature, &signature, "start", &tree, &[])
         .unwrap();
 
-    let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+    let mut tabs = TabManager::for_test(ShellConfig::default());
     tabs.new_tab_with_command(
         "/bin/sh",
         &["-c".into(), "sleep 30".into()],
@@ -8758,7 +8629,7 @@ fn agent_changes_are_listed_reviewed_staged_and_reverted_for_their_terminal() {
 pub(super) fn two_agent_tabs() -> (App, usize, usize) {
     use crate::agents::{AgentReport, AgentStatus};
     use crate::control::protocol::AgentEventKind;
-    let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+    let mut tabs = TabManager::for_test(ShellConfig::default());
     let mut ids = Vec::new();
     for (agent, event, detail) in [
         ("codex", AgentEventKind::Working, None),
@@ -8874,7 +8745,7 @@ fn the_agents_panel_lists_agents_by_urgency_and_shows_the_chosen_one() {
 fn a_transcript_can_be_stopped_after_its_agent_exits() {
     let temp = tempfile::tempdir().unwrap();
     crate::session::set_test_sessions_base_dir(Some(temp.path().to_path_buf()));
-    let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+    let mut tabs = TabManager::for_test(ShellConfig::default());
     tabs.new_tab_with_command(
         "/bin/sh",
         &["-c".into(), "sleep 30".into()],
@@ -8936,7 +8807,7 @@ fn a_read_only_agent_refuses_context_with_its_own_reason() {
         .find(|path| std::path::Path::new(path).exists())
         .unwrap();
     std::os::unix::fs::symlink(sleep, &codex).unwrap();
-    let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+    let mut tabs = TabManager::for_test(ShellConfig::default());
     let tab_id = tabs
         .new_tab_with_command(
             codex.to_str().unwrap(),
@@ -9037,11 +8908,7 @@ fn plugin_context_cwd_follows_the_focused_pane_and_single_terminal() {
         std::fs::create_dir(directory).unwrap();
     }
 
-    let shell = ShellConfig {
-        program: Some("/bin/sh".into()),
-        args: vec!["-c".into(), "sleep 2".into()],
-        env: Default::default(),
-    };
+    let shell = crate::test_support::sleeping_shell();
     let mut panes = PaneManager::new(
         80,
         24,
@@ -9067,10 +8934,10 @@ fn plugin_context_cwd_follows_the_focused_pane_and_single_terminal() {
         .process(format!("\x1b]7;file://{}\x07", right_cwd.display()).as_bytes());
     panes.focus(PaneId(0));
 
-    let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+    let mut tabs = TabManager::for_test(ShellConfig::default());
     tabs.new_tab_with_command(
         "/bin/sh",
-        &["-c".into(), "sleep 2".into()],
+        &crate::test_support::sleeping_args(),
         None,
         Some("plugin-context-routing"),
         None,
@@ -9097,11 +8964,11 @@ fn plugin_context_cwd_follows_the_focused_pane_and_single_terminal() {
         right_cwd.to_str()
     );
 
-    let mut single_tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+    let mut single_tabs = TabManager::for_test(ShellConfig::default());
     single_tabs
         .new_tab_with_command(
             "/bin/sh",
-            &["-c".into(), "sleep 2".into()],
+            &crate::test_support::sleeping_args(),
             None,
             Some("single-plugin-context"),
             None,
@@ -9128,10 +8995,10 @@ fn idle_deadline_releases_stalled_synchronized_output_and_requests_the_final_fra
         return;
     }
     let mut app = App::new_headless(Config::default()).unwrap();
-    let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+    let mut tabs = TabManager::for_test(ShellConfig::default());
     tabs.new_tab_with_command(
         "/bin/sh",
-        &["-c".into(), "sleep 2".into()],
+        &crate::test_support::sleeping_args(),
         None,
         Some("synchronized-output-timeout"),
         None,
@@ -9456,7 +9323,7 @@ fn kitty_animation_uses_its_exact_deadline_and_requests_one_frame() {
     let mut tabs = TabManager::new(8, 4, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
     tabs.new_tab_with_command(
         "/bin/sh",
-        &["-c".into(), "sleep 2".into()],
+        &crate::test_support::sleeping_args(),
         None,
         Some("kitty-animation-deadline"),
         None,
@@ -9497,11 +9364,7 @@ fn synchronized_output_timeout_is_terminal_local_even_when_its_pane_is_unfocused
         return;
     }
     let mut app = App::new_headless(Config::default()).unwrap();
-    let shell = ShellConfig {
-        program: Some("/bin/sh".into()),
-        args: vec!["-c".into(), "sleep 2".into()],
-        env: Default::default(),
-    };
+    let shell = crate::test_support::sleeping_shell();
     let mut panes = PaneManager::new(
         80,
         24,
@@ -9528,10 +9391,10 @@ fn synchronized_output_timeout_is_terminal_local_even_when_its_pane_is_unfocused
         .unwrap();
     panes.focus(PaneId(0));
 
-    let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+    let mut tabs = TabManager::for_test(ShellConfig::default());
     tabs.new_tab_with_command(
         "/bin/sh",
-        &["-c".into(), "sleep 2".into()],
+        &crate::test_support::sleeping_args(),
         None,
         Some("pane-synchronized-output-timeout"),
         None,
@@ -9581,11 +9444,7 @@ fn keyboard_mode_snapshot_follows_the_focused_pane() {
         return;
     }
     let mut app = App::new_headless(Config::default()).unwrap();
-    let shell = ShellConfig {
-        program: Some("/bin/sh".into()),
-        args: vec!["-c".into(), "sleep 2".into()],
-        env: Default::default(),
-    };
+    let shell = crate::test_support::sleeping_shell();
     let mut panes = PaneManager::new(
         80,
         24,
@@ -9615,10 +9474,10 @@ fn keyboard_mode_snapshot_follows_the_focused_pane() {
         b"\x1b[=2u\x1b[?1061h\x1b[>0;9m\x1b[>0;10f\x1b[>1;4m\x1b[>1;1f\x1b[>2;4m\x1b[>2;1f\x1b[>3;4m\x1b[>3;1f\x1b[>4;2m\x1b[>4;1f\x1b[>6;4m\x1b[>6;1f\x1b[>7;4m\x1b[>7;1f",
     );
 
-    let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+    let mut tabs = TabManager::for_test(ShellConfig::default());
     tabs.new_tab_with_command(
         "/bin/sh",
-        &["-c".into(), "sleep 2".into()],
+        &crate::test_support::sleeping_args(),
         None,
         Some("keyboard-mode"),
         None,
@@ -9790,11 +9649,7 @@ fn copy_mode_is_owned_by_one_focused_pane_and_disappears_after_focus_changes() {
         return;
     }
     let mut app = App::new_headless(Config::default()).unwrap();
-    let shell = ShellConfig {
-        program: Some("/bin/sh".into()),
-        args: vec!["-c".into(), "sleep 2".into()],
-        env: Default::default(),
-    };
+    let shell = crate::test_support::sleeping_shell();
     let mut panes = PaneManager::new(
         80,
         24,
@@ -9808,10 +9663,10 @@ fn copy_mode_is_owned_by_one_focused_pane_and_disappears_after_focus_changes() {
     )
     .unwrap();
     let right = panes.split(SplitDirection::Vertical).unwrap();
-    let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+    let mut tabs = TabManager::for_test(ShellConfig::default());
     tabs.new_tab_with_command(
         "/bin/sh",
-        &["-c".into(), "sleep 2".into()],
+        &crate::test_support::sleeping_args(),
         None,
         Some("copy-mode-owner"),
         None,
@@ -9901,7 +9756,7 @@ fn mouse_focus_and_bracketed_paste_reach_the_focused_pane_in_order() {
         );
 
     let mut app = App::new_headless(Config::default()).unwrap();
-    let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+    let mut tabs = TabManager::for_test(ShellConfig::default());
     tabs.new_tab_with_command(
         "/bin/sh",
         &["-c".into(), "sleep 3".into()],
@@ -10237,17 +10092,13 @@ fn pane_identity_survives_collapse_and_the_next_split() {
     if !std::path::Path::new("/bin/sh").exists() {
         return;
     }
-    let shell = ShellConfig {
-        program: Some("/bin/sh".into()),
-        args: vec!["-c".into(), "sleep 2".into()],
-        env: Default::default(),
-    };
+    let shell = crate::test_support::sleeping_shell();
     let mut tab = Tab::new_with_command(
         0,
         80,
         24,
         "/bin/sh",
-        &["-c".into(), "sleep 2".into()],
+        &crate::test_support::sleeping_args(),
         None,
         Some("stable-pane"),
         1_000,
@@ -10276,7 +10127,7 @@ fn pane_identity_survives_collapse_and_the_next_split() {
     assert_eq!(snapshot.primary_pane, 1);
     assert_eq!(snapshot.focused_pane, 1);
     assert_eq!(snapshot.panes[0].id, 1);
-    let mut restored = TabManager::new(80, 24, shell.clone(), 1_000, 8 * 1024 * 1024);
+    let mut restored = TabManager::for_test(shell.clone());
     restored
         .new_shell_tab_from_workspace(&snapshot, &HashMap::new())
         .unwrap();
@@ -10535,11 +10386,7 @@ fn pane_read_only_blocks_user_routes_but_not_protocol_replies_and_follows_owners
     if !std::path::Path::new("/bin/sh").exists() {
         return;
     }
-    let shell = ShellConfig {
-        program: Some("/bin/sh".into()),
-        args: vec!["-c".into(), "sleep 2".into()],
-        env: Default::default(),
-    };
+    let shell = crate::test_support::sleeping_shell();
     let mut tab = Tab::new_with_command(
         0,
         80,
@@ -10596,13 +10443,12 @@ fn read_only_focused_pane_rejects_keyboard_and_running_gui_control_input() {
     if !std::path::Path::new("/bin/sh").exists() {
         return;
     }
-    let mut config = Config::default();
-    config.shell.program = Some("/bin/sh".into());
-    config.shell.args = vec!["-c".into(), "sleep 2".into()];
+    let mut config = Config {
+        shell: crate::test_support::sleeping_shell(),
+        ..Config::default()
+    };
     config.security.allow_gui_control_input = true;
-    let mut app = App::new_headless(config).unwrap();
-    app.allow_auto_restore = false;
-    app.init_tabs().unwrap();
+    let mut app = App::new_headless_with_tabs(config);
     app.toggle_focused_pane_read_only();
 
     let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
@@ -11000,22 +10846,12 @@ fn headless_config_application_updates_agents_harvest_and_palette() {
 
 #[test]
 fn structured_plugin_completions_require_a_live_generation_and_plugin() {
-    #[derive(Debug)]
-    struct CompletionPlugin;
-
-    impl crate::plugin::hooks::Plugin for CompletionPlugin {
-        fn id(&self) -> &str {
-            "completion-fixture"
-        }
-
-        fn name(&self) -> &str {
-            "Completion Fixture"
-        }
-    }
-
     let mut app = App::new_headless(Config::default()).unwrap();
     app.plugin_manager
-        .register(Box::new(CompletionPlugin))
+        .register(crate::test_support::identity_plugin(
+            "completion-fixture",
+            "Completion Fixture",
+        ))
         .unwrap();
     let completion =
         |generation, message: &str| crate::plugin::structured::StructuredHandlerCompletion {
@@ -11067,22 +10903,12 @@ fn structured_completion_hands_its_host_operation_to_the_application() {
         StructuredHandlerMode, StructuredResponseAction,
     };
 
-    #[derive(Debug)]
-    struct CompletionPlugin;
-
-    impl crate::plugin::hooks::Plugin for CompletionPlugin {
-        fn id(&self) -> &str {
-            "operation-fixture"
-        }
-
-        fn name(&self) -> &str {
-            "Operation Fixture"
-        }
-    }
-
     let mut app = App::new_headless(Config::default()).unwrap();
     app.plugin_manager
-        .register(Box::new(CompletionPlugin))
+        .register(crate::test_support::identity_plugin(
+            "operation-fixture",
+            "Operation Fixture",
+        ))
         .unwrap();
     let select = StructuredResponseAction::SelectTab {
         action_id: "select".into(),
@@ -11141,15 +10967,11 @@ fn plugin_window_close_validation_never_tears_down_the_window() {
     if !std::path::Path::new("/bin/sh").exists() {
         return;
     }
-    let shell = ShellConfig {
-        program: Some("/bin/sh".into()),
-        args: vec!["-c".into(), "sleep 2".into()],
-        env: Default::default(),
-    };
-    let mut tabs = TabManager::new(80, 24, shell, 1_000, 8 * 1024 * 1024);
+    let shell = crate::test_support::sleeping_shell();
+    let mut tabs = TabManager::for_test(shell);
     tabs.new_tab_with_command(
         "/bin/sh",
-        &["-c".into(), "sleep 2".into()],
+        &crate::test_support::sleeping_args(),
         None,
         Some("close fixture"),
         None,
@@ -11255,15 +11077,11 @@ fn structured_workspace_query_is_current_window_bounded_and_control_safe() {
     if !std::path::Path::new("/bin/sh").exists() {
         return;
     }
-    let shell = ShellConfig {
-        program: Some("/bin/sh".into()),
-        args: vec!["-c".into(), "sleep 2".into()],
-        env: Default::default(),
-    };
-    let mut tabs = TabManager::new(80, 24, shell, 1_000, 8 * 1024 * 1024);
+    let shell = crate::test_support::sleeping_shell();
+    let mut tabs = TabManager::for_test(shell);
     tabs.new_tab_with_command(
         "/bin/sh",
-        &["-c".into(), "sleep 2".into()],
+        &crate::test_support::sleeping_args(),
         None,
         Some("unsafe\u{1b} title"),
         None,
@@ -11320,35 +11138,12 @@ fn structured_workspace_query_is_current_window_bounded_and_control_safe() {
     assert_eq!(window["tabs"][0]["panes"][0]["cols"], 80);
     assert_eq!(window["tabs"][0]["panes"][0]["rows"], 24);
 
-    #[derive(Debug)]
-    struct TabSwitchObserver(std::sync::Arc<std::sync::atomic::AtomicUsize>);
-
-    impl crate::plugin::hooks::Plugin for TabSwitchObserver {
-        fn id(&self) -> &str {
-            "workspace-action-observer"
-        }
-
-        fn name(&self) -> &str {
-            "Workspace Action Observer"
-        }
-
-        fn on_hook(
-            &mut self,
-            hook: &crate::plugin::Hook,
-            _ctx: &crate::plugin::PluginContext,
-        ) -> Option<crate::plugin::PluginAction> {
-            if matches!(hook, crate::plugin::Hook::TabSwitched { .. }) {
-                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            }
-            None
-        }
-    }
-
     let observed_switches = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     app.plugin_manager
-        .register(Box::new(TabSwitchObserver(std::sync::Arc::clone(
+        .register(crate::test_support::hook_counter(
+            |hook| matches!(hook, crate::plugin::Hook::TabSwitched { .. }),
             &observed_switches,
-        ))))
+        ))
         .unwrap();
 
     let failed = plugin_action_event(
@@ -11833,7 +11628,7 @@ fn config_reload_only_overrides_application_keyboard_type_when_profile_changes()
     let mut config = Config::default();
     config.keyboard.xterm_type = crate::config::XtermKeyboardTypeConfig::Legacy;
     let mut app = App::new_headless(config).unwrap();
-    let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+    let mut tabs = TabManager::for_test(ShellConfig::default());
     tabs.set_xterm_keyboard_type(termeric_core::term::XtermKeyboardType::Legacy, true);
     tabs.new_tab_with_command(
         "/bin/sh",
@@ -11882,7 +11677,7 @@ fn sending_to_an_agent_requires_one_to_be_running() {
 #[test]
 fn context_output_comes_from_a_shell_never_from_another_agent() {
     let mut app = App::new_headless(Config::default()).unwrap();
-    let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+    let mut tabs = TabManager::for_test(ShellConfig::default());
     let mut open = |text: &str, agent: Option<&str>| {
         let tab_id = tabs
             .new_tab_with_command(
@@ -12058,7 +11853,7 @@ done
     }
 
     let mut app = App::new_headless(config).unwrap();
-    let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+    let mut tabs = TabManager::for_test(ShellConfig::default());
     tabs.new_tab_with_command(
         "/bin/sh",
         &["-c".into(), "sleep 30".into()],
@@ -12245,7 +12040,7 @@ done
     config.supervisor.mode = SupervisorMode::Assist;
     let mut app = App::new_headless(config).unwrap();
     app.supervisor_rules_path = temp.path().join("supervisor.md");
-    let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+    let mut tabs = TabManager::for_test(ShellConfig::default());
     tabs.new_tab_with_command(
         "/bin/sh",
         &["-c".into(), "sleep 30".into()],
@@ -12481,27 +12276,24 @@ done
 
 #[cfg(unix)]
 fn wait_for_plugin_fixture(app: &mut App, plugin_id: &str, needle: &str) {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < deadline {
+    let found = crate::test_support::poll_until(Duration::from_secs(5), || {
         if let Some(tabs) = &mut app.tabs {
             let (_, events) = tabs.poll_events();
             for event in events {
                 app.handle_terminal_event(event);
             }
         }
-        let found = app
-            .tabs
+        app.tabs
             .as_ref()
             .and_then(|tabs| tabs.find_plugin_tab_index(plugin_id))
             .and_then(|index| tabs_at(app, index))
             .and_then(|tab| tab.focused_terminal())
-            .is_some_and(|terminal| terminal.grid().plain_lines().join("\n").contains(needle));
-        if found {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    panic!("timed out waiting for {plugin_id} fake CLI output containing {needle:?}");
+            .is_some_and(|terminal| terminal.grid().plain_lines().join("\n").contains(needle))
+    });
+    assert!(
+        found,
+        "timed out waiting for {plugin_id} fake CLI output containing {needle:?}"
+    );
 }
 
 #[cfg(unix)]
@@ -12514,17 +12306,16 @@ fn tabs_at(app: &App, index: usize) -> Option<&Tab> {
 
 #[cfg(unix)]
 fn wait_for_file_text(path: &std::path::Path, needle: &str) {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < deadline {
-        if std::fs::read_to_string(path)
+    let found = crate::test_support::poll_until(Duration::from_secs(5), || {
+        std::fs::read_to_string(path)
             .ok()
             .is_some_and(|text| text.contains(needle))
-        {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    panic!("timed out waiting for {needle:?} in {}", path.display());
+    });
+    assert!(
+        found,
+        "timed out waiting for {needle:?} in {}",
+        path.display()
+    );
 }
 
 #[cfg(unix)]
@@ -12581,11 +12372,11 @@ fn app_mediated_clipboard_reply_returns_to_requesting_pane_not_focus() {
         return;
     }
     let mut app = App::new_headless(Config::default()).unwrap();
-    let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+    let mut tabs = TabManager::for_test(ShellConfig::default());
     let tab_id = tabs
         .new_tab_with_command(
             "/bin/sh",
-            &["-c".into(), "sleep 2".into()],
+            &crate::test_support::sleeping_args(),
             None,
             Some("pane-owner"),
             None,
@@ -12836,11 +12627,11 @@ fn delayed_notification_reply_returns_to_requesting_pane_without_a_focus_fallbac
         env: Default::default(),
     };
     let mut app = App::new_headless(Config::default()).unwrap();
-    let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+    let mut tabs = TabManager::for_test(ShellConfig::default());
     let tab_id = tabs
         .new_tab_with_command(
             "/bin/sh",
-            &["-c".into(), "sleep 2".into()],
+            &crate::test_support::sleeping_args(),
             None,
             Some("notification-owner"),
             None,
@@ -12953,16 +12744,12 @@ fn notification_activation_selects_the_exact_origin_and_stale_origins_fail_close
     if !std::path::Path::new("/bin/sh").exists() {
         return;
     }
-    let shell = ShellConfig {
-        program: Some("/bin/sh".into()),
-        args: vec!["-c".into(), "sleep 2".into()],
-        env: Default::default(),
-    };
-    let mut tabs = TabManager::new(80, 24, shell.clone(), 1_000, 8 * 1024 * 1024);
+    let shell = crate::test_support::sleeping_shell();
+    let mut tabs = TabManager::for_test(shell.clone());
     let origin_tab = tabs
         .new_tab_with_command(
             "/bin/sh",
-            &["-c".into(), "sleep 2".into()],
+            &crate::test_support::sleeping_args(),
             None,
             Some("notification-origin"),
             None,
@@ -12972,7 +12759,7 @@ fn notification_activation_selects_the_exact_origin_and_stale_origins_fail_close
     let active_tab = tabs
         .new_tab_with_command(
             "/bin/sh",
-            &["-c".into(), "sleep 2".into()],
+            &crate::test_support::sleeping_args(),
             None,
             Some("active"),
             None,
@@ -13058,7 +12845,7 @@ fn osc_titles_and_dynamic_colors_apply_to_exact_inactive_tab_and_pane_origins() 
     let dormant_tab_id = tabs
         .new_tab_with_command(
             "/bin/sh",
-            &["-c".into(), "sleep 2".into()],
+            &crate::test_support::sleeping_args(),
             None,
             Some("dormant"),
             None,
@@ -13068,11 +12855,7 @@ fn osc_titles_and_dynamic_colors_apply_to_exact_inactive_tab_and_pane_origins() 
     let mut panes = PaneManager::new(
         40,
         8,
-        ShellConfig {
-            program: Some("/bin/sh".into()),
-            args: vec!["-c".into(), "sleep 2".into()],
-            env: Default::default(),
-        },
+        crate::test_support::sleeping_shell(),
         1_000,
         8 * 1024 * 1024,
         800.0,
@@ -13087,7 +12870,7 @@ fn osc_titles_and_dynamic_colors_apply_to_exact_inactive_tab_and_pane_origins() 
     let active_tab_id = tabs
         .new_tab_with_command(
             "/bin/sh",
-            &["-c".into(), "sleep 2".into()],
+            &crate::test_support::sleeping_args(),
             None,
             Some("active"),
             None,
@@ -13429,9 +13212,10 @@ fn cli_launch_plan_creates_ordered_shell_and_arbitrary_command_tabs() {
         return;
     }
     let temp = tempfile::tempdir().unwrap();
-    let mut config = Config::default();
-    config.shell.program = Some("/bin/sh".into());
-    config.shell.args = vec!["-c".into(), "sleep 2".into()];
+    let config = Config {
+        shell: crate::test_support::sleeping_shell(),
+        ..Config::default()
+    };
     let mut app = App::new_headless(config).unwrap();
     app.allow_auto_restore = false;
     app.launch = crate::cli::WindowLaunch {
@@ -14169,7 +13953,7 @@ fn codex_supervises_as_an_agent_view_conversation() {
     config.supervisor.mode = SupervisorMode::Watch;
     let mut app = App::new_headless(config).unwrap();
     app.supervisor_rules_path = temp.path().join("supervisor.md");
-    let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+    let mut tabs = TabManager::for_test(ShellConfig::default());
     tabs.new_tab().unwrap();
     app.tabs = Some(tabs);
 
@@ -14236,12 +14020,11 @@ fn tab_bar_hover_fades_in_by_elapsed_time_not_frame_count() {
 
 #[test]
 fn page_scrolling_moves_by_the_focused_terminals_screen() {
-    let mut config = Config::default();
-    config.shell.program = Some("/bin/sh".into());
-    config.shell.args = vec!["-c".into(), "sleep 2".into()];
-    let mut app = App::new_headless(config).unwrap();
-    app.allow_auto_restore = false;
-    app.init_tabs().unwrap();
+    let config = Config {
+        shell: crate::test_support::sleeping_shell(),
+        ..Config::default()
+    };
+    let mut app = App::new_headless_with_tabs(config);
     let terminal = app.active_terminal_mut().unwrap();
     for line in 0..200 {
         terminal.process(format!("line {line}\r\n").as_bytes());

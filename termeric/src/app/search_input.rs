@@ -50,31 +50,11 @@ mod tests {
 
     #[test]
     fn search_query_keys_edit_graphemes_and_keep_all_input_out_of_the_pty() {
-        let mut tabs = TabManager::new(
-            80,
-            24,
-            crate::config::ShellConfig::default(),
-            100,
-            1024 * 1024,
+        let mut app = App::new_headless_running(
+            "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1; sleep 0.1",
+            "search-edit",
         );
-        tabs.new_tab_with_command("/bin/sh", &[
-            "-c".into(), "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1; sleep 0.1".into(),
-        ], None, Some("search-edit"), None, Default::default()).unwrap();
-        let mut app = App::new_headless(Config::default()).unwrap();
-        app.tabs = Some(tabs);
-        let wait_for = |app: &mut App, expected: &str| {
-            let deadline = Instant::now() + Duration::from_secs(3);
-            loop {
-                app.process_pty_events();
-                let output = app.active_terminal().unwrap().rows_text(0, 23);
-                if output.contains(expected) {
-                    break;
-                }
-                assert!(Instant::now() < deadline, "missing {expected}: {output}");
-                std::thread::yield_now();
-            }
-        };
-        wait_for(&mut app, "READY");
+        app.wait_for_screen_text("READY");
         app.search.start();
         let query = "a界e\u{301}👩\u{200d}💻🇺🇸z";
         assert!(app.handle_search_key(&Key::Character(query.into())));
@@ -177,6 +157,6 @@ mod tests {
         assert!(!app.focus_search_query_at(0, redraw_scheduler::RedrawReason::PointerInput));
         assert!(!app.handle_search_key(&Key::Named(NamedKey::Delete)));
         app.write_to_pty(b"Z");
-        wait_for(&mut app, "5a");
+        app.wait_for_screen_text("5a");
     }
 }

@@ -83,6 +83,13 @@ pub struct TabManager {
 }
 
 impl TabManager {
+    /// An 80×24 manager keeping 1,000 lines or 8 MiB of scrollback, the size
+    /// most tests use.
+    #[cfg(test)]
+    pub(crate) fn for_test(shell: ShellConfig) -> Self {
+        Self::new(80, 24, shell, 1_000, 8 * 1024 * 1024)
+    }
+
     /// Create a new tab manager
     #[cfg(test)]
     pub fn new(
@@ -2821,7 +2828,7 @@ mod tests {
         let blocked = root.path().join("not-a-directory");
         std::fs::write(&blocked, "sentinel").unwrap();
         crate::session::set_test_sessions_base_dir(Some(blocked));
-        let mut manager = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+        let mut manager = TabManager::for_test(ShellConfig::default());
         manager
             .new_tab_with_command(
                 "/bin/cat",
@@ -2854,7 +2861,7 @@ mod tests {
             program: Some("/bin/cat".into()),
             ..Default::default()
         };
-        let mut manager = TabManager::new(80, 24, shell, 1_000, 8 * 1024 * 1024);
+        let mut manager = TabManager::for_test(shell);
         let next_id = manager.next_id;
         let result = manager.new_tab_from_session(&selected);
         crate::session::set_test_sessions_base_dir(None);
@@ -2874,7 +2881,7 @@ mod tests {
         if !std::path::Path::new("/bin/sh").exists() {
             return;
         }
-        let mut manager = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+        let mut manager = TabManager::for_test(ShellConfig::default());
         manager.set_screen_checksum_reporting(true);
         manager.set_kitty_file_transmission(true);
         manager
@@ -2915,7 +2922,7 @@ mod tests {
         if !std::path::Path::new("/bin/sh").exists() {
             return;
         }
-        let mut manager = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+        let mut manager = TabManager::for_test(ShellConfig::default());
         manager.set_xterm_keyboard_type(XtermKeyboardType::Legacy, true);
         manager
             .new_tab_with_command(
@@ -2966,7 +2973,7 @@ mod tests {
         if !std::path::Path::new("/bin/sh").exists() {
             return;
         }
-        let mut manager = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+        let mut manager = TabManager::for_test(ShellConfig::default());
         for title in ["one", "two", "three"] {
             manager
                 .new_tab_with_command(
@@ -3009,7 +3016,7 @@ mod tests {
         if !std::path::Path::new("/bin/sh").exists() {
             return;
         }
-        let mut manager = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+        let mut manager = TabManager::for_test(ShellConfig::default());
         for title in ["one", "two", "three"] {
             manager
                 .new_tab_with_command(
@@ -3043,7 +3050,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn tab_drag_reorder_requires_the_original_selected_owner() {
-        let mut manager = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+        let mut manager = TabManager::for_test(ShellConfig::default());
         for _ in 0..3 {
             manager
                 .new_tab_with_command(
@@ -3098,7 +3105,7 @@ mod tests {
             args: vec!["-c".into(), "sleep 1".into()],
             env: Default::default(),
         };
-        let mut manager = TabManager::new(80, 24, shell.clone(), 1_000, 8 * 1024 * 1024);
+        let mut manager = TabManager::for_test(shell.clone());
         manager
             .new_tab_with_command(
                 "/bin/sh",
@@ -3249,7 +3256,7 @@ mod tests {
             args: vec!["-c".into(), "sleep 1".into()],
             env: Default::default(),
         };
-        let mut manager = TabManager::new(80, 24, shell.clone(), 1_000, 8 * 1024 * 1024);
+        let mut manager = TabManager::for_test(shell.clone());
         for title in ["source", "destination"] {
             manager
                 .new_tab_with_command(
@@ -3326,7 +3333,7 @@ mod tests {
             args: vec!["-c".into(), "sleep 1".into()],
             env: Default::default(),
         };
-        let mut manager = TabManager::new(80, 24, shell.clone(), 1_000, 8 * 1024 * 1024);
+        let mut manager = TabManager::for_test(shell.clone());
         for title in ["source", "destination"] {
             manager
                 .new_tab_with_command(
@@ -3436,7 +3443,7 @@ mod tests {
             args: vec!["-c".into(), "printf 'PROFILE_OWNER\\n'; sleep 2".into()],
             env: Default::default(),
         };
-        let mut manager = TabManager::new(80, 24, shell.clone(), 1_000, 8 * 1024 * 1024);
+        let mut manager = TabManager::for_test(shell.clone());
         manager
             .new_tab_with_profile("dev", profile_shell.clone(), None, Some("profile"))
             .unwrap();
@@ -3554,16 +3561,12 @@ mod tests {
         if !std::path::Path::new("/bin/sh").exists() {
             return;
         }
-        let shell = ShellConfig {
-            program: Some("/bin/sh".into()),
-            args: vec!["-c".into(), "sleep 2".into()],
-            env: Default::default(),
-        };
-        let mut manager = TabManager::new(80, 24, shell.clone(), 1_000, 8 * 1024 * 1024);
+        let shell = crate::test_support::sleeping_shell();
+        let mut manager = TabManager::for_test(shell.clone());
         manager
             .new_tab_with_command(
                 "/bin/sh",
-                &["-c".into(), "sleep 2".into()],
+                &crate::test_support::sleeping_args(),
                 None,
                 Some("fake plugin"),
                 Some(TabType::Plugin {
@@ -3685,11 +3688,11 @@ mod tests {
         if !std::path::Path::new("/bin/sh").exists() {
             return;
         }
-        let mut manager = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+        let mut manager = TabManager::for_test(ShellConfig::default());
         let dormant_tab_id = manager
             .new_tab_with_command(
                 "/bin/sh",
-                &["-c".into(), "sleep 2".into()],
+                &crate::test_support::sleeping_args(),
                 None,
                 Some("pane-owner"),
                 None,
@@ -3733,7 +3736,7 @@ mod tests {
         manager
             .new_tab_with_command(
                 "/bin/sh",
-                &["-c".into(), "sleep 2".into()],
+                &crate::test_support::sleeping_args(),
                 None,
                 Some("active"),
                 None,

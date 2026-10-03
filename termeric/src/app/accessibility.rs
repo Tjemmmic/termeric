@@ -6453,9 +6453,7 @@ mod tests {
         let mut config = Config::default();
         config.shell.program = Some("/bin/sh".into());
         config.shell.args = vec!["-c".into(), "sleep 30".into()];
-        let mut app = App::new_headless(config).unwrap();
-        app.allow_auto_restore = false;
-        app.init_tabs().unwrap();
+        let mut app = App::new_headless_with_tabs(config);
         app.handle_action(crate::input::Action::NewTab);
         let press = |app: &mut App, key: NamedKey| {
             app.handle_chrome_keyboard(&Key::Named(key), ElementState::Pressed)
@@ -6669,30 +6667,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn search_semantic_replacement_retires_preedit_and_never_writes_to_pty() {
-        let mut tabs = TabManager::new(
-            80,
-            24,
-            crate::config::ShellConfig::default(),
-            100,
-            1024 * 1024,
+        let mut app = App::new_headless_running(
+            "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1; sleep 0.1",
+            "search-semantic",
         );
-        tabs.new_tab_with_command("/bin/sh", &[
-            "-c".into(), "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1; sleep 0.1".into(),
-        ], None, Some("search-semantic"), None, Default::default()).unwrap();
-        let mut app = App::new_headless(Config::default()).unwrap();
-        app.tabs = Some(tabs);
-        let wait_for = |app: &mut App, expected: &str| {
-            let deadline = Instant::now() + std::time::Duration::from_secs(3);
-            loop {
-                app.process_pty_events();
-                let output = app.active_terminal().unwrap().rows_text(0, 23);
-                if output.contains(expected) {
-                    break;
-                }
-                assert!(Instant::now() < deadline, "missing {expected}: {output}");
-                std::thread::yield_now();
-            }
-        };
         let replace = |app: &mut App, data| {
             app.handle_accessibility_action(ActionRequest {
                 action: Action::SetValue,
@@ -6701,7 +6679,7 @@ mod tests {
                 data,
             })
         };
-        wait_for(&mut app, "READY");
+        app.wait_for_screen_text("READY");
         app.search.start();
         for value in ["READY", "e\u{301}👩\u{200d}💻", &"🫚".repeat(1024), ""] {
             app.handle_ime_event(winit::event::Ime::Preedit("draft".into(), None));
@@ -6758,7 +6736,7 @@ mod tests {
         app.command_palette.close();
         app.search.cancel();
         app.write_to_pty(b"Z");
-        wait_for(&mut app, "5a");
+        app.wait_for_screen_text("5a");
     }
 
     #[test]

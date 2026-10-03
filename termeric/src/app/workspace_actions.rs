@@ -4727,11 +4727,7 @@ mod workspace_control_tests {
         if !std::path::Path::new("/bin/sh").is_file() {
             return;
         }
-        let shell = crate::config::ShellConfig {
-            program: Some("/bin/sh".into()),
-            args: vec!["-c".into(), "sleep 2".into()],
-            env: Default::default(),
-        };
+        let shell = crate::test_support::sleeping_shell();
         let mut tabs = TabManager::new(40, 8, shell.clone(), 100, 1024 * 1024);
         tabs.new_tab_with_command(
             "/bin/sh",
