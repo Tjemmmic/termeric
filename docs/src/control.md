@@ -13,13 +13,14 @@ $ termeric control list
 process 48213
   window 1 1600x1000 [focused]
     tab 0 [shell] title="~/src/termeric" [active]
-      pane 0 88x52 [focused]
+      pane 0 88x52 [focused] title="~/src/termeric"
       pane 1 88x52
       divider 1 vertical ratio=500
     tab 1 [shell] title="htop"
+      pane 0 177x52 [focused]
 ```
 
-Each command names what it acts on by these IDs: the Termeric process ID, then a window, tab, pane, or divider. A tab's kind is `shell`, `profile` (a terminal profile), `plugin` (an agent or plugin tab), or `live-domain`. Markers such as `[active]`, `[pinned]`, `[activity]`, and `[hidden]` show state.
+Each command names what it acts on by these IDs: the Termeric process ID, then a window, tab, pane, or divider. Bracketed markers such as `[active]` show state; the table below lists them all.
 
 For scripts, use `--json`:
 
@@ -27,7 +28,23 @@ For scripts, use `--json`:
 termeric control list --json | jq '.processes[0].windows[0].tabs[] | {id, title}'
 ```
 
-The JSON has a top-level `schema_version` and a `processes` array. Each process has `process_id` and `windows`; each window has `id`, `focused`, `visible`, `pixel_width`, `pixel_height`, and `tabs`; each tab has `id`, `title`, `kind`, `active`, `pinned`, `panes`, and `dividers`; each pane has `id`, `focused`, `cols`, and `rows`. If more than one Termeric process is running, each is listed.
+The JSON has a top-level `schema_version` and a `processes` array with one entry for each running Termeric. Each object has these fields; the last column shows how the text output displays them:
+
+| Object | JSON fields | Text output |
+| --- | --- | --- |
+| process | `process_id`, `windows`, `truncated` | `[truncated]` |
+| window | `id`, `focused`, `visible`, `quick_access`, `workspace_id`, `pixel_width`, `pixel_height`, `tabs`, `truncated` | `[focused]`, `[hidden]`, `[quick-access]`, `[truncated]`, `workspace="ID"` |
+| tab | `id`, `title`, `kind`, `active`, `pinned`, `activity`, `closed`, `domain_id`, `panes`, `dividers`, `truncated` | `[kind]`, `title="TITLE"`, `[active]`, `[pinned]`, `[activity]`, `[closed]`, `[truncated]`, `domain="ID"` |
+| pane | `id`, `title`, `focused`, `closed`, `cols`, `rows` | `COLSxROWS`, `[focused]`, `[closed]`, `title="TITLE"` |
+| divider | `id`, `kind`, `direction`, `ratio_millis` | `horizontal` or `vertical`, `ratio=N`, `[live-domain]` |
+
+- A tab's `kind` is `shell`, `profile` (a terminal profile), `plugin` (an agent or plugin tab), or `live_domain`, which the text output writes as `live-domain`.
+- `visible` is `false` for a window that is hidden, such as the [quick-access window](tabs-panes-windows.md#quick-access-window) while it is put away; `quick_access` marks that window. `workspace_id` is the ID of the [workspace](workspaces-and-sessions.md) the window is saved as, or `null`.
+- `activity` means the tab has output you haven't looked at. `closed` means a tab's or pane's program has exited, or the tab is closing.
+- `domain_id` names the [live domain](live-domains.md) a `live_domain` tab belongs to, and is `null` for every other tab.
+- A pane's `title` is the one its program last set, or `null`. Outside live domains, a tab that has never been split reports `null` for its pane and gives the title only on the tab.
+- A divider's `kind` is `local`, or `live_domain` for a split inside a live domain. `direction` is `horizontal` or `vertical`, and `ratio_millis` is the first side's share in thousandths, as `resize-divider` sets it.
+- `truncated` is `true` when Termeric left something out of that object or shortened its text to keep the listing within its limits (32 windows, 256 tabs, 1,024 panes, and 32 KiB of titles and IDs, at most 1 KiB each), or removed control or text-direction characters from a title or ID.
 
 IDs are stable while the process runs: a window keeps its ID until it closes, even as other windows close. Tab IDs belong to their window and pane IDs to their tab, so a tab moved to another window gets a new tab ID. A tab that has never been split has a single pane `0`. IDs do not survive a restart of Termeric, so look them up with `list` rather than storing them.
 
@@ -140,7 +157,12 @@ Typing is off by default, because it lets any program running as you run command
 allow_gui_control_input = true
 ```
 
-The same setting lets [`termeric mcp`](agents.md#letting-an-agent-use-termeric-termeric-mcp) send prompts to coding agents and lets [plugins](plugins.md) you granted input permission type into terminals. Text sent to an agent or plugin tab that looks like a destructive command, such as `rm -rf`, opens a confirmation dialog first, and nothing is typed unless you confirm. A read-only pane refuses all input.
+`send-text` then types what you send, with one exception: in an agent or plugin tab (kind `plugin`), text that looks like a destructive command, such as `rm -rf`, opens a confirmation dialog first, and nothing is typed unless you confirm. While that dialog is open, further `send-text` into its window is refused. A read-only pane refuses all input.
+
+The same setting is needed by two other ways of sending input, each with its own rules:
+
+- [Plugins](plugins.md#safety) also need the `terminal-input` permission, and destructive-looking text from a plugin asks for confirmation in every tab.
+- [`termeric mcp`](agents.md#letting-an-agent-use-termeric-termeric-mcp) needs it to send messages to coding agents and to answer their approvals. Its messages skip the destructive-command check; instead they must be plain text within a size limit, can't start with `!` or `/`, and are refused while you are typing to that agent. The [supervisor](agents.md#the-supervisor) doesn't need the setting: starting it is the permission.
 
 ## Retrying safely
 
@@ -148,7 +170,7 @@ Every command that changes something carries a request ID, which Termeric genera
 
 ## Safety
 
-- The socket accepts only your own user, but any program running as you can use it. It can list your windows, read the text in any pane, and launch programs, even with typing turned off.
+- The socket accepts only your own user, but any program running as you can use it. It can list your windows, read the text in any pane, and launch programs, even with typing turned off. It can also list your coding agents, with their state, what they are waiting for, and their last answer, and read [agent view](agent-view.md) conversations, as [`termeric mcp`](agents.md#letting-an-agent-use-termeric-termeric-mcp) does; that needs no opt-in either.
 - Nothing lets a script read a terminal's environment, command line, working directory, clipboard, or scrollback beyond the 256 lines `get-text` allows.
 - Values passed with `--env` can show up in shell history and process listings; use `--env-stdin` from a private file for secrets.
 - Don't enable `allow_gui_control_input` on a machine where you run programs you don't trust as your own user.
