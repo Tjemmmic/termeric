@@ -368,7 +368,6 @@ impl App {
             changed = true;
             self.last_plugin_registry_mtime = plugin_registry_mtime;
             self.sync_plugins_from_config();
-            self.reload_dynamic_keybindings();
             self.toasts.info("Third-party plugins reloaded");
             log::info!("Third-party plugin registry hot-reloaded");
         }
@@ -518,7 +517,8 @@ impl App {
         self.sync_harvest_from_config();
         self.sync_accessibility_preferences();
         self.refresh_launch_profile_commands();
-        self.reload_dynamic_keybindings();
+        self.keybinding_manager
+            .load(self.config.keybindings.clone());
         if let Some(window) = &self.window {
             window.request_redraw();
         }
@@ -557,13 +557,12 @@ impl App {
         self.plugin_runtime_generation = self.plugin_runtime_generation.wrapping_add(1).max(1);
         self.structured_plugin_worker
             .set_generation(self.plugin_runtime_generation);
-        let ctx = self.build_plugin_context();
-        self.plugin_manager.unload_all();
+        self.plugin_manager.clear();
         self.agents = crate::agents::AgentCatalog::from_config(&self.config.agents);
         self.sync_agent_settings_rows();
         for agent in self.agents.enabled() {
             let plugin = crate::plugin::agent::AgentPlugin::new(agent.clone());
-            if let Err(error) = self.plugin_manager.register(Box::new(plugin), &ctx) {
+            if let Err(error) = self.plugin_manager.register(Box::new(plugin)) {
                 log::error!("Failed to register agent {:?}: {error}", agent.id);
                 self.toasts.error(format!("{} failed: {error}", agent.name));
             }
@@ -595,7 +594,7 @@ impl App {
                 ));
                 continue;
             }
-            if let Err(error) = self.plugin_manager.register(Box::new(plugin), &ctx) {
+            if let Err(error) = self.plugin_manager.register(Box::new(plugin)) {
                 log::error!("Third-party plugin {id:?} was not loaded: {error:#}");
                 self.toasts
                     .error(format!("Third-party plugin {id} failed: {error:#}"));
@@ -724,25 +723,6 @@ impl App {
         if let Some(window) = &self.window {
             window.request_redraw();
         }
-    }
-
-    pub(super) fn reload_dynamic_keybindings(&mut self) {
-        let mut bindings = self.config.keybindings.clone();
-        for plugin_binding in self.plugin_manager.all_keybindings() {
-            bindings.push(crate::input::keybindings::KeyBinding {
-                key: plugin_binding.key,
-                modifiers: crate::input::keybindings::KeyModifiers {
-                    ctrl: plugin_binding.ctrl,
-                    alt: plugin_binding.alt,
-                    shift: plugin_binding.shift,
-                    super_key: false,
-                },
-                action: KeyAction::PluginCommand {
-                    command_id: plugin_binding.command_id,
-                },
-            });
-        }
-        self.keybinding_manager.load(bindings);
     }
 
     pub(super) fn apply_theme(&mut self, theme: Theme, source: Option<std::path::PathBuf>) {

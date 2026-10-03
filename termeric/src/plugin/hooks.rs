@@ -1,7 +1,7 @@
-//! Plugin trait and hook/event types
+//! Plugin trait, hooks, and actions
 //!
-//! Defines the core [`Plugin`] trait that all plugins implement,
-//! along with lifecycle hooks and response types.
+//! Defines the core [`Plugin`] trait that all plugins implement, the
+//! lifecycle hooks it receives, and the actions it may answer with.
 
 use std::collections::HashMap;
 
@@ -89,27 +89,8 @@ impl Hook {
     }
 }
 
-/// What a plugin returns after processing a hook.
-#[derive(Debug)]
-pub enum HookResponse {
-    /// Plugin didn't handle this hook
-    Ignored,
-    /// Plugin handled it, continue processing other plugins. No shipped
-    /// plugin answers this way today; the manager and fixtures still honor it.
-    #[cfg_attr(not(test), allow(dead_code))]
-    Handled,
-    /// Plugin wants to execute an action
-    Action(PluginAction),
-    /// Plugin wants to execute several actions (notice + open, etc.). Launch
-    /// validation must still reject extra or mismatched actions, so fixtures
-    /// exercise it even though no shipped plugin answers this way today.
-    #[cfg_attr(not(test), allow(dead_code))]
-    Actions(Vec<PluginAction>),
-}
-
-/// Actions a plugin can request the app to perform.
+/// An action a plugin asks the app to perform in answer to a hook.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub enum PluginAction {
     /// Invoke a versioned declarative lifecycle handler on the bounded
     /// background plugin worker.
@@ -133,47 +114,23 @@ pub enum PluginAction {
         /// Additional environment variables to set for the spawned process
         env: HashMap<String, String>,
     },
-    /// Write data to the active PTY
-    WriteToPty { data: Vec<u8> },
-    /// Show a desktop notification
-    Notify { title: String, body: String },
-    /// Show a message in the command palette area
+    /// Show a brief informational toast
     ShowMessage { message: String },
     /// Show a modal info overlay (title + body lines). Use for anything the
     /// user needs to actually see — failed profile lookups, config warnings,
     /// etc.
     ShowNotice { title: String, lines: Vec<String> },
-    /// Apply a detected diff to the filesystem via `git apply`
-    ApplyDiff {
-        diff_content: String,
-        cwd: Option<String>,
-    },
-    /// Stage a detected diff via `git apply --cached`
-    StageDiff {
-        diff_content: String,
-        cwd: Option<String>,
-    },
-    /// Revert a detected diff via `git apply --reverse`
-    RevertDiff {
-        diff_content: String,
-        cwd: Option<String>,
-    },
 }
 
 impl PluginAction {
     /// Payload-free diagnostic name. Action payloads can contain terminal
-    /// text, environment values, context, or diffs and must not enter logs.
+    /// text, environment values, or context and must not enter logs.
     pub fn name(&self) -> &'static str {
         match self {
             Self::InvokeStructuredHandler { .. } => "invoke-structured-handler",
             Self::OpenTab { .. } => "open-tab",
-            Self::WriteToPty { .. } => "write-to-pty",
-            Self::Notify { .. } => "notify",
             Self::ShowMessage { .. } => "show-message",
             Self::ShowNotice { .. } => "show-notice",
-            Self::ApplyDiff { .. } => "apply-diff",
-            Self::StageDiff { .. } => "stage-diff",
-            Self::RevertDiff { .. } => "revert-diff",
         }
     }
 }
@@ -189,21 +146,6 @@ pub struct PluginCommand {
     pub description: String,
     /// Category for grouping (e.g., "AI")
     pub category: Option<String>,
-}
-
-/// A keybinding a plugin wants to register.
-#[derive(Debug, Clone)]
-pub struct PluginKeybinding {
-    /// Key string (e.g., "i")
-    pub key: String,
-    /// Ctrl modifier required
-    pub ctrl: bool,
-    /// Alt modifier required
-    pub alt: bool,
-    /// Shift modifier required
-    pub shift: bool,
-    /// The command ID to trigger when this keybinding fires
-    pub command_id: String,
 }
 
 /// The core plugin trait. Every plugin implements this.
@@ -222,17 +164,9 @@ pub trait Plugin: std::fmt::Debug + Send {
         "0.1.0"
     }
 
-    /// Called once when the plugin is loaded.
-    fn on_load(&mut self, _ctx: &PluginContext) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    /// Called when the plugin is unloaded.
-    fn on_unload(&mut self) {}
-
-    /// Respond to a hook event. Return [`HookResponse`] to indicate behavior.
-    fn on_hook(&mut self, _hook: &Hook, _ctx: &PluginContext) -> HookResponse {
-        HookResponse::Ignored
+    /// Respond to a hook event with at most one action; `None` ignores it.
+    fn on_hook(&mut self, _hook: &Hook, _ctx: &PluginContext) -> Option<PluginAction> {
+        None
     }
 
     /// Commands this plugin adds to the command palette.
@@ -244,102 +178,5 @@ pub trait Plugin: std::fmt::Debug + Send {
     /// not running sessions. None keeps event-only plugins out of this UI.
     fn pane_profiles(&self) -> Option<Vec<String>> {
         None
-    }
-
-    /// Keybindings this plugin wants to register.
-    fn keybindings(&self) -> Vec<PluginKeybinding> {
-        vec![]
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A minimal test plugin for verifying trait defaults
-    #[derive(Debug)]
-    struct TestPlugin;
-
-    impl Plugin for TestPlugin {
-        fn id(&self) -> &str {
-            "test"
-        }
-        fn name(&self) -> &str {
-            "Test Plugin"
-        }
-    }
-
-    #[test]
-    fn test_default_trait_methods() {
-        let mut plugin = TestPlugin;
-        assert_eq!(plugin.version(), "0.1.0");
-        assert!(plugin.commands().is_empty());
-        assert!(plugin.keybindings().is_empty());
-
-        let ctx = PluginContext {
-            window_id: 1,
-            cwd: None,
-            tab_count: 1,
-            active_tab: 0,
-            terminal_size: (80, 24),
-        };
-        assert!(plugin.on_load(&ctx).is_ok());
-        assert!(matches!(
-            plugin.on_hook(&Hook::AppReady, &ctx),
-            HookResponse::Ignored
-        ));
-        plugin.on_unload(); // Should not panic
-    }
-
-    #[test]
-    fn test_hook_variants() {
-        let hooks = [
-            Hook::AppReady,
-            Hook::TabCreated { tab_id: 1 },
-            Hook::TabClosed { tab_id: 1 },
-            Hook::TabSwitched { from: 0, to: 1 },
-            Hook::CommandExecuted {
-                region_id: 1,
-                tab_id: 1,
-                pane_id: None,
-                command: "ls".to_string(),
-                command_truncated: false,
-                output: String::new(),
-                output_truncated: false,
-                content_available: true,
-                exit_code: Some(0),
-            },
-            Hook::CommandInvoked {
-                command_id: "test.cmd".to_string(),
-            },
-        ];
-        // All variants should be constructible (compile-time check)
-        assert_eq!(hooks.len(), 6);
-    }
-
-    #[test]
-    fn test_plugin_action_variants() {
-        let actions = [
-            PluginAction::OpenTab {
-                program: "claude".to_string(),
-                args: vec![],
-                cwd: None,
-                title: Some("Test".to_string()),
-                plugin_id: None,
-                profile: None,
-                env: HashMap::new(),
-            },
-            PluginAction::WriteToPty {
-                data: b"hello".to_vec(),
-            },
-            PluginAction::Notify {
-                title: "Title".to_string(),
-                body: "Body".to_string(),
-            },
-            PluginAction::ShowMessage {
-                message: "msg".to_string(),
-            },
-        ];
-        assert_eq!(actions.len(), 4);
     }
 }

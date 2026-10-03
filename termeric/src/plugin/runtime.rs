@@ -7,7 +7,7 @@
 //! explicitly granted before it takes effect; window-acting capabilities are
 //! limited to the plugin's own window unless granted with `:all-windows`.
 
-use super::hooks::{Hook, HookResponse, Plugin, PluginAction, PluginCommand, PluginContext};
+use super::hooks::{Hook, Plugin, PluginAction, PluginCommand, PluginContext};
 use super::permission::{Capability, PermissionScope, PluginPermission, PluginPermissions};
 use super::structured::{
     HandlerAuthority, MAX_PERSISTENT_SOURCE_EVENT_BYTES, StructuredHandlerInvocation,
@@ -895,28 +895,28 @@ impl DeclarativePlugin {
         Ok(environment)
     }
 
-    fn action_for(&self, profile_id: &str, context: &PluginContext) -> HookResponse {
+    fn action_for(&self, profile_id: &str, context: &PluginContext) -> PluginAction {
         let Some(profile) = self
             .manifest
             .profiles
             .iter()
             .find(|profile| profile.id == profile_id)
         else {
-            return HookResponse::Action(PluginAction::ShowNotice {
+            return PluginAction::ShowNotice {
                 title: format!("{} profile unavailable", self.manifest.name),
                 lines: vec![format!("No profile named {profile_id:?} is installed.")],
-            });
+            };
         };
         let env = match self.structured_context_environment(profile_id, context) {
             Ok(env) => env,
             Err(error) => {
-                return HookResponse::Action(PluginAction::ShowNotice {
+                return PluginAction::ShowNotice {
                     title: format!("{} context unavailable", self.manifest.name),
                     lines: vec![format!("{error:#}")],
-                });
+                };
             }
         };
-        HookResponse::Action(PluginAction::OpenTab {
+        PluginAction::OpenTab {
             program: profile.program.clone(),
             args: profile.args.clone(),
             cwd: match profile.working_directory {
@@ -927,10 +927,10 @@ impl DeclarativePlugin {
             plugin_id: Some(self.manifest.id.clone()),
             profile: Some(profile.id.clone()),
             env,
-        })
+        }
     }
 
-    fn event_action(&self, hook: &Hook, context: &PluginContext) -> Option<HookResponse> {
+    fn event_action(&self, hook: &Hook, context: &PluginContext) -> Option<PluginAction> {
         let (kind, event) = match hook {
             Hook::AppReady => (
                 StructuredEventKind::AppReady,
@@ -1039,36 +1039,34 @@ impl DeclarativePlugin {
         } {
             Ok(value) if value.len() <= max_event_bytes => value,
             Ok(_) => {
-                return Some(HookResponse::Action(PluginAction::ShowNotice {
+                return Some(PluginAction::ShowNotice {
                     title: format!("{} event unavailable", self.manifest.name),
                     lines: vec![format!(
                         "Structured plugin event exceeds {max_event_bytes} bytes."
                     )],
-                }));
+                });
             }
             Err(error) => {
-                return Some(HookResponse::Action(PluginAction::ShowNotice {
+                return Some(PluginAction::ShowNotice {
                     title: format!("{} event unavailable", self.manifest.name),
                     lines: vec![format!("Could not encode structured plugin event: {error}")],
-                }));
+                });
             }
         };
-        Some(HookResponse::Action(
-            PluginAction::InvokeStructuredHandler {
-                invocation: StructuredHandlerInvocation {
-                    plugin_id: self.manifest.id.clone(),
-                    program: handler.program.clone(),
-                    args: handler.args.clone(),
-                    event_json,
+        Some(PluginAction::InvokeStructuredHandler {
+            invocation: StructuredHandlerInvocation {
+                plugin_id: self.manifest.id.clone(),
+                program: handler.program.clone(),
+                args: handler.args.clone(),
+                event_json,
+                mode,
+                authority: HandlerAuthority::for_event(
+                    self.grants.clone(),
                     mode,
-                    authority: HandlerAuthority::for_event(
-                        self.grants.clone(),
-                        mode,
-                        kind == StructuredEventKind::CommandInvoked,
-                    ),
-                },
+                    kind == StructuredEventKind::CommandInvoked,
+                ),
             },
-        ))
+        })
     }
 }
 
@@ -1085,16 +1083,14 @@ impl Plugin for DeclarativePlugin {
         &self.manifest.version
     }
 
-    fn on_hook(&mut self, hook: &Hook, context: &PluginContext) -> HookResponse {
+    fn on_hook(&mut self, hook: &Hook, context: &PluginContext) -> Option<PluginAction> {
         let response = match hook {
             Hook::CommandInvoked { command_id } => self
                 .manifest
                 .profiles
                 .iter()
                 .find(|profile| command_id == &format!("{}.open-{}", self.manifest.id, profile.id))
-                .map_or(HookResponse::Ignored, |profile| {
-                    self.action_for(&profile.id, context)
-                }),
+                .map(|profile| self.action_for(&profile.id, context)),
             Hook::PaneLaunch {
                 plugin_id,
                 profile,
@@ -1115,32 +1111,26 @@ impl Plugin for DeclarativePlugin {
                             .map(|profile| profile.id.as_str())
                     });
                 let Some(selected) = selected else {
-                    return HookResponse::Action(PluginAction::ShowNotice {
+                    return Some(PluginAction::ShowNotice {
                         title: format!("{} profile unavailable", self.manifest.name),
                         lines: vec!["This event-only plugin has no launch profiles.".into()],
                     });
                 };
                 let mut restore_context = context.clone();
                 restore_context.cwd.clone_from(cwd);
-                let mut response = self.action_for(selected, &restore_context);
+                let mut response = Some(self.action_for(selected, &restore_context));
                 // Explicit pane launches use the host's pane cwd policy, not
                 // a tab profile's active/inherit placement default.
                 if matches!(hook, Hook::PaneLaunch { .. })
-                    && let HookResponse::Action(PluginAction::OpenTab { cwd: actual, .. }) =
-                        &mut response
+                    && let Some(PluginAction::OpenTab { cwd: actual, .. }) = &mut response
                 {
                     actual.clone_from(cwd);
                 }
                 response
             }
-            _ => HookResponse::Ignored,
+            _ => None,
         };
-        if matches!(response, HookResponse::Ignored) {
-            self.event_action(hook, context)
-                .unwrap_or(HookResponse::Ignored)
-        } else {
-            response
-        }
+        response.or_else(|| self.event_action(hook, context))
     }
 
     fn pane_profiles(&self) -> Option<Vec<String>> {
@@ -2184,7 +2174,7 @@ events = {events:?}
         context: &PluginContext,
     ) -> StructuredHandlerInvocation {
         let mut plugin = DeclarativePlugin::new(manifest, None, grants);
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) =
+        let Some(PluginAction::InvokeStructuredHandler { invocation }) =
             plugin.on_hook(hook, context)
         else {
             panic!("subscribed hook did not create a handler invocation")
@@ -2302,7 +2292,7 @@ events = ["command-invoked"]
                 &context,
             );
             assert!(
-                matches!(response, HookResponse::Action(PluginAction::OpenTab { cwd: Some(cwd), profile: Some(profile), .. }) if cwd == "/chosen/pane" && profile == name)
+                matches!(response, Some(PluginAction::OpenTab { cwd: Some(cwd), profile: Some(profile), .. }) if cwd == "/chosen/pane" && profile == name)
             );
         }
         assert!(matches!(
@@ -2312,7 +2302,7 @@ events = ["command-invoked"]
                 },
                 &context
             ),
-            HookResponse::Action(PluginAction::OpenTab { cwd: None, .. })
+            Some(PluginAction::OpenTab { cwd: None, .. })
         ));
     }
 
@@ -2361,7 +2351,7 @@ events = ["command-invoked"]
                 },
                 &context
             ),
-            HookResponse::Action(PluginAction::OpenTab {
+            Some(PluginAction::OpenTab {
                 program,
                 cwd: Some(cwd),
                 profile: Some(profile),
@@ -2377,7 +2367,7 @@ events = ["command-invoked"]
                 },
                 &context
             ),
-            HookResponse::Action(PluginAction::OpenTab {
+            Some(PluginAction::OpenTab {
                 cwd: Some(cwd), profile: Some(profile), ..
             }) if cwd == "/saved/workspace" && profile == "default"
         ));
@@ -2402,7 +2392,7 @@ events = ["command-invoked"]
                 },
                 &context
             ),
-            HookResponse::Action(PluginAction::OpenTab {
+            Some(PluginAction::OpenTab {
                 profile: Some(profile), cwd: None, ..
             }) if profile == "quiet"
         ));
@@ -2430,7 +2420,7 @@ events = ["command-invoked"]
                 },
                 &context
             ),
-            HookResponse::Action(PluginAction::OpenTab {
+            Some(PluginAction::OpenTab {
                 profile: Some(profile), cwd: None, ..
             }) if profile == "default"
         ));
@@ -2802,7 +2792,7 @@ grants = ["process-spawn", "process-query"]
             },
             &context,
         );
-        let HookResponse::Action(PluginAction::OpenTab { env, .. }) = response else {
+        let Some(PluginAction::OpenTab { env, .. }) = response else {
             panic!("structured profile did not produce an open-tab action")
         };
         assert_eq!(env.len(), 1);
@@ -2826,7 +2816,7 @@ grants = ["process-spawn", "process-query"]
             },
             &context,
         );
-        let HookResponse::Action(PluginAction::OpenTab { cwd, env, .. }) = response else {
+        let Some(PluginAction::OpenTab { cwd, env, .. }) = response else {
             panic!("structured workspace restore did not produce an open-tab action")
         };
         assert_eq!(cwd.as_deref(), Some("/archived/workspace"));
@@ -2840,7 +2830,7 @@ grants = ["process-spawn", "process-query"]
             None,
             permissions(&["process-spawn"]),
         );
-        let HookResponse::Action(PluginAction::OpenTab { env, .. }) = ungranted.on_hook(
+        let Some(PluginAction::OpenTab { env, .. }) = ungranted.on_hook(
             &Hook::CommandInvoked {
                 command_id: "sample-tools.open-default".into(),
             },
@@ -2862,7 +2852,7 @@ grants = ["process-spawn", "process-query"]
         );
         assert!(matches!(
             response,
-            HookResponse::Action(PluginAction::ShowNotice { title, lines })
+            Some(PluginAction::ShowNotice { title, lines })
                 if title.contains("context unavailable")
                     && lines[0].contains("structured plugin launch context exceeds")
         ));
@@ -2968,10 +2958,11 @@ grants = ["process-spawn", "process-query"]
         let unsubscribed = handler_manifest(&["ui-actions"], false, &["app-ready"]);
         let grants = unsubscribed.permissions.clone();
         let mut plugin = DeclarativePlugin::new(unsubscribed, None, grants);
-        assert!(matches!(
-            plugin.on_hook(&Hook::TabCreated { tab_id: 1 }, &context()),
-            HookResponse::Ignored
-        ));
+        assert!(
+            plugin
+                .on_hook(&Hook::TabCreated { tab_id: 1 }, &context())
+                .is_none()
+        );
     }
 
     #[test]
@@ -3172,14 +3163,12 @@ grants = ["process-spawn", "process-query"]
             cwd: Some("/workspace/private".into()),
             ..context()
         };
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "handler-fixture.run".into(),
-                },
-                &context,
-            )
-        else {
+        let Some(PluginAction::InvokeStructuredHandler { invocation }) = plugin.on_hook(
+            &Hook::CommandInvoked {
+                command_id: "handler-fixture.run".into(),
+            },
+            &context,
+        ) else {
             panic!("declared command did not create a handler invocation")
         };
         assert_eq!(invocation.mode, StructuredHandlerMode::Persistent);
@@ -3191,15 +3180,16 @@ grants = ["process-spawn", "process-query"]
         assert!(value.get("context").is_none());
         assert!(invocation.event_json.len() <= MAX_PERSISTENT_SOURCE_EVENT_BYTES);
 
-        assert!(matches!(
-            plugin.on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "handler-fixture.undeclared".into(),
-                },
-                &context,
-            ),
-            HookResponse::Ignored
-        ));
+        assert!(
+            plugin
+                .on_hook(
+                    &Hook::CommandInvoked {
+                        command_id: "handler-fixture.undeclared".into(),
+                    },
+                    &context,
+                )
+                .is_none()
+        );
 
         let process_per_event = handler_manifest(&["ui-actions"], false, &["command-invoked"]);
         process_per_event.validate().unwrap();
@@ -3388,7 +3378,7 @@ grants = ["process-spawn", "process-query"]
             cwd: Some("/workspace".into()),
             ..context()
         };
-        let HookResponse::Action(PluginAction::OpenTab { env, .. }) = plugins[0].on_hook(
+        let Some(PluginAction::OpenTab { env, .. }) = plugins[0].on_hook(
             &Hook::CommandInvoked {
                 command_id: "configurable-tool.open-run".into(),
             },
@@ -3403,14 +3393,12 @@ grants = ["process-spawn", "process-query"]
         assert_eq!(profile_settings["values"]["line-count"], 42);
         assert_eq!(profile_settings["values"]["enabled-output"], false);
 
-        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugins[0]
-            .on_hook(
-                &Hook::CommandInvoked {
-                    command_id: "configurable-tool.show-settings".into(),
-                },
-                &context,
-            )
-        else {
+        let Some(PluginAction::InvokeStructuredHandler { invocation }) = plugins[0].on_hook(
+            &Hook::CommandInvoked {
+                command_id: "configurable-tool.show-settings".into(),
+            },
+            &context,
+        ) else {
             panic!("configured handler command did not produce an invocation")
         };
         let handler_event: serde_json::Value =
@@ -3592,13 +3580,14 @@ grants = ["process-spawn", "process-query"]
             None,
             permissions(&["process-spawn", "event-subscribe"]),
         );
-        assert!(matches!(
-            ungranted.on_hook(
-                &command_completed("must-not-leak".into(), "must-not-leak".into(), true),
-                &context,
-            ),
-            HookResponse::Ignored
-        ));
+        assert!(
+            ungranted
+                .on_hook(
+                    &command_completed("must-not-leak".into(), "must-not-leak".into(), true),
+                    &context,
+                )
+                .is_none()
+        );
 
         let mut no_request = manifest.clone();
         no_request.permissions.remove(Capability::CommandOutput);
@@ -4252,10 +4241,7 @@ default = "local"
                 },
                 &context,
             );
-            assert!(matches!(
-                response,
-                HookResponse::Action(PluginAction::OpenTab { .. })
-            ));
+            assert!(matches!(response, Some(PluginAction::OpenTab { .. })));
         }
         assert!(started.elapsed() < Duration::from_secs(1));
     }
@@ -4304,7 +4290,7 @@ default = "local"
             .find(|plugin| plugin.id() == "task-runner")
             .unwrap();
         let mut task_runner = task_runner;
-        let HookResponse::Action(PluginAction::OpenTab { env, .. }) = task_runner.on_hook(
+        let Some(PluginAction::OpenTab { env, .. }) = task_runner.on_hook(
             &Hook::CommandInvoked {
                 command_id: "task-runner.open-tests".into(),
             },

@@ -1369,7 +1369,7 @@ impl App {
                         session.hand_off();
                     }
                 }
-                self.execute_plugin_actions(vec![action]);
+                self.execute_plugin_action(action);
                 self.set_agent_view_keyboard(false);
             }
             Err(error) => self.toasts.error(error),

@@ -56,7 +56,7 @@ impl App {
             ));
             return;
         }
-        let actions = if target.is_some() {
+        let action = if target.is_some() {
             self.plugin_manager.dispatch_to(
                 plugin_id,
                 &Hook::WorkspaceRestore {
@@ -70,44 +70,35 @@ impl App {
             self.plugin_manager
                 .execute_command(&format!("{plugin_id}.open"), &ctx)
         };
-        let mut launch = None;
-        let mut notices = Vec::new();
-        let mut invalid = false;
-        for action in actions {
-            match action {
-                PluginAction::OpenTab {
-                    program,
-                    args,
-                    cwd,
-                    title,
-                    plugin_id: owner,
-                    profile,
-                    env,
-                } => {
-                    if launch.is_some()
-                        || program.is_empty()
-                        || owner.as_deref() != Some(plugin_id)
-                        || (target.is_some() && cwd != ctx.cwd)
-                        || self
-                            .validate_plugin_launch_profile(plugin_id, profile.as_deref())
-                            .is_err()
-                        || saved_profile
-                            .as_ref()
-                            .is_some_and(|saved| profile.as_ref() != Some(saved))
-                    {
-                        invalid = true;
-                    }
-                    launch = Some((program, args, cwd, title, profile, env));
-                }
-                notice @ PluginAction::ShowNotice { .. } => {
-                    invalid |= target.is_some();
-                    notices.push(notice);
-                }
-                _ => invalid = true,
+        let launch = match action {
+            Some(PluginAction::OpenTab {
+                program,
+                args,
+                cwd,
+                title,
+                plugin_id: owner,
+                profile,
+                env,
+            }) => {
+                let valid = !program.is_empty()
+                    && owner.as_deref() == Some(plugin_id)
+                    && (target.is_none() || cwd == ctx.cwd)
+                    && self
+                        .validate_plugin_launch_profile(plugin_id, profile.as_deref())
+                        .is_ok()
+                    && saved_profile
+                        .as_ref()
+                        .is_none_or(|saved| profile.as_ref() == Some(saved));
+                valid.then_some((program, args, cwd, title, profile, env))
             }
-        }
-        self.execute_plugin_actions(notices);
-        let Some((program, args, cwd, title, profile, env)) = launch.filter(|_| !invalid) else {
+            // A notice explains why there is no launch; show it, then refuse.
+            Some(notice @ PluginAction::ShowNotice { .. }) => {
+                self.execute_plugin_action(notice);
+                None
+            }
+            _ => None,
+        };
+        let Some((program, args, cwd, title, profile, env)) = launch else {
             self.toasts.warning(format!("Cannot restart {plugin_id}: no valid replacement launch; existing terminals were kept"));
             return;
         };

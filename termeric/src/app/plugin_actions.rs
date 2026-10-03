@@ -78,20 +78,19 @@ impl App {
         let (mut operations, ui_actions): (Vec<_>, Vec<_>) = actions
             .into_iter()
             .partition(StructuredResponseAction::is_host_operation);
-        self.execute_plugin_actions(
-            ui_actions
-                .into_iter()
-                .filter_map(|action| match action {
-                    StructuredResponseAction::ShowMessage { message } => {
-                        Some(crate::plugin::PluginAction::ShowMessage { message })
-                    }
-                    StructuredResponseAction::ShowNotice { title, lines } => {
-                        Some(crate::plugin::PluginAction::ShowNotice { title, lines })
-                    }
-                    _ => None,
-                })
-                .collect(),
-        );
+        for action in ui_actions {
+            match action {
+                StructuredResponseAction::ShowMessage { message } => {
+                    self.execute_plugin_action(crate::plugin::PluginAction::ShowMessage { message })
+                }
+                StructuredResponseAction::ShowNotice { title, lines } => self
+                    .execute_plugin_action(crate::plugin::PluginAction::ShowNotice {
+                        title,
+                        lines,
+                    }),
+                _ => {}
+            }
+        }
         let operation = operations.pop()?;
         let Some(continuation) = completion.continuation else {
             let error = "host operations require a live persistent handler";
@@ -504,16 +503,16 @@ impl App {
             ctx.terminal_size.0,
             ctx.terminal_size.1
         );
-        let actions = self.plugin_manager.dispatch(&hook, &ctx);
-        self.execute_plugin_actions(actions);
+        for action in self.plugin_manager.dispatch(&hook, &ctx) {
+            self.execute_plugin_action(action);
+        }
     }
 
     /// Execute a plugin command by ID, routed to its exact owning plugin.
     pub(super) fn execute_plugin_command(&mut self, command_id: &str) {
         let ctx = self.build_plugin_context();
-        let actions = self.plugin_manager.execute_command(command_id, &ctx);
-        if !actions.is_empty() {
-            self.execute_plugin_actions(actions);
+        if let Some(action) = self.plugin_manager.execute_command(command_id, &ctx) {
+            self.execute_plugin_action(action);
         }
     }
 
@@ -713,178 +712,86 @@ impl App {
         )
     }
 
-    /// Execute a list of plugin actions.
-    pub(super) fn execute_plugin_actions(&mut self, actions: Vec<crate::plugin::PluginAction>) {
+    /// Execute one plugin action.
+    pub(super) fn execute_plugin_action(&mut self, action: crate::plugin::PluginAction) {
         use crate::plugin::PluginAction;
         use crate::tabs::TabType;
 
-        for action in actions {
-            match action {
-                PluginAction::InvokeStructuredHandler { invocation } => {
-                    let plugin_id = invocation.plugin_id.clone();
-                    if let Err(error) = self.submit_structured_handler(invocation) {
-                        log::debug!(
-                            "Skipping structured plugin handler {:?}: {}",
-                            plugin_id,
-                            error
-                        );
-                        self.toasts.error(error);
-                    }
+        match action {
+            PluginAction::InvokeStructuredHandler { invocation } => {
+                let plugin_id = invocation.plugin_id.clone();
+                if let Err(error) = self.submit_structured_handler(invocation) {
+                    log::debug!(
+                        "Skipping structured plugin handler {:?}: {}",
+                        plugin_id,
+                        error
+                    );
+                    self.toasts.error(error);
                 }
-                PluginAction::OpenTab {
-                    program,
-                    args,
-                    cwd,
-                    title,
-                    plugin_id,
-                    profile,
-                    env,
-                } => {
-                    let tab_type = plugin_id
-                        .clone()
-                        .map(|id| TabType::Plugin { plugin_id: id });
-                    if let Some(tabs) = &mut self.tabs {
-                        match tabs.new_tab_with_command(
-                            &program,
-                            &args,
-                            cwd.as_deref(),
-                            title.as_deref(),
-                            tab_type,
-                            env,
-                        ) {
-                            Ok(id) => {
-                                if let Some(plugin_id) = plugin_id
-                                    && let Some(tab) = tabs.tab_mut_by_id(id)
-                                {
-                                    tab.set_plugin_profile_reference(
-                                        tab.single_pane_id(),
-                                        &plugin_id,
-                                        profile,
-                                    );
-                                }
-                                log::info!("Plugin opened tab {} running '{}'", id, program);
-                                // The new tab is active; what describes the
-                                // focused tab follows it.
-                                self.refresh_focused_terminal_surfaces();
-                                self.dispatch_plugin_hook(crate::plugin::Hook::TabCreated {
-                                    tab_id: id,
-                                });
-                            }
-                            Err(e) => {
-                                self.info_overlay.show(
-                                    format!("Failed to launch '{}'", program),
-                                    vec![format!("{}", e)],
+            }
+            PluginAction::OpenTab {
+                program,
+                args,
+                cwd,
+                title,
+                plugin_id,
+                profile,
+                env,
+            } => {
+                let tab_type = plugin_id
+                    .clone()
+                    .map(|id| TabType::Plugin { plugin_id: id });
+                if let Some(tabs) = &mut self.tabs {
+                    match tabs.new_tab_with_command(
+                        &program,
+                        &args,
+                        cwd.as_deref(),
+                        title.as_deref(),
+                        tab_type,
+                        env,
+                    ) {
+                        Ok(id) => {
+                            if let Some(plugin_id) = plugin_id
+                                && let Some(tab) = tabs.tab_mut_by_id(id)
+                            {
+                                tab.set_plugin_profile_reference(
+                                    tab.single_pane_id(),
+                                    &plugin_id,
+                                    profile,
                                 );
-                                if let Some(window) = &self.window {
-                                    window.request_redraw();
-                                }
-                                log::error!("Plugin failed to open tab for '{}': {}", program, e);
                             }
+                            log::info!("Plugin opened tab {} running '{}'", id, program);
+                            // The new tab is active; what describes the
+                            // focused tab follows it.
+                            self.refresh_focused_terminal_surfaces();
+                            self.dispatch_plugin_hook(crate::plugin::Hook::TabCreated {
+                                tab_id: id,
+                            });
+                        }
+                        Err(e) => {
+                            self.info_overlay.show(
+                                format!("Failed to launch '{}'", program),
+                                vec![format!("{}", e)],
+                            );
+                            if let Some(window) = &self.window {
+                                window.request_redraw();
+                            }
+                            log::error!("Plugin failed to open tab for '{}': {}", program, e);
                         }
                     }
                 }
-                PluginAction::WriteToPty { data } => {
-                    self.write_to_pty(&data);
-                }
-                PluginAction::Notify { title, body } => {
-                    self.notifications.notify(&title, &body);
-                }
-                PluginAction::ShowMessage { message } => {
-                    log::info!("Plugin message: {}", message);
-                    self.toasts.info(message);
-                }
-                PluginAction::ShowNotice { title, lines } => {
-                    log::info!("Plugin notice [{}]: {}", title, lines.join(" / "));
-                    self.info_overlay.show(title, lines);
-                    if let Some(window) = &self.window {
-                        window.request_redraw();
-                    }
-                }
-                PluginAction::ApplyDiff { diff_content, cwd } => {
-                    self.run_git_apply("apply", &[], &diff_content, cwd.as_deref());
-                }
-                PluginAction::StageDiff { diff_content, cwd } => {
-                    self.run_git_apply("stage", &["--cached"], &diff_content, cwd.as_deref());
-                }
-                PluginAction::RevertDiff { diff_content, cwd } => {
-                    self.run_git_apply("revert", &["--reverse"], &diff_content, cwd.as_deref());
+            }
+            PluginAction::ShowMessage { message } => {
+                log::info!("Plugin message: {}", message);
+                self.toasts.info(message);
+            }
+            PluginAction::ShowNotice { title, lines } => {
+                log::info!("Plugin notice [{}]: {}", title, lines.join(" / "));
+                self.info_overlay.show(title, lines);
+                if let Some(window) = &self.window {
+                    window.request_redraw();
                 }
             }
-        }
-    }
-
-    /// Run `git apply` with optional extra args, piping diff_content to stdin.
-    pub(super) fn run_git_apply(
-        &mut self,
-        label: &str,
-        extra_args: &[&str],
-        diff_content: &str,
-        cwd: Option<&str>,
-    ) {
-        use std::io::Write;
-        use std::process::{Command, Stdio};
-
-        let mut cmd = Command::new("git");
-        cmd.arg("apply");
-        for arg in extra_args {
-            cmd.arg(arg);
-        }
-        cmd.stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        if let Some(dir) = cwd {
-            cmd.current_dir(dir);
-        }
-
-        match cmd.spawn() {
-            Ok(mut child) => {
-                if let Some(mut stdin) = child.stdin.take() {
-                    if let Err(error) = stdin.write_all(diff_content.as_bytes()) {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        self.show_git_action_failure(
-                            label,
-                            format!("Could not send diff: {error}"),
-                        );
-                        return;
-                    }
-                }
-                match child.wait_with_output() {
-                    Ok(output) if output.status.success() => {
-                        log::info!("git {} succeeded", label);
-                        self.toasts.success(format!("Git {label} succeeded"));
-                    }
-                    Ok(output) => {
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        log::error!("git {} failed: {}", label, stderr.trim());
-                        let detail = if stderr.trim().is_empty() {
-                            format!("git apply exited with {}", output.status)
-                        } else {
-                            stderr.trim().to_string()
-                        };
-                        self.show_git_action_failure(label, detail);
-                    }
-                    Err(e) => {
-                        log::error!("git {} wait failed: {}", label, e);
-                        self.show_git_action_failure(label, e.to_string());
-                    }
-                }
-            }
-            Err(e) => {
-                log::error!("Failed to spawn git {}: {}", label, e);
-                self.show_git_action_failure(label, e.to_string());
-            }
-        }
-    }
-
-    pub(super) fn show_git_action_failure(&mut self, label: &str, detail: String) {
-        self.toasts.error(format!("Git {label} failed"));
-        let mut lines = vec![format!("git {label} could not complete:"), String::new()];
-        lines.extend(detail.lines().take(8).map(str::to_string));
-        self.info_overlay.show("Git action failed", lines);
-        if let Some(window) = &self.window {
-            window.request_redraw();
         }
     }
 

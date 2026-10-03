@@ -478,7 +478,7 @@ impl App {
                 let ctx = self.build_plugin_context();
                 let resume = placement == AgentPlacement::Resume;
                 match crate::plugin::agent::open_tab_action(&agent, &ctx, profile, resume, None) {
-                    Ok(action) => self.execute_plugin_actions(vec![action]),
+                    Ok(action) => self.execute_plugin_action(action),
                     Err(error) => self.toasts.error(error),
                 }
             }

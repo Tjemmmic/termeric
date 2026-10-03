@@ -5660,11 +5660,11 @@ mod tests {
                 &mut self,
                 hook: &crate::plugin::Hook,
                 _context: &crate::plugin::PluginContext,
-            ) -> crate::plugin::hooks::HookResponse {
+            ) -> Option<crate::plugin::PluginAction> {
                 if matches!(hook, crate::plugin::Hook::TabSwitched { .. }) {
                     self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 }
-                crate::plugin::hooks::HookResponse::Ignored
+                None
             }
         }
 
@@ -5700,13 +5700,11 @@ mod tests {
         let observed_switches = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut target = App::new_headless(Config::default()).unwrap();
         target.tabs = Some(tabs);
-        let context = target.build_plugin_context();
         target
             .plugin_manager
-            .register(
-                Box::new(TabSwitchObserver(std::sync::Arc::clone(&observed_switches))),
-                &context,
-            )
+            .register(Box::new(TabSwitchObserver(std::sync::Arc::clone(
+                &observed_switches,
+            ))))
             .unwrap();
 
         let mut application =
@@ -5948,11 +5946,11 @@ mod tests {
                 &mut self,
                 hook: &crate::plugin::Hook,
                 _context: &crate::plugin::PluginContext,
-            ) -> crate::plugin::hooks::HookResponse {
+            ) -> Option<crate::plugin::PluginAction> {
                 if matches!(hook, crate::plugin::Hook::TabCreated { .. }) {
                     self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 }
-                crate::plugin::hooks::HookResponse::Ignored
+                None
             }
         }
 
@@ -5966,15 +5964,11 @@ mod tests {
         let observed_creations = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut target = App::new_headless(Config::default()).unwrap();
         target.tabs = Some(tabs);
-        let context = target.build_plugin_context();
         target
             .plugin_manager
-            .register(
-                Box::new(TabCreatedObserver(std::sync::Arc::clone(
-                    &observed_creations,
-                ))),
-                &context,
-            )
+            .register(Box::new(TabCreatedObserver(std::sync::Arc::clone(
+                &observed_creations,
+            ))))
             .unwrap();
 
         let mut application =
@@ -7456,11 +7450,11 @@ mod tests {
                 &mut self,
                 hook: &crate::plugin::Hook,
                 context: &crate::plugin::PluginContext,
-            ) -> crate::plugin::hooks::HookResponse {
+            ) -> Option<crate::plugin::PluginAction> {
                 if matches!(hook, crate::plugin::Hook::AppReady) {
                     self.0.lock().unwrap().push(context.window_id);
                 }
-                crate::plugin::hooks::HookResponse::Ignored
+                None
             }
         }
 
@@ -7474,10 +7468,9 @@ mod tests {
                 program: "/bin/sh".into(),
                 args: vec!["-c".into(), "exit 0".into()],
             };
-            let context = window.build_plugin_context();
             window
                 .plugin_manager
-                .register(Box::new(AppReadyObserver(observed.clone())), &context)
+                .register(Box::new(AppReadyObserver(observed.clone())))
                 .unwrap();
             application.pending.push(window);
         }

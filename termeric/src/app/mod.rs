@@ -4427,7 +4427,7 @@ impl App {
 
     /// Re-sync the command palette with currently registered plugins.
     ///
-    /// Called after a plugin is registered or deregistered at runtime.
+    /// Called whenever the registered plugins are rebuilt from configuration.
     fn refresh_plugin_commands(&mut self) {
         use crate::ui::command_palette::palette::{CommandSource, RegisteredCommand};
 
@@ -4435,25 +4435,10 @@ impl App {
         for pc in &plugin_commands {
             log::debug!("Refreshing plugin command: {} - {}", pc.id, pc.description);
         }
-        let keybindings = self.plugin_manager.all_keybindings();
 
         let palette_cmds: Vec<RegisteredCommand> = plugin_commands
             .iter()
             .map(|pc| {
-                let shortcut = keybindings.iter().find(|k| k.command_id == pc.id).map(|k| {
-                    let mut parts = Vec::new();
-                    if k.ctrl {
-                        parts.push("Ctrl".to_string());
-                    }
-                    if k.alt {
-                        parts.push("Alt".to_string());
-                    }
-                    if k.shift {
-                        parts.push("Shift".to_string());
-                    }
-                    parts.push(k.key.to_uppercase());
-                    parts.join("+")
-                });
                 let plugin_source = pc
                     .id
                     .split_once('.')
@@ -4463,7 +4448,7 @@ impl App {
                     id: pc.id.clone(),
                     title: pc.name.clone(),
                     category: pc.category.clone().unwrap_or_else(|| "Plugins".to_string()),
-                    shortcut,
+                    shortcut: None,
                     icon: None,
                     source: CommandSource::Plugin(plugin_source),
                     destructive: false,

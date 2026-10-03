@@ -1,5 +1,5 @@
 use super::*;
-use crate::plugin::hooks::{HookResponse, Plugin, PluginCommand};
+use crate::plugin::hooks::{Plugin, PluginCommand};
 
 #[test]
 fn stale_hyperlink_activation_is_rejected_before_opener_validation() {
@@ -3416,11 +3416,11 @@ impl Plugin for CountingTabClosedPlugin {
         &mut self,
         hook: &crate::plugin::Hook,
         _ctx: &crate::plugin::PluginContext,
-    ) -> HookResponse {
+    ) -> Option<PluginAction> {
         if matches!(hook, crate::plugin::Hook::TabClosed { .. }) {
             self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
-        HookResponse::Ignored
+        None
     }
 }
 
@@ -3440,11 +3440,11 @@ impl Plugin for CountingTabSwitchedPlugin {
         &mut self,
         hook: &crate::plugin::Hook,
         _ctx: &crate::plugin::PluginContext,
-    ) -> HookResponse {
+    ) -> Option<PluginAction> {
         if matches!(hook, crate::plugin::Hook::TabSwitched { .. }) {
             self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
-        HookResponse::Ignored
+        None
     }
 }
 
@@ -3478,17 +3478,17 @@ impl Plugin for ThirdPartyReservedSuffixFixture {
         &mut self,
         hook: &crate::plugin::Hook,
         _context: &crate::plugin::PluginContext,
-    ) -> HookResponse {
+    ) -> Option<PluginAction> {
         if matches!(
             hook,
             crate::plugin::Hook::CommandInvoked { command_id }
                 if command_id == "third-party.review-diff"
         ) {
-            HookResponse::Action(crate::plugin::PluginAction::ShowMessage {
+            Some(crate::plugin::PluginAction::ShowMessage {
                 message: "third-party command routed".into(),
             })
         } else {
-            HookResponse::Ignored
+            None
         }
     }
 
@@ -3505,9 +3505,8 @@ impl Plugin for ThirdPartyReservedSuffixFixture {
 #[test]
 fn third_party_command_suffixes_do_not_invoke_builtin_ai_actions() {
     let mut app = App::new_headless(Config::default()).unwrap();
-    let context = app.build_plugin_context();
     app.plugin_manager
-        .register(Box::new(ThirdPartyReservedSuffixFixture), &context)
+        .register(Box::new(ThirdPartyReservedSuffixFixture))
         .unwrap();
 
     app.execute_plugin_command("third-party.review-diff");
@@ -4995,14 +4994,12 @@ fn plugin_pane_movement_preserves_pty_and_returns_exact_destination_state() {
 
     let mut app = App::new_headless(Config::default()).unwrap();
     app.tabs = Some(tabs);
-    app.plugin_manager.unload_all();
+    app.plugin_manager.clear();
     let observed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let context = app.build_plugin_context();
     app.plugin_manager
-        .register(
-            Box::new(CountingTabSwitchedPlugin(std::sync::Arc::clone(&observed))),
-            &context,
-        )
+        .register(Box::new(CountingTabSwitchedPlugin(std::sync::Arc::clone(
+            &observed,
+        ))))
         .unwrap();
     app.copy_mode_target = Some(CopyModeTarget {
         tab: source_tab_id,
@@ -5818,14 +5815,12 @@ fn plugin_tab_closure_is_scheduled_exact_bounded_and_hook_suppressed() {
     };
     let mut app = App::new_headless(Config::default()).unwrap();
     app.tabs = Some(tabs);
-    app.plugin_manager.unload_all();
+    app.plugin_manager.clear();
     let observed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let context = app.build_plugin_context();
     app.plugin_manager
-        .register(
-            Box::new(CountingTabClosedPlugin(std::sync::Arc::clone(&observed))),
-            &context,
-        )
+        .register(Box::new(CountingTabClosedPlugin(std::sync::Arc::clone(
+            &observed,
+        ))))
         .unwrap();
 
     let background = plugin_action_event(
@@ -6054,14 +6049,12 @@ fn control_tab_closure_retains_final_tab_authority() {
     let tab_id = tabs.new_tab().unwrap();
     let mut app = App::new_headless(Config::default()).unwrap();
     app.tabs = Some(tabs);
-    app.plugin_manager.unload_all();
+    app.plugin_manager.clear();
     let observed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let context = app.build_plugin_context();
     app.plugin_manager
-        .register(
-            Box::new(CountingTabClosedPlugin(std::sync::Arc::clone(&observed))),
-            &context,
-        )
+        .register(Box::new(CountingTabClosedPlugin(std::sync::Arc::clone(
+            &observed,
+        ))))
         .unwrap();
 
     app.close_control_tab(tab_id as u64).unwrap();
@@ -6099,11 +6092,11 @@ fn plugin_tab_creation_returns_stable_identity_without_lifecycle_redispatch() {
             &mut self,
             hook: &crate::plugin::Hook,
             _ctx: &crate::plugin::PluginContext,
-        ) -> crate::plugin::hooks::HookResponse {
+        ) -> Option<crate::plugin::PluginAction> {
             if matches!(hook, crate::plugin::Hook::TabCreated { .. }) {
                 self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             }
-            crate::plugin::hooks::HookResponse::Ignored
+            None
         }
     }
 
@@ -6116,14 +6109,12 @@ fn plugin_tab_creation_returns_stable_identity_without_lifecycle_redispatch() {
     let initial_tab_id = tabs.new_tab().unwrap();
     let mut app = App::new_headless(Config::default()).unwrap();
     app.tabs = Some(tabs);
-    app.plugin_manager.unload_all();
+    app.plugin_manager.clear();
     let observed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let context = app.build_plugin_context();
     app.plugin_manager
-        .register(
-            Box::new(TabCreatedObserver(std::sync::Arc::clone(&observed))),
-            &context,
-        )
+        .register(Box::new(TabCreatedObserver(std::sync::Arc::clone(
+            &observed,
+        ))))
         .unwrap();
 
     let created = plugin_action_event(
@@ -7512,12 +7503,12 @@ fn semantic_command_completion_reaches_plugins_with_exact_bounded_source_text() 
             &mut self,
             hook: &crate::plugin::Hook,
             _context: &crate::plugin::PluginContext,
-        ) -> crate::plugin::hooks::HookResponse {
+        ) -> Option<crate::plugin::PluginAction> {
             if matches!(hook, crate::plugin::Hook::CommandExecuted { .. }) {
                 *self.captured.lock().unwrap() = Some(hook.clone());
-                crate::plugin::hooks::HookResponse::Handled
+                None
             } else {
-                crate::plugin::hooks::HookResponse::Ignored
+                None
             }
         }
     }
@@ -7543,15 +7534,11 @@ fn semantic_command_completion_reaches_plugins_with_exact_bounded_source_text() 
 
     let captured = std::sync::Arc::new(std::sync::Mutex::new(None));
     let mut app = App::new_headless(Config::default()).unwrap();
-    app.plugin_manager.unload_all();
-    let context = app.build_plugin_context();
+    app.plugin_manager.clear();
     app.plugin_manager
-        .register(
-            Box::new(CommandCapture {
-                captured: std::sync::Arc::clone(&captured),
-            }),
-            &context,
-        )
+        .register(Box::new(CommandCapture {
+            captured: std::sync::Arc::clone(&captured),
+        }))
         .unwrap();
     app.tabs = Some(tabs);
     assert!(app.process_pty_events());
@@ -11011,9 +10998,8 @@ fn structured_plugin_completions_require_a_live_generation_and_plugin() {
     }
 
     let mut app = App::new_headless(Config::default()).unwrap();
-    let context = app.build_plugin_context();
     app.plugin_manager
-        .register(Box::new(CompletionPlugin), &context)
+        .register(Box::new(CompletionPlugin))
         .unwrap();
     let completion =
         |generation, message: &str| crate::plugin::structured::StructuredHandlerCompletion {
@@ -11047,7 +11033,7 @@ fn structured_plugin_completions_require_a_live_generation_and_plugin() {
     );
     assert!(app.toasts.iter().any(|toast| toast.message == "current"));
 
-    app.plugin_manager.deregister("completion-fixture");
+    app.plugin_manager.clear();
     assert!(
         app.accept_structured_plugin_completion(completion(
             app.plugin_runtime_generation,
@@ -11079,9 +11065,8 @@ fn structured_completion_hands_its_host_operation_to_the_application() {
     }
 
     let mut app = App::new_headless(Config::default()).unwrap();
-    let context = app.build_plugin_context();
     app.plugin_manager
-        .register(Box::new(CompletionPlugin), &context)
+        .register(Box::new(CompletionPlugin))
         .unwrap();
     let select = StructuredResponseAction::SelectTab {
         action_id: "select".into(),
@@ -11335,21 +11320,19 @@ fn structured_workspace_query_is_current_window_bounded_and_control_safe() {
             &mut self,
             hook: &crate::plugin::Hook,
             _ctx: &crate::plugin::PluginContext,
-        ) -> crate::plugin::hooks::HookResponse {
+        ) -> Option<crate::plugin::PluginAction> {
             if matches!(hook, crate::plugin::Hook::TabSwitched { .. }) {
                 self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             }
-            crate::plugin::hooks::HookResponse::Ignored
+            None
         }
     }
 
     let observed_switches = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let context = app.build_plugin_context();
     app.plugin_manager
-        .register(
-            Box::new(TabSwitchObserver(std::sync::Arc::clone(&observed_switches))),
-            &context,
-        )
+        .register(Box::new(TabSwitchObserver(std::sync::Arc::clone(
+            &observed_switches,
+        ))))
         .unwrap();
 
     let failed = plugin_action_event(
@@ -11888,7 +11871,7 @@ printf 'launch=%s\n' "${1-}" >> "$TERMERIC_PLUGIN_PROBE_LOG"
         termeric_core::DEFAULT_SCROLLBACK_MEMORY_BYTES,
     ));
     let started = Instant::now();
-    app.execute_plugin_actions(vec![PluginAction::OpenTab {
+    app.execute_plugin_action(PluginAction::OpenTab {
         program: executable.display().to_string(),
         args: vec!["run".into()],
         cwd: Some(temp.path().display().to_string()),
@@ -11899,7 +11882,7 @@ printf 'launch=%s\n' "${1-}" >> "$TERMERIC_PLUGIN_PROBE_LOG"
             "TERMERIC_PLUGIN_PROBE_LOG".into(),
             invocation.display().to_string(),
         )]),
-    }]);
+    });
     assert!(
         started.elapsed() < Duration::from_secs(1),
         "plugin dispatch blocked on executable behavior"
@@ -11923,7 +11906,7 @@ fn plugin_spawn_failure_is_visible_without_a_preflight_process() {
         100,
         termeric_core::DEFAULT_SCROLLBACK_MEMORY_BYTES,
     ));
-    app.execute_plugin_actions(vec![PluginAction::OpenTab {
+    app.execute_plugin_action(PluginAction::OpenTab {
         program: "/definitely/missing/termeric-plugin-fixture".into(),
         args: vec![],
         cwd: None,
@@ -11931,7 +11914,7 @@ fn plugin_spawn_failure_is_visible_without_a_preflight_process() {
         plugin_id: Some("fixture-plugin".into()),
         profile: None,
         env: HashMap::new(),
-    }]);
+    });
 
     assert!(app.info_overlay.is_active());
     assert!(app.info_overlay.title().contains("Failed to launch"));

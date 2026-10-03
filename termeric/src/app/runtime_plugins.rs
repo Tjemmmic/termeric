@@ -1687,7 +1687,6 @@ impl App {
                         .and_then(|metadata| metadata.modified())
                         .ok();
                 self.sync_plugins_from_config();
-                self.reload_dynamic_keybindings();
                 self.toasts.success(message);
                 self.show_runtime_plugin_detail(preview.id, page);
             }
@@ -1715,7 +1714,6 @@ impl App {
                         .and_then(|metadata| metadata.modified())
                         .ok();
                 self.sync_plugins_from_config();
-                self.reload_dynamic_keybindings();
                 self.toasts.success(message);
                 self.show_runtime_plugin_detail(preview.id.clone(), page);
             }
@@ -1744,7 +1742,6 @@ impl App {
                         .and_then(|metadata| metadata.modified())
                         .ok();
                 self.sync_plugins_from_config();
-                self.reload_dynamic_keybindings();
                 self.toasts.success(message);
                 self.show_runtime_plugin_detail(plugin_id, page);
             }
@@ -1807,7 +1804,6 @@ impl App {
                         .and_then(|metadata| metadata.modified())
                         .ok();
                 self.sync_plugins_from_config();
-                self.reload_dynamic_keybindings();
                 self.toasts.success(message);
                 self.show_runtime_plugin_settings(plugin_id, page, settings_page);
             }
@@ -1842,7 +1838,6 @@ impl App {
                         .and_then(|metadata| metadata.modified())
                         .ok();
                 self.sync_plugins_from_config();
-                self.reload_dynamic_keybindings();
                 self.toasts.success(message);
                 if removed {
                     self.show_runtime_plugin_list(page);

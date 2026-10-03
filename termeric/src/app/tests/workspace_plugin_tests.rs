@@ -423,12 +423,12 @@ impl Plugin for RestoreResponseFixture {
     fn name(&self) -> &str {
         "Synthetic workspace restore"
     }
-    fn on_hook(&mut self, hook: &crate::plugin::Hook, ctx: &PluginContext) -> HookResponse {
+    fn on_hook(&mut self, hook: &crate::plugin::Hook, ctx: &PluginContext) -> Option<PluginAction> {
         use crate::plugin::{Hook, PluginAction};
         let (Hook::WorkspaceRestore { profile, cwd, .. } | Hook::PaneLaunch { profile, cwd, .. }) =
             hook
         else {
-            return HookResponse::Ignored;
+            return None;
         };
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         assert_eq!(&ctx.cwd, cwd);
@@ -457,39 +457,25 @@ impl Plugin for RestoreResponseFixture {
             env: Default::default(),
         };
         match self.mode {
-            "duplicate" => HookResponse::Actions(vec![launch.clone(), launch]),
-            "side-effect" => HookResponse::Actions(vec![
-                launch,
-                PluginAction::WriteToPty {
-                    data: b"must not be sent".to_vec(),
-                },
-            ]),
-            "notice" => HookResponse::Actions(vec![
-                PluginAction::ShowNotice {
-                    title: "Fallback".into(),
-                    lines: vec!["Do not accept silently".into()],
-                },
-                launch,
-            ]),
-            _ => HookResponse::Action(launch),
+            "unsupported" => Some(PluginAction::ShowMessage {
+                message: "not a launch".into(),
+            }),
+            "notice" => Some(PluginAction::ShowNotice {
+                title: "Fallback".into(),
+                lines: vec!["Do not accept silently".into()],
+            }),
+            _ => Some(launch),
         }
     }
 }
 
 #[test]
-fn workspace_plugin_hooks_are_targeted_and_mismatched_or_ambiguous_actions_are_rejected() {
+fn workspace_plugin_hooks_are_targeted_and_mismatched_or_non_launch_actions_are_rejected() {
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
-    for mode in [
-        "owner",
-        "profile",
-        "cwd",
-        "duplicate",
-        "side-effect",
-        "notice",
-    ] {
+    for mode in ["owner", "profile", "cwd", "unsupported", "notice"] {
         let (mut app, _dir, mut snapshot) = fixture();
         let called = Arc::new(AtomicUsize::new(0));
         let unrelated = Arc::new(AtomicUsize::new(0));
@@ -498,10 +484,7 @@ fn workspace_plugin_hooks_are_targeted_and_mismatched_or_ambiguous_actions_are_r
             ("unrelated", unrelated.clone()),
         ] {
             app.plugin_manager
-                .register(
-                    Box::new(RestoreResponseFixture { id, mode, calls }),
-                    &app.build_plugin_context(),
-                )
+                .register(Box::new(RestoreResponseFixture { id, mode, calls }))
                 .unwrap();
         }
         snapshot.launch = WorkspaceLaunch::Plugin {

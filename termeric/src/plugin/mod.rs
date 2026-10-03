@@ -1,18 +1,16 @@
 //! Plugin system for Termeric
 //!
-//! Provides a trait-based plugin architecture that lets external tools
-//! integrate with Termeric non-intrusively. Plugins can:
+//! Every plugin implements the [`hooks::Plugin`] trait: it reacts to
+//! lifecycle hooks (tab creation, command completion, and so on), may add
+//! command-palette commands and pane launch profiles, and answers a hook with
+//! at most one [`PluginAction`] (open a tab, show a message or notice, or run
+//! a structured handler).
 //!
-//! - React to lifecycle hooks (tab creation, command execution, etc.)
-//! - Add commands to the command palette
-//! - Register keybindings
-//! - Request actions (open tabs, write to PTY, show notifications)
-//!
-//! # Built-in Plugins
-//!
-//! - **Agents** (`agent`) — one launch integration per coding agent in the
-//!   agent catalog (Claude Code, Codex, Gemini CLI, OpenCode, and configured
-//!   custom agents)
+//! - **Agents** (`agent`) — one built-in launch integration per coding agent
+//!   in the agent catalog, including configured custom agents
+//! - **Third-party plugins** (`runtime`) — installed declarative manifests;
+//!   `structured` runs their handler processes and `permission` holds their
+//!   capabilities
 
 pub mod agent;
 pub mod hooks;

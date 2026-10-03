@@ -43,49 +43,44 @@ impl App {
         };
         let profile = profile.as_deref();
         self.validate_plugin_launch_profile(plugin_id, profile)?;
-        let actions = self.plugin_manager.dispatch_to(plugin_id, hook, ctx);
-        let mut launch = None;
-        for action in actions {
-            match action {
-                PluginAction::OpenTab {
-                    program,
-                    args,
-                    cwd: actual_cwd,
-                    plugin_id: actual_id,
-                    profile: actual_profile,
-                    env,
-                    ..
-                } => {
-                    if launch.is_some()
-                        || actual_id.as_deref() != Some(plugin_id)
-                        || profile.is_some_and(|saved| actual_profile.as_deref() != Some(saved))
-                        || actual_cwd.as_ref() != cwd.as_ref()
-                        || program.is_empty()
-                    {
-                        anyhow::bail!("plugin returned an ambiguous or mismatched terminal launch");
-                    }
-                    self.validate_plugin_launch_profile(plugin_id, actual_profile.as_deref())?;
-                    // Requested cwd is authoritative, including restoration's
-                    // missing-cwd fallback. PWD must not override it indirectly.
-                    let env = env.into_iter().filter(|(key, _)| key != "PWD").collect();
-                    launch = Some((
-                        WorkspaceLaunch::Plugin {
-                            plugin_id: plugin_id.into(),
-                            profile: actual_profile,
-                        },
-                        crate::config::ShellConfig {
-                            program: Some(program),
-                            args,
-                            env,
-                        },
-                    ));
+        match self.plugin_manager.dispatch_to(plugin_id, hook, ctx) {
+            Some(PluginAction::OpenTab {
+                program,
+                args,
+                cwd: actual_cwd,
+                plugin_id: actual_id,
+                profile: actual_profile,
+                env,
+                ..
+            }) => {
+                if actual_id.as_deref() != Some(plugin_id)
+                    || profile.is_some_and(|saved| actual_profile.as_deref() != Some(saved))
+                    || actual_cwd.as_ref() != cwd.as_ref()
+                    || program.is_empty()
+                {
+                    anyhow::bail!("plugin returned a mismatched terminal launch");
                 }
-                PluginAction::ShowNotice { .. } => anyhow::bail!(
-                    "plugin did not provide a clean terminal launch; configuration needs attention"
-                ),
-                _ => anyhow::bail!("plugin returned an unsupported terminal launch action"),
+                self.validate_plugin_launch_profile(plugin_id, actual_profile.as_deref())?;
+                // Requested cwd is authoritative, including restoration's
+                // missing-cwd fallback. PWD must not override it indirectly.
+                let env = env.into_iter().filter(|(key, _)| key != "PWD").collect();
+                Ok((
+                    WorkspaceLaunch::Plugin {
+                        plugin_id: plugin_id.into(),
+                        profile: actual_profile,
+                    },
+                    crate::config::ShellConfig {
+                        program: Some(program),
+                        args,
+                        env,
+                    },
+                ))
             }
+            Some(PluginAction::ShowNotice { .. }) => anyhow::bail!(
+                "plugin did not provide a clean terminal launch; configuration needs attention"
+            ),
+            Some(_) => anyhow::bail!("plugin returned an unsupported terminal launch action"),
+            None => anyhow::bail!("plugin {plugin_id:?} is not available"),
         }
-        launch.ok_or_else(|| anyhow::anyhow!("plugin {plugin_id:?} is not available"))
     }
 }

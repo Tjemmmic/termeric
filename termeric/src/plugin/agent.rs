@@ -6,7 +6,7 @@
 //! application offers agents through one picker instead of a copy of every
 //! command per agent.
 
-use super::hooks::{Hook, HookResponse, Plugin, PluginAction, PluginContext};
+use super::hooks::{Hook, Plugin, PluginAction, PluginContext};
 use crate::agents::AgentDefinition;
 
 #[derive(Debug)]
@@ -36,14 +36,13 @@ impl AgentPlugin {
         profile: Option<&str>,
         resume: bool,
         cwd: Option<&str>,
-    ) -> HookResponse {
-        match open_tab_action(&self.agent, ctx, profile, resume, cwd) {
-            Ok(action) => HookResponse::Action(action),
-            Err(error) => HookResponse::Action(PluginAction::ShowNotice {
+    ) -> PluginAction {
+        open_tab_action(&self.agent, ctx, profile, resume, cwd).unwrap_or_else(|error| {
+            PluginAction::ShowNotice {
                 title: format!("{} could not start", self.agent.name),
                 lines: vec![error],
-            }),
-        }
+            }
+        })
     }
 }
 
@@ -85,15 +84,15 @@ impl Plugin for AgentPlugin {
         &self.agent.name
     }
 
-    fn on_hook(&mut self, hook: &Hook, ctx: &PluginContext) -> HookResponse {
+    fn on_hook(&mut self, hook: &Hook, ctx: &PluginContext) -> Option<PluginAction> {
         match hook {
             Hook::CommandInvoked { command_id } if *command_id == Self::open_command(self.id()) => {
-                self.launch(ctx, None, false, None)
+                Some(self.launch(ctx, None, false, None))
             }
             Hook::CommandInvoked { command_id }
                 if *command_id == Self::resume_command(self.id()) =>
             {
-                self.launch(ctx, None, true, None)
+                Some(self.launch(ctx, None, true, None))
             }
             Hook::PaneLaunch {
                 plugin_id,
@@ -105,9 +104,9 @@ impl Plugin for AgentPlugin {
                 profile,
                 cwd,
             } if *plugin_id == self.agent.id => {
-                self.launch(ctx, profile.as_deref(), false, cwd.as_deref())
+                Some(self.launch(ctx, profile.as_deref(), false, cwd.as_deref()))
             }
-            _ => HookResponse::Ignored,
+            _ => None,
         }
     }
 
@@ -131,8 +130,10 @@ mod tests {
         }
     }
 
-    fn open_tab(response: HookResponse) -> (String, Vec<String>, Option<String>, Option<String>) {
-        let HookResponse::Action(PluginAction::OpenTab {
+    fn open_tab(
+        response: Option<PluginAction>,
+    ) -> (String, Vec<String>, Option<String>, Option<String>) {
+        let Some(PluginAction::OpenTab {
             program,
             args,
             cwd,
@@ -201,20 +202,18 @@ mod tests {
             },
             &context(),
         );
-        assert!(matches!(
-            missing,
-            HookResponse::Action(PluginAction::ShowNotice { .. })
-        ));
-        assert!(matches!(
-            plugin.on_hook(
-                &Hook::PaneLaunch {
-                    plugin_id: "claude-code".into(),
-                    profile: None,
-                    cwd: None
-                },
-                &context()
-            ),
-            HookResponse::Ignored
-        ));
+        assert!(matches!(missing, Some(PluginAction::ShowNotice { .. })));
+        assert!(
+            plugin
+                .on_hook(
+                    &Hook::PaneLaunch {
+                        plugin_id: "claude-code".into(),
+                        profile: None,
+                        cwd: None
+                    },
+                    &context()
+                )
+                .is_none()
+        );
     }
 }

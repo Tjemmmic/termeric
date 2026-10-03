@@ -18,18 +18,18 @@ impl Plugin for RestartFixture {
     fn name(&self) -> &str {
         "Local restart fixture"
     }
-    fn on_hook(&mut self, hook: &Hook, ctx: &PluginContext) -> HookResponse {
+    fn on_hook(&mut self, hook: &Hook, ctx: &PluginContext) -> Option<PluginAction> {
         let profile = match hook {
             Hook::WorkspaceRestore { profile, .. } => profile.clone(),
             Hook::CommandInvoked { command_id } if command_id == "synthetic-capture.open" => None,
-            _ => return HookResponse::Ignored,
+            _ => return None,
         };
         self.seen
             .lock()
             .unwrap()
             .push((ctx.clone(), profile.clone()));
         if self.mode == "configuration" {
-            return HookResponse::Action(PluginAction::ShowNotice {
+            return Some(PluginAction::ShowNotice {
                 title: "Synthetic configuration error".into(),
                 lines: vec!["No launch".into()],
             });
@@ -68,21 +68,10 @@ impl Plugin for RestartFixture {
             env: HashMap::from([("CAPTURE_DIR".into(), self.directory.display().to_string())]),
         };
         match self.mode {
-            "duplicate" => HookResponse::Actions(vec![launch.clone(), launch]),
-            "fallback-notice" => HookResponse::Actions(vec![
-                launch,
-                PluginAction::ShowNotice {
-                    title: "Fallback".into(),
-                    lines: vec!["Requested profile unavailable".into()],
-                },
-            ]),
-            "side-effect" => HookResponse::Actions(vec![
-                launch,
-                PluginAction::WriteToPty {
-                    data: b"must-not-arrive".to_vec(),
-                },
-            ]),
-            _ => HookResponse::Action(launch),
+            "unsupported" => Some(PluginAction::ShowMessage {
+                message: "not a launch".into(),
+            }),
+            _ => Some(launch),
         }
     }
 }
@@ -94,14 +83,11 @@ fn register_restart_fixture(
 ) -> RestartObservations {
     let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     app.plugin_manager
-        .register(
-            Box::new(RestartFixture {
-                directory: directory.to_path_buf(),
-                mode,
-                seen: seen.clone(),
-            }),
-            &app.build_plugin_context(),
-        )
+        .register(Box::new(RestartFixture {
+            directory: directory.to_path_buf(),
+            mode,
+            seen: seen.clone(),
+        }))
         .unwrap();
     seen
 }
@@ -113,11 +99,9 @@ fn failed_restart_preserves_old_owners_layout_and_focus() {
         "missing-binary",
         "bad-cwd",
         "wrong-existing-cwd",
-        "fallback-notice",
         "wrong-owner",
         "wrong-profile",
-        "duplicate",
-        "side-effect",
+        "unsupported",
         "read-only",
         "live-domain",
     ] {
