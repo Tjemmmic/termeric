@@ -1232,7 +1232,7 @@ mod tests {
                         window_id: 7,
                         tab_id: 3,
                         pane_id: 0,
-                        direction: protocol::SplitDirection::Vertical,
+                        direction: crate::panes::SplitDirection::Vertical,
                     }
                 );
                 Ok(Response::PaneCreated {
@@ -1255,7 +1255,7 @@ mod tests {
                     window_id: 7,
                     tab_id: 3,
                     pane_id: 0,
-                    direction: protocol::SplitDirection::Vertical,
+                    direction: crate::panes::SplitDirection::Vertical,
                 },
             },
         )
@@ -1320,7 +1320,7 @@ mod tests {
                     window_id: 7,
                     tab_id: 3,
                     pane_id: 0,
-                    direction: protocol::SplitDirection::Vertical,
+                    direction: crate::panes::SplitDirection::Vertical,
                 },
             },
         )

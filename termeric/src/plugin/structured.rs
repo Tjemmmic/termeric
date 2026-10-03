@@ -6,6 +6,7 @@
 //! capabilities plus where the response sits in its bounded follow-up chain.
 
 use super::permission::{Capability, PermissionScope, PluginPermissions};
+use crate::panes::PaneLayoutPreset;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -48,16 +49,6 @@ const PERSISTENT_REAP_INTERVAL: Duration = Duration::from_millis(100);
 pub enum StructuredHandlerMode {
     ProcessPerEvent,
     Persistent,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum PluginPaneLayoutPreset {
-    Columns,
-    Rows,
-    Grid,
-    Tall,
-    Fat,
 }
 
 #[derive(Debug, Clone)]
@@ -262,7 +253,7 @@ pub enum StructuredResponseAction {
         window_id: Option<u64>,
         tab_id: u64,
         pane_id: u32,
-        direction: crate::control::protocol::SplitDirection,
+        direction: crate::panes::SplitDirection,
     },
     ClosePane {
         action_id: String,
@@ -281,7 +272,7 @@ pub enum StructuredResponseAction {
         destination_window_id: Option<u64>,
         destination_tab_id: u64,
         target_pane_id: u32,
-        direction: crate::control::protocol::SplitDirection,
+        direction: crate::panes::SplitDirection,
     },
     SwapPanes {
         action_id: String,
@@ -302,7 +293,7 @@ pub enum StructuredResponseAction {
         #[serde(default)]
         window_id: Option<u64>,
         tab_id: u64,
-        preset: PluginPaneLayoutPreset,
+        preset: PaneLayoutPreset,
     },
     ResizeDivider {
         action_id: String,
@@ -2431,7 +2422,7 @@ done"#,
     #[cfg(unix)]
     #[test]
     fn pane_layouts_example_arranges_the_origin_windows_active_tab() {
-        use crate::control::protocol::SplitDirection;
+        use crate::panes::SplitDirection;
         if !python3_available() {
             return;
         }
@@ -2499,11 +2490,11 @@ done"#,
         };
         assert_eq!(
             conversation.command_with_workspace("dev-layout", None, windows(3)),
-            vec![layout("dev-layout", PluginPaneLayoutPreset::Tall)]
+            vec![layout("dev-layout", PaneLayoutPreset::Tall)]
         );
 
         // Tile and Balance act on the same tab; a successful result is quiet.
-        let tile = layout("tile", PluginPaneLayoutPreset::Grid);
+        let tile = layout("tile", PaneLayoutPreset::Grid);
         assert_eq!(
             conversation.command_with_workspace("tile", None, windows(4)),
             vec![tile.clone()]

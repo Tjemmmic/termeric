@@ -281,7 +281,7 @@ fn live_layout_has_exact_move_split(
     layout: &crate::domain::model::LivePaneLayout,
     target_pane: u32,
     moved_pane: u32,
-    direction: crate::domain::model::SplitDirection,
+    direction: crate::panes::SplitDirection,
 ) -> bool {
     use crate::domain::model::LivePaneLayout;
     match layout {
@@ -2235,7 +2235,7 @@ impl Application {
         window_id: u64,
         tab_id: u64,
         pane_id: u32,
-        direction: crate::control::protocol::SplitDirection,
+        direction: crate::panes::SplitDirection,
     ) -> std::result::Result<crate::control::protocol::Response, String> {
         let native_id = self
             .control_window_ids
@@ -2247,14 +2247,6 @@ impl Application {
             .filter(|window| !window.should_exit)
             .ok_or_else(|| format!("GUI window {window_id} is closing"))?;
         validate_process_pane_creation_capacity(process_pane_count(&self.windows))?;
-        let direction = match direction {
-            crate::control::protocol::SplitDirection::Horizontal => {
-                crate::panes::SplitDirection::Horizontal
-            }
-            crate::control::protocol::SplitDirection::Vertical => {
-                crate::panes::SplitDirection::Vertical
-            }
-        };
         let created_pane = self
             .windows
             .get_mut(&native_id)
@@ -2616,18 +2608,10 @@ impl Application {
         destination_window_id: u64,
         destination_tab_id: u64,
         target_pane_id: u32,
-        direction: crate::control::protocol::SplitDirection,
+        direction: crate::panes::SplitDirection,
     ) -> std::result::Result<crate::control::protocol::Response, String> {
         let source_native = self.control_native_window_id(source_window_id)?;
         let destination_native = self.control_native_window_id(destination_window_id)?;
-        let direction = match direction {
-            crate::control::protocol::SplitDirection::Horizontal => {
-                crate::panes::SplitDirection::Horizontal
-            }
-            crate::control::protocol::SplitDirection::Vertical => {
-                crate::panes::SplitDirection::Vertical
-            }
-        };
         let destination_pane_id = if source_native == destination_native {
             self.windows
                 .get_mut(&source_native)
@@ -4165,7 +4149,7 @@ mod tests {
         launch.windows[0].tabs[0].working_directory = None;
         launch.windows[0].tabs[0]
             .splits
-            .push(crate::cli::CliSplitDirection::Vertical);
+            .push(crate::panes::SplitDirection::Vertical);
         assert!(validate_cli_launches(&config, &launch).is_err());
     }
 
@@ -4395,7 +4379,7 @@ mod tests {
             window_id: 7,
             tab_id: 3,
             pane_id: 0,
-            direction: crate::control::protocol::SplitDirection::Vertical,
+            direction: crate::panes::SplitDirection::Vertical,
         };
         let pane_response = Ok(Response::PaneCreated {
             process_id: 42,
@@ -4454,7 +4438,7 @@ mod tests {
             destination_window_id: 9,
             destination_tab_id: 4,
             target_pane_id: 0,
-            direction: crate::control::protocol::SplitDirection::Vertical,
+            direction: crate::panes::SplitDirection::Vertical,
         };
         let pane_move_response = Ok(Response::PaneMoved {
             process_id: 42,
@@ -5025,8 +5009,8 @@ mod tests {
         }
         use crate::domain::model::{
             DomainSnapshot, LivePane, LivePaneLayout, LiveTab, LiveWorkspace, SpawnSpec,
-            SplitDirection,
         };
+        use crate::panes::SplitDirection;
         use crate::tabs::TabManager;
 
         let pane = |id| LivePane {
@@ -5160,7 +5144,7 @@ mod tests {
             window_id: 7,
             tab_id: created_local_tab,
             pane_id: 0,
-            direction: crate::control::protocol::SplitDirection::Vertical,
+            direction: crate::panes::SplitDirection::Vertical,
         };
         let split_control = crate::app::LiveDomainControl::SplitPane {
             domain_id: created.id.clone(),
@@ -5310,7 +5294,7 @@ mod tests {
             destination_window_id: 7,
             destination_tab_id: destination_local_tab,
             target_pane_id: 0,
-            direction: crate::control::protocol::SplitDirection::Horizontal,
+            direction: crate::panes::SplitDirection::Horizontal,
         };
         let move_pane_control = application.windows[&native_id]
             .control_live_domain_move_pane(
@@ -5318,7 +5302,7 @@ mod tests {
                 1,
                 destination_local_tab,
                 0,
-                crate::control::protocol::SplitDirection::Horizontal,
+                crate::panes::SplitDirection::Horizontal,
             )
             .unwrap()
             .unwrap();
@@ -6182,7 +6166,7 @@ mod tests {
                 window_id: Some(7),
                 tab_id: tab_id as u64,
                 pane_id: 0,
-                direction: crate::control::protocol::SplitDirection::Vertical,
+                direction: crate::panes::SplitDirection::Vertical,
             },
         );
         assert_eq!(created["plugin_id"], "pane-builder");
@@ -6224,7 +6208,7 @@ mod tests {
                 window_id: Some(7),
                 tab_id: tab_id as u64,
                 pane_id: 0,
-                direction: crate::control::protocol::SplitDirection::Horizontal,
+                direction: crate::panes::SplitDirection::Horizontal,
             },
         );
         assert_eq!(created_same_window["event"]["ok"], true);
@@ -6253,7 +6237,7 @@ mod tests {
                 window_id: Some(8),
                 tab_id: tab_id as u64,
                 pane_id: 0,
-                direction: crate::control::protocol::SplitDirection::Vertical,
+                direction: crate::panes::SplitDirection::Vertical,
             },
         );
         assert_eq!(stale_window["event"]["ok"], false);
@@ -6273,7 +6257,7 @@ mod tests {
                 window_id: Some(7),
                 tab_id: tab_id as u64,
                 pane_id: u32::MAX,
-                direction: crate::control::protocol::SplitDirection::Vertical,
+                direction: crate::panes::SplitDirection::Vertical,
             },
         );
         assert_eq!(stale_pane["event"]["ok"], false);
@@ -6315,7 +6299,7 @@ mod tests {
                 window_id: Some(7),
                 tab_id: tab_id as u64,
                 pane_id: 0,
-                direction: crate::control::protocol::SplitDirection::Vertical,
+                direction: crate::panes::SplitDirection::Vertical,
             },
         );
         assert_eq!(live_domain["event"]["ok"], false);
@@ -6348,7 +6332,7 @@ mod tests {
                 window_id: Some(7),
                 tab_id: tab_id as u64,
                 pane_id: 0,
-                direction: crate::control::protocol::SplitDirection::Vertical,
+                direction: crate::panes::SplitDirection::Vertical,
             },
         );
         assert_eq!(serial["event"]["ok"], false);
@@ -6369,7 +6353,7 @@ mod tests {
                 window_id: Some(7),
                 tab_id: tab_id as u64,
                 pane_id: 0,
-                direction: crate::control::protocol::SplitDirection::Vertical,
+                direction: crate::panes::SplitDirection::Vertical,
             },
         );
         assert_eq!(closing["event"]["ok"], false);
@@ -7018,7 +7002,7 @@ mod tests {
         Capability,
         std::result::Result<(), &'static str>,
     )> {
-        use crate::control::protocol::SplitDirection;
+        use crate::panes::SplitDirection;
         let action_id = || "scoped".to_string();
         vec![
             (
@@ -7179,7 +7163,7 @@ mod tests {
                     action_id: action_id(),
                     window_id: Some(8),
                     tab_id: 0,
-                    preset: crate::plugin::structured::PluginPaneLayoutPreset::Rows,
+                    preset: crate::panes::PaneLayoutPreset::Rows,
                 },
                 Capability::PaneLayout,
                 Ok(()),
@@ -7792,7 +7776,7 @@ mod tests {
                 destination_window_id: Some(8),
                 destination_tab_id: 0,
                 target_pane_id: 99,
-                direction: crate::control::protocol::SplitDirection::Vertical,
+                direction: crate::panes::SplitDirection::Vertical,
             },
         );
         assert_eq!(refused["event"]["ok"], false);
@@ -7829,7 +7813,7 @@ mod tests {
                 destination_window_id: Some(8),
                 destination_tab_id: 0,
                 target_pane_id: 0,
-                direction: crate::control::protocol::SplitDirection::Horizontal,
+                direction: crate::panes::SplitDirection::Horizontal,
             },
         );
         assert_eq!(moved["plugin_id"], "pane-mover");
@@ -8658,7 +8642,7 @@ mod tests {
                 action_id: "fat-sibling-panes".into(),
                 window_id: Some(8),
                 tab_id: target_tab_id as u64,
-                preset: crate::plugin::structured::PluginPaneLayoutPreset::Fat,
+                preset: crate::panes::PaneLayoutPreset::Fat,
             },
         );
         assert_eq!(applied["event"]["action"], "apply-pane-layout");

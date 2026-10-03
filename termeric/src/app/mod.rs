@@ -187,7 +187,7 @@ pub(crate) enum LiveDomainControl {
     SplitPane {
         domain_id: String,
         remote_pane_id: u32,
-        direction: crate::domain::model::SplitDirection,
+        direction: crate::panes::SplitDirection,
         spawn: crate::domain::model::SpawnSpec,
     },
     ResizeSplit {
@@ -221,7 +221,7 @@ pub(crate) enum LiveDomainControl {
     ApplyPaneLayout {
         domain_id: String,
         remote_tab_id: u32,
-        preset: crate::domain::model::LivePaneLayoutPreset,
+        preset: crate::panes::PaneLayoutPreset,
     },
     MovePane {
         domain_id: String,
@@ -229,7 +229,7 @@ pub(crate) enum LiveDomainControl {
         source_tab_id: u32,
         destination_tab_id: u32,
         target_pane_id: u32,
-        direction: crate::domain::model::SplitDirection,
+        direction: crate::panes::SplitDirection,
     },
     ClosePane {
         domain_id: String,
@@ -531,9 +531,9 @@ impl App {
                                     id,
                                     kind,
                                     direction: if divider.vertical {
-                                        crate::control::protocol::SplitDirection::Vertical
+                                        crate::panes::SplitDirection::Vertical
                                     } else {
-                                        crate::control::protocol::SplitDirection::Horizontal
+                                        crate::panes::SplitDirection::Horizontal
                                     },
                                     ratio_millis: divider.ratio_millis,
                                 }

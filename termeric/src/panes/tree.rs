@@ -6,19 +6,12 @@
 use super::layout::PaneRect;
 use super::{Divider, DividerTarget, PANE_DIVIDER_THICKNESS};
 use std::collections::HashMap;
+pub use termeric_core::split::SplitDirection;
+use termeric_core::split::{LayoutShape, PaneLayoutPreset};
 
 /// Unique identifier for a pane
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PaneId(pub u32);
-
-/// Direction of a split
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SplitDirection {
-    /// Split horizontally (panes stacked vertically)
-    Horizontal,
-    /// Split vertically (panes side by side)
-    Vertical,
-}
 
 /// A node in the pane tree
 #[derive(Debug, Clone)]
@@ -88,79 +81,29 @@ impl PaneNode {
         }
     }
 
-    fn preset(
-        ids: &[PaneId],
-        direction: SplitDirection,
-        alternate: bool,
-        next_split_id: &mut u64,
-    ) -> Option<Self> {
-        debug_assert!(!ids.is_empty());
-        if ids.len() == 1 {
-            return Some(Self::Leaf(ids[0]));
-        }
-        let local_split_id = *next_split_id;
-        *next_split_id = next_split_id.checked_add(1)?;
-        let midpoint = ids.len().div_ceil(2);
-        let next_direction = if alternate {
-            match direction {
-                SplitDirection::Horizontal => SplitDirection::Vertical,
-                SplitDirection::Vertical => SplitDirection::Horizontal,
+    /// The node for a preset's layout, numbering its splits from
+    /// `next_split_id`; `None` when the numbers run out.
+    fn from_shape(shape: LayoutShape<PaneId>, next_split_id: &mut u64) -> Option<Self> {
+        match shape {
+            LayoutShape::Pane(id) => Some(Self::Leaf(id)),
+            LayoutShape::Split {
+                direction,
+                ratio_millis,
+                first,
+                second,
+            } => {
+                let local_split_id = *next_split_id;
+                *next_split_id = next_split_id.checked_add(1)?;
+                Some(Self::Split {
+                    local_split_id,
+                    domain_split_id: None,
+                    direction,
+                    ratio: f32::from(ratio_millis) / 1000.0,
+                    first: Box::new(Self::from_shape(*first, next_split_id)?),
+                    second: Box::new(Self::from_shape(*second, next_split_id)?),
+                })
             }
-        } else {
-            direction
-        };
-        Some(Self::Split {
-            local_split_id,
-            domain_split_id: None,
-            direction,
-            ratio: midpoint as f32 / ids.len() as f32,
-            first: Box::new(Self::preset(
-                &ids[..midpoint],
-                next_direction,
-                alternate,
-                next_split_id,
-            )?),
-            second: Box::new(Self::preset(
-                &ids[midpoint..],
-                next_direction,
-                alternate,
-                next_split_id,
-            )?),
-        })
-    }
-
-    fn master_detail_preset(
-        ids: &[PaneId],
-        master: PaneId,
-        direction: SplitDirection,
-        next_split_id: &mut u64,
-    ) -> Option<Self> {
-        debug_assert!(ids.len() >= 2);
-        debug_assert!(ids.contains(&master));
-        let detail_ids = ids
-            .iter()
-            .copied()
-            .filter(|id| *id != master)
-            .collect::<Vec<_>>();
-        let detail_direction = match direction {
-            SplitDirection::Horizontal => SplitDirection::Vertical,
-            SplitDirection::Vertical => SplitDirection::Horizontal,
-        };
-        let local_split_id = *next_split_id;
-        *next_split_id = next_split_id.checked_add(1)?;
-        Some(Self::Split {
-            local_split_id,
-            domain_split_id: None,
-            direction,
-            ratio: 0.5,
-            first: Box::new(Self::Leaf(master)),
-            second: Box::new(Self::preset(
-                &detail_ids,
-                detail_direction,
-                false,
-                next_split_id,
-            )?),
-        })
+        }
     }
 
     /// Find and split a leaf node
@@ -646,30 +589,16 @@ impl PaneTree {
         self.root.balance();
     }
 
-    /// Rebuild the tree from the same stable pane IDs.
-    pub fn apply_preset(&mut self, direction: SplitDirection, alternate: bool) -> bool {
-        let ids = self.get_all_ids();
+    /// Rebuild the tree from the same stable pane IDs in a preset's
+    /// layout, `focused` being the master of Tall and Fat. False, leaving
+    /// the tree as it was, when the preset does not apply or split
+    /// identities run out.
+    pub fn apply_layout_preset(&mut self, preset: PaneLayoutPreset, focused: PaneId) -> bool {
         let mut next = self.next_local_split_id;
-        let Some(root) = PaneNode::preset(&ids, direction, alternate, &mut next) else {
-            return false;
-        };
-        self.root = root;
-        self.next_local_split_id = next;
-        true
-    }
-
-    /// Rebuild the tree with one focused master and evenly tiled details.
-    pub fn apply_master_detail_preset(
-        &mut self,
-        master: PaneId,
-        direction: SplitDirection,
-    ) -> bool {
-        let ids = self.get_all_ids();
-        if ids.len() < 2 || !ids.contains(&master) {
-            return false;
-        }
-        let mut next = self.next_local_split_id;
-        let Some(root) = PaneNode::master_detail_preset(&ids, master, direction, &mut next) else {
+        let Some(root) = preset
+            .shape(&self.get_all_ids(), focused)
+            .and_then(|shape| PaneNode::from_shape(shape, &mut next))
+        else {
             return false;
         };
         self.root = root;
@@ -826,7 +755,7 @@ mod tests {
         assert_eq!(surviving[0].target, DividerTarget::Local(nested_id));
         assert_eq!(surviving[0].ratio_millis, 700);
 
-        assert!(tree.apply_preset(SplitDirection::Vertical, false));
+        assert!(tree.apply_layout_preset(PaneLayoutPreset::Columns, PaneId(1)));
         let replacement = tree.get_dividers(bounds);
         let replacement_id = match replacement[0].target {
             DividerTarget::Local(id) => id,
@@ -926,12 +855,14 @@ mod tests {
         let balanced = tree.calculate_layout(bounds);
         assert!((balanced[&PaneId(2)].width - 448.0).abs() < 0.1);
 
-        for (direction, alternate) in [
-            (SplitDirection::Vertical, false),
-            (SplitDirection::Horizontal, false),
-            (SplitDirection::Vertical, true),
+        for preset in [
+            PaneLayoutPreset::Columns,
+            PaneLayoutPreset::Rows,
+            PaneLayoutPreset::Grid,
+            PaneLayoutPreset::Tall,
+            PaneLayoutPreset::Fat,
         ] {
-            tree.apply_preset(direction, alternate);
+            assert!(tree.apply_layout_preset(preset, PaneId(2)));
             let mut ids = tree.get_all_ids();
             ids.sort_by_key(|id| id.0);
             assert_eq!(ids, vec![PaneId(0), PaneId(1), PaneId(2)]);
@@ -987,12 +918,15 @@ mod tests {
                         assert_balanced(tree.root());
                     }
                     3 => {
-                        let direction = if value & 1 == 0 {
-                            SplitDirection::Horizontal
-                        } else {
-                            SplitDirection::Vertical
-                        };
-                        tree.apply_preset(direction, value & 2 != 0);
+                        let preset = [
+                            PaneLayoutPreset::Columns,
+                            PaneLayoutPreset::Rows,
+                            PaneLayoutPreset::Grid,
+                            PaneLayoutPreset::Tall,
+                            PaneLayoutPreset::Fat,
+                        ][(value as usize >> 8) % 5];
+                        let focused = ids[(value as usize >> 16) % ids.len()];
+                        assert_eq!(tree.apply_layout_preset(preset, focused), ids.len() > 1);
                     }
                     4 if ids.len() > 1 => {
                         let removed = ids[(value as usize >> 8) % ids.len()];

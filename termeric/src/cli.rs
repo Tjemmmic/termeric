@@ -1,5 +1,6 @@
 //! Deterministic command-line parsing into window-local startup plans.
 
+use crate::panes::SplitDirection;
 use anyhow::Context;
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -43,7 +44,7 @@ pub struct TabLaunch {
     /// validated before populating this map; ordinary CLI plans leave it empty.
     pub environment: HashMap<String, String>,
     pub environment_policy: termeric_core::pty::EnvironmentPolicy,
-    pub splits: Vec<CliSplitDirection>,
+    pub splits: Vec<SplitDirection>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,12 +53,6 @@ pub enum LaunchTarget {
     Command { program: String, args: Vec<String> },
     TerminalProfile { name: String },
     Plugin { plugin_id: String, profile: String },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CliSplitDirection {
-    Horizontal,
-    Vertical,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -314,8 +309,8 @@ fn parse_collected(
             "--split" => {
                 let value = next_utf8(&arguments, &mut index, "--split")?;
                 let direction = match value.as_str() {
-                    "horizontal" | "h" => CliSplitDirection::Horizontal,
-                    "vertical" | "v" => CliSplitDirection::Vertical,
+                    "horizontal" | "h" => SplitDirection::Horizontal,
+                    "vertical" | "v" => SplitDirection::Vertical,
                     _ => anyhow::bail!("--split expects horizontal or vertical, got {value:?}"),
                 };
                 let window = current_window(&mut plan);
@@ -891,8 +886,8 @@ fn parse_control(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
             )?
             .as_str()
             {
-                "horizontal" => crate::control::protocol::SplitDirection::Horizontal,
-                "vertical" => crate::control::protocol::SplitDirection::Vertical,
+                "horizontal" => SplitDirection::Horizontal,
+                "vertical" => SplitDirection::Vertical,
                 other => anyhow::bail!(
                     "invalid split direction {other:?}; expected horizontal or vertical"
                 ),
@@ -1041,8 +1036,8 @@ fn parse_control(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
             )?
             .as_str()
             {
-                "horizontal" => crate::control::protocol::SplitDirection::Horizontal,
-                "vertical" => crate::control::protocol::SplitDirection::Vertical,
+                "horizontal" => SplitDirection::Horizontal,
+                "vertical" => SplitDirection::Vertical,
                 other => anyhow::bail!(
                     "invalid split direction {other:?}; expected horizontal or vertical"
                 ),
@@ -1506,7 +1501,7 @@ fn parse_domain(
     domains: &crate::config::DomainsConfig,
 ) -> anyhow::Result<ParseOutcome> {
     use crate::domain::DomainCommand;
-    use crate::domain::model::SplitDirection;
+    use crate::panes::SplitDirection;
 
     let Some(command) = arguments.first().and_then(|argument| argument.to_str()) else {
         return Ok(ParseOutcome::Print(domain_help_text()));
@@ -1687,11 +1682,11 @@ fn parse_domain(
             let preset = match domain_utf8(values.get(2), "domain layout-tab requires PRESET")?
                 .as_str()
             {
-                "columns" => crate::domain::model::LivePaneLayoutPreset::Columns,
-                "rows" => crate::domain::model::LivePaneLayoutPreset::Rows,
-                "grid" => crate::domain::model::LivePaneLayoutPreset::Grid,
-                "tall" => crate::domain::model::LivePaneLayoutPreset::Tall,
-                "fat" => crate::domain::model::LivePaneLayoutPreset::Fat,
+                "columns" => crate::panes::PaneLayoutPreset::Columns,
+                "rows" => crate::panes::PaneLayoutPreset::Rows,
+                "grid" => crate::panes::PaneLayoutPreset::Grid,
+                "tall" => crate::panes::PaneLayoutPreset::Tall,
+                "fat" => crate::panes::PaneLayoutPreset::Fat,
                 value => anyhow::bail!(
                     "domain layout preset must be columns, rows, grid, tall, or fat, got {value:?}"
                 ),
@@ -2483,10 +2478,7 @@ mod tests {
             plan.windows[0].tabs[0].working_directory,
             Some(PathBuf::from("/tmp/根"))
         );
-        assert_eq!(
-            plan.windows[0].tabs[0].splits,
-            [CliSplitDirection::Vertical]
-        );
+        assert_eq!(plan.windows[0].tabs[0].splits, [SplitDirection::Vertical]);
         assert_eq!(plan.windows[1].pixel_size, Some((1000, 700)));
         assert_eq!(plan.windows[1].app_id.as_deref(), Some("termeric.review"));
         assert_eq!(plan.windows[1].workspace.as_deref(), Some("workspace-27"));
@@ -2887,7 +2879,7 @@ mod tests {
                 window_id: 7,
                 tab_id: 3,
                 pane_id: 0,
-                direction: crate::control::protocol::SplitDirection::Vertical,
+                direction: SplitDirection::Vertical,
                 request_id: Some(request_id),
                 json: true,
             }) if request_id == "1234567890abcdef1234567890abcdef"
@@ -3026,7 +3018,7 @@ mod tests {
                 destination_window_id: 9,
                 destination_tab_id: 4,
                 target_pane_id: 2,
-                direction: crate::control::protocol::SplitDirection::Horizontal,
+                direction: SplitDirection::Horizontal,
                 request_id: None,
                 json: true,
             })
@@ -3649,7 +3641,7 @@ mod tests {
             .unwrap(),
             ParseOutcome::Domain(crate::domain::DomainCommand::ApplyPaneLayout {
                 tab: 7,
-                preset: crate::domain::model::LivePaneLayoutPreset::Grid,
+                preset: crate::panes::PaneLayoutPreset::Grid,
                 ..
             })
         ));
@@ -3662,7 +3654,7 @@ mod tests {
             .unwrap(),
             ParseOutcome::Domain(crate::domain::DomainCommand::ApplyPaneLayout {
                 tab: 7,
-                preset: crate::domain::model::LivePaneLayoutPreset::Tall,
+                preset: crate::panes::PaneLayoutPreset::Tall,
                 ..
             })
         ));
@@ -3675,7 +3667,7 @@ mod tests {
             .unwrap(),
             ParseOutcome::Domain(crate::domain::DomainCommand::ApplyPaneLayout {
                 tab: 7,
-                preset: crate::domain::model::LivePaneLayoutPreset::Fat,
+                preset: crate::panes::PaneLayoutPreset::Fat,
                 ..
             })
         ));

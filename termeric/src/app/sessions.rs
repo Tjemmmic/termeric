@@ -306,11 +306,7 @@ impl App {
                     restore_result?;
                 }
             }
-            for split in &spec.splits {
-                let direction = match split {
-                    crate::cli::CliSplitDirection::Horizontal => SplitDirection::Horizontal,
-                    crate::cli::CliSplitDirection::Vertical => SplitDirection::Vertical,
-                };
+            for &direction in &spec.splits {
                 let before = self
                     .tabs
                     .as_ref()
@@ -325,7 +321,7 @@ impl App {
                     .and_then(|tab| tab.pane_manager.as_ref())
                     .map_or(1, PaneManager::pane_count);
                 if after != before + 1 {
-                    anyhow::bail!("could not create requested {split:?} pane");
+                    anyhow::bail!("could not create requested {} pane", direction.name());
                 }
             }
         }

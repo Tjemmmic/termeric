@@ -7,8 +7,7 @@
 
 use super::*;
 use crate::plugin::structured::{
-    PluginPaneLayoutPreset, StructuredHandlerCompletion, StructuredHandlerInvocation,
-    StructuredResponseAction,
+    StructuredHandlerCompletion, StructuredHandlerInvocation, StructuredResponseAction,
 };
 
 const MAX_RESULT_ERROR_BYTES: usize = 1024;
@@ -209,8 +208,7 @@ impl App {
                 direction,
                 ..
             } => {
-                let created_pane_id =
-                    self.create_control_pane(*tab_id, *pane_id, pane_split_direction(*direction))?;
+                let created_pane_id = self.create_control_pane(*tab_id, *pane_id, *direction)?;
                 Ok(serde_json::json!({ "created_pane_id": created_pane_id }))
             }
             StructuredResponseAction::ClosePane {
@@ -248,15 +246,8 @@ impl App {
                 }))
             }
             StructuredResponseAction::ApplyPaneLayout { tab_id, preset, .. } => {
-                let preset = match preset {
-                    PluginPaneLayoutPreset::Columns => crate::panes::PaneLayoutPreset::Columns,
-                    PluginPaneLayoutPreset::Rows => crate::panes::PaneLayoutPreset::Rows,
-                    PluginPaneLayoutPreset::Grid => crate::panes::PaneLayoutPreset::Grid,
-                    PluginPaneLayoutPreset::Tall => crate::panes::PaneLayoutPreset::Tall,
-                    PluginPaneLayoutPreset::Fat => crate::panes::PaneLayoutPreset::Fat,
-                };
                 let (pane_order, focused_pane_id, zoomed_pane_id) =
-                    self.apply_plugin_pane_layout(*tab_id, preset)?;
+                    self.apply_plugin_pane_layout(*tab_id, *preset)?;
                 Ok(serde_json::json!({
                     "pane_order": pane_order,
                     "focused_pane_id": focused_pane_id,
@@ -806,19 +797,6 @@ impl App {
             self.toggle_terminal_transcript(identity);
         } else {
             self.toasts.warning("No active terminal");
-        }
-    }
-}
-
-pub(super) fn pane_split_direction(
-    direction: crate::control::protocol::SplitDirection,
-) -> crate::panes::SplitDirection {
-    match direction {
-        crate::control::protocol::SplitDirection::Horizontal => {
-            crate::panes::SplitDirection::Horizontal
-        }
-        crate::control::protocol::SplitDirection::Vertical => {
-            crate::panes::SplitDirection::Vertical
         }
     }
 }

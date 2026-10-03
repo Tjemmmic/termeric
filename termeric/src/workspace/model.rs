@@ -1,3 +1,4 @@
+use crate::panes::SplitDirection;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -223,7 +224,7 @@ pub enum WorkspacePaneLayout {
         pane: u32,
     },
     Split {
-        direction: WorkspaceSplitDirection,
+        direction: SplitDirection,
         ratio: f32,
         first: Box<WorkspacePaneLayout>,
         second: Box<WorkspacePaneLayout>,
@@ -259,13 +260,6 @@ impl WorkspacePaneLayout {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum WorkspaceSplitDirection {
-    Horizontal,
-    Vertical,
-}
-
 impl From<&crate::panes::PaneNode> for WorkspacePaneLayout {
     fn from(node: &crate::panes::PaneNode) -> Self {
         match node {
@@ -277,10 +271,7 @@ impl From<&crate::panes::PaneNode> for WorkspacePaneLayout {
                 second,
                 ..
             } => Self::Split {
-                direction: match direction {
-                    crate::panes::SplitDirection::Horizontal => WorkspaceSplitDirection::Horizontal,
-                    crate::panes::SplitDirection::Vertical => WorkspaceSplitDirection::Vertical,
-                },
+                direction: *direction,
                 ratio: *ratio,
                 first: Box::new(Self::from(first.as_ref())),
                 second: Box::new(Self::from(second.as_ref())),
@@ -301,10 +292,7 @@ impl From<&WorkspacePaneLayout> for crate::panes::PaneNode {
             } => Self::Split {
                 local_split_id: 0,
                 domain_split_id: None,
-                direction: match direction {
-                    WorkspaceSplitDirection::Horizontal => crate::panes::SplitDirection::Horizontal,
-                    WorkspaceSplitDirection::Vertical => crate::panes::SplitDirection::Vertical,
-                },
+                direction: *direction,
                 ratio: *ratio,
                 first: Box::new(Self::from(first.as_ref())),
                 second: Box::new(Self::from(second.as_ref())),
@@ -428,11 +416,11 @@ pub(crate) mod tests {
                 primary_pane: 0,
                 focused_pane: 2,
                 layout: WorkspacePaneLayout::Split {
-                    direction: WorkspaceSplitDirection::Vertical,
+                    direction: SplitDirection::Vertical,
                     ratio: 0.37,
                     first: Box::new(WorkspacePaneLayout::Pane { pane: 0 }),
                     second: Box::new(WorkspacePaneLayout::Split {
-                        direction: WorkspaceSplitDirection::Horizontal,
+                        direction: SplitDirection::Horizontal,
                         ratio: 0.62,
                         first: Box::new(WorkspacePaneLayout::Pane { pane: 1 }),
                         second: Box::new(WorkspacePaneLayout::Pane { pane: 2 }),

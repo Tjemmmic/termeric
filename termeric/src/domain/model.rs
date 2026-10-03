@@ -1,6 +1,7 @@
 //! Serializable descriptions of live terminal domains.
 
 use serde::{Deserialize, Serialize};
+use termeric_core::split::SplitDirection;
 
 pub const MAX_DOMAINS: usize = 16;
 pub const MAX_TABS_PER_DOMAIN: usize = 16;
@@ -143,23 +144,6 @@ pub enum LivePaneLayout {
         first: Box<LivePaneLayout>,
         second: Box<LivePaneLayout>,
     },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SplitDirection {
-    Horizontal,
-    Vertical,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LivePaneLayoutPreset {
-    Columns,
-    Rows,
-    Grid,
-    Tall,
-    Fat,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

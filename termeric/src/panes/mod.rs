@@ -7,6 +7,7 @@ mod layout;
 mod tree;
 
 pub use layout::PaneRect;
+pub use termeric_core::split::PaneLayoutPreset;
 pub(crate) use tree::PaneNode;
 pub use tree::{PaneId, PaneTree, SplitDirection};
 
@@ -57,16 +58,6 @@ pub enum PaneDir {
     Down,
     Left,
     Right,
-}
-
-/// Deterministic layouts that preserve existing pane identities and PTYs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PaneLayoutPreset {
-    Columns,
-    Rows,
-    Grid,
-    Tall,
-    Fat,
 }
 
 /// App-facing terminal event tagged with the pane that produced it. Protocol
@@ -462,10 +453,7 @@ fn domain_layout_to_local(
         } => PaneNode::Split {
             local_split_id: 0,
             domain_split_id: Some(*split_id),
-            direction: match direction {
-                crate::domain::model::SplitDirection::Horizontal => SplitDirection::Horizontal,
-                crate::domain::model::SplitDirection::Vertical => SplitDirection::Vertical,
-            },
+            direction: *direction,
             ratio: f32::from(*ratio_millis) / 1_000.0,
             first: Box::new(domain_layout_to_local(first, ids)?),
             second: Box::new(domain_layout_to_local(second, ids)?),
@@ -1605,17 +1593,7 @@ impl PaneManager {
         preset: PaneLayoutPreset,
     ) -> anyhow::Result<()> {
         self.validate_complete_live_layout()?;
-        let applied = match preset {
-            PaneLayoutPreset::Columns => self.tree.apply_preset(SplitDirection::Vertical, false),
-            PaneLayoutPreset::Rows => self.tree.apply_preset(SplitDirection::Horizontal, false),
-            PaneLayoutPreset::Grid => self.tree.apply_preset(SplitDirection::Vertical, true),
-            PaneLayoutPreset::Tall => self
-                .tree
-                .apply_master_detail_preset(self.focused, SplitDirection::Vertical),
-            PaneLayoutPreset::Fat => self
-                .tree
-                .apply_master_detail_preset(self.focused, SplitDirection::Horizontal),
-        };
+        let applied = self.tree.apply_layout_preset(preset, self.focused);
         if !applied {
             anyhow::bail!("Pane layout split ID space is exhausted");
         }
@@ -1648,38 +1626,8 @@ impl PaneManager {
         if self.panes.len() <= 1 {
             return false;
         }
-        match preset {
-            PaneLayoutPreset::Columns => {
-                if !self.tree.apply_preset(SplitDirection::Vertical, false) {
-                    return false;
-                }
-            }
-            PaneLayoutPreset::Rows => {
-                if !self.tree.apply_preset(SplitDirection::Horizontal, false) {
-                    return false;
-                }
-            }
-            PaneLayoutPreset::Grid => {
-                if !self.tree.apply_preset(SplitDirection::Vertical, true) {
-                    return false;
-                }
-            }
-            PaneLayoutPreset::Tall => {
-                if !self
-                    .tree
-                    .apply_master_detail_preset(self.focused, SplitDirection::Vertical)
-                {
-                    return false;
-                }
-            }
-            PaneLayoutPreset::Fat => {
-                if !self
-                    .tree
-                    .apply_master_detail_preset(self.focused, SplitDirection::Horizontal)
-                {
-                    return false;
-                }
-            }
+        if !self.tree.apply_layout_preset(preset, self.focused) {
+            return false;
         }
         self.zoomed = None;
         self.navigation_memory.clear();

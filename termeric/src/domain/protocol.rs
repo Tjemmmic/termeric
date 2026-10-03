@@ -2,11 +2,11 @@
 
 use super::model::{
     DomainSnapshot, DomainSummary, DomainTopology, LivePane, LiveWorkspace, SpawnSpec,
-    SplitDirection,
 };
 use anyhow::Context;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::io::{Read, Write};
+use termeric_core::split::{PaneLayoutPreset, SplitDirection};
 
 pub const PROTOCOL_VERSION: u32 = 16;
 pub const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
@@ -166,7 +166,7 @@ pub enum Request {
     ApplyPaneLayout {
         domain: String,
         tab: u32,
-        preset: super::model::LivePaneLayoutPreset,
+        preset: PaneLayoutPreset,
     },
     MovePane {
         domain: String,
@@ -478,21 +478,21 @@ mod tests {
                 request: Request::ApplyPaneLayout {
                     domain: "daily".into(),
                     tab: 3,
-                    preset: super::super::model::LivePaneLayoutPreset::Grid,
+                    preset: PaneLayoutPreset::Grid,
                 },
             },
             ClientFrame::Request {
                 request: Request::ApplyPaneLayout {
                     domain: "daily".into(),
                     tab: 3,
-                    preset: super::super::model::LivePaneLayoutPreset::Tall,
+                    preset: PaneLayoutPreset::Tall,
                 },
             },
             ClientFrame::Request {
                 request: Request::ApplyPaneLayout {
                     domain: "daily".into(),
                     tab: 3,
-                    preset: super::super::model::LivePaneLayoutPreset::Fat,
+                    preset: PaneLayoutPreset::Fat,
                 },
             },
             ClientFrame::Request {

@@ -3801,7 +3801,6 @@ mod tests {
         }
         use crate::domain::model::{
             DomainSnapshot, LivePane, LivePaneLayout, LiveTab, LiveWorkspace,
-            SplitDirection as DomainSplitDirection,
         };
         let panes = [5, 9, 12]
             .into_iter()
@@ -3832,12 +3831,12 @@ mod tests {
                     focused_pane: 12,
                     layout: LivePaneLayout::Split {
                         split_id: 70,
-                        direction: DomainSplitDirection::Vertical,
+                        direction: SplitDirection::Vertical,
                         ratio_millis: 400,
                         first: Box::new(LivePaneLayout::Pane { pane: 5 }),
                         second: Box::new(LivePaneLayout::Split {
                             split_id: 71,
-                            direction: DomainSplitDirection::Horizontal,
+                            direction: SplitDirection::Horizontal,
                             ratio_millis: 600,
                             first: Box::new(LivePaneLayout::Pane { pane: 9 }),
                             second: Box::new(LivePaneLayout::Pane { pane: 12 }),
@@ -3935,7 +3934,6 @@ mod tests {
         }
         use crate::domain::model::{
             DomainSnapshot, LivePane, LivePaneLayout, LiveTab, LiveWorkspace,
-            SplitDirection as DomainSplitDirection,
         };
         let remote_pane = |id| LivePane {
             id,
@@ -3978,7 +3976,7 @@ mod tests {
         snapshot.workspace.tabs[0].focused_pane = 9;
         snapshot.workspace.tabs[0].layout = LivePaneLayout::Split {
             split_id: 70,
-            direction: DomainSplitDirection::Vertical,
+            direction: SplitDirection::Vertical,
             ratio_millis: 350,
             first: Box::new(LivePaneLayout::Pane { pane: 5 }),
             second: Box::new(LivePaneLayout::Pane { pane: 9 }),
@@ -4068,7 +4066,6 @@ mod tests {
         }
         use crate::domain::model::{
             DomainSnapshot, LivePane, LivePaneLayout, LiveTab, LiveWorkspace,
-            SplitDirection as DomainSplitDirection,
         };
         let pane = |id| LivePane {
             id,
@@ -4096,7 +4093,7 @@ mod tests {
                     focused_pane: 8,
                     layout: LivePaneLayout::Split {
                         split_id: 30,
-                        direction: DomainSplitDirection::Vertical,
+                        direction: SplitDirection::Vertical,
                         ratio_millis: 500,
                         first: Box::new(LivePaneLayout::Pane { pane: 4 }),
                         second: Box::new(LivePaneLayout::Pane { pane: 8 }),
@@ -4141,7 +4138,6 @@ mod tests {
     fn relay_driven_split_dissolution_remaps_focus_to_the_surviving_remote_pane() {
         use crate::domain::model::{
             DomainSnapshot, LivePane, LivePaneLayout, LiveTab, LiveWorkspace,
-            SplitDirection as DomainSplitDirection,
         };
         use std::os::unix::fs::PermissionsExt;
 
@@ -4179,7 +4175,7 @@ mod tests {
                     focused_pane: 8,
                     layout: LivePaneLayout::Split {
                         split_id: 30,
-                        direction: DomainSplitDirection::Vertical,
+                        direction: SplitDirection::Vertical,
                         ratio_millis: 500,
                         first: Box::new(LivePaneLayout::Pane { pane: 4 }),
                         second: Box::new(LivePaneLayout::Pane { pane: 8 }),

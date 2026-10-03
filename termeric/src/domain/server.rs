@@ -5,6 +5,7 @@ use super::paths::{RuntimePaths, effective_uid};
 use super::protocol::{
     self, ClientFrame, Request, Response, ServerFrame, UploadKind, UploadRetention, UploadSummary,
 };
+use crate::panes::{PaneLayoutPreset, SplitDirection};
 use anyhow::Context;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -18,6 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use termeric_core::pty::{PtyHandle, PtySize, default_pty_size};
+use termeric_core::split::LayoutShape;
 use termeric_core::term::{TerminalMode, XtermKeyboardType};
 use termeric_core::{Pty, Terminal, TerminalEvent};
 
@@ -1963,7 +1965,7 @@ fn apply_domain_pane_layout(
     state: &SharedState,
     domain_id: &str,
     tab_id: u32,
-    preset: LivePaneLayoutPreset,
+    preset: PaneLayoutPreset,
 ) -> anyhow::Result<Response> {
     validate_id("domain id", domain_id)?;
     let mut state = state.lock().unwrap();
@@ -1983,29 +1985,10 @@ fn apply_domain_pane_layout(
     }
     let focused_pane = domain.tabs[tab_index].focused_pane;
     let mut next_split = domain.next_split;
-    let layout = match preset {
-        LivePaneLayoutPreset::Columns => {
-            preset_layout(&panes, SplitDirection::Vertical, false, &mut next_split)?
-        }
-        LivePaneLayoutPreset::Rows => {
-            preset_layout(&panes, SplitDirection::Horizontal, false, &mut next_split)?
-        }
-        LivePaneLayoutPreset::Grid => {
-            preset_layout(&panes, SplitDirection::Vertical, true, &mut next_split)?
-        }
-        LivePaneLayoutPreset::Tall => master_detail_layout(
-            &panes,
-            focused_pane,
-            SplitDirection::Vertical,
-            &mut next_split,
-        )?,
-        LivePaneLayoutPreset::Fat => master_detail_layout(
-            &panes,
-            focused_pane,
-            SplitDirection::Horizontal,
-            &mut next_split,
-        )?,
-    };
+    let shape = preset
+        .shape(&panes, focused_pane)
+        .context("master-detail layout requires its focused pane in the layout")?;
+    let layout = layout_from_shape(shape, &mut next_split)?;
     domain.tabs[tab_index].layout = layout;
     domain.next_split = next_split;
     domain.publish_topology();
@@ -2132,82 +2115,31 @@ fn balance_layout(layout: &mut LivePaneLayout) -> bool {
     }
 }
 
-fn preset_layout(
-    panes: &[u32],
-    direction: SplitDirection,
-    alternate: bool,
+/// The layout for a preset's shape, numbering its splits from `next_split`.
+fn layout_from_shape(
+    shape: LayoutShape<u32>,
     next_split: &mut u32,
 ) -> anyhow::Result<LivePaneLayout> {
-    if panes.len() == 1 {
-        return Ok(LivePaneLayout::Pane { pane: panes[0] });
-    }
-    let midpoint = panes.len().div_ceil(2);
-    let split_id = *next_split;
-    *next_split = next_split
-        .checked_add(1)
-        .context("domain split identity space exhausted")?;
-    let next_direction = if alternate {
-        match direction {
-            SplitDirection::Horizontal => SplitDirection::Vertical,
-            SplitDirection::Vertical => SplitDirection::Horizontal,
+    Ok(match shape {
+        LayoutShape::Pane(pane) => LivePaneLayout::Pane { pane },
+        LayoutShape::Split {
+            direction,
+            ratio_millis,
+            first,
+            second,
+        } => {
+            let split_id = *next_split;
+            *next_split = next_split
+                .checked_add(1)
+                .context("domain split identity space exhausted")?;
+            LivePaneLayout::Split {
+                split_id,
+                direction,
+                ratio_millis,
+                first: Box::new(layout_from_shape(*first, next_split)?),
+                second: Box::new(layout_from_shape(*second, next_split)?),
+            }
         }
-    } else {
-        direction
-    };
-    let ratio_millis = u16::try_from((midpoint * 1_000 + panes.len() / 2) / panes.len())
-        .expect("bounded pane count produces a ratio in u16");
-    Ok(LivePaneLayout::Split {
-        split_id,
-        direction,
-        ratio_millis,
-        first: Box::new(preset_layout(
-            &panes[..midpoint],
-            next_direction,
-            alternate,
-            next_split,
-        )?),
-        second: Box::new(preset_layout(
-            &panes[midpoint..],
-            next_direction,
-            alternate,
-            next_split,
-        )?),
-    })
-}
-
-fn master_detail_layout(
-    panes: &[u32],
-    master: u32,
-    direction: SplitDirection,
-    next_split: &mut u32,
-) -> anyhow::Result<LivePaneLayout> {
-    if panes.len() < 2 || !panes.contains(&master) {
-        anyhow::bail!("master-detail layout requires its focused pane in the layout");
-    }
-    let details = panes
-        .iter()
-        .copied()
-        .filter(|pane| *pane != master)
-        .collect::<Vec<_>>();
-    let detail_direction = match direction {
-        SplitDirection::Horizontal => SplitDirection::Vertical,
-        SplitDirection::Vertical => SplitDirection::Horizontal,
-    };
-    let split_id = *next_split;
-    *next_split = next_split
-        .checked_add(1)
-        .context("domain split identity space exhausted")?;
-    Ok(LivePaneLayout::Split {
-        split_id,
-        direction,
-        ratio_millis: 500,
-        first: Box::new(LivePaneLayout::Pane { pane: master }),
-        second: Box::new(preset_layout(
-            &details,
-            detail_direction,
-            false,
-            next_split,
-        )?),
     })
 }
 
@@ -3680,8 +3612,8 @@ mod tests {
     #[test]
     fn pane_layout_operations_preserve_leaf_identity_and_allocate_stable_splits() {
         let mut next_split = 20;
-        let mut layout =
-            preset_layout(&[3, 4, 5], SplitDirection::Vertical, true, &mut next_split).unwrap();
+        let shape = PaneLayoutPreset::Grid.shape(&[3, 4, 5], 3).unwrap();
+        let mut layout = layout_from_shape(shape, &mut next_split).unwrap();
         assert_eq!(next_split, 22);
         assert!(matches!(
             &layout,
@@ -3720,9 +3652,8 @@ mod tests {
         ));
 
         let mut next_split = 30;
-        let tall =
-            master_detail_layout(&[3, 4, 5, 6], 5, SplitDirection::Vertical, &mut next_split)
-                .unwrap();
+        let shape = PaneLayoutPreset::Tall.shape(&[3, 4, 5, 6], 5).unwrap();
+        let tall = layout_from_shape(shape, &mut next_split).unwrap();
         assert_eq!(next_split, 33);
         assert!(matches!(
             &tall,
@@ -3745,13 +3676,8 @@ mod tests {
         assert_eq!(panes, vec![5, 3, 4, 6]);
 
         let mut next_split = 40;
-        let fat = master_detail_layout(
-            &[3, 4, 5, 6],
-            4,
-            SplitDirection::Horizontal,
-            &mut next_split,
-        )
-        .unwrap();
+        let shape = PaneLayoutPreset::Fat.shape(&[3, 4, 5, 6], 4).unwrap();
+        let fat = layout_from_shape(shape, &mut next_split).unwrap();
         assert!(matches!(
             &fat,
             LivePaneLayout::Split {
@@ -3769,11 +3695,15 @@ mod tests {
         panes.clear();
         collect_layout_panes(&fat, &mut panes);
         assert_eq!(panes, vec![4, 3, 5, 6]);
+        let mut next_split = u32::MAX;
         assert!(
-            master_detail_layout(&[3, 4], 99, SplitDirection::Vertical, &mut next_split)
-                .unwrap_err()
-                .to_string()
-                .contains("focused pane")
+            layout_from_shape(
+                PaneLayoutPreset::Rows.shape(&[3, 4], 3).unwrap(),
+                &mut next_split
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("exhausted")
         );
     }
 
@@ -4715,7 +4645,7 @@ mod tests {
             .request(Request::ApplyPaneLayout {
                 domain: domain_id.clone(),
                 tab: 0,
-                preset: LivePaneLayoutPreset::Rows,
+                preset: PaneLayoutPreset::Rows,
             })
             .unwrap()
         else {
@@ -4942,7 +4872,7 @@ mod tests {
             Request::ApplyPaneLayout {
                 domain: domain_id.clone(),
                 tab: 0,
-                preset: LivePaneLayoutPreset::Grid,
+                preset: PaneLayoutPreset::Grid,
             },
         ] {
             assert!(

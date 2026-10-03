@@ -1,5 +1,6 @@
 //! Bounded wire types for inspecting and explicitly controlling GUI processes.
 
+use crate::panes::SplitDirection;
 use anyhow::Context;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::collections::HashSet;
@@ -363,13 +364,6 @@ pub enum AgentEventKind {
     Stopped,
     /// The conversation ended.
     SessionEnded,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SplitDirection {
-    Horizontal,
-    Vertical,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]

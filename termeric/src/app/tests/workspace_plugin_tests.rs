@@ -1,8 +1,8 @@
 //! Fake executables and raw local PTYs only; never installed provider binaries.
 use super::*;
+use crate::panes::SplitDirection;
 use crate::workspace::{
-    WorkspaceLaunch, WorkspacePaneLayout, WorkspacePaneSnapshot, WorkspaceSplitDirection,
-    WorkspaceTabSnapshot,
+    WorkspaceLaunch, WorkspacePaneLayout, WorkspacePaneSnapshot, WorkspaceTabSnapshot,
 };
 
 pub(super) fn fixture() -> (App, tempfile::TempDir, WorkspaceTabSnapshot) {
@@ -106,7 +106,7 @@ pub(super) fn fixture() -> (App, tempfile::TempDir, WorkspaceTabSnapshot) {
             .into_iter()
             .fold(WorkspacePaneLayout::Pane { pane: 0 }, |first, pane| {
                 WorkspacePaneLayout::Split {
-                    direction: WorkspaceSplitDirection::Vertical,
+                    direction: SplitDirection::Vertical,
                     ratio: 0.6,
                     first: Box::new(first),
                     second: Box::new(WorkspacePaneLayout::Pane { pane }),

@@ -346,23 +346,6 @@ impl App {
                     .map(|(domain, tab)| (domain.to_string(), tab))
             });
         if let Some((domain_id, remote_tab_id)) = live {
-            let preset = match preset {
-                crate::panes::PaneLayoutPreset::Columns => {
-                    crate::domain::model::LivePaneLayoutPreset::Columns
-                }
-                crate::panes::PaneLayoutPreset::Rows => {
-                    crate::domain::model::LivePaneLayoutPreset::Rows
-                }
-                crate::panes::PaneLayoutPreset::Grid => {
-                    crate::domain::model::LivePaneLayoutPreset::Grid
-                }
-                crate::panes::PaneLayoutPreset::Tall => {
-                    crate::domain::model::LivePaneLayoutPreset::Tall
-                }
-                crate::panes::PaneLayoutPreset::Fat => {
-                    crate::domain::model::LivePaneLayoutPreset::Fat
-                }
-            };
             self.queue_live_domain_control(LiveDomainControl::ApplyPaneLayout {
                 domain_id,
                 remote_tab_id,
@@ -423,7 +406,7 @@ impl App {
                     source_tab_id,
                     destination_tab_id,
                     target_pane_id,
-                    direction: crate::domain::model::SplitDirection::Vertical,
+                    direction: crate::panes::SplitDirection::Vertical,
                 });
             } else {
                 self.toasts
@@ -1048,10 +1031,6 @@ impl App {
             .and_then(crate::tabs::Tab::live_domain_focus_route)
             .map(|(domain, pane)| (domain.to_string(), pane));
         if let Some((domain_id, remote_pane_id)) = live_route {
-            let direction = match direction {
-                SplitDirection::Horizontal => crate::domain::model::SplitDirection::Horizontal,
-                SplitDirection::Vertical => crate::domain::model::SplitDirection::Vertical,
-            };
             let spawn = self.live_domain_spawn_spec(false);
             self.queue_live_domain_control(LiveDomainControl::SplitPane {
                 domain_id,
@@ -1165,10 +1144,7 @@ impl App {
             return Err("Serial terminal tabs cannot be split into panes".into());
         }
 
-        let direction_name = match direction {
-            SplitDirection::Horizontal => "horizontal",
-            SplitDirection::Vertical => "vertical",
-        };
+        let direction_name = direction.name();
         let target = PaneId(pane_id);
         let new_id = if let Some(manager) = &mut tab.pane_manager {
             let pane = manager
@@ -1985,7 +1961,7 @@ impl App {
         &self,
         tab_id: u64,
         pane_id: u32,
-        direction: crate::control::protocol::SplitDirection,
+        direction: crate::panes::SplitDirection,
     ) -> std::result::Result<Option<LiveDomainControl>, String> {
         let tab_id = usize::try_from(tab_id)
             .map_err(|_| "Target tab ID does not fit this platform".to_string())?;
@@ -2029,14 +2005,7 @@ impl App {
         Ok(Some(LiveDomainControl::SplitPane {
             domain_id: live.domain_id.clone(),
             remote_pane_id,
-            direction: match direction {
-                crate::control::protocol::SplitDirection::Horizontal => {
-                    crate::domain::model::SplitDirection::Horizontal
-                }
-                crate::control::protocol::SplitDirection::Vertical => {
-                    crate::domain::model::SplitDirection::Vertical
-                }
-            },
+            direction,
             spawn,
         }))
     }
@@ -2313,7 +2282,7 @@ impl App {
         pane_id: u32,
         destination_tab_id: u64,
         target_pane_id: u32,
-        direction: crate::control::protocol::SplitDirection,
+        direction: crate::panes::SplitDirection,
     ) -> std::result::Result<Option<LiveDomainControl>, String> {
         let source_tab_id = usize::try_from(source_tab_id)
             .map_err(|_| "Source tab ID does not fit this platform".to_string())?;
@@ -2394,14 +2363,7 @@ impl App {
             source_tab_id: source_live.tab_id,
             destination_tab_id: destination_live.tab_id,
             target_pane_id: remote_target_pane_id,
-            direction: match direction {
-                crate::control::protocol::SplitDirection::Horizontal => {
-                    crate::domain::model::SplitDirection::Horizontal
-                }
-                crate::control::protocol::SplitDirection::Vertical => {
-                    crate::domain::model::SplitDirection::Vertical
-                }
-            },
+            direction,
         }))
     }
 
@@ -4209,14 +4171,14 @@ mod workspace_control_tests {
             LiveDomainControl::SplitPane {
                 domain_id: "domain-control".into(),
                 remote_pane_id: 200,
-                direction: crate::domain::model::SplitDirection::Vertical,
+                direction: crate::panes::SplitDirection::Vertical,
                 spawn: spawn.clone(),
             }
             .request(),
             crate::domain::protocol::Request::SplitPane {
                 domain: "domain-control".into(),
                 pane: 200,
-                direction: crate::domain::model::SplitDirection::Vertical,
+                direction: crate::panes::SplitDirection::Vertical,
                 spawn,
             }
         );
@@ -4298,13 +4260,13 @@ mod workspace_control_tests {
             LiveDomainControl::ApplyPaneLayout {
                 domain_id: "domain-control".into(),
                 remote_tab_id: 10,
-                preset: crate::domain::model::LivePaneLayoutPreset::Tall,
+                preset: crate::panes::PaneLayoutPreset::Tall,
             }
             .request(),
             crate::domain::protocol::Request::ApplyPaneLayout {
                 domain: "domain-control".into(),
                 tab: 10,
-                preset: crate::domain::model::LivePaneLayoutPreset::Tall,
+                preset: crate::panes::PaneLayoutPreset::Tall,
             }
         );
         assert_eq!(
@@ -4314,7 +4276,7 @@ mod workspace_control_tests {
                 source_tab_id: 10,
                 destination_tab_id: 11,
                 target_pane_id: 110,
-                direction: crate::domain::model::SplitDirection::Horizontal,
+                direction: crate::panes::SplitDirection::Horizontal,
             }
             .request(),
             crate::domain::protocol::Request::MovePane {
@@ -4322,7 +4284,7 @@ mod workspace_control_tests {
                 pane: 100,
                 tab: 11,
                 target: Some(110),
-                direction: crate::domain::model::SplitDirection::Horizontal,
+                direction: crate::panes::SplitDirection::Horizontal,
             }
         );
         app.pending_live_domain_controls.insert(close.clone());
@@ -4414,7 +4376,7 @@ mod workspace_control_tests {
         revision_two.workspace.tabs[1].focused_pane = 201;
         revision_two.workspace.tabs[1].layout = LivePaneLayout::Split {
             split_id: 44,
-            direction: crate::domain::model::SplitDirection::Vertical,
+            direction: crate::panes::SplitDirection::Vertical,
             ratio_millis: 500,
             first: Box::new(LivePaneLayout::Pane { pane: 200 }),
             second: Box::new(LivePaneLayout::Pane { pane: 201 }),
@@ -4550,7 +4512,7 @@ mod workspace_control_tests {
         let mut revision_four = revision_three.clone();
         revision_four.workspace.tabs[0].layout = LivePaneLayout::Split {
             split_id: 55,
-            direction: crate::domain::model::SplitDirection::Horizontal,
+            direction: crate::panes::SplitDirection::Horizontal,
             ratio_millis: 500,
             first: Box::new(LivePaneLayout::Pane { pane: 201 }),
             second: Box::new(LivePaneLayout::Pane { pane: 200 }),
@@ -4678,7 +4640,7 @@ mod workspace_control_tests {
         revision_five.workspace.tabs[1].panes.push(moved);
         revision_five.workspace.tabs[1].layout = LivePaneLayout::Split {
             split_id: 56,
-            direction: crate::domain::model::SplitDirection::Vertical,
+            direction: crate::panes::SplitDirection::Vertical,
             ratio_millis: 500,
             first: Box::new(LivePaneLayout::Pane { pane: 100 }),
             second: Box::new(LivePaneLayout::Pane { pane: 201 }),

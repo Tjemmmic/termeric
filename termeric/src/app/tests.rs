@@ -2564,7 +2564,7 @@ fn domain_divider_pending_fixture() -> App {
                 focused_pane: 100,
                 layout: LivePaneLayout::Split {
                     split_id: 44,
-                    direction: crate::domain::model::SplitDirection::Vertical,
+                    direction: crate::panes::SplitDirection::Vertical,
                     ratio_millis: 500,
                     first: Box::new(LivePaneLayout::Pane { pane: 100 }),
                     second: Box::new(LivePaneLayout::Pane { pane: 101 }),
@@ -4816,7 +4816,7 @@ fn plugin_pane_creation_is_exact_correlated_and_rejects_unsupported_tabs() {
             window_id: None,
             tab_id: tab_id as u64,
             pane_id: 0,
-            direction: crate::control::protocol::SplitDirection::Horizontal,
+            direction: crate::panes::SplitDirection::Horizontal,
         },
     );
     assert_eq!(created["event"]["type"], "action-result");
@@ -4848,7 +4848,7 @@ fn plugin_pane_creation_is_exact_correlated_and_rejects_unsupported_tabs() {
             window_id: None,
             tab_id: tab_id as u64,
             pane_id: u32::MAX,
-            direction: crate::control::protocol::SplitDirection::Vertical,
+            direction: crate::panes::SplitDirection::Vertical,
         },
     );
     assert_eq!(stale["event"]["ok"], false);
@@ -4873,7 +4873,7 @@ fn plugin_pane_creation_is_exact_correlated_and_rejects_unsupported_tabs() {
             window_id: None,
             tab_id: tab_id as u64,
             pane_id: 0,
-            direction: crate::control::protocol::SplitDirection::Vertical,
+            direction: crate::panes::SplitDirection::Vertical,
         },
     );
     assert_eq!(live["event"]["ok"], false);
@@ -4896,7 +4896,7 @@ fn plugin_pane_creation_is_exact_correlated_and_rejects_unsupported_tabs() {
             window_id: None,
             tab_id: tab_id as u64,
             pane_id: 0,
-            direction: crate::control::protocol::SplitDirection::Vertical,
+            direction: crate::panes::SplitDirection::Vertical,
         },
     );
     assert_eq!(serial["event"]["ok"], false);
@@ -4917,7 +4917,7 @@ fn plugin_pane_creation_is_exact_correlated_and_rejects_unsupported_tabs() {
             window_id: None,
             tab_id: tab_id as u64,
             pane_id: 0,
-            direction: crate::control::protocol::SplitDirection::Vertical,
+            direction: crate::panes::SplitDirection::Vertical,
         },
     );
     assert_eq!(closing["event"]["ok"], false);
@@ -5117,7 +5117,7 @@ fn plugin_pane_layout_controls_background_tab_without_changing_terminal_owners()
             action_id: "tall".into(),
             window_id: None,
             tab_id: target_tab_id as u64,
-            preset: crate::plugin::structured::PluginPaneLayoutPreset::Tall,
+            preset: crate::panes::PaneLayoutPreset::Tall,
         },
     );
     assert_eq!(arranged["event"]["ok"], true);
@@ -13925,7 +13925,7 @@ fn mixed_shell_and_profile_panes_restore_each_saved_launch() {
         primary_pane: 0,
         focused_pane: 7,
         layout: crate::workspace::WorkspacePaneLayout::Split {
-            direction: crate::workspace::WorkspaceSplitDirection::Vertical,
+            direction: crate::panes::SplitDirection::Vertical,
             ratio: 0.5,
             first: Box::new(crate::workspace::WorkspacePaneLayout::Pane { pane: 0 }),
             second: Box::new(crate::workspace::WorkspacePaneLayout::Pane { pane: 7 }),

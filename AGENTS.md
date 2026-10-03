@@ -100,7 +100,8 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 | `unicode.rs` | Grapheme segmentation and cell-width rules |
 | `checksum.rs` | FNV-1a for relay checksums and persisted names and fingerprints |
 | `hex.rs` | Random lowercase-hex identifiers and the checks for their one spelling |
-| `safe_text.rs` | Character classes for untrusted text in chrome and protocol fields (also used by the fuzzed domain protocol) |
+| `safe_text.rs` | Character classes for untrusted text in chrome and protocol fields, and character-boundary cuts (also used by the fuzzed domain protocol) |
+| `split.rs` | `SplitDirection`, `PaneLayoutPreset`, and preset shapes shared by the pane tree, workspaces, the control protocol, plugins, and the domain daemon |
 
 ### Renderer Sub-modules
 

@@ -38,6 +38,7 @@ pub mod hex;
 pub mod pty;
 pub mod safe_text;
 pub mod shell;
+pub mod split;
 pub mod term;
 pub mod unicode;
 

@@ -153,7 +153,8 @@ impl DomainClient {
 #[cfg(not(unix))]
 pub fn request_focus_background(_authority: DomainAuthority, _domain: String, _pane: u32) {}
 
-use model::{LivePaneLayoutPreset, SpawnSpec, SplitDirection};
+use crate::panes::{PaneLayoutPreset, SplitDirection};
+use model::SpawnSpec;
 use protocol::{Request, Response};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -303,7 +304,7 @@ pub enum DomainCommand {
     ApplyPaneLayout {
         domain: String,
         tab: u32,
-        preset: LivePaneLayoutPreset,
+        preset: PaneLayoutPreset,
     },
     MovePane {
         domain: String,
@@ -515,7 +516,7 @@ fn execute_with_client(
                 pane,
                 tab,
                 target: None,
-                direction: crate::domain::model::SplitDirection::Vertical,
+                direction: crate::panes::SplitDirection::Vertical,
             },
             false,
         ),

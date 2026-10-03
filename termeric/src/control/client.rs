@@ -678,7 +678,7 @@ pub fn split_pane(
     window_id: u64,
     tab_id: u64,
     pane_id: u32,
-    direction: protocol::SplitDirection,
+    direction: crate::panes::SplitDirection,
     request_id: Option<String>,
     json: bool,
 ) -> anyhow::Result<String> {
@@ -1146,7 +1146,7 @@ pub fn move_pane(
     destination_window_id: u64,
     destination_tab_id: u64,
     target_pane_id: u32,
-    direction: protocol::SplitDirection,
+    direction: crate::panes::SplitDirection,
     request_id: Option<String>,
     json: bool,
 ) -> anyhow::Result<String> {
@@ -1992,10 +1992,7 @@ fn format_human(processes: &[ProcessInventory]) -> String {
                     output.push('\n');
                 }
                 for divider in &tab.dividers {
-                    let direction = match divider.direction {
-                        super::protocol::SplitDirection::Horizontal => "horizontal",
-                        super::protocol::SplitDirection::Vertical => "vertical",
-                    };
+                    let direction = divider.direction.name();
                     output.push_str(&format!(
                         "      divider {} {direction} ratio={}",
                         divider.id, divider.ratio_millis
@@ -2060,9 +2057,9 @@ mod tests {
     }
     use super::*;
     use crate::control::protocol::{
-        DividerInventory, DividerKind, PaneInventory, SplitDirection, TabInventory, TabKind,
-        WindowInventory,
+        DividerInventory, DividerKind, PaneInventory, TabInventory, TabKind, WindowInventory,
     };
+    use crate::panes::SplitDirection;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::os::unix::net::UnixListener;
