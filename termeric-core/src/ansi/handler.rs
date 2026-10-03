@@ -416,10 +416,6 @@ fn encode_hex(bytes: &[u8], output: &mut Vec<u8>) {
     }
 }
 
-fn terminal_os_name() -> &'static [u8] {
-    b"Linux"
-}
-
 /// Return only capabilities whose byte strings are part of Termeric's own
 /// version-controlled terminal contract. Keeping this table independent of
 /// the host terminfo database makes XTGETTCAP deterministic over SSH and in
@@ -432,7 +428,7 @@ fn xtgettcap_value<'a>(name: &[u8], term_name: &'a [u8]) -> Option<&'a [u8]> {
         b"TN" | b"name" => Some(term_name),
         b"RGB" => Some(b"8"),
         b"indn" => Some(b"\x1b[%p1%dS"),
-        b"query-os-name" => Some(terminal_os_name()),
+        b"query-os-name" => Some(b"Linux"),
 
         // Unmodified and shifted special keys advertised by
         // assets/terminfo/xterm-termeric.terminfo. Termcap aliases are

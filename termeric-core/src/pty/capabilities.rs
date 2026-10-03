@@ -152,7 +152,6 @@ fn terminfo_search_path(root: &Path, existing: Option<&std::ffi::OsStr>) -> Opti
     env::join_paths(paths).ok()
 }
 
-#[cfg(unix)]
 fn default_terminfo_roots() -> &'static [&'static str] {
     &[
         "/usr/local/share/terminfo",
@@ -160,11 +159,6 @@ fn default_terminfo_roots() -> &'static [&'static str] {
         "/lib/terminfo",
         "/etc/terminfo",
     ]
-}
-
-#[cfg(not(unix))]
-fn default_terminfo_roots() -> &'static [&'static str] {
-    &[]
 }
 
 #[cfg(test)]

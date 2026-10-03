@@ -24,18 +24,11 @@ use placeholder::PlaceholderDecoder;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{Cursor, Read};
-#[cfg(unix)]
 use std::io::{Seek, SeekFrom};
 use std::ops::{Deref, DerefMut};
-#[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
-#[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-#[cfg(target_vendor = "apple")]
-use std::os::unix::io::AsRawFd;
-#[cfg(unix)]
 use std::os::unix::io::FromRawFd;
-#[cfg(unix)]
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -3484,21 +3477,12 @@ fn prepare_transmission_data(
                     "ordinary-file transmission cannot be chunked",
                 ));
             }
-            #[cfg(unix)]
-            {
-                cmd.data = read_ordinary_file(
-                    &cmd.data,
-                    cmd.transmission.data_offset.unwrap_or(0),
-                    cmd.transmission.data_size,
-                )?;
-                Ok(())
-            }
-            #[cfg(not(unix))]
-            {
-                Err(ProtocolError::unsupported(
-                    "ordinary-file transmission is only supported on Unix",
-                ))
-            }
+            cmd.data = read_ordinary_file(
+                &cmd.data,
+                cmd.transmission.data_offset.unwrap_or(0),
+                cmd.transmission.data_size,
+            )?;
+            Ok(())
         }
         KittyMedium::SharedMemory => {
             if cmd.more_chunks {
@@ -3506,21 +3490,12 @@ fn prepare_transmission_data(
                     "shared-memory transmission cannot be chunked",
                 ));
             }
-            #[cfg(unix)]
-            {
-                cmd.data = read_and_unlink_shared_memory(
-                    &cmd.data,
-                    cmd.transmission.data_offset.unwrap_or(0),
-                    cmd.transmission.data_size,
-                )?;
-                Ok(())
-            }
-            #[cfg(not(unix))]
-            {
-                Err(ProtocolError::unsupported(
-                    "shared-memory transmission is only supported on Unix",
-                ))
-            }
+            cmd.data = read_and_unlink_shared_memory(
+                &cmd.data,
+                cmd.transmission.data_offset.unwrap_or(0),
+                cmd.transmission.data_size,
+            )?;
+            Ok(())
         }
         KittyMedium::TempFile => {
             if cmd.more_chunks {
@@ -3528,26 +3503,16 @@ fn prepare_transmission_data(
                     "temporary-file transmission cannot be chunked",
                 ));
             }
-            #[cfg(unix)]
-            {
-                cmd.data = read_and_remove_temporary_file(
-                    &cmd.data,
-                    cmd.transmission.data_offset.unwrap_or(0),
-                    cmd.transmission.data_size,
-                )?;
-                Ok(())
-            }
-            #[cfg(not(unix))]
-            {
-                Err(ProtocolError::unsupported(
-                    "temporary-file transmission is only supported on Unix",
-                ))
-            }
+            cmd.data = read_and_remove_temporary_file(
+                &cmd.data,
+                cmd.transmission.data_offset.unwrap_or(0),
+                cmd.transmission.data_size,
+            )?;
+            Ok(())
         }
     }
 }
 
-#[cfg(unix)]
 fn read_ordinary_file(
     encoded_path: &[u8],
     offset: u64,
@@ -3607,7 +3572,6 @@ fn read_ordinary_file(
     Ok(data)
 }
 
-#[cfg(unix)]
 fn ensure_ordinary_file_unchanged(
     path: &Path,
     opened: &std::fs::Metadata,
@@ -3629,14 +3593,12 @@ fn ensure_ordinary_file_unchanged(
     Ok(())
 }
 
-#[cfg(unix)]
 fn is_sensitive_file_root(path: &Path) -> bool {
     [Path::new("/dev"), Path::new("/proc"), Path::new("/sys")]
         .into_iter()
         .any(|root| path.starts_with(root))
 }
 
-#[cfg(unix)]
 fn read_and_remove_temporary_file(
     encoded_path: &[u8],
     offset: u64,
@@ -3712,7 +3674,6 @@ fn read_and_remove_temporary_file(
     }
 }
 
-#[cfg(unix)]
 fn open_local_graphics_file(path: &Path) -> std::io::Result<std::fs::File> {
     // Type validation occurs on the descriptor. A FIFO substituted before
     // open must not wait for a peer before that validation can reject it.
@@ -3723,7 +3684,6 @@ fn open_local_graphics_file(path: &Path) -> std::io::Result<std::fs::File> {
         .open(path)
 }
 
-#[cfg(unix)]
 fn open_unchanged_temporary_file(
     path: &Path,
     before: &std::fs::Metadata,
@@ -3742,7 +3702,6 @@ fn open_unchanged_temporary_file(
     Ok((file, opened))
 }
 
-#[cfg(unix)]
 fn read_and_unlink_shared_memory(
     name: &[u8],
     offset: u64,
@@ -3774,11 +3733,10 @@ fn read_and_unlink_shared_memory(
         .map_err(|error| filesystem_error(error, "shared-memory metadata is unavailable"))?;
     // SAFETY: `geteuid` has no preconditions and does not access Rust memory.
     let effective_uid = unsafe { libc::geteuid() };
-    #[cfg(target_vendor = "apple")]
-    let valid_object_type = true;
-    #[cfg(not(target_vendor = "apple"))]
-    let valid_object_type = metadata.file_type().is_file();
-    if !valid_object_type || metadata.uid() != effective_uid || metadata.mode() & 0o077 != 0 {
+    if !metadata.file_type().is_file()
+        || metadata.uid() != effective_uid
+        || metadata.mode() & 0o077 != 0
+    {
         return Err(ProtocolError::invalid(
             "shared-memory object must be a private regular object owned by this user",
         ));
@@ -3799,7 +3757,6 @@ fn read_and_unlink_shared_memory(
     read_shared_memory_range(&mut file, offset, size)
 }
 
-#[cfg(all(unix, not(target_vendor = "apple")))]
 fn read_shared_memory_range(
     file: &mut std::fs::File,
     offset: u64,
@@ -3820,60 +3777,6 @@ fn read_shared_memory_range(
     Ok(data)
 }
 
-#[cfg(target_vendor = "apple")]
-fn read_shared_memory_range(
-    file: &mut std::fs::File,
-    offset: u64,
-    size: u64,
-) -> Result<Vec<u8>, ProtocolError> {
-    if size == 0 {
-        return Ok(Vec::new());
-    }
-    // SAFETY: sysconf has no pointer arguments or Rust-memory preconditions.
-    let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
-    if page_size <= 0 {
-        return Err(ProtocolError::io("shared-memory page size is unavailable"));
-    }
-    let page_size = page_size as u64;
-    let page_start = offset / page_size * page_size;
-    let delta = usize::try_from(offset - page_start)
-        .map_err(|_| ProtocolError::too_large("shared-memory offset is too large"))?;
-    let size = usize::try_from(size)
-        .map_err(|_| ProtocolError::too_large("shared-memory data is too large"))?;
-    let map_size = size
-        .checked_add(delta)
-        .ok_or_else(|| ProtocolError::too_large("shared-memory mapping size overflow"))?;
-    let page_start = libc::off_t::try_from(page_start)
-        .map_err(|_| ProtocolError::too_large("shared-memory offset is too large"))?;
-    // SAFETY: the descriptor is open and validated, the aligned range is
-    // within the metadata length checked above, and MAP_FAILED is handled.
-    let address = unsafe {
-        libc::mmap(
-            std::ptr::null_mut(),
-            map_size,
-            libc::PROT_READ,
-            libc::MAP_SHARED,
-            file.as_raw_fd(),
-            page_start,
-        )
-    };
-    if address == libc::MAP_FAILED {
-        return Err(filesystem_error(
-            std::io::Error::last_os_error(),
-            "shared-memory object could not be mapped",
-        ));
-    }
-    let mut data = vec![0; size];
-    // SAFETY: the mapping covers `delta + size` bytes and `data` owns `size`
-    // initialized writable bytes. These regions do not overlap.
-    unsafe {
-        std::ptr::copy_nonoverlapping((address as *const u8).add(delta), data.as_mut_ptr(), size);
-        libc::munmap(address, map_size);
-    }
-    Ok(data)
-}
-
-#[cfg(unix)]
 fn unlink_shared_memory_if_unchanged(
     name: &std::ffi::CStr,
     opened: &std::fs::Metadata,
@@ -3901,20 +3804,14 @@ fn unlink_shared_memory_if_unchanged(
     Ok(())
 }
 
-#[cfg(unix)]
 fn open_graphics_shared_memory(name: &std::ffi::CStr) -> std::io::Result<std::fs::File> {
     // Linux shm names refer to /dev/shm entries: initial and cleanup opens
     // must reject FIFO/symlink substitutions without waiting for a writer.
-    // Other platforms use their existing native shared-memory flag contract.
-    #[cfg(target_os = "linux")]
-    let extra_flags = libc::O_NONBLOCK | libc::O_NOFOLLOW;
-    #[cfg(not(target_os = "linux"))]
-    let extra_flags = 0;
     // SAFETY: name is a live C string; flags never create or truncate an object.
     let descriptor = unsafe {
         libc::shm_open(
             name.as_ptr(),
-            libc::O_RDONLY | libc::O_CLOEXEC | extra_flags,
+            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NONBLOCK | libc::O_NOFOLLOW,
             0,
         )
     };
@@ -3925,7 +3822,6 @@ fn open_graphics_shared_memory(name: &std::ffi::CStr) -> std::io::Result<std::fs
     Ok(unsafe { std::fs::File::from_raw_fd(descriptor) })
 }
 
-#[cfg(unix)]
 fn allowed_temporary_roots() -> Vec<PathBuf> {
     [
         std::env::temp_dir(),
@@ -3942,7 +3838,6 @@ fn allowed_temporary_roots() -> Vec<PathBuf> {
     })
 }
 
-#[cfg(unix)]
 fn remove_temporary_file_if_unchanged(
     path: &Path,
     opened: &std::fs::Metadata,
@@ -3961,12 +3856,10 @@ fn remove_temporary_file_if_unchanged(
         .map_err(|error| filesystem_error(error, "temporary file could not be removed"))
 }
 
-#[cfg(unix)]
 fn same_file(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
     left.dev() == right.dev() && left.ino() == right.ino()
 }
 
-#[cfg(unix)]
 fn filesystem_error(error: std::io::Error, message: &'static str) -> ProtocolError {
     match error.kind() {
         std::io::ErrorKind::NotFound => ProtocolError::not_found(message),
@@ -4558,7 +4451,6 @@ fn blend_source_over(destination: &mut [u8], source: &[u8]) {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(target_os = "linux")]
     fn fifo_fixture(directory: &Path) -> tempfile::TempPath {
         let file = tempfile::Builder::new()
             .prefix("termeric-tty-graphics-protocol-fifo-")
@@ -4567,7 +4459,6 @@ mod tests {
         replace_fixture_with_fifo(file).0
     }
 
-    #[cfg(target_os = "linux")]
     fn replace_fixture_with_fifo(
         file: tempfile::NamedTempFile,
     ) -> (tempfile::TempPath, std::fs::File) {
@@ -4584,7 +4475,6 @@ mod tests {
 
     /// A regression must fail rather than hanging the entire test lane. Open a
     /// private rescue peer only if the production operation did not return.
-    #[cfg(target_os = "linux")]
     fn check_fifo_open_does_not_wait<T: Send + 'static>(
         path: &Path,
         operation: impl FnOnce() -> T + Send + 'static,
@@ -4618,7 +4508,6 @@ mod tests {
         result
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn ordinary_graphics_fifo_is_rejected_without_waiting_for_a_writer() {
         let path = fifo_fixture(&std::env::temp_dir());
@@ -4629,7 +4518,6 @@ mod tests {
         assert!(path.exists(), "rejected FIFO was deleted");
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn shared_memory_graphics_fifo_is_rejected_without_waiting_for_a_writer() {
         let path = fifo_fixture(Path::new("/dev/shm"));
@@ -4641,7 +4529,6 @@ mod tests {
         assert!(path.exists(), "rejected FIFO was unlinked");
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn temporary_graphics_open_rejects_fifo_and_symlink_substitution() {
         let file = tempfile::NamedTempFile::new().unwrap();
@@ -4671,7 +4558,6 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn shared_memory_cleanup_rejects_substituted_fifo_without_waiting_or_unlinking() {
         let file = tempfile::Builder::new()
@@ -4689,7 +4575,6 @@ mod tests {
         assert!(path.exists(), "cleanup removed a substituted FIFO");
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn fifo_protocol_errors_preserve_quiet_policy_and_next_image_progress() {
         let path = fifo_fixture(Path::new("/dev/shm"));
@@ -5038,7 +4923,6 @@ mod tests {
         assert!(!manager.animations.contains_key(&ImageId(19)));
     }
 
-    #[cfg(unix)]
     #[test]
     fn animation_frames_use_the_supported_temporary_file_medium() {
         use std::io::Write;
@@ -5066,7 +4950,6 @@ mod tests {
         assert!(!path.exists());
     }
 
-    #[cfg(unix)]
     fn encoded_path(path: &std::path::Path) -> String {
         use base64::{Engine as _, engine::general_purpose::STANDARD};
         use std::os::unix::ffi::OsStrExt;
@@ -5074,19 +4957,14 @@ mod tests {
         STANDARD.encode(path.as_os_str().as_bytes())
     }
 
-    #[cfg(unix)]
     struct TestSharedMemory {
         name: std::ffi::CString,
         file: std::fs::File,
     }
 
-    #[cfg(unix)]
     impl TestSharedMemory {
         fn new(data: &[u8]) -> Self {
-            #[cfg(not(target_vendor = "apple"))]
             use std::io::Write;
-            #[cfg(target_vendor = "apple")]
-            use std::os::unix::io::AsRawFd;
             use std::os::unix::io::FromRawFd;
             use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -5121,38 +4999,9 @@ mod tests {
                 // returned descriptor.
                 let file = unsafe { std::fs::File::from_raw_fd(descriptor) };
                 file.set_len(data.len() as u64).unwrap();
-                #[cfg(not(target_vendor = "apple"))]
-                {
-                    let mut writer = &file;
-                    writer.write_all(data).unwrap();
-                    writer.flush().unwrap();
-                }
-                #[cfg(target_vendor = "apple")]
-                if !data.is_empty() {
-                    // SAFETY: the private object has just been sized to the
-                    // mapping length and remains open for the mapping lifetime.
-                    let address = unsafe {
-                        libc::mmap(
-                            std::ptr::null_mut(),
-                            data.len(),
-                            libc::PROT_READ | libc::PROT_WRITE,
-                            libc::MAP_SHARED,
-                            file.as_raw_fd(),
-                            0,
-                        )
-                    };
-                    assert_ne!(address, libc::MAP_FAILED);
-                    // SAFETY: both regions cover exactly `data.len()` bytes
-                    // and cannot overlap; the mapping is released afterwards.
-                    unsafe {
-                        std::ptr::copy_nonoverlapping(
-                            data.as_ptr(),
-                            address as *mut u8,
-                            data.len(),
-                        );
-                        libc::munmap(address, data.len());
-                    }
-                }
+                let mut writer = &file;
+                writer.write_all(data).unwrap();
+                writer.flush().unwrap();
                 return Self { name, file };
             }
         }
@@ -5186,7 +5035,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     impl Drop for TestSharedMemory {
         fn drop(&mut self) {
             // SAFETY: `name` remains a live C string. Failure is expected when
@@ -5197,7 +5045,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn temporary_file_range_is_loaded_deleted_and_queryable() {
         use std::io::Write;
@@ -5257,7 +5104,6 @@ mod tests {
         assert!(!unsupported_path.exists());
     }
 
-    #[cfg(unix)]
     #[test]
     fn opted_in_ordinary_file_range_is_loaded_without_deletion() {
         use std::io::Write;
@@ -5294,7 +5140,6 @@ mod tests {
         assert!(manager.get_image(ImageId(60)).is_none());
     }
 
-    #[cfg(unix)]
     #[test]
     fn opted_in_ordinary_files_follow_safe_symlinks_but_reject_unsafe_targets() {
         use std::io::Write;
@@ -5341,7 +5186,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn oversized_ordinary_file_is_rejected_without_deletion() {
         let file = tempfile::NamedTempFile::new_in(std::env::temp_dir()).unwrap();
@@ -5359,7 +5203,6 @@ mod tests {
         assert!(manager.storage.is_empty());
     }
 
-    #[cfg(unix)]
     #[test]
     fn local_media_policy_rejects_unsafe_paths_and_special_files() {
         let ordinary = tempfile::Builder::new()
@@ -5411,7 +5254,6 @@ mod tests {
         std::fs::remove_file(&symlink_path).unwrap();
     }
 
-    #[cfg(unix)]
     #[test]
     fn oversized_safe_temporary_file_is_rejected_and_removed() {
         let file = tempfile::Builder::new()
@@ -5431,7 +5273,6 @@ mod tests {
         assert!(manager.storage.is_empty());
     }
 
-    #[cfg(unix)]
     #[test]
     fn shared_memory_range_is_loaded_unlinked_and_queryable() {
         let image = TestSharedMemory::new(&[90, 91, 92, 93, 1, 2, 3, 4, 5, 6, 7, 8]);
@@ -5465,7 +5306,6 @@ mod tests {
         assert!(!unsupported.is_linked());
     }
 
-    #[cfg(unix)]
     #[test]
     fn current_kitty_bare_shared_memory_name_is_normalized_and_unlinked() {
         let image = TestSharedMemory::new(&[1, 2, 3, 4]);
@@ -5484,7 +5324,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn compressed_local_media_uses_format_specific_size_semantics() {
         use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -5577,7 +5416,6 @@ mod tests {
         assert!(result.response.unwrap().ok);
     }
 
-    #[cfg(unix)]
     #[test]
     fn shared_memory_policy_rejects_public_and_invalid_names() {
         use std::os::unix::fs::PermissionsExt;
@@ -5600,7 +5438,6 @@ mod tests {
         assert_eq!(result.response.unwrap().error_code, Some("EINVAL"));
     }
 
-    #[cfg(unix)]
     #[test]
     fn oversized_private_shared_memory_is_rejected_and_unlinked() {
         let object = TestSharedMemory::new(&[]);

@@ -27,17 +27,11 @@ pub fn terminal_identity_variable(name: &str) -> bool {
 
 /// A fresh identity for one terminal's processes, or `None` when the system
 /// cannot supply randomness.
-#[cfg(unix)]
 pub(super) fn new_terminal_id() -> Option<String> {
     let random = crate::hex::random(16)
         .map_err(|error| log::warn!("No terminal identity: {error}"))
         .ok()?;
     Some(format!("{}.{random}", std::process::id()))
-}
-
-#[cfg(not(unix))]
-pub(super) fn new_terminal_id() -> Option<String> {
-    None
 }
 
 impl EnvironmentPolicy {

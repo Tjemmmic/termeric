@@ -300,14 +300,8 @@ impl PtyHandle {
 
     /// The process group in the terminal's foreground: the program the
     /// person is interacting with, which may be a child of the shell.
-    #[cfg(unix)]
     pub fn foreground_process_group(&self) -> Option<i32> {
         self.master.process_group_leader()
-    }
-
-    #[cfg(not(unix))]
-    pub fn foreground_process_group(&self) -> Option<i32> {
-        None
     }
 }
 
@@ -407,7 +401,6 @@ mod tests {
 
     /// Runs only when explicitly selected in a child PTY. Reports no inherited
     /// values or credentials; the normal workspace invocation is a no-op.
-    #[cfg(unix)]
     #[test]
     fn environment_policy_child_probe() {
         let Ok(mode) = std::env::var("TERMERIC_POLICY_PROBE") else {
@@ -454,7 +447,6 @@ mod tests {
         println!("ENVIRONMENT_POLICY_PROBE_OK");
     }
 
-    #[cfg(unix)]
     #[test]
     fn environment_policy_reaches_real_child_without_changing_parent_or_siblings() {
         let original_path = std::env::var_os("PATH");
@@ -553,7 +545,6 @@ mod tests {
         reads: Arc<AtomicUsize>,
     }
 
-    #[cfg(unix)]
     #[test]
     fn child_observation_survives_wait_detach_and_output_drain() {
         for code in [0, 7] {
@@ -603,7 +594,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn terminal_child_shutdown_precedes_writer_drop_for_both_owner_forms() {
         struct DropProbe {
@@ -701,7 +691,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn child_observer_does_not_keep_a_closed_terminal_child_alive() {
         let pty = Pty::spawn(
@@ -755,7 +744,6 @@ mod tests {
         assert_eq!(pty.size().unwrap(), default_pty_size(80, 24));
     }
 
-    #[cfg(unix)]
     #[test]
     fn child_identity_cannot_be_overridden_by_untrusted_extra_environment() {
         let args = vec![
@@ -798,7 +786,6 @@ mod tests {
         assert!(!output.contains("not-a-real-terminal"), "{output:?}");
     }
 
-    #[cfg(unix)]
     #[test]
     fn kernel_winsize_preserves_nonzero_pixels_at_spawn_and_resize() {
         let initial = PtySize {
@@ -833,7 +820,6 @@ mod tests {
         assert_eq!(pty.size().unwrap(), resized);
     }
 
-    #[cfg(unix)]
     #[test]
     fn child_winsize_probe_observes_startup_and_resize_pixels() {
         let python = ["/usr/bin/python3", "/bin/python3"]

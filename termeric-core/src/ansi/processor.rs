@@ -1001,19 +1001,11 @@ mod tests {
         assert_eq!(replies[0], b"\x1b[?0u");
         assert_eq!(replies[1], b"\x1bP>|Termeric(1)\x1b\\");
         assert_eq!(replies[2], b"\x1bP1+r696e646e=1b5b257031256453\x1b\\");
-        let expected_os = if cfg!(target_os = "linux") {
-            b"4c696e7578".as_slice()
-        } else if cfg!(target_os = "macos") {
-            b"44617277696e".as_slice()
-        } else if cfg!(target_os = "windows") {
-            b"57696e646f7773".as_slice()
-        } else {
-            b"556e6b6e6f776e".as_slice()
-        };
-        let mut os_reply = b"\x1bP1+r71756572792d6f732d6e616d65=".to_vec();
-        os_reply.extend_from_slice(expected_os);
-        os_reply.extend_from_slice(b"\x1b\\");
-        assert_eq!(replies[3], os_reply);
+        // query-os-name=Linux
+        assert_eq!(
+            replies[3],
+            b"\x1bP1+r71756572792d6f732d6e616d65=4c696e7578\x1b\\"
+        );
     }
 
     #[test]
@@ -1246,7 +1238,6 @@ mod tests {
               \x1b]99;e=1;%%%\x1b\\\
               \x1b]99;p=future;ignored\x1b\\",
         );
-        #[cfg(target_os = "linux")]
         let expected_query_events = vec![
             crate::event::TerminalEvent::PtyWrite(
                 b"\x1b]99;i=query-7:p=?;p=title,body,close,alive,buttons,icon:a=report,focus:c=1:o=always,unfocused,invisible:s=system,silent,error,warn,warning,info,question:u=0,1,2:w=1\x1b\\"
@@ -1255,15 +1246,6 @@ mod tests {
             crate::event::TerminalEvent::PtyWrite(
                 b"\x9d99;i=query-8:p=?;p=title,body,close,alive,buttons,icon:a=report,focus:c=1:o=always,unfocused,invisible:s=system,silent,error,warn,warning,info,question:u=0,1,2:w=1\x9c"
                     .to_vec(),
-            ),
-        ];
-        #[cfg(not(target_os = "linux"))]
-        let expected_query_events = vec![
-            crate::event::TerminalEvent::PtyWrite(
-                b"\x1b]99;i=query-7:p=?;p=title,body:o=always,unfocused,invisible\x1b\\".to_vec(),
-            ),
-            crate::event::TerminalEvent::PtyWrite(
-                b"\x9d99;i=query-8:p=?;p=title,body:o=always,unfocused,invisible\x9c".to_vec(),
             ),
         ];
         assert_eq!(terminal.drain_events(), expected_query_events);

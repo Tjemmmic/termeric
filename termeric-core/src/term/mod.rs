@@ -1022,21 +1022,15 @@ impl Terminal {
         match self.notification_protocol.handle(params) {
             Osc99Action::None => {}
             Osc99Action::Query(identifier) => {
-                #[cfg(target_os = "linux")]
                 let capabilities = "p=title,body,close,alive,buttons,icon:a=report,focus:c=1:o=always,unfocused,invisible:s=system,silent,error,warn,warning,info,question:u=0,1,2:w=1";
-                #[cfg(not(target_os = "linux"))]
-                let capabilities = "p=title,body:o=always,unfocused,invisible";
                 let response = format!("\x1b]99;i={identifier}:p=?;{capabilities}\x1b\\");
                 self.push_event(TerminalEvent::PtyWrite(response.into_bytes()));
             }
             Osc99Action::AliveQuery(identifier) => {
-                #[cfg(target_os = "linux")]
                 self.push_event(TerminalEvent::NotificationAliveQuery {
                     identifier,
                     reply_uses_8bit_controls: self.use_8bit_controls,
                 });
-                #[cfg(not(target_os = "linux"))]
-                let _ = identifier;
             }
             Osc99Action::Notify(mut request) => {
                 request.reply_uses_8bit_controls = self.use_8bit_controls;
