@@ -148,6 +148,133 @@ mod tests {
     use crate::ui::text_input::TextInputEdit;
     use winit::keyboard::{Key, NamedKey};
 
+    /// The focused paste owner takes the configured Paste chord and only it:
+    /// the default chord, then a rebinding, and nothing once Paste is unbound.
+    /// Headless mode has no OS clipboard, so an owned chord reads nothing but
+    /// is still consumed instead of inserting its letter or reaching a PTY.
+    /// Leaves Paste bound to F8 with no modifiers held, and returns that key.
+    fn assert_paste_binding_follows_registry(app: &mut App) -> Key {
+        let default = Key::Character("v".into());
+        app.modifiers = ModifiersState::CONTROL | ModifiersState::SHIFT;
+        assert!(app.handle_query_paste_key(&default));
+        let rebound = Key::Named(NamedKey::F8);
+        let chord = KeyChord::from_key_event(&rebound, ModifiersState::empty());
+        app.shortcut_registry
+            .set_binding(BindableAction::Paste, chord.clone());
+        assert!(!app.handle_query_paste_key(&default));
+        app.modifiers = ModifiersState::empty();
+        assert!(app.handle_query_paste_key(&rebound));
+        app.shortcut_registry
+            .set_binding(BindableAction::Paste, None);
+        assert!(!app.handle_query_paste_key(&rebound));
+        app.shortcut_registry
+            .set_binding(BindableAction::Paste, chord);
+        rebound
+    }
+
+    fn open_settings_dropdown(app: &mut App) {
+        app.settings_panel
+            .open_to_section(crate::ui::settings::SettingsSection::Theme);
+        app.settings_panel
+            .build_info(&app.config, &app.shortcut_registry);
+        app.settings_panel.handle_key(
+            crate::ui::settings::SettingsKey::Right,
+            &app.config,
+            &app.shortcut_registry,
+        );
+        assert!(app.settings_panel.is_dropdown_open());
+    }
+
+    fn settings_filter(app: &mut App) -> String {
+        app.settings_panel
+            .build_info(&app.config, &app.shortcut_registry)
+            .filter
+    }
+
+    fn shortcuts_filter(app: &mut App) -> String {
+        app.shortcuts_panel
+            .build_info(&app.shortcut_registry)
+            .filter
+    }
+
+    /// A modal opened above the field under test.
+    #[derive(Clone, Copy, Debug)]
+    enum Higher {
+        InfoOverlay,
+        Settings,
+        Shortcuts,
+        Palette,
+        Unicode,
+        Domains,
+        /// Shortcut recording, over an open Shortcuts panel.
+        Recording,
+    }
+
+    impl Higher {
+        fn open(self, app: &mut App) {
+            match self {
+                Self::InfoOverlay => {
+                    app.info_overlay.show("Notice", vec![]);
+                }
+                Self::Settings => app.settings_panel.toggle(),
+                Self::Shortcuts => app.shortcuts_panel.open(),
+                Self::Palette => app.command_palette.open(),
+                Self::Unicode => app.unicode_picker.open(),
+                Self::Domains => app.domain_picker.open(&app.config.domains),
+                Self::Recording => {
+                    app.shortcuts_panel.start_recording(BindableAction::Copy);
+                }
+            }
+        }
+
+        /// The query field this modal pastes into, or `None` when it blocks
+        /// pastes.
+        fn query(self, app: &mut App) -> Option<String> {
+            match self {
+                Self::InfoOverlay | Self::Recording => None,
+                Self::Settings => Some(settings_filter(app)),
+                Self::Shortcuts => Some(shortcuts_filter(app)),
+                Self::Palette => Some(app.command_palette.build_info().input),
+                Self::Unicode => Some(app.unicode_picker.build_info().input),
+                Self::Domains => Some(app.domain_picker.build_info().input),
+            }
+        }
+    }
+
+    /// For each `higher` modal opened over a field (`open_lower` opens it and
+    /// pastes into it, over a retained search and Commands form), a paste goes
+    /// to the higher modal's query or is refused, and never reaches the lower
+    /// field (`lower_intact` checks it) or anything beneath it.
+    fn assert_higher_modals_own_paste(
+        open_lower: fn(&mut App),
+        lower_intact: fn(&mut App),
+        highers: &[Higher],
+    ) {
+        for &higher in highers {
+            let mut app = App::new_headless(Config::default()).unwrap();
+            app.search.start();
+            app.commands_panel.toggle();
+            app.commands_panel.start_add();
+            open_lower(&mut app);
+            higher.open(&mut app);
+            let takes_paste = higher.query(&mut app).is_some();
+            assert_eq!(
+                app.paste_clipboard_payload("higher"),
+                takes_paste,
+                "{higher:?}"
+            );
+            lower_intact(&mut app);
+            assert!(app.search.query().is_empty(), "{higher:?}");
+            assert!(app.commands_panel.form_name.text().is_empty(), "{higher:?}");
+            match higher.query(&mut app) {
+                Some(query) => assert_eq!(query, "higher", "{higher:?}"),
+                None => assert!(app.clipboard_paste_blocked(), "{higher:?}"),
+            }
+            app.unicode_picker.close();
+            app.unicode_picker.finish_search_for_test();
+        }
+    }
+
     fn exercise_tab_rename_paste(app: &mut App) {
         let search_before = app.search.query().to_owned();
         for max_chars in [128, 256] {
@@ -236,17 +363,7 @@ mod tests {
     fn tab_rename_paste_honors_rebinding_disabling_and_higher_modal_guards() {
         let mut app = App::new_headless(Config::default()).unwrap();
         app.tab_rename = Some(TabRenameState::new(usize::MAX, None, "Roots", 256));
-        app.modifiers = ModifiersState::CONTROL | ModifiersState::SHIFT;
-        let default = Key::Character("v".into());
-        assert!(app.handle_query_paste_key(&default)); // no OS clipboard in headless mode
-        let rebound = Key::Named(NamedKey::F8);
-        app.shortcut_registry.set_binding(
-            BindableAction::Paste,
-            KeyChord::from_key_event(&rebound, ModifiersState::empty()),
-        );
-        assert!(!app.handle_query_paste_key(&default));
-        app.modifiers = ModifiersState::empty();
-        assert!(app.handle_query_paste_key(&rebound));
+        let rebound = assert_paste_binding_follows_registry(&mut app);
         app.commands_panel.toggle();
         assert!(app.clipboard_paste_blocked());
         assert!(!app.handle_query_paste_key(&rebound));
@@ -263,9 +380,6 @@ mod tests {
         assert!(app.clipboard_paste_blocked());
         assert!(!app.paste_clipboard_payload("hidden"));
         app.workspace_menu = None;
-        app.shortcut_registry
-            .set_binding(BindableAction::Paste, None);
-        assert!(!app.handle_query_paste_key(&rebound));
         assert_eq!(app.tab_rename.as_ref().unwrap().input.text(), "Roots");
     }
 
@@ -352,18 +466,7 @@ mod tests {
     fn workspace_rename_paste_honors_binding_changes_and_blocks_browse_and_dropdown() {
         let mut app = App::new_headless(Config::default()).unwrap();
         open_workspace_rename(&mut app);
-        app.modifiers = ModifiersState::CONTROL | ModifiersState::SHIFT;
-        let default = Key::Character("v".into());
-        // Headless: no OS clipboard is read, but the configured chord is owned.
-        assert!(app.handle_query_paste_key(&default));
-        let rebound = Key::Named(NamedKey::F8);
-        app.shortcut_registry.set_binding(
-            BindableAction::Paste,
-            KeyChord::from_key_event(&rebound, ModifiersState::empty()),
-        );
-        assert!(!app.handle_query_paste_key(&default));
-        app.modifiers = ModifiersState::empty();
-        assert!(app.handle_query_paste_key(&rebound));
+        let rebound = assert_paste_binding_follows_registry(&mut app);
         app.workspace_menu = Some(crate::ui::popup_menu::PopupMenu::new(
             crate::ui::workspace_menu::workspace_menu_rows(&[], None),
             false,
@@ -372,9 +475,6 @@ mod tests {
         assert!(!app.handle_query_paste_key(&rebound));
         assert!(!app.paste_clipboard_payload("hidden"));
         app.workspace_menu = None;
-        app.shortcut_registry
-            .set_binding(BindableAction::Paste, None);
-        assert!(!app.handle_query_paste_key(&rebound));
         assert_eq!(
             app.session_panel.build_info().rename_text.as_deref(),
             Some("Roots")
@@ -388,69 +488,27 @@ mod tests {
 
     #[test]
     fn workspace_paste_preserves_lower_fields_and_respects_higher_modal_owners() {
-        for higher in 0..6 {
-            let mut app = App::new_headless(Config::default()).unwrap();
-            app.search.start();
-            app.commands_panel.toggle();
-            app.commands_panel.start_add();
-            open_workspace_rename(&mut app);
-            assert!(app.paste_clipboard_payload(" workspace"));
-            match higher {
-                0 => {
-                    app.info_overlay.show("Notice", vec![]);
-                }
-                1 => app.settings_panel.toggle(),
-                2 => app.shortcuts_panel.open(),
-                3 => app.command_palette.open(),
-                4 => app.unicode_picker.open(),
-                5 => app.domain_picker.open(&app.config.domains),
-                _ => unreachable!(),
-            }
-            assert_eq!(
-                app.paste_clipboard_payload("higher"),
-                (1..=5).contains(&higher)
-            );
-            assert_eq!(
-                app.session_panel.build_info().rename_text.as_deref(),
-                Some("Roots workspace")
-            );
-            assert!(app.search.query().is_empty());
-            assert!(app.commands_panel.form_name.text().is_empty());
-            assert_eq!(app.session_panel.sessions()[0].display_name, "Roots");
-            match higher {
-                1 => assert_eq!(
-                    app.settings_panel
-                        .build_info(&app.config, &app.shortcut_registry)
-                        .filter,
-                    "higher"
-                ),
-                2 => assert_eq!(
-                    app.shortcuts_panel
-                        .build_info(&app.shortcut_registry)
-                        .filter,
-                    "higher"
-                ),
-                3 => assert_eq!(app.command_palette.build_info().input, "higher"),
-                4 => assert_eq!(app.unicode_picker.build_info().input, "higher"),
-                5 => assert_eq!(app.domain_picker.build_info().input, "higher"),
-                _ => assert!(app.clipboard_paste_blocked()),
-            }
-            app.unicode_picker.close();
-            app.unicode_picker.finish_search_for_test();
-        }
-    }
-
-    fn open_settings_dropdown(app: &mut App) {
-        app.settings_panel
-            .open_to_section(crate::ui::settings::SettingsSection::Theme);
-        app.settings_panel
-            .build_info(&app.config, &app.shortcut_registry);
-        app.settings_panel.handle_key(
-            crate::ui::settings::SettingsKey::Right,
-            &app.config,
-            &app.shortcut_registry,
+        assert_higher_modals_own_paste(
+            |app| {
+                open_workspace_rename(app);
+                assert!(app.paste_clipboard_payload(" workspace"));
+            },
+            |app| {
+                assert_eq!(
+                    app.session_panel.build_info().rename_text.as_deref(),
+                    Some("Roots workspace")
+                );
+                assert_eq!(app.session_panel.sessions()[0].display_name, "Roots");
+            },
+            &[
+                Higher::InfoOverlay,
+                Higher::Settings,
+                Higher::Shortcuts,
+                Higher::Palette,
+                Higher::Unicode,
+                Higher::Domains,
+            ],
         );
-        assert!(app.settings_panel.is_dropdown_open());
     }
 
     #[test]
@@ -515,17 +573,7 @@ mod tests {
     fn settings_paste_honors_binding_changes_and_dropdown_refuses_clipboard_reads() {
         let mut app = App::new_headless(Config::default()).unwrap();
         app.settings_panel.toggle();
-        app.modifiers = ModifiersState::CONTROL | ModifiersState::SHIFT;
-        let default = Key::Character("v".into());
-        assert!(app.handle_query_paste_key(&default));
-        let rebound = Key::Named(NamedKey::F8);
-        app.shortcut_registry.set_binding(
-            BindableAction::Paste,
-            KeyChord::from_key_event(&rebound, ModifiersState::empty()),
-        );
-        assert!(!app.handle_query_paste_key(&default));
-        app.modifiers = ModifiersState::empty();
-        assert!(app.handle_query_paste_key(&rebound));
+        let rebound = assert_paste_binding_follows_registry(&mut app);
         open_settings_dropdown(&mut app);
         assert!(app.clipboard_paste_blocked());
         assert!(!app.handle_query_paste_key(&rebound));
@@ -537,60 +585,25 @@ mod tests {
                 .filter
                 .is_empty()
         );
-        app.settings_panel.close();
-        app.settings_panel.toggle();
-        app.shortcut_registry
-            .set_binding(BindableAction::Paste, None);
-        assert!(!app.handle_query_paste_key(&rebound));
     }
 
     #[test]
     fn settings_paste_retains_lower_fields_and_respects_higher_modal_owners() {
-        for higher in 0..5 {
-            let mut app = App::new_headless(Config::default()).unwrap();
-            app.search.start();
-            app.commands_panel.toggle();
-            app.commands_panel.start_add();
-            app.session_panel.open_workspaces();
-            app.settings_panel.toggle();
-            assert!(app.paste_clipboard_payload("settings only"));
-            assert!(app.search.query().is_empty());
-            assert!(app.commands_panel.form_name.text().is_empty());
-            match higher {
-                0 => {
-                    app.info_overlay.show("Notice", vec![]);
-                }
-                1 => app.shortcuts_panel.open(),
-                2 => app.command_palette.open(),
-                3 => app.unicode_picker.open(),
-                4 => app.domain_picker.open(&app.config.domains),
-                _ => unreachable!(),
-            }
-            assert_eq!(
-                app.paste_clipboard_payload("higher"),
-                (1..=4).contains(&higher)
-            );
-            assert_eq!(
-                app.settings_panel
-                    .build_info(&app.config, &app.shortcut_registry)
-                    .filter,
-                "settings only"
-            );
-            assert!(app.search.query().is_empty());
-            assert!(app.commands_panel.form_name.text().is_empty());
-            match higher {
-                1 => assert_eq!(
-                    app.shortcuts_panel
-                        .build_info(&app.shortcut_registry)
-                        .filter,
-                    "higher"
-                ),
-                2 => assert_eq!(app.command_palette.build_info().input, "higher"),
-                3 => assert_eq!(app.unicode_picker.build_info().input, "higher"),
-                4 => assert_eq!(app.domain_picker.build_info().input, "higher"),
-                _ => assert!(app.clipboard_paste_blocked()),
-            }
-        }
+        assert_higher_modals_own_paste(
+            |app| {
+                app.session_panel.open_workspaces();
+                app.settings_panel.toggle();
+                assert!(app.paste_clipboard_payload("settings only"));
+            },
+            |app| assert_eq!(settings_filter(app), "settings only"),
+            &[
+                Higher::InfoOverlay,
+                Higher::Shortcuts,
+                Higher::Palette,
+                Higher::Unicode,
+                Higher::Domains,
+            ],
+        );
     }
 
     #[test]
@@ -646,17 +659,7 @@ mod tests {
     fn shortcut_filter_paste_binding_honors_rebinding_disabling_and_recording() {
         let mut app = App::new_headless(Config::default()).unwrap();
         app.shortcuts_panel.open();
-        app.modifiers = ModifiersState::CONTROL | ModifiersState::SHIFT;
-        let default = Key::Character("v".into());
-        assert!(app.handle_query_paste_key(&default));
-        let rebound = Key::Named(NamedKey::F8);
-        app.shortcut_registry.set_binding(
-            BindableAction::Paste,
-            KeyChord::from_key_event(&rebound, ModifiersState::empty()),
-        );
-        assert!(!app.handle_query_paste_key(&default));
-        app.modifiers = ModifiersState::empty();
-        assert!(app.handle_query_paste_key(&rebound));
+        let rebound = assert_paste_binding_follows_registry(&mut app);
         app.shortcuts_panel.start_recording(BindableAction::Copy);
         assert!(app.clipboard_paste_blocked());
         // Let the recording handler see the chord, without reading a clipboard.
@@ -669,56 +672,26 @@ mod tests {
                 .filter
                 .is_empty()
         );
-        app.shortcuts_panel.open();
-        app.shortcut_registry
-            .set_binding(BindableAction::Paste, None);
-        assert!(!app.handle_query_paste_key(&rebound));
         assert!(app.config.keybindings.is_empty());
     }
 
     #[test]
     fn shortcut_filter_paste_retains_lower_fields_and_respects_higher_owners() {
-        for higher in 0..5 {
-            let mut app = App::new_headless(Config::default()).unwrap();
-            app.search.start();
-            app.commands_panel.toggle();
-            app.commands_panel.start_add();
-            app.settings_panel.toggle();
-            app.shortcuts_panel.open();
-            assert!(app.paste_clipboard_payload("filter"));
-            assert!(app.search.query().is_empty());
-            assert!(app.commands_panel.form_name.text().is_empty());
-            match higher {
-                0 => {
-                    app.info_overlay.show("Notice", vec![]);
-                }
-                1 => app.command_palette.open(),
-                2 => app.unicode_picker.open(),
-                3 => app.domain_picker.open(&app.config.domains),
-                4 => {
-                    app.shortcuts_panel.start_recording(BindableAction::Copy);
-                }
-                _ => unreachable!(),
-            }
-            assert_eq!(
-                app.paste_clipboard_payload("higher"),
-                (1..=3).contains(&higher)
-            );
-            assert_eq!(
-                app.shortcuts_panel
-                    .build_info(&app.shortcut_registry)
-                    .filter,
-                "filter"
-            );
-            assert!(app.search.query().is_empty());
-            assert!(app.commands_panel.form_name.text().is_empty());
-            match higher {
-                1 => assert_eq!(app.command_palette.build_info().input, "higher"),
-                2 => assert_eq!(app.unicode_picker.build_info().input, "higher"),
-                3 => assert_eq!(app.domain_picker.build_info().input, "higher"),
-                _ => assert!(app.clipboard_paste_blocked()),
-            }
-        }
+        assert_higher_modals_own_paste(
+            |app| {
+                app.settings_panel.toggle();
+                app.shortcuts_panel.open();
+                assert!(app.paste_clipboard_payload("filter"));
+            },
+            |app| assert_eq!(shortcuts_filter(app), "filter"),
+            &[
+                Higher::InfoOverlay,
+                Higher::Palette,
+                Higher::Unicode,
+                Higher::Domains,
+                Higher::Recording,
+            ],
+        );
     }
 
     #[test]
@@ -727,19 +700,7 @@ mod tests {
         app.commands_panel.toggle();
         assert!(app.clipboard_paste_blocked());
         app.commands_panel.start_add();
-        app.modifiers = ModifiersState::CONTROL | ModifiersState::SHIFT;
-        assert!(app.handle_query_paste_key(&Key::Character("v".into())));
-        let rebound = Key::Named(NamedKey::F8);
-        app.shortcut_registry.set_binding(
-            BindableAction::Paste,
-            KeyChord::from_key_event(&rebound, ModifiersState::empty()),
-        );
-        assert!(!app.handle_query_paste_key(&Key::Character("v".into())));
-        app.modifiers = ModifiersState::empty();
-        assert!(app.handle_query_paste_key(&rebound));
-        app.shortcut_registry
-            .set_binding(BindableAction::Paste, None);
-        assert!(!app.handle_query_paste_key(&rebound));
+        assert_paste_binding_follows_registry(&mut app);
         assert!(app.paste_clipboard_payload("az"));
         app.commands_panel.form_edit(TextInputEdit::Left);
         app.handle_ime_event(winit::event::Ime::Preedit("draft".into(), None));
@@ -804,27 +765,12 @@ mod tests {
     fn query_paste_honors_rebound_and_disabled_shortcuts_without_reading_for_blocked_owners() {
         let mut app = App::new_headless(Config::default()).unwrap();
         app.command_palette.open();
-        app.modifiers = ModifiersState::CONTROL | ModifiersState::SHIFT;
-        let default = Key::Character("v".into());
-        // No platform clipboard exists in headless mode, but ownership still
-        // consumes the chord instead of inserting its V or reaching a PTY.
-        assert!(app.handle_query_paste_key(&default));
-        let rebound = Key::Named(NamedKey::F8);
-        app.shortcut_registry.set_binding(
-            BindableAction::Paste,
-            KeyChord::from_key_event(&rebound, ModifiersState::empty()),
-        );
-        assert!(!app.handle_query_paste_key(&default));
-        app.modifiers = ModifiersState::empty();
-        assert!(app.handle_query_paste_key(&rebound));
+        let rebound = assert_paste_binding_follows_registry(&mut app);
         app.info_overlay.show("Notice", vec![]);
         assert!(!app.handle_query_paste_key(&rebound));
         assert!(app.clipboard_paste_blocked());
         assert!(!app.paste_clipboard_payload("hidden"));
         assert_eq!(app.command_palette.build_info().input, "");
-        app.shortcut_registry
-            .set_binding(BindableAction::Paste, None);
-        assert!(!app.handle_query_paste_key(&rebound));
     }
 
     #[test]
