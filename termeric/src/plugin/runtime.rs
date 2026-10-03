@@ -3667,66 +3667,6 @@ events = ["command-invoked"]
     }
 
     #[test]
-    fn update_is_explicit_and_new_or_wider_permissions_cannot_migrate_silently() {
-        let (_temp, source, root, registry_path) = fixture();
-        fs::write(
-            source.join(MANIFEST_NAME),
-            manifest("1.0.0", ", \"workspace-query\"", "sample"),
-        )
-        .unwrap();
-        install(
-            &source,
-            permissions(&["process-spawn", "workspace-query"]),
-            true,
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-        fs::write(
-            source.join(MANIFEST_NAME),
-            manifest("1.1.0", ", \"workspace-query\"", "sample-v2"),
-        )
-        .unwrap();
-        execute_admin_at(
-            PluginAdminCommand::Update {
-                id: "sample-tools".into(),
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap();
-        let show = || {
-            execute_admin_at(
-                PluginAdminCommand::Show {
-                    id: "sample-tools".into(),
-                    json: false,
-                },
-                &registry_path,
-                &root,
-            )
-            .unwrap()
-        };
-        assert!(show().contains("v1.1.0"));
-
-        // Widening a scope is a new permission, exactly like a new capability.
-        fs::write(
-            source.join(MANIFEST_NAME),
-            manifest("2.0.0", ", \"workspace-query:all-windows\"", "sample-v3"),
-        )
-        .unwrap();
-        let error = execute_admin_at(
-            PluginAdminCommand::Update {
-                id: "sample-tools".into(),
-            },
-            &registry_path,
-            &root,
-        )
-        .unwrap_err();
-        assert!(format!("{error:#}").contains("new permissions (workspace-query:all-windows)"));
-        assert!(show().contains("v1.1.0"));
-    }
-
-    #[test]
     fn an_unloadable_registry_explains_the_replacing_reinstall() {
         let (_temp, source, root, registry_path) = fixture();
         install(
@@ -3828,7 +3768,8 @@ events = ["command-invoked"]
             )
         );
 
-        // A narrowed grant is never widened back by a later update.
+        // A narrowed grant is never widened back by a later update: widening a
+        // scope is a new permission, exactly like a new capability.
         write("3.0.0", ", \"workspace-query:all-windows\"");
         assert!(
             format!("{:#}", update().unwrap_err())
