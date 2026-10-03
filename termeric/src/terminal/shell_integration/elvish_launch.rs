@@ -1,5 +1,5 @@
 //! Eligibility for Elvish's Go-style flags and rc-loading REPL mode.
-//! Keep unrecognized/malformed invocations untouched; Elvish owns diagnostics.
+//! Unrecognized invocations stay untouched; Elvish owns diagnostics.
 
 pub(super) fn is_interactive(args: &[String]) -> bool {
     // These flags select a different program or suppress user rc loading.
@@ -17,17 +17,11 @@ pub(super) fn is_interactive(args: &[String]) -> bool {
             .split_once('=')
             .map_or((flag, None), |(name, value)| (name, Some(value)));
         match name {
-            "rc" | "log" | "db" | "sock" | "cpuprofile" | "allocsprofile" => {
-                // String values may be empty or look like flags/end markers.
+            "rc" | "log" | "db" | "sock" | "cpuprofile" | "allocsprofile" | "deprecation-level" => {
+                // Values may be empty or look like flags/end markers. A
+                // malformed deprecation level is Elvish's error to report;
+                // integration only adds the module search path either way.
                 if inline.is_none() && args.next().is_none() {
-                    return false;
-                }
-            }
-            "deprecation-level" => {
-                if !inline
-                    .or_else(|| args.next().map(String::as_str))
-                    .is_some_and(valid_go_int)
-                {
                     return false;
                 }
             }
@@ -57,40 +51,4 @@ pub(super) fn is_interactive(args: &[String]) -> bool {
         }
     }
     !disabled.contains(&true)
-}
-
-fn valid_go_int(value: &str) -> bool {
-    let negative = value.starts_with('-');
-    let digits = value.strip_prefix(['-', '+']).unwrap_or(value);
-    let (radix, digits, prefix) = match digits.as_bytes() {
-        [b'0', b'x' | b'X', ..] => (16, &digits[2..], true),
-        [b'0', b'o' | b'O', ..] => (8, &digits[2..], true),
-        [b'0', b'b' | b'B', ..] => (2, &digits[2..], true),
-        [b'0', _, ..] => (8, digits, false),
-        _ => (10, digits, false),
-    };
-    let limit = (isize::MAX as u64) + u64::from(negative);
-    let mut magnitude = 0u64;
-    let mut previous_digit = prefix;
-    let mut any_digit = false;
-    for ch in digits.chars() {
-        if ch == '_' && previous_digit {
-            previous_digit = false;
-            continue;
-        }
-        let Some(digit) = ch.to_digit(radix) else {
-            return false;
-        };
-        let Some(next) = magnitude
-            .checked_mul(u64::from(radix))
-            .and_then(|value| value.checked_add(u64::from(digit)))
-            .filter(|value| *value <= limit)
-        else {
-            return false;
-        };
-        magnitude = next;
-        previous_digit = true;
-        any_digit = true;
-    }
-    any_digit && previous_digit
 }
