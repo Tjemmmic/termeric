@@ -1314,17 +1314,19 @@ impl Default for BellConfigFile {
     }
 }
 
-/// Session save/restore configuration
+/// `[session]`: automatic saving and restoring of workspaces and closed-tab
+/// snapshots, the two things that carry a session across restarts.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct SessionConfig {
-    /// Enable workspace save/restore (legacy key name retained for compatibility)
+    /// Allow automatic saving and restoring at all; manual workspace saves
+    /// work either way
     pub enabled: bool,
     /// Automatically restore the last referenced workspace on startup
     pub auto_restore: bool,
     /// Automatically save the complete workspace on exit
     pub auto_save: bool,
-    /// Save bounded scrollback content with workspaces and legacy sessions
+    /// Save bounded scrollback content with workspaces and tab snapshots
     pub save_scrollback: bool,
 }
 
