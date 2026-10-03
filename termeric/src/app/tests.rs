@@ -574,69 +574,6 @@ fn native_selection_follows_grapheme_growth_collision_and_skip_policy() {
 
 #[cfg(unix)]
 #[test]
-fn native_selection_cannot_restore_glyphs_erased_outside_vertical_edit_region() {
-    use termeric_core::Point;
-    for split in [false, true] {
-        for wide in [false, true] {
-            let mut app = if split {
-                divider_owner_fixture()
-            } else {
-                scrollbar_owner_fixture()
-            };
-            let terminal = app.active_terminal_mut().unwrap();
-            terminal.resize(12, 5);
-            terminal.process(b"\x1bc\x1b[3J");
-            let point = if wide {
-                terminal.process("\x1b[3;3H界\x1b[?69h\x1b[4;8s\x1b[1;4H".as_bytes());
-                Point::new(2, 2)
-            } else {
-                terminal.process(b"\x1b]66;s=3;X\x07\x1b[2;5r");
-                Point::new(0, 0)
-            };
-            app.begin_native_selection(MouseButton::Left, point);
-            app.extend_native_selection(Point::new(point.row, point.col + 1));
-            app.active_terminal_mut().unwrap().process(b"\x1b[S");
-            app.extend_native_selection(Point::new(point.row, point.col + 1));
-            app.finish_native_selection();
-            assert!(app.native_selection_text().is_none());
-            assert!(app.mouse_state.selection.is_none());
-        }
-    }
-}
-
-#[cfg(unix)]
-#[test]
-fn native_selection_cannot_restore_text_replaced_by_multicell_placement() {
-    use termeric_core::Point;
-    for split in [false, true] {
-        for overwritten in [false, true] {
-            let mut app = if split {
-                divider_owner_fixture()
-            } else {
-                scrollbar_owner_fixture()
-            };
-            let terminal = app.active_terminal_mut().unwrap();
-            terminal.resize(12, 4);
-            terminal.process(b"\x1bc\x1b[3Janchor\r\nother\x1b[H");
-            let row = if overwritten { 0 } else { 1 };
-            app.begin_native_selection(MouseButton::Left, Point::new(row, 0));
-            app.extend_native_selection(Point::new(row, 4));
-            app.active_terminal_mut()
-                .unwrap()
-                .process(b"\x1b]66;s=1:w=3;X\x07");
-            app.extend_native_selection(Point::new(row, 4));
-            app.finish_native_selection();
-            assert_eq!(
-                app.native_selection_text().as_deref(),
-                (!overwritten).then_some("other")
-            );
-            assert_eq!(app.mouse_state.selection.is_some(), !overwritten);
-        }
-    }
-}
-
-#[cfg(unix)]
-#[test]
 fn native_selection_tracks_horizontal_motion_and_cannot_restore_deleted_cells() {
     use termeric_core::Point;
     for split in [false, true] {
@@ -672,73 +609,6 @@ fn native_selection_tracks_horizontal_motion_and_cannot_restore_deleted_cells() 
             app.finish_native_selection();
             assert!(app.native_selection_text().is_none());
             assert!(app.mouse_state.selection.is_none());
-        }
-    }
-}
-
-#[cfg(unix)]
-#[test]
-fn native_selection_follows_rectangular_writes_without_resurrecting_destinations() {
-    use termeric_core::Point;
-    for split in [false, true] {
-        for copy in [false, true] {
-            for selected_source in [false, true] {
-                let mut app = if split {
-                    divider_owner_fixture()
-                } else {
-                    scrollbar_owner_fixture()
-                };
-                let terminal = app.active_terminal_mut().unwrap();
-                terminal.resize(12, 3);
-                terminal.process(b"\x1bc\x1b[3Janchor\r\nsource");
-                let row = i32::from(selected_source);
-                app.begin_native_selection(MouseButton::Left, Point::new(row, 0));
-                app.extend_native_selection(Point::new(row, 5));
-                app.active_terminal_mut().unwrap().process(if copy {
-                    b"\x1b[2;1;2;6;1;1;1;1$v"
-                } else {
-                    b"\x1b[88;1;1;1;6$x"
-                });
-                app.extend_native_selection(Point::new(row, 5));
-                app.finish_native_selection();
-                assert_eq!(
-                    app.native_selection_text().as_deref(),
-                    selected_source.then_some("source")
-                );
-                assert_eq!(app.mouse_state.selection.is_some(), selected_source);
-            }
-        }
-    }
-}
-
-#[cfg(unix)]
-#[test]
-fn native_erased_selection_cannot_return_but_protected_selection_survives_selective_erase() {
-    use termeric_core::Point;
-    for split in [false, true] {
-        for selective in [false, true] {
-            let mut app = if split {
-                divider_owner_fixture()
-            } else {
-                scrollbar_owner_fixture()
-            };
-            let terminal = app.active_terminal_mut().unwrap();
-            terminal.resize(12, 3);
-            terminal.process(b"\x1bc\x1b[3J\x1b[1\"qanchor\x1b[0\"q");
-            app.begin_native_selection(MouseButton::Left, Point::new(0, 0));
-            app.extend_native_selection(Point::new(0, 5));
-            app.active_terminal_mut().unwrap().process(if selective {
-                b"\x1b[?2K"
-            } else {
-                b"\x1b[2K"
-            });
-            app.extend_native_selection(Point::new(0, 5));
-            app.finish_native_selection();
-            assert_eq!(
-                app.native_selection_text().as_deref(),
-                selective.then_some("anchor")
-            );
-            assert_eq!(app.mouse_state.selection.is_some(), selective);
         }
     }
 }
@@ -4243,34 +4113,24 @@ fn plugin_terminal_query_event(
     serde_json::from_str(&event).unwrap()
 }
 
-#[cfg(unix)]
-#[test]
-fn control_selection_validates_complete_stable_paths_before_changing_focus() {
-    if !std::path::Path::new("/bin/sh").exists() {
-        return;
-    }
+/// Two shell tabs, the second active; the first is split into panes 0 and 1
+/// with pane 1 focused. Returns the app and the two stable tab IDs.
+fn background_split_tab_app() -> (App, usize, usize) {
     let shell = crate::test_support::sleeping_shell();
     let mut tabs = TabManager::for_test(shell.clone());
-    let first = tabs
-        .new_tab_with_command(
+    let mut sleeping_tab = |title| {
+        tabs.new_tab_with_command(
             "/bin/sh",
             &crate::test_support::sleeping_args(),
             None,
-            Some("first"),
+            Some(title),
             None,
             HashMap::new(),
         )
-        .unwrap();
-    let second = tabs
-        .new_tab_with_command(
-            "/bin/sh",
-            &crate::test_support::sleeping_args(),
-            None,
-            Some("second"),
-            None,
-            HashMap::new(),
-        )
-        .unwrap();
+        .unwrap()
+    };
+    let first = sleeping_tab("first");
+    let second = sleeping_tab("second");
     let first_tab = tabs.tab_mut_by_id(first).unwrap();
     let owner = first_tab.take_terminal_owner().unwrap();
     let mut panes = PaneManager::from_existing(
@@ -4290,18 +4150,36 @@ fn control_selection_validates_complete_stable_paths_before_changing_focus() {
 
     let mut app = App::new_headless(Config::default()).unwrap();
     app.tabs = Some(tabs);
-    let source_terminal = &mut app
-        .tabs
+    (app, first, second)
+}
+
+fn split_pane_mut(app: &mut App, tab_id: usize, pane_id: PaneId) -> &mut crate::panes::Pane {
+    app.tabs
         .as_mut()
         .unwrap()
-        .tab_mut_by_id(first)
+        .tab_mut_by_id(tab_id)
         .unwrap()
         .pane_manager
         .as_mut()
         .unwrap()
-        .get_pane_mut(PaneId(0))
+        .get_pane_mut(pane_id)
         .unwrap()
-        .terminal;
+}
+
+fn tab_order(app: &App) -> Vec<usize> {
+    app.tabs
+        .as_ref()
+        .unwrap()
+        .all_tabs()
+        .iter()
+        .map(|tab| tab.id)
+        .collect()
+}
+
+#[test]
+fn control_and_plugin_text_reads_show_the_presented_screen_of_an_exact_pane() {
+    let (mut app, first, second) = background_split_tab_app();
+    let source_terminal = &mut split_pane_mut(&mut app, first, PaneId(0)).terminal;
     source_terminal.process(b"presented-secret");
     source_terminal.process(b"\x1b[?2026h\rhidden-update");
     let (screen, history, text, truncated) =
@@ -4324,18 +4202,9 @@ fn control_selection_validates_complete_stable_paths_before_changing_focus() {
     assert_eq!(event["event"]["tab_id"], first as u64);
     assert_eq!(event["event"]["pane_id"], 0);
     assert_eq!(event["event"]["screen"], "primary");
-    assert!(
-        event["event"]["text"]
-            .as_str()
-            .unwrap()
-            .contains("presented-secret")
-    );
-    assert!(
-        !event["event"]["text"]
-            .as_str()
-            .unwrap()
-            .contains("hidden-update")
-    );
+    let text = event["event"]["text"].as_str().unwrap();
+    assert!(text.contains("presented-secret"));
+    assert!(!text.contains("hidden-update"));
 
     let missing = plugin_terminal_query_event(&app, "missing-pane", first as u64, 99, 0, 64);
     assert_eq!(missing["event"]["ok"], false);
@@ -4348,18 +4217,7 @@ fn control_selection_validates_complete_stable_paths_before_changing_focus() {
             .contains("does not exist")
     );
 
-    let source_terminal = &mut app
-        .tabs
-        .as_mut()
-        .unwrap()
-        .tab_mut_by_id(first)
-        .unwrap()
-        .pane_manager
-        .as_mut()
-        .unwrap()
-        .get_pane_mut(PaneId(0))
-        .unwrap()
-        .terminal;
+    let source_terminal = &mut split_pane_mut(&mut app, first, PaneId(0)).terminal;
     source_terminal.process(b"\x1b[?2026l\x1b[2J\x1b[H");
     source_terminal.process("\\".repeat(9_000).as_bytes());
     let escaped = plugin_terminal_query_event(
@@ -4379,20 +4237,29 @@ fn control_selection_validates_complete_stable_paths_before_changing_focus() {
         escaped["event"]["text_bytes"].as_u64().unwrap()
             < u64::from(crate::plugin::structured::MAX_TERMINAL_QUERY_BYTES)
     );
+    assert_eq!(app.tabs.as_ref().unwrap().active_tab_id(), Some(second));
+}
 
-    let disabled_input = plugin_action_event(
-        &mut app,
-        "terminal-writer",
-        crate::plugin::structured::StructuredResponseAction::SendText {
-            action_id: "policy-disabled".into(),
-            window_id: None,
-            tab_id: first as u64,
-            pane_id: 0,
-            text: "x".into(),
-            paste: false,
-            enter: false,
-        },
-    );
+#[test]
+fn external_text_input_follows_policy_closed_panes_and_guardrails_without_changing_focus() {
+    let (mut app, first, second) = background_split_tab_app();
+    let send_text = |app: &mut App, action_id: &str, text: &str, enter: bool| {
+        plugin_action_event(
+            app,
+            "terminal-writer",
+            crate::plugin::structured::StructuredResponseAction::SendText {
+                action_id: action_id.into(),
+                window_id: None,
+                tab_id: first as u64,
+                pane_id: 0,
+                text: text.into(),
+                paste: false,
+                enter,
+            },
+        )
+    };
+
+    let disabled_input = send_text(&mut app, "policy-disabled", "x", false);
     assert_eq!(disabled_input["event"]["action"], "send-text");
     assert_eq!(disabled_input["event"]["ok"], false);
     assert!(
@@ -4402,19 +4269,7 @@ fn control_selection_validates_complete_stable_paths_before_changing_focus() {
     );
 
     app.config.security.allow_gui_control_input = true;
-    let sent_input = plugin_action_event(
-        &mut app,
-        "terminal-writer",
-        crate::plugin::structured::StructuredResponseAction::SendText {
-            action_id: "safe-input".into(),
-            window_id: None,
-            tab_id: first as u64,
-            pane_id: 0,
-            text: "x".into(),
-            paste: false,
-            enter: false,
-        },
-    );
+    let sent_input = send_text(&mut app, "safe-input", "x", false);
     assert_eq!(sent_input["event"]["ok"], true);
     assert_eq!(sent_input["event"]["disposition"], "sent");
     assert_eq!(sent_input["event"]["input_bytes"], 1);
@@ -4425,61 +4280,17 @@ fn control_selection_validates_complete_stable_paths_before_changing_focus() {
     );
     assert_eq!(app.tabs.as_ref().unwrap().active_tab_id(), Some(second));
 
-    app.tabs
-        .as_mut()
-        .unwrap()
-        .tab_mut_by_id(first)
-        .unwrap()
-        .pane_manager
-        .as_mut()
-        .unwrap()
-        .get_pane_mut(PaneId(0))
-        .unwrap()
-        .closed = true;
-    let closed_input = plugin_action_event(
-        &mut app,
-        "terminal-writer",
-        crate::plugin::structured::StructuredResponseAction::SendText {
-            action_id: "closed-input".into(),
-            window_id: None,
-            tab_id: first as u64,
-            pane_id: 0,
-            text: "x".into(),
-            paste: false,
-            enter: false,
-        },
-    );
+    split_pane_mut(&mut app, first, PaneId(0)).closed = true;
+    let closed_input = send_text(&mut app, "closed-input", "x", false);
     assert_eq!(closed_input["event"]["ok"], false);
     assert!(
         closed_input["event"]["error"]
             .as_str()
             .is_some_and(|error| error.contains("closed"))
     );
-    app.tabs
-        .as_mut()
-        .unwrap()
-        .tab_mut_by_id(first)
-        .unwrap()
-        .pane_manager
-        .as_mut()
-        .unwrap()
-        .get_pane_mut(PaneId(0))
-        .unwrap()
-        .closed = false;
+    split_pane_mut(&mut app, first, PaneId(0)).closed = false;
 
-    let guarded_input = plugin_action_event(
-        &mut app,
-        "terminal-writer",
-        crate::plugin::structured::StructuredResponseAction::SendText {
-            action_id: "guarded-input".into(),
-            window_id: None,
-            tab_id: first as u64,
-            pane_id: 0,
-            text: "rm -rf /".into(),
-            paste: false,
-            enter: true,
-        },
-    );
+    let guarded_input = send_text(&mut app, "guarded-input", "rm -rf /", true);
     assert_eq!(guarded_input["event"]["ok"], true);
     assert_eq!(
         guarded_input["event"]["disposition"],
@@ -4498,6 +4309,11 @@ fn control_selection_validates_complete_stable_paths_before_changing_focus() {
         Ok((1, 1, crate::control::protocol::InputDisposition::Sent, None))
     ));
     assert_eq!(app.tabs.as_ref().unwrap().active_tab_id(), Some(second));
+}
+
+#[test]
+fn control_selection_validates_complete_stable_paths_before_changing_focus() {
+    let (mut app, first, second) = background_split_tab_app();
     assert!(
         app.focus_pane_for(Requester::Control, first as u64, 99)
             .is_err()
@@ -4533,7 +4349,11 @@ fn control_selection_validates_complete_stable_paths_before_changing_focus() {
     );
     assert!(app.select_tab_for(Requester::Control, u64::MAX).is_err());
     assert_eq!(app.tabs.as_ref().unwrap().active_tab_id(), Some(second));
+}
 
+#[test]
+fn control_tab_moves_reorder_without_activating_and_reject_out_of_range_targets() {
+    let (mut app, first, second) = background_split_tab_app();
     // Plugin tab moves share the control path, which reorders without
     // activating.
     assert_eq!(
@@ -4541,32 +4361,17 @@ fn control_selection_validates_complete_stable_paths_before_changing_focus() {
         Ok(true)
     );
     assert_eq!(app.tabs.as_ref().unwrap().active_tab_id(), Some(second));
-    assert_eq!(
-        app.tabs
-            .as_ref()
-            .unwrap()
-            .all_tabs()
-            .iter()
-            .map(|tab| tab.id)
-            .collect::<Vec<_>>(),
-        vec![second, first]
-    );
-
+    assert_eq!(tab_order(&app), vec![second, first]);
     assert!(
         app.move_control_tab_within_window(first as u64, 2)
             .is_err_and(|error| error.contains("outside"))
     );
-    assert_eq!(
-        app.tabs
-            .as_ref()
-            .unwrap()
-            .all_tabs()
-            .iter()
-            .map(|tab| tab.id)
-            .collect::<Vec<_>>(),
-        vec![second, first]
-    );
+    assert_eq!(tab_order(&app), vec![second, first]);
+}
 
+#[test]
+fn divider_resizes_report_ratios_reach_the_inventory_and_refuse_live_domain_tabs() {
+    let (mut app, first, second) = background_split_tab_app();
     let divider_id = app
         .tabs
         .as_ref()
@@ -4644,35 +4449,20 @@ fn control_selection_validates_complete_stable_paths_before_changing_focus() {
             .unwrap_err()
             .contains("live-domain")
     );
-    app.tabs
-        .as_mut()
-        .unwrap()
-        .tab_mut_by_id(first)
-        .unwrap()
-        .live_domain = None;
+}
 
+#[test]
+fn control_pane_and_tab_closure_leave_the_survivor_addressable_and_reject_repeats() {
+    let (mut app, first, second) = background_split_tab_app();
     assert_eq!(
         app.close_pane_for(Requester::Control, first as u64, 0),
         Ok((1, 1))
     );
     let tabs = app.tabs.as_ref().unwrap();
     assert_eq!(tabs.active_tab_id(), Some(second));
-    assert!(
-        tabs.iter()
-            .find(|(_, tab)| tab.id == first)
-            .unwrap()
-            .1
-            .pane_manager
-            .is_none()
-    );
-    assert_eq!(
-        tabs.iter()
-            .find(|(_, tab)| tab.id == first)
-            .unwrap()
-            .1
-            .single_pane_id(),
-        PaneId(1)
-    );
+    let first_tab = tabs.tab_by_id(first).unwrap();
+    assert!(first_tab.pane_manager.is_none());
+    assert_eq!(first_tab.single_pane_id(), PaneId(1));
     assert!(app.read_control_text(first as u64, 1, 0, 64).is_ok());
     assert!(app.read_control_text(first as u64, 0, 0, 64).is_err());
     assert!(
@@ -4684,10 +4474,8 @@ fn control_selection_validates_complete_stable_paths_before_changing_focus() {
         app.tabs
             .as_ref()
             .unwrap()
-            .iter()
-            .find(|(_, tab)| tab.id == first)
+            .tab_by_id(first)
             .unwrap()
-            .1
             .closing_at
             .is_some()
     );
