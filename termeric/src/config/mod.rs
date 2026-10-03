@@ -5,6 +5,7 @@ pub mod theme;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::ops::RangeInclusive;
 use std::path::PathBuf;
 
 use crate::input::keybindings::{KeyBinding, ShortcutOverride};
@@ -391,9 +392,7 @@ impl Config {
                 );
             }
         }
-        if !(8.0..=72.0).contains(&self.font.size) || !self.font.size.is_finite() {
-            bail!("font.size must be between 8 and 72");
-        }
+        validate_range("font.size", self.font.size, FONT_SIZE_RANGE)?;
         if !(MIN_FONT_WEIGHT..=MAX_FONT_WEIGHT).contains(&self.font.weight) {
             bail!("font.weight must be between {MIN_FONT_WEIGHT} and {MAX_FONT_WEIGHT}");
         }
@@ -403,9 +402,7 @@ impl Config {
         if self.font.bold_weight < self.font.weight {
             bail!("font.bold_weight must be greater than or equal to font.weight");
         }
-        if !(0.8..=3.0).contains(&self.font.line_height) || !self.font.line_height.is_finite() {
-            bail!("font.line_height must be between 0.8 and 3.0");
-        }
+        validate_range("font.line_height", self.font.line_height, LINE_HEIGHT_RANGE)?;
         if !(100..=1_000_000).contains(&self.scrollback.lines) {
             bail!("scrollback.lines must be between 100 and 1000000");
         }
@@ -432,32 +429,34 @@ impl Config {
                 format!("copy_mode pattern {:?} has an invalid regex", pattern.name)
             })?;
         }
-        if !(0.1..=1.0).contains(&self.window.opacity) || !self.window.opacity.is_finite() {
-            bail!("window.opacity must be between 0.1 and 1.0");
-        }
+        validate_range("window.opacity", self.window.opacity, WINDOW_OPACITY_RANGE)?;
         self.window.background_image.validate()?;
-        if self.window.padding > 256 {
-            bail!("window.padding must not exceed 256");
-        }
+        validate_range("window.padding", self.window.padding, WINDOW_PADDING_RANGE)?;
         if !(320..=16_384).contains(&self.window.width)
             || !(200..=16_384).contains(&self.window.height)
         {
             bail!("window dimensions must be between 320x200 and 16384x16384");
         }
-        if !(100..=5_000).contains(&self.cursor.blink_rate) {
-            bail!("cursor.blink_rate must be between 100 and 5000 milliseconds");
-        }
-        if !(10..=5_000).contains(&self.bell.visual_duration_ms) {
-            bail!("bell.visual_duration_ms must be between 10 and 5000");
-        }
+        validate_range(
+            "cursor.blink_rate",
+            self.cursor.blink_rate,
+            CURSOR_BLINK_RATE_RANGE,
+        )?;
+        validate_range(
+            "bell.visual_duration_ms",
+            self.bell.visual_duration_ms,
+            BELL_DURATION_RANGE,
+        )?;
         if !(1..=termeric_core::ansi::MAX_OSC52_DECODED_BYTES)
             .contains(&self.security.osc52.max_bytes)
         {
             bail!("security.osc52.max_bytes must be between 1 and 1048576");
         }
-        if !(1..=10_000).contains(&self.harvest.max_history) {
-            bail!("harvest.max_history must be between 1 and 10000");
-        }
+        validate_range(
+            "harvest.max_history",
+            self.harvest.max_history,
+            HARVEST_HISTORY_RANGE,
+        )?;
         self.domains.validate()?;
         crate::agents::config::validate(&self.agents)?;
         self.supervisor.validate()?;
@@ -490,6 +489,36 @@ impl Config {
     pub fn themes_dir() -> PathBuf {
         crate::paths::config_dir().map_or_else(|| PathBuf::from("themes"), |dir| dir.join("themes"))
     }
+}
+
+/// Bounds of the numeric settings that the Settings dialog also adjusts. The
+/// file validator and the Settings controls both use these, so a control can
+/// reach every value the file accepts and nothing it refuses.
+pub const FONT_SIZE_RANGE: RangeInclusive<f32> = 8.0..=72.0;
+pub const LINE_HEIGHT_RANGE: RangeInclusive<f32> = 0.8..=3.0;
+pub const WINDOW_OPACITY_RANGE: RangeInclusive<f32> = 0.1..=1.0;
+pub const BACKGROUND_IMAGE_OPACITY_RANGE: RangeInclusive<f32> = 0.0..=1.0;
+pub const WINDOW_PADDING_RANGE: RangeInclusive<u32> = 0..=256;
+/// Milliseconds.
+pub const CURSOR_BLINK_RATE_RANGE: RangeInclusive<u32> = 100..=5_000;
+/// Milliseconds.
+pub const BELL_DURATION_RANGE: RangeInclusive<u64> = 10..=5_000;
+pub const HARVEST_HISTORY_RANGE: RangeInclusive<usize> = 1..=10_000;
+
+/// Refuse `value` outside `range`; NaN and infinities are outside every
+/// float range here.
+fn validate_range<T>(key: &str, value: T, range: RangeInclusive<T>) -> Result<()>
+where
+    T: PartialOrd + std::fmt::Display,
+{
+    if !range.contains(&value) {
+        bail!(
+            "{key} must be between {} and {}",
+            range.start(),
+            range.end()
+        );
+    }
+    Ok(())
 }
 
 /// Saved destinations for the experimental OpenSSH domain transport. OpenSSH
@@ -1142,9 +1171,11 @@ impl Default for BackgroundImageConfig {
 
 impl BackgroundImageConfig {
     fn validate(&self) -> Result<()> {
-        if !(0.0..=1.0).contains(&self.opacity) || !self.opacity.is_finite() {
-            bail!("window.background_image.opacity must be between 0.0 and 1.0");
-        }
+        validate_range(
+            "window.background_image.opacity",
+            self.opacity,
+            BACKGROUND_IMAGE_OPACITY_RANGE,
+        )?;
         if let Some(path) = self.path.as_ref() {
             let path = path.as_os_str().to_string_lossy();
             if path.is_empty() {
@@ -1415,6 +1446,20 @@ mod tests {
         config = Config::default();
         config.copy_mode.patterns[0].regex = "(".into();
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn shared_numeric_bounds_accept_their_ends_and_refuse_beyond() {
+        let mut config = Config::default();
+        config.window.padding = *WINDOW_PADDING_RANGE.end();
+        config.cursor.blink_rate = *CURSOR_BLINK_RATE_RANGE.end();
+        config.bell.visual_duration_ms = *BELL_DURATION_RANGE.start();
+        config.font.line_height = *LINE_HEIGHT_RANGE.start();
+        config.validate().unwrap();
+
+        config.window.padding += 1;
+        let error = config.validate().unwrap_err().to_string();
+        assert_eq!(error, "window.padding must be between 0 and 256");
     }
 
     #[test]
@@ -1847,6 +1892,8 @@ mod tests {
             "[profiles.dev]\nprogram = '/bin/sh'\ncwd = 'relative'",
             "[profiles.dev]\nprogram = '/bin/sh'\nenv = { TERM = 'spoofed' }",
             "[profiles.dev]\nprogram = '/bin/sh'\nenv = { 'BAD-KEY' = 'value' }",
+            "[profiles.dev]\nprogram = '/bin/sh'\nargs = [\"a\\u0000b\"]",
+            "[profiles.dev]\nprogram = '/bin/sh'\nenv = { MARK = \"a\\u0000b\" }",
         ] {
             let config: Config = toml::from_str(source).unwrap();
             assert!(config.validate().is_err(), "accepted {source:?}");
@@ -1880,8 +1927,6 @@ mod tests {
                 [profiles.console]
                 description = "Development board"
                 title = "Board console"
-            "[profiles.dev]\nprogram = '/bin/sh'\nargs = [\"a\\u0000b\"]",
-            "[profiles.dev]\nprogram = '/bin/sh'\nenv = { MARK = \"a\\u0000b\" }",
 
                 [profiles.console.serial]
                 device = "/dev/ttyUSB0"
