@@ -219,20 +219,15 @@ impl App {
                 }),
         }) = tab_drag
         {
+            // The dragged tab must still be open and still show that remote tab.
             let index = self.tabs.as_ref().and_then(|tabs| {
                 tabs.iter()
-                    .filter(|(_, tab)| {
-                        tab.live_domain_tab_route()
-                            .is_some_and(|(domain, _)| domain == domain_id)
-                    })
-                    .position(|(_, tab)| {
-                        tab.id == tab_id
-                            && !tab.closed
-                            && !tab.is_closing()
-                            && tab.live_domain_tab_route()
-                                == Some((domain_id.as_str(), remote_tab_id))
-                    })
-                    .and_then(|index| u16::try_from(index).ok())
+                    .map(|(_, tab)| tab)
+                    .find(|tab| tab.id == tab_id && !tab.closed && !tab.is_closing())
+                    .filter(|tab| {
+                        tab.live_domain_tab_route() == Some((domain_id.as_str(), remote_tab_id))
+                    })?;
+                u16::try_from(tabs.live_domain_tab_index(&domain_id, remote_tab_id)?).ok()
             });
             if let Some(index) = index
                 && index != initial_index
@@ -488,43 +483,30 @@ impl App {
                                             .unwrap_or(0);
                                         if let Some(tabs) = &mut self.tabs {
                                             tabs.switch_to(idx);
-                                            self.tab_dragging = tabs.active_tab().map(|tab| {
-                                                let live =
-                                                    tab.live_domain_tab_route().map(
-                                                        |(domain_id, remote_tab_id)| {
-                                                            let initial_index =
-                                                                tabs.iter()
-                                                                    .filter(|(_, candidate)| {
-                                                                        candidate
-                                                                            .live_domain_tab_route()
-                                                                            .is_some_and(
-                                                                                |(candidate, _)| {
-                                                                                    candidate
-                                                                                        == domain_id
-                                                                                },
-                                                                            )
-                                                                    })
-                                                                    .position(|(_, candidate)| {
-                                                                        candidate
-                                                                    .live_domain_tab_route()
-                                                                    .is_some_and(|(_, candidate)| {
-                                                                        candidate == remote_tab_id
-                                                                    })
-                                                                    })
-                                                                    .unwrap_or(0)
-                                                                    as u16;
-                                                            LiveDomainTabDrag {
-                                                                domain_id: domain_id.to_string(),
-                                                                remote_tab_id,
-                                                                initial_index,
-                                                            }
-                                                        },
-                                                    );
-                                                TabDrag {
+                                            self.tab_dragging = tabs.active_tab().and_then(|tab| {
+                                                let live = match tab.live_domain_tab_route() {
+                                                    Some((domain_id, remote_tab_id)) => {
+                                                        Some(LiveDomainTabDrag {
+                                                            domain_id: domain_id.to_string(),
+                                                            remote_tab_id,
+                                                            // A live tab with no index of its
+                                                            // own is not dragged at all.
+                                                            initial_index: u16::try_from(
+                                                                tabs.live_domain_tab_index(
+                                                                    domain_id,
+                                                                    remote_tab_id,
+                                                                )?,
+                                                            )
+                                                            .ok()?,
+                                                        })
+                                                    }
+                                                    None => None,
+                                                };
+                                                Some(TabDrag {
                                                     tab_id: tab.id,
                                                     live,
                                                     grab: None,
-                                                }
+                                                })
                                             });
                                         }
                                         self.begin_tab_grab();

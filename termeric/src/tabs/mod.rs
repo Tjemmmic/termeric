@@ -2361,6 +2361,32 @@ impl TabManager {
         self.tabs.iter().enumerate()
     }
 
+    /// The tabs a live domain shows here, in tab-bar order: the order its
+    /// tab-move index counts in. Closed tabs keep their place until the
+    /// domain removes them.
+    pub(crate) fn live_domain_tabs<'a>(
+        &'a self,
+        domain_id: &'a str,
+    ) -> impl Iterator<Item = &'a Tab> + 'a {
+        self.tabs.iter().filter(move |tab| {
+            tab.live_domain_tab_route()
+                .is_some_and(|(candidate, _)| candidate == domain_id)
+        })
+    }
+
+    /// Where the tab showing `remote_tab_id` sits among
+    /// [`live_domain_tabs`](Self::live_domain_tabs).
+    pub(crate) fn live_domain_tab_index(
+        &self,
+        domain_id: &str,
+        remote_tab_id: u32,
+    ) -> Option<usize> {
+        self.live_domain_tabs(domain_id).position(|tab| {
+            tab.live_domain_tab_route()
+                .is_some_and(|(_, remote)| remote == remote_tab_id)
+        })
+    }
+
     /// Re-identify the coding agent in every terminal. Returns whether any
     /// terminal changed.
     pub(crate) fn refresh_agents(&mut self, catalog: &crate::agents::AgentCatalog) -> bool {

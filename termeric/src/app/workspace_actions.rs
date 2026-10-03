@@ -46,20 +46,10 @@ impl App {
         let live_move = self.tabs.as_ref().and_then(|tabs| {
             let active = tabs.active_tab()?;
             let (domain, remote_tab_id) = active.live_domain_tab_route()?;
-            let domain_tabs: Vec<_> = tabs
-                .iter()
-                .filter_map(|(_, tab)| {
-                    tab.live_domain_tab_route().and_then(|(candidate, remote)| {
-                        (candidate == domain).then_some((remote, tab.pinned))
-                    })
-                })
-                .collect();
-            let source = domain_tabs
-                .iter()
-                .position(|(remote, _)| *remote == remote_tab_id)?;
+            let source = tabs.live_domain_tab_index(domain, remote_tab_id)?;
             let target = source.checked_add_signed(delta)?;
-            let (_, target_pinned) = domain_tabs.get(target)?;
-            (active.pinned == *target_pinned).then_some((
+            let target_pinned = tabs.live_domain_tabs(domain).nth(target)?.pinned;
+            (active.pinned == target_pinned).then_some((
                 domain.to_string(),
                 remote_tab_id,
                 u16::try_from(target).ok()?,
@@ -2192,13 +2182,8 @@ impl App {
             return Err("Destination tab index crosses the pinned-tab boundary".into());
         }
         let domain_index = tabs
-            .iter()
-            .take(destination_index)
-            .filter(|(_, tab)| {
-                tab.live_domain_tab_route()
-                    .is_some_and(|(candidate, _)| candidate == domain_id)
-            })
-            .count();
+            .live_domain_tab_index(domain_id, destination_remote_tab)
+            .expect("the destination is one of the domain's tabs");
         let topology = self
             .live_domain_topologies
             .get(domain_id)
