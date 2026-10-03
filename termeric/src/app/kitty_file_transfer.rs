@@ -197,10 +197,7 @@ impl App {
             id: command.id.clone(),
         };
         if command.action == KittyFileTransferAction::Cancel {
-            if self.cancel_kitty_upload(&key, command.reply_uses_8bit_controls, true) {
-                return;
-            }
-            self.cancel_kitty_download(&key, command.reply_uses_8bit_controls, true);
+            self.cancel_kitty_transfer(&key, command.reply_uses_8bit_controls);
             return;
         }
 
@@ -260,8 +257,8 @@ impl App {
             self.fail_active_kitty_download(
                 token,
                 command.reply_uses_8bit_controls,
-                KittyFileTransferStatusCode::Invalid,
                 &command.file_id,
+                KittyFileTransferStatusCode::Invalid,
                 "unsupported transfer command, quiet level, bypass, or mode",
             );
             return;
@@ -285,8 +282,8 @@ impl App {
             self.fail_active_kitty_download(
                 token,
                 reply_uses_8bit_controls,
-                KittyFileTransferStatusCode::Busy,
                 &file_id,
+                KittyFileTransferStatusCode::Busy,
                 error,
             );
         }
@@ -1010,36 +1007,38 @@ impl App {
         }
     }
 
-    fn cancel_kitty_upload(
-        &mut self,
-        key: &TransferKey,
-        reply_uses_8bit_controls: bool,
-        acknowledge: bool,
-    ) -> bool {
+    /// Cancel the transfer `key` names, in either direction. The terminal
+    /// gets a canceled acknowledgement even for a pending request or an ID it
+    /// no longer knows.
+    fn cancel_kitty_transfer(&mut self, key: &TransferKey, reply_uses_8bit_controls: bool) {
+        let canceled = Some(KittyFileTransferStatusCode::Canceled);
         if self
             .kitty_file_transfers
             .pending_upload
             .as_ref()
             .is_some_and(|pending| &pending.key == key)
         {
-            self.deny_pending_kitty_upload(
-                acknowledge.then_some(KittyFileTransferStatusCode::Canceled),
-                "",
-            );
-            return true;
+            self.deny_pending_kitty_upload(canceled, "");
+            return;
         }
-        let Some(token) = self.kitty_file_transfers.upload_tokens.get(key).copied() else {
-            return false;
-        };
-        self.remove_active_kitty_upload(token);
-        if acknowledge {
-            self.write_kitty_status(
-                key.origin,
-                reply_uses_8bit_controls,
-                transfer_status(&key.id, "", KittyFileTransferStatusCode::Canceled, ""),
-            );
+        if let Some(token) = self.kitty_file_transfers.upload_tokens.get(key).copied() {
+            self.remove_active_kitty_upload(token);
+        } else if self
+            .kitty_file_transfers
+            .pending
+            .as_ref()
+            .is_some_and(|pending| &pending.key == key)
+        {
+            self.deny_pending_kitty_download(canceled, "");
+            return;
+        } else if let Some(token) = self.kitty_file_transfers.tokens.get(key).copied() {
+            self.remove_active_kitty_download(token);
         }
-        true
+        self.write_kitty_status(
+            key.origin,
+            reply_uses_8bit_controls,
+            transfer_status(&key.id, "", KittyFileTransferStatusCode::Canceled, ""),
+        );
     }
 
     fn deny_pending_kitty_upload(
@@ -1136,50 +1135,12 @@ impl App {
         }
     }
 
-    fn cancel_kitty_download(
-        &mut self,
-        key: &TransferKey,
-        reply_uses_8bit_controls: bool,
-        acknowledge: bool,
-    ) {
-        if self
-            .kitty_file_transfers
-            .pending
-            .as_ref()
-            .is_some_and(|pending| &pending.key == key)
-        {
-            self.deny_pending_kitty_download(
-                acknowledge.then_some(KittyFileTransferStatusCode::Canceled),
-                "",
-            );
-            return;
-        }
-        let Some(token) = self.kitty_file_transfers.tokens.get(key).copied() else {
-            if acknowledge {
-                self.write_kitty_status(
-                    key.origin,
-                    reply_uses_8bit_controls,
-                    transfer_status(&key.id, "", KittyFileTransferStatusCode::Canceled, ""),
-                );
-            }
-            return;
-        };
-        self.remove_active_kitty_download(token);
-        if acknowledge {
-            self.write_kitty_status(
-                key.origin,
-                reply_uses_8bit_controls,
-                transfer_status(&key.id, "", KittyFileTransferStatusCode::Canceled, ""),
-            );
-        }
-    }
-
     fn fail_active_kitty_download(
         &mut self,
         token: u64,
         reply_uses_8bit_controls: bool,
-        code: KittyFileTransferStatusCode,
         file_id: &str,
+        code: KittyFileTransferStatusCode,
         message: &str,
     ) {
         let Some(active) = self.remove_active_kitty_download(token) else {
@@ -1339,16 +1300,7 @@ impl App {
             .as_ref()
             .is_some_and(|pending| {
                 !self.info_overlay.is_awaiting(pending.request_id)
-                    || self
-                        .tabs
-                        .as_ref()
-                        .and_then(|tabs| {
-                            tabs.origin_for_pane(
-                                pending.key.origin.tab_id,
-                                pending.key.origin.pane_id,
-                            )
-                        })
-                        .is_none()
+                    || self.kitty_transfer_origin(pending.key.origin).is_none()
             });
         if stale_pending {
             self.deny_pending_kitty_download(
@@ -1366,16 +1318,7 @@ impl App {
                     || pending
                         .request_id
                         .is_some_and(|request_id| !self.info_overlay.is_awaiting(request_id))
-                    || self
-                        .tabs
-                        .as_ref()
-                        .and_then(|tabs| {
-                            tabs.origin_for_pane(
-                                pending.key.origin.tab_id,
-                                pending.key.origin.pane_id,
-                            )
-                        })
-                        .is_none()
+                    || self.kitty_transfer_origin(pending.key.origin).is_none()
             });
         if stale_pending_upload {
             self.deny_pending_kitty_upload(
@@ -1389,11 +1332,7 @@ impl App {
             .active
             .iter()
             .filter_map(|(token, active)| {
-                self.tabs
-                    .as_ref()
-                    .and_then(|tabs| {
-                        tabs.origin_for_pane(active.key.origin.tab_id, active.key.origin.pane_id)
-                    })
+                self.kitty_transfer_origin(active.key.origin)
                     .is_none()
                     .then_some(*token)
             })
@@ -1406,11 +1345,7 @@ impl App {
             .active_uploads
             .iter()
             .filter_map(|(token, active)| {
-                self.tabs
-                    .as_ref()
-                    .and_then(|tabs| {
-                        tabs.origin_for_pane(active.key.origin.tab_id, active.key.origin.pane_id)
-                    })
+                self.kitty_transfer_origin(active.key.origin)
                     .is_none()
                     .then_some(*token)
             })
