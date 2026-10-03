@@ -2016,4 +2016,21 @@ mod wheel_tests {
         app.handle_mouse_wheel(MouseScrollDelta::LineDelta(0.0, -3.0));
         assert_eq!(app.info_overlay.scroll_offset(), 3);
     }
+
+    #[test]
+    fn leaving_settings_for_shortcuts_hands_the_wheel_over_at_once() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.settings_panel.toggle();
+        app.apply_settings_action(crate::ui::settings::SettingsAction::OpenKeyboardShortcuts);
+        // Even while it fades out, Settings no longer takes input.
+        assert!(!app.settings_panel.is_active());
+        let offset = |app: &App| {
+            app.shortcuts_panel
+                .build_info(&app.shortcut_registry)
+                .scroll_offset
+        };
+        let before = offset(&app);
+        app.handle_mouse_wheel(MouseScrollDelta::LineDelta(0.0, -3.0));
+        assert!(offset(&app) > before);
+    }
 }
