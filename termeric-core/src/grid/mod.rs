@@ -157,11 +157,7 @@ impl Grid {
                 }
             }
         }
-        let blank = Cell {
-            flags: CellFlags::DIRTY,
-            ..Cell::default()
-        };
-        snapshot.repair_multicells(&blank);
+        snapshot.repair_multicells(&Cell::default());
 
         snapshot.cursor = self.cursor;
         // A terminal cursor is not presented while the user is viewing
@@ -365,7 +361,6 @@ impl Grid {
             {
                 damage(row..row + 1, col..col + 1);
                 *cell = blank.clone();
-                cell.flags.insert(CellFlags::DIRTY);
             }
             return false;
         };
@@ -377,7 +372,6 @@ impl Grid {
                         cell.set_char(' ');
                     } else {
                         *cell = blank.clone();
-                        cell.flags.insert(CellFlags::DIRTY);
                     }
                 }
             }
@@ -434,7 +428,6 @@ impl Grid {
             damage(row..row + 1, col..col + 1);
             if let Some(cell) = self.cell_mut(row, col) {
                 *cell = blank.clone();
-                cell.flags.insert(CellFlags::DIRTY);
             }
         }
         for (row, col) in regions.iter().copied() {
@@ -502,7 +495,6 @@ impl Grid {
                 if !keep && let Some(cell) = self.cell_mut(row, col) {
                     damage(row..row + 1, col..col + 1);
                     *cell = blank.clone();
-                    cell.flags.insert(CellFlags::DIRTY);
                     if let Some(tracking) = &mut tracking {
                         tracking.damage(row..row + 1, col..col + 1, self.cols);
                     }
@@ -939,11 +931,9 @@ mod tests {
                         assert!(snapshot.multicell_region_at(top, left).is_some());
                         assert!(grid.cell(row, col).unwrap().multicell.is_present());
                         grid.repair_multicells(&blank);
-                        let mut erased = blank.clone();
-                        erased.flags.insert(CellFlags::DIRTY);
                         assert_eq!(
                             grid.cell(row, col),
-                            Some(&erased),
+                            Some(&blank),
                             "foreign={foreign:?} row={row} col={col} text={stray_text}"
                         );
                         for (r, c, cell) in grid.iter_cells() {
@@ -986,7 +976,6 @@ mod tests {
                     });
                     if !keep && let Some(cell) = grid.cell_mut(row, col) {
                         *cell = blank.clone();
-                        cell.flags.insert(CellFlags::DIRTY);
                     }
                 }
             }

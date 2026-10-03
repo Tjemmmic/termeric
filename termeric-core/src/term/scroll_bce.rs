@@ -1,10 +1,5 @@
 use super::*;
 
-fn cell_without_dirty(mut cell: Cell) -> Cell {
-    cell.flags.remove(CellFlags::DIRTY);
-    cell
-}
-
 #[test]
 fn vertical_edits_fill_only_exposed_cells_with_the_active_background() {
     for alternate in [false, true] {
@@ -45,16 +40,7 @@ fn vertical_edits_fill_only_exposed_cells_with_the_active_background() {
                             ..Cell::default()
                         };
                         let original: Vec<Vec<Cell>> = (0..5)
-                            .map(|row| {
-                                terminal
-                                    .grid()
-                                    .row(row)
-                                    .unwrap()
-                                    .iter()
-                                    .cloned()
-                                    .map(cell_without_dirty)
-                                    .collect()
-                            })
+                            .map(|row| terminal.grid().row(row).unwrap().iter().cloned().collect())
                             .collect();
                         let first = if matches!(operation, b'L' | b'M') {
                             cursor_row
@@ -79,9 +65,7 @@ fn vertical_edits_fill_only_exposed_cells_with_the_active_background() {
                                     original_cell
                                 };
                                 assert_eq!(
-                                    &cell_without_dirty(
-                                        terminal.grid().cell(row, col).unwrap().clone()
-                                    ),
+                                    terminal.grid().cell(row, col).unwrap(),
                                     expected,
                                     "alternate={alternate} region={top}..{bottom}/{left}..{right} operation={} count={count} rendition={rendition} row={row} col={col}",
                                     operation as char
@@ -114,8 +98,8 @@ fn implicit_scrolling_uses_bce_for_linefeed_index_reverse_index_and_wrap() {
             terminal.process(operation);
             for col in first_blank..4 {
                 assert_eq!(
-                    cell_without_dirty(terminal.grid().cell(exposed, col).unwrap().clone()),
-                    Cell {
+                    terminal.grid().cell(exposed, col).unwrap(),
+                    &Cell {
                         bg: Color::rgb(1, 2, 3),
                         bg_spec: ColorSpec::TrueColor(Color::rgb(1, 2, 3)),
                         ..Cell::default()
@@ -162,9 +146,6 @@ fn scrolled_backgrounds_survive_history_and_respect_synchronized_presentation() 
     }
     terminal.process(b"\x1b[49m\x1b[T");
     for col in 0..4 {
-        assert_eq!(
-            cell_without_dirty(terminal.grid().cell(0, col).unwrap().clone()),
-            Cell::default()
-        );
+        assert_eq!(terminal.grid().cell(0, col).unwrap(), &Cell::default());
     }
 }

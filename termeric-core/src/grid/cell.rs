@@ -291,17 +291,15 @@ bitflags! {
         const WIDE_CHAR_SPACER = 0b0010;
         /// This cell is part of a hyperlink
         const HYPERLINK = 0b0100;
-        /// This cell has been modified since last render
-        const DIRTY = 0b1000;
         /// DEC character protection selected by DECSCA. Selective erase
         /// operations preserve cells carrying this flag.
-        const PROTECTED = 0b1_0000;
+        const PROTECTED = 0b1000;
         /// The displayed glyph originated in DEC Special Graphics. Retaining
         /// the G-set identity makes DECRQCRA reversible without another byte
         /// in every dense cell.
-        const DEC_SPECIAL_GRAPHICS = 0b10_0000;
+        const DEC_SPECIAL_GRAPHICS = 0b1_0000;
         /// The displayed glyph originated in the United Kingdom G-set.
-        const DEC_UK_CHARSET = 0b100_0000;
+        const DEC_UK_CHARSET = 0b10_0000;
     }
 }
 
@@ -429,7 +427,7 @@ impl Default for Cell {
 
 impl Cell {
     /// Whether this cell can be omitted from history or reflow padding without
-    /// losing durable presentation state. Render dirtiness is not durable.
+    /// losing durable presentation state.
     pub(crate) fn is_history_default(&self) -> bool {
         self.content.is_empty()
             && self.fg == Color::default_fg()
@@ -439,7 +437,7 @@ impl Cell {
             && self.underline_color.is_none()
             && self.underline_color_spec.is_none()
             && self.attrs.is_empty()
-            && (self.flags - CellFlags::DIRTY).is_empty()
+            && self.flags.is_empty()
             && self.hyperlink_id.is_none()
             && !self.multicell.is_present()
     }
@@ -461,7 +459,6 @@ impl Cell {
     pub(crate) fn set_char(&mut self, c: char) {
         self.content = CellContent::Char(c);
         self.multicell = MultiCell::default();
-        self.flags.insert(CellFlags::DIRTY);
     }
 
     /// Set the grapheme content (for complex Unicode)
@@ -473,7 +470,6 @@ impl Cell {
             (Some(_), Some(_)) => CellContent::Grapheme(s.into()),
         };
         self.multicell = MultiCell::default();
-        self.flags.insert(CellFlags::DIRTY);
     }
 
     /// Clear the cell to default state
@@ -486,7 +482,7 @@ impl Cell {
         self.underline_color = None;
         self.underline_color_spec = None;
         self.attrs = CellAttrs::empty();
-        self.flags = CellFlags::DIRTY; // Keep dirty flag to trigger re-render
+        self.flags = CellFlags::empty();
         self.hyperlink_id = None;
         self.multicell = MultiCell::default();
     }
@@ -503,7 +499,6 @@ impl Cell {
                 | CellFlags::DEC_SPECIAL_GRAPHICS
                 | CellFlags::DEC_UK_CHARSET,
         );
-        self.flags.insert(CellFlags::DIRTY);
         self.hyperlink_id = None;
         self.multicell = MultiCell::default();
     }
@@ -511,7 +506,6 @@ impl Cell {
     /// Reset the cell completely (including colors)
     pub fn reset(&mut self) {
         *self = Self::default();
-        self.flags.insert(CellFlags::DIRTY);
     }
 
     /// Check if the cell is empty

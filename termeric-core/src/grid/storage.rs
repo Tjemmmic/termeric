@@ -134,8 +134,8 @@ struct CellStyle {
 
 impl CellStyle {
     fn from_cell(cell: &Cell) -> Self {
-        // Structural width flags are encoded by CompactCellContent and DIRTY
-        // is transient. Hyperlink and DEC protection are durable cell state.
+        // Structural width flags are encoded by CompactCellContent. Hyperlink
+        // and DEC protection are durable cell state.
         let mut flags = cell.flags
             & (CellFlags::HYPERLINK
                 | CellFlags::PROTECTED
@@ -2030,9 +2030,7 @@ mod tests {
             let mut storage = GridStorage::new(3, 3);
             fill_row(&mut storage, 0, "top");
             fill_row(&mut storage, 1, "mid");
-            let row = storage.row_mut(2).unwrap();
-            row.get_mut(2).unwrap().flags.insert(CellFlags::DIRTY);
-            row.set_wrapped(wrapped);
+            storage.row_mut(2).unwrap().set_wrapped(wrapped);
             storage.resize(3, 2, 2, 0);
             assert_eq!(storage.scrollback_len(), usize::from(wrapped));
             assert_eq!(row_text(&storage, 0), if wrapped { "mid" } else { "top" });
@@ -2196,9 +2194,10 @@ mod tests {
         assert_eq!(compact.content.len(), 12);
         assert!(compact.owned_bytes() < 32 * size_of::<Cell>());
         for column in 0..32 {
-            let mut expected = original.get(column).unwrap().clone();
-            expected.flags.remove(CellFlags::DIRTY);
-            assert_eq!(compact.get(column).unwrap(), expected);
+            assert_eq!(
+                compact.get(column).unwrap(),
+                original.get(column).unwrap().clone()
+            );
         }
     }
 
@@ -2313,9 +2312,10 @@ mod tests {
             for (actual, expected) in actual.iter().zip(reference) {
                 assert_eq!(actual.wrapped, expected.is_wrapped());
                 for column in 0..new_cols {
-                    let mut expected_cell = expected.get(column).unwrap().clone();
-                    expected_cell.flags.remove(CellFlags::DIRTY);
-                    assert_eq!(actual.get(column).unwrap(), expected_cell);
+                    assert_eq!(
+                        actual.get(column).unwrap(),
+                        expected.get(column).unwrap().clone()
+                    );
                 }
             }
         }

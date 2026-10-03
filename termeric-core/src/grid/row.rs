@@ -29,9 +29,9 @@ impl Row {
         }
     }
 
-    /// Reuse a discarded viewport row's allocation with exactly `new` state.
-    /// Unlike `clear`, fresh cells have no per-cell DIRTY flags. Dropping old
-    /// cells also releases graphemes and other content.
+    /// Reuse a discarded viewport row's allocation as a blank row of `cols`
+    /// default cells. Dropping old cells also releases graphemes and other
+    /// content.
     pub(crate) fn into_blank(mut self, cols: usize) -> Self {
         self.cells.clear();
         self.cells.resize_with(cols, Cell::default);
@@ -195,10 +195,7 @@ impl Row {
         }
 
         // Clear inserted cells
-        for c in col..col + count {
-            self.cells[c] = blank.clone();
-            self.cells[c].flags.insert(CellFlags::DIRTY);
-        }
+        self.cells[col..col + count].fill(blank.clone());
 
         self.repair_wide_cells_with_damage(blank, damage);
     }
@@ -222,7 +219,6 @@ impl Row {
                 self.cells[c] = self.cells[src].clone();
             } else {
                 self.cells[c] = blank.clone();
-                self.cells[c].flags.insert(CellFlags::DIRTY);
             }
         }
 
@@ -263,9 +259,6 @@ impl Row {
         }
         damage(start..start + count);
         self.cells[start..start + count].clone_from_slice(&cells[..count]);
-        for cell in &mut self.cells[start..start + count] {
-            cell.flags.insert(CellFlags::DIRTY);
-        }
         self.repair_wide_cells_with_damage(blank, damage);
     }
 
@@ -284,10 +277,7 @@ impl Row {
             return;
         }
         damage(start..end);
-        for target in &mut self.cells[start..end] {
-            *target = cell.clone();
-            target.flags.insert(CellFlags::DIRTY);
-        }
+        self.cells[start..end].fill(cell.clone());
         self.repair_wide_cells_with_damage(blank, damage);
     }
 
@@ -318,11 +308,7 @@ impl Row {
             if exact_rectangle && !drawn {
                 cell.set_char(' ');
             }
-            let previous = cell.attrs;
             apply(&mut cell.attrs);
-            if cell.attrs != previous {
-                cell.flags.insert(CellFlags::DIRTY);
-            }
         }
     }
 
@@ -346,10 +332,7 @@ impl Row {
             end = (end + 1).min(self.cells.len());
         }
         damage(start..end);
-        for c in start..end {
-            self.cells[c] = blank.clone();
-            self.cells[c].flags.insert(CellFlags::DIRTY);
-        }
+        self.cells[start..end].fill(blank.clone());
         if start == 0 && end == self.cells.len() {
             self.wrapped = false;
         }
@@ -491,7 +474,6 @@ impl Row {
         if orphaned {
             damage(col..col + 1);
             self.cells[col] = blank.clone();
-            self.cells[col].flags.insert(CellFlags::DIRTY);
         }
     }
 

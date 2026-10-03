@@ -1190,7 +1190,6 @@ impl Terminal {
             hyperlink_id: self.current_hyperlink_id,
             ..Cell::default()
         };
-        template.flags.insert(CellFlags::DIRTY);
         template
             .flags
             .set(CellFlags::HYPERLINK, self.current_hyperlink_id.is_some());
@@ -2427,10 +2426,7 @@ impl Terminal {
             .grid
             .resize_with_points(cols, rows, &mut primary_points);
         let primary_shift = primary_resize.archived_rows;
-        let resize_blank = Cell {
-            flags: CellFlags::DIRTY,
-            ..Cell::default()
-        };
+        let resize_blank = Cell::default();
         if !self.alt_screen_active {
             if same_columns {
                 self.remap_selection_after_height_resize(primary_shift, rows);
@@ -2811,9 +2807,7 @@ impl Terminal {
                     CellFlags::DEC_UK_CHARSET,
                     charset == CharacterSet::UnitedKingdom,
                 );
-                spacer
-                    .flags
-                    .insert(CellFlags::WIDE_CHAR_SPACER | CellFlags::DIRTY);
+                spacer.flags.insert(CellFlags::WIDE_CHAR_SPACER);
                 spacer
                     .flags
                     .set(CellFlags::HYPERLINK, hyperlink_id.is_some());
@@ -3000,9 +2994,7 @@ impl Terminal {
                 *spacer = template;
                 spacer.content = CellContent::Empty;
                 spacer.flags.remove(CellFlags::WIDE_CHAR);
-                spacer
-                    .flags
-                    .insert(CellFlags::WIDE_CHAR_SPACER | CellFlags::DIRTY);
+                spacer.flags.insert(CellFlags::WIDE_CHAR_SPACER);
             }
         }
         if col + new_width >= right {
@@ -3822,7 +3814,7 @@ impl Terminal {
             CharacterSet::Ascii
         };
         character = charset.translate(character);
-        let mut flags = CellFlags::DIRTY;
+        let mut flags = CellFlags::empty();
         flags.set(CellFlags::PROTECTED, self.current_character_protected);
         flags.set(
             CellFlags::DEC_SPECIAL_GRAPHICS,
@@ -4043,7 +4035,6 @@ impl Terminal {
         Cell {
             bg: self.current_bg,
             bg_spec: self.current_bg_spec,
-            flags: CellFlags::DIRTY,
             ..Cell::default()
         }
     }
