@@ -20,6 +20,7 @@ mod input;
 mod mcp;
 mod notifications;
 mod panes;
+mod paths;
 mod plugin;
 mod renderer;
 mod safe_text;

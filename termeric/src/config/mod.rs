@@ -501,20 +501,15 @@ impl Config {
 
     /// Get the configuration file path
     pub fn config_path() -> PathBuf {
-        if let Some(dirs) = directories::ProjectDirs::from("", "", "termeric") {
-            dirs.config_dir().join("config.toml")
-        } else {
-            PathBuf::from("config.toml")
-        }
+        crate::paths::config_dir().map_or_else(
+            || PathBuf::from("config.toml"),
+            |dir| dir.join("config.toml"),
+        )
     }
 
     /// Get the themes directory path
     pub fn themes_dir() -> PathBuf {
-        if let Some(dirs) = directories::ProjectDirs::from("", "", "termeric") {
-            dirs.config_dir().join("themes")
-        } else {
-            PathBuf::from("themes")
-        }
+        crate::paths::config_dir().map_or_else(|| PathBuf::from("themes"), |dir| dir.join("themes"))
     }
 }
 

@@ -275,8 +275,7 @@ pub fn sessions_base_dir() -> Option<PathBuf> {
     if let Some(path) = TEST_SESSIONS_BASE_DIR.with(|base| base.borrow().clone()) {
         return Some(path);
     }
-    directories::ProjectDirs::from("com", "termeric", "termeric")
-        .map(|dirs| dirs.data_dir().join("sessions"))
+    crate::paths::data_dir().map(|dir| dir.join("sessions"))
 }
 
 #[cfg(test)]

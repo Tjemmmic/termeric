@@ -312,8 +312,8 @@ impl ShellIntegrationSupport {
 /// are left untouched because injecting an interactive rc file would change
 /// their semantics.
 pub fn prepare_shell_launch(shell: &ShellConfig) -> ShellLaunch {
-    let base = directories::ProjectDirs::from("", "", "termeric")
-        .map(|dirs| dirs.config_dir().join("shell-integration"))
+    let base = crate::paths::config_dir()
+        .map(|dir| dir.join("shell-integration"))
         .unwrap_or_else(|| PathBuf::from(".termeric-shell-integration"));
     match prepare_shell_launch_in(shell, &base) {
         Ok(launch) => launch,

@@ -83,11 +83,8 @@ impl AppState {
         if let Some(path) = TEST_STATE_PATH.with(|state| state.borrow().clone()) {
             return path;
         }
-        if let Some(dirs) = directories::ProjectDirs::from("", "", "termeric") {
-            dirs.data_dir().join("state.json")
-        } else {
-            PathBuf::from("state.json")
-        }
+        crate::paths::data_dir()
+            .map_or_else(|| PathBuf::from("state.json"), |dir| dir.join("state.json"))
     }
 
     #[cfg(test)]

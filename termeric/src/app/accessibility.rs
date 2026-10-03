@@ -8285,13 +8285,14 @@ mod tests {
     #[test]
     #[cfg(target_os = "linux")]
     fn command_deletion_unifies_focus_and_retires_stale_duplicate_actions() {
-        const CHILD: &str = "TERMERIC_COMMAND_DELETE_FIXTURE_CONFIG";
-        let Some(config_root) = std::env::var_os(CHILD) else {
-            let directory = tempfile::tempdir().unwrap();
+        // Deleting a command saves the configuration. A child test process
+        // has a configuration directory of its own, so tests running beside
+        // this one never see that file change.
+        const CHILD: &str = "TERMERIC_COMMAND_DELETE_FIXTURE_CHILD";
+        if std::env::var_os(CHILD).is_none() {
             let result = std::process::Command::new(std::env::current_exe().unwrap())
                 .args(["--exact", "app::accessibility::tests::command_deletion_unifies_focus_and_retires_stale_duplicate_actions", "--nocapture"])
-                .env(CHILD, directory.path())
-                .env("XDG_CONFIG_HOME", directory.path())
+                .env(CHILD, "1")
                 .output().unwrap();
             assert!(
                 result.status.success(),
@@ -8300,10 +8301,7 @@ mod tests {
                 String::from_utf8_lossy(&result.stderr)
             );
             return;
-        };
-        let config_root = std::path::PathBuf::from(config_root);
-        assert!(config_root.is_absolute());
-        assert!(Config::config_path().starts_with(&config_root));
+        }
         use crate::ui::commands::panel::CommandsPanelAction;
         use winit::keyboard::{Key, NamedKey};
         for (route, editing) in [

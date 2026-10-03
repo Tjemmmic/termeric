@@ -50,8 +50,7 @@ pub fn workspaces_base_dir() -> Option<PathBuf> {
     if let Some(path) = TEST_WORKSPACES_BASE_DIR.with(|base| base.borrow().clone()) {
         return Some(path);
     }
-    directories::ProjectDirs::from("com", "termeric", "termeric")
-        .map(|dirs| dirs.data_dir().join("workspaces"))
+    crate::paths::data_dir().map(|dir| dir.join("workspaces"))
 }
 
 #[cfg(test)]

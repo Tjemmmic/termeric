@@ -81,6 +81,8 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 | `cli.rs` | Command-line parsing into window-local startup plans |
 | `mcp.rs` | `termeric mcp`, an MCP server over stdio backed by the control protocol |
 | `serial.rs` | Serial transport for serial terminal profiles |
+| `paths.rs` | Configuration and data directories; test builds resolve them under a per-process temporary directory |
+| `safe_text.rs` | Character classes and bounding for untrusted text shown in chrome or sent over protocols |
 
 ### Key Modules (termeric-core/)
 
