@@ -180,6 +180,87 @@ pub(crate) enum AppEvent {
     SystemAccessibilityUnavailable(String),
 }
 
+impl AppEvent {
+    /// For a result a background task returns to one window: that window,
+    /// and why it is redrawn.
+    fn window_target(&self) -> Option<(winit::window::WindowId, RedrawReason)> {
+        Some(match self {
+            Self::AccessKit(event) => (event.window_id, RedrawReason::Accessibility),
+            Self::RendererDeviceLost { window_id, .. } => {
+                (*window_id, RedrawReason::SurfaceRecovery)
+            }
+            Self::BackgroundImageLoaded { window_id, .. } => {
+                (*window_id, RedrawReason::BackgroundTask)
+            }
+            Self::LiveDomainTopology { window_id, .. } => {
+                (*window_id, RedrawReason::BackgroundTask)
+            }
+            Self::DomainPickerLoaded { window_id, .. } => {
+                (*window_id, RedrawReason::BackgroundTask)
+            }
+            Self::ContextGathered { window_id, .. } => (*window_id, RedrawReason::BackgroundTask),
+            Self::FileUploadCompleted { window_id, .. } => {
+                (*window_id, RedrawReason::BackgroundTask)
+            }
+            Self::FileUploadProgress { window_id, .. } => {
+                (*window_id, RedrawReason::BackgroundTask)
+            }
+            Self::KittyFileTransferCompleted { window_id, .. } => {
+                (*window_id, RedrawReason::BackgroundTask)
+            }
+            Self::KittyFileUploadCompleted { window_id, .. } => {
+                (*window_id, RedrawReason::BackgroundTask)
+            }
+            _ => return None,
+        })
+    }
+}
+
+impl App {
+    /// Apply a result `AppEvent::window_target` routed to this window.
+    fn handle_window_event_result(&mut self, event: AppEvent) {
+        match event {
+            AppEvent::AccessKit(event) => self.handle_accesskit_event(event),
+            AppEvent::RendererDeviceLost {
+                generation,
+                failure,
+                ..
+            } => self.handle_renderer_device_lost(generation, failure),
+            AppEvent::BackgroundImageLoaded {
+                generation,
+                path,
+                result,
+                ..
+            } => self.handle_background_image_loaded(generation, path, result),
+            AppEvent::LiveDomainTopology {
+                domain_id, result, ..
+            } => self.handle_live_domain_topology(domain_id, result),
+            AppEvent::DomainPickerLoaded {
+                generation, result, ..
+            } => self.handle_domain_picker_loaded(generation, result),
+            AppEvent::ContextGathered {
+                request_id, result, ..
+            } => self.handle_context_gathered(request_id, result),
+            AppEvent::FileUploadCompleted {
+                request_id, result, ..
+            } => self.handle_file_upload_completed(request_id, result),
+            AppEvent::FileUploadProgress {
+                request_id,
+                bytes_sent,
+                total_bytes,
+                ..
+            } => self.handle_file_upload_progress(request_id, bytes_sent, total_bytes),
+            AppEvent::KittyFileTransferCompleted { token, result, .. } => {
+                self.handle_kitty_file_transfer_completed(token, result)
+            }
+            AppEvent::KittyFileUploadCompleted { token, result, .. } => {
+                self.handle_kitty_file_upload_completed(token, result)
+            }
+            _ => unreachable!("not a single-window result: {event:?}"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum LiveDomainControl {
     SpawnTab {
