@@ -112,4 +112,18 @@ impl App {
         }
         self.request_redraw(RedrawReason::Action);
     }
+
+    /// Toggle transcript recording for the focused terminal.
+    pub(super) fn toggle_transcript(&mut self) {
+        if let Some(identity) = self
+            .tabs
+            .as_ref()
+            .and_then(|tabs| tabs.active_tab())
+            .map(|tab| tab.focused_terminal_identity())
+        {
+            self.toggle_terminal_transcript(identity);
+        } else {
+            self.toasts.warning("No active terminal");
+        }
+    }
 }
