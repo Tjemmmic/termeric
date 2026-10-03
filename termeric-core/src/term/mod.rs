@@ -6293,7 +6293,7 @@ mod tests {
     fn osc66_ansi_export_replays_descriptor_and_text_once() {
         let mut source = Terminal::new(10, 3);
         source.process(b"\x1b]66;s=1:w=3:n=1:d=2:h=1;abc\x07!");
-        let line = source.grid().export_scrollback_text().remove(0);
+        let line = source.grid().styled_lines().remove(0);
         assert!(line.contains("\x1b]66;s=1:w=3:n=1:d=2:h=1;abc\x07"));
         assert_eq!(line.matches("abc").count(), 1);
 
@@ -7764,7 +7764,7 @@ mod tests {
         selection.update(Point::new(0, 5));
         term.set_selection(Some(selection));
         assert_eq!(term.get_selection_text().as_deref(), Some("界e\u{301}👍🏽"));
-        let exported = term.grid().export_scrollback_text().join("\n");
+        let exported = term.grid().plain_lines().join("\n");
         assert_eq!(exported, "A界e\u{301}👍🏽");
     }
 

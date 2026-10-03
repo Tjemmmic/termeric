@@ -57,10 +57,7 @@ fn assert_equivalent(actual: &Terminal, expected: &Terminal) {
         actual.grid().scrollback_len(),
         expected.grid().scrollback_len()
     );
-    assert_eq!(
-        actual.grid().export_scrollback_text(),
-        expected.grid().export_scrollback_text()
-    );
+    assert_eq!(actual.grid().styled_lines(), expected.grid().styled_lines());
     for row in 0..6 {
         let a = actual.grid().row(row).unwrap();
         let b = expected.grid().row(row).unwrap();

@@ -435,29 +435,6 @@ fn hunk_ranges(line: &str) -> Option<(Range, Range)> {
     (old.1 != 0 || new.1 != 0).then_some((old, new))
 }
 
-/// Strip ANSI escape sequences from a string
-pub fn strip_ansi(input: &str) -> String {
-    let mut result = String::with_capacity(input.len());
-    let mut chars = input.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '\x1b' {
-            // Skip ESC[...m sequences
-            if chars.peek() == Some(&'[') {
-                chars.next(); // consume '['
-                while let Some(&next) = chars.peek() {
-                    chars.next();
-                    if next.is_ascii_alphabetic() {
-                        break;
-                    }
-                }
-            }
-        } else {
-            result.push(c);
-        }
-    }
-    result
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -638,13 +615,6 @@ mod tests {
         assert!(detector.detected[0].reviewed);
         assert!(!detector.detected[1].reviewed);
         assert!(!detector.mark_reviewed(u64::MAX));
-    }
-
-    #[test]
-    fn test_strip_ansi() {
-        assert_eq!(strip_ansi("\x1b[31m--- a/file.rs\x1b[0m"), "--- a/file.rs");
-        assert_eq!(strip_ansi("normal text"), "normal text");
-        assert_eq!(strip_ansi("\x1b[1;32m+added\x1b[0m"), "+added");
     }
 
     #[test]

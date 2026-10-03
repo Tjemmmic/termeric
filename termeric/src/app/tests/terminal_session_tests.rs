@@ -178,13 +178,7 @@ fn single_and_split_diff_capture_waits_for_real_eof_not_poll_boundaries() {
             } else {
                 tab.focused_terminal().unwrap()
             };
-            assert!(
-                terminal
-                    .grid()
-                    .export_scrollback_text()
-                    .join("\n")
-                    .contains("🌱")
-            );
+            assert!(terminal.grid().plain_lines().join("\n").contains("🌱"));
         }
     }
 }

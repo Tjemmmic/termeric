@@ -1004,7 +1004,7 @@ impl PaneManager {
                     scrollback_file: None,
                     scrollback_truncated: false,
                     scrollback_lines: if save_scrollback {
-                        pane.terminal.grid().export_scrollback_text()
+                        crate::session::save::restorable_scrollback(pane.terminal.grid())
                     } else {
                         Vec::new()
                     },
@@ -2995,7 +2995,7 @@ mod tests {
             let all_replied = panes.panes.values().all(|pane| {
                 pane.terminal
                     .grid()
-                    .export_scrollback_text()
+                    .plain_lines()
                     .join("\n")
                     .contains("1b 5b 31 3b 31 52")
             });
@@ -3007,7 +3007,7 @@ mod tests {
 
         assert_eq!(panes.pane_count(), 2);
         for pane in panes.panes.values() {
-            let text = pane.terminal.grid().export_scrollback_text().join("\n");
+            let text = pane.terminal.grid().plain_lines().join("\n");
             assert!(
                 text.contains("1b 5b 31 3b 31 52"),
                 "pane {:?} did not receive its own DSR reply: {text:?}",

@@ -2520,9 +2520,8 @@ impl TabManager {
         // Replay scrollback
         if !lines.is_empty() {
             // Join lines with \r\n and add a trailing \r\n so the shell's
-            // new prompt appears on a fresh line below the scrollback.
-            // This is safe because export_scrollback_text() only includes
-            // scrollback lines, not the visible area (which has the prompt).
+            // new prompt appears on a fresh line below the scrollback. Saved
+            // lines stop before the old final prompt (`restorable_scrollback`).
             let text = lines.join("\r\n") + "\r\n";
             if let Some(terminal) = tab.focused_terminal_mut() {
                 terminal.process(text.as_bytes());
@@ -3503,7 +3502,7 @@ mod tests {
                 .unwrap()
                 .terminal
                 .grid()
-                .export_scrollback_text()
+                .plain_lines()
                 .join("\n");
             if text.contains("PROFILE_OWNER") {
                 break;
@@ -3770,7 +3769,7 @@ mod tests {
                 .unwrap()
                 .iter_with_layout()
                 .all(|(pane, _)| {
-                    let text = pane.terminal.grid().export_scrollback_text().join("\n");
+                    let text = pane.terminal.grid().plain_lines().join("\n");
                     text.contains("1b 5b 31 3b 31 52")
                         && text.contains("1b 5b 3f 31 3b 32 63")
                         && text.contains("1b 5b 3e 30 3b 31 3b 30 63")
@@ -3789,7 +3788,7 @@ mod tests {
             .focused_terminal()
             .unwrap()
             .grid()
-            .export_scrollback_text()
+            .plain_lines()
             .join("\n");
         assert!(!active_text.contains("reply="));
     }

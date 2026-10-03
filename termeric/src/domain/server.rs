@@ -1480,14 +1480,7 @@ fn process_request(state: &SharedState, request: Request) -> anyhow::Result<Resp
             let state = state.lock().unwrap();
             let pane = find_pane(&state, &domain, pane)?;
             let maximum = max_bytes.clamp(1, MAX_TEXT_RESPONSE_BYTES);
-            let complete = pane
-                .terminal
-                .grid()
-                .export_scrollback_text()
-                .into_iter()
-                .map(|line| crate::terminal::diff_detector::strip_ansi(&line))
-                .collect::<Vec<_>>()
-                .join("\n");
+            let complete = pane.terminal.grid().plain_lines().join("\n");
             let (text, truncated) = newest_utf8_bytes(&complete, maximum);
             Ok(Response::Text { text, truncated })
         }
@@ -2775,7 +2768,7 @@ fn terminal_snapshot(terminal: &Terminal, max_bytes: usize) -> Vec<u8> {
     } else {
         Vec::new()
     };
-    let lines = terminal.grid().export_scrollback_text();
+    let lines = terminal.grid().styled_lines();
     let mut selected = Vec::new();
     let mut bytes = 0usize;
     let content_budget = max_bytes
@@ -3972,6 +3965,22 @@ mod tests {
             terminal.extra_cursors().colors()
         );
         assert!(replica.drain_events().is_empty());
+    }
+
+    #[test]
+    fn terminal_attach_snapshot_replays_an_idle_prompt_and_a_cleared_screen() {
+        for output in [
+            &b"older\r\noutput\r\nuser@host:~$ "[..],
+            &b"line 1\r\nline 2\r\nline 3\r\nline 4\x1b[H\x1b[2J$ "[..],
+        ] {
+            let mut terminal = Terminal::new(20, 4);
+            terminal.process(output);
+            let mut replica = Terminal::new(20, 4);
+            replica.process(&terminal_snapshot(&terminal, 4096));
+            for row in 0..4 {
+                assert_eq!(replica.rows_text(row, row), terminal.rows_text(row, row));
+            }
+        }
     }
 
     #[test]

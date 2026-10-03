@@ -664,7 +664,7 @@ impl App {
     ) -> Option<String> {
         let tabs = self.tabs.as_ref()?;
         let tail = |terminal: &termeric_core::Terminal| {
-            let lines = terminal.grid().export_scrollback_text();
+            let lines = terminal.grid().plain_lines();
             let start = lines.len().saturating_sub(50);
             lines[start..].join("\n")
         };

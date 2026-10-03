@@ -121,13 +121,10 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(3);
         while Instant::now() < deadline {
             app.process_pty_events();
-            if app.active_terminal().is_some_and(|terminal| {
-                terminal
-                    .grid()
-                    .export_scrollback_text()
-                    .join("\n")
-                    .contains(needle)
-            }) {
+            if app
+                .active_terminal()
+                .is_some_and(|terminal| terminal.grid().plain_lines().join("\n").contains(needle))
+            {
                 return true;
             }
             std::thread::yield_now();

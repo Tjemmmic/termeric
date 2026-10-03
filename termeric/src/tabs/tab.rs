@@ -1536,7 +1536,7 @@ impl Tab {
                 .and_then(get_foreground_process)
                 .or(remembered_command),
             scrollback: if save_scrollback {
-                terminal.grid().export_scrollback_text()
+                crate::session::save::restorable_scrollback(terminal.grid())
             } else {
                 Vec::new()
             },
@@ -1587,7 +1587,7 @@ impl Tab {
                         scrollback_file: None,
                         scrollback_truncated: false,
                         scrollback_lines: if save_scrollback {
-                            terminal.grid().export_scrollback_text()
+                            crate::session::save::restorable_scrollback(terminal.grid())
                         } else {
                             Vec::new()
                         },

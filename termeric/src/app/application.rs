@@ -4851,7 +4851,7 @@ mod tests {
                 .as_ref()
                 .and_then(crate::tabs::TabManager::active_tab)
                 .and_then(crate::tabs::Tab::focused_terminal)
-                .map(|terminal| terminal.grid().export_scrollback_text().join("\n"))
+                .map(|terminal| terminal.grid().plain_lines().join("\n"))
                 .unwrap_or_default();
             if output.contains("[]|[two words]|[$HOME;🙂]|[--json]")
                 && output.contains("WINDOW_ENV=[]|[= exact $HOME;🙂]")

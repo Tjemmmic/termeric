@@ -3619,7 +3619,7 @@ fn local_file_drop_writes_one_bracketed_payload_without_enter() {
             .active_terminal()
             .unwrap()
             .grid()
-            .export_scrollback_text()
+            .plain_lines()
             .join("\n")
             .contains("READY")
         {
@@ -3644,7 +3644,7 @@ fn local_file_drop_writes_one_bracketed_payload_without_enter() {
         let Some(terminal) = app.active_terminal() else {
             break;
         };
-        output = terminal.grid().export_scrollback_text().join("\n");
+        output = terminal.grid().plain_lines().join("\n");
         let compact = output
             .chars()
             .filter(|character| !character.is_whitespace())
@@ -6268,7 +6268,7 @@ fn control_input_is_opt_in_exact_paste_aware_and_guarded_without_provider_execut
             .active_terminal()
             .unwrap()
             .grid()
-            .export_scrollback_text()
+            .plain_lines()
             .join("\n")
             .contains("READY")
         {
@@ -6295,7 +6295,7 @@ fn control_input_is_opt_in_exact_paste_aware_and_guarded_without_provider_execut
             .active_terminal()
             .unwrap()
             .grid()
-            .export_scrollback_text()
+            .plain_lines()
             .join("\n");
         if output
             .split_whitespace()
@@ -8166,13 +8166,7 @@ fn typed_agent_input_is_submitted_separately_and_only_to_the_same_agent() {
         let ready = tabs
             .active_tab()
             .and_then(Tab::focused_terminal)
-            .is_some_and(|terminal| {
-                terminal
-                    .grid()
-                    .export_scrollback_text()
-                    .concat()
-                    .contains("RAW_READY")
-            });
+            .is_some_and(|terminal| terminal.grid().plain_lines().concat().contains("RAW_READY"));
         if ready {
             break;
         }
@@ -9967,7 +9961,7 @@ fn mouse_focus_and_bracketed_paste_reach_the_focused_pane_in_order() {
             .unwrap()
             .terminal
             .grid()
-            .export_scrollback_text()
+            .plain_lines()
             .join("\n")
             .contains("READY");
         if ready {
@@ -10027,7 +10021,7 @@ fn mouse_focus_and_bracketed_paste_reach_the_focused_pane_in_order() {
             .unwrap()
             .terminal
             .grid()
-            .export_scrollback_text()
+            .plain_lines()
             .join("\n");
         if output
             .split_whitespace()
@@ -11879,12 +11873,14 @@ fn context_output_comes_from_a_shell_never_from_another_agent() {
     };
     let asking = open("ASKING_AGENT", Some("codex"));
     open("OTHER_AGENT", Some("claude-code"));
-    open("USER_WORK", None);
+    open("\x1b[1;31mUSER_WORK\x1b[0m", None);
     app.tabs = Some(tabs);
 
     let output = app.context_source_output(asking).unwrap();
     assert!(output.contains("USER_WORK"), "{output:?}");
     assert!(!output.contains("AGENT"), "{output:?}");
+    // Agents get the text, not the styling the screen was drawn with.
+    assert!(!output.contains('\x1b'), "{output:?}");
 }
 
 #[cfg(unix)]
@@ -12464,13 +12460,7 @@ fn wait_for_plugin_fixture(app: &mut App, plugin_id: &str, needle: &str) {
             .and_then(|tabs| tabs.find_plugin_tab_index(plugin_id))
             .and_then(|index| tabs_at(app, index))
             .and_then(|tab| tab.focused_terminal())
-            .is_some_and(|terminal| {
-                terminal
-                    .grid()
-                    .export_scrollback_text()
-                    .join("\n")
-                    .contains(needle)
-            });
+            .is_some_and(|terminal| terminal.grid().plain_lines().join("\n").contains(needle));
         if found {
             return;
         }
@@ -12623,7 +12613,7 @@ fn app_mediated_clipboard_reply_returns_to_requesting_pane_not_focus() {
             .unwrap()
             .terminal
             .grid()
-            .export_scrollback_text()
+            .plain_lines()
             .join("\n");
         if text.contains("1b 5d 35 32 3b 63 3b 1b 5c") {
             break;
@@ -12645,14 +12635,14 @@ fn app_mediated_clipboard_reply_returns_to_requesting_pane_not_focus() {
         .unwrap()
         .terminal
         .grid()
-        .export_scrollback_text()
+        .plain_lines()
         .join("\n");
     let focused_text = panes
         .get_pane(PaneId(0))
         .unwrap()
         .terminal
         .grid()
-        .export_scrollback_text()
+        .plain_lines()
         .join("\n");
     assert!(requesting_text.contains("1b 5d 35 32 3b 63 3b 1b 5c"));
     assert!(!focused_text.contains("reply="));
@@ -12870,7 +12860,7 @@ fn delayed_notification_reply_returns_to_requesting_pane_without_a_focus_fallbac
             .unwrap()
             .terminal
             .grid()
-            .export_scrollback_text()
+            .plain_lines()
             .join("\n");
         if requesting_text
             .chars()
@@ -12897,7 +12887,7 @@ fn delayed_notification_reply_returns_to_requesting_pane_without_a_focus_fallbac
         .unwrap()
         .terminal
         .grid()
-        .export_scrollback_text()
+        .plain_lines()
         .join("\n");
     let compact_requesting_text: String = requesting_text
         .chars()
@@ -13456,7 +13446,7 @@ fn cli_launch_plan_creates_ordered_shell_and_arbitrary_command_tabs() {
             .is_some_and(|terminal| {
                 terminal
                     .grid()
-                    .export_scrollback_text()
+                    .plain_lines()
                     .join("\n")
                     .contains("CLI_ARGV_28")
             });
@@ -13599,7 +13589,7 @@ fn background_command_launch_preserves_focused_pane_and_interaction_surfaces() {
                 .focused_terminal()
                 .unwrap()
                 .grid()
-                .export_scrollback_text()
+                .plain_lines()
                 .join("\n");
             if text.contains("background-ready") {
                 break;
@@ -13711,30 +13701,24 @@ fn running_gui_launch_tab_preserves_argv_cwd_title_and_failure_atomicity() {
             .is_some_and(|terminal| {
                 terminal
                     .grid()
-                    .export_scrollback_text()
+                    .plain_lines()
                     .join("\n")
                     .contains("[]|[two words]|[$HOME;🙂]|[--json]")
             });
         cwd_output = tabs_at(&app, 0)
             .and_then(|tab| tab.focused_terminal())
-            .is_some_and(|terminal| {
-                terminal
-                    .grid()
-                    .export_scrollback_text()
-                    .join("\n")
-                    .contains(cwd)
-            });
+            .is_some_and(|terminal| terminal.grid().plain_lines().join("\n").contains(cwd));
         environment_output = tabs_at(&app, 0)
             .and_then(|tab| tab.focused_terminal())
             .is_some_and(|terminal| {
                 terminal
                     .grid()
-                    .export_scrollback_text()
+                    .plain_lines()
                     .join("\n")
                     .contains("ENV=[]|[= two words $HOME;value]|[line one")
                     && terminal
                         .grid()
-                        .export_scrollback_text()
+                        .plain_lines()
                         .join("\n")
                         .contains("ENV_UNICODE_λ")
             });
@@ -13833,7 +13817,7 @@ fn terminal_profile_cli_launch_applies_env_cwd_title_and_workspace_identity() {
             .active_terminal()
             .unwrap()
             .grid()
-            .export_scrollback_text()
+            .plain_lines()
             .join("\n");
         if text.contains("PROFILE_MARK=exact")
             && text.contains(&format!("PWD={}", temp.path().display()))
@@ -13964,14 +13948,14 @@ fn mixed_shell_and_profile_panes_restore_each_saved_launch() {
             .unwrap()
             .terminal
             .grid()
-            .export_scrollback_text()
+            .plain_lines()
             .join("\n");
         let profile_text = panes
             .get_pane(crate::panes::PaneId(7))
             .unwrap()
             .terminal
             .grid()
-            .export_scrollback_text()
+            .plain_lines()
             .join("\n");
         if default_text.contains("DEFAULT_PANE") && profile_text.contains("PROFILE_PANE") {
             break;

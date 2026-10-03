@@ -1480,9 +1480,10 @@ impl GridStorage {
         self.scrollback.iter().map(RowView::history)
     }
 
-    /// Iterate over all visible rows
-    pub fn iter_visible(&self) -> impl Iterator<Item = &Row> {
-        self.rows.iter()
+    /// Scrollback (oldest first) then the visible rows.
+    pub fn iter_all(&self) -> impl Iterator<Item = RowView<'_>> {
+        self.iter_scrollback()
+            .chain(self.rows.iter().map(RowView::visible))
     }
 
     pub fn memory_usage(&self) -> GridMemoryUsage {
@@ -1632,7 +1633,7 @@ mod tests {
     #[test]
     fn test_storage_creation() {
         let storage = GridStorage::new(80, 24);
-        assert_eq!(storage.iter_visible().count(), 24);
+        assert_eq!(storage.rows.len(), 24);
         assert_eq!(storage.row(0).unwrap().len(), 80);
         assert_eq!(storage.scrollback_len(), 0);
     }
@@ -1671,7 +1672,7 @@ mod tests {
     fn test_resize() {
         let mut storage = GridStorage::new(80, 24);
         storage.resize(100, 30, 0, 0);
-        assert_eq!(storage.iter_visible().count(), 30);
+        assert_eq!(storage.rows.len(), 30);
         assert_eq!(storage.row(0).unwrap().len(), 100);
     }
 
@@ -1705,7 +1706,7 @@ mod tests {
         storage.resize(5, 3, 0, 0);
 
         // Should have 3 visible rows (padded), first two contain content
-        assert_eq!(storage.iter_visible().count(), 3);
+        assert_eq!(storage.rows.len(), 3);
         assert_eq!(row_text(&storage, 0), "ABCDE");
         assert_eq!(row_text(&storage, 1), "FGHIJ");
         // First row should be wrapped, second should not
