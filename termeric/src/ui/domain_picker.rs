@@ -466,7 +466,6 @@ mod tests {
         DomainSummary {
             id: id.into(),
             name: name.into(),
-            workspace_id: format!("workspace-{id}"),
             tabs: 2,
             panes: 3,
             attachments: 1,
@@ -479,12 +478,8 @@ mod tests {
             id: id.into(),
             name: "Compile services".into(),
             created_at: "2026-01-01T00:00:00Z".into(),
-            workspace: crate::domain::model::LiveWorkspace {
-                id: format!("workspace-{id}"),
-                name: "Compile services".into(),
-                tabs: Vec::new(),
-                active_tab: 0,
-            },
+            tabs: Vec::new(),
+            active_tab: 0,
         }
     }
 

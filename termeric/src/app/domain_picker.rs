@@ -239,7 +239,6 @@ mod tests {
             Ok(vec![crate::domain::model::DomainSummary {
                 id: "domain-7".into(),
                 name: "Build".into(),
-                workspace_id: "workspace-domain-7".into(),
                 tabs: 1,
                 panes: 1,
                 attachments: 0,
@@ -255,12 +254,8 @@ mod tests {
             id: "domain-7".into(),
             name: "Build".into(),
             created_at: "2026-01-01T00:00:00Z".into(),
-            workspace: crate::domain::model::LiveWorkspace {
-                id: "workspace-domain-7".into(),
-                name: "Build".into(),
-                active_tab: 0,
-                tabs: Vec::new(),
-            },
+            active_tab: 0,
+            tabs: Vec::new(),
         };
         app.handle_domain_picker_prepared(generation, Ok(snapshot.clone()));
         let launch = app.requested_window_launch.take().unwrap();

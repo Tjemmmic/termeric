@@ -1530,7 +1530,7 @@ impl Application {
                     .get(&window_id)
                     .and_then(|window| {
                         window
-                            .control_local_live_tab_id(&snapshot.id, snapshot.workspace.active_tab)
+                            .control_local_live_tab_id(&snapshot.id, snapshot.active_tab)
                     })
                     .map(|tab_id| Response::TabCreated {
                         process_id: std::process::id(),
@@ -1547,10 +1547,9 @@ impl Application {
                     tab_id,
                     ..
                 } => snapshot
-                    .workspace
                     .tabs
                     .iter()
-                    .find(|tab| tab.id == snapshot.workspace.active_tab)
+                    .find(|tab| tab.id == snapshot.active_tab)
                     .and_then(|tab| {
                         self.windows.get(&window_id).and_then(|window| {
                             window.control_local_live_pane_id(
@@ -1577,7 +1576,6 @@ impl Application {
                 } => match control {
                     super::LiveDomainControl::CloseTab { remote_tab_id, .. }
                         if !snapshot
-                            .workspace
                             .tabs
                             .iter()
                             .any(|tab| tab.id == *remote_tab_id) =>
@@ -1603,7 +1601,6 @@ impl Application {
                 } => match control {
                     super::LiveDomainControl::ClosePane { remote_pane_id, .. }
                         if !snapshot
-                            .workspace
                             .tabs
                             .iter()
                             .any(|tab| tab.panes.iter().any(|pane| pane.id == *remote_pane_id)) =>
@@ -1725,12 +1722,10 @@ impl Application {
                         direction,
                     } => {
                         let source = snapshot
-                            .workspace
                             .tabs
                             .iter()
                             .find(|tab| tab.id == *source_remote_tab_id);
                         let destination = snapshot
-                            .workspace
                             .tabs
                             .iter()
                             .find(|tab| tab.id == *destination_remote_tab_id);
@@ -4740,9 +4735,7 @@ mod tests {
         if !std::path::Path::new("/bin/true").is_file() {
             return;
         }
-        use crate::domain::model::{
-            DomainSnapshot, LivePane, LivePaneLayout, LiveTab, LiveWorkspace, SpawnSpec,
-        };
+        use crate::domain::model::{DomainSnapshot, LivePane, LivePaneLayout, LiveTab, SpawnSpec};
         use crate::panes::SplitDirection;
         use crate::tabs::TabManager;
 
@@ -4769,12 +4762,8 @@ mod tests {
             id: "domain-control-ack".into(),
             name: "control ack".into(),
             created_at: "2026-01-01T00:00:00Z".into(),
-            workspace: LiveWorkspace {
-                id: "live-domain-control-ack".into(),
-                name: "control ack".into(),
-                active_tab,
-                tabs,
-            },
+            active_tab,
+            tabs,
         };
         let initial = snapshot(10, vec![tab(10, 100)]);
         let relay = crate::domain::DomainRelayCommand::local("/bin/true");

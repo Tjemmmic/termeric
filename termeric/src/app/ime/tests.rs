@@ -419,7 +419,6 @@ fn domain_picker_ime_owns_editable_stages_and_blocks_busy_background_input() {
         Ok(vec![crate::domain::model::DomainSummary {
             id: "domain-test".into(),
             name: "日本".into(),
-            workspace_id: "workspace-test".into(),
             tabs: 1,
             panes: 1,
             attachments: 0,

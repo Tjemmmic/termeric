@@ -8,7 +8,6 @@ pub(super) fn state() -> SharedState {
         id: DOMAIN.into(),
         name: "topology-fixture".into(),
         created_at: String::new(),
-        workspace_id: DOMAIN.into(),
         active_tab: 0,
         next_tab: 0,
         next_pane: 0,

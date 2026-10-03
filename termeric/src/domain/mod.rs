@@ -124,10 +124,6 @@ pub enum DomainCommand {
     List {
         json: bool,
     },
-    Workspaces {
-        domain: String,
-        json: bool,
-    },
     Panes {
         domain: String,
         json: bool,
@@ -330,7 +326,6 @@ fn execute_with_client(
     }
     let (request, json) = match command {
         DomainCommand::List { json } => (Request::ListDomains, json),
-        DomainCommand::Workspaces { domain, json } => (Request::ListWorkspaces { domain }, json),
         DomainCommand::Panes { domain, json } => (Request::ListPanes { domain }, json),
         DomainCommand::Show { domain, json } => (Request::Describe { domain }, json),
         DomainCommand::Create { name, spawn, json } => {
@@ -503,19 +498,6 @@ fn format_human(response: Response) -> String {
                 .collect::<Vec<_>>()
                 .join("\n")
         }
-        Response::Workspaces { workspaces } => workspaces
-            .into_iter()
-            .map(|workspace| {
-                format!(
-                    "{}\t{}\t{} tabs\tactive {}",
-                    workspace.id,
-                    workspace.name,
-                    workspace.tabs.len(),
-                    workspace.active_tab
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n"),
         Response::Panes { panes } => panes
             .into_iter()
             .map(|pane| {
@@ -532,17 +514,11 @@ fn format_human(response: Response) -> String {
             .collect::<Vec<_>>()
             .join("\n"),
         Response::Domain { domain } => format!(
-            "{}\t{}\tworkspace {}\t{} tabs\t{} panes",
+            "{}\t{}\t{} tabs\t{} panes",
             domain.id,
             domain.name,
-            domain.workspace.id,
-            domain.workspace.tabs.len(),
-            domain
-                .workspace
-                .tabs
-                .iter()
-                .map(|tab| tab.panes.len())
-                .sum::<usize>()
+            domain.tabs.len(),
+            domain.tabs.iter().map(|tab| tab.panes.len()).sum::<usize>()
         ),
         Response::Text { text, truncated } => {
             if truncated {

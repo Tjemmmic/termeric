@@ -117,7 +117,6 @@ A saved host holds only a name, a destination, and an optional description. Keep
 | --- | --- |
 | `list [--json]` | List live domains with their tab, pane, and attached-window counts. |
 | `show DOMAIN [--json]` | Summarize a domain on one line; with `--json`, describe all its tabs, panes, and splits. |
-| `workspaces DOMAIN [--json]` | List a domain's workspaces. |
 | `panes DOMAIN [--json]` | List a domain's panes, with their size and whether their program is still running. |
 | `attach DOMAIN [--geometry WIDTHxHEIGHT] [--app-id NAME]` | Open a window showing the domain. `--class NAME` is the same as `--app-id NAME`. |
 | `create NAME [LAUNCH OPTIONS] [-- PROGRAM ARG...]` | Create a domain with one tab running `PROGRAM`, or your shell, and print the domain's ID. |

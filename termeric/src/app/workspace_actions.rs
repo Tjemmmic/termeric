@@ -3949,9 +3949,7 @@ mod workspace_control_tests {
         if !std::path::Path::new("/bin/true").exists() {
             return;
         }
-        use crate::domain::model::{
-            DomainSnapshot, LivePane, LivePaneLayout, LiveTab, LiveWorkspace,
-        };
+        use crate::domain::model::{DomainSnapshot, LivePane, LivePaneLayout, LiveTab};
         let remote_tab = |tab_id, pane_id| LiveTab {
             id: tab_id,
             title: format!("remote-tab-{tab_id}"),
@@ -3974,12 +3972,8 @@ mod workspace_control_tests {
             id: "domain-control".into(),
             name: "control".into(),
             created_at: "2026-01-01T00:00:00Z".into(),
-            workspace: LiveWorkspace {
-                id: "live-domain-control".into(),
-                name: "control".into(),
-                active_tab: 20,
-                tabs: vec![remote_tab(10, 100), remote_tab(20, 200)],
-            },
+            active_tab: 20,
+            tabs: vec![remote_tab(10, 100), remote_tab(20, 200)],
         };
         let mut tabs = TabManager::new(
             80,
@@ -4223,9 +4217,7 @@ mod workspace_control_tests {
         if !std::path::Path::new("/bin/true").exists() {
             return;
         }
-        use crate::domain::model::{
-            DomainSnapshot, LivePane, LivePaneLayout, LiveTab, LiveWorkspace,
-        };
+        use crate::domain::model::{DomainSnapshot, LivePane, LivePaneLayout, LiveTab};
         let remote_tab = |tab_id, pane_id| LiveTab {
             id: tab_id,
             title: format!("remote-tab-{tab_id}"),
@@ -4248,12 +4240,8 @@ mod workspace_control_tests {
             id: "domain-topology".into(),
             name: "topology".into(),
             created_at: "2026-01-01T00:00:00Z".into(),
-            workspace: LiveWorkspace {
-                id: "live-domain-topology".into(),
-                name: "topology".into(),
-                active_tab: 10,
-                tabs: vec![remote_tab(10, 100)],
-            },
+            active_tab: 10,
+            tabs: vec![remote_tab(10, 100)],
         };
         let mut tabs = TabManager::new(
             80,
@@ -4273,17 +4261,17 @@ mod workspace_control_tests {
         app.live_domain_relay_command = Some(crate::domain::DomainRelayCommand::local("/bin/true"));
 
         let mut revision_two = initial.clone();
-        revision_two.workspace.active_tab = 20;
-        revision_two.workspace.tabs.push(remote_tab(20, 200));
-        revision_two.workspace.tabs[1].focused_pane = 201;
-        revision_two.workspace.tabs[1].layout = LivePaneLayout::Split {
+        revision_two.active_tab = 20;
+        revision_two.tabs.push(remote_tab(20, 200));
+        revision_two.tabs[1].focused_pane = 201;
+        revision_two.tabs[1].layout = LivePaneLayout::Split {
             split_id: 44,
             direction: crate::panes::SplitDirection::Vertical,
             ratio_millis: 500,
             first: Box::new(LivePaneLayout::Pane { pane: 200 }),
             second: Box::new(LivePaneLayout::Pane { pane: 201 }),
         };
-        revision_two.workspace.tabs[1].panes.push(LivePane {
+        revision_two.tabs[1].panes.push(LivePane {
             id: 201,
             title: "remote-pane-201".into(),
             working_directory: None,
@@ -4327,11 +4315,11 @@ mod workspace_control_tests {
         );
 
         let mut revision_three = revision_two.clone();
-        let mut pinned = revision_three.workspace.tabs.remove(1);
+        let mut pinned = revision_three.tabs.remove(1);
         pinned.title = "daemon build".into();
         pinned.user_title = Some("daemon build".into());
         pinned.pinned = true;
-        revision_three.workspace.tabs.insert(0, pinned);
+        revision_three.tabs.insert(0, pinned);
         app.handle_live_domain_topology(
             "domain-topology".into(),
             Ok(crate::domain::DomainTopologyEvent::Snapshot {
@@ -4412,7 +4400,7 @@ mod workspace_control_tests {
             .pane_ids
             .clone();
         let mut revision_four = revision_three.clone();
-        revision_four.workspace.tabs[0].layout = LivePaneLayout::Split {
+        revision_four.tabs[0].layout = LivePaneLayout::Split {
             split_id: 55,
             direction: crate::panes::SplitDirection::Horizontal,
             ratio_millis: 500,
@@ -4531,24 +4519,24 @@ mod workspace_control_tests {
         }
 
         let mut revision_five = revision_four.clone();
-        let moved = revision_five.workspace.tabs[0]
+        let moved = revision_five.tabs[0]
             .panes
             .iter()
             .position(|pane| pane.id == 201)
-            .map(|index| revision_five.workspace.tabs[0].panes.remove(index))
+            .map(|index| revision_five.tabs[0].panes.remove(index))
             .unwrap();
-        revision_five.workspace.tabs[0].layout = LivePaneLayout::Pane { pane: 200 };
-        revision_five.workspace.tabs[0].focused_pane = 200;
-        revision_five.workspace.tabs[1].panes.push(moved);
-        revision_five.workspace.tabs[1].layout = LivePaneLayout::Split {
+        revision_five.tabs[0].layout = LivePaneLayout::Pane { pane: 200 };
+        revision_five.tabs[0].focused_pane = 200;
+        revision_five.tabs[1].panes.push(moved);
+        revision_five.tabs[1].layout = LivePaneLayout::Split {
             split_id: 56,
             direction: crate::panes::SplitDirection::Vertical,
             ratio_millis: 500,
             first: Box::new(LivePaneLayout::Pane { pane: 100 }),
             second: Box::new(LivePaneLayout::Pane { pane: 201 }),
         };
-        revision_five.workspace.tabs[1].focused_pane = 201;
-        revision_five.workspace.active_tab = 10;
+        revision_five.tabs[1].focused_pane = 201;
+        revision_five.active_tab = 10;
         app.handle_live_domain_topology(
             "domain-topology".into(),
             Ok(crate::domain::DomainTopologyEvent::Snapshot {

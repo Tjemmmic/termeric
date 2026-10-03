@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-const VERSION: u32 = 16;
+const VERSION: u32 = 1;
 const LIMIT: Duration = Duration::from_secs(5);
 
 struct OwnedChild(Option<Child>);

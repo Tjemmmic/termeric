@@ -1566,10 +1566,9 @@ fn parse_domain(
             }
             DomainCommand::CancelUpload { upload_id, json }
         }
-        "workspaces" | "panes" | "show" => {
+        "panes" | "show" => {
             let (domain, json) = parse_id_and_json(values, command)?;
             match command {
-                "workspaces" => DomainCommand::Workspaces { domain, json },
                 "panes" => DomainCommand::Panes { domain, json },
                 _ => DomainCommand::Show { domain, json },
             }
@@ -2104,7 +2103,6 @@ Inspect:\n  \
   list [--json]                         List live domains\n  \
   uploads [--json]                      List retained partial uploads\n  \
   show DOMAIN [--json]                  Describe complete live state\n  \
-  workspaces DOMAIN [--json]            List live workspaces\n  \
   panes DOMAIN [--json]                 List panes\n\n\
 Create and control:\n  \
   create NAME [OPTIONS] [-- COMMAND...] Create a persistent domain\n  \

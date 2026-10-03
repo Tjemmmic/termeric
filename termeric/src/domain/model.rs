@@ -15,7 +15,6 @@ pub const MAX_TEXT_RESPONSE_BYTES: usize = 1024 * 1024;
 pub struct DomainSummary {
     pub id: String,
     pub name: String,
-    pub workspace_id: String,
     pub tabs: usize,
     pub panes: usize,
     pub attachments: usize,
@@ -27,7 +26,8 @@ pub struct DomainSnapshot {
     pub id: String,
     pub name: String,
     pub created_at: String,
-    pub workspace: LiveWorkspace,
+    pub active_tab: u32,
+    pub tabs: Vec<LiveTab>,
 }
 
 /// Minimal whole-domain state needed to reconcile attached GUIs. Commands,
@@ -86,23 +86,10 @@ impl From<&DomainSnapshot> for DomainTopology {
     fn from(domain: &DomainSnapshot) -> Self {
         Self {
             domain_id: domain.id.clone(),
-            active_tab: domain.workspace.active_tab,
-            tabs: domain
-                .workspace
-                .tabs
-                .iter()
-                .map(LiveTopologyTab::from)
-                .collect(),
+            active_tab: domain.active_tab,
+            tabs: domain.tabs.iter().map(LiveTopologyTab::from).collect(),
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LiveWorkspace {
-    pub id: String,
-    pub name: String,
-    pub active_tab: u32,
-    pub tabs: Vec<LiveTab>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -267,29 +254,25 @@ mod tests {
             id: "domain-memory".into(),
             name: "memory".into(),
             created_at: "now".into(),
-            workspace: LiveWorkspace {
-                id: "live-domain-memory".into(),
-                name: "memory".into(),
-                active_tab: 0,
-                tabs: vec![LiveTab {
+            active_tab: 0,
+            tabs: vec![LiveTab {
+                id: 0,
+                title: "tab".into(),
+                user_title: None,
+                pinned: false,
+                focused_pane: 0,
+                layout: LivePaneLayout::Pane { pane: 0 },
+                panes: vec![LivePane {
                     id: 0,
-                    title: "tab".into(),
-                    user_title: None,
-                    pinned: false,
-                    focused_pane: 0,
-                    layout: LivePaneLayout::Pane { pane: 0 },
-                    panes: vec![LivePane {
-                        id: 0,
-                        title: "pane".into(),
-                        working_directory: Some("/large/inspection/path".into()),
-                        command: vec![marker.clone()],
-                        cols: 80,
-                        rows: 24,
-                        closed: false,
-                        attachments: 7,
-                    }],
+                    title: "pane".into(),
+                    working_directory: Some("/large/inspection/path".into()),
+                    command: vec![marker.clone()],
+                    cols: 80,
+                    rows: 24,
+                    closed: false,
+                    attachments: 7,
                 }],
-            },
+            }],
         };
         let topology = DomainTopology::from(&snapshot);
         let encoded = serde_json::to_vec(&topology).unwrap();

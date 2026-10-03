@@ -1,14 +1,12 @@
 //! Versioned, length-delimited local-domain wire protocol.
 
-use super::model::{
-    DomainSnapshot, DomainSummary, DomainTopology, LivePane, LiveWorkspace, SpawnSpec,
-};
+use super::model::{DomainSnapshot, DomainSummary, DomainTopology, LivePane, SpawnSpec};
 use anyhow::Context;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::io::{Read, Write};
 use termeric_core::split::{PaneLayoutPreset, SplitDirection};
 
-pub const PROTOCOL_VERSION: u32 = 16;
+pub const PROTOCOL_VERSION: u32 = 1;
 pub const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_STREAM_CHUNK_BYTES: usize = 64 * 1024;
 pub const MAX_FILE_UPLOAD_BYTES: u64 = 64 * 1024 * 1024;
@@ -112,9 +110,6 @@ pub enum ServerFrame {
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum Request {
     ListDomains,
-    ListWorkspaces {
-        domain: String,
-    },
     ListPanes {
         domain: String,
     },
@@ -241,9 +236,6 @@ pub enum Request {
 pub enum Response {
     Domains {
         domains: Vec<DomainSummary>,
-    },
-    Workspaces {
-        workspaces: Vec<LiveWorkspace>,
     },
     Panes {
         panes: Vec<LivePane>,

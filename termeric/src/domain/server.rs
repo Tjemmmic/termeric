@@ -129,7 +129,6 @@ struct DomainRuntime {
     id: String,
     name: String,
     created_at: String,
-    workspace_id: String,
     active_tab: u32,
     next_tab: u32,
     next_pane: u32,
@@ -1330,14 +1329,6 @@ fn process_request(state: &SharedState, request: Request) -> anyhow::Result<Resp
             domains.sort_by(|left, right| left.id.cmp(&right.id));
             Ok(Response::Domains { domains })
         }
-        Request::ListWorkspaces { domain } => {
-            validate_id("domain id", &domain)?;
-            let state = state.lock().unwrap();
-            let domain = state.domains.get(&domain).context("domain not found")?;
-            Ok(Response::Workspaces {
-                workspaces: vec![domain.workspace_snapshot()],
-            })
-        }
         Request::ListPanes { domain } => {
             validate_id("domain id", &domain)?;
             let state = state.lock().unwrap();
@@ -1485,7 +1476,6 @@ fn create_domain(state: &SharedState, name: String, spawn: SpawnSpec) -> anyhow:
     validate_name("domain name", &name)?;
     spawn.validate()?;
     let id = format!("domain-{}", crate::session::generate_session_id());
-    let workspace_id = format!("live-{id}");
     let title = spawn.title.clone().unwrap_or_else(|| name.clone());
     let created_at = crate::session::format_unix_timestamp(
         std::time::SystemTime::now()
@@ -1516,7 +1506,6 @@ fn create_domain(state: &SharedState, name: String, spawn: SpawnSpec) -> anyhow:
                 id: id.clone(),
                 name,
                 created_at,
-                workspace_id,
                 active_tab: 0,
                 next_tab: 1,
                 next_pane: 1,
@@ -3155,21 +3144,13 @@ impl DomainRuntime {
         panes
     }
 
-    fn workspace_snapshot(&self) -> LiveWorkspace {
-        LiveWorkspace {
-            id: self.workspace_id.clone(),
-            name: self.name.clone(),
-            active_tab: self.active_tab,
-            tabs: self.tabs.iter().map(TabRuntime::snapshot).collect(),
-        }
-    }
-
     fn snapshot(&self) -> DomainSnapshot {
         DomainSnapshot {
             id: self.id.clone(),
             name: self.name.clone(),
             created_at: self.created_at.clone(),
-            workspace: self.workspace_snapshot(),
+            active_tab: self.active_tab,
+            tabs: self.tabs.iter().map(TabRuntime::snapshot).collect(),
         }
     }
 
@@ -3209,7 +3190,6 @@ impl DomainRuntime {
         DomainSummary {
             id: self.id.clone(),
             name: self.name.clone(),
-            workspace_id: self.workspace_id.clone(),
             tabs: self.tabs.len(),
             panes: self.pane_count(),
             attachments: self.attachment_count(),
@@ -4440,9 +4420,9 @@ mod tests {
         else {
             panic!("expected split domain");
         };
-        assert_eq!(domain.workspace.tabs[0].panes.len(), 2);
+        assert_eq!(domain.tabs[0].panes.len(), 2);
         assert_eq!(
-            domain.workspace.tabs[0]
+            domain.tabs[0]
                 .panes
                 .iter()
                 .find(|pane| pane.id == 1)
@@ -4451,7 +4431,7 @@ mod tests {
             "a local-domain split must inherit its source terminal's OSC 7 cwd"
         );
         assert!(matches!(
-            &domain.workspace.tabs[0].layout,
+            &domain.tabs[0].layout,
             LivePaneLayout::Split { .. }
         ));
         assert!(matches!(
@@ -4472,7 +4452,7 @@ mod tests {
             panic!("expected resized domain");
         };
         assert!(matches!(
-            &domain.workspace.tabs[0].layout,
+            &domain.tabs[0].layout,
             LivePaneLayout::Split {
                 split_id: 0,
                 ratio_millis: 350,
@@ -4525,7 +4505,7 @@ mod tests {
             panic!("expected domain after swapping panes");
         };
         assert!(matches!(
-            &domain.workspace.tabs[0].layout,
+            &domain.tabs[0].layout,
             LivePaneLayout::Split {
                 first,
                 second,
@@ -4533,7 +4513,7 @@ mod tests {
             } if matches!(first.as_ref(), LivePaneLayout::Pane { pane: 1 })
                 && matches!(second.as_ref(), LivePaneLayout::Pane { pane: 0 })
         ));
-        assert_eq!(domain.workspace.tabs[0].focused_pane, 1);
+        assert_eq!(domain.tabs[0].focused_pane, 1);
         assert!(matches!(
             protocol::read_frame::<ServerFrame>(&mut topology).unwrap(),
             ServerFrame::TopologyChanged {
@@ -4555,7 +4535,7 @@ mod tests {
             panic!("expected domain after balancing panes");
         };
         assert!(matches!(
-            domain.workspace.tabs[0].layout,
+            domain.tabs[0].layout,
             LivePaneLayout::Split {
                 ratio_millis: 500,
                 ..
@@ -4585,7 +4565,7 @@ mod tests {
             panic!("expected domain after applying row layout");
         };
         assert!(matches!(
-            domain.workspace.tabs[0].layout,
+            domain.tabs[0].layout,
             LivePaneLayout::Split {
                 split_id: 1,
                 direction: SplitDirection::Horizontal,
@@ -4625,14 +4605,6 @@ mod tests {
                 .request(Request::ListDomains)
                 .unwrap(),
             Response::Domains { domains } if domains.len() == 1 && domains[0].panes == 2
-        ));
-        assert!(matches!(
-            client
-                .request(Request::ListWorkspaces {
-                    domain: domain_id.clone(),
-                })
-                .unwrap(),
-            Response::Workspaces { workspaces } if workspaces[0].active_tab == 0
         ));
         assert!(matches!(
             client
@@ -4681,7 +4653,7 @@ mod tests {
                     domain: domain_id.clone(),
                 })
                 .unwrap(),
-            Response::Domain { domain } if domain.workspace.tabs[0].panes.len() == 2
+            Response::Domain { domain } if domain.tabs[0].panes.len() == 2
         ));
 
         // Daemon-owned closure repairs layout/focus and tells every attached
@@ -4748,12 +4720,9 @@ mod tests {
         else {
             panic!("expected domain after closing pane");
         };
-        assert_eq!(domain.workspace.tabs[0].focused_pane, 0);
-        assert_eq!(domain.workspace.tabs[0].panes.len(), 1);
-        assert_eq!(
-            domain.workspace.tabs[0].layout,
-            LivePaneLayout::Pane { pane: 0 }
-        );
+        assert_eq!(domain.tabs[0].focused_pane, 0);
+        assert_eq!(domain.tabs[0].panes.len(), 1);
+        assert_eq!(domain.tabs[0].layout, LivePaneLayout::Pane { pane: 0 });
         assert!(matches!(
             protocol::read_frame::<ServerFrame>(&mut topology).unwrap(),
             ServerFrame::TopologyChanged {
@@ -4847,8 +4816,8 @@ mod tests {
         else {
             panic!("expected domain after spawning tab");
         };
-        assert_eq!(domain.workspace.active_tab, 1);
-        assert_eq!(domain.workspace.tabs.len(), 2);
+        assert_eq!(domain.active_tab, 1);
+        assert_eq!(domain.tabs.len(), 2);
         assert!(matches!(
             protocol::read_frame::<ServerFrame>(&mut topology).unwrap(),
             ServerFrame::TopologyChanged {
@@ -4871,7 +4840,7 @@ mod tests {
         else {
             panic!("expected source tab after preparing a pane move");
         };
-        assert_eq!(domain.workspace.active_tab, 0);
+        assert_eq!(domain.active_tab, 0);
         assert!(matches!(
             protocol::read_frame::<ServerFrame>(&mut topology).unwrap(),
             ServerFrame::TopologyChanged {
@@ -4934,15 +4903,12 @@ mod tests {
         else {
             panic!("expected domain after moving a pane between tabs");
         };
-        assert_eq!(domain.workspace.active_tab, 1);
-        assert_eq!(domain.workspace.tabs[0].focused_pane, 0);
-        assert_eq!(
-            domain.workspace.tabs[0].layout,
-            LivePaneLayout::Pane { pane: 0 }
-        );
-        assert_eq!(domain.workspace.tabs[1].focused_pane, 3);
+        assert_eq!(domain.active_tab, 1);
+        assert_eq!(domain.tabs[0].focused_pane, 0);
+        assert_eq!(domain.tabs[0].layout, LivePaneLayout::Pane { pane: 0 });
+        assert_eq!(domain.tabs[1].focused_pane, 3);
         assert!(matches!(
-            &domain.workspace.tabs[1].layout,
+            &domain.tabs[1].layout,
             LivePaneLayout::Split {
                 split_id: 3,
                 direction: SplitDirection::Horizontal,
@@ -4953,7 +4919,7 @@ mod tests {
                 && matches!(second.as_ref(), LivePaneLayout::Pane { pane: 3 })
         ));
         assert_eq!(
-            domain.workspace.tabs[1]
+            domain.tabs[1]
                 .panes
                 .iter()
                 .find(|pane| pane.id == 3)
@@ -5004,8 +4970,8 @@ mod tests {
                         domain: domain_id.clone(),
                     }),
                     Ok(Response::Domain { domain })
-                        if domain.workspace.tabs[1].title == "temporary"
-                            && domain.workspace.tabs[1].panes[0].title == "runtime title"
+                        if domain.tabs[1].title == "temporary"
+                            && domain.tabs[1].panes[0].title == "runtime title"
                 )
             }
         ));
@@ -5019,11 +4985,8 @@ mod tests {
         else {
             panic!("expected domain after renaming tab");
         };
-        assert_eq!(domain.workspace.tabs[1].title, "renamed λ");
-        assert_eq!(
-            domain.workspace.tabs[1].user_title.as_deref(),
-            Some("renamed λ")
-        );
+        assert_eq!(domain.tabs[1].title, "renamed λ");
+        assert_eq!(domain.tabs[1].user_title.as_deref(), Some("renamed λ"));
         assert!(matches!(
             protocol::read_frame::<ServerFrame>(&mut topology).unwrap(),
             ServerFrame::TopologyChanged {
@@ -5054,15 +5017,10 @@ mod tests {
             panic!("expected domain after pinning tab");
         };
         assert_eq!(
-            domain
-                .workspace
-                .tabs
-                .iter()
-                .map(|tab| tab.id)
-                .collect::<Vec<_>>(),
+            domain.tabs.iter().map(|tab| tab.id).collect::<Vec<_>>(),
             vec![1, 0]
         );
-        assert!(domain.workspace.tabs[0].pinned);
+        assert!(domain.tabs[0].pinned);
         assert!(matches!(
             protocol::read_frame::<ServerFrame>(&mut topology).unwrap(),
             ServerFrame::TopologyChanged {
@@ -5107,12 +5065,7 @@ mod tests {
             panic!("expected domain after moving tab");
         };
         assert_eq!(
-            domain
-                .workspace
-                .tabs
-                .iter()
-                .map(|tab| tab.id)
-                .collect::<Vec<_>>(),
+            domain.tabs.iter().map(|tab| tab.id).collect::<Vec<_>>(),
             vec![0, 1]
         );
         assert!(matches!(
@@ -5132,8 +5085,8 @@ mod tests {
         else {
             panic!("expected domain after clearing tab title");
         };
-        assert_eq!(domain.workspace.tabs[1].title, "sh");
-        assert_eq!(domain.workspace.tabs[1].user_title, None);
+        assert_eq!(domain.tabs[1].title, "sh");
+        assert_eq!(domain.tabs[1].user_title, None);
         assert!(matches!(
             protocol::read_frame::<ServerFrame>(&mut topology).unwrap(),
             ServerFrame::TopologyChanged {
@@ -5150,8 +5103,8 @@ mod tests {
         else {
             panic!("expected domain after closing tab");
         };
-        assert_eq!(domain.workspace.active_tab, 0);
-        assert_eq!(domain.workspace.tabs.len(), 1);
+        assert_eq!(domain.active_tab, 0);
+        assert_eq!(domain.tabs.len(), 1);
         assert!(matches!(
             protocol::read_frame::<ServerFrame>(&mut topology).unwrap(),
             ServerFrame::TopologyChanged {
