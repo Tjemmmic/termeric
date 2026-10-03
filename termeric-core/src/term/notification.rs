@@ -7,20 +7,20 @@ use crate::event::{
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::collections::VecDeque;
 
-pub const MAX_NOTIFICATION_TITLE_BYTES: usize = 4 * 1024;
-pub const MAX_NOTIFICATION_BODY_BYTES: usize = 16 * 1024;
-pub const MAX_PENDING_NOTIFICATIONS: usize = 16;
-pub const MAX_PENDING_NOTIFICATION_BYTES: usize = 256 * 1024;
-pub const MAX_NOTIFICATION_IDENTIFIER_BYTES: usize = 128;
-pub const MAX_NOTIFICATION_METADATA_VALUE_BYTES: usize = 256;
-pub const MAX_NOTIFICATION_TYPES: usize = 8;
-pub const MAX_NOTIFICATION_ICON_NAMES: usize = 8;
+pub(crate) const MAX_NOTIFICATION_TITLE_BYTES: usize = 4 * 1024;
+pub(crate) const MAX_NOTIFICATION_BODY_BYTES: usize = 16 * 1024;
+pub(crate) const MAX_PENDING_NOTIFICATIONS: usize = 16;
+pub(crate) const MAX_PENDING_NOTIFICATION_BYTES: usize = 256 * 1024;
+pub(crate) const MAX_NOTIFICATION_IDENTIFIER_BYTES: usize = 128;
+pub(crate) const MAX_NOTIFICATION_METADATA_VALUE_BYTES: usize = 256;
+pub(crate) const MAX_NOTIFICATION_TYPES: usize = 8;
+pub(crate) const MAX_NOTIFICATION_ICON_NAMES: usize = 8;
 pub const MAX_NOTIFICATION_ICON_BYTES: usize = 192 * 1024;
-pub const MAX_NOTIFICATION_BUTTONS: usize = 8;
-pub const MAX_NOTIFICATION_BUTTON_LABEL_BYTES: usize = 256;
-pub const MAX_NOTIFICATION_BUTTON_PAYLOAD_BYTES: usize = 4 * 1024;
-pub const MAX_OSC99_DECODED_CHUNK_BYTES: usize = 2 * 1024;
-pub const MAX_OSC99_ENCODED_CHUNK_BYTES: usize = 4 * 1024;
+pub(crate) const MAX_NOTIFICATION_BUTTONS: usize = 8;
+pub(crate) const MAX_NOTIFICATION_BUTTON_LABEL_BYTES: usize = 256;
+pub(crate) const MAX_NOTIFICATION_BUTTON_PAYLOAD_BYTES: usize = 4 * 1024;
+pub(crate) const MAX_OSC99_DECODED_CHUNK_BYTES: usize = 2 * 1024;
+pub(crate) const MAX_OSC99_ENCODED_CHUNK_BYTES: usize = 4 * 1024;
 const MAX_OSC99_METADATA_BYTES: usize = 1024;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

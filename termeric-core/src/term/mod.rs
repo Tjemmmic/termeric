@@ -15,7 +15,7 @@ mod mode;
 mod multicell;
 mod multiple_cursors;
 mod notification;
-mod pointer;
+pub(crate) mod pointer;
 #[cfg(test)]
 mod reflow_prompts;
 #[cfg(test)]
@@ -32,33 +32,28 @@ mod selection;
 mod selection_damage;
 mod title;
 
-pub use cursor::{SavedCursor, TerminalCursorShape, TerminalCursorStyle};
+pub(crate) use cursor::SavedCursor;
+pub use cursor::{TerminalCursorShape, TerminalCursorStyle};
 pub use keyboard::{
-    KITTY_KEYBOARD_STACK_DEPTH, KittyKeyboardFlags, MAX_USER_DEFINED_KEY_BYTES,
-    MAX_USER_DEFINED_KEYS_BYTES, XTERM_USER_DEFINED_KEY_COUNT, XtermCursorKeys, XtermFunctionKeys,
-    XtermKeyFormat, XtermKeyMode, XtermKeyboardResource, XtermKeyboardType, XtermKeypadKeys,
-    XtermModifierKeys, XtermModifyOtherKeys, XtermSpecialKeys, XtermStringKeys,
-    XtermUserDefinedKeys,
+    KittyKeyboardFlags, XtermCursorKeys, XtermFunctionKeys, XtermKeyFormat, XtermKeyMode,
+    XtermKeyboardResource, XtermKeyboardType, XtermKeypadKeys, XtermModifierKeys,
+    XtermModifyOtherKeys, XtermSpecialKeys,
 };
+pub(crate) use keyboard::{MAX_USER_DEFINED_KEY_BYTES, XtermStringKeys, XtermUserDefinedKeys};
 pub use mode::TerminalMode;
-pub use multicell::MAX_OSC66_TEXT_BYTES;
 use multicell::Osc66Command;
 pub use multiple_cursors::{
-    ExtraCursor, ExtraCursorColor, ExtraCursorColors, ExtraCursorShape, ExtraCursorState,
-    MAX_EXTRA_CURSOR_CELLS, MAX_EXTRA_CURSOR_DIMENSION,
+    ExtraCursorColor, ExtraCursorColors, ExtraCursorShape, ExtraCursorState,
 };
-pub use notification::{
-    MAX_NOTIFICATION_BODY_BYTES, MAX_NOTIFICATION_ICON_BYTES, MAX_NOTIFICATION_IDENTIFIER_BYTES,
-    MAX_NOTIFICATION_TITLE_BYTES, MAX_OSC99_DECODED_CHUNK_BYTES, MAX_OSC99_ENCODED_CHUNK_BYTES,
-    MAX_PENDING_NOTIFICATION_BYTES, MAX_PENDING_NOTIFICATIONS,
-};
+pub use notification::MAX_NOTIFICATION_ICON_BYTES;
+pub(crate) use notification::{MAX_NOTIFICATION_BODY_BYTES, MAX_NOTIFICATION_TITLE_BYTES};
 use notification::{NotificationProtocol, Osc99Action};
 #[cfg(test)]
 pub(crate) use pointer::MAX_POINTER_SHAPE_PAYLOAD_BYTES;
-pub use pointer::{POINTER_SHAPE_STACK_DEPTH, PointerShape};
+pub use pointer::PointerShape;
 pub use selection::{Point, Selection, SelectionType};
 pub(crate) use title::MAX_TITLE_BYTES;
-pub use title::XTERM_TITLE_STACK_DEPTH;
+pub(crate) use title::XTERM_TITLE_STACK_DEPTH;
 use title::{ApplicationTitles, TitleTarget};
 
 const MAX_PENDING_NOTIFICATION_ICON_EVENT_BYTES: usize = 2 * MAX_NOTIFICATION_ICON_BYTES;
@@ -89,7 +84,7 @@ const MAX_GRAPHICS_RELAY_APC_BYTES: usize = 64 * 1024;
 /// leave it. The protocol deliberately does not prescribe a timeout; one
 /// second bounds stale presentation and snapshot memory without affecting a
 /// normal frame-sized update.
-pub const SYNCHRONIZED_OUTPUT_TIMEOUT: Duration = Duration::from_secs(1);
+pub(crate) const SYNCHRONIZED_OUTPUT_TIMEOUT: Duration = Duration::from_secs(1);
 
 fn graphics_relay_checksum(bytes: &[u8]) -> u64 {
     crate::checksum::fnv1a64(bytes)
@@ -1040,13 +1035,15 @@ impl Terminal {
 
     /// Last application-authored OSC 1 icon label. This never reflects UI or
     /// native-window metadata.
-    pub fn application_icon_name(&self) -> &str {
+    #[cfg(test)]
+    pub(crate) fn application_icon_name(&self) -> &str {
         self.application_titles.icon()
     }
 
     /// Last application-authored OSC 0/2 window label. This never reflects a
     /// user-renamed tab, process-derived label, or working directory.
-    pub fn application_window_title(&self) -> &str {
+    #[cfg(test)]
+    pub(crate) fn application_window_title(&self) -> &str {
         self.application_titles.window()
     }
 
@@ -1352,7 +1349,9 @@ impl Terminal {
     }
 
     /// Whether the terminal is currently presenting its alternate screen.
-    pub fn alternate_screen_active(&self) -> bool {
+    #[cfg(test)]
+    #[cfg(test)]
+    pub(crate) fn alternate_screen_active(&self) -> bool {
         self.alt_screen_active
     }
 
@@ -1447,7 +1446,7 @@ impl Terminal {
     }
 
     /// Current application-selected mouse pointer shape for the active screen.
-    pub fn pointer_shape(&self) -> Option<PointerShape> {
+    pub(crate) fn pointer_shape(&self) -> Option<PointerShape> {
         if self.alt_screen_active {
             self.alt_pointer_shapes.current()
         } else {
@@ -1694,7 +1693,9 @@ impl Terminal {
         self.xterm_user_defined_keys.iter()
     }
 
-    pub fn xterm_user_defined_key_bytes(&self) -> usize {
+    #[cfg(test)]
+    #[cfg(test)]
+    pub(crate) fn xterm_user_defined_key_bytes(&self) -> usize {
         self.xterm_user_defined_keys.bytes()
     }
 
@@ -2229,7 +2230,7 @@ impl Terminal {
     /// Push a terminal event to be handled by the application. `PtyWrite`
     /// payloads are authored canonically with 7-bit introducers and framed at
     /// this boundary according to the current S7C1T/S8C1T preference.
-    pub fn push_event(&mut self, event: TerminalEvent) {
+    pub(crate) fn push_event(&mut self, event: TerminalEvent) {
         let event = match event {
             TerminalEvent::PtyWrite(reply) => TerminalEvent::PtyWrite(self.frame_pty_reply(&reply)),
             TerminalEvent::Notification(mut request) => {
@@ -2328,7 +2329,7 @@ impl Terminal {
         self.use_8bit_controls = use_8bit_controls;
     }
 
-    pub fn dec_conformance_level(&self) -> u8 {
+    pub(crate) fn dec_conformance_level(&self) -> u8 {
         self.dec_conformance_level
     }
 
@@ -3016,7 +3017,7 @@ impl Terminal {
 
     /// Repeat the most recently printed grapheme using the current rendition.
     /// A missing or deliberately unremembered pathological grapheme is a no-op.
-    pub fn repeat_last_graphic(&mut self, count: usize) {
+    pub(crate) fn repeat_last_graphic(&mut self, count: usize) {
         let Some((grapheme, charset)) = self.last_graphic.clone() else {
             return;
         };
@@ -3053,7 +3054,7 @@ impl Terminal {
     }
 
     /// Perform a line feed (move cursor down, scroll if at bottom)
-    pub fn linefeed(&mut self) {
+    pub(crate) fn linefeed(&mut self) {
         let cursor = self.grid().cursor();
         let col = if self.mode.contains(TerminalMode::LINEFEED_NEWLINE) {
             self.carriage_return_column(cursor.row, cursor.col)
@@ -3233,12 +3234,12 @@ impl Terminal {
     }
 
     /// Move to the next tab stop
-    pub fn horizontal_tab(&mut self) {
+    pub(crate) fn horizontal_tab(&mut self) {
         self.cursor_forward_tabs(1);
     }
 
     /// Move forward across the requested number of horizontal tab stops.
-    pub fn cursor_forward_tabs(&mut self, count: usize) {
+    pub(crate) fn cursor_forward_tabs(&mut self, count: usize) {
         let cursor = self.grid().cursor();
         let max_col =
             if self.row_inside_vertical_margins(cursor.row) && cursor.col < self.scroll_right {
@@ -3256,7 +3257,7 @@ impl Terminal {
     }
 
     /// Move backward across the requested number of horizontal tab stops.
-    pub fn cursor_backward_tabs(&mut self, count: usize) {
+    pub(crate) fn cursor_backward_tabs(&mut self, count: usize) {
         let cursor = self.grid().cursor();
         let min_col =
             if self.row_inside_vertical_margins(cursor.row) && cursor.col >= self.scroll_left {
@@ -3275,7 +3276,7 @@ impl Terminal {
     }
 
     /// Move cursor up
-    pub fn cursor_up(&mut self, n: usize) {
+    pub(crate) fn cursor_up(&mut self, n: usize) {
         let cursor = self.grid().cursor();
         let minimum =
             if self.col_inside_horizontal_margins(cursor.col) && cursor.row >= self.scroll_top {
@@ -3288,7 +3289,7 @@ impl Terminal {
     }
 
     /// Move cursor down
-    pub fn cursor_down(&mut self, n: usize) {
+    pub(crate) fn cursor_down(&mut self, n: usize) {
         let cursor = self.grid().cursor();
         let maximum =
             if self.col_inside_horizontal_margins(cursor.col) && cursor.row < self.scroll_bottom {
@@ -3301,7 +3302,7 @@ impl Terminal {
     }
 
     /// Move cursor forward (right)
-    pub fn cursor_forward(&mut self, n: usize) {
+    pub(crate) fn cursor_forward(&mut self, n: usize) {
         let cursor = self.grid().cursor();
         let maximum =
             if self.row_inside_vertical_margins(cursor.row) && cursor.col < self.scroll_right {
@@ -3314,7 +3315,7 @@ impl Terminal {
     }
 
     /// Move cursor backward (left)
-    pub fn cursor_backward(&mut self, n: usize) {
+    pub(crate) fn cursor_backward(&mut self, n: usize) {
         let cursor = self.grid().cursor();
         let minimum =
             if self.row_inside_vertical_margins(cursor.row) && cursor.col >= self.scroll_left {
@@ -3327,7 +3328,7 @@ impl Terminal {
     }
 
     /// HPR moves horizontally without the CUF margin clamp.
-    pub fn horizontal_position_relative(&mut self, n: usize) {
+    pub(crate) fn horizontal_position_relative(&mut self, n: usize) {
         if self.mode.contains(TerminalMode::ORIGIN) {
             self.cursor_forward(n);
             return;
@@ -3338,7 +3339,7 @@ impl Terminal {
     }
 
     /// VPR moves vertically without the CUD margin clamp.
-    pub fn vertical_position_relative(&mut self, n: usize) {
+    pub(crate) fn vertical_position_relative(&mut self, n: usize) {
         if self.mode.contains(TerminalMode::ORIGIN) {
             self.cursor_down(n);
             return;
@@ -3349,7 +3350,7 @@ impl Terminal {
     }
 
     /// CHA/HPA move only the column while respecting DECOM's origin.
-    pub fn set_cursor_column(&mut self, col: usize) {
+    pub(crate) fn set_cursor_column(&mut self, col: usize) {
         let cursor = self.grid().cursor();
         let col = if self.mode.contains(TerminalMode::ORIGIN) {
             self.scroll_left
@@ -3362,7 +3363,7 @@ impl Terminal {
     }
 
     /// VPA moves only the row while respecting DECOM's origin.
-    pub fn set_cursor_row(&mut self, row: usize) {
+    pub(crate) fn set_cursor_row(&mut self, row: usize) {
         let cursor = self.grid().cursor();
         let row = if self.mode.contains(TerminalMode::ORIGIN) {
             self.scroll_top
@@ -3395,7 +3396,7 @@ impl Terminal {
     }
 
     /// Erase in display
-    pub fn erase_in_display(&mut self, mode: u16) {
+    pub(crate) fn erase_in_display(&mut self, mode: u16) {
         let cursor = self.grid().cursor();
         let cols = self.cols;
         let rows = self.rows;
@@ -3449,7 +3450,7 @@ impl Terminal {
     }
 
     /// Erase in line
-    pub fn erase_in_line(&mut self, mode: u16) {
+    pub(crate) fn erase_in_line(&mut self, mode: u16) {
         let cursor = self.grid().cursor();
 
         let (start, end) = match mode {
@@ -3464,7 +3465,7 @@ impl Terminal {
 
     /// Selectively erase erasable cells in the display (DECSED). Protected
     /// cells survive with their complete grapheme and presentation state.
-    pub fn selective_erase_in_display(&mut self, mode: u16) {
+    pub(crate) fn selective_erase_in_display(&mut self, mode: u16) {
         let cursor = self.grid().cursor();
         let cols = self.cols;
         let rows = self.rows;
@@ -3486,7 +3487,7 @@ impl Terminal {
     }
 
     /// Selectively erase erasable cells in the current line (DECSEL).
-    pub fn selective_erase_in_line(&mut self, mode: u16) {
+    pub(crate) fn selective_erase_in_line(&mut self, mode: u16) {
         let cursor = self.grid().cursor();
         let (start, end) = match mode {
             0 => (cursor.col, self.cols),
@@ -3915,7 +3916,7 @@ impl Terminal {
         }
     }
 
-    pub fn attribute_change_extent_parameter(&self) -> u8 {
+    pub(crate) fn attribute_change_extent_parameter(&self) -> u8 {
         if self.rectangular_change_extent { 2 } else { 1 }
     }
 
@@ -4220,25 +4221,20 @@ impl Terminal {
         }
     }
 
-    /// Set text attributes (SGR)
-    pub fn set_attrs(&mut self, attrs: CellAttrs) {
-        self.current_attrs = attrs;
-    }
-
     /// Set foreground color with its original specification
-    pub fn set_fg(&mut self, color: Color, spec: ColorSpec) {
+    pub(crate) fn set_fg(&mut self, color: Color, spec: ColorSpec) {
         self.current_fg = color;
         self.current_fg_spec = spec;
     }
 
     /// Set background color with its original specification
-    pub fn set_bg(&mut self, color: Color, spec: ColorSpec) {
+    pub(crate) fn set_bg(&mut self, color: Color, spec: ColorSpec) {
         self.current_bg = color;
         self.current_bg_spec = spec;
     }
 
     /// Reset all attributes to default
-    pub fn reset_attrs(&mut self) {
+    pub(crate) fn reset_attrs(&mut self) {
         self.current_attrs = CellAttrs::empty();
         self.current_fg = Color::default_fg();
         self.current_bg = Color::default_bg();
@@ -4249,34 +4245,29 @@ impl Terminal {
     }
 
     /// Add text attributes to the current set
-    pub fn add_attrs(&mut self, attrs: CellAttrs) {
+    pub(crate) fn add_attrs(&mut self, attrs: CellAttrs) {
         self.current_attrs.insert(attrs);
     }
 
     /// Remove text attributes from the current set
-    pub fn remove_attrs(&mut self, attrs: CellAttrs) {
+    pub(crate) fn remove_attrs(&mut self, attrs: CellAttrs) {
         self.current_attrs.remove(attrs);
     }
 
-    /// Set underline color
-    pub fn set_underline_color(&mut self, color: Color) {
-        self.set_underline_color_spec(color, ColorSpec::TrueColor(color));
-    }
-
     /// Set an underline color while retaining its original SGR encoding.
-    pub fn set_underline_color_spec(&mut self, color: Color, spec: ColorSpec) {
+    pub(crate) fn set_underline_color_spec(&mut self, color: Color, spec: ColorSpec) {
         self.current_underline_color = Some(color);
         self.current_underline_color_spec = Some(spec);
     }
 
     /// Reset underline color (use fg color)
-    pub fn reset_underline_color(&mut self) {
+    pub(crate) fn reset_underline_color(&mut self) {
         self.current_underline_color = None;
         self.current_underline_color_spec = None;
     }
 
     /// Set underline style (clears all underline flags and sets the specified style)
-    pub fn set_underline_style(&mut self, style: u16) {
+    pub(crate) fn set_underline_style(&mut self, style: u16) {
         // Clear all underline-related flags first
         self.current_attrs.remove(CellAttrs::ALL_UNDERLINES);
 
@@ -4296,7 +4287,7 @@ impl Terminal {
     ///
     /// All characters written after this will be part of this hyperlink
     /// until `reset_hyperlink` is called.
-    pub fn set_hyperlink(&mut self, url: String, id: Option<String>) {
+    pub(crate) fn set_hyperlink(&mut self, url: String, id: Option<String>) {
         const MAX_HYPERLINK_BYTES: usize = 8 * 1024;
         if url.len() > MAX_HYPERLINK_BYTES
             || id
@@ -4325,7 +4316,7 @@ impl Terminal {
     /// Clear the current hyperlink
     ///
     /// Characters written after this will not be part of any hyperlink.
-    pub fn reset_hyperlink(&mut self) {
+    pub(crate) fn reset_hyperlink(&mut self) {
         self.current_hyperlink_id = None;
     }
 
@@ -4336,7 +4327,9 @@ impl Terminal {
 
     /// Resolve an OSC 8 target at a visual cell in the presented viewport,
     /// including scrolled history and a frozen synchronized-output snapshot.
-    pub fn presentation_hyperlink_at(&self, row: usize, col: usize) -> Option<&str> {
+    #[cfg(test)]
+    #[cfg(test)]
+    pub(crate) fn presentation_hyperlink_at(&self, row: usize, col: usize) -> Option<&str> {
         let grid = self.presentation_grid();
         if row >= grid.rows() || col >= grid.cols() {
             return None;
@@ -4717,7 +4710,7 @@ impl Terminal {
     // === Shell integration methods ===
 
     /// Handle OSC 133 shell integration sequence
-    pub fn handle_osc_133(&mut self, params: &[&[u8]]) {
+    pub(crate) fn handle_osc_133(&mut self, params: &[&[u8]]) {
         if self.alt_screen_active {
             log::trace!("Ignoring OSC 133 from the alternate screen");
             return;
@@ -4901,7 +4894,7 @@ impl Terminal {
     }
 
     /// Set a tab stop at the current column
-    pub fn set_tab_stop(&mut self) {
+    pub(crate) fn set_tab_stop(&mut self) {
         let cursor = self.grid().cursor();
         if let Some(tab) = self.tabs.get_mut(cursor.col) {
             *tab = true;
@@ -4909,7 +4902,7 @@ impl Terminal {
     }
 
     /// Clear the tab stop at the current column.
-    pub fn clear_tab_stop(&mut self) {
+    pub(crate) fn clear_tab_stop(&mut self) {
         let cursor = self.grid().cursor();
         if let Some(tab) = self.tabs.get_mut(cursor.col) {
             *tab = false;
@@ -4917,12 +4910,12 @@ impl Terminal {
     }
 
     /// Clear all tab stops
-    pub fn clear_tab_stops(&mut self) {
+    pub(crate) fn clear_tab_stops(&mut self) {
         self.tabs.fill(false);
     }
 
     /// Restore DEC's default horizontal tab stops at columns 9, 17, ...
-    pub fn reset_tab_stops(&mut self) {
+    pub(crate) fn reset_tab_stops(&mut self) {
         self.clear_tab_stops();
         for i in (TAB_INTERVAL..self.cols).step_by(TAB_INTERVAL) {
             self.tabs[i] = true;
@@ -4930,7 +4923,7 @@ impl Terminal {
     }
 
     /// Set the scroll region (1-indexed, inclusive) for DECSTBM
-    pub fn set_scroll_region(&mut self, top: usize, bottom: usize) {
+    pub(crate) fn set_scroll_region(&mut self, top: usize, bottom: usize) {
         if top == 0 || top >= bottom || bottom > self.rows {
             return;
         }
@@ -4949,7 +4942,7 @@ impl Terminal {
 
     /// Set DECSLRM's 1-indexed inclusive horizontal margins. Invalid pairs
     /// leave both margins and the cursor unchanged.
-    pub fn set_left_right_margins(&mut self, left: usize, right: usize) {
+    pub(crate) fn set_left_right_margins(&mut self, left: usize, right: usize) {
         if !self.mode.contains(TerminalMode::LEFT_RIGHT_MARGIN)
             || left == 0
             || left >= right
@@ -4976,7 +4969,7 @@ impl Terminal {
     }
 
     /// Reverse index (move up, scroll down if at top of region)
-    pub fn reverse_index(&mut self) {
+    pub(crate) fn reverse_index(&mut self) {
         let cursor = self.grid().cursor();
         if cursor.row == self.scroll_top && self.col_inside_horizontal_margins(cursor.col) {
             self.scroll_down(1);
@@ -4986,12 +4979,12 @@ impl Terminal {
     }
 
     /// Insert blank characters at cursor position
-    pub fn insert_chars(&mut self, count: usize) {
+    pub(crate) fn insert_chars(&mut self, count: usize) {
         self.shift_chars(count, true);
     }
 
     /// Delete characters at cursor position
-    pub fn delete_chars(&mut self, count: usize) {
+    pub(crate) fn delete_chars(&mut self, count: usize) {
         self.shift_chars(count, false);
     }
 
@@ -5034,7 +5027,7 @@ impl Terminal {
     }
 
     /// Erase characters at the cursor without moving it.
-    pub fn erase_chars(&mut self, count: usize) {
+    pub(crate) fn erase_chars(&mut self, count: usize) {
         let cursor = self.grid().cursor();
         self.erase_cells_in_region(
             cursor.row..cursor.row + 1,
@@ -5224,7 +5217,7 @@ impl Terminal {
     }
 
     /// Switch back to primary screen buffer
-    pub fn exit_alt_screen(&mut self) {
+    pub(crate) fn exit_alt_screen(&mut self) {
         let previous_pointer_shape = self.effective_pointer_shape();
         self.mode.remove(TerminalMode::ALT_SCREEN);
         if self.alt_screen_active {
@@ -5237,7 +5230,7 @@ impl Terminal {
     }
 
     /// Save cursor position
-    pub fn save_cursor(&mut self) {
+    pub(crate) fn save_cursor(&mut self) {
         let cursor = self.grid().cursor();
         let saved = SavedCursor {
             row: cursor.row,
@@ -5266,7 +5259,7 @@ impl Terminal {
     }
 
     /// Restore cursor position
-    pub fn restore_cursor(&mut self) {
+    pub(crate) fn restore_cursor(&mut self) {
         let saved = if self.alt_screen_active {
             self.alt_saved_cursor.clone()
         } else {
@@ -5292,7 +5285,7 @@ impl Terminal {
     }
 
     /// Set cursor visibility
-    pub fn set_cursor_visible(&mut self, visible: bool) {
+    pub(crate) fn set_cursor_visible(&mut self, visible: bool) {
         self.grid.set_cursor_visible(visible);
         self.alt_grid.set_cursor_visible(visible);
         self.set_mode(TerminalMode::CURSOR_VISIBLE, visible);
@@ -5355,7 +5348,7 @@ impl Terminal {
     /// while xterm modifier resources return to their startup values. As in
     /// xterm, autowrap returns to this terminal's startup default (enabled),
     /// rather than the VT420 hardware default (disabled).
-    pub fn soft_reset(&mut self) {
+    pub(crate) fn soft_reset(&mut self) {
         let previous_pointer_shape = self.effective_pointer_shape();
         self.pointer_shapes.clear();
         self.alt_pointer_shapes.clear();
@@ -5748,6 +5741,7 @@ fn is_word_char(c: char) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::keyboard::{MAX_USER_DEFINED_KEYS_BYTES, XTERM_USER_DEFINED_KEY_COUNT};
     use super::*;
 
     #[test]

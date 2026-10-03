@@ -7,12 +7,12 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::collections::HashSet;
 
-pub const MAX_KITTY_TRANSFER_ID_BYTES: usize = 64;
+pub(crate) const MAX_KITTY_TRANSFER_ID_BYTES: usize = 64;
 pub const MAX_KITTY_TRANSFER_FILE_ID_BYTES: usize = 64;
 pub const MAX_KITTY_TRANSFER_PATH_BYTES: usize = 4_096;
-pub const MAX_KITTY_TRANSFER_STATUS_BYTES: usize = 1_024;
+pub(crate) const MAX_KITTY_TRANSFER_STATUS_BYTES: usize = 1_024;
 pub const MAX_KITTY_TRANSFER_DATA_BYTES: usize = 4_096;
-pub const MAX_KITTY_TRANSFER_OSC_BYTES: usize = 16 * 1_024;
+pub(crate) const MAX_KITTY_TRANSFER_OSC_BYTES: usize = 16 * 1_024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KittyFileTransferAction {

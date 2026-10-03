@@ -52,25 +52,16 @@ pub use file_transfer::{
     KittyFileTransferAction, KittyFileTransferCommand, KittyFileTransferCompression,
     KittyFileTransferReply, KittyFileTransferStatus, KittyFileTransferStatusCode,
     KittyFileTransferType, KittyFileTransmissionType, MAX_KITTY_TRANSFER_DATA_BYTES,
-    MAX_KITTY_TRANSFER_FILE_ID_BYTES, MAX_KITTY_TRANSFER_ID_BYTES, MAX_KITTY_TRANSFER_OSC_BYTES,
-    MAX_KITTY_TRANSFER_PATH_BYTES, MAX_KITTY_TRANSFER_STATUS_BYTES,
+    MAX_KITTY_TRANSFER_FILE_ID_BYTES, MAX_KITTY_TRANSFER_PATH_BYTES,
 };
-pub use graphics::{
-    GraphicsManager, IMAGE_PLACEHOLDER, ImageId, ImagePlacement, PresentationImage, StoredImage,
-};
+pub use graphics::{IMAGE_PLACEHOLDER, ImageId, ImagePlacement, PresentationImage, StoredImage};
 pub use grid::{
     Cell, CellAttrs, CellContent, CellFlags, CellRef, Color, ColorSpec, Cursor,
-    DEFAULT_SCROLLBACK_MEMORY_BYTES, Grid, GridMemoryUsage, MultiCell, MultiCellAlignment,
-    MultiCellRegion, Row, RowView,
+    DEFAULT_SCROLLBACK_MEMORY_BYTES, Grid, MultiCell, MultiCellAlignment, Row, RowView,
 };
 pub use pty::Pty;
-pub use shell::{CommandRegion, PromptMark, ShellIntegration};
+pub use shell::CommandRegion;
 pub use term::{
-    DynamicColors, ExtraCursor, ExtraCursorColor, ExtraCursorColors, ExtraCursorShape,
-    ExtraCursorState, MAX_EXTRA_CURSOR_CELLS, MAX_EXTRA_CURSOR_DIMENSION,
-    MAX_NOTIFICATION_BODY_BYTES, MAX_NOTIFICATION_IDENTIFIER_BYTES, MAX_NOTIFICATION_TITLE_BYTES,
-    MAX_OSC66_TEXT_BYTES, MAX_OSC99_DECODED_CHUNK_BYTES, MAX_OSC99_ENCODED_CHUNK_BYTES,
-    MAX_PENDING_NOTIFICATION_BYTES, MAX_PENDING_NOTIFICATIONS, Point, PointerShape,
-    ReportedWorkingDirectory, Selection, SelectionType, Terminal, TerminalMemoryUsage,
-    XTERM_TITLE_STACK_DEPTH,
+    DynamicColors, ExtraCursorColor, ExtraCursorColors, ExtraCursorShape, ExtraCursorState, Point,
+    PointerShape, ReportedWorkingDirectory, Selection, SelectionType, Terminal,
 };

@@ -4,7 +4,7 @@ use super::handler::{Handler, MAX_OSC_SEQUENCE_BYTES};
 use crate::term::Terminal;
 use vte::Parser;
 
-pub const MAX_DCS_SEQUENCE_BYTES: usize = 16 * 1024 * 1024 + 64;
+pub(crate) const MAX_DCS_SEQUENCE_BYTES: usize = 16 * 1024 * 1024 + 64;
 
 /// Mirror the UTF-8 decoder's small amount of pending state so bytes in the
 /// C1 range are interpreted as controls only when they are not continuations
@@ -73,7 +73,7 @@ impl Utf8InputState {
 }
 
 /// Processor for parsing and handling escape sequences
-pub struct Processor {
+pub(crate) struct Processor {
     parser: Parser,
     utf8_input_state: Utf8InputState,
     escape_sequence_active: bool,
@@ -1036,7 +1036,7 @@ mod tests {
             )]
         );
 
-        terminal.set_term_name(crate::pty::COMPATIBILITY_TERM);
+        terminal.set_term_name(crate::pty::capabilities::COMPATIBILITY_TERM);
         processor.process(&mut terminal, b"\x1bP+q544e\x1b\\");
         assert_eq!(
             terminal.drain_events(),
@@ -1346,7 +1346,8 @@ mod tests {
     #[test]
     fn osc22_pointer_shapes_are_bounded_queryable_screen_local_and_resettable() {
         use crate::event::TerminalEvent;
-        use crate::term::{POINTER_SHAPE_STACK_DEPTH, PointerShape};
+        use crate::term::PointerShape;
+        use crate::term::pointer::POINTER_SHAPE_STACK_DEPTH;
 
         let mut processor = Processor::new();
         let mut terminal = Terminal::new(10, 2);

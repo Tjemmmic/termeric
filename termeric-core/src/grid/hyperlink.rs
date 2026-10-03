@@ -71,13 +71,13 @@ impl HyperlinkRegistry {
         new_id
     }
 
-    pub fn find_id(&self, url: &str, id: Option<&str>) -> Option<u32> {
+    pub(crate) fn find_id(&self, url: &str, id: Option<&str>) -> Option<u32> {
         self.url_to_id
             .get(&(url.to_owned(), id.map(str::to_owned)))
             .copied()
     }
 
-    pub fn retain_ids(&mut self, retained: &HashSet<u32>) {
+    pub(crate) fn retain_ids(&mut self, retained: &HashSet<u32>) {
         self.links
             .retain(|identifier, _| retained.contains(identifier));
         self.url_to_id
@@ -92,7 +92,7 @@ impl HyperlinkRegistry {
     }
 
     /// Get the URL for a hyperlink ID
-    pub fn get_url(&self, id: u32) -> Option<&str> {
+    pub(crate) fn get_url(&self, id: u32) -> Option<&str> {
         self.links.get(&id).map(|h| h.url.as_str())
     }
 
@@ -114,7 +114,7 @@ impl HyperlinkRegistry {
     }
 
     /// Estimated heap and table memory owned by the deduplicated registry.
-    pub fn memory_usage_bytes(&self) -> usize {
+    pub(crate) fn memory_usage_bytes(&self) -> usize {
         let strings = self
             .links
             .values()

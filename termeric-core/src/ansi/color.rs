@@ -2,52 +2,6 @@
 
 use crate::grid::Color;
 
-/// ANSI color index (0-15)
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AnsiColor {
-    Black = 0,
-    Red = 1,
-    Green = 2,
-    Yellow = 3,
-    Blue = 4,
-    Magenta = 5,
-    Cyan = 6,
-    White = 7,
-    BrightBlack = 8,
-    BrightRed = 9,
-    BrightGreen = 10,
-    BrightYellow = 11,
-    BrightBlue = 12,
-    BrightMagenta = 13,
-    BrightCyan = 14,
-    BrightWhite = 15,
-}
-
-impl AnsiColor {
-    /// Convert an index to an AnsiColor
-    pub fn from_index(idx: u8) -> Option<Self> {
-        match idx {
-            0 => Some(Self::Black),
-            1 => Some(Self::Red),
-            2 => Some(Self::Green),
-            3 => Some(Self::Yellow),
-            4 => Some(Self::Blue),
-            5 => Some(Self::Magenta),
-            6 => Some(Self::Cyan),
-            7 => Some(Self::White),
-            8 => Some(Self::BrightBlack),
-            9 => Some(Self::BrightRed),
-            10 => Some(Self::BrightGreen),
-            11 => Some(Self::BrightYellow),
-            12 => Some(Self::BrightBlue),
-            13 => Some(Self::BrightMagenta),
-            14 => Some(Self::BrightCyan),
-            15 => Some(Self::BrightWhite),
-            _ => None,
-        }
-    }
-}
-
 /// Get the default color for a normal ANSI color (0-7)
 pub fn ansi_color(idx: u16) -> Color {
     match idx {
@@ -64,7 +18,7 @@ pub fn ansi_color(idx: u16) -> Color {
 }
 
 /// Get the default color for a bright ANSI color (8-15)
-pub fn ansi_bright_color(idx: u16) -> Color {
+pub(crate) fn ansi_bright_color(idx: u16) -> Color {
     match idx {
         0 => Color::rgb(102, 102, 102), // Bright Black (Gray)
         1 => Color::rgb(241, 76, 76),   // Bright Red

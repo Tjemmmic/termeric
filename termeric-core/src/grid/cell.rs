@@ -94,7 +94,7 @@ impl MultiCell {
     }
 
     /// Logical width before multiplying by `scale` (`1..=7`).
-    pub fn logical_width(self) -> u8 {
+    pub(crate) fn logical_width(self) -> u8 {
         ((self.0 >> Self::WIDTH_SHIFT) & Self::THREE_BIT_MASK) as u8
     }
 
@@ -139,12 +139,12 @@ impl MultiCell {
     }
 
     /// Column offset from this cell back to the block leader.
-    pub fn relative_col(self) -> usize {
+    pub(crate) fn relative_col(self) -> usize {
         ((self.0 >> Self::RELATIVE_COL_SHIFT) & Self::RELATIVE_COL_MASK) as usize
     }
 
     /// Row offset from this cell back to the block leader.
-    pub fn relative_row(self) -> usize {
+    pub(crate) fn relative_row(self) -> usize {
         ((self.0 >> Self::RELATIVE_ROW_SHIFT) & Self::RELATIVE_ROW_MASK) as usize
     }
 
@@ -267,7 +267,7 @@ bitflags! {
 
 impl CellAttrs {
     /// All underline-related flags
-    pub const ALL_UNDERLINES: CellAttrs = CellAttrs::from_bits_truncate(
+    pub(crate) const ALL_UNDERLINES: CellAttrs = CellAttrs::from_bits_truncate(
         CellAttrs::UNDERLINE.bits()
             | CellAttrs::DOUBLE_UNDERLINE.bits()
             | CellAttrs::CURLY_UNDERLINE.bits()
@@ -458,14 +458,14 @@ impl Cell {
     }
 
     /// Set the character content
-    pub fn set_char(&mut self, c: char) {
+    pub(crate) fn set_char(&mut self, c: char) {
         self.content = CellContent::Char(c);
         self.multicell = MultiCell::default();
         self.flags.insert(CellFlags::DIRTY);
     }
 
     /// Set the grapheme content (for complex Unicode)
-    pub fn set_grapheme(&mut self, s: &str) {
+    pub(crate) fn set_grapheme(&mut self, s: &str) {
         let mut scalars = s.chars();
         self.content = match (scalars.next(), scalars.next()) {
             (None, _) => CellContent::Empty,
@@ -541,15 +541,6 @@ impl Cell {
             0
         } else {
             1
-        }
-    }
-
-    /// Apply the inverse attribute (swap fg/bg)
-    pub fn apply_inverse(&self) -> (Color, Color) {
-        if self.attrs.contains(CellAttrs::INVERSE) {
-            (self.bg, self.fg)
-        } else {
-            (self.fg, self.bg)
         }
     }
 }

@@ -7,20 +7,20 @@ use std::collections::VecDeque;
 ///
 /// Kitty requires a bounded stack and FIFO retirement when it fills. Sixteen
 /// entries is deep enough for nested TUIs while keeping hostile input bounded.
-pub const KITTY_KEYBOARD_STACK_DEPTH: usize = 16;
+pub(crate) const KITTY_KEYBOARD_STACK_DEPTH: usize = 16;
 
 /// Xterm stores DEC user-defined keys by DEC function-key code 0 through 34.
-pub const XTERM_USER_DEFINED_KEY_COUNT: usize = 35;
+pub(crate) const XTERM_USER_DEFINED_KEY_COUNT: usize = 35;
 /// A single definition is deliberately much larger than the VT220 hardware
 /// budget while preventing a control sequence from becoming permanent
 /// unbounded terminal state.
-pub const MAX_USER_DEFINED_KEY_BYTES: usize = 4 * 1024;
+pub(crate) const MAX_USER_DEFINED_KEY_BYTES: usize = 4 * 1024;
 /// Aggregate decoded UDK storage per terminal owner.
-pub const MAX_USER_DEFINED_KEYS_BYTES: usize = 64 * 1024;
+pub(crate) const MAX_USER_DEFINED_KEYS_BYTES: usize = 64 * 1024;
 
 /// Terminal-local DECUDK definitions used by xterm's VT220 keyboard profile.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct XtermUserDefinedKeys {
+pub(crate) struct XtermUserDefinedKeys {
     definitions: [Option<Box<[u8]>>; XTERM_USER_DEFINED_KEY_COUNT],
     bytes: usize,
 }
@@ -50,12 +50,9 @@ impl XtermUserDefinedKeys {
             })
     }
 
-    pub const fn bytes(&self) -> usize {
+    #[cfg(test)]
+    pub(crate) const fn bytes(&self) -> usize {
         self.bytes
-    }
-
-    pub const fn is_empty(&self) -> bool {
-        self.bytes == 0
     }
 
     pub(super) fn clear(&mut self) {

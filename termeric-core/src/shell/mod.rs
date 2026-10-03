@@ -4,7 +4,7 @@
 
 mod prompt;
 
-pub use prompt::{CommandRegion, PromptMark, PromptTracker, PromptType};
+pub use prompt::{CommandRegion, PromptTracker};
 
 /// Shell integration state for a terminal
 #[derive(Debug, Default)]
@@ -28,7 +28,7 @@ impl ShellIntegration {
     /// - B: Prompt end / Command start
     /// - C: Command end / Output start
     /// - D: Output end (with optional exit code)
-    pub fn handle_osc_133(&mut self, params: &[&[u8]], cursor_row: usize) {
+    pub(crate) fn handle_osc_133(&mut self, params: &[&[u8]], cursor_row: usize) {
         if params.is_empty() {
             return;
         }
@@ -92,18 +92,13 @@ impl ShellIntegration {
     }
 
     /// Prompt row of the nearest earlier command that exited non-zero.
-    pub fn previous_failed_prompt(&self, from_row: i32) -> Option<i32> {
+    pub(crate) fn previous_failed_prompt(&self, from_row: i32) -> Option<i32> {
         self.prompt_tracker.previous_failed_prompt(from_row)
     }
 
     /// Prompt row of the nearest later command that exited non-zero.
-    pub fn next_failed_prompt(&self, from_row: i32) -> Option<i32> {
+    pub(crate) fn next_failed_prompt(&self, from_row: i32) -> Option<i32> {
         self.prompt_tracker.next_failed_prompt(from_row)
-    }
-
-    /// Get the command region containing a given row
-    pub fn command_at(&self, row: i32) -> Option<&CommandRegion> {
-        self.prompt_tracker.command_at(row)
     }
 }
 

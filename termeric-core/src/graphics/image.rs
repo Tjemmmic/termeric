@@ -26,7 +26,7 @@ pub struct StoredImage {
 
 impl StoredImage {
     /// Get the memory size of this image
-    pub fn memory_size(&self) -> usize {
+    pub(crate) fn memory_size(&self) -> usize {
         self.data.len()
     }
 }
@@ -100,7 +100,7 @@ pub struct PresentationImage {
 }
 
 impl PresentationImage {
-    pub fn from_placement(placement: &ImagePlacement, image: &StoredImage) -> Self {
+    pub(crate) fn from_placement(placement: &ImagePlacement, image: &StoredImage) -> Self {
         Self {
             placement: placement.clone(),
             image: image.clone(),

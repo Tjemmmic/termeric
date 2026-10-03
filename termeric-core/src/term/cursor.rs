@@ -65,7 +65,7 @@ impl TerminalCursorStyle {
 
 /// Saved cursor state (for DECSC/DECRC)
 #[derive(Clone, Debug)]
-pub struct SavedCursor {
+pub(crate) struct SavedCursor {
     /// Saved row position
     pub row: usize,
     /// Saved column position

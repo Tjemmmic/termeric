@@ -14,11 +14,13 @@ mod storage;
 pub use cell::{
     Cell, CellAttrs, CellContent, CellFlags, Color, ColorSpec, MultiCell, MultiCellAlignment,
 };
-pub use hyperlink::{Hyperlink, HyperlinkRegistry};
+pub use hyperlink::Hyperlink;
+pub(crate) use hyperlink::HyperlinkRegistry;
 pub use resize_tracking::ResizeTrackingToken;
 pub use row::Row;
+pub(crate) use storage::GridMemoryUsage;
 pub(crate) use storage::ResizeOutcome;
-pub use storage::{CellRef, DEFAULT_SCROLLBACK_MEMORY_BYTES, GridMemoryUsage, RowView};
+pub use storage::{CellRef, DEFAULT_SCROLLBACK_MEMORY_BYTES, RowView};
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -293,7 +295,7 @@ impl Grid {
     }
 
     /// Get a mutable reference to a cell at the given position
-    pub fn cell_mut(&mut self, row: usize, col: usize) -> Option<&mut Cell> {
+    pub(crate) fn cell_mut(&mut self, row: usize, col: usize) -> Option<&mut Cell> {
         let cell = self.storage.cell_mut(row, col)?;
         self.content_revision = self.content_revision.wrapping_add(1);
         Some(cell)
@@ -555,12 +557,12 @@ impl Grid {
     }
 
     /// Set the wrap-pending flag on the cursor
-    pub fn set_wrap_pending(&mut self, pending: bool) {
+    pub(crate) fn set_wrap_pending(&mut self, pending: bool) {
         self.cursor.wrap_pending = pending;
     }
 
     /// Set cursor visibility
-    pub fn set_cursor_visible(&mut self, visible: bool) {
+    pub(crate) fn set_cursor_visible(&mut self, visible: bool) {
         self.cursor.visible = visible;
     }
 
@@ -615,34 +617,6 @@ impl Grid {
         self.storage.scroll_region_down(top, bottom);
     }
 
-    /// Scroll a partial-width rectangle up by one row.
-    pub fn scroll_rect_up(
-        &mut self,
-        top: usize,
-        bottom: usize,
-        left: usize,
-        right: usize,
-        blank: &Cell,
-    ) {
-        self.storage
-            .scroll_rect_up(top, bottom, left, right, blank, |_, _| {});
-        self.mark_rows_changed();
-    }
-
-    /// Scroll a partial-width rectangle down by one row.
-    pub fn scroll_rect_down(
-        &mut self,
-        top: usize,
-        bottom: usize,
-        left: usize,
-        right: usize,
-        blank: &Cell,
-    ) {
-        self.storage
-            .scroll_rect_down(top, bottom, left, right, blank, |_, _| {});
-        self.mark_rows_changed();
-    }
-
     pub(crate) fn scroll_rect_with_damage(
         &mut self,
         rows: std::ops::Range<usize>,
@@ -671,14 +645,6 @@ impl Grid {
             blinking: self.cursor.blinking,
             ..Default::default()
         };
-    }
-
-    /// Clear a specific row
-    pub fn clear_row(&mut self, row: usize) {
-        if row < self.rows {
-            self.content_revision = self.content_revision.wrapping_add(1);
-        }
-        self.storage.clear_row(row);
     }
 
     /// Get the scrollback length
@@ -716,7 +682,7 @@ impl Grid {
     }
 
     /// Set the maximum estimated memory owned by archived scrollback rows.
-    pub fn set_scrollback_byte_limit(&mut self, limit: usize) {
+    pub(crate) fn set_scrollback_byte_limit(&mut self, limit: usize) {
         let previous_len = self.scrollback_len();
         self.storage.set_scrollback_byte_limit(limit);
         if self.scrollback_len() != previous_len {
@@ -752,8 +718,8 @@ impl Grid {
         Some(row)
     }
 
-    /// Iterate over all visible cells
-    pub fn iter_cells(&self) -> impl Iterator<Item = (usize, usize, &Cell)> {
+    #[cfg(test)]
+    pub(crate) fn iter_cells(&self) -> impl Iterator<Item = (usize, usize, &Cell)> {
         (0..self.rows).flat_map(move |row| {
             (0..self.cols).filter_map(move |col| self.cell(row, col).map(|cell| (row, col, cell)))
         })
@@ -807,7 +773,6 @@ mod tests {
                 |grid| grid.row_mut(0).unwrap().set_wrapped(true),
                 false,
             ),
-            ("clear row", |grid| grid.clear_row(0), false),
             ("clear", Grid::clear, false),
             (
                 "scroll up",
@@ -825,16 +790,6 @@ mod tests {
                 true,
             ),
             ("region down", |grid| grid.scroll_region_down(0, 1), true),
-            (
-                "rectangle up",
-                |grid| grid.scroll_rect_up(0, 1, 0, 1, &Cell::default()),
-                true,
-            ),
-            (
-                "rectangle down",
-                |grid| grid.scroll_rect_down(0, 1, 0, 1, &Cell::default()),
-                true,
-            ),
             (
                 "archive",
                 |grid| {
@@ -902,14 +857,12 @@ mod tests {
                 .unwrap()
                 .flags
                 .insert(CellFlags::WIDE_CHAR_SPACER);
-            grid.row_mut(row).unwrap().set_clean();
         }
         let before: Vec<_> = (0..4)
             .map(|row| grid.row(row).unwrap().iter().cloned().collect::<Vec<_>>())
             .collect();
         grid.repair_multicells(&Cell::default());
         for (row, cells) in before.iter().enumerate() {
-            assert!(!grid.row(row).unwrap().is_dirty());
             assert_eq!(
                 grid.row(row).unwrap().iter().collect::<Vec<_>>(),
                 cells.iter().collect::<Vec<_>>()
@@ -976,7 +929,6 @@ mod tests {
                         // unrelated cells, not just the legitimate leader.
                         for row in 0..grid.rows() {
                             grid.row_mut(row).unwrap().has_multicells();
-                            grid.row_mut(row).unwrap().set_clean();
                         }
                         let before: Vec<_> = grid.iter_cells().map(|(_, _, c)| c.clone()).collect();
                         // Synchronized-output capture uses the same repair path
@@ -998,9 +950,6 @@ mod tests {
                             if (r, c) != (row, col) {
                                 assert_eq!(cell, &before[r * grid.cols() + c]);
                             }
-                        }
-                        for r in 0..grid.rows() {
-                            assert_eq!(grid.row(r).unwrap().is_dirty(), r == row);
                         }
                         assert!(grid.multicell_region_at(top, left).is_some());
                     }
@@ -1077,17 +1026,10 @@ mod tests {
                             cell.multicell = descriptor.at(offset % 4, offset / 4).unwrap();
                         }
                     }
-                    for row in 0..4 {
-                        grid.row_mut(row).unwrap().set_clean();
-                    }
                 }
                 actual.repair_multicells(&blank);
                 reference(&mut expected, &blank);
                 for row in 0..4 {
-                    assert_eq!(
-                        actual.row(row).unwrap().is_dirty(),
-                        expected.row(row).unwrap().is_dirty()
-                    );
                     for col in 0..8 {
                         assert_eq!(
                             actual.cell(row, col),

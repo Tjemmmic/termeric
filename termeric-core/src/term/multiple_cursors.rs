@@ -8,8 +8,9 @@ use std::fmt::Write as _;
 /// Maximum geometry accepted by live-domain pane resizes and by the multiple
 /// cursors protocol. Keeping the same limit makes every allocation and query
 /// response finite even when a child fills the complete viewport.
-pub const MAX_EXTRA_CURSOR_DIMENSION: usize = 1_000;
-pub const MAX_EXTRA_CURSOR_CELLS: usize = MAX_EXTRA_CURSOR_DIMENSION * MAX_EXTRA_CURSOR_DIMENSION;
+pub(crate) const MAX_EXTRA_CURSOR_DIMENSION: usize = 1_000;
+pub(crate) const MAX_EXTRA_CURSOR_CELLS: usize =
+    MAX_EXTRA_CURSOR_DIMENSION * MAX_EXTRA_CURSOR_DIMENSION;
 
 const EMPTY: u8 = 0;
 const BLOCK: u8 = 1;

@@ -8,15 +8,15 @@ use std::collections::HashMap;
 use std::fmt;
 
 /// Bound the control section independently from image data.
-pub const MAX_CONTROL_BYTES: usize = 4 * 1024;
+pub(crate) const MAX_CONTROL_BYTES: usize = 4 * 1024;
 /// Kitty's reference client currently emits 128-KiB directly transmitted,
 /// base64-encoded chunks even though the published protocol recommends 4 KiB.
-pub const MAX_ENCODED_CHUNK_BYTES: usize = 128 * 1024;
+pub(crate) const MAX_ENCODED_CHUNK_BYTES: usize = 128 * 1024;
 /// Maximum bytes following APC `G`, including control data and its separator.
-pub const MAX_APC_BYTES: usize = MAX_CONTROL_BYTES + 1 + MAX_ENCODED_CHUNK_BYTES;
+pub(crate) const MAX_APC_BYTES: usize = MAX_CONTROL_BYTES + 1 + MAX_ENCODED_CHUNK_BYTES;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct KittyParseError(pub String);
+pub(crate) struct KittyParseError(pub String);
 
 impl fmt::Display for KittyParseError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -26,7 +26,7 @@ impl fmt::Display for KittyParseError {
 
 /// Kitty graphics command.
 #[derive(Debug, Clone)]
-pub struct KittyCommand {
+pub(crate) struct KittyCommand {
     pub action: KittyAction,
     pub image_id: Option<u32>,
     /// Client image number (`I=`). Unlike IDs, numbers are not unique and
@@ -42,12 +42,10 @@ pub struct KittyCommand {
     pub quiet: u8,
     /// Deletion selector (d=), defaulting to all visible placements/images.
     pub delete: char,
-    /// Whether a semicolon and data field were present.
-    pub has_data: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KittyAction {
+pub(crate) enum KittyAction {
     Transmit,
     Display,
     TransmitAndDisplay,
@@ -61,7 +59,7 @@ pub enum KittyAction {
 /// Action-dependent animation controls. Kitty intentionally reuses several
 /// control keys between frame loading, playback control, and composition.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct KittyFrame {
+pub(crate) struct KittyFrame {
     /// `r=`: edited/affected/source frame number, depending on the action.
     pub frame_number: Option<u32>,
     /// `c=`: base/current/destination frame number, depending on the action.
@@ -86,7 +84,7 @@ pub struct KittyFrame {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct KittyTransmission {
+pub(crate) struct KittyTransmission {
     pub format: KittyFormat,
     pub width: Option<u32>,
     pub height: Option<u32>,
@@ -96,8 +94,6 @@ pub struct KittyTransmission {
     pub data_size: Option<u64>,
     /// Byte offset into local media (`O=`).
     pub data_offset: Option<u64>,
-    /// Client usage hints (`N=`). Hints may be ignored by the storage policy.
-    pub usage_hints: u32,
 }
 
 impl Default for KittyTransmission {
@@ -110,13 +106,12 @@ impl Default for KittyTransmission {
             compression: KittyCompression::None,
             data_size: None,
             data_offset: None,
-            usage_hints: 0,
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum KittyFormat {
+pub(crate) enum KittyFormat {
     #[default]
     Rgba,
     Rgb,
@@ -124,7 +119,7 @@ pub enum KittyFormat {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum KittyMedium {
+pub(crate) enum KittyMedium {
     #[default]
     Direct,
     File,
@@ -133,14 +128,14 @@ pub enum KittyMedium {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum KittyCompression {
+pub(crate) enum KittyCompression {
     #[default]
     None,
     Zlib,
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct KittyPlacement {
+pub(crate) struct KittyPlacement {
     /// Source rectangle in image pixels (x/y/w/h).
     pub source_x: Option<u32>,
     pub source_y: Option<u32>,
@@ -172,7 +167,7 @@ impl KittyCommand {
     /// Return whether a command explicitly requests that all replies be
     /// suppressed. This deliberately needs only the bounded control prefix so
     /// malformed and oversized commands can still honor `q=2`.
-    pub fn suppresses_response(payload: &[u8]) -> bool {
+    pub(crate) fn suppresses_response(payload: &[u8]) -> bool {
         let control_end = payload
             .iter()
             .position(|byte| *byte == b';')
@@ -239,6 +234,8 @@ impl KittyCommand {
             Some("1") => true,
             Some(value) => return Err(KittyParseError(format!("invalid m={value}"))),
         };
+        // Usage hints (`N=`) are advisory: validated, then ignored.
+        number::<u32>(&params, "N")?;
         let quiet = number::<u8>(&params, "q")?.unwrap_or(0);
         if quiet > 2 {
             return Err(KittyParseError("q must be 0, 1, or 2".into()));
@@ -342,7 +339,6 @@ impl KittyCommand {
                 compression,
                 data_size: number::<u64>(&params, "S")?.filter(|value| *value != 0),
                 data_offset: number::<u64>(&params, "O")?.filter(|value| *value != 0),
-                usage_hints: number::<u32>(&params, "N")?.unwrap_or(0),
             },
             placement: KittyPlacement {
                 source_x: number(&params, "x")?,
@@ -368,7 +364,6 @@ impl KittyCommand {
             more_chunks,
             quiet,
             delete,
-            has_data,
         })
     }
 }
@@ -484,7 +479,7 @@ mod tests {
         let cmd = KittyCommand::parse(b"a=T,I=13,N=1,f=32,s=1,v=1;AQIDBA==").unwrap();
         assert_eq!(cmd.image_id, None);
         assert_eq!(cmd.image_number, Some(13));
-        assert_eq!(cmd.transmission.usage_hints, 1);
+        assert!(KittyCommand::parse(b"a=T,N=x,f=32,s=1,v=1;AQIDBA==").is_err());
 
         assert!(KittyCommand::parse(b"a=t,i=7,I=13;AQIDBA==").is_err());
         assert!(KittyCommand::parse(b"a=t,I=not-a-number;AQIDBA==").is_err());

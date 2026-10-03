@@ -63,7 +63,6 @@ fn assert_equivalent(actual: &Terminal, expected: &Terminal) {
         let b = expected.grid().row(row).unwrap();
         assert!(a.iter().eq(b.iter()), "row {row}");
         assert_eq!(a.is_wrapped(), b.is_wrapped());
-        assert_eq!(a.is_dirty(), b.is_dirty());
     }
     let a = actual.grid().cursor();
     let b = expected.grid().cursor();

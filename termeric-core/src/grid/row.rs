@@ -7,13 +7,11 @@ use super::cell::{Cell, CellAttrs, CellFlags};
 pub struct Row {
     /// Cells in this row
     cells: Vec<Cell>,
-    /// Whether this row has been modified since last render
-    dirty: bool,
     /// True if this row was soft-wrapped (content continues on next row)
     wrapped: bool,
     /// Final default cell inserted only because a wide pair did not fit.
     wide_wrap_padding: bool,
-    /// Lazy descriptor presence, independent of render dirtiness. Every cell
+    /// Lazy descriptor presence. Every cell
     /// mutation must invalidate or recompute it; exposed mutable references
     /// must invalidate it. Keeping
     /// it on the row lets unchanged rows retain it through scrolling.
@@ -25,7 +23,6 @@ impl Row {
     pub fn new(cols: usize) -> Self {
         Self {
             cells: vec![Cell::default(); cols],
-            dirty: true,
             wrapped: false,
             wide_wrap_padding: false,
             multicells_present: Some(false),
@@ -33,12 +30,11 @@ impl Row {
     }
 
     /// Reuse a discarded viewport row's allocation with exactly `new` state.
-    /// Unlike `clear`, fresh cells have no per-cell DIRTY flags; the row itself
-    /// is dirty. Dropping old cells also releases graphemes and other content.
+    /// Unlike `clear`, fresh cells have no per-cell DIRTY flags. Dropping old
+    /// cells also releases graphemes and other content.
     pub(crate) fn into_blank(mut self, cols: usize) -> Self {
         self.cells.clear();
         self.cells.resize_with(cols, Cell::default);
-        self.dirty = true;
         self.wrapped = false;
         self.wide_wrap_padding = false;
         self.multicells_present = Some(false);
@@ -49,7 +45,6 @@ impl Row {
     pub fn from_cells(cells: Vec<Cell>, wrapped: bool) -> Self {
         Self {
             cells,
-            dirty: true,
             wrapped,
             wide_wrap_padding: false,
             multicells_present: None,
@@ -80,7 +75,6 @@ impl Row {
         if col.checked_add(1) == Some(self.cells.len()) {
             self.wide_wrap_padding = false;
         }
-        self.dirty = true;
         self.multicells_present = None;
         self.cells.get_mut(col)
     }
@@ -96,7 +90,6 @@ impl Row {
         for cell in &mut self.cells {
             cell.clear();
         }
-        self.dirty = true;
         self.wrapped = false;
         self.wide_wrap_padding = false;
         self.multicells_present = Some(false);
@@ -106,22 +99,6 @@ impl Row {
     pub fn resize(&mut self, cols: usize) {
         self.cells.resize_with(cols, Cell::default);
         self.repair_wide_cells();
-        self.dirty = true;
-    }
-
-    /// Check if the row is dirty (needs re-rendering)
-    pub fn is_dirty(&self) -> bool {
-        self.dirty
-    }
-
-    /// Mark the row as clean
-    pub fn set_clean(&mut self) {
-        self.dirty = false;
-    }
-
-    /// Mark the row as dirty
-    pub fn set_dirty(&mut self) {
-        self.dirty = true;
     }
 
     /// Check if this row was soft-wrapped (content continues on next row)
@@ -156,7 +133,7 @@ impl Row {
     }
 
     /// Consume the row and return its cells
-    pub fn into_cells(self) -> Vec<Cell> {
+    pub(crate) fn into_cells(self) -> Vec<Cell> {
         self.cells
     }
 
@@ -168,30 +145,33 @@ impl Row {
     /// Iterate over all cells mutably
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Cell> {
         self.wide_wrap_padding = false;
-        self.dirty = true;
         self.multicells_present = None;
         self.cells.iter_mut()
     }
 
     /// Iterate over cells with their column index
-    pub fn iter_enumerated(&self) -> impl Iterator<Item = (usize, &Cell)> {
+    pub(crate) fn iter_enumerated(&self) -> impl Iterator<Item = (usize, &Cell)> {
         self.cells.iter().enumerate()
     }
 
-    /// Insert blank cells at a position, shifting content right
-    pub fn insert_cells(&mut self, col: usize, count: usize, blank: &Cell) {
-        self.insert_cells_bounded(col, self.cells.len(), count, blank);
+    #[cfg(test)]
+    fn insert_cells(&mut self, col: usize, count: usize, blank: &Cell) {
+        self.insert_cells_bounded_with_damage(col, self.cells.len(), count, blank, |_| {});
     }
 
-    /// Insert blank cells, shifting only within `[col, right)`.
-    pub(crate) fn insert_cells_bounded(
-        &mut self,
-        col: usize,
-        right: usize,
-        count: usize,
-        blank: &Cell,
-    ) {
-        self.insert_cells_bounded_with_damage(col, right, count, blank, |_| {});
+    #[cfg(test)]
+    fn delete_cells(&mut self, col: usize, count: usize, blank: &Cell) {
+        self.delete_cells_bounded_with_damage(col, self.cells.len(), count, blank, |_| {});
+    }
+
+    #[cfg(test)]
+    fn erase_range(&mut self, start: usize, end: usize, blank: &Cell) {
+        self.erase_range_with_damage(start, end, blank, |_| {});
+    }
+
+    #[cfg(test)]
+    fn selective_erase_range(&mut self, start: usize, end: usize, blank: &Cell) {
+        self.selective_erase_range_with_damage(start, end, blank, |_| {});
     }
 
     /// Report cells erased by glyph repair after moving the surviving cells.
@@ -221,23 +201,6 @@ impl Row {
         }
 
         self.repair_wide_cells_with_damage(blank, damage);
-        self.dirty = true;
-    }
-
-    /// Delete cells at a position, shifting content left
-    pub fn delete_cells(&mut self, col: usize, count: usize, blank: &Cell) {
-        self.delete_cells_bounded(col, self.cells.len(), count, blank);
-    }
-
-    /// Delete cells, shifting only within `[col, right)`.
-    pub(crate) fn delete_cells_bounded(
-        &mut self,
-        col: usize,
-        right: usize,
-        count: usize,
-        blank: &Cell,
-    ) {
-        self.delete_cells_bounded_with_damage(col, right, count, blank, |_| {});
     }
 
     /// Report cells erased by glyph repair after moving the surviving cells.
@@ -264,7 +227,6 @@ impl Row {
         }
 
         self.repair_wide_cells_with_damage(blank, damage);
-        self.dirty = true;
     }
 
     /// Copy a same-column cell range from another row. Partial-width vertical
@@ -283,7 +245,6 @@ impl Row {
         self.cells[left..right].clone_from_slice(&source.cells[left..right]);
         self.wrapped = false;
         self.repair_wide_cells_with_damage(blank, damage);
-        self.dirty = true;
     }
 
     /// Replace a bounded range with an already snapshotted set of cells.
@@ -306,7 +267,6 @@ impl Row {
             cell.flags.insert(CellFlags::DIRTY);
         }
         self.repair_wide_cells_with_damage(blank, damage);
-        self.dirty = true;
     }
 
     /// Fill a bounded range with one attributed character cell.
@@ -329,7 +289,6 @@ impl Row {
             target.flags.insert(CellFlags::DIRTY);
         }
         self.repair_wide_cells_with_damage(blank, damage);
-        self.dirty = true;
     }
 
     /// Apply a rendition-only operation to a cell range. Stream operations
@@ -349,7 +308,6 @@ impl Row {
         self.multicells_present = None;
         let start = start.min(self.cells.len());
         let end = end.min(self.cells.len()).max(start);
-        let mut changed = false;
         for cell in &mut self.cells[start..end] {
             let drawn = !cell.content.is_empty()
                 || cell.is_wide_char_spacer()
@@ -359,21 +317,13 @@ impl Row {
             }
             if exact_rectangle && !drawn {
                 cell.set_char(' ');
-                changed = true;
             }
             let previous = cell.attrs;
             apply(&mut cell.attrs);
             if cell.attrs != previous {
                 cell.flags.insert(CellFlags::DIRTY);
-                changed = true;
             }
         }
-        self.dirty |= changed;
-    }
-
-    /// Erase cells from start to end (exclusive)
-    pub fn erase_range(&mut self, start: usize, end: usize, blank: &Cell) {
-        self.erase_range_with_damage(start, end, blank, |_| {});
     }
 
     /// Report the exact expanded glyph span replaced by this erase.
@@ -404,15 +354,6 @@ impl Row {
             self.wrapped = false;
         }
         self.repair_wide_cells_with(blank);
-        self.dirty = true;
-    }
-
-    /// Erase the content of unprotected graphemes while retaining every
-    /// cell's visual and DECSCA protection attributes. Wide leader/spacer
-    /// pairs are treated atomically: intersecting either half erases both only
-    /// when neither half is protected.
-    pub fn selective_erase_range(&mut self, start: usize, end: usize, blank: &Cell) {
-        self.selective_erase_range_with_damage(start, end, blank, |_| {});
     }
 
     /// Emit only unprotected grapheme spans actually erased, including both
@@ -456,12 +397,11 @@ impl Row {
             self.wrapped = false;
         }
         self.repair_wide_cells_with(blank);
-        self.dirty = true;
     }
 
     /// Clear a grapheme atomically when an edit targets either half of a wide
     /// cell pair.
-    pub fn clear_grapheme_at(&mut self, col: usize) {
+    pub(crate) fn clear_grapheme_at(&mut self, col: usize) {
         self.wide_wrap_padding = false;
         self.multicells_present = None;
         if col >= self.cells.len() {
@@ -480,11 +420,10 @@ impl Row {
         } else {
             self.cells[col].clear();
         }
-        self.dirty = true;
     }
 
     /// Remove orphan leaders/spacers after cell-based edit operations.
-    pub fn repair_wide_cells(&mut self) {
+    pub(crate) fn repair_wide_cells(&mut self) {
         self.repair_wide_cells_with(&Cell::default());
     }
 
@@ -509,7 +448,6 @@ impl Row {
         for col in 0..self.cells.len() {
             self.repair_wide_cell_with_damage(col, blank, &mut damage);
         }
-        self.dirty = true;
     }
 
     /// A new multicell range contains no ordinary wide halves. Only the cells
@@ -533,7 +471,6 @@ impl Row {
         if end < self.cells.len() {
             self.repair_wide_cell_with_damage(end, blank, &mut damage);
         }
-        self.dirty = true;
     }
 
     fn repair_wide_cell_with_damage(
@@ -824,7 +761,6 @@ impl std::ops::Index<usize> for Row {
 
 impl std::ops::IndexMut<usize> for Row {
     fn index_mut(&mut self, col: usize) -> &mut Self::Output {
-        self.dirty = true;
         self.multicells_present = None;
         &mut self.cells[col]
     }
@@ -891,11 +827,9 @@ mod tests {
             row.mark_wide_wrap_padding();
             assert!(row.has_wide_wrap_padding());
             assert!(row.has_multicells());
-            row.set_clean();
             let pointer = row.cells.as_ptr();
             let row = row.into_blank(cols);
             assert_eq!(row.cells, vec![Cell::default(); cols]);
-            assert!(row.is_dirty());
             assert!(!row.is_wrapped());
             assert!(!row.has_wide_wrap_padding());
             assert_eq!(row.multicells_present, Some(false));
@@ -1002,22 +936,17 @@ mod tests {
 
         let mut row = Row::from_cells(vec![descriptor_cell()], true);
         assert_eq!(row.multicells_present, None);
-        row.set_clean();
         assert!(row.has_multicells());
-        assert!(!row.is_dirty());
         let mut clone = row.clone();
         row.clear();
         assert!(!row.has_multicells());
         assert!(clone.has_multicells());
-        clone.set_dirty();
         clone.set_wrapped(false);
         assert_eq!(clone.multicells_present, Some(true));
         clone.clear();
-        clone.set_clean();
         for _ in 0..100 {
             assert!(!clone.has_multicells());
             assert_eq!(clone.multicells_present, Some(false));
-            assert!(!clone.is_dirty());
         }
     }
 
@@ -1025,7 +954,6 @@ mod tests {
     fn test_row_creation() {
         let row = Row::new(80);
         assert_eq!(row.len(), 80);
-        assert!(row.is_dirty());
     }
 
     #[test]

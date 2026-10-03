@@ -20,7 +20,7 @@ pub(super) struct ResizeTracking {
 }
 
 impl ResizeTracking {
-    pub fn damage(&mut self, rows: Range<usize>, cols: Range<usize>, width: usize) {
+    pub(crate) fn damage(&mut self, rows: Range<usize>, cols: Range<usize>, width: usize) {
         let Some((row, col)) = self.points[0] else {
             return;
         };

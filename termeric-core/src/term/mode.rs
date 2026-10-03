@@ -95,60 +95,6 @@ impl TerminalMode {
                 | Self::MOUSE_ANY_EVENT,
         )
     }
-
-    /// Get the active mouse mode for encoding
-    pub fn mouse_mode(&self) -> MouseMode {
-        if self.contains(Self::MOUSE_ANY_EVENT) {
-            MouseMode::AnyEvent
-        } else if self.contains(Self::MOUSE_BUTTON_EVENT) {
-            MouseMode::ButtonEvent
-        } else if self.contains(Self::MOUSE_TRACKING) {
-            MouseMode::Normal
-        } else if self.contains(Self::MOUSE_X10) {
-            MouseMode::X10
-        } else {
-            MouseMode::None
-        }
-    }
-
-    /// Get the mouse encoding format
-    pub fn mouse_encoding(&self) -> MouseEncoding {
-        if self.contains(Self::MOUSE_SGR) {
-            MouseEncoding::Sgr
-        } else if self.contains(Self::MOUSE_UTF8) {
-            MouseEncoding::Utf8
-        } else {
-            MouseEncoding::Default
-        }
-    }
-}
-
-/// Mouse tracking mode
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum MouseMode {
-    /// No mouse tracking
-    #[default]
-    None,
-    /// X10 mode - button press only
-    X10,
-    /// Normal mode - button press and release
-    Normal,
-    /// Button event mode - press/release + motion while pressed
-    ButtonEvent,
-    /// Any event mode - all motion reported
-    AnyEvent,
-}
-
-/// Mouse encoding format
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum MouseEncoding {
-    /// Default X10 encoding (limited to 223 columns/rows)
-    #[default]
-    Default,
-    /// UTF-8 encoding
-    Utf8,
-    /// SGR encoding (unlimited coordinates)
-    Sgr,
 }
 
 #[cfg(test)]
@@ -167,26 +113,5 @@ mod tests {
         let mut mode = TerminalMode::default();
         mode.insert(TerminalMode::AUTOWRAP);
         assert!(mode.contains(TerminalMode::AUTOWRAP));
-    }
-
-    #[test]
-    fn test_mouse_mode() {
-        let mut mode = TerminalMode::default();
-        assert_eq!(mode.mouse_mode(), MouseMode::None);
-
-        mode.insert(TerminalMode::MOUSE_TRACKING);
-        assert_eq!(mode.mouse_mode(), MouseMode::Normal);
-
-        mode.insert(TerminalMode::MOUSE_ANY_EVENT);
-        assert_eq!(mode.mouse_mode(), MouseMode::AnyEvent);
-    }
-
-    #[test]
-    fn test_mouse_encoding() {
-        let mut mode = TerminalMode::default();
-        assert_eq!(mode.mouse_encoding(), MouseEncoding::Default);
-
-        mode.insert(TerminalMode::MOUSE_SGR);
-        assert_eq!(mode.mouse_encoding(), MouseEncoding::Sgr);
     }
 }

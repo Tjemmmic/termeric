@@ -9,7 +9,7 @@ const MAX_PROMPTS: usize = 1000;
 
 /// Type of prompt mark
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PromptType {
+pub(crate) enum PromptType {
     /// Fresh prompt start (OSC 133;A)
     PromptStart,
     /// Command input start (OSC 133;B)
@@ -22,13 +22,11 @@ pub enum PromptType {
 
 /// A mark in the terminal indicating a prompt or command boundary
 #[derive(Debug, Clone)]
-pub struct PromptMark {
+pub(crate) struct PromptMark {
     /// Row where this mark occurred
     pub row: i32,
     /// Type of mark
     pub mark_type: PromptType,
-    /// Exit code for CommandFinished marks
-    pub exit_code: Option<i32>,
 }
 
 /// A complete command region with prompt, command, and output
@@ -53,11 +51,6 @@ pub struct CommandRegion {
 }
 
 impl CommandRegion {
-    /// Check if the command succeeded (exit code 0)
-    pub fn is_success(&self) -> bool {
-        self.exit_code == Some(0)
-    }
-
     /// Check if the command failed (non-zero exit code)
     pub fn is_failure(&self) -> bool {
         matches!(self.exit_code, Some(code) if code != 0)
@@ -107,7 +100,6 @@ impl PromptTracker {
         self.add_mark(PromptMark {
             row: bounded_row(row),
             mark_type: PromptType::PromptStart,
-            exit_code: None,
         });
 
         let id = self.next_region_id;
@@ -134,7 +126,6 @@ impl PromptTracker {
         self.add_mark(PromptMark {
             row: bounded_row(row),
             mark_type: PromptType::CommandStart,
-            exit_code: None,
         });
 
         if let Some(ref mut region) = self.current_region {
@@ -154,13 +145,30 @@ impl PromptTracker {
         self.add_mark(PromptMark {
             row: bounded_row(row),
             mark_type: PromptType::OutputStart,
-            exit_code: None,
         });
 
         if let Some(ref mut region) = self.current_region {
             region.output_row = Some(bounded_row(row));
         }
         true
+    }
+
+    /// Get the command region containing a given row
+    #[cfg(test)]
+    pub(crate) fn command_at(&self, row: i32) -> Option<&CommandRegion> {
+        // Check current region first
+        if let Some(ref region) = self.current_region {
+            let end = region.finish_row.unwrap_or(i32::MAX);
+            if region.content_available && row >= region.prompt_row && row <= end {
+                return self.current_region.as_ref();
+            }
+        }
+
+        // Search completed regions
+        self.regions.iter().rev().find(|region| {
+            let end = region.finish_row.unwrap_or(i32::MAX);
+            region.content_available && row >= region.prompt_row && row <= end
+        })
     }
 
     /// Mark the command as finished (OSC 133;D)
@@ -178,7 +186,6 @@ impl PromptTracker {
         self.add_mark(PromptMark {
             row: bounded_row(row),
             mark_type: PromptType::CommandFinished,
-            exit_code,
         });
 
         if let Some(ref mut region) = self.current_region {
@@ -247,12 +254,12 @@ impl PromptTracker {
 
     /// Prompt row of the nearest failed command (non-zero exit) above
     /// `from_row` whose text is still retained.
-    pub fn previous_failed_prompt(&self, from_row: i32) -> Option<i32> {
+    pub(crate) fn previous_failed_prompt(&self, from_row: i32) -> Option<i32> {
         self.failed_prompts().rev().find(|row| *row < from_row)
     }
 
     /// Prompt row of the nearest failed command below `from_row`.
-    pub fn next_failed_prompt(&self, from_row: i32) -> Option<i32> {
+    pub(crate) fn next_failed_prompt(&self, from_row: i32) -> Option<i32> {
         self.failed_prompts().find(|row| *row > from_row)
     }
 
@@ -269,23 +276,6 @@ impl PromptTracker {
             .iter()
             .filter(|m| m.mark_type == PromptType::PromptStart)
             .map(|m| m.row)
-    }
-
-    /// Get the command region containing a given row
-    pub fn command_at(&self, row: i32) -> Option<&CommandRegion> {
-        // Check current region first
-        if let Some(ref region) = self.current_region {
-            let end = region.finish_row.unwrap_or(i32::MAX);
-            if region.content_available && row >= region.prompt_row && row <= end {
-                return self.current_region.as_ref();
-            }
-        }
-
-        // Search completed regions
-        self.regions.iter().rev().find(|region| {
-            let end = region.finish_row.unwrap_or(i32::MAX);
-            region.content_available && row >= region.prompt_row && row <= end
-        })
     }
 
     /// Resolve one exact completed region without relying on mutable row
@@ -558,7 +548,6 @@ mod tests {
         assert_eq!(region.output_row, Some(1));
         assert_eq!(region.finish_row, Some(5));
         assert_eq!(region.exit_code, Some(0));
-        assert!(region.is_success());
     }
 
     #[test]

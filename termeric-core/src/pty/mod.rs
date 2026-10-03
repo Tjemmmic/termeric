@@ -3,13 +3,13 @@
 //! This module provides cross-platform PTY creation and management
 //! using the portable-pty crate.
 
-mod capabilities;
+pub(crate) mod capabilities;
 mod child;
 mod environment;
 mod event;
 
-pub use capabilities::{COMPATIBILITY_TERM, TERMERIC_TERM};
-pub use child::{ChildExitStatus, ChildObservation, ChildObserver};
+pub(crate) use capabilities::TERMERIC_TERM;
+pub use child::{ChildExitStatus, ChildObserver};
 pub use environment::{EnvironmentPolicy, TERMINAL_ID_VARIABLE, terminal_identity_variable};
 pub use event::PtyEvent;
 pub use portable_pty::PtySize;
@@ -23,7 +23,7 @@ use std::thread;
 /// PTY reader backpressure ceiling. A full queue blocks the reader thread and
 /// leaves additional output in the operating-system PTY buffer instead of
 /// allocating an unbounded process queue while the application is busy.
-pub const PTY_EVENT_QUEUE_CAPACITY: usize = 256;
+pub(crate) const PTY_EVENT_QUEUE_CAPACITY: usize = 256;
 /// Bootstrap cell pixels used by constructors that do not yet have renderer
 /// metrics. Renderer-backed callers replace this with exact physical geometry.
 pub const DEFAULT_CELL_PIXEL_WIDTH: u16 = 8;
@@ -435,6 +435,7 @@ impl From<anyhow::Error> for PtyError {
 
 #[cfg(test)]
 mod tests {
+    use super::child::ChildObservation;
     use super::*;
     use std::io::Cursor;
     use std::sync::atomic::{AtomicUsize, Ordering};

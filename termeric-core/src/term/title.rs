@@ -1,5 +1,5 @@
 pub(crate) const MAX_TITLE_BYTES: usize = 4_096;
-pub const XTERM_TITLE_STACK_DEPTH: usize = 10;
+pub(crate) const XTERM_TITLE_STACK_DEPTH: usize = 10;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TitleTarget {

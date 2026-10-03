@@ -3,7 +3,7 @@
 use crate::grid::MultiCellAlignment;
 
 /// Maximum UTF-8 payload allowed by the protocol.
-pub const MAX_OSC66_TEXT_BYTES: usize = 4_096;
+pub(crate) const MAX_OSC66_TEXT_BYTES: usize = 4_096;
 const MAX_OSC66_METADATA_BYTES: usize = 128;
 
 #[derive(Clone, Debug, PartialEq, Eq)]

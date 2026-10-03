@@ -1,7 +1,7 @@
 //! Kitty OSC 22 mouse-pointer-shape protocol state.
 
 /// Minimum stack depth required by the Kitty pointer-shape protocol.
-pub const POINTER_SHAPE_STACK_DEPTH: usize = 16;
+pub(crate) const POINTER_SHAPE_STACK_DEPTH: usize = 16;
 
 /// Maximum comma-separated entries accepted by one OSC 22 operation.
 pub(crate) const MAX_POINTER_SHAPE_LIST_ENTRIES: usize = 64;

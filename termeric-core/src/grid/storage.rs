@@ -500,7 +500,7 @@ enum RowViewInner<'a> {
 
 impl<'a> RowView<'a> {
     /// Count bookmark units without expanding or scanning compact history.
-    pub fn reflow_unit_count(&self) -> usize {
+    pub(crate) fn reflow_unit_count(&self) -> usize {
         match self.inner {
             RowViewInner::Visible(_) => self.reflow_columns().count(),
             RowViewInner::History(row) => row
@@ -647,7 +647,7 @@ impl fmt::Display for RowView<'_> {
 }
 
 /// Grid storage manages the visible grid and scrollback buffer
-pub struct GridStorage {
+pub(crate) struct GridStorage {
     /// Visible rows
     rows: Vec<Row>,
     /// Scrollback buffer (historical lines)
@@ -684,7 +684,7 @@ impl GridStorage {
     }
 
     /// Set the estimated byte budget for compact scrollback rows.
-    pub fn set_scrollback_byte_limit(&mut self, limit: usize) {
+    pub(crate) fn set_scrollback_byte_limit(&mut self, limit: usize) {
         self.scrollback_byte_limit = limit;
         if self.enforce_scrollback_limits() > 0 {
             self.scrollback.shrink_to_fit();
@@ -760,7 +760,7 @@ impl GridStorage {
     }
 
     /// Get a mutable reference to a cell
-    pub fn cell_mut(&mut self, row: usize, col: usize) -> Option<&mut Cell> {
+    pub(crate) fn cell_mut(&mut self, row: usize, col: usize) -> Option<&mut Cell> {
         self.rows.get_mut(row)?.get_mut(col)
     }
 
@@ -845,7 +845,7 @@ impl GridStorage {
 
     /// Scroll a partial-width rectangle up by one row without affecting
     /// scrollback or cells outside the rectangle.
-    pub fn scroll_rect_up(
+    pub(crate) fn scroll_rect_up(
         &mut self,
         top: usize,
         bottom: usize,
@@ -871,7 +871,7 @@ impl GridStorage {
 
     /// Scroll a partial-width rectangle down by one row without affecting
     /// scrollback or cells outside the rectangle.
-    pub fn scroll_rect_down(
+    pub(crate) fn scroll_rect_down(
         &mut self,
         top: usize,
         bottom: usize,
@@ -902,13 +902,6 @@ impl GridStorage {
         }
     }
 
-    /// Clear a specific row
-    pub fn clear_row(&mut self, row: usize) {
-        if let Some(r) = self.rows.get_mut(row) {
-            r.clear();
-        }
-    }
-
     /// Resize the grid with text reflow when columns change.
     /// Return the new cursor position and number of viewport rows archived.
     /// The row count is exact even when retention limits evict archive rows.
@@ -925,7 +918,7 @@ impl GridStorage {
         (cursor, outcome.archived_rows)
     }
 
-    pub fn resize_with_points<const N: usize>(
+    pub(crate) fn resize_with_points<const N: usize>(
         &mut self,
         new_cols: usize,
         new_rows: usize,
@@ -1471,17 +1464,17 @@ impl GridStorage {
         }
     }
 
-    pub fn scrollback_cell(&self, idx: usize, col: usize) -> Option<CellRef<'_>> {
+    pub(crate) fn scrollback_cell(&self, idx: usize, col: usize) -> Option<CellRef<'_>> {
         self.scrollback.get(idx)?.get(col).map(CellRef::Owned)
     }
 
     /// Iterate over all scrollback rows (oldest first)
-    pub fn iter_scrollback(&self) -> impl Iterator<Item = RowView<'_>> {
+    pub(crate) fn iter_scrollback(&self) -> impl Iterator<Item = RowView<'_>> {
         self.scrollback.iter().map(RowView::history)
     }
 
     /// Scrollback (oldest first) then the visible rows.
-    pub fn iter_all(&self) -> impl Iterator<Item = RowView<'_>> {
+    pub(crate) fn iter_all(&self) -> impl Iterator<Item = RowView<'_>> {
         self.iter_scrollback()
             .chain(self.rows.iter().map(RowView::visible))
     }
@@ -1508,7 +1501,7 @@ impl GridStorage {
         }
     }
 
-    pub fn collect_hyperlink_ids(&self, identifiers: &mut HashSet<u32>) {
+    pub(crate) fn collect_hyperlink_ids(&self, identifiers: &mut HashSet<u32>) {
         for row in &self.scrollback {
             row.collect_hyperlink_ids(identifiers);
         }
@@ -1589,7 +1582,6 @@ mod tests {
                                 }
                                 row.set_wrapped(index % 2 == 0);
                                 row.has_multicells();
-                                row.set_clean();
                             }
                         }
                         for _ in 0..8 {
@@ -1612,7 +1604,6 @@ mod tests {
                                 assert!(a.iter().eq(b.iter()));
                                 assert_eq!(a.is_wrapped(), b.is_wrapped());
                                 assert_eq!(a.has_wide_wrap_padding(), b.has_wide_wrap_padding());
-                                assert_eq!(a.is_dirty(), b.is_dirty());
                                 assert_eq!(a.has_multicells(), b.has_multicells());
                             }
                             for (a, b) in actual.scrollback.iter().zip(&expected.scrollback) {

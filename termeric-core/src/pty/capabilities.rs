@@ -4,10 +4,10 @@ use std::env;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-pub const TERMERIC_TERM: &str = "xterm-termeric";
-pub const COMPATIBILITY_TERM: &str = "xterm-256color";
-pub const TERM_OVERRIDE_ENV: &str = "TERMERIC_TERM";
-pub const TERMINFO_OVERRIDE_ENV: &str = "TERMERIC_TERMINFO_DIR";
+pub(crate) const TERMERIC_TERM: &str = "xterm-termeric";
+pub(crate) const COMPATIBILITY_TERM: &str = "xterm-256color";
+pub(crate) const TERM_OVERRIDE_ENV: &str = "TERMERIC_TERM";
+pub(crate) const TERMINFO_OVERRIDE_ENV: &str = "TERMERIC_TERMINFO_DIR";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TerminalEnvironment {

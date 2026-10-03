@@ -8,16 +8,13 @@
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-pub const SEGMENTATION_UNICODE_VERSION: (u64, u64, u64) = unicode_segmentation::UNICODE_VERSION;
-pub const WIDTH_UNICODE_VERSION: (u8, u8, u8) = unicode_width::UNICODE_VERSION;
-
 /// Return the narrow-policy terminal width for one extended grapheme cluster.
 pub fn grapheme_width(grapheme: &str) -> usize {
     UnicodeWidthStr::width(grapheme).min(2)
 }
 
 /// Whether appending `next` keeps `existing` as one extended grapheme cluster.
-pub fn extends_grapheme(existing: &str, next: char) -> bool {
+pub(crate) fn extends_grapheme(existing: &str, next: char) -> bool {
     let mut combined = String::with_capacity(existing.len() + next.len_utf8());
     combined.push_str(existing);
     combined.push(next);
@@ -30,8 +27,8 @@ mod tests {
 
     #[test]
     fn policy_versions_are_explicit() {
-        assert_eq!(SEGMENTATION_UNICODE_VERSION, (17, 0, 0));
-        assert_eq!(WIDTH_UNICODE_VERSION, (17, 0, 0));
+        assert_eq!(unicode_segmentation::UNICODE_VERSION, (17, 0, 0));
+        assert_eq!(unicode_width::UNICODE_VERSION, (17, 0, 0));
     }
 
     #[test]

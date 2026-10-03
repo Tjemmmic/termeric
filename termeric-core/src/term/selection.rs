@@ -257,13 +257,13 @@ impl Selection {
     }
 
     /// Get the range of rows included in the selection
-    pub fn row_range(&self) -> std::ops::RangeInclusive<i32> {
+    pub(crate) fn row_range(&self) -> std::ops::RangeInclusive<i32> {
         let (start, end) = self.bounds();
         start.row..=end.row
     }
 
     /// Get the column range for a specific row
-    pub fn col_range(
+    pub(crate) fn col_range(
         &self,
         row: i32,
         total_cols: usize,

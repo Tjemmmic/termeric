@@ -9,9 +9,9 @@ mod sixel;
 
 pub use image::{ImageId, ImagePlacement, ImageStorage, PresentationImage, StoredImage};
 pub(crate) use iterm2::Iterm2Command;
-pub use kitty::{
+pub(crate) use kitty::{
     KittyAction, KittyCommand, KittyCompression, KittyFormat, KittyFrame, KittyMedium,
-    KittyParseError, KittyPlacement, KittyTransmission, MAX_APC_BYTES as MAX_KITTY_APC_BYTES,
+    KittyPlacement, KittyTransmission, MAX_APC_BYTES as MAX_KITTY_APC_BYTES,
 };
 pub use placeholder::IMAGE_PLACEHOLDER;
 pub(crate) use presentation::GraphicsSnapshot;
@@ -48,16 +48,16 @@ pub const MAX_IMAGE_PLACEMENTS: usize = 1_024;
 /// Virtual placements are inert prototypes rather than renderer instances,
 /// but they remain independently bounded because clients may create them
 /// without adding any visible cells.
-pub const MAX_VIRTUAL_IMAGE_PLACEMENTS: usize = 1_024;
+pub(crate) const MAX_VIRTUAL_IMAGE_PLACEMENTS: usize = 1_024;
 /// Relative placements may be chained, but resolution work must remain
 /// bounded. The protocol requires support for at least eight ancestors.
-pub const MAX_RELATIVE_PLACEMENT_DEPTH: usize = 32;
-pub const MAX_ANIMATION_FRAMES_PER_IMAGE: usize = 1_024;
-pub const MAX_ANIMATION_FRAMES_TOTAL: usize = 4_096;
-pub const MAX_ANIMATION_MEMORY: usize = 5 * MAX_IMAGE_MEMORY;
+pub(crate) const MAX_RELATIVE_PLACEMENT_DEPTH: usize = 32;
+pub(crate) const MAX_ANIMATION_FRAMES_PER_IMAGE: usize = 1_024;
+pub(crate) const MAX_ANIMATION_FRAMES_TOTAL: usize = 4_096;
+pub(crate) const MAX_ANIMATION_MEMORY: usize = 5 * MAX_IMAGE_MEMORY;
 const DEFAULT_ANIMATION_GAP_MS: u32 = 40;
 const GRAPHICS_RELAY_VERSION: u32 = 1;
-pub const MAX_GRAPHICS_RELAY_METADATA_BYTES: usize = 4 * 1024 * 1024;
+pub(crate) const MAX_GRAPHICS_RELAY_METADATA_BYTES: usize = 4 * 1024 * 1024;
 const RELAY_PIXEL_CHUNK_BYTES: usize = 3 * 1024;
 const RELAY_METADATA_CHUNK_BYTES: usize = 24 * 1024;
 pub(crate) const MAX_IMAGE_MEMORY: usize = 64 * 1024 * 1024;
@@ -76,7 +76,7 @@ pub(crate) struct ProtocolPlacement {
 }
 
 #[derive(Debug)]
-pub struct GraphicsManager {
+pub(crate) struct GraphicsManager {
     storage: ImageStorage,
     pending: Option<PendingImage>,
     pending_frame: Option<PendingFrame>,
@@ -544,7 +544,7 @@ fn relay_managed_placement(placement: &RelayPlacement) -> ManagedImagePlacement 
 
 /// Non-PTY side effects of a successfully handled graphics command.
 #[derive(Debug, Clone, Default)]
-pub struct GraphicsCommandResult {
+pub(crate) struct GraphicsCommandResult {
     pub response: Option<GraphicsResponse>,
     pub cursor_movement: Option<(u32, u32)>,
 }
@@ -572,7 +572,7 @@ impl GraphicsManager {
         }
     }
 
-    pub fn handle_command(
+    pub(crate) fn handle_command(
         &mut self,
         cmd: KittyCommand,
         alternate_screen: bool,
@@ -629,11 +629,11 @@ impl GraphicsManager {
 
     /// Permit or deny Kitty's persistent ordinary-file transmission medium.
     /// This host policy is intentionally independent of terminal reset state.
-    pub fn set_file_transmission_allowed(&mut self, allowed: bool) {
+    pub(crate) fn set_file_transmission_allowed(&mut self, allowed: bool) {
         self.allow_file_transmission = allowed;
     }
 
-    pub fn file_transmission_allowed(&self) -> bool {
+    pub(crate) fn file_transmission_allowed(&self) -> bool {
         self.allow_file_transmission
     }
 
@@ -2506,7 +2506,7 @@ impl GraphicsManager {
         self.storage.get(id)
     }
 
-    pub fn clear_screen(&mut self, alternate_screen: bool) {
+    pub(crate) fn clear_screen(&mut self, alternate_screen: bool) {
         let roots: Vec<PlacementUid> = self
             .placements
             .iter()
@@ -2520,7 +2520,7 @@ impl GraphicsManager {
     /// Clear the complete graphics namespace for one screen buffer. Unlike an
     /// ordinary viewport erase, alternate-screen replacement also discards
     /// invisible Unicode virtual-placement prototypes.
-    pub fn clear_screen_all(&mut self, alternate_screen: bool) {
+    pub(crate) fn clear_screen_all(&mut self, alternate_screen: bool) {
         let roots: Vec<PlacementUid> = self
             .placements
             .iter()
@@ -2717,7 +2717,7 @@ impl GraphicsManager {
         self.remove_unplaced_protocol_images();
     }
 
-    pub fn abort_pending(&mut self) {
+    pub(crate) fn abort_pending(&mut self) {
         self.pending = None;
         self.pending_frame = None;
     }
@@ -2963,12 +2963,12 @@ impl GraphicsManager {
     }
 
     /// Number of decoded images currently retained by all protocols.
-    pub fn image_count(&self) -> usize {
+    pub(crate) fn image_count(&self) -> usize {
         self.storage.len()
     }
 
     /// Number of live placements across the primary and alternate screens.
-    pub fn placement_count(&self) -> usize {
+    pub(crate) fn placement_count(&self) -> usize {
         self.placements.len() + self.virtual_placements.len()
     }
 
@@ -4213,7 +4213,7 @@ impl ProtocolError {
 }
 
 #[derive(Debug, Clone)]
-pub struct GraphicsResponse {
+pub(crate) struct GraphicsResponse {
     pub image_id: u32,
     pub image_number: Option<u32>,
     pub placement_id: Option<u32>,
@@ -4224,7 +4224,7 @@ pub struct GraphicsResponse {
 }
 
 impl GraphicsResponse {
-    pub fn parse_error(message: &str) -> Self {
+    pub(crate) fn parse_error(message: &str) -> Self {
         Self {
             image_id: 0,
             image_number: None,
@@ -4236,7 +4236,7 @@ impl GraphicsResponse {
         }
     }
 
-    pub fn too_large(message: &str) -> Self {
+    pub(crate) fn too_large(message: &str) -> Self {
         Self {
             image_id: 0,
             image_number: None,
@@ -4248,7 +4248,7 @@ impl GraphicsResponse {
         }
     }
 
-    pub fn to_escape_sequence(&self) -> String {
+    pub(crate) fn to_escape_sequence(&self) -> String {
         let mut controls = if self.image_id != 0 || self.image_number.is_none() {
             format!("i={}", self.image_id)
         } else {
