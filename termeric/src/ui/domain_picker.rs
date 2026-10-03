@@ -451,7 +451,6 @@ fn command(id: String, title: String, category: String) -> RegisteredCommand {
         title,
         category,
         shortcut: None,
-        icon: None,
         source: CommandSource::Core,
         destructive: false,
     }

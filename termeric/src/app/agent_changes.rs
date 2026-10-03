@@ -275,7 +275,6 @@ impl App {
                         change
                     },
                     shortcut: None,
-                    icon: None,
                     source: CommandSource::Core,
                     destructive: false,
                 }

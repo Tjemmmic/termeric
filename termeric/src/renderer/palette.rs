@@ -262,7 +262,7 @@ impl Renderer {
         // `info.entries` is already sliced to the visible window.
         let size = self.ui_label_px();
         let list_y = layout.list_y;
-        let title_x = panel_x + padding + cell_width * 0.5;
+        let text_x = panel_x + padding + cell_width * 0.5;
         let scrollbar_width = px(3.0);
         let right = panel_x + panel_width - padding - scrollbar_width - px(6.0);
         for (row_index, entry) in info.entries.iter().enumerate().take(layout.visible_count) {
@@ -280,20 +280,6 @@ impl Renderer {
             }
             let text = fade(self.ui.palette_text, if selected { 1.0 } else { 0.88 });
             let dim = fade(self.ui.menu_text_dim, 1.0);
-            let mut text_x = title_x;
-            if let Some(icon) = entry.icon {
-                let mut buffer = [0; 4];
-                self.push_ui_label(
-                    icon.encode_utf8(&mut buffer),
-                    text_x,
-                    row_y,
-                    row_height,
-                    px(20.0),
-                    size,
-                    text,
-                );
-                text_x += px(22.0);
-            }
             let detail = entry
                 .shortcut
                 .clone()

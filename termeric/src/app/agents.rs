@@ -347,7 +347,6 @@ impl App {
                         .and_then(|status| status.detail.clone())
                         .unwrap_or_else(|| terminal.tab_title.clone()),
                     shortcut: None,
-                    icon: None,
                     source: CommandSource::Core,
                     destructive: false,
                 }
@@ -1170,7 +1169,6 @@ pub(super) fn agent_pick_items(
             title,
             category: detail,
             shortcut: None,
-            icon: None,
             source: CommandSource::Core,
             destructive: false,
         };

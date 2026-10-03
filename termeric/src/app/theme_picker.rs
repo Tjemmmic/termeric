@@ -37,7 +37,6 @@ pub(super) fn theme_pick_items(current: &str) -> Vec<RegisteredCommand> {
             },
             id: name,
             shortcut: None,
-            icon: None,
             source: CommandSource::Core,
             destructive: false,
         })

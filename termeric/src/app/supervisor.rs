@@ -387,7 +387,6 @@ impl App {
                     title: mode.label().into(),
                     category: mode.description().into(),
                     shortcut: None,
-                    icon: None,
                     source: crate::ui::command_palette::palette::CommandSource::Core,
                     destructive: false,
                 },

@@ -4473,7 +4473,6 @@ impl App {
                     title: pc.name.clone(),
                     category: pc.category.clone().unwrap_or_else(|| "Plugins".to_string()),
                     shortcut: None,
-                    icon: None,
                     source: CommandSource::Plugin(plugin_source),
                     destructive: false,
                 }
@@ -4510,7 +4509,6 @@ impl App {
                     ),
                     category: "Terminal Profiles".into(),
                     shortcut: None,
-                    icon: None,
                     source: CommandSource::LaunchProfiles,
                     destructive: false,
                 }

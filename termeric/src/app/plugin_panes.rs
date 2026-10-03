@@ -27,7 +27,6 @@ impl App {
                         title: format!("Split {placement} with {name}{selection}"),
                         category: "Plugin Panes".into(),
                         shortcut: None,
-                        icon: None,
                         source: CommandSource::LaunchProfiles,
                         destructive: false,
                     });

@@ -206,7 +206,6 @@ impl UnicodePicker {
                     entry.aliases
                 ),
                 shortcut: None,
-                icon: None,
                 source: CommandSource::Core,
                 destructive: false,
             });
@@ -249,7 +248,6 @@ impl UnicodePicker {
                 character as u32
             ),
             shortcut: None,
-            icon: None,
             source: CommandSource::Core,
             destructive: false,
         }]);
@@ -624,7 +622,6 @@ fn named_result(character: char, name: &str, score: u32) -> RankedCharacter {
                 display_codepoints(&text)
             ),
             shortcut: None,
-            icon: None,
             source: CommandSource::Core,
             destructive: false,
         },
@@ -648,7 +645,6 @@ fn cldr_result(annotation: Annotation<'_>, score: u32) -> RankedCharacter {
                 display_codepoints(annotation.text)
             ),
             shortcut: None,
-            icon: None,
             source: CommandSource::Core,
             destructive: false,
         },
@@ -780,7 +776,6 @@ fn curated_result(entry: &CuratedCharacter, score: u32, position: usize) -> Rank
                 entry.aliases
             ),
             shortcut: None,
-            icon: None,
             source: CommandSource::Core,
             destructive: false,
         },
