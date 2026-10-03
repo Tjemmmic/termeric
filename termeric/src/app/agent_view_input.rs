@@ -9,6 +9,7 @@ use crate::agent_view::present;
 use crate::agent_view::session::{AgentSession, QuestionAnswer};
 use crate::agent_view::transcript::{Attachment, DecidedBy, Item};
 use crate::ui::agent_view::commands;
+use crate::ui::agent_view::layout::plural;
 use crate::ui::agent_view::scene::{Bounds, HitRole, MenuAction, MenuKind, Target};
 use crate::ui::agent_view::{ComposerIntent, Focus, OpenMenu, Screen};
 use crate::ui::text_input::TextInputEdit;
@@ -1517,8 +1518,4 @@ fn menu_kind_of(action: &MenuAction) -> MenuKind {
         | MenuAction::CopyConversation
         | MenuAction::HidePanel => MenuKind::More,
     }
-}
-
-fn plural(count: usize, one: &str, many: &str) -> String {
-    format!("{count} {}", if count == 1 { one } else { many })
 }

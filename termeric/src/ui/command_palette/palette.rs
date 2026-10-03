@@ -12,7 +12,7 @@ use crate::input::keybindings::{BindableAction, ShortcutRegistry};
 const MAX_QUERY_CHARACTERS: usize = 256;
 
 fn valid_query_character(character: char) -> bool {
-    !character.is_control() && !matches!(character, '\u{2028}' | '\u{2029}')
+    !crate::safe_text::breaks_single_line(character)
 }
 
 fn valid_query_text(text: &str) -> bool {

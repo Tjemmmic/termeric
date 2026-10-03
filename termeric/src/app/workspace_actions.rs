@@ -43,9 +43,7 @@ pub(super) fn validate_ordinary_tab_creation_capacity(
 
 fn bounded_tab_rename_text(text: &str, max_chars: usize) -> String {
     text.chars()
-        .filter(|character| {
-            !character.is_control() && !matches!(character, '\u{2028}' | '\u{2029}')
-        })
+        .filter(|character| !crate::safe_text::breaks_single_line(*character))
         .take(max_chars)
         .collect()
 }
@@ -53,9 +51,7 @@ fn bounded_tab_rename_text(text: &str, max_chars: usize) -> String {
 fn append_tab_rename_text(input: &mut String, text: &str, max_chars: usize) -> bool {
     if text.is_empty()
         || text.len() > max_chars.saturating_mul(4)
-        || text
-            .chars()
-            .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+        || text.chars().any(crate::safe_text::breaks_single_line)
         || input.chars().count().saturating_add(text.chars().count()) > max_chars
     {
         return false;

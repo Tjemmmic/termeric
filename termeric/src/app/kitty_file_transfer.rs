@@ -1515,16 +1515,7 @@ fn resolve_kitty_upload_path(name: &str) -> Result<PathBuf, String> {
     if name.is_empty() || name.len() > termeric_core::MAX_KITTY_TRANSFER_PATH_BYTES {
         return Err("empty or oversized requested path".into());
     }
-    if name.chars().any(|character| {
-        character.is_control()
-            || matches!(
-                character,
-                '\u{200e}'
-                    | '\u{200f}'
-                    | '\u{202a}'..='\u{202e}'
-                    | '\u{2066}'..='\u{2069}'
-            )
-    }) {
+    if name.chars().any(crate::safe_text::is_unsafe_display_char) {
         return Err("requested path contains unsafe display controls".into());
     }
     let components = name
@@ -3048,7 +3039,9 @@ mod upload_worker_tests {
         assert!(resolve_kitty_upload_path("/tmp//secret").is_err());
         assert!(resolve_kitty_upload_path("/tmp/./secret").is_err());
         assert!(resolve_kitty_upload_path("/tmp/line\nbreak").is_err());
-        assert!(resolve_kitty_upload_path("/tmp/a\u{202e}b").is_err());
+        for unsafe_display in ['\u{202e}', '\u{061c}', '\u{2028}', '\u{2029}'] {
+            assert!(resolve_kitty_upload_path(&format!("/tmp/a{unsafe_display}b")).is_err());
+        }
         assert!(
             resolve_kitty_upload_path("/tmp/secret")
                 .unwrap()

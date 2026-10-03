@@ -11,9 +11,7 @@ const MAX_RENAME_CHARACTERS: usize = 128;
 fn valid_rename_text(value: &str) -> bool {
     value.len() <= MAX_RENAME_CHARACTERS * 4
         && value.chars().count() <= MAX_RENAME_CHARACTERS
-        && !value
-            .chars()
-            .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+        && !value.chars().any(crate::safe_text::breaks_single_line)
 }
 
 /// Information about a single session for display

@@ -705,10 +705,7 @@ impl CommandsPanel {
     }
 
     fn valid_form_text(text: &str, limit: usize) -> bool {
-        text.len() <= limit
-            && !text
-                .chars()
-                .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+        text.len() <= limit && !text.chars().any(crate::safe_text::breaks_single_line)
     }
 
     /// Atomic keyboard, IME, and clipboard insertion into the open form.

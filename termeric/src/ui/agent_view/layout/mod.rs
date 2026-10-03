@@ -1963,7 +1963,8 @@ fn caret_visible(moved: Instant, now: Instant) -> bool {
         || (elapsed.as_millis() / super::CARET_PHASE.as_millis()).is_multiple_of(2)
 }
 
-fn plural(count: usize, one: &str, many: &str) -> String {
+/// `count` with the singular or plural noun, as in "1 file" or "3 files".
+pub(crate) fn plural(count: usize, one: &str, many: &str) -> String {
     format!("{count} {}", if count == 1 { one } else { many })
 }
 

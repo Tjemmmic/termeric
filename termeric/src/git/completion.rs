@@ -29,10 +29,7 @@ pub(crate) fn branch_edit(
     if branch.is_empty()
         || branch.len() > 4096
         || branch.starts_with('-')
-        || branch.chars().any(|c| {
-            c.is_control()
-                || matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{2028}' | '\u{2029}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
-        })
+        || branch.chars().any(crate::safe_text::is_unsafe_display_char)
         || !git2::Reference::is_valid_name(&format!("refs/heads/{branch}"))
     {
         return Err("Branch name is not safe for terminal insertion");

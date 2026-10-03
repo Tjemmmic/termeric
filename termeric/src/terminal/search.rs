@@ -16,10 +16,7 @@ pub(crate) const MAX_SEARCH_RESULT_INDEX_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) const MAX_SEARCH_QUERY_BYTES: usize = 4 * 1024;
 
 fn valid_query_text(text: &str) -> bool {
-    text.len() <= MAX_SEARCH_QUERY_BYTES
-        && !text
-            .chars()
-            .any(|character| character.is_control() || matches!(character, '\u{2028}' | '\u{2029}'))
+    text.len() <= MAX_SEARCH_QUERY_BYTES && !text.chars().any(crate::safe_text::breaks_single_line)
 }
 
 struct SearchLine {

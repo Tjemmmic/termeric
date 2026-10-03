@@ -1323,17 +1323,7 @@ fn validate_upload_source(
 }
 
 fn unsafe_drop_path_character(character: char) -> bool {
-    character.is_control()
-        || matches!(
-            character,
-            '\u{061c}'
-                | '\u{200e}'
-                | '\u{200f}'
-                | '\u{2028}'
-                | '\u{2029}'
-                | '\u{202a}'..='\u{202e}'
-                | '\u{2066}'..='\u{2069}'
-        )
+    crate::safe_text::is_unsafe_display_char(character)
 }
 
 fn dynamic_color_reply(

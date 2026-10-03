@@ -448,19 +448,7 @@ fn validate_relative_path(path: &Path) -> anyhow::Result<()> {
 fn is_safe_component(value: &str) -> bool {
     !value.is_empty()
         && !matches!(value, "." | "..")
-        && !value.chars().any(|character| {
-            character.is_control()
-                || matches!(
-                    character,
-                    '\u{061c}'
-                        | '\u{200e}'
-                        | '\u{200f}'
-                        | '\u{2028}'
-                        | '\u{2029}'
-                        | '\u{202a}'..='\u{202e}'
-                        | '\u{2066}'..='\u{2069}'
-                )
-        })
+        && !value.chars().any(crate::safe_text::is_unsafe_display_char)
 }
 
 fn read_u8(reader: &mut File) -> anyhow::Result<u8> {

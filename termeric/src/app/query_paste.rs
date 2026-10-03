@@ -131,11 +131,7 @@ impl App {
         } else {
             crate::terminal::search::MAX_SEARCH_QUERY_BYTES
         };
-        if text.len() > limit
-            || text
-                .chars()
-                .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
-        {
+        if text.len() > limit || text.chars().any(crate::safe_text::breaks_single_line) {
             self.toasts.warning(
                 "Field paste requires bounded single-line text without control characters",
             );

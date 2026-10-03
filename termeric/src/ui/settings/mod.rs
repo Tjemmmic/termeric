@@ -12,9 +12,7 @@ const MAX_FILTER_CHARACTERS: usize = 256;
 fn valid_filter_text(text: &str) -> bool {
     text.len() <= MAX_FILTER_CHARACTERS * 4
         && text.chars().count() <= MAX_FILTER_CHARACTERS
-        && !text
-            .chars()
-            .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+        && !text.chars().any(crate::safe_text::breaks_single_line)
 }
 
 /// Default fallback font (always available)

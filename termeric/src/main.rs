@@ -22,6 +22,7 @@ mod notifications;
 mod panes;
 mod plugin;
 mod renderer;
+mod safe_text;
 mod serial;
 mod session;
 mod tabs;

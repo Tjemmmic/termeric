@@ -13,9 +13,7 @@ const MAX_FILTER_CHARACTERS: usize = 128;
 fn valid_filter_text(value: &str) -> bool {
     value.len() <= MAX_FILTER_CHARACTERS * 4
         && value.chars().count() <= MAX_FILTER_CHARACTERS
-        && !value
-            .chars()
-            .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+        && !value.chars().any(crate::safe_text::breaks_single_line)
 }
 
 /// Result of a user action in the shortcuts panel

@@ -460,12 +460,11 @@ pub fn check_message(text: &str) -> Result<(), SendRefusal> {
     if text.len() > MAX_MESSAGE_BYTES || text.lines().count() > MAX_MESSAGE_LINES {
         return Err(SendRefusal::TooLong);
     }
+    // Multi-line messages keep newlines and tabs, so only other controls
+    // and bidi formatting count as hidden.
     let hidden = |character: char| {
         (character.is_control() && !matches!(character, '\n' | '\t'))
-            || matches!(
-                character,
-                '\u{200E}' | '\u{200F}' | '\u{061C}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
-            )
+            || crate::safe_text::is_bidi_format(character)
     };
     if text.chars().any(hidden) {
         return Err(SendRefusal::HiddenCharacters);
