@@ -1,11 +1,10 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use termeric_core::{Terminal, graphics::MAX_IMAGE_PLACEMENTS};
+use termeric_core::Terminal;
+use termeric_core::graphics::{MAX_IMAGE_MEMORY, MAX_IMAGE_PLACEMENTS, MAX_IMAGES};
 
 const MAX_INPUT_BYTES: usize = 1024 * 1024;
-const MAX_IMAGE_MEMORY: usize = 64 * 1024 * 1024;
-const MAX_IMAGES: usize = 256;
 
 fuzz_target!(|data: &[u8]| {
     let Some((&selector, payload)) = data.split_first() else {

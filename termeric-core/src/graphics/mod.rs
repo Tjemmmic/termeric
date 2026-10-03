@@ -33,7 +33,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-const MAX_IMAGES: usize = 256;
+pub const MAX_IMAGES: usize = 256;
 /// A placement is roughly one renderer instance plus terminal lifecycle
 /// metadata. Bound it independently from decoded images because one reusable
 /// image may otherwise create an unlimited number of placements.
@@ -53,7 +53,7 @@ const GRAPHICS_RELAY_VERSION: u32 = 1;
 pub(crate) const MAX_GRAPHICS_RELAY_METADATA_BYTES: usize = 4 * 1024 * 1024;
 const RELAY_PIXEL_CHUNK_BYTES: usize = 3 * 1024;
 const RELAY_METADATA_CHUNK_BYTES: usize = 24 * 1024;
-pub(crate) const MAX_IMAGE_MEMORY: usize = 64 * 1024 * 1024;
+pub const MAX_IMAGE_MEMORY: usize = 64 * 1024 * 1024;
 pub(crate) const MAX_IMAGE_DIMENSION: u32 = 16_384;
 pub(crate) const MAX_TRANSMISSION_BYTES: usize = MAX_IMAGE_MEMORY;
 
