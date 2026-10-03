@@ -105,11 +105,10 @@ class ArchPackageCheckTests(unittest.TestCase):
             "pkgname = termeric-git",
             "pkgver = 0.1.0.r42.gabcdef0-1",
             "arch = x86_64",
-            "license = MIT",
-            "license = Unicode-3.0",
             "provides = termeric",
             "conflict = termeric",
         ]
+        lines.extend(f"license = {license}" for license in sorted(REQUIRED_LICENSES))
         lines.extend(f"depend = {dependency}" for dependency in sorted(REQUIRED_DEPENDENCIES))
         fields = parse_pkginfo("\n".join(lines))
         metadata = validate_package_metadata(fields)
@@ -129,6 +128,11 @@ class ArchPackageCheckTests(unittest.TestCase):
         fields["license"].remove("Unicode-3.0")
         with self.assertRaisesRegex(CheckError, "Unicode-3.0"):
             validate_package_metadata(fields)
+
+    def test_srcinfo_declares_the_licenses_the_checker_requires(self):
+        srcinfo = Path(__file__).resolve().parent.parent / "packaging/arch/.SRCINFO"
+        fields = parse_pkginfo(srcinfo.read_text(encoding="utf-8"))
+        self.assertEqual(sorted(fields["license"]), sorted(REQUIRED_LICENSES))
 
     def test_metadata_rejects_pacman_invalid_tilde_version(self):
         fields = valid_metadata()

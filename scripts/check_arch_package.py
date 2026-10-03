@@ -51,8 +51,6 @@ EXPECTED_FILES = {
     **{path: 0o644 for path in ICON_FILES},
     "usr/share/terminfo/x/xterm-termeric": 0o644,
     "usr/share/licenses/termeric-git/LICENSE": 0o644,
-    "usr/share/doc/termeric/README.md": 0o644,
-    "usr/share/doc/termeric/CHANGELOG.md": 0o644,
     "usr/share/doc/termeric/THIRD_PARTY_NOTICES.md": 0o644,
 }
 METADATA_FILES = {".BUILDINFO", ".MTREE", ".PKGINFO"}
@@ -65,7 +63,22 @@ REQUIRED_DEPENDENCIES = {
     "wayland",
     "zlib",
 }
-REQUIRED_LICENSES = {"MIT", "Unicode-3.0"}
+# The license array of packaging/arch/PKGBUILD.
+REQUIRED_LICENSES = {
+    "MIT",
+    "0BSD",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CC0-1.0",
+    "GPL-2.0-only WITH GCC-exception-2.0",
+    "ISC",
+    "LGPL-2.1-or-later",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+}
 
 
 def normalize_member_name(raw_name: str) -> str:
