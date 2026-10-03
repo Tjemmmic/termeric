@@ -143,7 +143,6 @@ mod tests {
         assert!(app.redraw_scheduler.has_pending());
     }
 
-    #[cfg(unix)]
     #[test]
     fn settings_ime_and_keyboard_limits_never_leak_into_the_pty() {
         let mut app = App::new_headless_running(
@@ -151,6 +150,9 @@ mod tests {
             "settings-filter",
         );
         app.wait_for_screen_text("READY");
+        // The click below targets a layout computed before it; an opening
+        // animation would move the field between the two.
+        app.settings_panel.set_reduced_motion(true);
         app.settings_panel.toggle();
         assert!(app.handle_settings_filter_key(&Key::Character("e\u{301}".into())));
         app.handle_ime_event(winit::event::Ime::Commit("👩\u{200d}💻".into()));
