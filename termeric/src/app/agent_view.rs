@@ -1,10 +1,10 @@
-//! The agent view in one window: its sessions, frame, input, and actions.
+//! The agent view in one window: its frame, input, and actions.
 //!
 //! The panel is docked right of the terminals and never modal: it takes
 //! keys only while it has keyboard focus, which a click in it or its shortcut
 //! gives and a click in a terminal or Escape takes back. Sessions belong to
-//! the window and end with it; the agents keep their logs, so they can be
-//! continued later.
+//! their tab (`agent_view_tabs.rs`) and end with it; the agents keep their
+//! logs, so they can be continued later.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
