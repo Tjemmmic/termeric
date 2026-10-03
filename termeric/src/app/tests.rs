@@ -4160,7 +4160,10 @@ fn desktop_delivery_failures_become_deduplicated_visible_toasts() {
     let mut app = App::new_headless(config).unwrap();
     app.allow_auto_restore = false;
     app.init_tabs().unwrap();
-    app.bell.set_audio(true);
+    app.bell.set_config(crate::notifications::BellConfig {
+        audio: true,
+        ..Default::default()
+    });
     app.bell
         .set_audio_command_for_test("/definitely/missing/termeric-audio-helper");
     app.notifications
@@ -11534,6 +11537,16 @@ fn headless_font_settings_preserve_order_and_apply_without_a_window() {
         "invalid settings pairs must leave both live values unchanged"
     );
 
+    // The primary family can't also be a fallback.
+    app.apply_settings_action(SettingsAction::SetFontFallback {
+        index: 1,
+        family: Some("Fira Mono".into()),
+    });
+    assert_eq!(
+        app.config.font.fallback,
+        ["Noto Sans Mono", "Noto Color Emoji"]
+    );
+
     app.apply_settings_action(SettingsAction::SetFontFallback {
         index: 0,
         family: None,
@@ -11543,6 +11556,26 @@ fn headless_font_settings_preserve_order_and_apply_without_a_window() {
     // Promoting an existing fallback to primary removes the duplicate.
     app.apply_settings_action(SettingsAction::SetFontFamily("Noto Color Emoji".into()));
     assert!(app.config.font.fallback.is_empty());
+}
+
+#[test]
+fn only_agent_settings_reregister_plugins() {
+    let mut app = App::new_headless(Config::default()).unwrap();
+    assert!(app.plugin_manager.contains("codex"));
+    let generation = app.plugin_runtime_generation;
+
+    app.apply_settings_action(SettingsAction::SetCursorBlink(false));
+    app.apply_settings_action(SettingsAction::SetPadding(6));
+    assert!(!app.config.cursor.blink);
+    assert_eq!(app.config.window.padding, 6);
+    assert_eq!(app.plugin_runtime_generation, generation);
+
+    app.apply_settings_action(SettingsAction::SetAgentEnabled {
+        agent_id: "codex".into(),
+        enabled: false,
+    });
+    assert_ne!(app.plugin_runtime_generation, generation);
+    assert!(!app.plugin_manager.contains("codex"));
 }
 
 #[test]

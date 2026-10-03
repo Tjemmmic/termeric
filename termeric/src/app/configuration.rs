@@ -43,157 +43,6 @@ impl App {
         window.request_redraw();
     }
 
-    /// Set normal and SGR-bold OpenType `wght` requests atomically.
-    pub(super) fn set_font_weights(&mut self, weight: u16, bold_weight: u16) {
-        let mut candidate = self.config.clone();
-        candidate.font.weight = weight;
-        candidate.font.bold_weight = bold_weight;
-        if let Err(error) = candidate.validate() {
-            self.toasts
-                .warning(format!("Font weights rejected: {error:#}"));
-            return;
-        }
-
-        self.config.font.weight = weight;
-        self.config.font.bold_weight = bold_weight;
-        let Some(renderer) = &mut self.renderer else {
-            return;
-        };
-        renderer.set_font_weights(weight, bold_weight);
-        if let Some(window) = self.window.clone() {
-            let size = window.inner_size();
-            self.sync_terminal_geometry(size.width, size.height);
-            window.request_redraw();
-        }
-    }
-
-    /// Set font family to a specific value
-    pub(super) fn set_font_family(&mut self, family: String) {
-        self.config
-            .font
-            .fallback
-            .retain(|fallback| !fallback.eq_ignore_ascii_case(&family));
-        self.config.font.family = family.clone();
-        let Some(renderer) = &mut self.renderer else {
-            return;
-        };
-        let Some(window) = self.window.clone() else {
-            return;
-        };
-
-        renderer.set_font_families(
-            family,
-            &self.config.font.fallback,
-            &self.config.font.range_overrides,
-        );
-        // Sync ligature setting and log resolved font info
-        renderer.set_ligatures(self.config.font.ligatures);
-        log::debug!(
-            "Font set: family='{}', glyph_size={}, ligatures={}",
-            renderer.font_family(),
-            renderer.glyph_font_size(),
-            self.config.font.ligatures,
-        );
-
-        let window_size = window.inner_size();
-        self.sync_terminal_geometry(window_size.width, window_size.height);
-        log::info!(
-            "Font family updated, grid resized to {}x{}",
-            self.cols,
-            self.rows
-        );
-
-        window.request_redraw();
-    }
-
-    /// Update one position in the ordered font fallback chain. Selecting None
-    /// removes that position and shifts later families forward.
-    pub(super) fn set_font_fallback(&mut self, index: usize, family: Option<String>) {
-        if index > self.config.font.fallback.len() || index >= crate::config::MAX_FONT_FALLBACKS {
-            return;
-        }
-        if let Some(family) = family.as_ref()
-            && (family.eq_ignore_ascii_case(&self.config.font.family)
-                || self
-                    .config
-                    .font
-                    .fallback
-                    .iter()
-                    .enumerate()
-                    .any(|(other, configured)| {
-                        other != index && configured.eq_ignore_ascii_case(family)
-                    }))
-        {
-            self.toasts
-                .warning(format!("Font fallback is already configured: {family}"));
-            return;
-        }
-
-        match family {
-            Some(family) if index == self.config.font.fallback.len() => {
-                self.config.font.fallback.push(family);
-            }
-            Some(family) => self.config.font.fallback[index] = family,
-            None if index < self.config.font.fallback.len() => {
-                self.config.font.fallback.remove(index);
-            }
-            None => return,
-        }
-
-        let Some(renderer) = &mut self.renderer else {
-            return;
-        };
-        renderer.set_font_families(
-            self.config.font.family.clone(),
-            &self.config.font.fallback,
-            &self.config.font.range_overrides,
-        );
-        if let Some(window) = self.window.clone() {
-            let size = window.inner_size();
-            self.sync_terminal_geometry(size.width, size.height);
-            window.request_redraw();
-        }
-    }
-
-    /// Set line-height multiplier and propagate the resulting cell geometry.
-    pub(super) fn set_line_height(&mut self, multiplier: f32) {
-        self.config.font.line_height = multiplier;
-        let Some(renderer) = &mut self.renderer else {
-            return;
-        };
-        let Some(window) = self.window.clone() else {
-            return;
-        };
-
-        renderer.set_line_height(multiplier);
-        let window_size = window.inner_size();
-        self.sync_terminal_geometry(window_size.width, window_size.height);
-        window.request_redraw();
-    }
-
-    /// Set padding around terminal content
-    pub(super) fn set_padding(&mut self, padding: u32) {
-        let Some(renderer) = &mut self.renderer else {
-            return;
-        };
-        let Some(window) = self.window.clone() else {
-            return;
-        };
-
-        self.config.window.padding = padding;
-        renderer.set_padding(padding as f32);
-
-        let window_size = window.inner_size();
-        self.sync_terminal_geometry(window_size.width, window_size.height);
-        log::info!(
-            "Padding updated, grid resized to {}x{}",
-            self.cols,
-            self.rows
-        );
-
-        window.request_redraw();
-    }
-
     /// Apply layout changes immediately and schedule at most one bounded
     /// off-event-loop decode for a new or modified local background image.
     pub(super) fn sync_background_image(&mut self, force_reload: bool) {
@@ -419,8 +268,9 @@ impl App {
             self.commands_panel.retain_browse_targets(&retained);
             self.retain_commands_accessibility_rows(&retained);
         }
+        let agents_changed = config.agents != self.config.agents;
         self.config = config;
-        self.apply_config_side_effects();
+        self.apply_config_side_effects(agents_changed);
         if keyboard_type_changed && let Some(tabs) = &mut self.tabs {
             tabs.set_xterm_keyboard_type(self.config.keyboard.xterm_type.terminal_type(), true);
         }
@@ -430,24 +280,30 @@ impl App {
     /// Re-apply every runtime-owned piece of `self.config`. This is the single
     /// application path for startup, settings, reset, manual reload, and hot
     /// reload. Existing PTYs keep their process; shell changes affect new tabs.
-    pub(super) fn apply_config_side_effects(&mut self) {
+    pub(super) fn apply_config_side_effects(&mut self, agents_changed: bool) {
         self.default_font_size = self.config.font.size;
-        self.set_font_family(self.config.font.family.clone());
-        self.set_font_size(self.config.font.size);
-        if let Some(renderer) = &mut self.renderer {
-            renderer.set_font_weights(self.config.font.weight, self.config.font.bold_weight);
-        }
-        self.set_line_height(self.config.font.line_height);
         let tab_bar_position_changed = self.renderer.as_ref().is_some_and(|renderer| {
             renderer.tab_bar_position() != self.config.window.tab_bar_position
         });
         if let Some(renderer) = &mut self.renderer {
+            let font = &self.config.font;
+            renderer.set_font_families(font.family.clone(), &font.fallback, &font.range_overrides);
+            renderer.set_font_size(font.size);
+            renderer.set_font_weights(font.weight, font.bold_weight);
+            renderer.set_line_height(font.line_height);
             renderer.set_tab_bar_position(self.config.window.tab_bar_position);
+            renderer.set_padding(self.config.window.padding as f32);
         }
         if tab_bar_position_changed {
             self.tab_bar_hover = None;
+            // The rail's width limits the dock's.
+            self.apply_agent_dock_width();
         }
-        self.set_padding(self.config.window.padding);
+        // Every geometry input is in place: resize the terminals once.
+        if let Some(window) = self.window.clone() {
+            let size = window.inner_size();
+            self.sync_terminal_geometry(size.width, size.height);
+        }
         self.sync_agent_view_config();
         if let Some(renderer) = &mut self.renderer {
             renderer.set_ligatures(self.config.font.ligatures);
@@ -513,7 +369,9 @@ impl App {
                     .map(|regex| (pattern.name.clone(), regex))
             })
             .collect();
-        self.sync_plugins_from_config();
+        if agents_changed {
+            self.sync_plugins_from_config();
+        }
         self.sync_harvest_from_config();
         self.sync_accessibility_preferences();
         self.refresh_launch_profile_commands();
@@ -746,6 +604,11 @@ impl App {
 
     /// Apply a settings panel action to the app config
     pub(super) fn apply_settings_action(&mut self, action: SettingsAction) {
+        // Configuration changes edit a candidate that `apply_config`
+        // validates and applies once: one geometry pass, and plugins
+        // re-register only when agent configuration changed.
+        let mut config = self.config.clone();
+        let mut applied_message = None;
         match action {
             SettingsAction::PlaceFilterCaret(cursor) => {
                 if self.settings_panel.place_filter_caret(cursor) {
@@ -758,29 +621,21 @@ impl App {
                 }
                 return;
             }
-            SettingsAction::SetFontSize(size) => {
-                // Validate before touching the live font or geometry. The
-                // shared config path applies the size once; calling the
-                // direct zoom setter first invalidates rows and resizes twice.
-                let mut config = self.config.clone();
-                config.font.size = size;
-                if let Err(error) = self.apply_config(config) {
-                    self.toasts
-                        .error(format!("Setting could not be applied: {error}"));
-                }
-                return;
-            }
+            SettingsAction::SetFontSize(size) => config.font.size = size,
             SettingsAction::SetFontFamily(family) => {
-                self.set_font_family(family);
+                config
+                    .font
+                    .fallback
+                    .retain(|fallback| !fallback.eq_ignore_ascii_case(&family));
+                config.font.family = family;
             }
-            SettingsAction::SetFontWeight(weight) => {
-                self.set_font_weights(weight, self.config.font.bold_weight);
-            }
-            SettingsAction::SetBoldFontWeight(weight) => {
-                self.set_font_weights(self.config.font.weight, weight);
-            }
+            SettingsAction::SetFontWeight(weight) => config.font.weight = weight,
+            SettingsAction::SetBoldFontWeight(weight) => config.font.bold_weight = weight,
             SettingsAction::SetFontFallback { index, family } => {
-                self.set_font_fallback(index, family);
+                if let Err(message) = set_font_fallback(&mut config.font, index, family) {
+                    self.toasts.warning(message);
+                    return;
+                }
             }
             SettingsAction::ManageFontRangeOverrides => {
                 self.open_font_range_manager();
@@ -790,147 +645,51 @@ impl App {
                 self.open_font_feature_manager();
                 return;
             }
-            SettingsAction::SetFontLigatures(enabled) => {
-                self.config.font.ligatures = enabled;
-                if let Some(renderer) = &mut self.renderer {
-                    renderer.set_ligatures(enabled);
-                }
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
+            SettingsAction::SetFontLigatures(enabled) => config.font.ligatures = enabled,
+            SettingsAction::SetBoldIsBright(enabled) => config.font.bold_is_bright = enabled,
+            SettingsAction::SetTheme(name) => {
+                applied_message = Some(format!("Theme: {name}"));
+                config.theme.name = name;
+                config.theme.path = None;
             }
-            SettingsAction::SetBoldIsBright(enabled) => {
-                self.config.font.bold_is_bright = enabled;
-                if let Some(renderer) = &mut self.renderer {
-                    renderer.set_bold_is_bright(enabled);
-                }
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
-            }
-            SettingsAction::SetTheme(name) => match Theme::resolve(&name, None) {
-                Ok((theme, source)) => {
-                    let display = name.clone();
-                    self.config.theme.name = name;
-                    self.config.theme.path = None;
-                    self.apply_theme(theme, source);
-                    self.toasts.info(format!("Theme: {}", display));
-                }
-                Err(err) => {
-                    self.toasts
-                        .error(format!("Theme '{}' failed: {}", name, err));
-                }
-            },
-            SettingsAction::SetPadding(padding) => {
-                self.set_padding(padding);
-            }
-            SettingsAction::SetOpacity(opacity) => {
-                self.config.window.opacity = opacity;
-                if let Some(renderer) = &mut self.renderer {
-                    renderer.set_opacity(opacity);
-                }
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
-            }
+            SettingsAction::SetPadding(padding) => config.window.padding = padding,
+            SettingsAction::SetOpacity(opacity) => config.window.opacity = opacity,
             SettingsAction::SetBackgroundImageOpacity(opacity) => {
-                self.config.window.background_image.opacity = opacity;
-                self.sync_background_image(false);
+                config.window.background_image.opacity = opacity;
             }
             SettingsAction::SetBackgroundImageFit(fit) => {
-                self.config.window.background_image.fit = fit;
-                self.sync_background_image(false);
+                config.window.background_image.fit = fit;
             }
-            SettingsAction::SetScrollback(lines) => {
-                self.config.scrollback.lines = lines;
-                if let Some(tabs) = &mut self.tabs {
-                    tabs.set_scrollback_limits(lines, self.config.scrollback.max_memory_bytes());
-                }
-            }
+            SettingsAction::SetScrollback(lines) => config.scrollback.lines = lines,
             SettingsAction::SetScrollbackMemory(memory_mib) => {
-                self.config.scrollback.max_memory_mib = memory_mib;
-                if let Some(tabs) = &mut self.tabs {
-                    tabs.set_scrollback_limits(
-                        self.config.scrollback.lines,
-                        self.config.scrollback.max_memory_bytes(),
-                    );
-                }
+                config.scrollback.max_memory_mib = memory_mib;
             }
-            SettingsAction::SetScrollSpeed(speed) => {
-                self.config.scrollback.scroll_speed = speed;
-            }
-            SettingsAction::SetDecorations(enabled) => {
-                self.config.window.decorations = enabled;
-                if let Some(window) = &self.window {
-                    window.set_decorations(enabled);
-                }
-            }
-            SettingsAction::SetWindowLevel(level) => {
-                self.config.window.level = level;
-                if let Some(window) = &self.window {
-                    window.set_window_level(level.native_for_window(self.launch.quick_access));
-                }
-            }
+            SettingsAction::SetScrollSpeed(speed) => config.scrollback.scroll_speed = speed,
+            SettingsAction::SetDecorations(enabled) => config.window.decorations = enabled,
+            SettingsAction::SetWindowLevel(level) => config.window.level = level,
             SettingsAction::SetTabBarPosition(position) => {
-                self.config.window.tab_bar_position = position;
-                self.tab_bar_hover = None;
-                if let Some(renderer) = &mut self.renderer {
-                    renderer.set_tab_bar_position(position);
-                }
-                // The rail's width limits the dock's.
-                self.apply_agent_dock_width();
-                if let Some(window) = self.window.clone() {
-                    let size = window.inner_size();
-                    self.sync_terminal_geometry(size.width, size.height);
-                    window.request_redraw();
-                }
+                config.window.tab_bar_position = position;
             }
             SettingsAction::SetCursorStyle(style_name) => {
                 use crate::config::CursorStyle;
-                let style = match style_name.as_str() {
+                config.cursor.style = match style_name.as_str() {
                     "Underline" => CursorStyle::Underline,
                     "Beam" => CursorStyle::Beam,
                     _ => CursorStyle::Block,
                 };
-                self.config.cursor.style = style;
             }
-            SettingsAction::SetCursorBlink(enabled) => {
-                self.config.cursor.blink = enabled;
-            }
-            SettingsAction::SetCursorBlinkRate(rate) => {
-                self.config.cursor.blink_rate = rate;
-            }
-            SettingsAction::SetVisualBell(enabled) => {
-                self.config.bell.visual = enabled;
-                self.bell.set_visual(enabled);
-            }
-            SettingsAction::SetAudioBell(enabled) => {
-                self.config.bell.audio = enabled;
-                self.bell.set_audio(enabled);
-            }
-            SettingsAction::SetLineHeight(height) => {
-                self.set_line_height(height);
-            }
-            SettingsAction::SetBellDuration(ms) => {
-                self.config.bell.visual_duration_ms = ms;
-                self.bell.set_config(BellConfig {
-                    visual: self.config.bell.visual,
-                    audio: self.config.bell.audio,
-                    visual_duration_ms: ms,
-                    ..Default::default()
-                });
-            }
-            SettingsAction::SetSplashMode(mode) => {
-                self.config.splash.mode = mode;
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
-            }
+            SettingsAction::SetCursorBlink(enabled) => config.cursor.blink = enabled,
+            SettingsAction::SetCursorBlinkRate(rate) => config.cursor.blink_rate = rate,
+            SettingsAction::SetVisualBell(enabled) => config.bell.visual = enabled,
+            SettingsAction::SetAudioBell(enabled) => config.bell.audio = enabled,
+            SettingsAction::SetLineHeight(height) => config.font.line_height = height,
+            SettingsAction::SetBellDuration(ms) => config.bell.visual_duration_ms = ms,
+            SettingsAction::SetSplashMode(mode) => config.splash.mode = mode,
             SettingsAction::SetReduceMotion(preference) => {
-                self.config.accessibility.reduce_motion = preference;
+                config.accessibility.reduce_motion = preference;
             }
             SettingsAction::SetHighContrast(preference) => {
-                self.config.accessibility.high_contrast = preference;
+                config.accessibility.high_contrast = preference;
             }
             SettingsAction::SaveConfig => {
                 match self.save_config() {
@@ -954,44 +713,32 @@ impl App {
                 }
                 return;
             }
-            SettingsAction::SetSessionAutoSave(enabled) => {
-                self.config.session.auto_save = enabled;
-            }
+            SettingsAction::SetSessionAutoSave(enabled) => config.session.auto_save = enabled,
             SettingsAction::SetSessionAutoRestore(enabled) => {
-                self.config.session.auto_restore = enabled;
+                config.session.auto_restore = enabled;
             }
             SettingsAction::SetSessionSaveScrollback(enabled) => {
-                self.config.session.save_scrollback = enabled;
+                config.session.save_scrollback = enabled;
             }
-            SettingsAction::SetHarvestEnabled(enabled) => {
-                self.config.harvest.enabled = enabled;
-            }
+            SettingsAction::SetHarvestEnabled(enabled) => config.harvest.enabled = enabled,
             SettingsAction::SetHarvestIndicators(enabled) => {
-                self.config.harvest.show_indicators = enabled;
+                config.harvest.show_indicators = enabled;
             }
-            SettingsAction::SetHarvestMaxHistory(limit) => {
-                self.config.harvest.max_history = limit;
-            }
+            SettingsAction::SetHarvestMaxHistory(limit) => config.harvest.max_history = limit,
             SettingsAction::SetAgentEnabled { agent_id, enabled } => {
                 // Built-in agents are on by default: record only an opt-out.
-                let entry = self.config.agents.entry(agent_id.clone()).or_default();
+                let entry = config.agents.entry(agent_id.clone()).or_default();
                 entry.enabled = (!enabled).then_some(false);
                 if *entry == crate::agents::AgentConfig::default() {
-                    self.config.agents.remove(&agent_id);
+                    config.agents.remove(&agent_id);
                 }
             }
-            SettingsAction::SetAgentNotifications(notify) => {
-                self.config.agent_status.notify = notify;
-            }
+            SettingsAction::SetAgentNotifications(notify) => config.agent_status.notify = notify,
             SettingsAction::SetAllowBypassPermissions(allowed) => {
-                self.config.agent_view.allow_bypass_permissions = allowed;
+                config.agent_view.allow_bypass_permissions = allowed;
             }
-            SettingsAction::SetOpenAgentsIn(place) => {
-                self.config.agent_view.open_agents_in = place;
-            }
-            SettingsAction::SetSupervisorAgent(agent) => {
-                self.config.supervisor.agent = agent;
-            }
+            SettingsAction::SetOpenAgentsIn(place) => config.agent_view.open_agents_in = place,
+            SettingsAction::SetSupervisorAgent(agent) => config.supervisor.agent = agent,
             SettingsAction::SetSupervisorMode(mode) => {
                 // Also applies to a supervisor that is already running.
                 self.set_supervisor_mode(mode);
@@ -1019,10 +766,15 @@ impl App {
             SettingsAction::None => return,
         }
 
-        let config = self.config.clone();
-        if let Err(error) = self.apply_config(config) {
-            self.toasts
-                .error(format!("Setting could not be applied: {error}"));
+        match self.apply_config(config) {
+            Ok(()) => {
+                if let Some(message) = applied_message {
+                    self.toasts.info(message);
+                }
+            }
+            Err(error) => self
+                .toasts
+                .error(format!("Setting could not be applied: {error}")),
         }
     }
 
@@ -1242,4 +994,34 @@ impl App {
             ShortcutsAction::None => {}
         }
     }
+}
+
+/// Set, append, or remove one position in the ordered font fallback chain;
+/// removing shifts later families forward. A family already in the chain, or
+/// the primary family, is refused.
+fn set_font_fallback(
+    font: &mut crate::config::FontConfig,
+    index: usize,
+    family: Option<String>,
+) -> std::result::Result<(), String> {
+    if index > font.fallback.len() || index >= crate::config::MAX_FONT_FALLBACKS {
+        return Err("Font fallback position is out of range".into());
+    }
+    if let Some(family) = family.as_ref()
+        && (family.eq_ignore_ascii_case(&font.family)
+            || font.fallback.iter().enumerate().any(|(other, configured)| {
+                other != index && configured.eq_ignore_ascii_case(family)
+            }))
+    {
+        return Err(format!("Font fallback is already configured: {family}"));
+    }
+    match family {
+        Some(family) if index == font.fallback.len() => font.fallback.push(family),
+        Some(family) => font.fallback[index] = family,
+        None if index < font.fallback.len() => {
+            font.fallback.remove(index);
+        }
+        None => {}
+    }
+    Ok(())
 }

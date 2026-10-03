@@ -1517,16 +1517,6 @@ impl GlyphCache {
         self.clear_atlas(queue);
     }
 
-    /// Get current font size
-    pub fn font_size(&self) -> f32 {
-        self.font_size
-    }
-
-    /// Get current font family
-    pub fn font_family(&self) -> &str {
-        &self.font_family
-    }
-
     /// Check if ligatures are enabled
     pub fn ligatures_enabled(&self) -> bool {
         self.ligatures_enabled

@@ -1085,16 +1085,6 @@ impl Renderer {
             .inspect_font_coverage(configured_primary, text)
     }
 
-    /// Get current font family from the glyph cache
-    pub fn font_family(&self) -> &str {
-        self.glyph_cache.font_family()
-    }
-
-    /// Get the physical pixel size the glyph cache rasterizes at
-    pub fn glyph_font_size(&self) -> f32 {
-        self.glyph_cache.font_size()
-    }
-
     /// Enable or disable ligature rendering
     pub fn set_ligatures(&mut self, enabled: bool) {
         if self.glyph_cache.ligatures_enabled() != enabled {

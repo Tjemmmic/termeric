@@ -318,18 +318,11 @@ impl Bell {
 
     /// Update configuration
     pub fn set_config(&mut self, config: BellConfig) {
+        // Turning audio back on may report a helper failure again.
+        if config.audio && !self.config.audio {
+            self.last_audio_failure = None;
+        }
         self.config = config;
-    }
-
-    /// Enable/disable visual bell
-    pub fn set_visual(&mut self, enabled: bool) {
-        self.config.visual = enabled;
-    }
-
-    /// Enable/disable audio bell
-    pub fn set_audio(&mut self, enabled: bool) {
-        self.config.audio = enabled;
-        self.last_audio_failure = None;
     }
 
     #[cfg(test)]

@@ -1586,7 +1586,7 @@ impl App {
             app.config.harvest.enabled,
             &app.shortcut_registry,
         ));
-        app.apply_config_side_effects();
+        app.apply_config_side_effects(true);
         app.mark_config_saved();
         if let Some(warning) = startup_config_warning {
             log::error!("{}", warning);
