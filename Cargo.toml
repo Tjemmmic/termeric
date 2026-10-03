@@ -35,8 +35,8 @@ codegen-units = 1
 panic = "abort"
 strip = true
 
-# Keep release-equivalent optimization while retaining enough symbols for
-# perf, heaptrack, and DHAT to attribute hot paths and allocation sites.
+# Release optimization with symbols, for profilers such as perf and heaptrack.
+# See "Profiling and debugging builds" in docs/dev/testing.md.
 [profile.profiling]
 inherits = "release"
 debug = 1
@@ -49,9 +49,8 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 opt-level = 3
 
-# Ordinary builds retain source-line backtraces without embedding full
-# variable/type debug data in every artifact. Opt into this profile for GDB,
-# LLDB, or another debugger that needs complete local-variable information.
+# Ordinary dev builds keep only line tables. This profile adds full debug
+# information for GDB or LLDB; see docs/dev/testing.md.
 [profile.debugging]
 inherits = "dev"
 debug = 2

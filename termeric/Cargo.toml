@@ -39,8 +39,11 @@ unicode_names2 = "=4.0.0"
 
 # Image decoding for the window icon, notification icons, and background images
 image = "0.25"
+# Decompressing Kitty file-transfer data
 flate2 = "1.1"
+# Private staging files for atomic writes of Termeric's own files (safe_fs)
 tempfile = "3"
+# Scrollback encoding in session snapshots
 base64 = "0.22"
 
 # Clipboard (wayland-data-control needed for Wayland support)

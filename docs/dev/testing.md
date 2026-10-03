@@ -57,6 +57,17 @@ python3 scripts/run_benchmarks.py
 
 The runner builds and runs the release benchmark suites, writes every metric's samples and statistics to `target/benchmarks/latest.json`, and fails if a metric exceeds its budget in `benchmarks/budgets.toml`. Use `--repeat N` to pool several runs and `--no-check` to record results without enforcing budgets. Renderer metrics need a GPU or Mesa's software Vulkan; without one they're reported as skipped, which only budgets marked `allow_skipped` accept.
 
+## Profiling and debugging builds
+
+Release builds are stripped, and ordinary dev builds keep only line tables. Two extra Cargo profiles fill the gaps:
+
+```bash
+cargo build --profile profiling   # release optimization with symbols, for perf or heaptrack
+cargo build --profile debugging   # dev build with full debug information, for GDB or LLDB
+```
+
+The binaries land in `target/profiling/` and `target/debugging/`.
+
 ## Fuzzing
 
 The fuzz targets live in `fuzz/` and use [cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz), which needs a nightly toolchain.
