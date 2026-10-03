@@ -1,9 +1,14 @@
-//! Terminal content features
+//! Features built on a terminal's content and launch.
 //!
-//! Modules for working with terminal content:
-//! - Text search with regex support
-//! - Splash screen
-//! - Diff detection in terminal output
+//! - `copy_mode`: keyboard scrollback navigation, selection, and quick select
+//! - `diff_detector`: passive unified-diff capture for agent diff review
+//! - `events`: draining terminal events beside their PTY owner
+//! - `geometry`: the physical grid size shared by renderer and PTY
+//! - `guardrails`: confirmation for destructive automated input
+//! - `search`: incremental literal and regex search
+//! - `shell_integration`: shell launch preparation for OSC 7 and OSC 133
+//! - `splash`: the startup splash art
+//! - `url`: URL detection and opening
 
 pub mod copy_mode;
 pub mod diff_detector;
