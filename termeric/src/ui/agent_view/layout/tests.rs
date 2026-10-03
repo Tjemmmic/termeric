@@ -1,4 +1,3 @@
-use crate::ui::geometry::Bounds;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -15,6 +14,7 @@ use crate::agent_view::transcript::Transcript;
 use crate::config::theme::Theme;
 use crate::ui::agent_view::scene::{ExpandKey, Node};
 use crate::ui::agent_view::{OpenMenu, Screen};
+use crate::ui::geometry::Bounds;
 use crate::ui::text_layout::FixedMeasure;
 
 const PANEL: Bounds = Bounds::new(1000.0, 34.0, 440.0, 866.0);
@@ -957,7 +957,7 @@ fn a_long_menu_is_searched_grouped_and_scrolled_within_the_panel() {
     assert!(!headings.contains(&"GitHub Copilot"));
 
     // Every word typed must match, the provider's name included.
-    state.menu.as_mut().unwrap().filter = "copilot OPUS".into();
+    assert!(state.menu.as_mut().unwrap().filter.replace("copilot OPUS"));
     state.menu.as_mut().unwrap().fresh = false;
     let input = new_session_input(&state, &sessions, &colors, agents.clone());
     let shown: Vec<MenuAction> = filtered_menu_items(&input, MenuKind::Model, "copilot OPUS")
@@ -975,7 +975,14 @@ fn a_long_menu_is_searched_grouped_and_scrolled_within_the_panel() {
     // A short list fits without scrolling.
     assert_eq!(scene.menu_height, scene.menu_viewport.unwrap().height);
 
-    state.menu.as_mut().unwrap().filter = "nothing like this".into();
+    assert!(
+        state
+            .menu
+            .as_mut()
+            .unwrap()
+            .filter
+            .replace("nothing like this")
+    );
     let scene = build(
         &new_session_input(&state, &sessions, &colors, agents),
         &mut measure(),

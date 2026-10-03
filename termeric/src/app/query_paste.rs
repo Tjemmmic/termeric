@@ -184,12 +184,12 @@ mod tests {
             let tab = app.tabs.as_ref().and_then(TabManager::active_tab);
             let tab_id = tab.map_or(usize::MAX, |tab| tab.id);
             let original_title = tab.and_then(|tab| tab.user_title().map(str::to_owned));
-            app.tab_rename = Some(TabRenameState {
+            app.tab_rename = Some(TabRenameState::new(
                 tab_id,
-                original: original_title.clone(),
-                input: "Roots".into(),
+                original_title.clone(),
+                "Roots",
                 max_chars,
-            });
+            ));
             assert_eq!(app.clipboard_paste_target(), PasteTarget::TabRename);
             app.handle_ime_event(winit::event::Ime::Preedit("draft".into(), None));
             for value in [
@@ -207,7 +207,7 @@ mod tests {
                 &"x".repeat(4097),
             ] {
                 assert!(!app.paste_clipboard_payload(value));
-                assert_eq!(app.tab_rename.as_ref().unwrap().input, "Roots");
+                assert_eq!(app.tab_rename.as_ref().unwrap().input.text(), "Roots");
                 assert!(app.ime.preedit().is_some());
                 if let Some(tab) = app.tabs.as_ref().and_then(TabManager::active_tab) {
                     assert_eq!(tab.user_title(), original_title.as_deref());
@@ -217,20 +217,26 @@ mod tests {
             assert!(app.paste_clipboard_payload("界e\u{301}👩\u{200d}💻"));
             assert!(app.ime.preedit().is_none());
             assert_eq!(app.redraw_scheduler.begin_frame(), "keyboard-input");
-            let draft = app.tab_rename.as_ref().unwrap().input.clone();
+            let draft = app.tab_rename.as_ref().unwrap().input.text().to_owned();
             assert_eq!(draft, "Roots界e\u{301}👩\u{200d}💻");
             assert!(
                 app.paste_clipboard_payload(&"🫚".repeat(max_chars - 1 - draft.chars().count()))
             );
-            let almost = app.tab_rename.as_ref().unwrap().input.clone();
+            let almost = app.tab_rename.as_ref().unwrap().input.text().to_owned();
             app.handle_ime_event(winit::event::Ime::Preedit("keep".into(), None));
             assert!(!app.paste_clipboard_payload("e\u{301}"));
-            assert_eq!(app.tab_rename.as_ref().unwrap().input, almost);
+            assert_eq!(app.tab_rename.as_ref().unwrap().input.text(), almost);
             assert!(app.ime.preedit().is_some());
             assert!(app.paste_clipboard_payload("🫚"));
             assert!(!app.paste_clipboard_payload("x"));
             assert_eq!(
-                app.tab_rename.as_ref().unwrap().input.chars().count(),
+                app.tab_rename
+                    .as_ref()
+                    .unwrap()
+                    .input
+                    .text()
+                    .chars()
+                    .count(),
                 max_chars
             );
             assert_eq!(app.search.query(), search_before);
@@ -238,7 +244,7 @@ mod tests {
             if let Some(tab) = app.tabs.as_ref().and_then(TabManager::active_tab) {
                 assert_eq!(
                     tab.user_title(),
-                    Some(app.tab_rename.as_ref().unwrap().input.as_str())
+                    Some(app.tab_rename.as_ref().unwrap().input.text())
                 );
             }
             assert!(app.handle_tab_rename_key(&Key::Named(NamedKey::Escape)));
@@ -259,12 +265,7 @@ mod tests {
     #[test]
     fn tab_rename_paste_honors_rebinding_disabling_and_higher_modal_guards() {
         let mut app = App::new_headless(Config::default()).unwrap();
-        app.tab_rename = Some(TabRenameState {
-            tab_id: usize::MAX,
-            original: None,
-            input: "Roots".into(),
-            max_chars: 256,
-        });
+        app.tab_rename = Some(TabRenameState::new(usize::MAX, None, "Roots", 256));
         app.modifiers = ModifiersState::CONTROL | ModifiersState::SHIFT;
         let default = Key::Character("v".into());
         assert!(app.handle_query_paste_key(&default)); // no OS clipboard in headless mode
@@ -283,7 +284,7 @@ mod tests {
         app.commands_panel.start_add();
         assert!(app.paste_clipboard_payload("front form"));
         assert_eq!(app.commands_panel.form_name.text(), "front form");
-        assert_eq!(app.tab_rename.as_ref().unwrap().input, "Roots");
+        assert_eq!(app.tab_rename.as_ref().unwrap().input.text(), "Roots");
         app.commands_panel.close();
         app.workspace_menu = Some(crate::ui::popup_menu::PopupMenu::new(
             crate::ui::workspace_menu::workspace_menu_rows(&[], None),
@@ -295,7 +296,7 @@ mod tests {
         app.shortcut_registry
             .set_binding(BindableAction::Paste, None);
         assert!(!app.handle_query_paste_key(&rebound));
-        assert_eq!(app.tab_rename.as_ref().unwrap().input, "Roots");
+        assert_eq!(app.tab_rename.as_ref().unwrap().input.text(), "Roots");
     }
 
     fn open_workspace_rename(app: &mut App) {

@@ -6,7 +6,6 @@
 //! the window and end with it; the agents keep their logs, so they can be
 //! continued later.
 
-use crate::ui::geometry::Bounds;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -24,6 +23,7 @@ use crate::ui::agent_view::layout::{
 };
 use crate::ui::agent_view::scene::Scene;
 use crate::ui::agent_view::{AgentViewState, Focus, Layout, Screen};
+use crate::ui::geometry::Bounds;
 
 /// Earlier conversations listed per folder.
 const PAST_LIMIT: usize = 12;
@@ -1965,7 +1965,10 @@ mod tests {
         for letter in ["o", "p", "u", "s"] {
             key(&mut app, character(letter), Some(letter));
         }
-        assert_eq!(app.agent_view.state.menu.as_ref().unwrap().filter, "opus");
+        assert_eq!(
+            app.agent_view.state.menu.as_ref().unwrap().filter.text(),
+            "opus"
+        );
         key(&mut app, Key::Named(NamedKey::Enter), None);
         assert!(app.agent_view.state.menu.is_none());
         assert_eq!(
@@ -1978,21 +1981,24 @@ mod tests {
         key(&mut app, character("z"), Some("z"));
         key(&mut app, character("e\u{301}"), Some("e\u{301}"));
         key(&mut app, Key::Named(NamedKey::Backspace), None);
-        assert_eq!(app.agent_view.state.menu.as_ref().unwrap().filter, "z");
+        assert_eq!(
+            app.agent_view.state.menu.as_ref().unwrap().filter.text(),
+            "z"
+        );
         // The search is one bounded line.
         key(&mut app, character("\u{2028}"), Some("\u{2028}"));
         for _ in 0..200 {
             key(&mut app, character("x"), Some("x"));
         }
         assert_eq!(
-            app.agent_view.state.menu.as_ref().unwrap().filter,
+            app.agent_view.state.menu.as_ref().unwrap().filter.text(),
             format!("z{}", "x".repeat(127))
         );
         key(&mut app, Key::Named(NamedKey::Escape), None);
         key(&mut app, character("z"), Some("z"));
         key(&mut app, Key::Named(NamedKey::Escape), None);
         let menu = app.agent_view.state.menu.as_ref().unwrap();
-        assert!(menu.filter.is_empty());
+        assert!(menu.filter.text().is_empty());
         key(&mut app, Key::Named(NamedKey::Escape), None);
         assert!(app.agent_view.state.menu.is_none());
 

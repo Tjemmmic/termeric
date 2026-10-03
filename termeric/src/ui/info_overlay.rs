@@ -2,7 +2,7 @@
 
 use super::animation::OverlayAnimation;
 use super::constants::CONTENT_CHAR_SCALE;
-use super::text_input::{TextInput, TextInputEdit, grapheme_boundary};
+use super::text_input::{TextInput, TextInputEdit, TextLimit, grapheme_boundary};
 use crate::ui::geometry::Bounds;
 
 pub const MAX_INFO_TITLE_CHARS: usize = 256;
@@ -65,14 +65,13 @@ pub struct InfoOverlayInputInfo {
     pub value: String,
     pub cursor_byte: usize,
     pub source_line: usize,
-    pub max_bytes: usize,
+    pub limit: TextLimit,
 }
 
 struct InfoOverlayInput {
     label: String,
     value: TextInput,
     source_line: usize,
-    max_bytes: usize,
 }
 
 /// Geometry shared by rendering, pointer hit testing, viewport sizing, and
@@ -319,13 +318,12 @@ impl InfoOverlay {
             .clamp(1, MAX_INFO_INPUT_BYTES)
             .min(MAX_INFO_LINE_CHARS.saturating_sub(label.len()).max(1));
         let value = crate::safe_text::single_line_within(&value.into(), max_bytes);
-        let mut input = TextInput::new();
-        input.replace(value);
+        let mut input = TextInput::new(TextLimit::Bytes(max_bytes));
+        input.replace(&value);
         self.input = Some(InfoOverlayInput {
             label,
             value: input,
             source_line,
-            max_bytes,
         });
         self.refresh_input_line();
         self.focus = Some(InfoOverlayFocus::Input);
@@ -454,7 +452,7 @@ impl InfoOverlay {
             value: input.value.text().to_string(),
             cursor_byte: input.value.cursor(),
             source_line: input.source_line,
-            max_bytes: input.max_bytes,
+            limit: input.value.limit(),
         })
     }
 
@@ -469,38 +467,31 @@ impl InfoOverlay {
         Some(input.value.text())
     }
 
-    /// Insert typed or committed text at the caret. Like every other field,
-    /// text that would overflow the bound or contains controls is rejected
-    /// whole rather than truncated or filtered.
+    /// Insert typed or committed text at the caret, whole or not at all.
     pub fn insert_input_text(&mut self, request_id: u64, text: &str) -> bool {
-        if !self.is_awaiting(request_id) || text.is_empty() || text.chars().any(char::is_control) {
+        if !self.is_awaiting(request_id) {
             return false;
         }
         let Some(input) = self.input.as_mut() else {
             return false;
         };
-        if input.value.text().len().saturating_add(text.len()) > input.max_bytes {
+        if !input.value.insert(text) {
             return false;
         }
-        input.value.insert_text(text);
         self.refresh_input_line();
         true
     }
 
     pub fn replace_input_text(&mut self, request_id: u64, text: &str) -> bool {
-        if !self.is_awaiting(request_id)
-            || text.len() > self.input.as_ref().map_or(0, |input| input.max_bytes)
-            || text.chars().any(char::is_control)
-        {
+        if !self.is_awaiting(request_id) {
             return false;
         }
         let Some(input) = self.input.as_mut() else {
             return false;
         };
-        if input.value.text() == text {
+        if input.value.text() == text || !input.value.replace(text) {
             return false;
         }
-        input.value.replace(text);
         self.refresh_input_line();
         true
     }
@@ -562,7 +553,7 @@ impl InfoOverlay {
             return false;
         };
         let before = input.value.cursor();
-        if !input.value.set_cursor_byte(byte) || before == byte {
+        if !input.value.place_caret(byte) || before == byte {
             return false;
         }
         self.ensure_input_cursor_visible();

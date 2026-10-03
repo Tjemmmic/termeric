@@ -17,64 +17,122 @@ pub enum TextInputEdit {
     DeleteWord,
 }
 
-/// A single-line text input buffer with cursor tracking.
+/// How much one field holds: characters for what people read, bytes for
+/// what is sent on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextLimit {
+    Chars(usize),
+    Bytes(usize),
+}
+
+impl std::fmt::Display for TextLimit {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Chars(limit) => write!(formatter, "{limit} characters"),
+            Self::Bytes(limit) => write!(formatter, "{limit} UTF-8 bytes"),
+        }
+    }
+}
+
+impl TextLimit {
+    /// Whether `held` and `added` together stay within the limit.
+    fn admits(self, held: &str, added: &str) -> bool {
+        match self {
+            Self::Bytes(limit) => held.len().saturating_add(added.len()) <= limit,
+            // A character is at most four bytes, so longer text cannot fit.
+            Self::Chars(limit) => {
+                added.len() <= limit.saturating_mul(4)
+                    && held.chars().count() + added.chars().count() <= limit
+            }
+        }
+    }
+}
+
+/// A single-line text field: its text, caret, and limit. Every change is
+/// whole or nothing; text with a line break or control character, or that
+/// would overflow the limit, is refused rather than cut or filtered.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextInput {
     buffer: String,
     /// Byte offset into buffer
     cursor: usize,
+    limit: TextLimit,
 }
 
 impl TextInput {
-    /// Create an empty text input.
-    pub fn new() -> Self {
+    pub fn new(limit: TextLimit) -> Self {
         Self {
             buffer: String::new(),
             cursor: 0,
+            limit,
         }
     }
 
-    /// Get the current text.
     pub fn text(&self) -> &str {
         &self.buffer
     }
 
-    /// Get the cursor position (byte offset).
+    /// The caret, as a byte offset.
     pub fn cursor(&self) -> usize {
         self.cursor
     }
 
-    /// Place the cursor at an exact UTF-8 byte boundary.
-    pub fn set_cursor_byte(&mut self, byte_offset: usize) -> bool {
-        if byte_offset > self.buffer.len() || !self.buffer.is_char_boundary(byte_offset) {
+    pub fn limit(&self) -> TextLimit {
+        self.limit
+    }
+
+    /// Whether `text` could be this field's whole value.
+    pub fn accepts(&self, text: &str) -> bool {
+        !text.chars().any(crate::safe_text::breaks_single_line) && self.limit.admits("", text)
+    }
+
+    /// Place the caret on a grapheme boundary; anywhere else changes nothing.
+    pub fn place_caret(&mut self, cursor: usize) -> bool {
+        if cursor != self.buffer.len()
+            && !self
+                .buffer
+                .grapheme_indices(true)
+                .any(|(offset, _)| offset == cursor)
+        {
             return false;
         }
-        self.cursor = byte_offset;
+        self.cursor = cursor;
         true
     }
 
-    /// Clear the buffer and reset cursor.
     pub fn clear(&mut self) {
         self.buffer.clear();
         self.cursor = 0;
     }
 
-    /// Replace the complete buffer and place the cursor at its end.
-    pub fn replace(&mut self, value: impl Into<String>) {
-        self.buffer = value.into();
+    /// Replace the whole value, caret at its end. Returns whether it was
+    /// accepted.
+    pub fn replace(&mut self, text: &str) -> bool {
+        if !self.accepts(text) {
+            return false;
+        }
+        self.buffer.clear();
+        self.buffer.push_str(text);
         self.cursor = self.buffer.len();
+        true
     }
 
-    /// Insert a character at the cursor position and advance cursor.
-    pub fn insert_char(&mut self, c: char) {
-        self.buffer.insert(self.cursor, c);
-        self.cursor += c.len_utf8();
+    /// Whether [`insert`](Self::insert) would accept `text`.
+    pub fn can_insert(&self, text: &str) -> bool {
+        !text.is_empty()
+            && !text.chars().any(crate::safe_text::breaks_single_line)
+            && self.limit.admits(&self.buffer, text)
     }
 
-    /// Insert already-validated text with one splice, not one suffix move per
-    /// scalar. Callers own their field-specific size and content policy.
-    pub fn insert_text(&mut self, text: &str) {
+    /// Insert typed, committed, or pasted text at the caret with one splice.
+    /// Returns whether it was accepted; empty text is not a change.
+    pub fn insert(&mut self, text: &str) -> bool {
+        if !self.can_insert(text) {
+            return false;
+        }
         self.buffer.insert_str(self.cursor, text);
         self.cursor += text.len();
+        true
     }
 
     /// Apply a whole-grapheme edit. Returns true only if text changed; moving
@@ -83,7 +141,6 @@ impl TextInput {
         edit_grapheme(&mut self.buffer, &mut self.cursor, edit)
     }
 
-    /// Move cursor to the end.
     pub fn cursor_end(&mut self) {
         self.cursor = self.buffer.len();
     }
@@ -211,37 +268,68 @@ pub(crate) fn grapheme_boundary(text: &str, cursor: usize, backwards: bool) -> u
 }
 
 #[cfg(test)]
-impl TextInput {
-    fn from(s: impl Into<String>) -> Self {
-        let buffer: String = s.into();
-        let cursor = buffer.len();
-        Self { buffer, cursor }
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
 
+    fn input(text: &str) -> TextInput {
+        let mut input = TextInput::new(TextLimit::Bytes(64));
+        assert!(input.replace(text));
+        input
+    }
+
     #[test]
     fn text_splice_preserves_utf8_suffix_and_advances_by_bytes() {
-        let mut input = TextInput::from("界z");
-        assert!(input.set_cursor_byte("界".len()));
-        input.insert_text("e\u{301}👩\u{200d}💻");
+        let mut input = input("界z");
+        assert!(input.place_caret("界".len()));
+        assert!(input.insert("e\u{301}👩\u{200d}💻"));
         assert_eq!(input.text(), "界e\u{301}👩\u{200d}💻z");
         assert_eq!(input.cursor(), input.text().len() - 1);
-        input.insert_text("");
+        assert!(!input.insert(""));
         assert_eq!(input.cursor(), input.text().len() - 1);
         assert!(input.edit_grapheme(TextInputEdit::Backspace));
         assert_eq!(input.text(), "界e\u{301}z");
     }
 
     #[test]
+    fn changes_are_whole_or_nothing() {
+        let mut chars = TextInput::new(TextLimit::Chars(3));
+        assert!(chars.insert("界界"));
+        assert!(!chars.insert("ab"), "would hold four characters");
+        assert!(chars.insert("a"));
+        assert_eq!(chars.text(), "界界a");
+
+        let mut bytes = TextInput::new(TextLimit::Bytes(4));
+        assert!(!bytes.insert("界界"), "six bytes");
+        assert!(bytes.insert("界"));
+        assert!(!bytes.insert("界"));
+        assert!(bytes.insert("a"));
+
+        for line_break in ["a\nb", "a\rb", "\t", "\u{1b}", "a\u{2028}"] {
+            assert!(!chars.accepts(line_break), "{line_break:?}");
+            assert!(!input("").insert(line_break), "{line_break:?}");
+        }
+        assert!(!bytes.replace("toolong"));
+        assert_eq!(bytes.text(), "界a");
+        assert!(bytes.replace(""));
+        assert_eq!((bytes.text(), bytes.cursor()), ("", 0));
+    }
+
+    #[test]
+    fn carets_land_only_on_grapheme_boundaries() {
+        let mut input = input("e\u{301}x");
+        assert!(!input.place_caret(1), "inside e + combining acute");
+        assert!(input.place_caret(3));
+        assert!(input.place_caret(4));
+        assert!(!input.place_caret(5));
+        assert_eq!(input.cursor(), 4);
+    }
+
+    #[test]
     fn word_edits_skip_whitespace_and_keep_punctuation_and_emoji_segments() {
         use TextInputEdit::*;
         let value = "one  two,👩\u{200d}💻";
-        let mut input = TextInput::from(value);
-        assert!(input.set_cursor_byte(0));
+        let mut input = input(value);
+        assert!(input.place_caret(0));
         for cursor in [3, 8, 9, value.len(), value.len()] {
             assert!(!input.edit_grapheme(WordRight));
             assert_eq!(input.cursor(), cursor);
@@ -303,7 +391,7 @@ mod tests {
             .map(|(offset, _)| offset)
             .chain([value.len()])
             .collect();
-        let mut input = TextInput::from(value);
+        let mut input = input(value);
         assert!(!input.edit_grapheme(TextInputEdit::Home));
         for boundary in boundaries.iter().skip(1) {
             assert!(!input.edit_grapheme(TextInputEdit::Right));
@@ -329,54 +417,13 @@ mod tests {
     #[test]
     fn edits_repair_a_caret_inside_a_newly_joined_grapheme() {
         for edit in [TextInputEdit::Backspace, TextInputEdit::Delete] {
-            let mut input = TextInput::from("\u{301}x");
-            assert!(input.set_cursor_byte(0));
-            input.insert_char('e');
+            let mut input = input("\u{301}x");
+            assert!(input.place_caret(0));
+            assert!(input.insert("e"));
             assert_eq!(input.cursor(), 1);
             assert!(input.edit_grapheme(edit));
             assert_eq!(input.text(), "x");
             assert_eq!(input.cursor(), 0);
         }
-    }
-
-    #[test]
-    fn test_empty() {
-        let input = TextInput::new();
-        assert_eq!(input.cursor(), 0);
-        assert_eq!(input.text(), "");
-    }
-
-    #[test]
-    fn test_insert_char() {
-        let mut input = TextInput::new();
-        input.insert_char('h');
-        input.insert_char('i');
-        assert_eq!(input.text(), "hi");
-        assert_eq!(input.cursor(), 2);
-    }
-
-    #[test]
-    fn test_insert_at_middle() {
-        let mut input = TextInput::from("hllo");
-        assert!(input.set_cursor_byte(1));
-        input.insert_char('e');
-        assert_eq!(input.text(), "hello");
-        assert_eq!(input.cursor(), 2);
-    }
-
-    #[test]
-    fn test_clear() {
-        let mut input = TextInput::from("hello");
-        input.clear();
-        assert_eq!(input.text(), "");
-        assert_eq!(input.cursor(), 0);
-    }
-
-    #[test]
-    fn test_replace_moves_cursor_to_utf8_end() {
-        let mut input = TextInput::from("old");
-        input.replace("new 🫚");
-        assert_eq!(input.text(), "new 🫚");
-        assert_eq!(input.cursor(), "new 🫚".len());
     }
 }

@@ -20,6 +20,7 @@ use crate::agent_view::agent::AgentKind;
 use crate::agent_view::session::SessionId;
 use crate::agent_view::transcript::Attachment;
 use crate::ui::text_area::TextArea;
+use crate::ui::text_input::{TextInput, TextLimit};
 
 use scene::{ExpandKey, MenuKind, Target};
 
@@ -383,20 +384,23 @@ pub struct OpenMenu {
     /// Nothing was highlighted or scrolled yet: the menu shows the checked
     /// item, highlighted and in view.
     pub fresh: bool,
-    /// Typed to narrow a long menu.
-    pub filter: String,
+    /// Typed to narrow a long menu; it has no caret, so typing and
+    /// Backspace work at its end.
+    pub filter: TextInput,
     /// How far a long menu's list is scrolled.
     pub scroll: Scroll,
 }
 
 impl OpenMenu {
+    const MAX_FILTER_CHARS: usize = 128;
+
     pub fn new(kind: MenuKind, anchor: Bounds) -> Self {
         Self {
             kind,
             anchor,
             highlighted: 0,
             fresh: true,
-            filter: String::new(),
+            filter: TextInput::new(TextLimit::Chars(Self::MAX_FILTER_CHARS)),
             scroll: Scroll::at_start(),
         }
     }

@@ -4,18 +4,12 @@
 //! modeled after the command palette (OverlayAnimation, centered panel, search bar).
 
 use super::animation::OverlayAnimation;
-use super::text_input::{TextInput, TextInputEdit};
+use super::text_input::{TextInput, TextInputEdit, TextLimit};
 use super::text_input_viewport::TextInputViewport;
 use crate::input::keybindings::{BindableAction, KeyChord, ShortcutCategory, ShortcutRegistry};
 use crate::ui::geometry::Bounds;
 
 const MAX_FILTER_CHARACTERS: usize = 128;
-
-fn valid_filter_text(value: &str) -> bool {
-    value.len() <= MAX_FILTER_CHARACTERS * 4
-        && value.chars().count() <= MAX_FILTER_CHARACTERS
-        && !value.chars().any(crate::safe_text::breaks_single_line)
-}
 
 /// Result of a user action in the shortcuts panel
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -268,7 +262,7 @@ impl ShortcutsPanel {
     pub fn new() -> Self {
         Self {
             animation: OverlayAnimation::new(),
-            filter: TextInput::new(),
+            filter: TextInput::new(TextLimit::Chars(MAX_FILTER_CHARACTERS)),
             selected: 0,
             scroll_offset: 0,
             max_visible: 12,
@@ -566,10 +560,9 @@ impl ShortcutsPanel {
     }
 
     pub fn accessibility_set_filter(&mut self, value: &str) -> bool {
-        if !self.is_active() || self.recording || !valid_filter_text(value) {
+        if !self.is_active() || self.recording || !self.filter.replace(value) {
             return false;
         }
-        self.filter.replace(value);
         self.selected = 0;
         self.scroll_offset = 0;
         true
@@ -578,15 +571,9 @@ impl ShortcutsPanel {
     /// Insert an entire keyboard/IME event or reject it unchanged. The same
     /// scalar and single-line policy applies to semantic replacement.
     pub fn insert_filter_text(&mut self, value: &str) -> bool {
-        if !self.is_active()
-            || self.recording
-            || value.is_empty()
-            || !valid_filter_text(value)
-            || self.filter.text().chars().count() + value.chars().count() > MAX_FILTER_CHARACTERS
-        {
+        if !self.is_active() || self.recording || !self.filter.insert(value) {
             return false;
         }
-        self.filter.insert_text(value);
         self.selected = 0;
         self.scroll_offset = 0;
         true
@@ -629,7 +616,7 @@ impl ShortcutsPanel {
         ) else {
             return false;
         };
-        self.filter.set_cursor_byte(cursor)
+        self.filter.place_caret(cursor)
     }
 
     /// Active filter geometry without rebuilding or cloning result rows.

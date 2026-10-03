@@ -5,16 +5,10 @@ use crate::config::{
 };
 use crate::input::keybindings::ShortcutRegistry;
 use crate::ui::geometry::Bounds;
-use crate::ui::text_input::{TextInputEdit, edit_grapheme};
+use crate::ui::text_input::{TextInput, TextInputEdit, TextLimit};
 use crate::ui::text_input_viewport::TextInputViewport;
 
 const MAX_FILTER_CHARACTERS: usize = 256;
-
-fn valid_filter_text(text: &str) -> bool {
-    text.len() <= MAX_FILTER_CHARACTERS * 4
-        && text.chars().count() <= MAX_FILTER_CHARACTERS
-        && !text.chars().any(crate::safe_text::breaks_single_line)
-}
 
 /// Default fallback font (always available)
 const DEFAULT_FONT: &str = "monospace";
@@ -712,9 +706,7 @@ pub struct SettingsPanel {
     /// Header, footer, or sidebar control under the pointer.
     hovered_control: Option<SettingsControl>,
     /// Search filter text
-    filter: String,
-    /// Cursor position in filter text (byte offset)
-    filter_cursor: usize,
+    filter: TextInput,
     /// Currently selected entry index (selectable entries only, not headers)
     selected: usize,
     /// Scroll offset in absolute entry units (headers count)
@@ -769,8 +761,7 @@ impl SettingsPanel {
             ),
             page: SettingsPage::Appearance,
             hovered_control: None,
-            filter: String::new(),
-            filter_cursor: 0,
+            filter: TextInput::new(TextLimit::Chars(MAX_FILTER_CHARACTERS)),
             selected: 0,
             scroll_offset: 0,
             max_visible: 12,
@@ -825,7 +816,6 @@ impl SettingsPanel {
         if !self.animation.is_open() {
             // Reset state when opening
             self.filter.clear();
-            self.filter_cursor = 0;
             self.selected = 0;
             self.scroll_offset = 0;
             self.selection_visibility_pending = true;
@@ -842,7 +832,6 @@ impl SettingsPanel {
     pub fn select_page(&mut self, page: SettingsPage) {
         self.page = page;
         self.filter.clear();
-        self.filter_cursor = 0;
         self.selected = 0;
         self.scroll_offset = 0;
         self.dropdown_open = false;
@@ -855,7 +844,6 @@ impl SettingsPanel {
     pub fn open_to_section(&mut self, section: SettingsSection) {
         self.page = section.page();
         self.filter.clear();
-        self.filter_cursor = 0;
         self.scroll_offset = 0;
         self.selection_visibility_pending = true;
         self.dropdown_open = false;
@@ -1673,7 +1661,7 @@ impl SettingsPanel {
     /// page's matches. Section headings appear when a list spans sections.
     pub fn build_entries(&self, config: &Config, registry: &ShortcutRegistry) -> Vec<SettingEntry> {
         let all = self.all_items(config, registry);
-        let filter_lower = self.filter.to_lowercase();
+        let filter_lower = self.filter.text().to_lowercase();
         let has_filter = !filter_lower.is_empty();
         // Without a search only the current page shows, and a page made of
         // one section needs no heading beneath the page title.
@@ -1781,10 +1769,9 @@ impl SettingsPanel {
 
         let action = match key {
             SettingsKey::Escape => {
-                if !self.filter.is_empty() {
+                if !self.filter.text().is_empty() {
                     // First Escape clears filter
                     self.filter.clear();
-                    self.filter_cursor = 0;
                     self.selected = 0;
                     self.scroll_offset = 0;
                 } else {
@@ -1844,17 +1831,9 @@ impl SettingsPanel {
 
     /// Insert one complete text event or reject it without changing any state.
     pub fn insert_filter_text(&mut self, text: &str) -> bool {
-        if !self.is_active()
-            || self.dropdown_open
-            || text.is_empty()
-            || !valid_filter_text(text)
-            || self.filter.chars().count() + text.chars().count() > MAX_FILTER_CHARACTERS
-            || !self.filter.is_char_boundary(self.filter_cursor)
-        {
+        if !self.is_active() || self.dropdown_open || !self.filter.insert(text) {
             return false;
         }
-        self.filter.insert_str(self.filter_cursor, text);
-        self.filter_cursor += text.len();
         self.selected = 0;
         self.scroll_offset = 0;
         self.selection_visibility_pending = false;
@@ -1864,12 +1843,9 @@ impl SettingsPanel {
     /// Replace the filter atomically using the same policy as keyboard/IME/paste.
     /// Empty replacement clears the query; the accepted caret ends at the text.
     pub fn accessibility_set_filter(&mut self, text: &str) -> bool {
-        if !self.is_active() || self.dropdown_open || !valid_filter_text(text) {
+        if !self.is_active() || self.dropdown_open || !self.filter.replace(text) {
             return false;
         }
-        self.filter.clear();
-        self.filter.push_str(text);
-        self.filter_cursor = text.len();
         self.selected = 0;
         self.scroll_offset = 0;
         self.selection_visibility_pending = false;
@@ -1886,31 +1862,19 @@ impl SettingsPanel {
         if !self.is_active() || self.dropdown_open {
             return false;
         }
-        let previous_cursor = self.filter_cursor;
-        let changed = edit_grapheme(&mut self.filter, &mut self.filter_cursor, edit);
+        let previous_cursor = self.filter.cursor();
+        let changed = self.filter.edit_grapheme(edit);
         if changed {
             self.selected = 0;
             self.scroll_offset = 0;
             self.selection_visibility_pending = false;
         }
-        changed || self.filter_cursor != previous_cursor
+        changed || self.filter.cursor() != previous_cursor
     }
 
     /// Reject hidden/dropdown owners and non-grapheme boundaries before mutation.
     pub fn place_filter_caret(&mut self, cursor: usize) -> bool {
-        use unicode_segmentation::UnicodeSegmentation;
-        if !self.is_active()
-            || self.dropdown_open
-            || (cursor != self.filter.len()
-                && !self
-                    .filter
-                    .grapheme_indices(true)
-                    .any(|(offset, _)| offset == cursor))
-        {
-            return false;
-        }
-        self.filter_cursor = cursor;
-        true
+        self.is_active() && !self.dropdown_open && self.filter.place_caret(cursor)
     }
 
     /// Candidate geometry needs only filter state, never a rebuilt settings list.
@@ -1932,7 +1896,7 @@ impl SettingsPanel {
             self.animation_progress(),
             0,
         )
-        .input_viewport(&self.filter, self.filter_cursor, cell_height)
+        .input_viewport(self.filter.text(), self.filter.cursor(), cell_height)
     }
 
     /// Find the selectable index of the first item in `section`.
@@ -2303,7 +2267,12 @@ impl SettingsPanel {
         // consumes the click, and dropdown dismissal above never moves a caret.
         if layout.input.contains(x, y) {
             return layout
-                .input_cursor_at(&self.filter, self.filter_cursor, (x, y), cell_height)
+                .input_cursor_at(
+                    self.filter.text(),
+                    self.filter.cursor(),
+                    (x, y),
+                    cell_height,
+                )
                 .map_or(SettingsAction::None, SettingsAction::PlaceFilterCaret);
         }
 
@@ -2403,7 +2372,7 @@ impl SettingsPanel {
     /// The page the sidebar marks: the browsed page, or while searching the
     /// page of the selected result.
     fn shown_page(&self, entries: &[SettingEntry]) -> SettingsPage {
-        if self.filter.is_empty() {
+        if self.filter.text().is_empty() {
             return self.page;
         }
         Self::nth_selectable(entries, self.selected).map_or(self.page, |entry| entry.section.page())
@@ -2493,8 +2462,8 @@ impl SettingsPanel {
             dropdown_highlight: self.dropdown_highlight,
             hovered_item: self.hovered_item,
             dropdown_hovered: self.dropdown_hovered,
-            filter: self.filter.clone(),
-            filter_cursor: self.filter_cursor,
+            filter: self.filter.text().to_string(),
+            filter_cursor: self.filter.cursor(),
             page: self.shown_page(&entries),
             hovered_control: self.hovered_control,
             unsaved: false,
@@ -2507,7 +2476,6 @@ impl SettingsPanel {
 impl SettingsPanel {
     fn open(&mut self) {
         self.filter.clear();
-        self.filter_cursor = 0;
         self.selected = 0;
         self.scroll_offset = 0;
         self.selection_visibility_pending = true;
@@ -2532,7 +2500,10 @@ mod tests {
         assert!(!panel.accessibility_set_filter("hidden"));
         panel.open();
         assert!(panel.accessibility_set_filter(&"🫚".repeat(256)));
-        assert_eq!((panel.filter.len(), panel.filter_cursor), (1024, 1024));
+        assert_eq!(
+            (panel.filter.text().len(), panel.filter.cursor()),
+            (1024, 1024)
+        );
         panel.selected = 3;
         panel.scroll_offset = 2;
         panel.selection_visibility_pending = true;
@@ -2549,23 +2520,23 @@ mod tests {
             &"🫚".repeat(257),
         ] {
             assert!(!panel.accessibility_set_filter(value));
-            assert_eq!(panel.filter, "🫚".repeat(256));
-            assert_eq!(panel.filter_cursor, 1024);
+            assert_eq!(panel.filter.text(), "🫚".repeat(256));
+            assert_eq!(panel.filter.cursor(), 1024);
             assert_eq!((panel.selected, panel.scroll_offset), (3, 2));
             assert!(panel.selection_visibility_pending);
         }
         panel.dropdown_open = true;
         assert!(!panel.accessibility_set_filter(""));
         assert!(!panel.accessibility_set_filter("size"));
-        assert_eq!(panel.filter_cursor, 1024);
+        assert_eq!(panel.filter.cursor(), 1024);
         panel.dropdown_open = false;
         assert!(panel.accessibility_set_filter("e\u{301}👩\u{200d}💻"));
         assert_eq!((panel.selected, panel.scroll_offset), (0, 0));
         assert!(!panel.selection_visibility_pending);
-        assert_eq!(panel.filter_cursor, panel.filter.len());
+        assert_eq!(panel.filter.cursor(), panel.filter.text().len());
         assert!(panel.accessibility_set_filter(""));
-        assert!(panel.filter.is_empty());
-        assert_eq!(panel.filter_cursor, 0);
+        assert!(panel.filter.text().is_empty());
+        assert_eq!(panel.filter.cursor(), 0);
         panel.close();
         assert!(!panel.accessibility_set_filter("closed"));
     }
@@ -2580,14 +2551,14 @@ mod tests {
         panel.scroll_offset = 2;
         panel.selection_visibility_pending = true;
         assert!(panel.edit_filter(TextInputEdit::Home));
-        assert_eq!(panel.filter_cursor, 0);
+        assert_eq!(panel.filter.cursor(), 0);
         assert_eq!((panel.selected, panel.scroll_offset), (3, 2));
         assert!(panel.selection_visibility_pending);
         assert!(!panel.edit_filter(TextInputEdit::Home));
         for expected in ["界👩\u{200d}💻", "👩\u{200d}💻", ""] {
             assert!(panel.edit_filter(TextInputEdit::Delete));
-            assert_eq!(panel.filter, expected);
-            assert_eq!(panel.filter_cursor, 0);
+            assert_eq!(panel.filter.text(), expected);
+            assert_eq!(panel.filter.cursor(), 0);
             assert_eq!((panel.selected, panel.scroll_offset), (0, 0));
             assert!(!panel.selection_visibility_pending);
         }
@@ -2601,12 +2572,18 @@ mod tests {
         ] {
             assert!(!panel.edit_filter(edit));
         }
-        assert_eq!((&*panel.filter, panel.filter_cursor), ("draft size", 10));
+        assert_eq!(
+            (panel.filter.text(), panel.filter.cursor()),
+            ("draft size", 10)
+        );
         panel.dropdown_open = false;
         panel.close();
         assert!(!panel.edit_filter(TextInputEdit::Home));
         assert!(!panel.edit_filter(TextInputEdit::BackspaceWord));
-        assert_eq!((&*panel.filter, panel.filter_cursor), ("draft size", 10));
+        assert_eq!(
+            (panel.filter.text(), panel.filter.cursor()),
+            ("draft size", 10)
+        );
     }
 
     #[test]
@@ -2688,7 +2665,7 @@ mod tests {
         };
         assert_eq!(cursor, "e\u{301}".len());
         assert_eq!(
-            panel.filter_cursor,
+            panel.filter.cursor(),
             text.len(),
             "hit test only proposes an action"
         );
@@ -2696,7 +2673,7 @@ mod tests {
         assert_eq!((panel.selected, panel.scroll_offset), (2, 1));
         for invalid in [1, 2, 4, text.len() + 1] {
             assert!(!panel.place_filter_caret(invalid));
-            assert_eq!(panel.filter_cursor, cursor);
+            assert_eq!(panel.filter.cursor(), cursor);
         }
         panel.dropdown_open = true;
         assert!(!panel.place_filter_caret(0));
@@ -2705,9 +2682,9 @@ mod tests {
             SettingsAction::None
         ));
         assert!(!panel.dropdown_open);
-        assert_eq!(panel.filter_cursor, cursor);
+        assert_eq!(panel.filter.cursor(), cursor);
         assert!(panel.insert_filter_text("@"));
-        assert_eq!(panel.filter, "e\u{301}@界👩\u{200d}💻");
+        assert_eq!(panel.filter.text(), "e\u{301}@界👩\u{200d}💻");
         let collapsed = SettingsModalLayout::calculate(60.0, 700.0, 8.0, 16.0, 1.0, 0);
         assert!(matches!(
             panel.handle_click(
@@ -2722,7 +2699,7 @@ mod tests {
             ),
             SettingsAction::None
         ));
-        assert_eq!(panel.filter_cursor, cursor + 1);
+        assert_eq!(panel.filter.cursor(), cursor + 1);
         panel.close();
         assert!(!panel.place_filter_caret(0));
     }
@@ -2791,19 +2768,19 @@ mod tests {
             &"x".repeat(1025),
         ] {
             assert!(!panel.insert_filter_text(rejected));
-            assert_eq!(panel.filter.chars().count(), 255);
-            assert_eq!(panel.filter_cursor, 255 * 4);
+            assert_eq!(panel.filter.text().chars().count(), 255);
+            assert_eq!(panel.filter.cursor(), 255 * 4);
             assert_eq!((panel.selected, panel.scroll_offset), (2, 1));
             assert!(panel.selection_visibility_pending);
         }
         assert!(panel.insert_filter_text("🫚"));
-        assert_eq!(panel.filter.len(), 1024);
+        assert_eq!(panel.filter.text().len(), 1024);
         assert!(!panel.insert_filter_text("x"));
         assert_eq!((panel.selected, panel.scroll_offset), (0, 0));
         panel.dropdown_open = true;
         assert!(!panel.backspace_filter());
         assert!(!panel.insert_filter_text("x"));
-        assert_eq!(panel.filter_cursor, 1024);
+        assert_eq!(panel.filter.cursor(), 1024);
         panel.close();
         assert!(!panel.backspace_filter());
     }
@@ -2815,23 +2792,21 @@ mod tests {
         for cluster in ["e\u{301}", "👩\u{200d}💻", "🇺🇸"] {
             assert!(panel.insert_filter_text(cluster));
             assert!(panel.backspace_filter());
-            assert!(panel.filter.is_empty());
-            assert_eq!(panel.filter_cursor, 0);
+            assert!(panel.filter.text().is_empty());
+            assert_eq!(panel.filter.cursor(), 0);
         }
         panel.selected = 2;
         panel.scroll_offset = 1;
         assert!(!panel.backspace_filter());
         assert_eq!((panel.selected, panel.scroll_offset), (2, 1));
         assert!(panel.insert_filter_text("a界z"));
-        panel.filter_cursor = 1;
+        assert!(panel.filter.place_caret(1));
         assert!(panel.insert_filter_text("e\u{301}"));
-        assert_eq!(panel.filter, "ae\u{301}界z");
-        assert_eq!(panel.filter_cursor, 4);
+        assert_eq!(panel.filter.text(), "ae\u{301}界z");
+        assert_eq!(panel.filter.cursor(), 4);
         assert!(panel.backspace_filter());
-        assert_eq!(panel.filter, "a界z");
-        panel.filter_cursor = 2;
-        assert!(!panel.insert_filter_text("invalid caret"));
-        assert_eq!(panel.filter, "a界z");
+        assert_eq!(panel.filter.text(), "a界z");
+        assert!(!panel.filter.place_caret(2), "inside 界");
     }
 
     #[test]
@@ -3386,11 +3361,11 @@ mod tests {
 
         // Type something
         assert!(panel.insert_filter_text("a"));
-        assert!(!panel.filter.is_empty());
+        assert!(!panel.filter.text().is_empty());
 
         // First Escape clears filter, panel stays open
         panel.handle_key(SettingsKey::Escape, &config, &registry);
-        assert!(panel.filter.is_empty());
+        assert!(panel.filter.text().is_empty());
         assert!(panel.is_active());
 
         // Second Escape closes
@@ -3638,7 +3613,7 @@ mod tests {
         panel.update_animation();
 
         // Filter must be empty — the rest of the page stays browsable.
-        assert!(panel.filter.is_empty());
+        assert!(panel.filter.text().is_empty());
 
         // build_info resolves the pending jump.
         let config = Config::default();

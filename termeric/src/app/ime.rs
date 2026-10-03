@@ -740,9 +740,10 @@ mod tests {
         app.commands_panel.set_reduced_motion(true);
         app.commands_panel.toggle();
         app.commands_panel.start_add();
-        let text = "界e\u{301}👩\u{200d}💻".repeat(20);
-        app.commands_panel.form_name.replace(&text);
-        app.commands_panel.form_command.replace(&text);
+        // Fifteen repeats fill the 256-byte name field to one byte short.
+        let text = "界e\u{301}👩\u{200d}💻".repeat(15);
+        assert!(app.commands_panel.form_name.replace(&text));
+        assert!(app.commands_panel.form_command.replace(&text));
         app.search.start(); // retained lower-priority query must not win
         for field in [EditMode::EditingName, EditMode::EditingCommand] {
             app.commands_panel.edit_mode = field.clone();
@@ -835,14 +836,7 @@ mod tests {
                 app.info_overlay.show("Notice", vec![]);
             },
             |app| app.domain_picker.open(&app.config.domains),
-            |app| {
-                app.tab_rename = Some(TabRenameState {
-                    tab_id: 0,
-                    original: None,
-                    input: String::new(),
-                    max_chars: 80,
-                })
-            },
+            |app| app.tab_rename = Some(TabRenameState::new(0, None, "", 80)),
         ];
         for open in openers {
             let mut app = App::new_headless(Config::default()).unwrap();
@@ -1172,16 +1166,15 @@ mod tests {
         use crate::session::panel::{SessionEntry, SessionPanelAction};
         use winit::keyboard::{Key, NamedKey};
         for owner in ["settings", "shortcuts", "session", "commands"] {
-            app.tab_rename = Some(TabRenameState {
-                tab_id: app
-                    .tabs
+            app.tab_rename = Some(TabRenameState::new(
+                app.tabs
                     .as_ref()
                     .and_then(TabManager::active_tab_id)
                     .unwrap_or(usize::MAX),
-                original: None,
-                input: "retained".into(),
-                max_chars: 256,
-            });
+                None,
+                "retained",
+                256,
+            ));
             app.search.start();
             match owner {
                 "settings" => {
@@ -1247,7 +1240,7 @@ mod tests {
                 _ => app.commands_panel.form_name.text().to_owned(),
             };
             assert_eq!(text, "KIP", "wrong {owner} input destination");
-            assert_eq!(app.tab_rename.as_ref().unwrap().input, "retained");
+            assert_eq!(app.tab_rename.as_ref().unwrap().input.text(), "retained");
             assert!(app.search.query().is_empty());
             // A frontmost read-only state must consume input, not expose
             // the retained rename behind it as an IME or paste destination.
@@ -1279,7 +1272,7 @@ mod tests {
             assert!(app.ime.preedit().is_none());
             app.handle_ime_event(Ime::Commit("blocked".into()));
             assert!(!app.paste_clipboard_payload("blocked"));
-            assert_eq!(app.tab_rename.as_ref().unwrap().input, "retained");
+            assert_eq!(app.tab_rename.as_ref().unwrap().input.text(), "retained");
             assert!(app.search.query().is_empty());
             match owner {
                 "settings" => app.settings_panel.close(),
@@ -1290,10 +1283,13 @@ mod tests {
                 }
             }
             app.handle_ime_event(Ime::Commit(" resumed".into()));
-            assert_eq!(app.tab_rename.as_ref().unwrap().input, "retained resumed");
+            assert_eq!(
+                app.tab_rename.as_ref().unwrap().input.text(),
+                "retained resumed"
+            );
             assert!(app.paste_clipboard_payload(" pasted"));
             assert_eq!(
-                app.tab_rename.as_ref().unwrap().input,
+                app.tab_rename.as_ref().unwrap().input.text(),
                 "retained resumed pasted"
             );
             app.tab_rename = None;
@@ -1495,12 +1491,7 @@ mod tests {
             Some("Roots 🫚")
         );
         // A vanished captured owner cannot preview into the focused tab.
-        app.tab_rename = Some(TabRenameState {
-            tab_id: usize::MAX,
-            original: None,
-            input: String::new(),
-            max_chars: 128,
-        });
+        app.tab_rename = Some(TabRenameState::new(usize::MAX, None, "", 128));
         app.handle_ime_event(Ime::Commit("wrong owner".into()));
         assert_eq!(
             app.tabs
@@ -1521,12 +1512,7 @@ mod tests {
         let mut app = App::new_headless(Config::default()).unwrap();
         app.open_agent_view(true);
         assert!(app.agent_view_owns_ime_text());
-        app.tab_rename = Some(TabRenameState {
-            tab_id: 0,
-            original: None,
-            input: String::new(),
-            max_chars: 128,
-        });
+        app.tab_rename = Some(TabRenameState::new(0, None, "", 128));
         assert!(!app.agent_view_owns_ime_text());
         app.tab_rename = None;
         app.command_palette.open();

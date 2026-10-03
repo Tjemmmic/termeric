@@ -1,9 +1,7 @@
 //! The agent view's actions, keys, pointer, and wheel.
 
-use crate::ui::geometry::Bounds;
 use std::time::Instant;
 
-use unicode_segmentation::UnicodeSegmentation;
 use winit::keyboard::{Key, NamedKey};
 
 use super::*;
@@ -14,7 +12,8 @@ use crate::ui::agent_view::commands;
 use crate::ui::agent_view::layout::plural;
 use crate::ui::agent_view::scene::{HitRole, MenuAction, MenuKind, Target};
 use crate::ui::agent_view::{ComposerIntent, Focus, OpenMenu, Screen};
-use crate::ui::text_input::TextInputEdit;
+use crate::ui::geometry::Bounds;
+use crate::ui::text_input::{TextInput, TextInputEdit};
 use crate::ui::text_layout::TextMeasure;
 
 use super::agent_view::DIVIDER_GRAB;
@@ -32,7 +31,6 @@ const PLAN_HINT: &str = "Say what to change in the plan…";
 const ANSWER_HINT: &str = "Type your answer…";
 
 /// A long menu's search keeps at most this many characters.
-const MAX_MENU_FILTER_CHARS: usize = 128;
 impl App {
     // ── Actions ──────────────────────────────────────────────────────────
 
@@ -743,16 +741,13 @@ impl App {
             .as_ref()
             .is_some_and(|scene| scene.hit_for(&Target::MenuSearch).is_some());
         let control = self.modifiers.control_key() || self.modifiers.alt_key();
-        let typed = text.filter(|text| {
-            searchable
-                && !control
-                && !text.is_empty()
-                && !text.chars().any(crate::safe_text::breaks_single_line)
-                && menu.filter.chars().count() + text.chars().count() <= MAX_MENU_FILTER_CHARS
-        });
+        let typed = text.filter(|text| searchable && !control && menu.filter.can_insert(text));
         match key {
-            Key::Named(NamedKey::Escape) if !menu.filter.is_empty() => {
-                self.set_agent_view_menu_filter(String::new());
+            Key::Named(NamedKey::Escape) if !menu.filter.text().is_empty() => {
+                self.edit_agent_view_menu_filter(|filter| {
+                    filter.clear();
+                    true
+                });
             }
             Key::Named(NamedKey::Escape) => self.agent_view.state.menu = None,
             Key::Named(NamedKey::ArrowDown | NamedKey::Tab) if !items.is_empty() => {
@@ -764,13 +759,9 @@ impl App {
                 self.highlight_agent_view_menu((current + items.len() - 1) % items.len(), &items);
             }
             Key::Named(NamedKey::Backspace) if searchable => {
-                let mut filter = menu.filter.clone();
-                let last = filter
-                    .grapheme_indices(true)
-                    .next_back()
-                    .map_or(0, |(start, _)| start);
-                filter.truncate(last);
-                self.set_agent_view_menu_filter(filter);
+                self.edit_agent_view_menu_filter(|filter| {
+                    filter.edit_grapheme(crate::ui::text_input::TextInputEdit::Backspace)
+                });
             }
             Key::Named(NamedKey::Enter) => {
                 let current = self.agent_view_menu_highlighted(&items);
@@ -778,10 +769,8 @@ impl App {
                     self.activate_agent_view_target(Target::Menu(action));
                 }
             }
-            _ if typed.is_some() => {
-                let mut filter = menu.filter.clone();
-                filter.push_str(typed.unwrap_or_default());
-                self.set_agent_view_menu_filter(filter);
+            _ if let Some(typed) = typed => {
+                self.edit_agent_view_menu_filter(|filter| filter.insert(typed));
             }
             Key::Named(NamedKey::Space) => {
                 let current = self.agent_view_menu_highlighted(&items);
@@ -894,10 +883,12 @@ impl App {
         true
     }
 
-    /// Narrows a long menu to what matches `filter`, from its top.
-    fn set_agent_view_menu_filter(&mut self, filter: String) {
-        if let Some(menu) = &mut self.agent_view.state.menu {
-            menu.filter = filter;
+    /// Narrows a long menu to what matches its filter after `edit`, from its
+    /// top, when `edit` changed it.
+    fn edit_agent_view_menu_filter(&mut self, edit: impl FnOnce(&mut TextInput) -> bool) {
+        if let Some(menu) = &mut self.agent_view.state.menu
+            && edit(&mut menu.filter)
+        {
             menu.fresh = false;
             menu.highlighted = 0;
             menu.scroll = crate::ui::agent_view::Scroll::at_start();

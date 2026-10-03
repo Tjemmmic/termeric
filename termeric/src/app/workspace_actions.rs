@@ -41,25 +41,6 @@ pub(super) fn validate_ordinary_tab_creation_capacity(
     Ok(())
 }
 
-fn bounded_tab_rename_text(text: &str, max_chars: usize) -> String {
-    text.chars()
-        .filter(|character| !crate::safe_text::breaks_single_line(*character))
-        .take(max_chars)
-        .collect()
-}
-
-fn append_tab_rename_text(input: &mut String, text: &str, max_chars: usize) -> bool {
-    if text.is_empty()
-        || text.len() > max_chars.saturating_mul(4)
-        || text.chars().any(crate::safe_text::breaks_single_line)
-        || input.chars().count().saturating_add(text.chars().count()) > max_chars
-    {
-        return false;
-    }
-    input.push_str(text);
-    true
-}
-
 impl App {
     pub(super) fn request_move_active_tab_by(&mut self, delta: isize) {
         let live_move = self.tabs.as_ref().and_then(|tabs| {
@@ -144,12 +125,12 @@ impl App {
             return;
         }
         let max_chars = if tab.live_domain.is_some() { 128 } else { 256 };
-        self.tab_rename = Some(TabRenameState {
-            tab_id: tab.id,
-            original: tab.user_title().map(str::to_owned),
-            input: bounded_tab_rename_text(tab.user_title().unwrap_or(&tab.title), max_chars),
+        self.tab_rename = Some(TabRenameState::new(
+            tab.id,
+            tab.user_title().map(str::to_owned),
+            tab.user_title().unwrap_or(&tab.title),
             max_chars,
-        });
+        ));
         self.ime.clear_preedit();
         self.toasts
             .info("Rename tab: type a title, Enter saves, Escape cancels");
@@ -174,7 +155,7 @@ impl App {
                 .iter_mut()
                 .find(|tab| tab.id == rename.tab_id)
         }) {
-            tab.set_user_title(Some(rename.input.clone()));
+            tab.set_user_title(Some(rename.input.text().to_owned()));
         }
     }
 
@@ -182,7 +163,7 @@ impl App {
         let Some(rename) = &mut self.tab_rename else {
             return false;
         };
-        if !append_tab_rename_text(&mut rename.input, text, rename.max_chars) {
+        if !rename.input.insert(text) {
             return false;
         }
         self.update_tab_rename_preview();
@@ -206,12 +187,9 @@ impl App {
             Key::Named(NamedKey::Escape) if plain => cancel = true,
             Key::Named(NamedKey::Backspace) if plain => {
                 let rename = self.tab_rename.as_mut().expect("rename checked above");
-                let mut cursor = rename.input.len();
-                crate::ui::text_input::edit_grapheme(
-                    &mut rename.input,
-                    &mut cursor,
-                    crate::ui::text_input::TextInputEdit::Backspace,
-                );
+                rename
+                    .input
+                    .edit_grapheme(crate::ui::text_input::TextInputEdit::Backspace);
                 self.update_tab_rename_preview();
             }
             Key::Named(NamedKey::Space) if text_allowed => {
@@ -228,7 +206,8 @@ impl App {
         }
         if commit {
             if let Some(rename) = self.tab_rename.take() {
-                let title = (!rename.input.trim().is_empty()).then_some(rename.input);
+                let title = (!rename.input.text().trim().is_empty())
+                    .then(|| rename.input.text().to_owned());
                 let live_route = self.tabs.as_ref().and_then(|tabs| {
                     tabs.iter().find_map(|(_, tab)| {
                         (tab.id == rename.tab_id)
@@ -2636,7 +2615,7 @@ impl App {
                                 .as_mut()
                                 .and_then(|tabs| tabs.tab_mut_by_id(rename.tab_id))
                         {
-                            tab.set_user_title(Some(rename.input.clone()));
+                            tab.set_user_title(Some(rename.input.text().to_owned()));
                         }
                         let after: std::collections::HashMap<_, _> = self
                             .tabs
@@ -3788,17 +3767,23 @@ mod workspace_control_tests {
 
     #[test]
     fn tab_rename_text_is_single_line_control_free_and_strictly_bounded() {
-        assert_eq!(bounded_tab_rename_text("alpha\nbeta", 20), "alphabeta");
-        assert_eq!(bounded_tab_rename_text("界🙂abc", 3), "界🙂a");
+        let draft = |title: &str, max_chars| {
+            TabRenameState::new(0, None, title, max_chars)
+                .input
+                .text()
+                .to_owned()
+        };
+        assert_eq!(draft("alpha\nbeta", 20), "alphabeta");
+        assert_eq!(draft("界🙂abc", 3), "界🙂a");
+        assert_eq!(draft("a\u{2028}b\u{2029}c", 20), "abc");
 
-        let mut title = "x".repeat(3);
-        assert!(!append_tab_rename_text(&mut title, " \nmore", 5));
-        assert_eq!(title, "xxx");
-        assert!(append_tab_rename_text(&mut title, "界🙂", 5));
-        assert_eq!(title, "xxx界🙂");
-        assert!(!append_tab_rename_text(&mut title, "ignored", 5));
-        assert_eq!(title, "xxx界🙂");
-        assert_eq!(bounded_tab_rename_text("a\u{2028}b\u{2029}c", 20), "abc");
+        let mut rename = TabRenameState::new(0, None, "xxx", 5);
+        assert!(!rename.input.insert(" \nmore"));
+        assert_eq!(rename.input.text(), "xxx");
+        assert!(rename.input.insert("界🙂"));
+        assert_eq!(rename.input.text(), "xxx界🙂");
+        assert!(!rename.input.insert("ignored"));
+        assert_eq!(rename.input.text(), "xxx界🙂");
     }
 
     #[test]
@@ -3810,12 +3795,7 @@ mod workspace_control_tests {
         for max_chars in [128, 256] {
             let mut app = App::new_headless(Config::default()).unwrap();
             let original = "界".repeat(max_chars - 1);
-            app.tab_rename = Some(TabRenameState {
-                tab_id: 0,
-                original: None,
-                input: original.clone(),
-                max_chars,
-            });
+            app.tab_rename = Some(TabRenameState::new(0, None, &original, max_chars));
             for value in [
                 "",
                 "xy",
@@ -3831,33 +3811,45 @@ mod workspace_control_tests {
             ] {
                 app.handle_ime_event(Ime::Preedit("keep".into(), None));
                 assert!(app.handle_tab_rename_key(&Key::Character(value.into())));
-                assert_eq!(app.tab_rename.as_ref().unwrap().input, original);
+                assert_eq!(app.tab_rename.as_ref().unwrap().input.text(), original);
                 assert!(app.ime.preedit().is_some());
                 app.handle_ime_event(Ime::Commit(value.into()));
-                assert_eq!(app.tab_rename.as_ref().unwrap().input, original);
+                assert_eq!(app.tab_rename.as_ref().unwrap().input.text(), original);
                 assert!(app.ime.preedit().is_none());
             }
             app.handle_ime_event(Ime::Commit("🫚".into()));
             assert_eq!(
-                app.tab_rename.as_ref().unwrap().input,
+                app.tab_rename.as_ref().unwrap().input.text(),
                 format!("{original}🫚")
             );
             app.handle_ime_event(Ime::Preedit("keep".into(), None));
             assert!(app.handle_tab_rename_key(&Key::Named(NamedKey::Space)));
             assert_eq!(
-                app.tab_rename.as_ref().unwrap().input.chars().count(),
+                app.tab_rename
+                    .as_ref()
+                    .unwrap()
+                    .input
+                    .text()
+                    .chars()
+                    .count(),
                 max_chars
             );
             assert!(app.ime.preedit().is_some());
-            app.tab_rename.as_mut().unwrap().input = "e\u{301}👩\u{200d}💻🇺🇸".into();
+            assert!(
+                app.tab_rename
+                    .as_mut()
+                    .unwrap()
+                    .input
+                    .replace("e\u{301}👩\u{200d}💻🇺🇸")
+            );
             for expected in ["e\u{301}👩\u{200d}💻", "e\u{301}", "", ""] {
                 assert!(app.handle_tab_rename_key(&Key::Named(NamedKey::Backspace)));
-                assert_eq!(app.tab_rename.as_ref().unwrap().input, expected);
+                assert_eq!(app.tab_rename.as_ref().unwrap().input.text(), expected);
                 assert!(app.ime.preedit().is_none());
             }
             assert!(app.handle_tab_rename_key(&Key::Character("e\u{301}👩\u{200d}💻".into())));
             assert_eq!(
-                app.tab_rename.as_ref().unwrap().input,
+                app.tab_rename.as_ref().unwrap().input.text(),
                 "e\u{301}👩\u{200d}💻"
             );
             assert!(app.pending_live_domain_controls.is_empty());
@@ -3872,12 +3864,7 @@ mod workspace_control_tests {
         };
         let mut app = App::new_headless(Config::default()).unwrap();
         assert!(!app.handle_tab_rename_key(&Key::Named(NamedKey::Backspace)));
-        app.tab_rename = Some(TabRenameState {
-            tab_id: 0,
-            original: None,
-            input: "Roots".into(),
-            max_chars: 256,
-        });
+        app.tab_rename = Some(TabRenameState::new(0, None, "Roots", 256));
         app.handle_ime_event(Ime::Preedit("keep".into(), None));
         for modifiers in [
             ModifiersState::CONTROL,
@@ -3895,26 +3882,26 @@ mod workspace_control_tests {
                 NamedKey::Delete,
             ] {
                 assert!(app.handle_tab_rename_key(&Key::Named(key)));
-                assert_eq!(app.tab_rename.as_ref().unwrap().input, "Roots");
+                assert_eq!(app.tab_rename.as_ref().unwrap().input.text(), "Roots");
                 assert!(app.ime.preedit().is_some());
             }
             if modifiers != ModifiersState::SHIFT {
                 assert!(app.handle_tab_rename_key(&Key::Character("x".into())));
                 assert!(app.handle_tab_rename_key(&Key::Named(NamedKey::Space)));
-                assert_eq!(app.tab_rename.as_ref().unwrap().input, "Roots");
+                assert_eq!(app.tab_rename.as_ref().unwrap().input.text(), "Roots");
                 assert!(app.ime.preedit().is_some());
             }
         }
         app.alt_graph_active = true;
         assert!(app.handle_tab_rename_key(&Key::Named(NamedKey::Backspace)));
-        assert_eq!(app.tab_rename.as_ref().unwrap().input, "Roots");
+        assert_eq!(app.tab_rename.as_ref().unwrap().input.text(), "Roots");
         assert!(app.handle_tab_rename_key(&Key::Character("@".into())));
-        assert_eq!(app.tab_rename.as_ref().unwrap().input, "Roots@");
+        assert_eq!(app.tab_rename.as_ref().unwrap().input.text(), "Roots@");
         assert!(app.ime.preedit().is_none());
         app.alt_graph_active = false;
         app.modifiers = ModifiersState::SHIFT;
         assert!(app.handle_tab_rename_key(&Key::Character("A".into())));
-        assert_eq!(app.tab_rename.as_ref().unwrap().input, "Roots@A");
+        assert_eq!(app.tab_rename.as_ref().unwrap().input.text(), "Roots@A");
         app.modifiers = ModifiersState::empty();
         assert!(app.handle_tab_rename_key(&Key::Named(NamedKey::Escape)));
         assert!(app.tab_rename.is_none());

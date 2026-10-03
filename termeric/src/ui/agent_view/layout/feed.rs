@@ -1,6 +1,5 @@
 //! The conversation: messages, tool calls, decisions, and turn endings.
 
-use crate::ui::geometry::Bounds;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -11,6 +10,7 @@ use crate::agent_view::session::AgentSession;
 use crate::agent_view::transcript::{
     Activity, Attachment, DecidedBy, Item, Notice, NoticeKind, ToolCall, ToolState, TurnEnd,
 };
+use crate::ui::geometry::Bounds;
 use crate::ui::icon::Icon;
 use crate::ui::text_layout::{TextSize, TextSpan, UiFace};
 

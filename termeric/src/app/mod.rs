@@ -714,8 +714,28 @@ struct CopyModeTarget {
 struct TabRenameState {
     tab_id: usize,
     original: Option<String>,
-    input: String,
-    max_chars: usize,
+    /// The draft title. The tab shows it in place with no caret, so typing
+    /// and Backspace always work at its end.
+    input: crate::ui::text_input::TextInput,
+}
+
+impl TabRenameState {
+    /// A draft starting from `title`, cut to one line of `max_chars`.
+    fn new(tab_id: usize, original: Option<String>, title: &str, max_chars: usize) -> Self {
+        use crate::ui::text_input::{TextInput, TextLimit};
+        let title: String = title
+            .chars()
+            .filter(|character| !crate::safe_text::breaks_single_line(*character))
+            .take(max_chars)
+            .collect();
+        let mut input = TextInput::new(TextLimit::Chars(max_chars));
+        input.replace(&title);
+        Self {
+            tab_id,
+            original,
+            input,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

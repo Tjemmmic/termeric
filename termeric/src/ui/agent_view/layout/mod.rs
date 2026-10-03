@@ -2317,7 +2317,7 @@ impl Builder<'_, '_> {
         let items = filtered_menu_items(
             self.input,
             menu.kind,
-            if searchable { &menu.filter } else { "" },
+            if searchable { menu.filter.text() } else { "" },
         );
         if items.is_empty() && !searchable {
             return None;
@@ -2539,10 +2539,14 @@ impl Builder<'_, '_> {
         let text_x = field.x + self.m.px(18.0) + icon_size;
         let text_width = field.right() - self.m.px(10.0) - text_x;
         let placeholder = search_placeholder(menu.kind);
-        let typed = !menu.filter.is_empty();
+        let typed = !menu.filter.text().is_empty();
         let drawn = self.label(
             overlay,
-            if typed { &menu.filter } else { placeholder },
+            if typed {
+                menu.filter.text()
+            } else {
+                placeholder
+            },
             text_x,
             field.y,
             field.height,
@@ -2568,7 +2572,7 @@ impl Builder<'_, '_> {
             color: self.c.text_strong,
         });
         let label = if typed {
-            format!("{placeholder}: {}", menu.filter)
+            format!("{placeholder}: {}", menu.filter.text())
         } else {
             placeholder.to_owned()
         };

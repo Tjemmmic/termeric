@@ -277,7 +277,7 @@ mod tests {
         assert!(!app.handle_commands_panel_scroll(MouseScrollDelta::LineDelta(0.0, -1.0)));
         app.commands_panel.toggle();
         app.commands_panel.start_add();
-        app.commands_panel.form_name.replace("kept draft");
+        assert!(app.commands_panel.form_name.replace("kept draft"));
         app.handle_ime_event(Ime::Preedit("kept preedit".into(), None));
         let initial = app.commands_panel_layout();
         app.redraw_scheduler.begin_frame();

@@ -1,6 +1,5 @@
 //! Request-scoped context assembly for developer-tool terminal sessions.
 
-use crate::ui::geometry::Bounds;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -9,10 +8,14 @@ use std::time::{Duration, Instant};
 
 use super::animation::OverlayAnimation;
 use super::constants::CONTENT_CHAR_SCALE;
+use super::text_input::{TextInput, TextInputEdit, TextLimit};
 use crate::tabs::TerminalIdentity;
+use crate::ui::geometry::Bounds;
 
 pub const MAX_CONTEXT_SOURCES: usize = 6;
 pub const MAX_CONTEXT_FILES: usize = 16;
+/// Every path, with room for the separators between them.
+const MAX_FILE_INPUT_CHARS: usize = MAX_CONTEXT_PATH_CHARS * MAX_CONTEXT_FILES;
 pub const MAX_CONTEXT_PATH_CHARS: usize = 1024;
 pub const MAX_CONTEXT_SOURCE_CHARS: usize = 10_000;
 pub const MAX_ASSEMBLED_CONTEXT_CHARS: usize = 64_000;
@@ -290,7 +293,7 @@ pub struct ContextPicker {
     cwd: Option<PathBuf>,
     target: Option<ContextTarget>,
     phase: ContextPickerPhase,
-    file_input: String,
+    file_input: TextInput,
     specific_files: Vec<PathBuf>,
     status: Option<String>,
     request_id: u64,
@@ -308,7 +311,7 @@ impl ContextPicker {
             cwd: None,
             target: None,
             phase: ContextPickerPhase::Sources,
-            file_input: String::new(),
+            file_input: TextInput::new(TextLimit::Chars(MAX_FILE_INPUT_CHARS)),
             specific_files: Vec::new(),
             status: None,
             request_id: 0,
@@ -420,7 +423,7 @@ impl ContextPicker {
             selected_index: self.selected_index,
             scroll_offset: self.scroll_offset,
             phase: self.phase,
-            file_input: self.file_input.clone(),
+            file_input: self.file_input.text().to_string(),
             status: self.status.clone(),
             awaiting: self.is_awaiting_current(),
             animation: self.animation(),
@@ -495,26 +498,21 @@ impl ContextPicker {
             ContextPickerAction::SetFileInput { value, .. }
                 if self.phase == ContextPickerPhase::FilePaths =>
             {
-                self.file_input = crate::safe_text::truncate_with_ellipsis(
-                    &value,
-                    MAX_CONTEXT_PATH_CHARS * MAX_CONTEXT_FILES,
-                );
-                self.status = None;
+                if self.file_input.replace(&value) {
+                    self.status = None;
+                }
             }
             ContextPickerAction::AppendFileInput { character, .. }
                 if self.phase == ContextPickerPhase::FilePaths =>
             {
-                if !character.is_control()
-                    && self.file_input.chars().count() < MAX_CONTEXT_PATH_CHARS * MAX_CONTEXT_FILES
-                {
-                    self.file_input.push(character);
+                if self.file_input.insert(character.encode_utf8(&mut [0; 4])) {
                     self.status = None;
                 }
             }
             ContextPickerAction::BackspaceFileInput { .. }
                 if self.phase == ContextPickerPhase::FilePaths =>
             {
-                self.file_input.pop();
+                self.file_input.edit_grapheme(TextInputEdit::Backspace);
                 self.status = None;
             }
             ContextPickerAction::Primary { .. } => match self.phase {
@@ -596,18 +594,21 @@ impl ContextPicker {
             self.status = Some("Specific files require a working directory".into());
             return;
         }
-        self.file_input = self
+        let paths = self
             .specific_files
             .iter()
             .map(|path| path.display().to_string())
             .collect::<Vec<_>>()
             .join(", ");
+        // Paths the field would refuse leave it empty to be typed again.
+        self.file_input.clear();
+        self.file_input.replace(&paths);
         self.phase = ContextPickerPhase::FilePaths;
         self.status = None;
     }
 
     fn commit_file_editor(&mut self) {
-        match validate_specific_files(self.cwd.as_deref(), &self.file_input) {
+        match validate_specific_files(self.cwd.as_deref(), self.file_input.text()) {
             Ok(paths) => {
                 self.specific_files = paths;
                 if let Some(source) = self

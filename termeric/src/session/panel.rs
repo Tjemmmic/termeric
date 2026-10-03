@@ -4,16 +4,9 @@
 
 use crate::ui::animation::PanelAnimation;
 use crate::ui::geometry::Bounds;
-use crate::ui::text_input::{TextInput, TextInputEdit};
-use unicode_segmentation::UnicodeSegmentation;
+use crate::ui::text_input::{TextInput, TextInputEdit, TextLimit};
 
 const MAX_RENAME_CHARACTERS: usize = 128;
-
-fn valid_rename_text(value: &str) -> bool {
-    value.len() <= MAX_RENAME_CHARACTERS * 4
-        && value.chars().count() <= MAX_RENAME_CHARACTERS
-        && !value.chars().any(crate::safe_text::breaks_single_line)
-}
 
 /// Information about a single session for display
 #[derive(Debug, Clone)]
@@ -387,7 +380,7 @@ impl SessionPanel {
             hovered_index: None,
             hovered_control: None,
             rename_target: None,
-            rename_input: TextInput::new(),
+            rename_input: TextInput::new(TextLimit::Chars(MAX_RENAME_CHARACTERS)),
             workspaces: true,
             scroll_offset: 0,
             max_visible: 8,
@@ -566,10 +559,9 @@ impl SessionPanel {
             return;
         };
         self.rename_target = Some(id.to_string());
+        // A stored name the field would refuse starts the draft empty.
         self.rename_input.clear();
-        for character in entry.display_name.chars() {
-            self.rename_input.insert_char(character);
-        }
+        self.rename_input.replace(&entry.display_name);
         if let Some(index) = self.sessions.iter().position(|entry| entry.id == id) {
             self.selected_index = index;
             self.ensure_selection_visible();
@@ -578,16 +570,7 @@ impl SessionPanel {
 
     /// Commit a whole single-line edit, never a truncated prefix.
     pub fn insert_rename_text(&mut self, text: &str) -> bool {
-        if !self.is_renaming()
-            || text.is_empty()
-            || !valid_rename_text(text)
-            || self.rename_input.text().chars().count() + text.chars().count()
-                > MAX_RENAME_CHARACTERS
-        {
-            return false;
-        }
-        self.rename_input.insert_text(text);
-        true
+        self.is_renaming() && self.rename_input.insert(text)
     }
 
     pub fn rename_edit(&mut self, edit: TextInputEdit) {
@@ -601,16 +584,7 @@ impl SessionPanel {
         if !self.is_open() || !self.is_renaming() {
             return false;
         }
-        if cursor != self.rename_input.text().len()
-            && !self
-                .rename_input
-                .text()
-                .grapheme_indices(true)
-                .any(|(offset, _)| offset == cursor)
-        {
-            return false;
-        }
-        self.rename_input.set_cursor_byte(cursor)
+        self.rename_input.place_caret(cursor)
     }
 
     pub fn cancel_rename(&mut self) {
@@ -626,11 +600,7 @@ impl SessionPanel {
     }
 
     pub fn accessibility_set_rename(&mut self, value: &str) -> bool {
-        if !self.is_renaming() || !valid_rename_text(value) {
-            return false;
-        }
-        self.rename_input.replace(value);
-        true
+        self.is_renaming() && self.rename_input.replace(value)
     }
 
     pub fn set_max_visible(&mut self, rows: usize) {
@@ -794,6 +764,7 @@ fn legacy_session_entries(now: u64) -> Vec<SessionEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use unicode_segmentation::UnicodeSegmentation;
 
     #[test]
     fn legacy_metadata_limits_apply_to_restore_title_list_and_panel() {

@@ -11,9 +11,8 @@ use super::navigation::{CommandControl, CommandNavigation, CommandNavigationKey}
 use crate::config::CustomCommand;
 use crate::ui::animation::PanelAnimation;
 use crate::ui::geometry::Bounds;
-use crate::ui::text_input::{TextInput, TextInputEdit};
+use crate::ui::text_input::{TextInput, TextInputEdit, TextLimit};
 use crate::ui::text_input_viewport::TextInputViewport;
-use unicode_segmentation::UnicodeSegmentation;
 
 /// Example text shown in the empty add-form fields.
 pub const NAME_PLACEHOLDER: &str = "Deploy staging";
@@ -409,8 +408,8 @@ impl CommandsPanel {
             navigation: CommandNavigation::default(),
             hovered: None,
             edit_mode: EditMode::Browse,
-            form_name: TextInput::new(),
-            form_command: TextInput::new(),
+            form_name: TextInput::new(TextLimit::Bytes(Self::MAX_FORM_NAME_BYTES)),
+            form_command: TextInput::new(TextLimit::Bytes(Self::MAX_FORM_COMMAND_BYTES)),
         }
     }
 
@@ -668,65 +667,35 @@ impl CommandsPanel {
             EditMode::EditingCommand => &mut self.form_command,
             EditMode::Browse => return false,
         };
-        if cursor != input.text().len()
-            && !input
-                .text()
-                .grapheme_indices(true)
-                .any(|(offset, _)| offset == cursor)
-        {
-            return false;
-        }
-        if !input.set_cursor_byte(cursor) {
+        if !input.place_caret(cursor) {
             return false;
         }
         self.edit_mode = field;
         true
     }
 
-    fn valid_form_text(text: &str, limit: usize) -> bool {
-        text.len() <= limit && !text.chars().any(crate::safe_text::breaks_single_line)
-    }
-
     /// Atomic keyboard, IME, and clipboard insertion into the open form.
     /// Never truncate a command, execute it, or change focus on rejection.
     pub fn insert_form_text(&mut self, text: &str) -> bool {
-        if !self.is_open() {
-            return false;
-        }
-        let limit = match self.edit_mode {
-            EditMode::EditingName => Self::MAX_FORM_NAME_BYTES,
-            EditMode::EditingCommand => Self::MAX_FORM_COMMAND_BYTES,
-            EditMode::Browse => return false,
-        };
-        if text.is_empty() || !Self::valid_form_text(text, limit) {
-            return false;
-        }
-        let input = self.active_input().expect("editable field checked above");
-        if input.text().len().saturating_add(text.len()) > limit {
-            return false;
-        }
-        input.insert_text(text);
-        true
+        self.is_open() && self.active_input().is_some_and(|input| input.insert(text))
     }
 
     /// Replace a form field from an assistive-technology value action. The
     /// same single-line and size limits apply as to typed input.
     pub fn accessibility_set_name(&mut self, value: &str) -> bool {
-        if !Self::valid_form_text(value, Self::MAX_FORM_NAME_BYTES) {
+        if !self.form_name.accepts(value) {
             return false;
         }
         self.focus_name();
-        self.form_name.replace(value);
-        true
+        self.form_name.replace(value)
     }
 
     pub fn accessibility_set_command(&mut self, value: &str) -> bool {
-        if !Self::valid_form_text(value, Self::MAX_FORM_COMMAND_BYTES) {
+        if !self.form_command.accepts(value) {
             return false;
         }
         self.focus_command();
-        self.form_command.replace(value);
-        true
+        self.form_command.replace(value)
     }
 
     /// Try to submit the form — returns the new command if valid
@@ -777,6 +746,7 @@ impl CommandsPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use unicode_segmentation::UnicodeSegmentation;
 
     #[test]
     fn command_browse_navigation_reveals_and_revalidates_before_activation() {
@@ -950,7 +920,7 @@ mod tests {
         assert!(!panel.reveal_row(100, layout(600.0, false, 100)));
         assert_eq!(panel.scroll_offset, old_offset);
         panel.start_add();
-        panel.form_name.replace("kept draft");
+        assert!(panel.form_name.replace("kept draft"));
         assert!(panel.reveal_row(99, layout(600.0, true, 100)));
         assert!(panel.scroll_offset > old_offset);
         assert_eq!(panel.form_name.text(), "kept draft");
@@ -1022,8 +992,8 @@ mod tests {
         let mut panel = CommandsPanel::new();
         panel.toggle();
         panel.start_add();
-        panel.form_name.replace(text);
-        panel.form_command.replace(text);
+        assert!(panel.form_name.replace(text));
+        assert!(panel.form_command.replace(text));
         for (width, cell) in [(800.0, 8.0), (1600.0, 16.0), (900.0, 10.0)] {
             for animation in [0.25, 1.0] {
                 let layout = CommandsPanelLayout::calculate(
@@ -1095,8 +1065,8 @@ mod tests {
         panel.toggle();
         panel.start_add();
         let text = "a界e\u{301}👩\u{200d}💻".repeat(8);
-        panel.form_name.replace(&text);
-        panel.form_command.replace(&text);
+        assert!(panel.form_name.replace(&text));
+        assert!(panel.form_command.replace(&text));
         let layout = CommandsPanelLayout::calculate(800.0, 800.0, 0.0, 8.0, 16.0, 1.0, true, 0);
         for field in [EditMode::EditingName, EditMode::EditingCommand] {
             assert!(panel.place_form_caret(field.clone(), text.len()));
@@ -1148,7 +1118,7 @@ mod tests {
         panel.toggle();
         assert!(!panel.place_form_caret(EditMode::EditingCommand, 0));
         panel.start_add();
-        panel.form_command.replace("界e\u{301}👩\u{200d}💻");
+        assert!(panel.form_command.replace("界e\u{301}👩\u{200d}💻"));
         let end = panel.form_command.cursor();
         for cursor in [1, 4, end + 1, usize::MAX] {
             assert!(!panel.place_form_caret(EditMode::EditingCommand, cursor));
@@ -1225,13 +1195,13 @@ mod tests {
             let mut panel = CommandsPanel::new();
             panel.toggle();
             panel.start_add();
-            panel.form_name.replace("untouched");
-            panel.form_command.replace("untouched");
+            assert!(panel.form_name.replace("untouched"));
+            assert!(panel.form_command.replace("untouched"));
             if !name {
                 panel.focus_command();
             }
             let input = "a界e\u{301}👩\u{200d}💻🇺🇸z";
-            panel.active_input().unwrap().replace(input);
+            assert!(panel.active_input().unwrap().replace(input));
             for edit in [Home, Right, Delete, Right] {
                 panel.form_edit(edit);
             }
@@ -1267,12 +1237,12 @@ mod tests {
 
     #[test]
     fn form_viewports_follow_whole_graphemes_at_scaled_animated_geometry() {
-        use unicode_segmentation::UnicodeSegmentation;
-        let text = "a界e\u{301}👩\u{200d}💻🇺🇸".repeat(30);
+        // Nine repeats fill most of the 256-byte name field.
+        let text = "a界e\u{301}👩\u{200d}💻🇺🇸".repeat(9);
         let mut panel = CommandsPanel::new();
         panel.start_add();
-        panel.form_name.replace(&text);
-        panel.form_command.replace(&text);
+        assert!(panel.form_name.replace(&text));
+        assert!(panel.form_command.replace(&text));
         for (width, cell) in [(800.0, 8.0), (1600.0, 16.0), (320.0, 8.0)] {
             for animation in [0.25, 1.0] {
                 let layout = CommandsPanelLayout::calculate(
@@ -1292,7 +1262,7 @@ mod tests {
                         .map(|(i, _)| i)
                         .chain([text.len()])
                     {
-                        panel.active_input().unwrap().set_cursor_byte(cursor);
+                        assert!(panel.active_input().unwrap().place_caret(cursor));
                         let info = panel.build_info(&[]);
                         let Some(view) = layout.input_viewport(&info, field.clone()) else {
                             assert_eq!(width, 320.0); // collapsed input: no out-of-box caret

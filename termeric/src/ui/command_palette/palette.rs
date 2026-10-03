@@ -6,22 +6,12 @@
 use sublime_fuzzy::FuzzySearch;
 
 use super::super::animation::OverlayAnimation;
-use super::super::text_input::{TextInput, TextInputEdit};
+use super::super::text_input::{TextInput, TextInputEdit, TextLimit};
 use crate::input::keybindings::{BindableAction, ShortcutRegistry};
 use crate::ui::geometry::Bounds;
 use crate::ui::scroll::reveal_row;
 
 const MAX_QUERY_CHARACTERS: usize = 256;
-
-fn valid_query_character(character: char) -> bool {
-    !crate::safe_text::breaks_single_line(character)
-}
-
-fn valid_query_text(text: &str) -> bool {
-    text.len() <= MAX_QUERY_CHARACTERS * 4
-        && text.chars().all(valid_query_character)
-        && text.chars().count() <= MAX_QUERY_CHARACTERS
-}
 
 /// Source of a registered command
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -292,7 +282,7 @@ impl CommandPalette {
     pub fn new() -> Self {
         Self {
             animation: OverlayAnimation::new(),
-            input: TextInput::new(),
+            input: TextInput::new(TextLimit::Chars(MAX_QUERY_CHARACTERS)),
             registry: Vec::new(),
             entries: Vec::new(),
             selected: 0,
@@ -498,10 +488,9 @@ impl CommandPalette {
     /// applies to dedicated palette workflows so accessibility cannot create
     /// an unbounded or multiline filter that keyboard input could not express.
     pub fn accessibility_set_input(&mut self, value: &str) -> bool {
-        if !valid_query_text(value) {
+        if !self.input.replace(value) {
             return false;
         }
-        self.input.replace(value);
         self.selected = 0;
         self.scroll_offset = 0;
         self.update_entries();
@@ -520,13 +509,9 @@ impl CommandPalette {
     /// Insert one bounded single-line query paste atomically, refreshing
     /// results only once. Rejection preserves the cursor and selected result.
     pub fn insert_query_text(&mut self, text: &str) -> bool {
-        if text.is_empty()
-            || !valid_query_text(text)
-            || self.input.text().chars().count() + text.chars().count() > MAX_QUERY_CHARACTERS
-        {
+        if !self.input.insert(text) {
             return false;
         }
-        self.input.insert_text(text);
         self.selected = 0;
         self.scroll_offset = 0;
         self.update_entries();
@@ -535,14 +520,7 @@ impl CommandPalette {
 
     /// Handle a character input
     pub fn handle_char(&mut self, c: char) -> bool {
-        if !valid_query_character(c) || self.input.text().chars().count() >= MAX_QUERY_CHARACTERS {
-            return false;
-        }
-        self.input.insert_char(c);
-        self.selected = 0;
-        self.scroll_offset = 0;
-        self.update_entries();
-        true
+        self.insert_query_text(c.encode_utf8(&mut [0; 4]))
     }
 
     /// Handle backspace
@@ -617,7 +595,7 @@ impl CommandPalette {
             return Some(PaletteResult::Cancelled);
         }
         if let Some(cursor) = layout.input_cursor_at(self.input.text(), self.input.cursor(), x, y) {
-            self.input.set_cursor_byte(cursor);
+            self.input.place_caret(cursor);
             return None;
         }
         if let Some(row) = layout.visible_row_at(y) {

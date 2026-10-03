@@ -1,6 +1,5 @@
 //! Incremental AccessKit tree for native screen readers.
 
-use crate::ui::geometry::Bounds;
 use std::collections::{HashMap, HashSet};
 
 use accesskit::{
@@ -15,6 +14,7 @@ use crate::ui::commands::navigation::{
     CommandControl, CommandKey as CustomCommandSemanticKey, command_index as custom_command_index,
     command_keys as custom_command_keys,
 };
+use crate::ui::geometry::Bounds;
 
 const ROOT: NodeId = NodeId(1);
 const TAB_LIST: NodeId = NodeId(2);
@@ -4351,10 +4351,7 @@ impl App {
         {
             let mut node = Node::new(Role::TextInput);
             node.set_label(input.label.trim_end_matches([' ', ':']));
-            node.set_description(format!(
-                "Single-line value, at most {} UTF-8 bytes",
-                input.max_bytes
-            ));
+            node.set_description(format!("Single-line value, at most {}", input.limit));
             node.set_value(input.value.clone());
             node.set_character_lengths(
                 input
@@ -8312,8 +8309,8 @@ mod tests {
             });
             if editing {
                 app.commands_panel.start_add();
-                app.commands_panel.form_name.replace("retained name");
-                app.commands_panel.form_command.replace("retained command");
+                assert!(app.commands_panel.form_name.replace("retained name"));
+                assert!(app.commands_panel.form_command.replace("retained command"));
                 app.commands_panel.focus_command();
             }
             // A refused index must not revoke still-valid row actions.
@@ -8421,8 +8418,8 @@ mod tests {
             });
             if editing {
                 app.commands_panel.start_add();
-                app.commands_panel.form_name.replace("retained");
-                app.commands_panel.form_command.replace("retained command");
+                assert!(app.commands_panel.form_name.replace("retained"));
+                assert!(app.commands_panel.form_command.replace("retained command"));
                 app.commands_panel.focus_command();
             }
             let mut replacement = app.config.clone();
