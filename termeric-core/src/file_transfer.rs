@@ -515,19 +515,26 @@ fn parse_error_with_ids(
     }
 }
 
+/// Whether `value` is a transfer identifier Termeric accepts: at most `limit`
+/// bytes from a conservative ASCII set, so it is safe to echo in replies and
+/// to use as a metadata node key.
+pub fn is_safe_transfer_id(value: &[u8], limit: usize) -> bool {
+    value.len() <= limit
+        && value.iter().all(|byte| {
+            matches!(
+                byte,
+                b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_' | b':' | b'.' | b'/' | b'@' | b'-'
+            )
+        })
+}
+
 fn parse_safe_id(
     value: &[u8],
     limit: usize,
     label: &str,
 ) -> Result<String, KittyFileTransferParseError> {
-    if value.len() > limit
-        || value
-            .iter()
-            .any(|byte| !matches!(byte, b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_' | b':' | b'.' | b'/' | b'@' | b'-'))
-    {
-        return Err(KittyFileTransferParseError::new(format!(
-            "invalid {label}"
-        )));
+    if !is_safe_transfer_id(value, limit) {
+        return Err(KittyFileTransferParseError::new(format!("invalid {label}")));
     }
     Ok(String::from_utf8(value.to_vec()).expect("safe id is ASCII"))
 }

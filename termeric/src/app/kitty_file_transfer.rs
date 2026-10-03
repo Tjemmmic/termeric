@@ -1479,40 +1479,61 @@ fn transfer_status(
 }
 
 fn resolve_kitty_upload_path(name: &str) -> Result<PathBuf, String> {
-    if name.is_empty() || name.len() > termeric_core::MAX_KITTY_TRANSFER_PATH_BYTES {
-        return Err("empty or oversized requested path".into());
-    }
+    // Only uploads show the requested name (in the consent dialog).
     if name.chars().any(crate::safe_text::is_unsafe_display_char) {
         return Err("requested path contains unsafe display controls".into());
     }
-    let components = name
-        .strip_prefix("~/")
-        .or_else(|| name.strip_prefix('/'))
-        .unwrap_or(name);
-    if components.is_empty()
-        || components.split('/').any(|component| {
-            component.is_empty()
-                || matches!(component, "." | "..")
-                || component.as_bytes().contains(&0)
-                || component.len() > 255
-        })
-    {
-        return Err("requested path contains empty, traversal, or oversized components".into());
+    resolve_home_relative_path(name)
+}
+
+/// Resolve a path a Kitty transfer names: `~`, `~/…`, and relative paths are
+/// under the home directory; absolute paths stay as they are. The result is an
+/// absolute, bounded path with no empty, `.`, `..`, NUL, or oversized
+/// component, and never a filesystem root.
+fn resolve_home_relative_path(name: &str) -> Result<PathBuf, String> {
+    use std::path::Component;
+
+    if name.is_empty() || name.len() > termeric_core::MAX_KITTY_TRANSFER_PATH_BYTES {
+        return Err("empty or oversized path".into());
     }
     let home = directories::BaseDirs::new()
         .map(|dirs| dirs.home_dir().to_path_buf())
         .ok_or_else(|| "home directory is unavailable".to_string())?;
-    let path = if name == "~" {
-        home
-    } else if let Some(relative) = name.strip_prefix("~/") {
-        home.join(relative)
-    } else if std::path::Path::new(name).is_absolute() {
-        PathBuf::from(name)
+    let (base, rest) = if name == "~" {
+        (home, "")
+    } else if let Some(rest) = name.strip_prefix("~/") {
+        (home, rest)
+    } else if let Some(rest) = name.strip_prefix('/') {
+        (PathBuf::from("/"), rest)
     } else {
-        home.join(name)
+        (home, name)
     };
-    if path.as_os_str().as_encoded_bytes().len() > termeric_core::MAX_KITTY_TRANSFER_PATH_BYTES {
-        return Err("resolved requested path is too large".into());
+    if name != "~"
+        && (rest.is_empty()
+            || rest.split('/').any(|component| {
+                component.is_empty()
+                    || matches!(component, "." | "..")
+                    || component.contains('\0')
+                    || component.len() > 255
+            }))
+    {
+        return Err("path contains empty, traversal, or oversized components".into());
+    }
+    let path = if rest.is_empty() {
+        base
+    } else {
+        base.join(rest)
+    };
+    if !path.is_absolute()
+        || path.as_os_str().len() > termeric_core::MAX_KITTY_TRANSFER_PATH_BYTES
+        || path
+            .components()
+            .any(|component| !matches!(component, Component::RootDir | Component::Normal(_)))
+    {
+        return Err("path must be an absolute bounded POSIX path".into());
+    }
+    if path.parent().is_none() {
+        return Err("path cannot be a filesystem root".into());
     }
     Ok(path)
 }
@@ -2986,6 +3007,25 @@ mod upload_worker_tests {
         let relative = resolve_kitty_upload_path("project/file").unwrap();
         assert!(relative.is_absolute());
         assert!(relative.ends_with("project/file"));
+        let home = directories::BaseDirs::new()
+            .unwrap()
+            .home_dir()
+            .to_path_buf();
+        assert_eq!(resolve_home_relative_path("~").unwrap(), home);
+        assert_eq!(
+            resolve_home_relative_path("~/a/b").unwrap(),
+            home.join("a/b")
+        );
+        assert_eq!(
+            resolve_home_relative_path("/~/a").unwrap(),
+            PathBuf::from("/~/a")
+        );
+        for rejected in ["", "/", "~/", "~//etc", "/a/../b", "a/\0b"] {
+            assert!(
+                resolve_home_relative_path(rejected).is_err(),
+                "{rejected:?}"
+            );
+        }
         let debug = format!(
             "{:?}",
             UploadPath {
@@ -3188,7 +3228,7 @@ mod download {
                 .name
                 .as_deref()
                 .ok_or_else(|| TransactionError::invalid(&command.file_id, "missing path"))?;
-            let path = resolve_target_path(name)
+            let path = super::resolve_home_relative_path(name)
                 .map_err(|message| TransactionError::invalid(&command.file_id, message))?;
             if self.paths.contains(&path) {
                 return Err(TransactionError::invalid(
@@ -3201,7 +3241,12 @@ mod download {
             })?;
 
             let status_id = command.status.as_deref().unwrap_or_default();
-            if !status_id.is_empty() && !is_safe_metadata_id(status_id) {
+            if !status_id.is_empty()
+                && !termeric_core::file_transfer::is_safe_transfer_id(
+                    status_id.as_bytes(),
+                    termeric_core::MAX_KITTY_TRANSFER_FILE_ID_BYTES,
+                )
+            {
                 return Err(TransactionError::invalid(
                     &command.file_id,
                     "invalid metadata node id",
@@ -3726,79 +3771,6 @@ mod download {
                 Ok(absolute)
             }
         }
-    }
-
-    fn resolve_target_path(name: &str) -> Result<PathBuf, String> {
-        if name.is_empty() || name.len() > termeric_core::MAX_KITTY_TRANSFER_PATH_BYTES {
-            return Err("empty or oversized destination path".into());
-        }
-        let components = name.strip_prefix('/').unwrap_or(name);
-        let components = components.strip_prefix("~/").unwrap_or(components);
-        if components.is_empty()
-            || components
-                .split('/')
-                .any(|component| component.is_empty() || matches!(component, "." | ".."))
-        {
-            return Err("destination contains empty or traversal components".into());
-        }
-        let home = directories::BaseDirs::new()
-            .map(|dirs| dirs.home_dir().to_path_buf())
-            .ok_or_else(|| "home directory is unavailable".to_string())?;
-        let path = if name == "~" {
-            home
-        } else if let Some(relative) = name.strip_prefix("~/") {
-            home.join(relative)
-        } else if Path::new(name).is_absolute() {
-            PathBuf::from(name)
-        } else {
-            home.join(name)
-        };
-        validate_lexical_path(&path)?;
-        if path.parent().is_none() {
-            return Err("destination cannot be a filesystem root".into());
-        }
-        Ok(path)
-    }
-
-    fn is_safe_metadata_id(value: &str) -> bool {
-        value.len() <= termeric_core::MAX_KITTY_TRANSFER_FILE_ID_BYTES
-            && value.bytes().all(|byte| {
-                matches!(
-                    byte,
-                    b'0'..=b'9'
-                        | b'a'..=b'z'
-                        | b'A'..=b'Z'
-                        | b'_'
-                        | b':'
-                        | b'.'
-                        | b'/'
-                        | b'@'
-                        | b'-'
-                )
-            })
-    }
-
-    fn validate_lexical_path(path: &Path) -> Result<(), String> {
-        if !path.is_absolute()
-            || path.as_os_str().as_bytes().len() > termeric_core::MAX_KITTY_TRANSFER_PATH_BYTES
-        {
-            return Err("destination must be an absolute bounded POSIX path".into());
-        }
-        for component in path.components() {
-            match component {
-                Component::RootDir => {}
-                Component::Normal(value) => {
-                    let bytes = value.as_bytes();
-                    if bytes.is_empty() || bytes.len() > 255 || bytes.contains(&0) {
-                        return Err("destination has an invalid path component".into());
-                    }
-                }
-                Component::CurDir | Component::ParentDir | Component::Prefix(_) => {
-                    return Err("destination contains traversal or a platform prefix".into());
-                }
-            }
-        }
-        Ok(())
     }
 
     fn validate_destination(path: &Path) -> io::Result<()> {
@@ -6975,9 +6947,9 @@ mod download {
                     .is_err()
             );
             assert_eq!(fs::read(&existing).unwrap(), b"keep");
-            assert!(resolve_target_path("../escape").is_err());
-            assert!(resolve_target_path("nested//empty").is_err());
-            assert!(resolve_target_path("nested/./dot").is_err());
+            assert!(super::resolve_home_relative_path("../escape").is_err());
+            assert!(super::resolve_home_relative_path("nested//empty").is_err());
+            assert!(super::resolve_home_relative_path("nested/./dot").is_err());
 
             let path = root.path().join("short");
             let mut metadata = command(
