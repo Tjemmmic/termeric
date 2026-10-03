@@ -154,26 +154,6 @@ impl Row {
         self.cells.iter().enumerate()
     }
 
-    #[cfg(test)]
-    fn insert_cells(&mut self, col: usize, count: usize, blank: &Cell) {
-        self.insert_cells_bounded_with_damage(col, self.cells.len(), count, blank, |_| {});
-    }
-
-    #[cfg(test)]
-    fn delete_cells(&mut self, col: usize, count: usize, blank: &Cell) {
-        self.delete_cells_bounded_with_damage(col, self.cells.len(), count, blank, |_| {});
-    }
-
-    #[cfg(test)]
-    fn erase_range(&mut self, start: usize, end: usize, blank: &Cell) {
-        self.erase_range_with_damage(start, end, blank, |_| {});
-    }
-
-    #[cfg(test)]
-    fn selective_erase_range(&mut self, start: usize, end: usize, blank: &Cell) {
-        self.selective_erase_range_with_damage(start, end, blank, |_| {});
-    }
-
     /// Report cells erased by glyph repair after moving the surviving cells.
     pub(crate) fn insert_cells_bounded_with_damage(
         &mut self,
@@ -752,6 +732,26 @@ impl std::ops::IndexMut<usize> for Row {
 mod tests {
     use super::*;
     use crate::{CellAttrs, Color, ColorSpec};
+
+    /// Full-width edits without damage reporting, for tests that only check
+    /// the resulting cells.
+    impl Row {
+        fn insert_cells(&mut self, col: usize, count: usize, blank: &Cell) {
+            self.insert_cells_bounded_with_damage(col, self.cells.len(), count, blank, |_| {});
+        }
+
+        fn delete_cells(&mut self, col: usize, count: usize, blank: &Cell) {
+            self.delete_cells_bounded_with_damage(col, self.cells.len(), count, blank, |_| {});
+        }
+
+        fn erase_range(&mut self, start: usize, end: usize, blank: &Cell) {
+            self.erase_range_with_damage(start, end, blank, |_| {});
+        }
+
+        fn selective_erase_range(&mut self, start: usize, end: usize, blank: &Cell) {
+            self.selective_erase_range_with_damage(start, end, blank, |_| {});
+        }
+    }
 
     #[test]
     fn erase_damage_reports_atomic_wide_spans_and_skips_protected_pairs() {

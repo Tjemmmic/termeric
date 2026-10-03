@@ -905,19 +905,6 @@ impl GridStorage {
     /// Resize the grid with text reflow when columns change.
     /// Return the new cursor position and number of viewport rows archived.
     /// The row count is exact even when retention limits evict archive rows.
-    #[cfg(test)]
-    pub fn resize(
-        &mut self,
-        new_cols: usize,
-        new_rows: usize,
-        cursor_row: usize,
-        cursor_col: usize,
-    ) -> ((usize, usize), usize) {
-        let (cursor, outcome) =
-            self.resize_with_points(new_cols, new_rows, cursor_row, cursor_col, &mut [None; 2]);
-        (cursor, outcome.archived_rows)
-    }
-
     pub(crate) fn resize_with_points<const N: usize>(
         &mut self,
         new_cols: usize,
@@ -1066,11 +1053,6 @@ impl GridStorage {
 
     /// Reflow compact history one logical line at a time. This avoids expanding
     /// the complete archive into a second full-width rich-cell buffer.
-    #[cfg(test)]
-    fn reflow_scrollback(rows: VecDeque<CompactRow>, new_cols: usize) -> VecDeque<CompactRow> {
-        Self::reflow_scrollback_with_points(rows, new_cols, &mut [None; 2])
-    }
-
     fn reflow_scrollback_with_points<const N: usize>(
         rows: VecDeque<CompactRow>,
         new_cols: usize,
@@ -1140,15 +1122,6 @@ impl GridStorage {
     /// and returns the new (row, col) in the output. This is critical for keeping
     /// the cursor at the correct position after resize, which prevents the shell's
     /// SIGWINCH response from corrupting content.
-    #[cfg(test)]
-    fn reflow_rows_with_cursor(
-        rows: impl IntoIterator<Item = Row>,
-        new_cols: usize,
-        cursor: Option<(usize, usize)>,
-    ) -> (Vec<Row>, Option<(usize, usize)>) {
-        Self::reflow_rows_with_points(rows, new_cols, cursor, &mut [None; 2])
-    }
-
     fn reflow_rows_with_points<const N: usize>(
         rows: impl IntoIterator<Item = Row>,
         new_cols: usize,
@@ -1279,11 +1252,6 @@ impl GridStorage {
             col_within_line
         };
         (clamped_row, clamped_col)
-    }
-
-    #[cfg(test)]
-    fn rewrap_line(output: &mut Vec<Row>, cells: Vec<Cell>, cols: usize) {
-        Self::rewrap_line_with_cursor(output, cells, cols, None, &mut [None; 2]);
     }
 
     /// Translate the cursor and selection offsets alongside the cell moves, without allocating
@@ -1433,11 +1401,6 @@ impl GridStorage {
     }
 
     /// Get a row from scrollback (0 = oldest)
-    #[cfg(test)]
-    fn scrollback_row(&self, idx: usize) -> Option<RowView<'_>> {
-        self.scrollback.get(idx).map(RowView::history)
-    }
-
     /// Clear the scrollback buffer
     pub fn clear_scrollback(&mut self) {
         self.scrollback.clear();
@@ -1516,6 +1479,42 @@ impl GridStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Test shorthands: the resize and reflow paths without tracked points,
+    /// and direct access to one history row.
+    impl GridStorage {
+        fn resize(
+            &mut self,
+            new_cols: usize,
+            new_rows: usize,
+            cursor_row: usize,
+            cursor_col: usize,
+        ) -> ((usize, usize), usize) {
+            let (cursor, outcome) =
+                self.resize_with_points(new_cols, new_rows, cursor_row, cursor_col, &mut [None; 2]);
+            (cursor, outcome.archived_rows)
+        }
+
+        fn reflow_scrollback(rows: VecDeque<CompactRow>, new_cols: usize) -> VecDeque<CompactRow> {
+            Self::reflow_scrollback_with_points(rows, new_cols, &mut [None; 2])
+        }
+
+        fn reflow_rows_with_cursor(
+            rows: impl IntoIterator<Item = Row>,
+            new_cols: usize,
+            cursor: Option<(usize, usize)>,
+        ) -> (Vec<Row>, Option<(usize, usize)>) {
+            Self::reflow_rows_with_points(rows, new_cols, cursor, &mut [None; 2])
+        }
+
+        fn rewrap_line(output: &mut Vec<Row>, cells: Vec<Cell>, cols: usize) {
+            Self::rewrap_line_with_cursor(output, cells, cols, None, &mut [None; 2]);
+        }
+
+        fn scrollback_row(&self, idx: usize) -> Option<RowView<'_>> {
+            self.scrollback.get(idx).map(RowView::history)
+        }
+    }
 
     #[test]
     fn recycled_scrolling_matches_fresh_row_reference() {
