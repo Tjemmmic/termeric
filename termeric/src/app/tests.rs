@@ -9380,7 +9380,7 @@ fn unicode_worker_completion_polls_only_while_pending_even_when_occluded() {
     let now = Instant::now();
     app.last_config_check = now;
     app.unicode_picker.open();
-    app.unicode_picker.accessibility_set_filter("snowman");
+    app.unicode_picker.set_query("snowman");
     assert_eq!(
         app.next_idle_deadline(now),
         Some(now + Duration::from_millis(16))
@@ -14014,7 +14014,8 @@ fn terminal_profile_palette_entries_follow_live_config_replacement() {
     let mut app = App::new_headless(config).unwrap();
     app.command_palette.open();
     for character in "dev".chars() {
-        app.command_palette.handle_char(character);
+        app.command_palette
+            .insert_query_text(character.encode_utf8(&mut [0; 4]));
     }
     let entries = app.command_palette.build_info().entries;
     assert!(
@@ -14041,7 +14042,8 @@ fn terminal_profile_palette_entries_follow_live_config_replacement() {
     app.apply_config(Config::default()).unwrap();
     app.command_palette.open();
     for character in "dev".chars() {
-        app.command_palette.handle_char(character);
+        app.command_palette
+            .insert_query_text(character.encode_utf8(&mut [0; 4]));
     }
     assert!(
         app.command_palette

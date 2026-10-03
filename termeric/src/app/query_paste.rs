@@ -1,12 +1,11 @@
 //! Clipboard ownership for bounded single-line queries and command forms.
 
+use super::palette_input::PaletteModal;
 use super::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PasteTarget {
-    Command,
-    Unicode,
-    Domain,
+    Palette(PaletteModal),
     Search,
     CommandsForm,
     WorkspaceRename,
@@ -32,14 +31,8 @@ impl App {
             return PasteTarget::Blocked;
         }
         // Match native keyboard dispatch, including retained background fields.
-        if self.domain_picker.is_active() {
-            return PasteTarget::Domain;
-        }
-        if self.unicode_picker.is_active() {
-            return PasteTarget::Unicode;
-        }
-        if self.command_palette.is_active() {
-            return PasteTarget::Command;
+        if let Some(modal) = self.open_palette_modal() {
+            return PasteTarget::Palette(modal);
         }
         if self.shortcuts_panel.is_active() {
             return if self.shortcuts_panel.is_recording() {
@@ -138,9 +131,7 @@ impl App {
             return false;
         }
         let accepted = match target {
-            PasteTarget::Command => self.command_palette.insert_query_text(text),
-            PasteTarget::Unicode => self.unicode_picker.insert_query_text(text),
-            PasteTarget::Domain => self.domain_picker.insert_query_text(text),
+            PasteTarget::Palette(modal) => self.palette_owner_mut(modal).insert_query_text(text),
             PasteTarget::CommandsForm => self.commands_panel.insert_form_text(text),
             PasteTarget::WorkspaceRename => self.session_panel.insert_rename_text(text),
             PasteTarget::TabRename => self.insert_tab_rename_text(text),
@@ -822,7 +813,10 @@ mod tests {
         app.commands_panel.toggle();
         app.commands_panel.start_add();
         app.command_palette.open();
-        assert_eq!(app.clipboard_paste_target(), PasteTarget::Command);
+        assert_eq!(
+            app.clipboard_paste_target(),
+            PasteTarget::Palette(PaletteModal::Commands)
+        );
         assert!(app.paste_clipboard_payload("palette only"));
         assert!(app.commands_panel.form_name.text().is_empty());
     }
@@ -856,28 +850,22 @@ mod tests {
 
     #[test]
     fn palette_query_paste_is_atomic_at_caret_and_retains_limits() {
-        for kind in [
-            PasteTarget::Command,
-            PasteTarget::Unicode,
-            PasteTarget::Domain,
+        for modal in [
+            PaletteModal::Commands,
+            PaletteModal::Unicode,
+            PaletteModal::Domains,
         ] {
             let mut app = App::new_headless(Config::default()).unwrap();
-            match kind {
-                PasteTarget::Command => app.command_palette.open(),
-                PasteTarget::Unicode => app.unicode_picker.open(),
-                PasteTarget::Domain => app.domain_picker.open(&app.config.domains),
-                _ => unreachable!(),
+            match modal {
+                PaletteModal::Commands => app.command_palette.open(),
+                PaletteModal::Unicode => app.unicode_picker.open(),
+                PaletteModal::Domains => app.domain_picker.open(&app.config.domains),
             }
-            assert_eq!(app.clipboard_paste_target(), kind);
+            assert_eq!(app.clipboard_paste_target(), PasteTarget::Palette(modal));
             assert!(app.paste_clipboard_payload("az"));
             assert!(app.handle_palette_edit_key(&Key::Named(NamedKey::ArrowLeft)));
             assert!(app.paste_clipboard_payload("界e\u{301}👩\u{200d}💻"));
-            let info = |app: &App| match kind {
-                PasteTarget::Command => app.command_palette.build_info(),
-                PasteTarget::Unicode => app.unicode_picker.build_info(),
-                PasteTarget::Domain => app.domain_picker.build_info(),
-                _ => unreachable!(),
-            };
+            let info = |app: &App| app.palette_owner(modal).build_info();
             let before = info(&app);
             assert_eq!(before.input, "a界e\u{301}👩\u{200d}💻z");
             assert_eq!(before.cursor, before.input.len() - 1);
@@ -930,9 +918,15 @@ mod tests {
         app.command_palette.open();
         assert!(app.paste_clipboard_payload("background"));
         app.unicode_picker.open();
-        assert_eq!(app.clipboard_paste_target(), PasteTarget::Unicode);
+        assert_eq!(
+            app.clipboard_paste_target(),
+            PasteTarget::Palette(PaletteModal::Unicode)
+        );
         app.domain_picker.open(&app.config.domains);
-        assert_eq!(app.clipboard_paste_target(), PasteTarget::Domain);
+        assert_eq!(
+            app.clipboard_paste_target(),
+            PasteTarget::Palette(PaletteModal::Domains)
+        );
         assert!(app.domain_picker.activate().is_some());
         assert!(app.domain_picker.is_busy());
         assert!(!app.paste_clipboard_payload("local"));

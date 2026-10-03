@@ -742,143 +742,9 @@ impl App {
                 {
                     return;
                 }
-                if self.domain_picker.is_active() {
+                if self.open_palette_modal().is_some() {
                     if event.state == winit::event::ElementState::Pressed {
-                        use winit::keyboard::{Key, NamedKey};
-                        let command = match &event.logical_key {
-                            Key::Named(NamedKey::Escape) => {
-                                self.back_or_close_domain_picker();
-                                None
-                            }
-                            Key::Named(NamedKey::ArrowUp) => {
-                                self.domain_picker.select_prev();
-                                None
-                            }
-                            Key::Named(NamedKey::ArrowDown) => {
-                                self.domain_picker.select_next();
-                                None
-                            }
-                            Key::Named(NamedKey::Enter) => self.domain_picker.activate(),
-                            Key::Named(NamedKey::Backspace) => {
-                                self.domain_picker.handle_backspace();
-                                None
-                            }
-                            Key::Named(NamedKey::Space) => {
-                                self.domain_picker.handle_char(' ');
-                                None
-                            }
-                            Key::Character(c)
-                                if self.modifiers.control_key()
-                                    && self.modifiers.shift_key()
-                                    && (c.as_str() == "p" || c.as_str() == "P") =>
-                            {
-                                self.close_domain_picker();
-                                None
-                            }
-                            Key::Character(c)
-                                if !self.modifiers.control_key() && !self.modifiers.alt_key() =>
-                            {
-                                for character in c.chars() {
-                                    self.domain_picker.handle_char(character);
-                                }
-                                None
-                            }
-                            _ => None,
-                        };
-                        if let Some(command) = command {
-                            self.handle_domain_picker_command(command);
-                        }
-                        self.request_redraw(RedrawReason::KeyboardInput);
-                    }
-                    return;
-                }
-
-                if self.unicode_picker.is_active() {
-                    if event.state == winit::event::ElementState::Pressed {
-                        use winit::keyboard::{Key, NamedKey};
-                        let selection = match &event.logical_key {
-                            Key::Named(NamedKey::Escape) => {
-                                self.close_unicode_picker();
-                                None
-                            }
-                            Key::Named(NamedKey::ArrowUp) => {
-                                self.unicode_picker.select_prev();
-                                None
-                            }
-                            Key::Named(NamedKey::ArrowDown) => {
-                                self.unicode_picker.select_next();
-                                None
-                            }
-                            Key::Named(NamedKey::Enter) => self.unicode_picker.activate(),
-                            Key::Named(NamedKey::Backspace) => {
-                                self.unicode_picker.handle_backspace();
-                                None
-                            }
-                            Key::Named(NamedKey::Space) => {
-                                self.unicode_picker.handle_char(' ');
-                                None
-                            }
-                            Key::Character(value)
-                                if !self.modifiers.control_key() && !self.modifiers.alt_key() =>
-                            {
-                                for character in value.chars() {
-                                    self.unicode_picker.handle_char(character);
-                                }
-                                None
-                            }
-                            _ => None,
-                        };
-                        if let Some(selection) = selection {
-                            self.apply_unicode_picker_selection(selection);
-                        } else if !self.unicode_picker.is_active() {
-                            self.pending_unicode_picker = None;
-                        }
-                        self.request_redraw(RedrawReason::KeyboardInput);
-                    }
-                    return;
-                }
-
-                // Handle command palette input first (highest priority when open)
-                if self.command_palette.is_active() {
-                    if event.state == winit::event::ElementState::Pressed {
-                        use winit::keyboard::{Key, NamedKey};
-                        match &event.logical_key {
-                            Key::Named(NamedKey::Escape) => {
-                                self.command_palette.close();
-                            }
-                            Key::Named(NamedKey::ArrowUp) => {
-                                self.command_palette.select_prev();
-                            }
-                            Key::Named(NamedKey::ArrowDown) => {
-                                self.command_palette.select_next();
-                            }
-                            Key::Named(NamedKey::Enter) => {
-                                let result = self.command_palette.execute();
-                                self.handle_palette_result(result);
-                            }
-                            Key::Named(NamedKey::Backspace) => {
-                                self.command_palette.handle_backspace();
-                            }
-                            Key::Named(NamedKey::Space) => {
-                                self.command_palette.handle_char(' ');
-                            }
-                            Key::Character(c) => {
-                                // Ctrl+Shift+P to close (toggle)
-                                if self.modifiers.control_key()
-                                    && self.modifiers.shift_key()
-                                    && (c.as_str() == "p" || c.as_str() == "P")
-                                {
-                                    self.command_palette.close();
-                                } else if !self.modifiers.control_key() && !self.modifiers.alt_key()
-                                {
-                                    for ch in c.chars() {
-                                        self.command_palette.handle_char(ch);
-                                    }
-                                }
-                            }
-                            _ => {}
-                        }
-                        self.request_redraw(RedrawReason::KeyboardInput);
+                        self.handle_palette_modal_key(&event.logical_key);
                     }
                     return;
                 }
@@ -1381,105 +1247,13 @@ impl App {
                     }
                     return;
                 }
-                if self.domain_picker.is_active() {
+                // Palette-style modals take every click: an entry is chosen,
+                // the query takes the caret, and a click outside closes them.
+                if self.open_palette_modal().is_some() {
                     if state == winit::event::ElementState::Pressed
                         && button == winit::event::MouseButton::Left
                     {
-                        self.ime.clear_preedit();
-                        let command = if let (Some(pos), Some(renderer)) =
-                            (self.last_cursor_pos, &self.renderer)
-                        {
-                            use crate::ui::command_palette::PaletteLayout;
-                            let (sw, sh) = renderer.window_size();
-                            let info = self.domain_picker.build_info();
-                            let layout = PaletteLayout::calculate(
-                                sw as f32,
-                                sh as f32,
-                                renderer.cell_width(),
-                                renderer.cell_height(),
-                                info.animation,
-                                info.entries.len(),
-                            );
-                            self.domain_picker
-                                .handle_click(pos.0 as f32, pos.1 as f32, &layout)
-                        } else {
-                            self.close_domain_picker();
-                            None
-                        };
-                        if let Some(command) = command {
-                            self.handle_domain_picker_command(command);
-                        }
-                        self.request_redraw(RedrawReason::PointerInput);
-                    }
-                    return;
-                }
-                if self.unicode_picker.is_active() {
-                    if state == winit::event::ElementState::Pressed
-                        && button == winit::event::MouseButton::Left
-                    {
-                        self.ime.clear_preedit();
-                        let selection = if let (Some(pos), Some(renderer)) =
-                            (self.last_cursor_pos, &self.renderer)
-                        {
-                            use crate::ui::command_palette::PaletteLayout;
-                            let (sw, sh) = renderer.window_size();
-                            let info = self.unicode_picker.build_info();
-                            let layout = PaletteLayout::calculate(
-                                sw as f32,
-                                sh as f32,
-                                renderer.cell_width(),
-                                renderer.cell_height(),
-                                info.animation,
-                                info.entries.len(),
-                            );
-                            self.unicode_picker
-                                .handle_click(pos.0 as f32, pos.1 as f32, &layout)
-                        } else {
-                            self.close_unicode_picker();
-                            None
-                        };
-                        if let Some(selection) = selection {
-                            self.apply_unicode_picker_selection(selection);
-                        } else if !self.unicode_picker.is_active() {
-                            self.pending_unicode_picker = None;
-                        }
-                        self.request_redraw(RedrawReason::PointerInput);
-                    }
-                    return;
-                }
-                // When palette is open, clicks route through the palette:
-                // inside an entry → select+execute, inside but not on an entry
-                // → move query caret or absorb, outside → close.
-                if self.command_palette.is_active() {
-                    if state == winit::event::ElementState::Pressed
-                        && button == winit::event::MouseButton::Left
-                    {
-                        self.ime.clear_preedit();
-                        if let (Some(pos), Some(renderer)) = (self.last_cursor_pos, &self.renderer)
-                        {
-                            use crate::ui::command_palette::PaletteLayout;
-                            let (sw, sh) = renderer.window_size();
-                            let info = self.command_palette.build_info();
-                            let layout = PaletteLayout::calculate(
-                                sw as f32,
-                                sh as f32,
-                                renderer.cell_width(),
-                                renderer.cell_height(),
-                                info.animation,
-                                info.entries.len(),
-                            );
-                            let result = self.command_palette.handle_click(
-                                pos.0 as f32,
-                                pos.1 as f32,
-                                &layout,
-                            );
-                            if let Some(res) = result {
-                                self.handle_palette_result(res);
-                            }
-                        } else {
-                            self.command_palette.close();
-                        }
-                        self.request_redraw(RedrawReason::PointerInput);
+                        self.handle_palette_modal_press();
                     }
                     return;
                 }
@@ -1719,44 +1493,7 @@ impl App {
             self.request_redraw(RedrawReason::PointerInput);
             return;
         }
-        if self.domain_picker.is_active() {
-            let lines = match delta {
-                winit::event::MouseScrollDelta::LineDelta(_, y) => y,
-                winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
-            };
-            if lines > 0.0 {
-                self.domain_picker.scroll_up(lines.ceil() as usize);
-            } else if lines < 0.0 {
-                self.domain_picker.scroll_down((-lines).ceil() as usize);
-            }
-            self.request_redraw(RedrawReason::PointerInput);
-            return;
-        }
-        if self.unicode_picker.is_active() {
-            let lines = match delta {
-                winit::event::MouseScrollDelta::LineDelta(_, y) => y,
-                winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
-            };
-            if lines > 0.0 {
-                self.unicode_picker.scroll_up(lines.ceil() as usize);
-            } else if lines < 0.0 {
-                self.unicode_picker.scroll_down((-lines).ceil() as usize);
-            }
-            self.request_redraw(RedrawReason::PointerInput);
-            return;
-        }
-        // Scroll palette list when palette is active
-        if self.command_palette.is_active() {
-            let lines = match delta {
-                winit::event::MouseScrollDelta::LineDelta(_, y) => y,
-                winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
-            };
-            if lines > 0.0 {
-                self.command_palette.scroll_up(lines.ceil() as usize);
-            } else if lines < 0.0 {
-                self.command_palette.scroll_down((-lines).ceil() as usize);
-            }
-            self.request_redraw(RedrawReason::PointerInput);
+        if self.handle_palette_modal_wheel(delta) {
             return;
         }
         // Root Cellar owns the wheel while open; positive deltas move
@@ -1787,8 +1524,6 @@ impl App {
             || self.info_overlay.is_active()
             || self.diff_review.is_active()
             || self.context_picker.is_active()
-            || self.domain_picker.is_active()
-            || self.unicode_picker.is_active()
             || self
                 .harvest
                 .as_ref()

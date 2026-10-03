@@ -9,6 +9,7 @@ use accesskit::{
 use accesskit_winit::WindowEvent;
 use termeric_core::{Cell, CellAttrs, CellFlags, Grid, Selection};
 
+use super::palette_input::PaletteModal;
 use super::*;
 use crate::ui::commands::navigation::{
     CommandControl, CommandKey as CustomCommandSemanticKey, command_index as custom_command_index,
@@ -608,6 +609,33 @@ impl AccessibilityState {
             .retain(|_, command| commands.contains(command.as_str()));
     }
 
+    /// The node for an entry of a palette-style modal, kept while the entry is.
+    fn palette_modal_node(&mut self, modal: PaletteModal, command: &str) -> NodeId {
+        match modal {
+            PaletteModal::Commands => self.palette_node(command),
+            PaletteModal::Domains => self.domain_node(command),
+            PaletteModal::Unicode => self.unicode_node(command),
+        }
+    }
+
+    fn retain_palette_modal_commands(&mut self, modal: PaletteModal, commands: &HashSet<&str>) {
+        match modal {
+            PaletteModal::Commands => self.retain_palette_commands(commands),
+            PaletteModal::Domains => self.retain_domain_commands(commands),
+            PaletteModal::Unicode => self.retain_unicode_commands(commands),
+        }
+    }
+
+    fn palette_modal_command(&self, modal: PaletteModal, node: NodeId) -> Option<String> {
+        match modal {
+            PaletteModal::Commands => &self.palette_commands,
+            PaletteModal::Domains => &self.domain_commands,
+            PaletteModal::Unicode => &self.unicode_commands,
+        }
+        .get(&node)
+        .cloned()
+    }
+
     fn is_unicode_node(&self, node: NodeId) -> bool {
         matches!(
             node,
@@ -1016,18 +1044,8 @@ impl App {
             self.request_redraw(RedrawReason::Accessibility);
             return;
         }
-        if self.domain_picker.is_active() {
-            self.handle_domain_picker_accessibility_action(request);
-            self.request_redraw(RedrawReason::Accessibility);
-            return;
-        }
-        if self.unicode_picker.is_active() {
-            self.handle_unicode_picker_accessibility_action(request);
-            self.request_redraw(RedrawReason::Accessibility);
-            return;
-        }
-        if self.command_palette.is_active() {
-            self.handle_command_palette_accessibility_action(request);
+        if let Some(modal) = self.open_palette_modal() {
+            self.handle_palette_modal_accessibility_action(modal, request);
             self.request_redraw(RedrawReason::Accessibility);
             return;
         }
@@ -1345,19 +1363,25 @@ impl App {
         }
     }
 
-    fn handle_command_palette_accessibility_action(&mut self, request: ActionRequest) {
-        if request.target_node == PALETTE_INPUT {
+    /// The query takes text and focus; a visible entry takes focus or a
+    /// click. The modal hides everything behind it, so a stale request for
+    /// anything else is dropped.
+    fn handle_palette_modal_accessibility_action(
+        &mut self,
+        modal: PaletteModal,
+        request: ActionRequest,
+    ) {
+        let ids = palette_modal_node_ids(modal);
+        if request.target_node == ids.input {
             match request.action {
-                Action::Focus => self.accessibility.focus_override = Some(PALETTE_INPUT),
+                Action::Focus => self.accessibility.focus_override = Some(ids.input),
                 Action::SetValue => {
                     let Some(ActionData::Value(value)) = request.data.as_ref() else {
                         return;
                     };
-                    if self.command_palette.accessibility_set_input(value) {
+                    if self.palette_owner_mut(modal).set_query(value) {
                         self.ime.clear_preedit();
-                        self.accessibility.focus_override = Some(PALETTE_INPUT);
-                        self.redraw_scheduler
-                            .request(redraw_scheduler::RedrawReason::Accessibility);
+                        self.accessibility.focus_override = Some(ids.input);
                     }
                 }
                 _ => {}
@@ -1369,137 +1393,35 @@ impl App {
         }
         let Some(command) = self
             .accessibility
-            .palette_commands
-            .get(&request.target_node)
-            .cloned()
+            .palette_modal_command(modal, request.target_node)
         else {
-            // The palette is modal. Never let a stale request reach controls
-            // hidden behind it.
             return;
         };
-        let info = self.command_palette.build_info();
+        let info = self.palette_owner(modal).build_info();
         let layout = self.command_palette_accessibility_layout(&info);
         if !info
             .entries
             .iter()
             .take(layout.visible_count)
             .any(|entry| entry.id == command)
+            || !self.palette_entry_actionable(modal, &command)
         {
             return;
         }
         if request.action == Action::Focus {
-            self.command_palette.select_command(&command);
-            self.accessibility.focus_override = Some(PALETTE_INPUT);
-        } else if let Some(result) = self.command_palette.execute_command(&command) {
-            self.accessibility.focus_override = None;
-            self.handle_palette_result(result);
-        }
-    }
-
-    fn handle_domain_picker_accessibility_action(&mut self, request: ActionRequest) {
-        if request.target_node == DOMAIN_INPUT {
-            match request.action {
-                Action::Focus => self.accessibility.focus_override = Some(DOMAIN_INPUT),
-                Action::SetValue => {
-                    let Some(ActionData::Value(value)) = request.data.as_ref() else {
-                        return;
-                    };
-                    if self.domain_picker.accessibility_set_filter(value) {
-                        self.ime.clear_preedit();
-                        self.accessibility.focus_override = Some(DOMAIN_INPUT);
-                        self.redraw_scheduler
-                            .request(redraw_scheduler::RedrawReason::Accessibility);
-                    }
-                }
-                _ => {}
+            if self
+                .palette_owner_mut(modal)
+                .palette_mut()
+                .select_command(&command)
+            {
+                self.accessibility.focus_override = Some(ids.input);
             }
-            return;
-        }
-        let Some(command) = self
-            .accessibility
-            .domain_commands
-            .get(&request.target_node)
-            .cloned()
-        else {
-            // The picker is modal; requests for the hidden application and
-            // retired staged results never reach the normal action path.
-            return;
-        };
-        let info = self.domain_picker.build_info();
-        let layout = self.domain_picker_accessibility_layout(&info);
-        if !info
-            .entries
-            .iter()
-            .take(layout.visible_count)
-            .any(|entry| entry.id == command)
-        {
-            return;
-        }
-        match request.action {
-            Action::Focus if self.domain_picker.is_actionable(&command) => {
-                if self.domain_picker.select_command(&command) {
-                    self.accessibility.focus_override = Some(DOMAIN_INPUT);
-                }
-            }
-            Action::Click if self.domain_picker.is_actionable(&command) => {
-                if let Some(action) = self.domain_picker.execute_command(&command) {
-                    self.accessibility.focus_override = Some(DOMAIN_INPUT);
-                    self.handle_domain_picker_command(action);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn handle_unicode_picker_accessibility_action(&mut self, request: ActionRequest) {
-        if request.target_node == UNICODE_INPUT {
-            match request.action {
-                Action::Focus => self.accessibility.focus_override = Some(UNICODE_INPUT),
-                Action::SetValue => {
-                    let Some(ActionData::Value(value)) = request.data.as_ref() else {
-                        return;
-                    };
-                    if self.unicode_picker.accessibility_set_filter(value) {
-                        self.ime.clear_preedit();
-                        self.accessibility.focus_override = Some(UNICODE_INPUT);
-                        self.redraw_scheduler
-                            .request(redraw_scheduler::RedrawReason::Accessibility);
-                    }
-                }
-                _ => {}
-            }
-            return;
-        }
-        if !matches!(request.action, Action::Click | Action::Focus) {
-            return;
-        }
-        let Some(command) = self
-            .accessibility
-            .unicode_commands
-            .get(&request.target_node)
-            .cloned()
-        else {
-            // The picker is modal. Hidden application controls and retired
-            // dynamic code-point results never receive stale actions.
-            return;
-        };
-        let info = self.unicode_picker.build_info();
-        let layout = self.unicode_picker_accessibility_layout(&info);
-        if !info
-            .entries
-            .iter()
-            .take(layout.visible_count)
-            .any(|entry| entry.id == command)
-        {
-            return;
-        }
-        if request.action == Action::Focus {
-            if self.unicode_picker.select_command(&command) {
-                self.accessibility.focus_override = Some(UNICODE_INPUT);
-            }
-        } else if let Some(selection) = self.unicode_picker.execute_command(&command) {
-            self.accessibility.focus_override = None;
-            self.apply_unicode_picker_selection(selection);
+        } else if let Some(choice) = self.execute_palette_modal_command(modal, &command) {
+            // A staged picker moves on with its query still focused; the
+            // others close.
+            self.accessibility.focus_override =
+                (modal == PaletteModal::Domains).then_some(ids.input);
+            self.finish_palette_input(Some(choice));
         }
     }
 
@@ -1869,20 +1791,6 @@ impl App {
             cell_height,
             self.guardrail.animation(),
         )
-    }
-
-    fn domain_picker_accessibility_layout(
-        &self,
-        info: &crate::ui::command_palette::PaletteInfo,
-    ) -> crate::ui::command_palette::PaletteLayout {
-        self.command_palette_accessibility_layout(info)
-    }
-
-    fn unicode_picker_accessibility_layout(
-        &self,
-        info: &crate::ui::command_palette::PaletteInfo,
-    ) -> crate::ui::command_palette::PaletteLayout {
-        self.command_palette_accessibility_layout(info)
     }
 
     fn handle_settings_accessibility_action(&mut self, request: ActionRequest) {
@@ -2913,28 +2821,13 @@ impl App {
         {
             self.accessibility.focus_override = None;
         }
-        if self.domain_picker.is_active() {
-            return self.domain_picker_accessibility_snapshot(width, height);
+        if let Some(modal) = self.open_palette_modal() {
+            return self.palette_modal_accessibility_snapshot(modal, width, height);
         }
-        if self
-            .accessibility
-            .focus_override
-            .is_some_and(|node| self.accessibility.is_domain_node(node))
-        {
+        if self.accessibility.focus_override.is_some_and(|node| {
+            self.accessibility.is_domain_node(node) || self.accessibility.is_unicode_node(node)
+        }) {
             self.accessibility.focus_override = None;
-        }
-        if self.unicode_picker.is_active() {
-            return self.unicode_picker_accessibility_snapshot(width, height);
-        }
-        if self
-            .accessibility
-            .focus_override
-            .is_some_and(|node| self.accessibility.is_unicode_node(node))
-        {
-            self.accessibility.focus_override = None;
-        }
-        if self.command_palette.is_active() {
-            return self.command_palette_accessibility_snapshot(width, height);
         }
         if self.accessibility.focus_override == Some(PALETTE_INPUT) {
             self.accessibility.focus_override = None;
@@ -3790,19 +3683,31 @@ impl App {
         }
     }
 
-    fn command_palette_accessibility_snapshot(
+    fn palette_modal_accessibility_snapshot(
         &mut self,
+        modal: PaletteModal,
         window_width: f32,
         window_height: f32,
     ) -> SemanticSnapshot {
-        let mut info = self.command_palette.build_info();
+        let ids = palette_modal_node_ids(modal);
+        let mut info = self.palette_owner(modal).build_info();
         let mut layout = self.command_palette_accessibility_layout(&info);
-        self.command_palette.set_max_visible(layout.rows_that_fit);
-        info = self.command_palette.build_info();
+        self.palette_owner_mut(modal)
+            .palette_mut()
+            .set_max_visible(layout.rows_that_fit);
+        info = self.palette_owner(modal).build_info();
         layout = self.command_palette_accessibility_layout(&info);
-        let registered_commands = self.command_palette.command_ids().collect::<HashSet<_>>();
+        let words = self.palette_modal_wording(modal, &info);
+        let editable = self.palette_owner(modal).query_editable();
+
+        let registered = self
+            .palette_owner(modal)
+            .palette()
+            .command_ids()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
         self.accessibility
-            .retain_palette_commands(&registered_commands);
+            .retain_palette_modal_commands(modal, &registered.iter().map(String::as_str).collect());
         let visible_entries = info
             .entries
             .iter()
@@ -3811,160 +3716,25 @@ impl App {
             .collect::<Vec<_>>();
         let entry_nodes = visible_entries
             .iter()
-            .map(|entry| self.accessibility.palette_node(&entry.id))
+            .map(|entry| self.accessibility.palette_modal_node(modal, &entry.id))
             .collect::<Vec<_>>();
-
-        let mut nodes = Vec::with_capacity(entry_nodes.len() + 5);
-        let mut root = Node::new(Role::Window);
-        root.set_label("Termeric terminal emulator");
-        root.set_bounds(rect(0.0, 0.0, window_width, window_height));
-        root.set_children([PALETTE_DIALOG]);
-
-        let input_x = layout.panel_x + layout.padding;
-        let input_y = layout.panel_y + layout.padding;
-        let input_width = layout.panel_width - layout.padding * 2.0;
-        let mut input = Node::new(Role::SearchInput);
-        input.set_label("Search commands");
-        input.set_placeholder(info.placeholder.clone());
-        input.set_value(info.input.clone());
-        input.set_character_lengths(
-            info.input
-                .chars()
-                .map(|character| character.len_utf8() as u8)
-                .collect::<Vec<_>>(),
-        );
-        let cursor = info
-            .input
-            .get(..info.cursor)
-            .map(str::chars)
-            .map(Iterator::count)
-            .unwrap_or_else(|| info.input.chars().count());
-        let cursor_position = TextPosition {
-            node: PALETTE_INPUT,
-            character_index: cursor,
-        };
-        input.set_text_selection(TextSelection {
-            anchor: cursor_position,
-            focus: cursor_position,
-        });
-        input.set_bounds(rect(input_x, input_y, input_width, layout.input_height));
-        input.set_controls([PALETTE_LIST]);
-        input.add_action(Action::Focus);
-        input.add_action(Action::SetValue);
-        if let Some(selected) = entry_nodes.get(info.selected).copied() {
-            input.set_active_descendant(selected);
-        }
-        nodes.push((PALETTE_INPUT, input));
-
-        for (row, (entry, node_id)) in visible_entries
+        let actionable = visible_entries
             .iter()
-            .zip(entry_nodes.iter().copied())
-            .enumerate()
-        {
-            let mut node = Node::new(Role::ListBoxOption);
-            node.set_label(entry.title.clone());
-            let mut description = format!("{} {}", entry.category, info.item_noun);
-            if entry.destructive {
-                description.push_str(", destructive");
-            }
-            node.set_description(description);
-            if let Some(shortcut) = &entry.shortcut {
-                node.set_keyboard_shortcut(shortcut.clone());
-            }
-            node.set_selected(row == info.selected);
-            node.add_action(Action::Click);
-            node.set_bounds(rect(
-                layout.panel_x + layout.padding * 0.5,
-                layout.list_y + row as f32 * layout.row_height,
-                layout.panel_width - layout.padding,
-                layout.row_height,
-            ));
-            nodes.push((node_id, node));
-        }
-
-        let mut list = Node::new(Role::ListBox);
-        list.set_label(format!("{} results", info.item_noun));
-        list.set_orientation(accesskit::Orientation::Vertical);
-        list.set_bounds(rect(
-            layout.panel_x + layout.padding * 0.5,
-            layout.list_y,
-            layout.panel_width - layout.padding,
-            layout.list_height,
-        ));
-        list.set_children(entry_nodes);
-        nodes.push((PALETTE_LIST, list));
-
-        let mut dialog_children = vec![PALETTE_INPUT, PALETTE_LIST];
-        if visible_entries.is_empty() {
-            let mut empty = Node::new(Role::Status);
-            empty.set_label(format!("No matching {}s", info.item_noun));
-            empty.set_live(Live::Polite);
-            nodes.push((PALETTE_EMPTY, empty));
-            dialog_children.push(PALETTE_EMPTY);
-        }
-        let mut dialog = Node::new(Role::Dialog);
-        dialog.set_label(info.dialog_label);
-        dialog.set_modal();
-        dialog.set_bounds(rect(
-            layout.panel_x,
-            layout.panel_y,
-            layout.panel_width,
-            layout.panel_height,
-        ));
-        dialog.set_children(dialog_children);
-        nodes.push((PALETTE_DIALOG, dialog));
-        nodes.push((ROOT, root));
-
-        self.accessibility.focus_override = Some(PALETTE_INPUT);
-        SemanticSnapshot {
-            nodes,
-            focus: PALETTE_INPUT,
-        }
-    }
-
-    fn domain_picker_accessibility_snapshot(
-        &mut self,
-        window_width: f32,
-        window_height: f32,
-    ) -> SemanticSnapshot {
-        let mut info = self.domain_picker.build_info();
-        let mut layout = self.domain_picker_accessibility_layout(&info);
-        self.domain_picker.set_max_visible(layout.rows_that_fit);
-        info = self.domain_picker.build_info();
-        layout = self.domain_picker_accessibility_layout(&info);
-
-        let registered = self.domain_picker.command_ids().collect::<HashSet<_>>();
-        self.accessibility.retain_domain_commands(&registered);
-        let visible_entries = info
-            .entries
-            .iter()
-            .take(layout.visible_count)
-            .cloned()
+            .map(|entry| self.palette_entry_actionable(modal, &entry.id))
             .collect::<Vec<_>>();
-        let entry_nodes = visible_entries
-            .iter()
-            .map(|entry| self.accessibility.domain_node(&entry.id))
-            .collect::<Vec<_>>();
-        let selected_action = visible_entries
+        let selected_action = entry_nodes
             .get(info.selected)
-            .filter(|entry| self.domain_picker.is_actionable(&entry.id))
-            .and_then(|_| entry_nodes.get(info.selected))
+            .filter(|_| actionable[info.selected])
             .copied();
-        let has_actions = visible_entries
-            .iter()
-            .any(|entry| self.domain_picker.is_actionable(&entry.id));
 
         let mut nodes = Vec::with_capacity(entry_nodes.len() + 5);
         let mut root = Node::new(Role::Window);
         root.set_label("Termeric terminal emulator");
         root.set_bounds(rect(0.0, 0.0, window_width, window_height));
-        root.set_children([DOMAIN_DIALOG]);
+        root.set_children([ids.dialog]);
 
-        let input_x = layout.panel_x + layout.padding;
-        let input_y = layout.panel_y + layout.padding;
-        let input_width = layout.panel_width - layout.padding * 2.0;
         let mut input = Node::new(Role::SearchInput);
-        input.set_label("Search live-domain hosts or domains");
+        input.set_label(words.input);
         input.set_placeholder(info.placeholder.clone());
         input.set_value(info.input.clone());
         input.set_character_lengths(
@@ -3980,17 +3750,22 @@ impl App {
             .map(Iterator::count)
             .unwrap_or_else(|| info.input.chars().count());
         let position = TextPosition {
-            node: DOMAIN_INPUT,
+            node: ids.input,
             character_index: cursor,
         };
         input.set_text_selection(TextSelection {
             anchor: position,
             focus: position,
         });
-        input.set_bounds(rect(input_x, input_y, input_width, layout.input_height));
-        input.set_controls([DOMAIN_LIST]);
+        input.set_bounds(rect(
+            layout.panel_x + layout.padding,
+            layout.panel_y + layout.padding,
+            layout.panel_width - layout.padding * 2.0,
+            layout.input_height,
+        ));
+        input.set_controls([ids.list]);
         input.add_action(Action::Focus);
-        if self.domain_picker.can_filter() {
+        if editable {
             input.add_action(Action::SetValue);
         } else {
             input.set_read_only();
@@ -3998,21 +3773,32 @@ impl App {
         if let Some(selected) = selected_action {
             input.set_active_descendant(selected);
         }
-        nodes.push((DOMAIN_INPUT, input));
+        nodes.push((ids.input, input));
 
-        for (row, (entry, node_id)) in visible_entries
+        for (row, ((entry, node_id), actionable)) in visible_entries
             .iter()
             .zip(entry_nodes.iter().copied())
+            .zip(actionable.iter().copied())
             .enumerate()
         {
-            let actionable = self.domain_picker.is_actionable(&entry.id);
             let mut node = Node::new(if actionable {
                 Role::ListBoxOption
             } else {
                 Role::Status
             });
             node.set_label(entry.title.clone());
-            node.set_description(entry.category.clone());
+            node.set_description(if modal == PaletteModal::Commands {
+                let mut description = format!("{} {}", entry.category, info.item_noun);
+                if entry.destructive {
+                    description.push_str(", destructive");
+                }
+                description
+            } else {
+                entry.category.clone()
+            });
+            if let Some(shortcut) = &entry.shortcut {
+                node.set_keyboard_shortcut(shortcut.clone());
+            }
             node.set_bounds(rect(
                 layout.panel_x + layout.padding * 0.5,
                 layout.list_y + row as f32 * layout.row_height,
@@ -4029,12 +3815,12 @@ impl App {
             nodes.push((node_id, node));
         }
 
-        let mut list = Node::new(if has_actions {
+        let mut list = Node::new(if actionable.contains(&true) {
             Role::ListBox
         } else {
             Role::List
         });
-        list.set_label(format!("Live-domain {} results", info.item_noun));
+        list.set_label(words.list);
         list.set_orientation(accesskit::Orientation::Vertical);
         list.set_bounds(rect(
             layout.panel_x + layout.padding * 0.5,
@@ -4046,25 +3832,21 @@ impl App {
             list.set_active_descendant(selected);
         }
         list.set_children(entry_nodes);
-        nodes.push((DOMAIN_LIST, list));
+        nodes.push((ids.list, list));
 
-        let mut dialog_children = vec![DOMAIN_INPUT, DOMAIN_LIST];
+        let mut dialog_children = vec![ids.input, ids.list];
         if visible_entries.is_empty() {
             let mut empty = Node::new(Role::Status);
-            empty.set_label("No matching live-domain results");
+            empty.set_label(words.empty);
             empty.set_live(Live::Polite);
-            nodes.push((DOMAIN_EMPTY, empty));
-            dialog_children.push(DOMAIN_EMPTY);
+            nodes.push((ids.empty, empty));
+            dialog_children.push(ids.empty);
         }
         let mut dialog = Node::new(Role::Dialog);
-        dialog.set_label("Attach live domain");
-        dialog.set_description(if self.domain_picker.is_busy() {
-            "Waiting for authoritative domain state; Escape returns to hosts"
-        } else if !self.domain_picker.can_filter() {
-            "Domain discovery status; Escape returns to hosts"
-        } else {
-            "Choose a local or saved SSH host, then choose a live domain"
-        });
+        dialog.set_label(words.dialog);
+        if let Some(description) = words.description {
+            dialog.set_description(description);
+        }
         dialog.set_modal();
         dialog.set_bounds(rect(
             layout.panel_x,
@@ -4073,145 +3855,60 @@ impl App {
             layout.panel_height,
         ));
         dialog.set_children(dialog_children);
-        nodes.push((DOMAIN_DIALOG, dialog));
+        nodes.push((ids.dialog, dialog));
         nodes.push((ROOT, root));
 
-        self.accessibility.focus_override = Some(DOMAIN_INPUT);
+        self.accessibility.focus_override = Some(ids.input);
         SemanticSnapshot {
             nodes,
-            focus: DOMAIN_INPUT,
+            focus: ids.input,
         }
     }
 
-    fn unicode_picker_accessibility_snapshot(
-        &mut self,
-        window_width: f32,
-        window_height: f32,
-    ) -> SemanticSnapshot {
-        let mut info = self.unicode_picker.build_info();
-        let mut layout = self.unicode_picker_accessibility_layout(&info);
-        self.unicode_picker.set_max_visible(layout.rows_that_fit);
-        info = self.unicode_picker.build_info();
-        layout = self.unicode_picker_accessibility_layout(&info);
+    /// Whether choosing an entry does anything. Only a live-domain picker
+    /// lists status lines among its choices.
+    fn palette_entry_actionable(&self, modal: PaletteModal, command: &str) -> bool {
+        modal != PaletteModal::Domains || self.domain_picker.is_actionable(command)
+    }
 
-        let registered = self.unicode_picker.command_ids().collect::<HashSet<_>>();
-        self.accessibility.retain_unicode_commands(&registered);
-        let visible_entries = info
-            .entries
-            .iter()
-            .take(layout.visible_count)
-            .cloned()
-            .collect::<Vec<_>>();
-        let entry_nodes = visible_entries
-            .iter()
-            .map(|entry| self.accessibility.unicode_node(&entry.id))
-            .collect::<Vec<_>>();
-
-        let mut nodes = Vec::with_capacity(entry_nodes.len() + 5);
-        let mut root = Node::new(Role::Window);
-        root.set_label("Termeric terminal emulator");
-        root.set_bounds(rect(0.0, 0.0, window_width, window_height));
-        root.set_children([UNICODE_DIALOG]);
-
-        let input_x = layout.panel_x + layout.padding;
-        let input_y = layout.panel_y + layout.padding;
-        let input_width = layout.panel_width - layout.padding * 2.0;
-        let mut input = Node::new(Role::SearchInput);
-        input.set_label("Search Unicode characters or enter a code point");
-        input.set_placeholder(info.placeholder.clone());
-        input.set_value(info.input.clone());
-        input.set_character_lengths(
-            info.input
-                .chars()
-                .map(|character| character.len_utf8() as u8)
-                .collect::<Vec<_>>(),
-        );
-        let cursor = info
-            .input
-            .get(..info.cursor)
-            .map(str::chars)
-            .map(Iterator::count)
-            .unwrap_or_else(|| info.input.chars().count());
-        let position = TextPosition {
-            node: UNICODE_INPUT,
-            character_index: cursor,
-        };
-        input.set_text_selection(TextSelection {
-            anchor: position,
-            focus: position,
-        });
-        input.set_bounds(rect(input_x, input_y, input_width, layout.input_height));
-        input.set_controls([UNICODE_LIST]);
-        input.add_action(Action::Focus);
-        input.add_action(Action::SetValue);
-        if let Some(selected) = entry_nodes.get(info.selected).copied() {
-            input.set_active_descendant(selected);
-        }
-        nodes.push((UNICODE_INPUT, input));
-
-        for (row, (entry, node_id)) in visible_entries
-            .iter()
-            .zip(entry_nodes.iter().copied())
-            .enumerate()
-        {
-            let mut node = Node::new(Role::ListBoxOption);
-            node.set_label(entry.title.clone());
-            node.set_description(entry.category.clone());
-            node.set_selected(row == info.selected);
-            node.add_action(Action::Click);
-            node.add_action(Action::Focus);
-            node.set_bounds(rect(
-                layout.panel_x + layout.padding * 0.5,
-                layout.list_y + row as f32 * layout.row_height,
-                layout.panel_width - layout.padding,
-                layout.row_height,
-            ));
-            nodes.push((node_id, node));
-        }
-
-        let mut list = Node::new(Role::ListBox);
-        list.set_label("Unicode character results");
-        list.set_orientation(accesskit::Orientation::Vertical);
-        list.set_bounds(rect(
-            layout.panel_x + layout.padding * 0.5,
-            layout.list_y,
-            layout.panel_width - layout.padding,
-            layout.list_height,
-        ));
-        if let Some(selected) = entry_nodes.get(info.selected).copied() {
-            list.set_active_descendant(selected);
-        }
-        list.set_children(entry_nodes);
-        nodes.push((UNICODE_LIST, list));
-
-        let mut dialog_children = vec![UNICODE_INPUT, UNICODE_LIST];
-        if visible_entries.is_empty() {
-            let mut empty = Node::new(Role::Status);
-            empty.set_label(info.status.unwrap_or("No matching Unicode character"));
-            empty.set_live(Live::Polite);
-            nodes.push((UNICODE_EMPTY, empty));
-            dialog_children.push(UNICODE_EMPTY);
-        }
-        let mut dialog = Node::new(Role::Dialog);
-        dialog.set_label("Unicode character picker");
-        dialog.set_description(
-            "Search common characters or enter U+ followed by a non-control Unicode scalar",
-        );
-        dialog.set_modal();
-        dialog.set_bounds(rect(
-            layout.panel_x,
-            layout.panel_y,
-            layout.panel_width,
-            layout.panel_height,
-        ));
-        dialog.set_children(dialog_children);
-        nodes.push((UNICODE_DIALOG, dialog));
-        nodes.push((ROOT, root));
-
-        self.accessibility.focus_override = Some(UNICODE_INPUT);
-        SemanticSnapshot {
-            nodes,
-            focus: UNICODE_INPUT,
+    fn palette_modal_wording(
+        &self,
+        modal: PaletteModal,
+        info: &crate::ui::command_palette::PaletteInfo,
+    ) -> PaletteWording {
+        match modal {
+            PaletteModal::Commands => PaletteWording {
+                dialog: info.dialog_label.to_owned(),
+                description: None,
+                input: "Search commands",
+                list: format!("{} results", info.item_noun),
+                empty: format!("No matching {}s", info.item_noun),
+            },
+            PaletteModal::Domains => PaletteWording {
+                dialog: "Attach live domain".into(),
+                description: Some(if self.domain_picker.is_busy() {
+                    "Waiting for authoritative domain state; Escape returns to hosts"
+                } else if !self.domain_picker.can_filter() {
+                    "Domain discovery status; Escape returns to hosts"
+                } else {
+                    "Choose a local or saved SSH host, then choose a live domain"
+                }),
+                input: "Search live-domain hosts or domains",
+                list: format!("Live-domain {} results", info.item_noun),
+                empty: "No matching live-domain results".into(),
+            },
+            PaletteModal::Unicode => PaletteWording {
+                dialog: "Unicode character picker".into(),
+                description: Some(
+                    "Search common characters or enter U+ followed by a non-control Unicode scalar",
+                ),
+                input: "Search Unicode characters or enter a code point",
+                list: "Unicode character results".into(),
+                empty: info
+                    .status
+                    .unwrap_or("No matching Unicode character")
+                    .into(),
+            },
         }
     }
 
@@ -6461,6 +6158,46 @@ fn workspace_menu_row(node: NodeId) -> Option<usize> {
         .map(|row| row as usize)
 }
 
+/// The fixed nodes of a palette-style modal's dialog.
+struct PaletteNodeIds {
+    dialog: NodeId,
+    input: NodeId,
+    list: NodeId,
+    empty: NodeId,
+}
+
+fn palette_modal_node_ids(modal: PaletteModal) -> PaletteNodeIds {
+    match modal {
+        PaletteModal::Commands => PaletteNodeIds {
+            dialog: PALETTE_DIALOG,
+            input: PALETTE_INPUT,
+            list: PALETTE_LIST,
+            empty: PALETTE_EMPTY,
+        },
+        PaletteModal::Domains => PaletteNodeIds {
+            dialog: DOMAIN_DIALOG,
+            input: DOMAIN_INPUT,
+            list: DOMAIN_LIST,
+            empty: DOMAIN_EMPTY,
+        },
+        PaletteModal::Unicode => PaletteNodeIds {
+            dialog: UNICODE_DIALOG,
+            input: UNICODE_INPUT,
+            list: UNICODE_LIST,
+            empty: UNICODE_EMPTY,
+        },
+    }
+}
+
+/// What assistive technology hears a palette-style modal called.
+struct PaletteWording {
+    dialog: String,
+    description: Option<&'static str>,
+    input: &'static str,
+    list: String,
+    empty: String,
+}
+
 fn bounds_rect(bounds: Bounds) -> Rect {
     rect(bounds.x, bounds.y, bounds.width, bounds.height)
 }
@@ -7511,7 +7248,8 @@ mod tests {
         let mut app = App::new_headless(Config::default()).unwrap();
         app.command_palette.open();
         for character in "toggle fullscreen".chars() {
-            app.command_palette.handle_char(character);
+            app.command_palette
+                .insert_query_text(character.encode_utf8(&mut [0; 4]));
         }
         let first = app.accessibility_snapshot();
         let command_node = *app
@@ -7532,7 +7270,8 @@ mod tests {
 
         app.command_palette.open();
         for character in "toggle fullscreen".chars() {
-            app.command_palette.handle_char(character);
+            app.command_palette
+                .insert_query_text(character.encode_utf8(&mut [0; 4]));
         }
         let second = app.accessibility_snapshot();
         assert!(second.nodes.iter().any(|(id, _)| *id == command_node));
@@ -9628,7 +9367,7 @@ mod tests {
         let mut app = App::new_headless(domain_picker_config(20)).unwrap();
         app.domain_picker.open(&app.config.domains);
         let preview = app.domain_picker.build_info();
-        let layout = app.domain_picker_accessibility_layout(&preview);
+        let layout = app.command_palette_accessibility_layout(&preview);
         let snapshot = app.accessibility_snapshot();
         let node = |id| {
             &snapshot
@@ -9741,7 +9480,7 @@ mod tests {
         let mut app = App::new_headless(Config::default()).unwrap();
         app.unicode_picker.open();
         let preview = app.unicode_picker.build_info();
-        let layout = app.unicode_picker_accessibility_layout(&preview);
+        let layout = app.command_palette_accessibility_layout(&preview);
         let snapshot = app.accessibility_snapshot();
         let node = |id| {
             &snapshot
@@ -9836,11 +9575,11 @@ mod tests {
             let mut app = App::new_headless(Config::default()).unwrap();
             if unicode {
                 app.unicode_picker.open();
-                app.unicode_picker.accessibility_set_filter("a界e\u{301}z");
-                app.unicode_picker.edit_input(TextInputEdit::Home);
-                app.unicode_picker.edit_input(TextInputEdit::Right);
-                app.unicode_picker.edit_input(TextInputEdit::Right);
-                app.unicode_picker.edit_input(TextInputEdit::Right);
+                app.unicode_picker.set_query("a界e\u{301}z");
+                app.unicode_picker.edit_query(TextInputEdit::Home);
+                app.unicode_picker.edit_query(TextInputEdit::Right);
+                app.unicode_picker.edit_query(TextInputEdit::Right);
+                app.unicode_picker.edit_query(TextInputEdit::Right);
             } else {
                 app.command_palette.open();
                 app.command_palette.accessibility_set_input("a界e\u{301}z");
@@ -9914,10 +9653,7 @@ mod tests {
     fn cldr_emoji_results_expose_exact_sequence_names_and_retire_stale_nodes() {
         let mut app = App::new_headless(Config::default()).unwrap();
         app.unicode_picker.open();
-        assert!(
-            app.unicode_picker
-                .accessibility_set_filter("flag united states")
-        );
+        assert!(app.unicode_picker.set_query("flag united states"));
         app.unicode_picker.finish_search_for_test();
         let snapshot = app.accessibility_snapshot();
         let command = "unicode-picker.cldr.1f1fa-1f1f8";
@@ -9935,7 +9671,7 @@ mod tests {
             description.contains("CLDR 48.0.0 en") && description.contains("U+1F1FA U+1F1F8")
         }));
 
-        assert!(app.unicode_picker.accessibility_set_filter("party pinata"));
+        assert!(app.unicode_picker.set_query("party pinata"));
         app.unicode_picker.finish_search_for_test();
         app.accessibility_snapshot();
         assert!(!app.accessibility.unicode_nodes.contains_key(command));

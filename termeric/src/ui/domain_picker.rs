@@ -4,7 +4,7 @@ use crate::config::DomainsConfig;
 use crate::domain::model::DomainSummary;
 use crate::domain::{DomainAuthority, DomainTarget};
 use crate::ui::command_palette::palette::{CommandSource, RegisteredCommand};
-use crate::ui::command_palette::{CommandPalette, PaletteInfo, PaletteLayout, PaletteResult};
+use crate::ui::command_palette::{CommandPalette, PaletteLayout, PaletteOwner, PaletteResult};
 use std::collections::HashSet;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -139,30 +139,6 @@ impl DomainPicker {
         }
     }
 
-    pub fn is_active(&self) -> bool {
-        self.palette.is_active()
-    }
-
-    pub fn update_animation(&mut self) -> bool {
-        self.palette.update_animation()
-    }
-
-    pub fn set_reduced_motion(&mut self, reduced_motion: bool) {
-        self.palette.set_reduced_motion(reduced_motion);
-    }
-
-    pub fn build_info(&self) -> PaletteInfo {
-        self.palette.build_info()
-    }
-
-    pub fn command_ids(&self) -> impl Iterator<Item = &str> {
-        self.palette.command_ids()
-    }
-
-    pub fn set_max_visible(&mut self, max_visible: usize) {
-        self.palette.set_max_visible(max_visible);
-    }
-
     pub fn can_filter(&self) -> bool {
         matches!(
             self.stage,
@@ -181,55 +157,9 @@ impl DomainPicker {
         self.actions.iter().any(|(entry_id, _)| entry_id == id)
     }
 
-    pub fn select_command(&mut self, id: &str) -> bool {
-        self.palette.select_command(id)
-    }
-
     pub fn execute_command(&mut self, id: &str) -> Option<DomainPickerCommand> {
         let result = self.palette.execute_command(id)?;
         self.resolve_palette_result(result)
-    }
-
-    pub fn accessibility_set_filter(&mut self, value: &str) -> bool {
-        self.can_filter() && self.palette.accessibility_set_input(value)
-    }
-
-    pub fn select_prev(&mut self) {
-        self.palette.select_prev();
-    }
-
-    pub fn select_next(&mut self) {
-        self.palette.select_next();
-    }
-
-    pub fn scroll_up(&mut self, amount: usize) {
-        self.palette.scroll_up(amount);
-    }
-
-    pub fn scroll_down(&mut self, amount: usize) {
-        self.palette.scroll_down(amount);
-    }
-
-    pub fn handle_backspace(&mut self) {
-        if self.can_filter() {
-            self.palette.handle_backspace();
-        }
-    }
-
-    pub fn edit_input(&mut self, edit: crate::ui::text_input::TextInputEdit) {
-        if self.is_active() && self.can_filter() {
-            self.palette.edit_input(edit);
-        }
-    }
-
-    pub fn handle_char(&mut self, character: char) {
-        if self.can_filter() {
-            self.palette.handle_char(character);
-        }
-    }
-
-    pub fn insert_query_text(&mut self, text: &str) -> bool {
-        self.is_active() && self.can_filter() && self.palette.insert_query_text(text)
     }
 
     pub fn activate(&mut self) -> Option<DomainPickerCommand> {
@@ -501,6 +431,20 @@ impl DomainPicker {
     }
 }
 
+impl PaletteOwner for DomainPicker {
+    fn palette(&self) -> &CommandPalette {
+        &self.palette
+    }
+
+    fn palette_mut(&mut self) -> &mut CommandPalette {
+        &mut self.palette
+    }
+
+    fn query_editable(&self) -> bool {
+        self.can_filter()
+    }
+}
+
 fn command(id: String, title: String, category: String) -> RegisteredCommand {
     RegisteredCommand {
         id,
@@ -559,7 +503,7 @@ mod tests {
         let mut picker = DomainPicker::new();
         picker.open(&config);
         assert_eq!(picker.build_info().total_count, 2);
-        picker.select_next();
+        picker.palette_mut().select_next();
         let Some(DomainPickerCommand::Discover {
             generation,
             authority,
@@ -710,7 +654,7 @@ mod tests {
         let mut picker = DomainPicker::new();
         picker.open(&config);
         assert_eq!(
-            picker.command_ids().collect::<Vec<_>>(),
+            picker.palette().command_ids().collect::<Vec<_>>(),
             [
                 "domain-picker.authority.local",
                 "domain-picker.authority.ssh.build",
@@ -719,7 +663,11 @@ mod tests {
         );
 
         // Select local by identity, not by its sorted display row.
-        assert!(picker.select_command("domain-picker.authority.local"));
+        assert!(
+            picker
+                .palette_mut()
+                .select_command("domain-picker.authority.local")
+        );
         let Some(DomainPickerCommand::Discover { generation, .. }) = picker.activate() else {
             panic!("expected local discovery");
         };
@@ -731,7 +679,7 @@ mod tests {
                 summary("domain-a", "Duplicate must be ignored"),
             ])
         ));
-        let ids = picker.command_ids().collect::<Vec<_>>();
+        let ids = picker.palette().command_ids().collect::<Vec<_>>();
         assert_eq!(
             ids,
             [
@@ -745,7 +693,7 @@ mod tests {
     fn pending_stages_reject_filter_mutation() {
         let mut picker = DomainPicker::new();
         picker.open(&DomainsConfig::default());
-        assert!(picker.accessibility_set_filter("local"));
+        assert!(picker.set_query("local"));
         let info = picker.build_info();
         let layout = PaletteLayout::calculate(800.0, 600.0, 10.0, 20.0, 1.0, info.entries.len());
         let view = layout.input_viewport(&info.input, info.cursor).unwrap();
@@ -769,9 +717,9 @@ mod tests {
         );
         assert_eq!(picker.build_info().cursor, before_cursor);
         let before = picker.build_info().input;
-        picker.handle_char('x');
-        picker.handle_backspace();
-        assert!(!picker.accessibility_set_filter("changed"));
+        picker.insert_query_text('x'.encode_utf8(&mut [0; 4]));
+        picker.edit_query(crate::ui::text_input::TextInputEdit::Backspace);
+        assert!(!picker.set_query("changed"));
         assert_eq!(picker.build_info().input, before);
     }
 }

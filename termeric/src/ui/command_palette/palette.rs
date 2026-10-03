@@ -518,16 +518,6 @@ impl CommandPalette {
         true
     }
 
-    /// Handle a character input
-    pub fn handle_char(&mut self, c: char) -> bool {
-        self.insert_query_text(c.encode_utf8(&mut [0; 4]))
-    }
-
-    /// Handle backspace
-    pub fn handle_backspace(&mut self) {
-        self.edit_input(TextInputEdit::Backspace);
-    }
-
     /// Cursor-only edits preserve both filtered results and row selection.
     pub fn edit_input(&mut self, edit: TextInputEdit) -> bool {
         if self.input.edit_grapheme(edit) {
@@ -1447,7 +1437,7 @@ mod tests {
             before.entries.iter().map(|e| &e.id).collect::<Vec<_>>()
         );
         assert!(palette.is_active());
-        palette.handle_char('界');
+        palette.insert_query_text("界");
         assert_eq!(palette.build_info().input, "t界ab");
     }
 
@@ -1486,12 +1476,12 @@ mod tests {
         let mut palette = CommandPalette::new();
         palette.open();
         for _ in 0..256 {
-            assert!(palette.handle_char('界'));
+            assert!(palette.insert_query_text("界"));
         }
         let full = palette.build_info();
-        assert!(!palette.handle_char('x'));
-        assert!(!palette.handle_char('\n'));
-        assert!(!palette.handle_char('\u{1b}'));
+        assert!(!palette.insert_query_text("x"));
+        assert!(!palette.insert_query_text("\n"));
+        assert!(!palette.insert_query_text("\u{1b}"));
         assert!(!palette.accessibility_set_input(&(full.input.clone() + "x")));
         assert!(!palette.accessibility_set_input("bad\nquery"));
         for character in ['\u{2028}', '\u{2029}'] {
@@ -1500,13 +1490,13 @@ mod tests {
         }
         assert_eq!(palette.build_info().input, full.input);
         assert_eq!(palette.build_info().cursor, full.cursor);
-        palette.handle_backspace();
-        assert!(palette.handle_char('🫚'));
+        palette.edit_input(TextInputEdit::Backspace);
+        assert!(palette.insert_query_text("🫚"));
         assert_eq!(palette.build_info().input.chars().count(), 256);
         assert!(palette.accessibility_set_input(&full.input));
         palette.accessibility_set_input("");
-        assert!(!palette.handle_char('\u{2028}'));
-        assert!(!palette.handle_char('\u{2029}'));
+        assert!(!palette.insert_query_text("\u{2028}"));
+        assert!(!palette.insert_query_text("\u{2029}"));
         assert_eq!(palette.build_info().input, "");
     }
 
@@ -1716,9 +1706,9 @@ mod tests {
     fn test_fuzzy_search_filters() {
         let mut palette = test_palette();
         palette.open();
-        palette.handle_char('t');
-        palette.handle_char('a');
-        palette.handle_char('b');
+        palette.insert_query_text("t");
+        palette.insert_query_text("a");
+        palette.insert_query_text("b");
         // Should match "New Tab", "Close Tab", etc.
         assert!(palette.entry_count() > 0);
         assert!(palette.entry_count() < palette.registry.len());
@@ -1728,9 +1718,9 @@ mod tests {
     fn test_prefix_match_scores_highest() {
         let mut palette = test_palette();
         palette.open();
-        palette.handle_char('N');
-        palette.handle_char('e');
-        palette.handle_char('w');
+        palette.insert_query_text("N");
+        palette.insert_query_text("e");
+        palette.insert_query_text("w");
         // "New Tab" should be first
         let info = palette.build_info();
         assert!(info.entries[0].title.starts_with("New"));
@@ -1755,12 +1745,12 @@ mod tests {
         let mut palette = test_palette();
         palette.open();
         let initial_count = palette.entry_count();
-        palette.handle_char('x');
-        palette.handle_char('x');
+        palette.insert_query_text("x");
+        palette.insert_query_text("x");
         let filtered_count = palette.entry_count();
         assert!(filtered_count < initial_count);
-        palette.handle_backspace();
-        palette.handle_backspace();
+        palette.edit_input(TextInputEdit::Backspace);
+        palette.edit_input(TextInputEdit::Backspace);
         assert_eq!(palette.entry_count(), initial_count);
     }
 
@@ -1780,11 +1770,11 @@ mod tests {
         // Execute "About Termeric" first
         palette.open();
         // Find "About" and select it
-        palette.handle_char('A');
-        palette.handle_char('b');
-        palette.handle_char('o');
-        palette.handle_char('u');
-        palette.handle_char('t');
+        palette.insert_query_text("A");
+        palette.insert_query_text("b");
+        palette.insert_query_text("o");
+        palette.insert_query_text("u");
+        palette.insert_query_text("t");
         let _ = palette.execute();
 
         // Reopen — "About Termeric" should be first when no query
@@ -1807,9 +1797,9 @@ mod tests {
         }];
         palette.register_commands(plugin_cmds);
         palette.open();
-        palette.handle_char('c');
-        palette.handle_char('l');
-        palette.handle_char('a');
+        palette.insert_query_text("c");
+        palette.insert_query_text("l");
+        palette.insert_query_text("a");
         // Should find claude command
         let info = palette.build_info();
         assert!(info.entries.iter().any(|e| e.title.contains("Claude")));
@@ -1864,9 +1854,9 @@ mod tests {
             destructive: false,
         }]);
         palette.open();
-        palette.handle_char('d');
-        palette.handle_char('e');
-        palette.handle_char('v');
+        palette.insert_query_text("d");
+        palette.insert_query_text("e");
+        palette.insert_query_text("v");
         assert!(matches!(
             palette.execute(),
             PaletteResult::RunAction(id) if id == "profile.open.dev"
@@ -1918,12 +1908,12 @@ mod tests {
     fn test_category_search() {
         let mut palette = test_palette();
         palette.open();
-        palette.handle_char('C');
-        palette.handle_char('o');
-        palette.handle_char('n');
-        palette.handle_char('f');
-        palette.handle_char('i');
-        palette.handle_char('g');
+        palette.insert_query_text("C");
+        palette.insert_query_text("o");
+        palette.insert_query_text("n");
+        palette.insert_query_text("f");
+        palette.insert_query_text("i");
+        palette.insert_query_text("g");
         // Should find Config category commands
         let info = palette.build_info();
         assert!(info.entries.iter().any(|e| e.category == "Config"));
@@ -1934,12 +1924,12 @@ mod tests {
         let mut palette = test_palette();
         palette.open();
         // Search by shortcut text
-        palette.handle_char('C');
-        palette.handle_char('t');
-        palette.handle_char('r');
-        palette.handle_char('l');
-        palette.handle_char('+');
-        palette.handle_char('T');
+        palette.insert_query_text("C");
+        palette.insert_query_text("t");
+        palette.insert_query_text("r");
+        palette.insert_query_text("l");
+        palette.insert_query_text("+");
+        palette.insert_query_text("T");
         // Should find commands with Ctrl+T in shortcut
         assert!(palette.entry_count() > 0);
     }

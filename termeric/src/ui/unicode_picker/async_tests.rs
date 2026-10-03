@@ -31,19 +31,19 @@ fn poll_until(picker: &mut UnicodePicker, condition: impl Fn(&UnicodePicker) -> 
 fn cursor_and_noop_edits_preserve_pending_generation_but_delete_replaces_query() {
     use crate::ui::text_input::TextInputEdit;
     let (mut picker, observed, release) = controlled_picker();
-    picker.accessibility_set_filter("snowman");
+    picker.set_query("snowman");
     observed.recv_timeout(Duration::from_secs(5)).unwrap();
     let generation = picker.generation;
-    picker.edit_input(TextInputEdit::Home);
-    picker.handle_backspace();
-    picker.edit_input(TextInputEdit::End);
-    picker.edit_input(TextInputEdit::Delete);
-    picker.edit_input(TextInputEdit::Left);
-    picker.edit_input(TextInputEdit::Right);
-    picker.edit_input(TextInputEdit::WordLeft);
-    picker.edit_input(TextInputEdit::BackspaceWord);
-    picker.edit_input(TextInputEdit::WordRight);
-    picker.edit_input(TextInputEdit::DeleteWord);
+    picker.edit_query(TextInputEdit::Home);
+    picker.edit_query(crate::ui::text_input::TextInputEdit::Backspace);
+    picker.edit_query(TextInputEdit::End);
+    picker.edit_query(TextInputEdit::Delete);
+    picker.edit_query(TextInputEdit::Left);
+    picker.edit_query(TextInputEdit::Right);
+    picker.edit_query(TextInputEdit::WordLeft);
+    picker.edit_query(TextInputEdit::BackspaceWord);
+    picker.edit_query(TextInputEdit::WordRight);
+    picker.edit_query(TextInputEdit::DeleteWord);
     let info = picker.build_info();
     let layout = PaletteLayout::calculate(800.0, 600.0, 10.0, 20.0, 1.0, info.entries.len());
     let view = layout.input_viewport(&info.input, info.cursor).unwrap();
@@ -58,14 +58,14 @@ fn cursor_and_noop_edits_preserve_pending_generation_but_delete_replaces_query()
     release.send(()).unwrap();
     picker.finish_search_for_test();
     let ids: Vec<_> = picker.actions.iter().map(|a| a.id.clone()).collect();
-    picker.edit_input(TextInputEdit::Home);
+    picker.edit_query(TextInputEdit::Home);
     assert!(
         picker
             .handle_click(view.text_x + 30.0, view.text_y, &layout)
             .is_none()
     );
     assert_eq!(picker.build_info().cursor, 3);
-    picker.edit_input(TextInputEdit::Home);
+    picker.edit_query(TextInputEdit::Home);
     assert_eq!(
         picker
             .actions
@@ -75,7 +75,7 @@ fn cursor_and_noop_edits_preserve_pending_generation_but_delete_replaces_query()
         ids
     );
     assert!(!picker.search_pending());
-    picker.edit_input(TextInputEdit::Delete);
+    picker.edit_query(TextInputEdit::Delete);
     assert!(picker.actions.is_empty());
     assert_ne!(picker.generation, generation);
     assert_eq!(
@@ -85,8 +85,8 @@ fn cursor_and_noop_edits_preserve_pending_generation_but_delete_replaces_query()
     release.send(()).unwrap();
     picker.finish_search_for_test();
     let generation = picker.generation;
-    picker.edit_input(TextInputEdit::WordRight);
-    picker.edit_input(TextInputEdit::BackspaceWord);
+    picker.edit_query(TextInputEdit::WordRight);
+    picker.edit_query(TextInputEdit::BackspaceWord);
     assert_eq!(picker.build_info().input, "");
     assert_ne!(picker.generation, generation);
     assert!(!picker.search_pending());
@@ -98,14 +98,14 @@ fn cursor_and_noop_edits_preserve_pending_generation_but_delete_replaces_query()
 fn blocked_search_coalesces_edits_and_retires_actions_without_waiting() {
     let (mut picker, observed, release) = controlled_picker();
     let stale = picker.actions[0].id.clone();
-    assert!(picker.accessibility_set_filter("snowman"));
+    assert!(picker.set_query("snowman"));
     assert_eq!(
         observed.recv_timeout(Duration::from_secs(5)).unwrap(),
         "snowman"
     );
     // The worker cannot finish until released below. These calls must return.
-    assert!(picker.accessibility_set_filter("umbrella"));
-    assert!(picker.accessibility_set_filter("woman judge"));
+    assert!(picker.set_query("umbrella"));
+    assert!(picker.set_query("woman judge"));
     assert!(picker.actions.is_empty());
     assert!(picker.build_info().entries.is_empty());
     assert_eq!(picker.build_info().status, Some("Searching characters…"));
@@ -133,9 +133,9 @@ fn blocked_search_coalesces_edits_and_retires_actions_without_waiting() {
 fn exact_and_empty_queries_remain_immediate_during_a_blocked_scan() {
     for replacement in ["U+2603", ""] {
         let (mut picker, observed, release) = controlled_picker();
-        picker.accessibility_set_filter("woman judge");
+        picker.set_query("woman judge");
         observed.recv_timeout(Duration::from_secs(5)).unwrap();
-        picker.accessibility_set_filter(replacement);
+        picker.set_query(replacement);
         let expected: Vec<_> = picker.actions.iter().map(|a| a.id.clone()).collect();
         assert!(!expected.is_empty());
         assert_eq!(picker.build_info().status, None);
@@ -156,15 +156,15 @@ fn exact_and_empty_queries_remain_immediate_during_a_blocked_scan() {
 #[test]
 fn close_reopen_reuses_inflight_worker_and_rejects_old_generation() {
     let (mut picker, observed, release) = controlled_picker();
-    picker.accessibility_set_filter("snowman");
+    picker.set_query("snowman");
     observed.recv_timeout(Duration::from_secs(5)).unwrap();
     picker.close();
-    picker.handle_char('x');
-    picker.handle_backspace();
-    assert!(!picker.accessibility_set_filter("umbrella"));
+    picker.insert_query_text('x'.encode_utf8(&mut [0; 4]));
+    picker.edit_query(crate::ui::text_input::TextInputEdit::Backspace);
+    assert!(!picker.set_query("umbrella"));
     assert!(picker.pending.is_none());
     picker.open();
-    picker.accessibility_set_filter("umbrella");
+    picker.set_query("umbrella");
     assert!(picker.pending.is_some());
     assert!(observed.try_recv().is_err());
     release.send(()).unwrap();
@@ -192,7 +192,7 @@ fn disconnected_worker_clears_polling_and_next_edit_retries() {
         requests,
         completions,
     });
-    picker.accessibility_set_filter("snowman");
+    picker.set_query("snowman");
     assert!(picker.search_pending());
     drop(output);
     drop(input);
@@ -203,7 +203,7 @@ fn disconnected_worker_clears_polling_and_next_edit_retries() {
         Some("Character search unavailable; edit to retry")
     );
     assert!(picker.actions.is_empty());
-    picker.accessibility_set_filter("umbrella");
+    picker.set_query("umbrella");
     picker.finish_search_for_test();
     assert!(!picker.actions.is_empty());
     assert_eq!(picker.build_info().status, None);
@@ -214,17 +214,17 @@ fn disconnected_worker_clears_polling_and_next_edit_retries() {
 #[test]
 fn unicode_query_limit_matches_keyboard_and_accessibility() {
     let (mut picker, observed, release) = controlled_picker();
-    picker.accessibility_set_filter("snowman");
+    picker.set_query("snowman");
     observed.recv_timeout(Duration::from_secs(5)).unwrap();
     let maximum = "🦀".repeat(256);
-    assert!(picker.accessibility_set_filter(&maximum));
-    picker.handle_char('a');
-    picker.handle_char('\n');
-    assert!(!picker.accessibility_set_filter(&(maximum.clone() + "a")));
-    assert!(!picker.accessibility_set_filter("bad\nquery"));
+    assert!(picker.set_query(&maximum));
+    picker.insert_query_text('a'.encode_utf8(&mut [0; 4]));
+    picker.insert_query_text('\n'.encode_utf8(&mut [0; 4]));
+    assert!(!picker.set_query(&(maximum.clone() + "a")));
+    assert!(!picker.set_query("bad\nquery"));
     assert_eq!(picker.build_info().input, maximum);
-    picker.handle_backspace();
-    picker.handle_char('b');
+    picker.edit_query(crate::ui::text_input::TextInputEdit::Backspace);
+    picker.insert_query_text('b'.encode_utf8(&mut [0; 4]));
     assert_eq!(picker.build_info().input.chars().count(), 256);
     assert!(picker.build_info().input.ends_with('b'));
     picker.close();

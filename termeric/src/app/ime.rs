@@ -87,11 +87,8 @@ impl App {
         {
             return false;
         }
-        if self.domain_picker.is_active() {
-            return self.domain_picker.can_filter();
-        }
-        if self.command_palette.is_active() || self.unicode_picker.is_active() {
-            return true;
+        if let Some(modal) = self.open_palette_modal() {
+            return self.palette_owner(modal).query_editable();
         }
         if self.shortcuts_panel.is_active() {
             return !self.shortcuts_panel.is_recording();
@@ -135,12 +132,8 @@ impl App {
         if self.info_overlay.input_focused() {
             let request_id = self.info_overlay.request_id();
             self.info_overlay.insert_input_text(request_id, text);
-        } else if self.domain_picker.is_active() {
-            self.domain_picker.insert_query_text(text);
-        } else if self.command_palette.is_active() {
-            self.command_palette.insert_query_text(text);
-        } else if self.unicode_picker.is_active() {
-            self.unicode_picker.insert_query_text(text);
+        } else if let Some(modal) = self.open_palette_modal() {
+            self.palette_owner_mut(modal).insert_query_text(text);
         } else if self.shortcuts_panel.is_active() {
             self.shortcuts_panel.insert_filter_text(text);
         } else if self.settings_panel.is_active() {
@@ -174,18 +167,11 @@ impl App {
         cell_width: f32,
         cell_height: f32,
     ) -> Option<crate::ui::command_palette::PaletteInputViewport> {
-        let info = if self.domain_picker.is_active() {
-            if !self.domain_picker.can_filter() {
-                return None;
-            }
-            self.domain_picker.build_info()
-        } else if self.command_palette.is_active() {
-            self.command_palette.build_info()
-        } else if self.unicode_picker.is_active() {
-            self.unicode_picker.build_info()
-        } else {
+        let owner = self.palette_owner(self.open_palette_modal()?);
+        if !owner.query_editable() {
             return None;
-        };
+        }
+        let info = owner.build_info();
         crate::ui::command_palette::PaletteLayout::calculate(
             width,
             height,
@@ -204,9 +190,7 @@ impl App {
             && self.agent_view_accepts_text()
             && self.accepts_ime_text()
             && !self.info_overlay.is_active()
-            && !self.domain_picker.is_active()
-            && !self.command_palette.is_active()
-            && !self.unicode_picker.is_active()
+            && self.open_palette_modal().is_none()
             && !self.shortcuts_panel.is_active()
             && !self.settings_panel.is_active()
             && !self.session_panel.is_open()
@@ -221,9 +205,7 @@ impl App {
         self.search.is_active()
             && self.accepts_ime_text()
             && !self.info_overlay.is_active()
-            && !self.domain_picker.is_active()
-            && !self.command_palette.is_active()
-            && !self.unicode_picker.is_active()
+            && self.open_palette_modal().is_none()
             && self.tab_rename.is_none()
             && !self.shortcuts_panel.is_active()
             && !self.settings_panel.is_active()
@@ -237,9 +219,7 @@ impl App {
             && self.commands_panel.is_editing()
             && self.accepts_ime_text()
             && !self.info_overlay.is_active()
-            && !self.domain_picker.is_active()
-            && !self.command_palette.is_active()
-            && !self.unicode_picker.is_active()
+            && self.open_palette_modal().is_none()
             && !self.shortcuts_panel.is_active()
             && !self.settings_panel.is_active()
             && !self.session_panel.is_open()
@@ -250,9 +230,7 @@ impl App {
             && !self.shortcuts_panel.is_recording()
             && self.accepts_ime_text()
             && !self.info_overlay.is_active()
-            && !self.domain_picker.is_active()
-            && !self.command_palette.is_active()
-            && !self.unicode_picker.is_active()
+            && self.open_palette_modal().is_none()
     }
 
     fn settings_owns_ime_text(&self) -> bool {
@@ -260,9 +238,7 @@ impl App {
             && !self.settings_panel.is_dropdown_open()
             && self.accepts_ime_text()
             && !self.info_overlay.is_active()
-            && !self.domain_picker.is_active()
-            && !self.command_palette.is_active()
-            && !self.unicode_picker.is_active()
+            && self.open_palette_modal().is_none()
             && !self.shortcuts_panel.is_active()
     }
 
@@ -286,9 +262,7 @@ impl App {
             && self.session_panel.is_renaming()
             && self.accepts_ime_text()
             && !self.info_overlay.is_active()
-            && !self.domain_picker.is_active()
-            && !self.command_palette.is_active()
-            && !self.unicode_picker.is_active()
+            && self.open_palette_modal().is_none()
             && !self.shortcuts_panel.is_active()
             && !self.settings_panel.is_active()
     }
@@ -412,9 +386,7 @@ impl App {
                 (row.x + row.width - x).max(layout.char_scale),
             );
         }
-        if self.domain_picker.is_active()
-            || self.command_palette.is_active()
-            || self.unicode_picker.is_active()
+        if self.open_palette_modal().is_some()
             || self.commands_owns_ime_text()
             || self.shortcuts_owns_ime_text()
             || self.settings_owns_ime_text()
@@ -985,7 +957,7 @@ mod tests {
             app.handle_ime_event(Ime::Commit(text));
             assert_eq!(app.domain_picker.build_info().input, "a界e\u{301}b");
         }
-        app.domain_picker.accessibility_set_filter("");
+        app.domain_picker.set_query("");
         let Some(DomainPickerCommand::Discover { generation, .. }) = app.domain_picker.activate()
         else {
             panic!("expected discovery");
@@ -1037,10 +1009,10 @@ mod tests {
         let mut app = App::new_headless(Config::default()).unwrap();
         app.command_palette.open();
         app.command_palette.accessibility_set_input("background");
-        app.domain_picker.set_reduced_motion(true);
+        app.domain_picker.palette_mut().set_reduced_motion(true);
         app.domain_picker.open(&app.config.domains);
         let query = "界e\u{301}👩\u{200d}💻".repeat(30);
-        assert!(app.domain_picker.accessibility_set_filter(&query));
+        assert!(app.domain_picker.set_query(&query));
         for (width, cell_width) in [(450.0, 8.0), (800.0, 10.0), (1400.0, 20.0)] {
             let info = app.domain_picker.build_info();
             let expected = crate::ui::command_palette::PaletteLayout::calculate(
@@ -1067,11 +1039,11 @@ mod tests {
         for unicode in [false, true] {
             let mut app = App::new_headless(Config::default()).unwrap();
             app.command_palette.set_reduced_motion(true);
-            app.unicode_picker.set_reduced_motion(true);
+            app.unicode_picker.palette_mut().set_reduced_motion(true);
             let query = "界e\u{301}👩\u{200d}💻".repeat(30);
             if unicode {
                 app.unicode_picker.open();
-                app.unicode_picker.accessibility_set_filter(&query);
+                app.unicode_picker.set_query(&query);
             } else {
                 app.command_palette.open();
                 app.command_palette.accessibility_set_input(&query);

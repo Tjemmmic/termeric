@@ -7,7 +7,9 @@ mod search_worker;
 
 use self::annotations::{Annotation, CLDR_LOCALE, CLDR_VERSION};
 use crate::ui::command_palette::palette::{CommandSource, RegisteredCommand};
-use crate::ui::command_palette::{CommandPalette, PaletteInfo, PaletteLayout, PaletteResult};
+use crate::ui::command_palette::{
+    CommandPalette, PaletteInfo, PaletteLayout, PaletteOwner, PaletteResult,
+};
 use search_worker::{Request, SearchWorker};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashSet};
@@ -143,94 +145,6 @@ impl UnicodePicker {
         }
         self.palette.close();
         self.actions.clear();
-    }
-
-    pub fn is_active(&self) -> bool {
-        self.palette.is_active()
-    }
-
-    pub fn update_animation(&mut self) -> bool {
-        self.palette.update_animation()
-    }
-
-    pub fn set_reduced_motion(&mut self, reduced_motion: bool) {
-        self.palette.set_reduced_motion(reduced_motion);
-    }
-
-    pub fn build_info(&self) -> PaletteInfo {
-        let mut info = self.palette.build_info();
-        info.status = if self.query_pending {
-            Some("Searching characters…")
-        } else if self.search_failed {
-            Some("Character search unavailable; edit to retry")
-        } else {
-            None
-        };
-        info
-    }
-
-    pub fn command_ids(&self) -> impl Iterator<Item = &str> {
-        self.palette.command_ids()
-    }
-
-    pub fn set_max_visible(&mut self, max_visible: usize) {
-        self.palette.set_max_visible(max_visible);
-    }
-
-    pub fn select_prev(&mut self) {
-        self.palette.select_prev();
-    }
-
-    pub fn select_next(&mut self) {
-        self.palette.select_next();
-    }
-
-    pub fn scroll_up(&mut self, amount: usize) {
-        self.palette.scroll_up(amount);
-    }
-
-    pub fn scroll_down(&mut self, amount: usize) {
-        self.palette.scroll_down(amount);
-    }
-
-    pub fn handle_char(&mut self, character: char) {
-        if !self.search_session || !self.palette.handle_char(character) {
-            return;
-        }
-        self.refresh_dynamic_entry();
-    }
-
-    pub fn insert_query_text(&mut self, text: &str) -> bool {
-        if !self.search_session || !self.palette.insert_query_text(text) {
-            return false;
-        }
-        self.refresh_dynamic_entry();
-        true
-    }
-
-    pub fn handle_backspace(&mut self) {
-        self.edit_input(crate::ui::text_input::TextInputEdit::Backspace);
-    }
-
-    pub fn edit_input(&mut self, edit: crate::ui::text_input::TextInputEdit) {
-        if !self.search_session {
-            return;
-        }
-        if self.palette.edit_input(edit) {
-            self.refresh_dynamic_entry();
-        }
-    }
-
-    pub fn accessibility_set_filter(&mut self, value: &str) -> bool {
-        if !self.search_session || !self.palette.accessibility_set_input(value) {
-            return false;
-        }
-        self.refresh_dynamic_entry();
-        true
-    }
-
-    pub fn select_command(&mut self, id: &str) -> bool {
-        self.palette.select_command(id)
     }
 
     pub fn activate(&mut self) -> Option<UnicodePickerSelection> {
@@ -465,6 +379,37 @@ impl UnicodePicker {
             self.close();
         }
         selection
+    }
+}
+
+impl PaletteOwner for UnicodePicker {
+    fn palette(&self) -> &CommandPalette {
+        &self.palette
+    }
+
+    fn palette_mut(&mut self) -> &mut CommandPalette {
+        &mut self.palette
+    }
+
+    /// The query belongs to the search that runs while the picker is open.
+    fn query_editable(&self) -> bool {
+        self.search_session
+    }
+
+    fn query_changed(&mut self) {
+        self.refresh_dynamic_entry();
+    }
+
+    fn build_info(&self) -> PaletteInfo {
+        let mut info = self.palette.build_info();
+        info.status = if self.query_pending {
+            Some("Searching characters…")
+        } else if self.search_failed {
+            Some("Character search unavailable; edit to retry")
+        } else {
+            None
+        };
+        info
     }
 }
 
@@ -1738,7 +1683,7 @@ mod tests {
     }
 
     fn filter(picker: &mut UnicodePicker, value: &str) -> PaletteInfo {
-        assert!(picker.accessibility_set_filter(value));
+        assert!(picker.set_query(value));
         picker.finish_search_for_test();
         picker.build_info()
     }
@@ -1985,9 +1930,9 @@ mod tests {
     #[test]
     fn reduced_motion_opens_without_scheduling_transition_frames() {
         let mut picker = UnicodePicker::new();
-        picker.set_reduced_motion(true);
+        picker.palette_mut().set_reduced_motion(true);
         picker.open();
         assert_eq!(picker.build_info().animation, 1.0);
-        assert!(!picker.update_animation());
+        assert!(!picker.palette_mut().update_animation());
     }
 }

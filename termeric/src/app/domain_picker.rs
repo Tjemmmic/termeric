@@ -173,6 +173,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::command_palette::PaletteOwner;
 
     #[test]
     fn live_domain_commands_show_only_where_they_can_act() {

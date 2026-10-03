@@ -88,6 +88,7 @@ use crate::terminal::guardrails::GuardrailOverlay;
 use crate::terminal::search::Search;
 use crate::terminal::splash::show_splash;
 use crate::terminal::url::{UrlCache, UrlDetector};
+use crate::ui::command_palette::PaletteOwner;
 use crate::ui::command_palette::palette::core_commands;
 use crate::ui::command_palette::{CommandPalette, PaletteResult};
 use crate::ui::context_picker::ContextPicker;
@@ -2336,52 +2337,34 @@ impl App {
         if self.command_palette.update_animation() {
             animating = true;
         }
-        if self.domain_picker.update_animation() {
+        if self.domain_picker.palette_mut().update_animation() {
             animating = true;
         }
-        if self.unicode_picker.update_animation() {
+        if self.unicode_picker.palette_mut().update_animation() {
             animating = true;
         }
-        // These workflows use the same proven palette renderer and geometry,
-        // but only one modal can own input and rendering at a time.
-        let palette_info = if self.domain_picker.is_active() {
+        // The palette-style modals share the palette's renderer and geometry;
+        // only the one that owns input is drawn.
+        let palette_info = {
             let (window_width, window_height) = renderer.window_size();
-            let layout = crate::ui::command_palette::PaletteLayout::calculate(
+            let rows = crate::ui::command_palette::PaletteLayout::calculate(
                 window_width as f32,
                 window_height as f32,
                 renderer.cell_width(),
                 renderer.cell_height(),
                 1.0,
                 0,
-            );
-            self.domain_picker.set_max_visible(layout.rows_that_fit);
-            Some(self.domain_picker.build_info())
-        } else if self.unicode_picker.is_active() {
-            let (window_width, window_height) = renderer.window_size();
-            let layout = crate::ui::command_palette::PaletteLayout::calculate(
-                window_width as f32,
-                window_height as f32,
-                renderer.cell_width(),
-                renderer.cell_height(),
-                1.0,
-                0,
-            );
-            self.unicode_picker.set_max_visible(layout.rows_that_fit);
-            Some(self.unicode_picker.build_info())
-        } else if self.command_palette.is_active() {
-            let (window_width, window_height) = renderer.window_size();
-            let layout = crate::ui::command_palette::PaletteLayout::calculate(
-                window_width as f32,
-                window_height as f32,
-                renderer.cell_width(),
-                renderer.cell_height(),
-                1.0,
-                0,
-            );
-            self.command_palette.set_max_visible(layout.rows_that_fit);
-            Some(self.command_palette.build_info())
-        } else {
-            None
+            )
+            .rows_that_fit;
+            palette_input::open_palette_owner(
+                &mut self.domain_picker,
+                &mut self.unicode_picker,
+                &mut self.command_palette,
+            )
+            .map(|owner| {
+                owner.palette_mut().set_max_visible(rows);
+                owner.build_info()
+            })
         };
 
         // Update shortcuts panel animation
