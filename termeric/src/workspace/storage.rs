@@ -402,7 +402,7 @@ fn bounded_scrollback(lines: &[String], limit: usize) -> (Vec<u8>, bool) {
 }
 
 fn deduplicated_scrollback_name(directory: &Path, payload: &[u8]) -> Result<String> {
-    let hash = fnv1a64(payload);
+    let hash = termeric_core::checksum::fnv1a64(payload);
     for collision in 0..=u16::MAX {
         let suffix = if collision == 0 {
             String::new()
@@ -430,15 +430,6 @@ fn deduplicated_scrollback_name(directory: &Path, payload: &[u8]) -> Result<Stri
         }
     }
     anyhow::bail!("could not allocate a collision-free scrollback filename")
-}
-
-fn fnv1a64(payload: &[u8]) -> u64 {
-    let mut hash = 0xcbf29ce484222325u64;
-    for byte in payload {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    hash
 }
 
 fn safe_scrollback_path(directory: &Path, relative: &str) -> Result<PathBuf> {

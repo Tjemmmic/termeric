@@ -29,6 +29,7 @@
 //! ```
 
 pub mod ansi;
+pub mod checksum;
 pub mod event;
 pub mod file_transfer;
 pub mod graphics;

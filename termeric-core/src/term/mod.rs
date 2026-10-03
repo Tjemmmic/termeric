@@ -92,9 +92,7 @@ const MAX_GRAPHICS_RELAY_APC_BYTES: usize = 64 * 1024;
 pub const SYNCHRONIZED_OUTPUT_TIMEOUT: Duration = Duration::from_secs(1);
 
 fn graphics_relay_checksum(bytes: &[u8]) -> u64 {
-    bytes.iter().fold(0xcbf29ce484222325, |hash, byte| {
-        (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
-    })
+    crate::checksum::fnv1a64(bytes)
 }
 
 /// Bounded shell-reported working-directory metadata from OSC 7.

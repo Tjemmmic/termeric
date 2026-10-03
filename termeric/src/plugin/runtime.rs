@@ -2063,12 +2063,7 @@ fn permission_list(permissions: impl IntoIterator<Item = PluginPermission>) -> S
 fn fingerprint(bytes: &[u8]) -> String {
     // Provenance/change detection, not a signature. FNV-1a is deterministic
     // across platforms; trust comes from the displayed canonical local source.
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    format!("fnv1a64:{hash:016x}")
+    format!("fnv1a64:{:016x}", termeric_core::checksum::fnv1a64(bytes))
 }
 
 #[cfg(test)]

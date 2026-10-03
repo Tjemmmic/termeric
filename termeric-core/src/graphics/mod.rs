@@ -473,9 +473,7 @@ fn emit_relay_pixels(
 fn relay_checksum(bytes: &[u8]) -> u64 {
     // FNV-1a is used as an inexpensive corruption/truncation check. The
     // authenticated Unix/SSH transport provides trust; this is not a MAC.
-    bytes.iter().fold(0xcbf29ce484222325, |hash, byte| {
-        (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
-    })
+    crate::checksum::fnv1a64(bytes)
 }
 
 fn validate_relay_relative_placements(
