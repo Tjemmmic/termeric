@@ -7,7 +7,7 @@ fn bash_login_bootstrap_ignores_unprepared_manual_sources() {
     };
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("bootstrap");
-    std::fs::write(&path, format!("{}{BASH_HOOKS}", bash_login::STARTUP)).unwrap();
+    std::fs::write(&path, BASH_LOGIN_RC).unwrap();
     for args in [
         vec!["--noprofile", "--norc"],
         vec!["--noprofile", "--norc", "--login", "-i"],
@@ -145,7 +145,7 @@ shopt -q login_shell || exit 91
             std::fs::write(home.join(".bashrc"), "printf 'WRONG_RC\\n'\n").unwrap();
             std::fs::write(home.join(".bash_logout"), "printf 'LOGOUT\\n'\n").unwrap();
             let generated = home.join("generated $(touch SHOULD_NOT_EXIST) é");
-            std::fs::write(&generated, format!("{}{BASH_HOOKS}", bash_login::STARTUP)).unwrap();
+            std::fs::write(&generated, BASH_LOGIN_RC).unwrap();
             let mut args: Vec<String> = if no_profile {
                 vec!["--noprofile".into()]
             } else {

@@ -216,7 +216,7 @@ fn bash_custom_rc_replaces_only_the_last_rc_value() {
             assert_eq!(&launch.args[index], original);
         }
     }
-    assert_eq!(std::fs::read_to_string(&launch.args[3]).unwrap(), bash_rc());
+    assert_eq!(std::fs::read_to_string(&launch.args[3]).unwrap(), BASH_RC);
     assert!(
         launch
             .env

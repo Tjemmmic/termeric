@@ -276,46 +276,6 @@ fn zsh_nested_prepared_launch_recovers_unset_empty_and_custom_directories() {
     }
 }
 
-#[test]
-fn zsh_legacy_transport_does_not_recursively_source_its_own_rc() {
-    let temp = tempfile::tempdir().unwrap();
-    let transport = temp.path().join("zsh");
-    let transport = transport.to_str().unwrap();
-    for (original, expected) in [
-        (None, None),
-        (Some(""), None),
-        (Some("/user/config"), Some("/user/config")),
-        (Some(transport), None),
-    ] {
-        let mut env = vec![("ZDOTDIR".into(), transport.into())];
-        if let Some(original) = original {
-            env.push(("TERMERIC_ORIGINAL_ZDOTDIR".into(), original.into()));
-        }
-        // Test the environment helper directly without mutating process-wide
-        // variables; explicit marker values isolate it from parent markers.
-        env.push(("TERMERIC_ZSH_HAD_ZDOTDIR".into(), "legacy".into()));
-        env.push(("TERMERIC_ZSH_INTEGRATION_DIR".into(), String::new()));
-        if original.is_none() {
-            env.push(("TERMERIC_ORIGINAL_ZDOTDIR".into(), String::new()));
-        }
-        configure_zsh_startup(Path::new(transport), &mut env).unwrap();
-        let launch = ShellLaunch {
-            program: None,
-            args: vec![],
-            env,
-            integration: ShellIntegrationSupport::Enabled("zsh"),
-        };
-        assert_eq!(
-            value(&launch, "TERMERIC_ORIGINAL_ZDOTDIR"),
-            expected.unwrap_or_default()
-        );
-        assert_eq!(
-            value(&launch, "TERMERIC_ZSH_HAD_ZDOTDIR"),
-            if expected.is_some() { "1" } else { "0" }
-        );
-    }
-}
-
 #[cfg(unix)]
 #[test]
 fn zsh_startup_restores_user_directory_before_rc_and_nested_shells() {

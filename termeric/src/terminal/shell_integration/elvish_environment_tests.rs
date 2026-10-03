@@ -61,18 +61,7 @@ fn elvish_repreparation_unwraps_only_identified_transports() {
             ]
         );
     }
-    // An old two-marker launch is identifiable at this known integration root.
-    let mut legacy = vec![
-        (
-            "XDG_DATA_DIRS".into(),
-            format!("{}:/original", temp.path().display()),
-        ),
-        (HAD.into(), "1".into()),
-        (ORIGINAL.into(), "/original".into()),
-    ];
-    expose_elvish_module(temp.path(), &mut legacy).unwrap();
-    assert_eq!(value(&legacy, ORIGINAL).as_deref(), Some("/original"));
-    // A different old root cannot be distinguished from a user override.
+    // Without a transport marker the inherited path is the user's own.
     let mut ambiguous = vec![
         ("XDG_DATA_DIRS".into(), "/unknown/root:/original".into()),
         (HAD.into(), "1".into()),

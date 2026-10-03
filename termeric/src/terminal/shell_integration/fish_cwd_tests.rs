@@ -1,7 +1,7 @@
+use super::cwd_report_checks::*;
 use super::*;
 use std::ffi::OsStr;
 use std::process::Command;
-use termeric_core::{Terminal, TerminalEvent};
 
 const AFTER_REPORT: &[u8] = b"<after-report>";
 
@@ -37,8 +37,7 @@ fn report(cwd: &Path, synthetic_path: Option<&OsStr>) -> Option<Vec<u8>> {
         // Fish 3 uses our OSC 133 hook; Fish 4's native producer is outside
         // this non-interactive event test. Require the legacy hook to survive
         // encoding, then remove its verified suffix for byte-exact cwd checks.
-        let marks = b"\x1b]133;A\x07\x1b]133;B\x07";
-        let suffix = [marks.as_slice(), AFTER_REPORT].concat();
+        let suffix = [PROMPT_MARKS, AFTER_REPORT].concat();
         assert!(bytes.ends_with(&suffix), "{:?}", bytes);
         bytes.truncate(bytes.len() - suffix.len());
         bytes.extend_from_slice(AFTER_REPORT);
@@ -51,49 +50,31 @@ fn fish_cwd_prompt_event_cannot_inject_terminal_commands() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp
         .path()
-        .join("control\x07\x1b]2;INJECTED_TITLE\x07suffix");
+        .join(INJECTION_PATH.strip_prefix("/tmp/").unwrap());
     std::fs::create_dir(&path).unwrap();
     let Some(bytes) = report(&path, None) else {
         return;
     };
-    let mut terminal = Terminal::new(80, 24);
-    terminal.process(&bytes);
-    assert!(
-        !terminal
-            .drain_events()
-            .iter()
-            .any(|event| matches!(event, TerminalEvent::TitleChanged(_))),
-        "directory report escaped into a title command: {bytes:?}"
-    );
-    assert!(terminal.reported_working_directory().is_none());
-    assert!(bytes.windows(3).any(|window| window == b"%07"));
-    assert!(bytes.windows(3).any(|window| window == b"%1B"));
     assert!(bytes.ends_with(AFTER_REPORT));
+    assert_cannot_inject(&bytes);
 }
 
 #[test]
 fn fish_cwd_prompt_event_round_trips_utf8_percent_and_uri_punctuation() {
     let temp = tempfile::tempdir().unwrap();
-    let path = temp.path().join("space %2F #?;quote'\"/界/é/👩\u{200d}💻");
+    let path = temp
+        .path()
+        .join(ROUND_TRIP_PATH.strip_prefix("/tmp/").unwrap());
     std::fs::create_dir_all(&path).unwrap();
     let Some(bytes) = report(&path, None) else {
         return;
     };
-    assert!(bytes.is_ascii());
     assert!(bytes.ends_with(AFTER_REPORT));
-    let mut terminal = Terminal::new(80, 24);
-    terminal.process(&bytes);
-    assert_eq!(
-        terminal.reported_working_directory().unwrap().path(),
-        path.to_str().unwrap()
-    );
-    assert!(terminal.drain_events().is_empty());
+    assert_round_trips(&bytes, path.to_str().unwrap());
 }
 
-#[cfg(unix)]
 #[test]
 fn fish_cwd_prompt_event_encodes_every_nonzero_byte() {
-    use std::fmt::Write;
     use std::os::unix::ffi::{OsStrExt, OsStringExt};
     let temp = tempfile::tempdir().unwrap();
     // The slash byte splits this into components shorter than NAME_MAX.
@@ -104,26 +85,7 @@ fn fish_cwd_prompt_event_encodes_every_nonzero_byte() {
     let Some(bytes) = report(&path, None) else {
         return;
     };
-    let mut expected = String::from("\x1b]7;file://");
-    for &byte in path.as_os_str().as_bytes() {
-        if byte.is_ascii_alphanumeric() || b"/._~-".contains(&byte) {
-            expected.push(char::from(byte));
-        } else {
-            write!(expected, "%{byte:02X}").unwrap();
-        }
-    }
-    expected.push('\x07');
-    let mut expected = expected.into_bytes();
-    expected.extend_from_slice(AFTER_REPORT);
-    assert_eq!(bytes, expected);
-    let mut terminal = Terminal::new(80, 24);
-    terminal.process(b"\x1b]7;file:///safe\x07");
-    terminal.process(&bytes);
-    assert_eq!(
-        terminal.reported_working_directory().unwrap().path(),
-        "/safe"
-    );
-    assert!(terminal.drain_events().is_empty());
+    assert_every_byte_encoded(&bytes, path.as_os_str().as_bytes(), AFTER_REPORT);
 }
 
 #[test]
@@ -145,30 +107,10 @@ fn fish_cwd_oversized_prompt_report_does_not_stop_other_handlers() {
 #[test]
 fn fish_cwd_bounds_encoded_reports_without_truncation() {
     let temp = tempfile::tempdir().unwrap();
-    for (path, accepted) in [
-        (String::from("/"), true),
-        (String::from("/tmp/plain"), true),
-        (format!("/{}", "a".repeat(4088)), true),
-        (format!("/{}", "a".repeat(4089)), false),
-        (format!("/aa{}", "%".repeat(1362)), true),
-        (format!("/aaa{}", "%".repeat(1362)), false),
-        (format!("/aa{}", "界".repeat(454)), true),
-        (format!("/aaa{}", "界".repeat(454)), false),
-        (format!("/{}", "界".repeat(4088)), false),
-        (String::new(), false),
-        (String::from("relative"), false),
-    ] {
+    for (path, accepted) in bound_cases() {
         let Some(bytes) = report(temp.path(), Some(OsStr::new(&path))) else {
             return;
         };
-        assert!(bytes.ends_with(AFTER_REPORT));
-        let mut terminal = Terminal::new(80, 24);
-        terminal.process(&bytes);
-        if accepted {
-            assert_eq!(terminal.reported_working_directory().unwrap().path(), path);
-        } else {
-            assert_eq!(bytes, AFTER_REPORT);
-            assert!(terminal.reported_working_directory().is_none());
-        }
+        assert_bounded(&bytes, &path, accepted, AFTER_REPORT);
     }
 }

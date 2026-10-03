@@ -14,19 +14,13 @@ pub(super) fn configure(base: &Path, env: &mut Vec<(String, String)>) -> Result<
         Some("1") => effective_env(env, ORIGINAL).map(Some),
         _ => None,
     };
-    let original = if let Some(saved) = saved {
-        let is_transport = match recorded.as_deref() {
-            Some(value) => !value.is_empty() && current.as_deref() == Some(value),
-            // Old launches had no transport identity. Recover only the exact
-            // old layout at this known root; don't guess that some other first
-            // component is ours and discard a profile's deliberate override.
-            None => current.as_deref() == Some(search_path(base, saved.as_deref(), true)?.as_str()),
-        };
-        if is_transport { saved } else { current }
-    } else {
-        current
+    // Unwrap only our own transport; a profile's different path is the user's.
+    let is_transport = recorded.is_some_and(|value| !value.is_empty() && current == Some(value));
+    let original = match saved {
+        Some(saved) if is_transport => saved,
+        _ => current,
     };
-    let joined = search_path(base, original.as_deref(), false)?;
+    let joined = search_path(base, original.as_deref())?;
     upsert_env(env, HAD, if original.is_some() { "1" } else { "0" }.into());
     upsert_env(env, ORIGINAL, original.unwrap_or_default());
     upsert_env(env, TRANSPORT, joined.clone());
@@ -34,19 +28,14 @@ pub(super) fn configure(base: &Path, env: &mut Vec<(String, String)>) -> Result<
     Ok(())
 }
 
-fn search_path(base: &Path, original: Option<&str>, legacy: bool) -> Result<String> {
+fn search_path(base: &Path, original: Option<&str>) -> Result<String> {
     base.to_str()
         .context("Elvish shell integration path is not valid UTF-8")?;
     let mut paths = vec![base.to_path_buf()];
-    if let Some(value) = original.filter(|value| legacy || !value.is_empty()) {
-        for path in std::env::split_paths(value) {
-            // Reproduce old layouts only for exact legacy recognition. New
-            // transports retain the user's full path order, including repeats.
-            if !legacy || !paths.contains(&path) {
-                paths.push(path);
-            }
-        }
-    } else if cfg!(unix) {
+    if let Some(value) = original.filter(|value| !value.is_empty()) {
+        // Keep the user's full path order, including repeats.
+        paths.extend(std::env::split_paths(value));
+    } else {
         // Elvish treats both unset and explicitly empty XDG_DATA_DIRS as the
         // defaults. Keep that lookup behavior while recording presence exactly.
         paths.extend([

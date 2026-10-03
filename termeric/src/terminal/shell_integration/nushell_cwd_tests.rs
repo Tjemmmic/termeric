@@ -1,6 +1,7 @@
+use super::cwd_report_checks::*;
 use super::*;
 use std::process::Command;
-use termeric_core::{Terminal, TerminalEvent};
+use termeric_core::Terminal;
 
 fn report(path: &str) -> Option<Vec<u8>> {
     // Enable native reporting first so the prelude itself emits nothing in
@@ -63,64 +64,26 @@ fn nushell_initial_cwd_is_conditional_and_not_duplicated_on_reentry() {
 
 #[test]
 fn nushell_initial_cwd_encodes_controls_without_injecting_commands() {
-    let Some(bytes) = report("/tmp/control\x07\x1b]2;INJECTED_TITLE\x07suffix") else {
+    let Some(bytes) = report(INJECTION_PATH) else {
         return;
     };
-    let mut terminal = Terminal::new(80, 24);
-    terminal.process(&bytes);
-    assert!(
-        !terminal
-            .drain_events()
-            .iter()
-            .any(|event| matches!(event, TerminalEvent::TitleChanged(_)))
-    );
-    assert!(terminal.reported_working_directory().is_none());
-    assert!(bytes.windows(3).any(|window| window == b"%07"));
-    assert!(bytes.windows(3).any(|window| window == b"%1B"));
+    assert_cannot_inject(&bytes);
 }
 
 #[test]
 fn nushell_initial_cwd_round_trips_percent_utf8_and_uri_punctuation() {
-    let path = "/tmp/space %2F #?;quote'\"/界/é/👩\u{200d}💻";
-    let Some(bytes) = report(path) else {
+    let Some(bytes) = report(ROUND_TRIP_PATH) else {
         return;
     };
-    assert!(bytes.is_ascii());
-    let mut terminal = Terminal::new(80, 24);
-    terminal.process(&bytes);
-    assert_eq!(terminal.reported_working_directory().unwrap().path(), path);
-    assert!(terminal.drain_events().is_empty());
+    assert_round_trips(&bytes, ROUND_TRIP_PATH);
 }
 
 #[test]
 fn nushell_initial_cwd_bounds_complete_reports() {
-    for (path, accepted) in [
-        (String::from("/"), true),
-        (String::from("/tmp/plain"), true),
-        (format!("/{}", "a".repeat(4088)), true),
-        (format!("/{}", "a".repeat(4089)), false),
-        (format!("/aa{}", "%".repeat(1362)), true),
-        (format!("/aaa{}", "%".repeat(1362)), false),
-        (format!("/aa{}", "界".repeat(454)), true),
-        (format!("/aaa{}", "界".repeat(454)), false),
-        (String::new(), false),
-        (String::from("relative"), false),
-    ] {
+    for (path, accepted) in bound_cases() {
         let Some(bytes) = report(&path) else {
             return;
         };
-        let mut terminal = Terminal::new(80, 24);
-        terminal.process(&bytes);
-        if accepted {
-            assert!(bytes.starts_with(b"\x1b]7;file://"));
-            assert!(bytes.ends_with(b"\x1b\\"));
-            assert_eq!(terminal.reported_working_directory().unwrap().path(), path);
-        } else {
-            assert!(
-                bytes.is_empty(),
-                "oversized/invalid reports must be omitted whole"
-            );
-            assert!(terminal.reported_working_directory().is_none());
-        }
+        assert_bounded(&bytes, &path, accepted, b"");
     }
 }

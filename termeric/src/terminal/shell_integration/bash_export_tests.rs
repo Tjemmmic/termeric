@@ -69,10 +69,8 @@ __termeric_before_prompt
                         "no"
                     },
                 )
-                // Simulate stale private state exported by an older shell.
+                // Simulate stale private state exported by an outer shell.
                 .env("__termeric_seen_command", "1")
-                .env("BASH_FUNC___termeric_before_prompt%%", "() { :; }")
-                .env("BASH_FUNC___termeric_after_prompt%%", "() { :; }")
                 .env("PWD", "/test")
                 .output()
                 .unwrap();

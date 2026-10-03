@@ -1,7 +1,7 @@
+use super::cwd_report_checks::*;
 use super::*;
 use std::ffi::OsStr;
 use std::process::Command;
-use termeric_core::{Terminal, TerminalEvent};
 
 fn report(path: impl AsRef<OsStr>, before_readline: bool) -> Option<Vec<u8>> {
     let program = super::tests::test_shell("elvish")?;
@@ -40,104 +40,43 @@ set after-chdir = [{|_| printf '<user>' }]
 #[test]
 fn elvish_cwd_cannot_inject_terminal_commands_from_either_hook() {
     for before_readline in [false, true] {
-        let Some(bytes) = report(
-            "/tmp/control\x07\x1b]2;INJECTED_TITLE\x07suffix",
-            before_readline,
-        ) else {
+        let Some(bytes) = report(INJECTION_PATH, before_readline) else {
             return;
         };
-        let mut terminal = Terminal::new(80, 24);
-        terminal.process(&bytes);
-        assert!(
-            !terminal
-                .drain_events()
-                .iter()
-                .any(|event| matches!(event, TerminalEvent::TitleChanged(_))),
-            "directory report escaped into a title command: {bytes:?}"
-        );
-        assert!(terminal.reported_working_directory().is_none());
-        assert!(bytes.windows(3).any(|window| window == b"%07"));
-        assert!(bytes.windows(3).any(|window| window == b"%1B"));
+        assert_cannot_inject(&bytes);
     }
 }
 
 #[test]
 fn elvish_cwd_round_trips_utf8_percent_and_uri_punctuation() {
-    let path = "/tmp/space %2F #?;quote'\"/界/é/👩\u{200d}💻";
     for before_readline in [false, true] {
-        let Some(bytes) = report(path, before_readline) else {
+        let Some(bytes) = report(ROUND_TRIP_PATH, before_readline) else {
             return;
         };
-        assert!(bytes.is_ascii());
-        let mut terminal = Terminal::new(80, 24);
-        terminal.process(&bytes);
-        assert_eq!(terminal.reported_working_directory().unwrap().path(), path);
-        assert!(terminal.drain_events().is_empty());
+        assert_round_trips(&bytes, ROUND_TRIP_PATH);
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn elvish_cwd_encodes_every_nonzero_byte() {
-    use std::fmt::Write;
-    use std::os::unix::ffi::OsStringExt;
-    let path = std::ffi::OsString::from_vec(b"/bytes/".iter().copied().chain(1..=255).collect());
-    let Some(bytes) = report(path, true) else {
+    use std::os::unix::ffi::OsStrExt;
+    let path = every_byte_path();
+    let Some(bytes) = report(OsStr::from_bytes(&path), true) else {
         return;
     };
-    let mut expected = String::from("\x1b]7;file:///bytes/");
-    for byte in 1u8..=255 {
-        if byte.is_ascii_alphanumeric() || b"/._~-".contains(&byte) {
-            expected.push(char::from(byte));
-        } else {
-            write!(expected, "%{byte:02X}").unwrap();
-        }
-    }
-    expected.push_str("\x07\x1b]133;A\x07\x1b]133;B\x07");
-    assert_eq!(bytes, expected.as_bytes());
-    let mut terminal = Terminal::new(80, 24);
-    terminal.process(b"\x1b]7;file:///safe\x07");
-    terminal.process(&bytes);
-    assert_eq!(
-        terminal.reported_working_directory().unwrap().path(),
-        "/safe"
-    );
-    assert!(terminal.drain_events().is_empty());
+    assert_every_byte_encoded(&bytes, &path, PROMPT_MARKS);
 }
 
 #[test]
 fn elvish_cwd_bounds_reports_without_truncation_or_losing_prompt_marks() {
-    for (path, accepted) in [
-        (String::from("/"), true),
-        (String::from("/tmp/plain"), true),
-        (format!("/{}", "a".repeat(4088)), true),
-        (format!("/{}", "a".repeat(4089)), false),
-        (format!("/aa{}", "%".repeat(1362)), true),
-        (format!("/aaa{}", "%".repeat(1362)), false),
-        (format!("/aa{}", "界".repeat(454)), true),
-        (format!("/aaa{}", "界".repeat(454)), false),
-        (format!("/{}", "界".repeat(4088)), false),
-        (String::new(), false),
-        (String::from("relative"), false),
-    ] {
+    for (path, accepted) in bound_cases() {
         for before_readline in [false, true] {
             let Some(bytes) = report(&path, before_readline) else {
                 return;
             };
-            let marks = if before_readline {
-                b"\x1b]133;A\x07\x1b]133;B\x07".as_slice()
-            } else {
-                b""
-            };
-            assert!(bytes.ends_with(marks));
-            let mut terminal = Terminal::new(80, 24);
-            terminal.process(&bytes);
-            if accepted {
-                assert_eq!(terminal.reported_working_directory().unwrap().path(), path);
-            } else {
-                assert_eq!(bytes, marks);
-                assert!(terminal.reported_working_directory().is_none());
-            }
+            // Only the prompt hook adds marks; the chdir hook reports alone.
+            let marks = if before_readline { PROMPT_MARKS } else { b"" };
+            assert_bounded(&bytes, &path, accepted, marks);
         }
     }
 }
