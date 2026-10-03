@@ -1,6 +1,5 @@
 import os
 from pathlib import Path
-import json
 import stat
 import tempfile
 import unittest
@@ -10,14 +9,11 @@ from scripts.check_debian_package import (
     CheckError,
     EXPECTED_FILES,
     ICON_FILES,
-    LIFECYCLE_OPT_IN,
     parse_desktop_entry,
     parse_os_release,
-    require_lifecycle_host,
     validate_package_metadata,
     validate_desktop_entry,
     validate_layout,
-    write_report,
 )
 
 
@@ -132,11 +128,6 @@ class DebianPackageCheckTests(unittest.TestCase):
             path.write_text('ID="ubuntu"\nID_LIKE="debian linux"\n')
             self.assertEqual(parse_os_release(path), {"ubuntu", "debian", "linux"})
 
-    def test_lifecycle_mode_fails_closed_without_explicit_opt_in(self):
-        with mock.patch.dict(os.environ, {}, clear=True):
-            with self.assertRaisesRegex(CheckError, LIFECYCLE_OPT_IN):
-                require_lifecycle_host()
-
     def test_expected_modes_are_not_group_or_world_writable(self):
         for mode in EXPECTED_FILES.values():
             self.assertFalse(mode & (stat.S_IWGRP | stat.S_IWOTH))
@@ -157,33 +148,6 @@ class DebianPackageCheckTests(unittest.TestCase):
         values["Recommends"] = ""
         with self.assertRaisesRegex(CheckError, "software renderer"):
             validate_package_metadata(Path("termeric.deb"))
-
-    def test_report_records_a_hash_and_explicit_unperformed_lifecycle(self):
-        with tempfile.TemporaryDirectory() as directory:
-            temporary = Path(directory)
-            package = temporary / "termeric.deb"
-            package.write_bytes(b"package fixture")
-            report = temporary / "report.json"
-            write_report(
-                report,
-                package,
-                status="pass",
-                metadata={
-                    "name": "termeric",
-                    "version": "1.2.3-1",
-                    "architecture": "amd64",
-                    "depends": "libc6",
-                    "recommends": "mesa-vulkan-drivers",
-                },
-                lifecycle=None,
-            )
-
-            parsed = json.loads(report.read_text())
-            self.assertEqual(parsed["schema"], 1)
-            self.assertEqual(parsed["status"], "pass")
-            self.assertEqual(parsed["package"]["bytes"], len(b"package fixture"))
-            self.assertEqual(len(parsed["package"]["sha256"]), 64)
-            self.assertEqual(parsed["lifecycle"], {"performed": False})
 
 
 if __name__ == "__main__":

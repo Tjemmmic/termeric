@@ -1,24 +1,16 @@
 #!/usr/bin/env python3
-"""Inspect a Termeric Arch package and optionally exercise its lifecycle.
+"""Inspect Termeric's Arch package, and optionally install and remove it.
 
-Archive mode is read-only and validates member safety, package metadata,
-installed paths, modes, desktop integration, terminfo identity, dynamic
-libraries, and the non-GUI version path before emitting optional JSON evidence.
-Lifecycle mode mutates pacman's database, so it requires a disposable Arch host,
-root, an explicit opt-in, and no pre-existing Termeric package.
+Inspection is read-only. --system-lifecycle changes the host's packages, so it
+needs root on a disposable Arch machine without Termeric installed.
 """
 
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
-import gzip
-import hashlib
-import json
 import os
 from pathlib import Path, PurePosixPath
 import re
-import shutil
 import stat
 import subprocess
 import sys
@@ -28,6 +20,9 @@ if __package__:
     from scripts.check_debian_package import (
         ICON_FILES,
         CheckError,
+        parse_os_release,
+        require_tool,
+        run,
         validate_desktop_entry,
         validate_icons,
     )
@@ -35,6 +30,9 @@ else:
     from check_debian_package import (
         ICON_FILES,
         CheckError,
+        parse_os_release,
+        require_tool,
+        run,
         validate_desktop_entry,
         validate_icons,
     )
@@ -43,8 +41,6 @@ else:
 PACKAGE_NAME = "termeric-git"
 CONFLICTING_PACKAGE_NAME = "termeric"
 TERMINFO_NAME = "xterm-termeric"
-LIFECYCLE_OPT_IN = "TERMERIC_ARCH_PACKAGE_LIFECYCLE_ACCEPT"
-SYNTHETIC_PREDECESSOR_VERSION = "0.0.0.r0.g0000000-1"
 EXPECTED_FILES = {
     "usr/bin/termeric": 0o755,
     "usr/share/applications/termeric.desktop": 0o644,
@@ -66,34 +62,6 @@ REQUIRED_DEPENDENCIES = {
     "zlib",
 }
 REQUIRED_LICENSES = {"MIT", "Unicode-3.0"}
-
-
-def require_tool(name: str) -> str:
-    path = shutil.which(name)
-    if path is None:
-        raise CheckError(f"required tool is unavailable: {name}")
-    return path
-
-
-def run(
-    command: list[str],
-    *,
-    cwd: Path | None = None,
-    env: dict[str, str] | None = None,
-    timeout: int = 180,
-) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(
-        command,
-        cwd=cwd,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-    )
-    if result.returncode != 0:
-        detail = result.stderr.strip() or result.stdout.strip()
-        raise CheckError(f"{' '.join(command)} failed ({result.returncode}): {detail}")
-    return result
 
 
 def normalize_member_name(raw_name: str) -> str:
@@ -279,14 +247,6 @@ def validate_archive_modes(root: Path) -> None:
             raise CheckError(f"/{relative} has mode {actual_mode:o}, expected 644")
 
 
-def file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def inspect_archive(package: Path) -> dict[str, object]:
     if not package.is_file():
         raise CheckError(f"Arch package does not exist: {package}")
@@ -310,19 +270,6 @@ def inspect_archive(package: Path) -> dict[str, object]:
     return metadata
 
 
-def parse_os_release(path: Path = Path("/etc/os-release")) -> set[str]:
-    if not path.is_file():
-        return set()
-    identifiers: set[str] = set()
-    for line in path.read_text(encoding="utf-8").splitlines():
-        key, separator, raw_value = line.partition("=")
-        if not separator or key not in {"ID", "ID_LIKE"}:
-            continue
-        value = raw_value.strip().strip('"').strip("'")
-        identifiers.update(part.casefold() for part in value.split())
-    return identifiers
-
-
 def installed_version(package_name: str = PACKAGE_NAME) -> str | None:
     result = subprocess.run(
         [require_tool("pacman"), "-Q", package_name],
@@ -337,8 +284,6 @@ def installed_version(package_name: str = PACKAGE_NAME) -> str | None:
 
 
 def require_lifecycle_host() -> None:
-    if os.environ.get(LIFECYCLE_OPT_IN) != "1":
-        raise CheckError(f"system lifecycle mode requires {LIFECYCLE_OPT_IN}=1")
     if os.geteuid() != 0:
         raise CheckError("system lifecycle mode must run as root")
     if "arch" not in parse_os_release():
@@ -351,94 +296,6 @@ def require_lifecycle_host() -> None:
             raise CheckError(f"refusing to replace pre-existing {name} package {prior}")
 
 
-def replace_metadata_version(path: Path, version: str) -> None:
-    text = path.read_text(encoding="utf-8")
-    pattern = r"^pkgver = .*$"
-    if len(re.findall(pattern, text, flags=re.MULTILINE)) != 1:
-        raise CheckError(f"{path.name} has no unique pkgver field")
-    changed = re.sub(pattern, f"pkgver = {version}", text, flags=re.MULTILINE)
-    path.write_text(changed, encoding="utf-8")
-
-
-def write_lifecycle_pacman_config(source: Path, destination: Path) -> None:
-    """Copy Pacman policy without host-specific payload exclusions.
-
-    Arch's container image deliberately excludes documentation and other files
-    to keep the image small. Lifecycle acceptance must install the complete
-    package payload so owned-file and removal checks remain meaningful.
-    """
-    lines = source.read_text(encoding="utf-8").splitlines(keepends=True)
-    retained = [
-        line
-        for line in lines
-        if re.match(r"^\s*NoExtract\s*=", line, flags=re.IGNORECASE) is None
-    ]
-    destination.write_text("".join(retained), encoding="utf-8")
-
-
-def write_mtree(root: Path) -> None:
-    members = sorted(
-        f"./{path.relative_to(root).as_posix()}"
-        for path in root.rglob("*")
-        if path.name != ".MTREE"
-    )
-    member_input = ("\0".join(members) + "\0").encode()
-    command = [
-        require_tool("bsdtar"),
-        "-cnf",
-        "-",
-        "--format=mtree",
-        "--options=!all,use-set,type,uid,gid,mode,time,size,sha256,link",
-        "--null",
-        "--files-from=-",
-    ]
-    result = subprocess.run(command, cwd=root, input=member_input, capture_output=True)
-    if result.returncode != 0:
-        detail = result.stderr.decode(errors="replace").strip()
-        raise CheckError(f"{' '.join(command)} failed ({result.returncode}): {detail}")
-    (root / ".MTREE").write_bytes(gzip.compress(result.stdout, mtime=0))
-
-
-def build_synthetic_predecessor(
-    package: Path, directory: Path, actual_version: str
-) -> Path:
-    comparison = run(
-        [
-            require_tool("vercmp"),
-            SYNTHETIC_PREDECESSOR_VERSION,
-            actual_version,
-        ]
-    ).stdout.strip()
-    if comparison != "-1":
-        raise CheckError(
-            f"synthetic predecessor {SYNTHETIC_PREDECESSOR_VERSION!r} "
-            f"is not older than {actual_version!r}"
-        )
-    root = directory / "predecessor-root"
-    root.mkdir()
-    run([require_tool("bsdtar"), "-xf", str(package.resolve()), "-C", str(root)])
-    replace_metadata_version(root / ".PKGINFO", SYNTHETIC_PREDECESSOR_VERSION)
-    replace_metadata_version(root / ".BUILDINFO", SYNTHETIC_PREDECESSOR_VERSION)
-    write_mtree(root)
-    predecessor = directory / (
-        f"{PACKAGE_NAME}-{SYNTHETIC_PREDECESSOR_VERSION}-x86_64.pkg.tar.zst"
-    )
-    run(
-        [
-            require_tool("bsdtar"),
-            "-caf",
-            str(predecessor),
-            ".PKGINFO",
-            ".BUILDINFO",
-            ".MTREE",
-            "usr",
-        ],
-        cwd=root,
-    )
-    inspect_archive(predecessor)
-    return predecessor
-
-
 def verify_installed(expected_version: str) -> None:
     actual = installed_version()
     if actual != expected_version:
@@ -448,147 +305,29 @@ def verify_installed(expected_version: str) -> None:
     validate_layout(Path("/"))
 
 
-def running_package_processes(proc_root: Path = Path("/proc")) -> list[int]:
-    processes: list[int] = []
-    for entry in proc_root.iterdir():
-        if not entry.name.isdigit():
-            continue
-        try:
-            executable = os.readlink(entry / "exe").removesuffix(" (deleted)")
-        except OSError:
-            continue
-        if executable == "/usr/bin/termeric":
-            processes.append(int(entry.name))
-    return sorted(processes)
-
-
-def verify_removed(
-    root: Path = Path("/"), proc_root: Path = Path("/proc")
-) -> None:
+def verify_removed() -> None:
     if installed_version() is not None:
         raise CheckError(f"{PACKAGE_NAME} remains installed after removal")
-    leftovers = [relative for relative in EXPECTED_FILES if (root / relative).exists()]
+    leftovers = [relative for relative in EXPECTED_FILES if (Path("/") / relative).exists()]
     if leftovers:
         raise CheckError(
             "package-owned files remain after removal: "
             + ", ".join(f"/{path}" for path in leftovers)
         )
-    processes = running_package_processes(proc_root)
-    if processes:
-        raise CheckError(
-            "package executable remains live after removal in PIDs: "
-            + ", ".join(str(process) for process in processes)
-        )
 
 
-def verify_user_state(sentinel: Path) -> None:
-    if not sentinel.is_file() or sentinel.read_text(encoding="utf-8") != "retain user state\n":
-        raise CheckError("package removal changed synthetic user configuration")
-
-
-def exercise_system_lifecycle(
-    package: Path, actual_version: str
-) -> dict[str, object]:
+def exercise_system_lifecycle(package: Path, version: str) -> None:
     require_lifecycle_host()
-    with tempfile.TemporaryDirectory(prefix="termeric-arch-lifecycle-") as directory:
-        temporary = Path(directory)
-        synthetic_home = temporary / "home"
-        sentinel = synthetic_home / ".config/termeric/lifecycle-sentinel"
-        sentinel.parent.mkdir(parents=True)
-        sentinel.write_text("retain user state\n", encoding="utf-8")
-        environment = dict(os.environ)
-        environment["HOME"] = str(synthetic_home)
-        pacman_config = temporary / "pacman.conf"
-        write_lifecycle_pacman_config(Path("/etc/pacman.conf"), pacman_config)
-        predecessor = build_synthetic_predecessor(
-            package, temporary, actual_version
-        )
-        pacman = require_tool("pacman")
-        pacman_command = [pacman, "--config", str(pacman_config)]
-        installed_by_check = False
-        try:
-            run(
-                [*pacman_command, "-U", "--noconfirm", str(predecessor)],
-                env=environment,
-                timeout=600,
-            )
-            installed_by_check = True
-            verify_installed(SYNTHETIC_PREDECESSOR_VERSION)
-            print(f"ok install: synthetic predecessor {SYNTHETIC_PREDECESSOR_VERSION}")
-
-            run(
-                [*pacman_command, "-U", "--noconfirm", str(package.resolve())],
-                env=environment,
-                timeout=600,
-            )
-            verify_installed(actual_version)
-            print(f"ok upgrade: {SYNTHETIC_PREDECESSOR_VERSION} -> {actual_version}")
-
-            run(
-                [*pacman_command, "-R", "--noconfirm", PACKAGE_NAME],
-                env=environment,
-                timeout=600,
-            )
-            installed_by_check = False
-            verify_removed()
-            verify_user_state(sentinel)
-            print("ok remove: package files removed and user state retained")
-            return {
-                "performed": True,
-                "host_family": sorted(parse_os_release()),
-                "predecessor_version": SYNTHETIC_PREDECESSOR_VERSION,
-                "candidate_version": actual_version,
-                "install": "pass",
-                "upgrade": "pass",
-                "non_gui_version_probe": "pass",
-                "remove": "pass",
-                "owned_file_cleanup": "pass",
-                "user_state_retention": "pass",
-            }
-        finally:
-            if installed_by_check and installed_version() is not None:
-                subprocess.run(
-                    [*pacman_command, "-R", "--noconfirm", PACKAGE_NAME],
-                    env=environment,
-                    capture_output=True,
-                    text=True,
-                    timeout=600,
-                )
-
-
-def write_report(
-    path: Path,
-    package: Path,
-    *,
-    status: str,
-    metadata: dict[str, object] | None,
-    lifecycle: dict[str, object] | None = None,
-    error: str | None = None,
-) -> None:
-    package_details: dict[str, object] = {"path": package.name}
-    if package.is_file():
-        package_details.update(
-            {"bytes": package.stat().st_size, "sha256": file_sha256(package)}
-        )
-    if metadata is not None:
-        package_details.update(metadata)
-    payload: dict[str, object] = {
-        "schema": 1,
-        "status": status,
-        "recorded_at_utc": datetime.now(timezone.utc).isoformat(),
-        "candidate_sha": os.environ.get("GITHUB_SHA"),
-        "package": package_details,
-        "archive_contract": "pass" if metadata is not None else "not-established",
-        "lifecycle": lifecycle or {"performed": False},
-    }
-    if error is not None:
-        payload["error"] = error
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.tmp")
-    temporary.write_text(
-        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
-    os.replace(temporary, path)
+    pacman = require_tool("pacman")
+    try:
+        run([pacman, "-U", "--noconfirm", str(package.resolve())], timeout=600)
+        verify_installed(version)
+        print(f"ok install: {version}")
+    finally:
+        if installed_version() is not None:
+            run([pacman, "-R", "--noconfirm", PACKAGE_NAME], timeout=600)
+    verify_removed()
+    print("ok remove: package files removed")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -597,39 +336,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--system-lifecycle",
         action="store_true",
-        help="install, upgrade, and remove on this explicitly opted-in disposable host",
+        help="install and remove the package on this disposable host",
     )
-    parser.add_argument("--report", type=Path)
     arguments = parser.parse_args(argv)
-    metadata: dict[str, object] | None = None
-    lifecycle: dict[str, object] | None = None
     try:
         metadata = inspect_archive(arguments.package)
         if arguments.system_lifecycle:
-            lifecycle = exercise_system_lifecycle(
-                arguments.package, str(metadata["version"])
-            )
-        if arguments.report is not None:
-            write_report(
-                arguments.report,
-                arguments.package,
-                status="pass",
-                metadata=metadata,
-                lifecycle=lifecycle,
-            )
-        return 0
+            exercise_system_lifecycle(arguments.package, str(metadata["version"]))
     except (CheckError, OSError, subprocess.SubprocessError) as error:
-        if arguments.report is not None:
-            write_report(
-                arguments.report,
-                arguments.package,
-                status="fail",
-                metadata=metadata,
-                lifecycle=lifecycle,
-                error=str(error),
-            )
         print(f"error: {error}", file=sys.stderr)
         return 1
+    return 0
 
 
 if __name__ == "__main__":

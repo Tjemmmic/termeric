@@ -82,7 +82,7 @@ python3 scripts/build_arch_package.py --output target/arch
 python3 scripts/check_arch_package.py target/arch/termeric-git-*.pkg.tar.zst
 ```
 
-The checkers inspect a package without installing it. Their `--system-lifecycle` mode installs, upgrades, and removes the package, so only use it on a disposable machine or container.
+The checkers inspect a package without installing it. Their `--system-lifecycle` mode, which needs root, installs the package, checks the installed files and `termeric --version`, and removes it again, so only use it on a disposable machine or container.
 
 ## Generated files
 
