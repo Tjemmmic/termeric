@@ -299,7 +299,8 @@ mod tests {
         assert!(app.clipboard_paste_blocked());
         assert!(!app.paste_clipboard_payload("hidden"));
         app.workspace_menu = None;
-        app.shortcut_registry.clear_binding(BindableAction::Paste);
+        app.shortcut_registry
+            .set_binding(BindableAction::Paste, None);
         assert!(!app.handle_query_paste_key(&rebound));
         assert_eq!(app.tab_rename.as_ref().unwrap().input, "Roots");
     }
@@ -407,7 +408,8 @@ mod tests {
         assert!(!app.handle_query_paste_key(&rebound));
         assert!(!app.paste_clipboard_payload("hidden"));
         app.workspace_menu = None;
-        app.shortcut_registry.clear_binding(BindableAction::Paste);
+        app.shortcut_registry
+            .set_binding(BindableAction::Paste, None);
         assert!(!app.handle_query_paste_key(&rebound));
         assert_eq!(
             app.session_panel.build_info().rename_text.as_deref(),
@@ -573,7 +575,8 @@ mod tests {
         );
         app.settings_panel.close();
         app.settings_panel.toggle();
-        app.shortcut_registry.clear_binding(BindableAction::Paste);
+        app.shortcut_registry
+            .set_binding(BindableAction::Paste, None);
         assert!(!app.handle_query_paste_key(&rebound));
     }
 
@@ -703,7 +706,8 @@ mod tests {
                 .is_empty()
         );
         app.shortcuts_panel.open();
-        app.shortcut_registry.clear_binding(BindableAction::Paste);
+        app.shortcut_registry
+            .set_binding(BindableAction::Paste, None);
         assert!(!app.handle_query_paste_key(&rebound));
         assert!(app.config.keybindings.is_empty());
     }
@@ -769,7 +773,8 @@ mod tests {
         assert!(!app.handle_query_paste_key(&Key::Character("v".into())));
         app.modifiers = ModifiersState::empty();
         assert!(app.handle_query_paste_key(&rebound));
-        app.shortcut_registry.clear_binding(BindableAction::Paste);
+        app.shortcut_registry
+            .set_binding(BindableAction::Paste, None);
         assert!(!app.handle_query_paste_key(&rebound));
         assert!(app.paste_clipboard_payload("az"));
         app.commands_panel.form_edit(TextInputEdit::Left);
@@ -850,7 +855,8 @@ mod tests {
         assert!(app.clipboard_paste_blocked());
         assert!(!app.paste_clipboard_payload("hidden"));
         assert_eq!(app.command_palette.build_info().input, "");
-        app.shortcut_registry.clear_binding(BindableAction::Paste);
+        app.shortcut_registry
+            .set_binding(BindableAction::Paste, None);
         assert!(!app.handle_query_paste_key(&rebound));
     }
 

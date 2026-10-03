@@ -863,51 +863,6 @@ impl ShortcutRegistry {
         self.user_overrides.insert(action, chord);
     }
 
-    /// Clear a binding (unbind the action).
-    #[allow(dead_code)] // Consumed only by unit tests; the shortcuts panel
-    // will use this once the Reset UI lands.
-    pub fn clear_binding(&mut self, action: BindableAction) {
-        self.set_binding(action, None);
-    }
-
-    /// Reset a single action to its default binding.
-    #[allow(dead_code)] // See `clear_binding`.
-    pub fn reset_binding(&mut self, action: BindableAction) {
-        let default = action.meta().default_binding;
-        // Remove current from reverse map
-        if let Some(Some(old)) = self.bindings.get(&action) {
-            self.key_map.remove(old);
-        }
-        // Handle conflict with default chord
-        if let Some(chord) = &default {
-            if let Some(&conflicting) = self.key_map.get(chord) {
-                if conflicting != action {
-                    self.bindings.insert(conflicting, None);
-                    self.user_overrides.insert(conflicting, None);
-                }
-            }
-            self.key_map.insert(chord.clone(), action);
-        }
-        self.bindings.insert(action, default);
-        self.user_overrides.remove(&action);
-    }
-
-    /// Reset all bindings to defaults.
-    #[allow(dead_code)] // See `clear_binding`.
-    pub fn reset_all(&mut self) {
-        self.key_map.clear();
-        self.user_overrides.clear();
-        for &action in BindableAction::all() {
-            let meta = action.meta();
-            if let Some(chord) = &meta.default_binding {
-                self.key_map.insert(chord.clone(), action);
-                self.bindings.insert(action, Some(chord.clone()));
-            } else {
-                self.bindings.insert(action, None);
-            }
-        }
-    }
-
     /// Check what action a chord is currently bound to (for conflict detection).
     pub fn conflict_for(&self, chord: &KeyChord) -> Option<BindableAction> {
         self.key_map.get(chord).copied()
@@ -1210,9 +1165,9 @@ mod tests {
     }
 
     #[test]
-    fn test_clear_binding() {
+    fn unbinding_an_action_removes_its_chord() {
         let mut reg = ShortcutRegistry::new();
-        reg.clear_binding(BindableAction::Copy);
+        reg.set_binding(BindableAction::Copy, None);
         assert!(reg.binding_for(BindableAction::Copy).is_none());
         // Lookup should return None
         let key = Key::Character("c".into());
@@ -1223,25 +1178,13 @@ mod tests {
     }
 
     #[test]
-    fn test_reset_binding() {
-        let mut reg = ShortcutRegistry::new();
-        reg.clear_binding(BindableAction::Copy);
-        assert!(reg.binding_for(BindableAction::Copy).is_none());
-        reg.reset_binding(BindableAction::Copy);
-        let chord = reg.binding_for(BindableAction::Copy).unwrap();
-        assert_eq!(chord.key, "c");
-        assert!(chord.ctrl);
-        assert!(chord.shift);
-    }
-
-    #[test]
     fn test_user_overrides_persistence() {
         let mut reg = ShortcutRegistry::new();
         reg.set_binding(
             BindableAction::Copy,
             Some(KeyChord::new("k", true, false, false, false)),
         );
-        reg.clear_binding(BindableAction::Paste);
+        reg.set_binding(BindableAction::Paste, None);
 
         let overrides = reg.user_overrides();
         assert_eq!(overrides.len(), 2); // Copy rebind + Paste cleared
@@ -1332,26 +1275,5 @@ mod tests {
             action,
             Some(KeyAction::PluginCommand { command_id }) if command_id == "test_plugin"
         ));
-    }
-
-    #[test]
-    fn test_reset_all() {
-        let mut reg = ShortcutRegistry::new();
-        reg.set_binding(
-            BindableAction::Copy,
-            Some(KeyChord::new("x", false, false, false, false)),
-        );
-        reg.clear_binding(BindableAction::NewTab);
-        reg.reset_all();
-
-        // Everything back to defaults
-        let chord = reg.binding_for(BindableAction::Copy).unwrap();
-        assert_eq!(chord.key, "c");
-        assert!(chord.ctrl && chord.shift);
-
-        let tab_chord = reg.binding_for(BindableAction::NewTab).unwrap();
-        assert_eq!(tab_chord.key, "t");
-
-        assert!(reg.user_overrides().is_empty());
     }
 }
