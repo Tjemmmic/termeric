@@ -56,7 +56,7 @@ Saving changes only the settings that differ from the file. Everything else in `
 
 Choosing a theme with **Change Theme…**, adding or deleting a saved command in the Commands panel, and **Cycle New Pane Directory** also save the file, together with any other unsaved changes from Settings.
 
-The font size you save is the current size of that window, so a zoom you made with Ctrl+= or Ctrl+- becomes the saved size.
+A zoom you make with Ctrl+= or Ctrl+- belongs to that window and is never saved; `font.size` keeps its configured value.
 
 Some settings are not in the Settings dialog, so you change them in the file:
 

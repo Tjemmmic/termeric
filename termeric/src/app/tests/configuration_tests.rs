@@ -51,14 +51,14 @@ fn headless_settings_apply_scrollback_memory_budget() {
 }
 
 #[test]
-fn headless_font_size_setting_updates_reset_size_and_preserves_other_config() {
+fn headless_font_size_setting_updates_the_drawn_size_and_preserves_other_config() {
     let mut app = App::new_headless(Config::default()).unwrap();
     for size in [8.0, 15.5, 72.0, 14.0] {
         let mut expected = app.config.clone();
         expected.font.size = size;
         app.apply_settings_action(SettingsAction::SetFontSize(size));
         assert_eq!(app.config.font.size, size);
-        assert_eq!(app.default_font_size, size);
+        assert_eq!(app.effective_font_size(), size);
         assert_eq!(
             toml::to_string(&app.config).unwrap(),
             toml::to_string(&expected).unwrap(),
@@ -75,7 +75,7 @@ fn headless_font_size_setting_rejects_invalid_values_before_mutation() {
     for size in [7.9, 72.1, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
         app.apply_settings_action(SettingsAction::SetFontSize(size));
         assert_eq!(toml::to_string(&app.config).unwrap(), retained);
-        assert_eq!(app.default_font_size, 15.5);
+        assert_eq!(app.effective_font_size(), 15.5);
         assert_eq!((app.cols, app.rows), geometry);
     }
 }
@@ -526,4 +526,52 @@ fn a_save_that_keeps_an_edit_made_elsewhere_leaves_it_for_the_reload() {
     );
     // The poller still sees a change, and its reload brings in padding = 20.
     assert_eq!(app.last_config_mtime, Some(saved));
+}
+
+#[test]
+fn zoom_changes_only_the_window_and_is_never_saved() {
+    let (_directory, path, mut app) = app_with_config_file("[font]\nsize = 12\n");
+    app.zoom_font(2.0);
+    app.zoom_font(2.0);
+    assert_eq!(app.effective_font_size(), 16.0);
+    assert_eq!(app.config.font.size, 12.0);
+    assert!(!app.config_has_unsaved_changes(), "zoom is not a setting");
+
+    // Saving another change keeps the configured size in the file.
+    app.apply_settings_action(SettingsAction::SetVisualBell(false));
+    app.save_config().unwrap();
+    let saved = Config::load_from(&path).unwrap();
+    assert_eq!(saved.font.size, 12.0);
+    assert!(!saved.bell.visual);
+    // An unrelated change keeps the zoom, and Ctrl+0 returns to the
+    // configured size rather than the zoomed one.
+    assert_eq!(app.effective_font_size(), 16.0);
+    app.reset_font_zoom();
+    assert_eq!(app.effective_font_size(), 12.0);
+
+    // Zooming stays within the configured bounds.
+    for _ in 0..40 {
+        app.zoom_font(2.0);
+    }
+    assert_eq!(app.effective_font_size(), 72.0);
+}
+
+#[test]
+fn changing_the_configured_size_ends_a_zoom() {
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.zoom_font(-2.0);
+    assert_eq!(app.effective_font_size(), 10.0);
+    app.apply_settings_action(SettingsAction::SetFontSize(14.0));
+    assert_eq!(app.effective_font_size(), 14.0);
+
+    // A reload that changes the size ends it too; one that does not keeps it.
+    app.zoom_font(2.0);
+    let mut reloaded = app.config.clone();
+    reloaded.cursor.blink = !reloaded.cursor.blink;
+    app.apply_config(reloaded).unwrap();
+    assert_eq!(app.effective_font_size(), 16.0);
+    let mut reloaded = app.config.clone();
+    reloaded.font.size = 13.0;
+    app.apply_config(reloaded).unwrap();
+    assert_eq!(app.effective_font_size(), 13.0);
 }

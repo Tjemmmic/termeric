@@ -441,11 +441,6 @@ impl Renderer {
         (TAB_BAR_HEIGHT * self.scale_factor).round()
     }
 
-    /// Get current font size
-    pub fn font_size(&self) -> f32 {
-        self.font_size
-    }
-
     /// Change font size
     pub fn set_font_size(&mut self, font_size: f32) {
         self.invalidate_terminal_rows();

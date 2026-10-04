@@ -8,21 +8,35 @@ impl App {
     pub(super) const CONFIG_POLL_INTERVAL: std::time::Duration =
         std::time::Duration::from_millis(750);
 
-    pub(super) fn change_font_size(&mut self, delta: f32) {
-        let Some(renderer) = &mut self.renderer else {
-            return;
-        };
-        let current = renderer.font_size();
-        let new_size = (current + delta).clamp(
+    /// The font size this window draws with: its zoom, or the configured
+    /// `font.size`.
+    pub(super) fn effective_font_size(&self) -> f32 {
+        self.font_zoom.unwrap_or(self.config.font.size)
+    }
+
+    /// Zoom this window's text by `delta` points (Ctrl+= and Ctrl+-).
+    pub(super) fn zoom_font(&mut self, delta: f32) {
+        let size = (self.effective_font_size() + delta).clamp(
             *crate::config::FONT_SIZE_RANGE.start(),
             *crate::config::FONT_SIZE_RANGE.end(),
         );
-        self.set_font_size(new_size);
+        self.set_font_zoom(Some(size));
     }
 
-    /// Set font size to a specific value
-    pub(super) fn set_font_size(&mut self, size: f32) {
-        self.config.font.size = size;
+    /// Return this window's text to the configured size (Ctrl+0).
+    pub(super) fn reset_font_zoom(&mut self) {
+        self.set_font_zoom(None);
+    }
+
+    /// Zoom is view state: it changes how this window draws, never the
+    /// configuration, so it is not saved and leaves Settings clean.
+    fn set_font_zoom(&mut self, zoom: Option<f32>) {
+        let zoom = zoom.filter(|size| *size != self.config.font.size);
+        if zoom == self.font_zoom {
+            return;
+        }
+        self.font_zoom = zoom;
+        let size = self.effective_font_size();
         let Some(renderer) = &mut self.renderer else {
             return;
         };
@@ -266,6 +280,11 @@ impl App {
             self.retain_commands_accessibility_rows(&retained);
         }
         let agents_changed = config.agents != self.config.agents;
+        // A new configured size is what the person now wants to see, so it
+        // ends a zoom; other changes keep it.
+        if config.font.size != self.config.font.size {
+            self.font_zoom = None;
+        }
         self.config = config;
         self.apply_config_side_effects(agents_changed);
         if keyboard_type_changed && let Some(tabs) = &mut self.tabs {
@@ -281,14 +300,14 @@ impl App {
     /// application path for startup, settings, reset, manual reload, and hot
     /// reload. Existing PTYs keep their process; shell changes affect new tabs.
     pub(super) fn apply_config_side_effects(&mut self, agents_changed: bool) {
-        self.default_font_size = self.config.font.size;
+        let font_size = self.effective_font_size();
         let tab_bar_position_changed = self.renderer.as_ref().is_some_and(|renderer| {
             renderer.tab_bar_position() != self.config.window.tab_bar_position
         });
         if let Some(renderer) = &mut self.renderer {
             let font = &self.config.font;
             renderer.set_font_families(font.family.clone(), &font.fallback, &font.range_overrides);
-            renderer.set_font_size(font.size);
+            renderer.set_font_size(font_size);
             renderer.set_font_weights(font.weight, font.bold_weight);
             renderer.set_line_height(font.line_height);
             renderer.set_tab_bar_position(self.config.window.tab_bar_position);

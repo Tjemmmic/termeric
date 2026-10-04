@@ -1214,8 +1214,9 @@ pub struct App {
     live_domain_authority: Option<crate::domain::DomainAuthority>,
     /// Exact local relay command, including any SSH authority prefix.
     live_domain_relay_command: Option<crate::domain::DomainRelayCommand>,
-    /// Default font size (for reset)
-    default_font_size: f32,
+    /// This window's Ctrl+=/Ctrl+- font size, in points, until Ctrl+0 or a
+    /// change to the configured `font.size`. View state: never saved.
+    font_zoom: Option<f32>,
     /// When copy flash started (for animation), None if not flashing
     copy_flash_start: Option<Instant>,
     /// Whether the window is currently focused
@@ -1431,7 +1432,6 @@ impl App {
         mut startup_config_warning: Option<String>,
         use_system_state: bool,
     ) -> Result<Self> {
-        let default_font_size = config.font.size;
         let config_path = Config::config_path();
         let background_image_path = config.window.background_image.path.clone();
         let last_background_image_stamp = background_image_path.as_deref().and_then(|path| {
@@ -1565,7 +1565,7 @@ impl App {
             live_domain_topology_alive: Arc::new(AtomicBool::new(true)),
             live_domain_authority: None,
             live_domain_relay_command: None,
-            default_font_size,
+            font_zoom: None,
             copy_flash_start: None,
             window_focused: true,
             focus_change_time: Instant::now(),
@@ -1710,7 +1710,7 @@ impl App {
         });
         let mut renderer = Renderer::new(
             window.clone(),
-            self.config.font.size,
+            self.effective_font_size(),
             &self.config.font.family,
             &self.config.font.fallback,
             &self.config.font.range_overrides,
@@ -3088,13 +3088,13 @@ impl App {
                 }
             }
             Action::IncreaseFontSize => {
-                self.change_font_size(2.0);
+                self.zoom_font(2.0);
             }
             Action::DecreaseFontSize => {
-                self.change_font_size(-2.0);
+                self.zoom_font(-2.0);
             }
             Action::ResetFontSize => {
-                self.set_font_size(self.default_font_size);
+                self.reset_font_zoom();
             }
             Action::ToggleFullscreen => {
                 self.toggle_fullscreen();
@@ -3761,14 +3761,10 @@ impl App {
             .replace_launch_profile_commands(commands);
     }
 
-    /// Save current configuration to file
-    /// The configuration Save writes: live settings plus values held
-    /// elsewhere (the renderer's font size and recorded shortcuts).
+    /// The configuration Save writes: live settings plus the recorded
+    /// shortcuts, which the shortcut registry holds.
     fn persisted_config(&self) -> Config {
         let mut config = self.config.clone();
-        if let Some(renderer) = &self.renderer {
-            config.font.size = renderer.font_size();
-        }
         config.shortcuts = self.shortcut_registry.user_overrides();
         config
     }
