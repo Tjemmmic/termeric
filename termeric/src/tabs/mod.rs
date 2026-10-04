@@ -1912,35 +1912,19 @@ impl TabManager {
                 continue;
             }
 
-            // Extract the terminal's visible content for the error message
+            // The visible screen, without its leading and trailing blank rows,
+            // explains why the plugin exited.
             let Some(terminal) = tab.focused_terminal() else {
                 continue;
             };
-            let grid = terminal.grid();
-            let mut lines: Vec<String> = Vec::new();
-            for row in 0..grid.rows() {
-                let mut line = String::new();
-                for col in 0..grid.cols() {
-                    if let Some(cell) = grid.cell(row, col) {
-                        if cell.is_wide_char_spacer()
-                            || (cell.multicell.is_present() && !cell.multicell.is_leader())
-                        {
-                            continue;
-                        }
-                        if cell.content.is_empty() {
-                            line.push(' ');
-                        } else {
-                            cell.content.push_to(&mut line);
-                        }
-                    }
-                }
-                let trimmed = line.trim_end().to_string();
-                if !trimmed.is_empty() || !lines.is_empty() {
-                    lines.push(trimmed);
-                }
-            }
-            // Trim trailing empty lines
-            while lines.last().is_some_and(|l| l.is_empty()) {
+            let last_row = i32::try_from(terminal.grid().rows()).unwrap_or(i32::MAX) - 1;
+            let mut lines: Vec<String> = terminal
+                .rows_text(0, last_row)
+                .lines()
+                .skip_while(|line| line.is_empty())
+                .map(String::from)
+                .collect();
+            while lines.last().is_some_and(|line| line.is_empty()) {
                 lines.pop();
             }
 
@@ -2028,39 +2012,12 @@ impl TabManager {
                     continue;
                 }
                 handled_before_topology_cleanup.push(tab.id);
-                if tab.live_domain.is_some() {
-                    log::debug!(
-                        "Skipping legacy snapshot for closing live-domain relay tab {}",
-                        tab.id
-                    );
-                } else if tab.has_content() {
-                    match tab.save_as_session(save_scrollback) {
-                        Ok(outcome) => {
-                            log::info!(
-                                "Auto-saved closing split tab {} as session '{}' before pane cleanup",
-                                tab.id,
-                                outcome.id
-                            );
-                            self.persistence_notices.push(PersistenceNotice::Saved {
-                                id: outcome.id,
-                                truncated: outcome.scrollback_truncated,
-                            });
-                        }
-                        Err(error) => {
-                            log::error!(
-                                "Failed to auto-save closing split tab {}: {error:#}",
-                                tab.id
-                            );
-                            self.persistence_notices
-                                .push(PersistenceNotice::SaveFailed {
-                                    tab_id: tab.id,
-                                    error: format!("{error:#}"),
-                                });
-                        }
-                    }
-                } else {
-                    log::debug!("Skipping empty closing split tab {} (no content)", tab.id);
-                }
+                auto_save_closing_tab(
+                    tab,
+                    "split tab",
+                    save_scrollback,
+                    &mut self.persistence_notices,
+                );
             }
         }
         let pane_topology_changed = self.cleanup_pane_topology();
@@ -2068,39 +2025,10 @@ impl TabManager {
 
         // Save sessions for tabs about to be removed
         for tab in self.tabs.iter_mut() {
-            if tab.closed || tab.is_close_complete() || (self.reduced_motion && tab.is_closing()) {
-                if handled_before_topology_cleanup.contains(&tab.id) {
-                    continue;
-                } else if auto_save && tab.live_domain.is_some() {
-                    log::debug!(
-                        "Skipping legacy snapshot for closing live-domain relay tab {}",
-                        tab.id
-                    );
-                } else if auto_save && tab.has_content() {
-                    match tab.save_as_session(save_scrollback) {
-                        Ok(outcome) => {
-                            log::info!(
-                                "Auto-saved closing tab {} as session '{}'",
-                                tab.id,
-                                outcome.id
-                            );
-                            self.persistence_notices.push(PersistenceNotice::Saved {
-                                id: outcome.id,
-                                truncated: outcome.scrollback_truncated,
-                            });
-                        }
-                        Err(error) => {
-                            log::error!("Failed to auto-save closing tab {}: {error:#}", tab.id);
-                            self.persistence_notices
-                                .push(PersistenceNotice::SaveFailed {
-                                    tab_id: tab.id,
-                                    error: format!("{error:#}"),
-                                });
-                        }
-                    }
-                } else if auto_save {
-                    log::debug!("Skipping empty closing tab {} (no content)", tab.id);
-                }
+            let removing =
+                tab.closed || tab.is_close_complete() || (self.reduced_motion && tab.is_closing());
+            if auto_save && removing && !handled_before_topology_cleanup.contains(&tab.id) {
+                auto_save_closing_tab(tab, "tab", save_scrollback, &mut self.persistence_notices);
             }
         }
 
@@ -2582,6 +2510,48 @@ impl TabManager {
             .iter_mut()
             .flat_map(Tab::drain_user_notices)
             .collect()
+    }
+}
+
+/// Saves a closing tab as a snapshot when it has content and is not a
+/// live-domain relay, recording the outcome for the person. `kind` names the
+/// tab in the log.
+fn auto_save_closing_tab(
+    tab: &mut Tab,
+    kind: &str,
+    save_scrollback: bool,
+    notices: &mut Vec<PersistenceNotice>,
+) {
+    if tab.live_domain.is_some() {
+        log::debug!(
+            "Skipping legacy snapshot for closing live-domain relay tab {}",
+            tab.id
+        );
+        return;
+    }
+    if !tab.has_content() {
+        log::debug!("Skipping empty closing {kind} {} (no content)", tab.id);
+        return;
+    }
+    match tab.save_as_session(save_scrollback) {
+        Ok(outcome) => {
+            log::info!(
+                "Auto-saved closing {kind} {} as session '{}'",
+                tab.id,
+                outcome.id
+            );
+            notices.push(PersistenceNotice::Saved {
+                id: outcome.id,
+                truncated: outcome.scrollback_truncated,
+            });
+        }
+        Err(error) => {
+            log::error!("Failed to auto-save closing {kind} {}: {error:#}", tab.id);
+            notices.push(PersistenceNotice::SaveFailed {
+                tab_id: tab.id,
+                error: format!("{error:#}"),
+            });
+        }
     }
 }
 
