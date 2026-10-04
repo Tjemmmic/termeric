@@ -79,12 +79,18 @@ pub enum Incoming {
     },
     /// A response to no request the host could have made.
     Stray,
-    /// Not a JSON-RPC message.
+    /// An error response with an `id` of `null`: the agent could not read
+    /// one of the host's requests well enough to name it. Holds a preview
+    /// of the error.
+    Rejected(String),
+    /// Not a JSON object, or one with neither a method nor an id.
     Unreadable,
 }
 
 /// Tell `line` apart as a request, notification, or response. An `id` of
-/// `null` counts as absent: JSON-RPC requests always carry a real id.
+/// `null` counts as absent: JSON-RPC 2.0 allows it, but neither protocol's
+/// requests use it, and on an error response it means the agent could not
+/// read the request it answers.
 pub fn incoming(line: &str) -> Incoming {
     let Ok(Value::Object(message)) = serde_json::from_str::<Value>(line) else {
         return Incoming::Unreadable;
@@ -109,7 +115,12 @@ pub fn incoming(line: &str) -> Incoming {
             Some(id) => Incoming::Response { id, message },
             None => Incoming::Stray,
         },
-        (None, None) => Incoming::Unreadable,
+        (None, None) => match message.get("error") {
+            Some(error) if message.get("id").is_some_and(Value::is_null) => {
+                Incoming::Rejected(preview(&error.to_string()))
+            }
+            _ => Incoming::Unreadable,
+        },
     }
 }
 
@@ -186,7 +197,19 @@ mod tests {
             Incoming::Response { id: 7, .. }
         ));
         assert_eq!(incoming(r#"{"id":"x","result":{}}"#), Incoming::Stray);
-        for unreadable in ["not json", "[]", r#"{"id":null}"#, "{}"] {
+        assert_eq!(
+            incoming(
+                r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}}"#
+            ),
+            Incoming::Rejected(r#"{"code":-32700,"message":"Parse error"}"#.into())
+        );
+        for unreadable in [
+            "not json",
+            "[]",
+            r#"{"id":null}"#,
+            "{}",
+            r#"{"error":{"code":-32700}}"#,
+        ] {
             assert_eq!(incoming(unreadable), Incoming::Unreadable, "{unreadable}");
         }
     }

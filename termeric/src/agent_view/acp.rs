@@ -1229,6 +1229,10 @@ impl Protocol for AcpCodec {
             Incoming::Notification { method, params } => self.decode_notification(&method, &params),
             Incoming::Response { id, message } => self.decode_response(id, &message),
             Incoming::Stray => Exchange::default(),
+            Incoming::Rejected(error) => {
+                log::warn!("agent view: agent rejected a request it could not parse: {error}");
+                Exchange::default()
+            }
             Incoming::Unreadable => Exchange {
                 events: vec![AgentEvent::Unrecognized(preview(line))],
                 lines: Vec::new(),
