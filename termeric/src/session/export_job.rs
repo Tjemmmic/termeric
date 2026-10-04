@@ -42,11 +42,21 @@ impl ExportJob {
         base: PathBuf,
         wake: Option<Arc<dyn Fn() + Send + Sync>>,
     ) -> io::Result<Self> {
+        Self::start_with_flush_timeout(source, base, wake, FLUSH_TIMEOUT)
+    }
+
+    fn start_with_flush_timeout(
+        source: ExportSource,
+        base: PathBuf,
+        wake: Option<Arc<dyn Fn() + Send + Sync>>,
+        flush_timeout: Duration,
+    ) -> io::Result<Self> {
         let (send, reply) = mpsc::sync_channel(1);
         std::thread::Builder::new()
             .name("termeric-export".into())
             .spawn(move || {
-                let result = export(source, &base).map_err(|error| error.to_string());
+                let result =
+                    export(source, &base, flush_timeout).map_err(|error| error.to_string());
                 let _ = send.send(result);
                 if let Some(wake) = wake {
                     wake();
@@ -66,7 +76,11 @@ impl ExportJob {
     }
 }
 
-fn export(source: ExportSource, base: &Path) -> io::Result<CompletedExport> {
+fn export(
+    source: ExportSource,
+    base: &Path,
+    flush_timeout: Duration,
+) -> io::Result<CompletedExport> {
     fs::create_dir_all(base)?;
     remove_stale_staging(base);
     // A hidden private directory until the export is complete; publishing
@@ -84,7 +98,7 @@ fn export(source: ExportSource, base: &Path) -> io::Result<CompletedExport> {
         ExportSource::Transcript(pending) => {
             let bytes = pending
                 .reply
-                .recv_timeout(FLUSH_TIMEOUT)
+                .recv_timeout(flush_timeout)
                 .map_err(|_| io::Error::other("Transcript writer did not flush its recording"))??;
             let raw = staging.path().join("transcript.jsonl");
             copy_prefix(&pending.path, &raw, bytes)?;
@@ -278,6 +292,66 @@ mod tests {
         }
     }
 
+    /// A transcript at `path` holding `bytes`, whose writer has not flushed
+    /// yet: it flushes when the returned sender sends.
+    fn unflushed(path: &Path, bytes: &[u8]) -> (ExportSource, mpsc::Sender<io::Result<u64>>) {
+        fs::write(path, bytes).unwrap();
+        let (reply, receiver) = mpsc::channel();
+        let source = ExportSource::Transcript(PendingTranscriptFlush {
+            path: path.to_owned(),
+            reply: receiver,
+        });
+        (source, reply)
+    }
+
+    #[test]
+    fn starting_an_export_never_waits_for_the_transcript_writer() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("exports");
+        let content = row("FLUSHED LATER");
+        let (source, writer) = unflushed(&dir.path().join("source"), &content);
+        let job = ExportJob::start(source, base.clone(), None).unwrap();
+        // The worker is still waiting for the flush, so nothing is done yet.
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(job.poll().is_none());
+        assert!(
+            !base.exists()
+                || fs::read_dir(&base).unwrap().all(|entry| {
+                    entry
+                        .unwrap()
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with('.')
+                })
+        );
+        writer.send(Ok(content.len() as u64)).unwrap();
+        let exported = wait(&job).unwrap();
+        assert!(
+            fs::read_to_string(&exported.markdown)
+                .unwrap()
+                .contains("FLUSHED LATER")
+        );
+    }
+
+    #[test]
+    fn a_writer_that_never_flushes_times_out_and_leaves_nothing_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("exports");
+        let (source, _writer) = unflushed(&dir.path().join("source"), &row("never"));
+        let started = Instant::now();
+        let job = ExportJob::start_with_flush_timeout(
+            source,
+            base.clone(),
+            None,
+            Duration::from_millis(100),
+        )
+        .unwrap();
+        let error = wait(&job).unwrap_err();
+        assert!(started.elapsed() >= Duration::from_millis(100));
+        assert_eq!(error, "Transcript writer did not flush its recording");
+        assert_eq!(fs::read_dir(&base).unwrap().count(), 0);
+    }
+
     #[test]
     fn a_failed_export_leaves_nothing_behind() {
         let dir = tempfile::tempdir().unwrap();
@@ -301,7 +375,7 @@ mod tests {
                 2 => fs::remove_file(&source).unwrap(),
                 _ => {}
             }
-            assert!(export(pending, &base).is_err());
+            assert!(export(pending, &base, FLUSH_TIMEOUT).is_err());
             assert_eq!(fs::read_dir(&base).unwrap().count(), 1);
             assert_eq!(fs::read_to_string(&sentinel).unwrap(), "unchanged");
         }
@@ -312,15 +386,22 @@ mod tests {
             path: source,
             reply,
         });
-        assert!(export(silent, &base).is_err());
+        assert!(export(silent, &base, FLUSH_TIMEOUT).is_err());
         assert_eq!(fs::read_dir(&base).unwrap().count(), 1);
     }
 
     #[test]
     fn repeated_exports_never_overwrite_and_scrollback_has_no_jsonl() {
         let dir = tempfile::tempdir().unwrap();
-        let first = export(ExportSource::Scrollback("first 界".into()), dir.path()).unwrap();
-        let second = export(ExportSource::Scrollback("second".into()), dir.path()).unwrap();
+        let scrollback = |text: &str| {
+            export(
+                ExportSource::Scrollback(text.into()),
+                dir.path(),
+                FLUSH_TIMEOUT,
+            )
+        };
+        let first = scrollback("first 界").unwrap();
+        let second = scrollback("second").unwrap();
         assert_ne!(first.markdown, second.markdown);
         assert!(!first.includes_jsonl);
         assert!(
@@ -368,7 +449,7 @@ mod tests {
         fs::write(&file, "kept").unwrap();
         age(&file, STALE_STAGING_AGE * 2);
 
-        let exported = export(ExportSource::Scrollback("new".into()), base).unwrap();
+        let exported = export(ExportSource::Scrollback("new".into()), base, FLUSH_TIMEOUT).unwrap();
 
         assert!(!stale.exists());
         for kept in [&running, &unrelated, &published, &link, &file] {
