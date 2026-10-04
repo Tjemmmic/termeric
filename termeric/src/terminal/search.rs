@@ -6,7 +6,7 @@
 use super::row_text::push_row_text;
 use crate::ui::search_bar::SearchBarInfo;
 use regex::{Regex, RegexBuilder};
-use std::ops::RangeInclusive;
+use std::ops::{Range, RangeInclusive};
 use std::time::{Duration, Instant};
 use termeric_core::Grid;
 use unicode_segmentation::UnicodeSegmentation;
@@ -17,11 +17,20 @@ pub(crate) const MAX_RETAINED_SEARCH_MATCHES: usize = 131_072;
 pub(crate) const MAX_SEARCH_RESULT_INDEX_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) const MAX_SEARCH_QUERY_BYTES: usize = 4 * 1024;
 
+/// Rows of one logical line searched at a time. A longer soft-wrapped line,
+/// such as megabytes of output with no newline, is searched in slices of this
+/// many rows, so one slice of work never grows with the line.
+const MAX_LINE_SLICE_ROWS: i32 = 64;
+/// How far past a slice a regex match that starts in it may reach. A literal
+/// query's matches are never longer than the query, so a slice reads that far
+/// ahead; a regex match may be unbounded, so it is cut off here instead.
+const REGEX_MATCH_OVERLAP_CHARS: usize = 4 * 1024;
+
 fn valid_query_text(text: &str) -> bool {
     text.len() <= MAX_SEARCH_QUERY_BYTES && !text.chars().any(crate::safe_text::breaks_single_line)
 }
 
-/// One logical line: a row and the rows it soft-wraps into.
+/// Rows of one logical line (a row and the rows it soft-wraps into) as text.
 struct SearchLine {
     text: String,
     first_row: i32,
@@ -38,16 +47,33 @@ struct LineCell {
     end_col: usize,
 }
 
+/// One slice of a logical line, read from `SearchLine::slice`.
+struct LineSlice {
+    line: SearchLine,
+    /// Byte where the search starts: the first owned row, or later when an
+    /// earlier slice's last match ran past it.
+    search_start: usize,
+    /// Byte just past the owned rows. Matches start before it; the text after
+    /// it is there to finish them.
+    owned_end: usize,
+    last_owned_row: i32,
+    /// Whether the logical line continues after the owned rows.
+    continues: bool,
+    rows_read: usize,
+}
+
 #[derive(Debug)]
 struct PendingSearch {
     content_revision: (u64, u64),
     cols: usize,
     history_len: usize,
     visible_rows: usize,
-    next_history: usize,
-    next_visible: usize,
-    /// Last row of the latest logical line searched; rows up to it are done.
-    searched_through: Option<i32>,
+    /// The next row to search: history rows are negative, visible rows 0 up.
+    next_row: i32,
+    /// While a logical line continues into `next_row`, the cell where its
+    /// search goes on: the start of `next_row`, or the end of the last match
+    /// when that ran further.
+    line_resume: Option<(i32, usize)>,
 }
 
 impl PendingSearch {
@@ -57,9 +83,8 @@ impl PendingSearch {
             cols: grid.cols(),
             history_len: grid.scrollback_len(),
             visible_rows: grid.rows(),
-            next_history: 0,
-            next_visible: 0,
-            searched_through: None,
+            next_row: -(grid.scrollback_len().min(i32::MAX as usize) as i32),
+            line_resume: None,
         }
     }
 
@@ -70,52 +95,91 @@ impl PendingSearch {
             && self.visible_rows == grid.rows()
     }
 
-    fn next_row(&mut self) -> Option<i32> {
-        if self.next_history < self.history_len {
-            let index = self.next_history;
-            self.next_history += 1;
-            return Some(-((self.history_len - index) as i32));
-        }
-        if self.next_visible < self.visible_rows {
-            let row = self.next_visible as i32;
-            self.next_visible += 1;
-            return Some(row);
-        }
-        None
-    }
-
     fn is_complete(&self) -> bool {
-        self.next_history >= self.history_len && self.next_visible >= self.visible_rows
+        self.next_row >= self.visible_rows.min(i32::MAX as usize) as i32
     }
 }
 
 impl SearchLine {
-    /// The logical line that starts at `row`: it and the rows it wraps
-    /// into, never past the end of `scope`. Rows are scanned in order, so the
-    /// row before `row` has always been searched already or is out of scope.
-    fn starting_at(grid: &Grid, row: i32, scope: Option<&RangeInclusive<i32>>) -> Self {
-        let last_allowed = scope.map_or(i32::MAX, |scope| *scope.end());
+    /// The slice of a logical line that owns `row` and up to
+    /// [`MAX_LINE_SLICE_ROWS`] - 1 rows it wraps into, never past
+    /// `last_allowed`. Rows are searched in order, so `row` starts its line
+    /// unless an earlier slice stopped before it and left `resume`. Then the
+    /// row before is read too, so anchors and word boundaries see what
+    /// precedes. When the line continues, the slice reads at least
+    /// `overlap_chars` (and at least one) more characters of it, so a match
+    /// that starts in the owned rows can finish and `$` cannot match early.
+    fn slice(
+        grid: &Grid,
+        row: i32,
+        resume: Option<(i32, usize)>,
+        last_allowed: i32,
+        overlap_chars: usize,
+    ) -> LineSlice {
+        let first_row = if resume.is_some() { row - 1 } else { row };
         let mut line = Self {
             text: String::new(),
-            first_row: row,
+            first_row,
             cells: None,
         };
-        let mut current = row;
+        let mut rows_read = 0;
+        let mut owned_start = 0;
+        let mut current = first_row;
+        let mut continues = false;
         while let Some(view) = grid.row_at_offset(current) {
+            if current == row {
+                owned_start = line.text.len();
+            }
             line.push_row(current, &view);
-            if !view.is_wrapped() || current >= last_allowed {
+            rows_read += 1;
+            continues = view.is_wrapped()
+                && current < last_allowed
+                && grid.row_at_offset(current + 1).is_some();
+            if !continues || current - row + 1 >= MAX_LINE_SLICE_ROWS {
                 break;
             }
             current += 1;
         }
-        line
+        let last_owned_row = current;
+        let owned_end = line.text.len();
+        if continues {
+            let mut overlap_read = 0;
+            let mut current = last_owned_row + 1;
+            while overlap_read < overlap_chars.max(1)
+                && let Some(view) = grid.row_at_offset(current)
+            {
+                let before = line.text.len();
+                line.push_row(current, &view);
+                rows_read += 1;
+                overlap_read += line.text[before..].chars().count();
+                if !view.is_wrapped() || current >= last_allowed {
+                    break;
+                }
+                current += 1;
+            }
+        }
+        let search_start = resume.map_or(owned_start, |cell| line.byte_at(cell).max(owned_start));
+        LineSlice {
+            line,
+            search_start,
+            owned_end,
+            last_owned_row,
+            continues,
+            rows_read,
+        }
     }
 
-    fn last_row(&self) -> i32 {
-        self.cells
-            .as_ref()
-            .and_then(|cells| cells.last())
-            .map_or(self.first_row, |cell| cell.row)
+    /// The byte of the first cell at or after `(row, col)`, or the end of
+    /// the text.
+    fn byte_at(&self, (row, col): (i32, usize)) -> usize {
+        match &self.cells {
+            Some(cells) => cells
+                .get(cells.partition_point(|cell| (cell.row, cell.start_col) < (row, col)))
+                .map_or(self.text.len(), |cell| cell.byte),
+            None if row == self.first_row => col.min(self.text.len()),
+            None if row < self.first_row => 0,
+            None => self.text.len(),
+        }
     }
 
     fn push_row(&mut self, row_index: i32, row: &termeric_core::RowView<'_>) {
@@ -640,7 +704,10 @@ impl Search {
         self.pending_search = Some(PendingSearch::new(grid));
     }
 
-    /// Consume at most `max_rows` rows of pending search work.
+    /// Consume about `max_rows` rows of pending search work. A slice of a
+    /// soft-wrapped line is read whole, so the last one may run past
+    /// `max_rows` by up to [`MAX_LINE_SLICE_ROWS`] and the rows it reads
+    /// around them.
     ///
     /// Returns `true` while more work remains. A grid content/geometry/history change
     /// invalidates partial results and restarts a full scan against the new
@@ -656,25 +723,37 @@ impl Search {
         let Some(mut pending) = self.pending_search.take() else {
             return false;
         };
+        let last_allowed = self
+            .row_scope
+            .as_ref()
+            .map_or(i32::MAX, |scope| *scope.end());
+        let overlap_chars = if self.use_regex {
+            REGEX_MATCH_OVERLAP_CHARS
+        } else {
+            self.query.chars().count()
+        };
         let mut rows_read = 0;
-        while rows_read < max_rows {
-            let Some(row_index) = pending.next_row() else {
-                break;
-            };
-            rows_read += 1;
-            if pending
-                .searched_through
-                .is_some_and(|through| row_index <= through)
-                || !self.row_is_in_scope(row_index)
-                || grid.row_at_offset(row_index).is_none()
+        while rows_read < max_rows && !pending.is_complete() {
+            let row = pending.next_row;
+            let resume = pending.line_resume.take();
+            if resume.is_none() && (!self.row_is_in_scope(row) || grid.row_at_offset(row).is_none())
             {
+                pending.next_row += 1;
+                rows_read += 1;
                 continue;
             }
-            let line = SearchLine::starting_at(grid, row_index, self.row_scope.as_ref());
-            let last_row = line.last_row();
-            rows_read += usize::try_from(last_row - row_index).unwrap_or(0);
-            pending.searched_through = Some(last_row);
-            self.find_matches_in_line(&line);
+            let slice = SearchLine::slice(grid, row, resume, last_allowed, overlap_chars);
+            rows_read += slice.rows_read;
+            let last_match_end =
+                self.find_matches_in_line(&slice.line, slice.search_start..slice.owned_end);
+            pending.next_row = slice.last_owned_row + 1;
+            if slice.continues {
+                let next_slice = (pending.next_row, 0);
+                pending.line_resume = [Some(next_slice), resume, last_match_end]
+                    .into_iter()
+                    .flatten()
+                    .max();
+            }
         }
 
         if pending.is_complete() {
@@ -751,33 +830,40 @@ impl Search {
         }
     }
 
-    /// Find all matches in a line and add them to self.matches
-    fn find_matches_in_line(&mut self, line: &SearchLine) {
+    /// Records the matches in `line` that start in `starts`, and returns
+    /// the end of the last one.
+    fn find_matches_in_line(
+        &mut self,
+        line: &SearchLine,
+        starts: Range<usize>,
+    ) -> Option<(i32, usize)> {
+        let text = &line.text;
         let mut found = Vec::new();
         if !self.use_regex && self.case_sensitive {
             found.extend(
-                line.text
+                text[starts.start..]
                     .match_indices(&self.query)
-                    .map(|(start, text)| (start, start + text.len())),
+                    .map(|(start, text)| (starts.start + start, starts.start + start + text.len()))
+                    .take_while(|(start, _)| *start < starts.end),
             );
-        } else if !self.use_regex && self.query.is_ascii() && line.text.is_ascii() {
+        } else if !self.use_regex && self.query.is_ascii() && text.is_ascii() {
             let query = self.query.as_bytes();
-            let mut search_start = 0;
-            while let Some(relative_start) = line.text.as_bytes()[search_start..]
+            let mut search_start = starts.start;
+            while let Some(relative_start) = text.as_bytes()[search_start..]
                 .windows(query.len())
                 .position(|candidate| candidate.eq_ignore_ascii_case(query))
             {
                 let start = search_start + relative_start;
+                if start >= starts.end {
+                    break;
+                }
                 found.push((start, start + query.len()));
                 search_start = start + query.len();
             }
         } else if let Some(regex) = &self.compiled_regex {
-            found.extend(
-                regex
-                    .find_iter(&line.text)
-                    .map(|found| (found.start(), found.end())),
-            );
+            found.extend(regex_matches(regex, text, starts));
         }
+        let mut last_end = None;
         for (start, end) in found {
             let search_match = line.span(start, end);
             for row in search_match.row..=search_match.end_row {
@@ -785,6 +871,7 @@ impl Search {
                     self.matching_rows.push(row);
                 }
             }
+            last_end = Some((search_match.end_row, search_match.end_col));
             record_retained_match(
                 &mut self.matches,
                 &mut self.retained_match_start,
@@ -792,7 +879,37 @@ impl Search {
                 search_match,
             );
         }
+        last_end
     }
+}
+
+/// The byte ranges of `regex`'s matches in `text` that start in `starts`,
+/// as `find_iter` would yield them. Searching from `starts.start` rather
+/// than slicing the text keeps what precedes it as context for anchors and
+/// word boundaries.
+fn regex_matches(regex: &Regex, text: &str, starts: Range<usize>) -> Vec<(usize, usize)> {
+    let next_char = |at: usize| text[at..].chars().next().map(|c| at + c.len_utf8());
+    let mut found = Vec::new();
+    let mut at = Some(starts.start);
+    let mut last_end = None;
+    while let Some(search_from) = at
+        && let Some(matched) = regex.find_at(text, search_from)
+        && matched.start() < starts.end
+    {
+        // Like find_iter, skip an empty match right where the last one ended.
+        if matched.is_empty() && last_end == Some(matched.end()) {
+            at = next_char(matched.end());
+            continue;
+        }
+        found.push((matched.start(), matched.end()));
+        last_end = Some(matched.end());
+        at = if matched.is_empty() {
+            next_char(matched.end())
+        } else {
+            Some(matched.end())
+        };
+    }
+    found
 }
 
 fn record_retained_match(
@@ -1358,7 +1475,7 @@ mod tests {
                 first_row: row,
                 cells: None,
             };
-            search.find_matches_in_line(&line);
+            search.find_matches_in_line(&line, 0..100);
         }
         search.finish_update();
 
@@ -1421,7 +1538,7 @@ mod tests {
 fn multicell_text_is_indexed_once_across_its_full_column_span() {
     let mut terminal = termeric_core::Terminal::new(10, 3);
     terminal.process(b"\x1b]66;s=2:w=2;title\x07!");
-    let line = SearchLine::starting_at(terminal.grid(), 0, None);
+    let line = SearchLine::slice(terminal.grid(), 0, None, i32::MAX, 1).line;
     assert_eq!(line.text.trim_end(), "title!");
     assert_eq!((line.span(0, 5).start_col, line.span(0, 5).end_col), (0, 4));
     assert_eq!((line.span(5, 6).start_col, line.span(5, 6).end_col), (4, 5));
@@ -1478,4 +1595,108 @@ fn matches_continue_across_soft_wraps_but_not_hard_line_breaks() {
         search.current().map(|found| (found.end_row, found.end_col)),
         Some((1, 2))
     );
+}
+
+#[test]
+fn long_soft_wrapped_lines_are_searched_in_bounded_slices() {
+    const COLS: usize = 20;
+    const ROWS: usize = 300;
+    let slice_chars = MAX_LINE_SLICE_ROWS as usize * COLS;
+    // A needle longer than two rows, so a match that starts just before a
+    // slice ends needs more than the next row to finish.
+    let needle = format!("needle{}", "z".repeat(2 * COLS));
+    // Needles across the first two slice ends and one near the end of the
+    // line, which takes several slices to reach.
+    let starts = [
+        slice_chars - 3,
+        2 * slice_chars - 3,
+        COLS * ROWS - needle.len() - 1,
+    ];
+    let mut line = "x".repeat(COLS * ROWS);
+    for start in starts {
+        line.replace_range(start..start + needle.len(), &needle);
+    }
+    let mut terminal = termeric_core::Terminal::new(COLS, 4);
+    terminal.grid_mut().set_scrollback_limit(1_000);
+    terminal.process(line.as_bytes());
+    terminal.process(format!("\r\n{needle}").as_bytes());
+    let first_row = -(terminal.grid().scrollback_len() as i32);
+
+    let mut search = Search::new();
+    search.start();
+    search.set_query(&needle, terminal.grid());
+    let mut slices = 0;
+    loop {
+        let before = search.pending_search.as_ref().unwrap().next_row;
+        if !search.advance_rows(terminal.grid(), 1) {
+            break;
+        }
+        let after = search.pending_search.as_ref().unwrap().next_row;
+        assert!(after - before <= MAX_LINE_SLICE_ROWS, "{before}..{after}");
+        slices += 1;
+    }
+    assert!(slices >= ROWS / MAX_LINE_SLICE_ROWS as usize, "{slices}");
+
+    let cell = |index: usize| (first_row + (index / COLS) as i32, index % COLS);
+    let found = |start: usize| {
+        let (row, start_col) = cell(start);
+        let (end_row, last_col) = cell(start + needle.len() - 1);
+        SearchMatch {
+            row,
+            start_col,
+            end_row,
+            end_col: last_col + 1,
+        }
+    };
+    let mut expected = starts.map(found).to_vec();
+    // The next line holds one more, past its first row.
+    expected.push(found(COLS * ROWS));
+    assert_eq!(search.matches, expected);
+}
+
+#[test]
+fn slices_of_a_long_line_find_what_one_whole_line_search_would() {
+    const COLS: usize = 20;
+    let chars = COLS * (3 * MAX_LINE_SLICE_ROWS as usize + 5);
+    let mut terminal = termeric_core::Terminal::new(COLS, 4);
+    terminal.grid_mut().set_scrollback_limit(1_000);
+    terminal.process("a".repeat(chars).as_bytes());
+    terminal.process(b"\r\n");
+    let grid = terminal.grid();
+    let search_for = |query: &str, regex: bool, case_sensitive: bool| {
+        let mut search = Search::new();
+        search.start();
+        if regex {
+            search.toggle_regex(grid);
+        }
+        if case_sensitive {
+            search.toggle_case_sensitive(grid);
+        }
+        assert!(search.set_query(query, grid));
+        search.finish(grid);
+        search
+    };
+
+    // A slice holds 1,280 characters, so matches of three straddle every
+    // slice end; each one starts where the last ended, as in one search.
+    for (regex, case_sensitive) in [(false, false), (false, true), (true, false)] {
+        let search = search_for("aaa", regex, case_sensitive);
+        assert_eq!(search.match_count(), chars / 3, "{regex} {case_sensitive}");
+        let last = search.matches.last().unwrap();
+        let last_start = (chars / 3 - 1) * 3;
+        assert_eq!(
+            (last.row - search.matches[0].row, last.start_col),
+            ((last_start / COLS) as i32, last_start % COLS)
+        );
+    }
+    assert_eq!(search_for("a{50}", true, false).match_count(), chars / 50);
+    // Anchors and word boundaries see the text around a slice, so they
+    // match only at the true ends of the line.
+    for anchored in ["^a", "a$", r"\ba", r"a\b"] {
+        assert_eq!(
+            search_for(anchored, true, false).match_count(),
+            1,
+            "{anchored}"
+        );
+    }
 }

@@ -19,7 +19,7 @@ Press `Ctrl+Shift+F` to open the find box, then type. Matches are highlighted as
 
 The same toggles, previous and next buttons, and a close button are on the find bar, so you can also use them with the mouse. After you press `Enter`, the bar stays visible with its buttons while the highlights remain; click its close button to clear them, or click the query to edit it again.
 
-Searches ignore case and match literal text by default. A long line the terminal wrapped onto several rows is searched as one line, so a match can continue from one row onto the next; lines a program ended with a newline are searched separately. With regular expressions on, the query uses [Rust regex syntax](https://docs.rs/regex/latest/regex/#syntax), and an invalid pattern shows its error under the query.
+Searches ignore case and match literal text by default. A long line the terminal wrapped onto several rows is searched as one line, so a match can continue from one row onto the next; lines a program ended with a newline are searched separately. With regular expressions on, the query uses [Rust regex syntax](https://docs.rs/regex/latest/regex/#syntax), and an invalid pattern shows its error under the query. A wrapped line longer than 64 rows is searched 64 rows at a time, and a regular-expression match that starts in one stretch can run at most 4,096 characters past it, so an open-ended pattern such as `error.*` may stop short there.
 
 ### Filter mode
 
