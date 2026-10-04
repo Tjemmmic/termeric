@@ -970,6 +970,72 @@ impl Builder<'_, '_> {
 }
 
 /// Appends `other` to `region`, keeping its hits' reading order.
+impl Builder<'_, '_> {
+    /// A card: `bounds` filled and outlined at one corner `radius`.
+    fn card(
+        &self,
+        region: &mut Region,
+        bounds: Bounds,
+        radius: f32,
+        fill: [f32; 4],
+        border: [f32; 4],
+    ) {
+        region.prims.push(Prim::Fill {
+            bounds,
+            radius,
+            color: fill,
+        });
+        region.prims.push(Prim::Outline {
+            bounds,
+            radius,
+            stroke: self.m.stroke,
+            color: border,
+        });
+    }
+
+    /// A card whose top `header_height` is a raised surface strip; where a
+    /// body `joined` below it, the strip's lower corners are squared off.
+    fn header_card(
+        &self,
+        region: &mut Region,
+        bounds: Bounds,
+        header_height: f32,
+        joined: bool,
+        body: [f32; 4],
+        border: [f32; 4],
+    ) {
+        let radius = self.m.radius;
+        region.prims.push(Prim::Fill {
+            bounds,
+            radius,
+            color: body,
+        });
+        region.prims.push(Prim::Fill {
+            bounds: Bounds::new(bounds.x, bounds.y, bounds.width, header_height),
+            radius,
+            color: self.c.surface,
+        });
+        if joined {
+            region.prims.push(Prim::Fill {
+                bounds: Bounds::new(
+                    bounds.x,
+                    bounds.y + header_height - radius,
+                    bounds.width,
+                    radius,
+                ),
+                radius: 0.0,
+                color: self.c.surface,
+            });
+        }
+        region.prims.push(Prim::Outline {
+            bounds,
+            radius,
+            stroke: self.m.stroke,
+            color: border,
+        });
+    }
+}
+
 fn merge(region: &mut Region, other: Region) {
     let offset = region.hits.len();
     region.prims.extend(other.prims);
@@ -1365,17 +1431,13 @@ impl Builder<'_, '_> {
             size,
             size,
         );
-        region.prims.push(Prim::Fill {
+        self.card(
+            region,
             bounds,
-            radius: size / 2.0,
-            color: self.c.surface_hover,
-        });
-        region.prims.push(Prim::Outline {
-            bounds,
-            radius: size / 2.0,
-            stroke: self.m.stroke,
-            color: self.c.border,
-        });
+            size / 2.0,
+            self.c.surface_hover,
+            self.c.border,
+        );
         region.prims.push(Prim::Icon {
             icon: Icon::ChevronDown,
             center: bounds.center(),
@@ -2201,17 +2263,7 @@ impl Builder<'_, '_> {
                 color: [0.0, 0.0, 0.0, 0.12],
             });
         }
-        region.prims.push(Prim::Fill {
-            bounds,
-            radius: self.m.radius,
-            color: self.c.surface,
-        });
-        region.prims.push(Prim::Outline {
-            bounds,
-            radius: self.m.radius,
-            stroke: self.m.stroke,
-            color: self.c.border,
-        });
+        self.card(region, bounds, self.m.radius, self.c.surface, self.c.border);
     }
 
     /// The agent's commands matching what follows a leading `/`, above the

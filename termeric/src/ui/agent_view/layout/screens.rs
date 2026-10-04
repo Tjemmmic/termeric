@@ -426,17 +426,7 @@ impl Builder<'_, '_> {
         );
         cursor += self.m.control + pad;
         let bounds = Bounds::new(x, y, width, cursor - y);
-        region.prims.push(Prim::Fill {
-            bounds,
-            radius: self.m.radius,
-            color: self.c.surface,
-        });
-        region.prims.push(Prim::Outline {
-            bounds,
-            radius: self.m.radius,
-            stroke: self.m.stroke,
-            color: self.c.border,
-        });
+        self.card(region, bounds, self.m.radius, self.c.surface, self.c.border);
         super::merge(region, body);
         bounds.height
     }

@@ -209,17 +209,13 @@ impl Builder<'_, '_> {
             cursor += height;
         }
         let bounds = Bounds::new(x, y, width, (cursor + pad_y - y).round());
-        region.prims.push(Prim::Fill {
+        self.card(
+            region,
             bounds,
-            radius: self.m.px(10.0),
-            color: self.c.surface,
-        });
-        region.prims.push(Prim::Outline {
-            bounds,
-            radius: self.m.px(10.0),
-            stroke: self.m.stroke,
-            color: self.c.border,
-        });
+            self.m.px(10.0),
+            self.c.surface,
+            self.c.border,
+        );
         region.nodes.push(RegionNode::Text(TextNode {
             bounds,
             clip: None,
@@ -1112,30 +1108,14 @@ impl Builder<'_, '_> {
             cursor += self.m.px(6.0);
         }
         let bounds = Bounds::new(x, y, width, (cursor - y).round());
-        region.prims.push(Prim::Fill {
+        self.header_card(
+            region,
             bounds,
-            radius: self.m.radius,
-            color: self.c.panel,
-        });
-        region.prims.push(Prim::Fill {
-            bounds: Bounds::new(x, y, width, header_height),
-            radius: self.m.radius,
-            color: self.c.surface,
-        });
-        if expanded || cursor > y + header_height {
-            // Square off the header's lower corners where the body joins it.
-            region.prims.push(Prim::Fill {
-                bounds: Bounds::new(x, y + header_height - self.m.radius, width, self.m.radius),
-                radius: 0.0,
-                color: self.c.surface,
-            });
-        }
-        region.prims.push(Prim::Outline {
-            bounds,
-            radius: self.m.radius,
-            stroke: self.m.stroke,
-            color: self.c.border,
-        });
+            header_height,
+            expanded || cursor > y + header_height,
+            self.c.panel,
+            self.c.border,
+        );
 
         // Header: icon, file name, folder, counts, status, chevron.
         let center = y + header_height / 2.0;
@@ -1475,29 +1455,14 @@ impl Builder<'_, '_> {
             cursor += layout.height + self.m.px(8.0);
         }
         let bounds = Bounds::new(x, y, width, (cursor - y).round());
-        region.prims.push(Prim::Fill {
+        self.header_card(
+            region,
             bounds,
-            radius: self.m.radius,
-            color: self.c.well,
-        });
-        region.prims.push(Prim::Fill {
-            bounds: Bounds::new(x, y, width, header_height),
-            radius: self.m.radius,
-            color: self.c.surface,
-        });
-        if expanded {
-            region.prims.push(Prim::Fill {
-                bounds: Bounds::new(x, y + header_height - self.m.radius, width, self.m.radius),
-                radius: 0.0,
-                color: self.c.surface,
-            });
-        }
-        region.prims.push(Prim::Outline {
-            bounds,
-            radius: self.m.radius,
-            stroke: self.m.stroke,
-            color: self.c.border,
-        });
+            header_height,
+            expanded,
+            self.c.well,
+            self.c.border,
+        );
         let center = y + header_height / 2.0;
         let mut header_x = x + self.m.px(12.0);
         region.prims.push(Prim::Icon {
@@ -1637,17 +1602,7 @@ impl Builder<'_, '_> {
         }
         cursor += self.m.px(6.0);
         let bounds = Bounds::new(x, y, width, (cursor - y).round());
-        region.prims.push(Prim::Fill {
-            bounds,
-            radius: self.m.radius,
-            color: self.c.surface,
-        });
-        region.prims.push(Prim::Outline {
-            bounds,
-            radius: self.m.radius,
-            stroke: self.m.stroke,
-            color: self.c.border,
-        });
+        self.card(region, bounds, self.m.radius, self.c.surface, self.c.border);
         let title_width = self.label(
             region,
             "To-dos",
@@ -1915,17 +1870,13 @@ impl Builder<'_, '_> {
         cursor = self.button_rows(&mut body, &buttons, x + pad, cursor, inner);
         cursor += pad;
         let bounds = Bounds::new(x, y, width, (cursor - y).round());
-        region.prims.push(Prim::Fill {
+        self.card(
+            region,
             bounds,
-            radius: self.m.radius,
-            color: self.c.attention_surface,
-        });
-        region.prims.push(Prim::Outline {
-            bounds,
-            radius: self.m.radius,
-            stroke: self.m.stroke,
-            color: self.c.attention_border,
-        });
+            self.m.radius,
+            self.c.attention_surface,
+            self.c.attention_border,
+        );
         merge(region, body);
         bounds.height
     }
@@ -2012,17 +1963,13 @@ impl Builder<'_, '_> {
         cursor = self.button_rows(&mut body, &buttons, x + pad, cursor, inner);
         cursor += pad;
         let card = Bounds::new(x, y, width, (cursor - y).round());
-        region.prims.push(Prim::Fill {
-            bounds: card,
-            radius: self.m.radius,
-            color: self.c.supervisor_surface,
-        });
-        region.prims.push(Prim::Outline {
-            bounds: card,
-            radius: self.m.radius,
-            stroke: self.m.stroke,
-            color: self.c.supervisor,
-        });
+        self.card(
+            region,
+            card,
+            self.m.radius,
+            self.c.supervisor_surface,
+            self.c.supervisor,
+        );
         merge(region, body);
         card.height
     }
@@ -2327,17 +2274,13 @@ impl Builder<'_, '_> {
         cursor = self.button_rows(&mut body, &buttons, x + pad, cursor, inner);
         cursor += pad;
         let bounds = Bounds::new(x, y, width, (cursor - y).round());
-        region.prims.push(Prim::Fill {
+        self.card(
+            region,
             bounds,
-            radius: self.m.radius,
-            color: self.c.attention_surface,
-        });
-        region.prims.push(Prim::Outline {
-            bounds,
-            radius: self.m.radius,
-            stroke: self.m.stroke,
-            color: self.c.attention_border,
-        });
+            self.m.radius,
+            self.c.attention_surface,
+            self.c.attention_border,
+        );
         merge(region, body);
         bounds.height
     }
@@ -2558,27 +2501,7 @@ impl Builder<'_, '_> {
         } else {
             (self.c.border, self.c.panel)
         };
-        region.prims.push(Prim::Fill {
-            bounds,
-            radius: self.m.radius,
-            color: surface,
-        });
-        region.prims.push(Prim::Fill {
-            bounds: Bounds::new(x, y, width, header),
-            radius: self.m.radius,
-            color: self.c.surface,
-        });
-        region.prims.push(Prim::Fill {
-            bounds: Bounds::new(x, y + header - self.m.radius, width, self.m.radius),
-            radius: 0.0,
-            color: self.c.surface,
-        });
-        region.prims.push(Prim::Outline {
-            bounds,
-            radius: self.m.radius,
-            stroke: self.m.stroke,
-            color: border,
-        });
+        self.header_card(region, bounds, header, true, surface, border);
         region.prims.push(Prim::Icon {
             icon: Icon::Plan,
             center: [x + pad + self.m.px(7.0), y + header / 2.0],
