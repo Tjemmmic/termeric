@@ -41,7 +41,7 @@ winit event loop
 
 PTY output and terminal-generated replies stay with the terminal that produced them and never route through focused input; the rules are under "PTY and terminal-event ownership" below.
 
-Outside pane mode a tab owns its one terminal as a `Pane`; entering pane mode detaches that pane (with the tab's pane allocation history, as a `PaneOwner`) and adopts it as the first pane, and no replacement PTY may be spawned. User-facing reads and writes must use `Tab::focused_pane()`, `Tab::focused_terminal()`, `focused_terminal_mut()`, or `Tab::write()`; focus changes must refresh search/URL/Git/cursor surfaces. Lifecycle transitions use the take/restore owner APIs.
+Every tab owns exactly one `PaneManager` (`Tab::panes`); a tab with one terminal is a one-leaf tree. Splitting and closing panes only change the tree: no terminal is ever handed between the tab and its panes, no replacement PTY is spawned, and pane IDs are never reused within a tab (a fresh tab's terminal is pane 0). Every terminal event names its pane (`TerminalEventOrigin { tab_id, pane_id }`). A tab's only pane is focused, unzoomed, and primary, and shows the tab's title rather than its own. Features that exist only between panes (broadcast, dividers, zoom, pane focus, outlines) check `Tab::split_panes()`. User-facing reads and writes must use `Tab::focused_pane()`, `Tab::focused_terminal()`, `focused_terminal_mut()`, or `Tab::write()`; focus changes must refresh search/URL/Git/cursor surfaces.
 
 Closed tabs are kept as one-tab workspaces (`Tab::save_closed_tab()`, marked `closed_tab`, newest 100 kept). Pane-local last-command state must move with terminal ownership. Complete startup/exit persistence uses the same versioned workspace archive and reconstructs tabs/panes by relaunching fresh processes. See [`docs/src/workspaces-and-sessions.md`](docs/src/workspaces-and-sessions.md).
 
@@ -66,7 +66,7 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 | `config/` | TOML config loading, theme definitions |
 | `input/` | Shortcut registry, focused mode-aware keyboard encoder, mouse state |
 | `tabs/` | Tab management |
-| `panes/` | Split-pane tree and layout |
+| `panes/` | Each tab's pane tree (one leaf until it is split), its layout over the tab's `TerminalArea`, and pane/divider ID history |
 | `session/` | Per-terminal agent state, transcripts and their export, and what the workspace panel lists |
 | `workspace/` | Complete workspace schema, atomic storage, migration, and recovery |
 | `domain/` | Same-user local daemon, control protocol/client, PTY ownership, and GUI relay |
@@ -113,11 +113,11 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 | `mod.rs` | `Renderer` struct, `new()`, setters, font-size conversion |
 | `device.rs` | Adapter and device selection, renderer diagnostics |
 | `colors.rs` | `UiPalette` and its high-contrast pass, the terminal palette, surface formats |
-| `frame.rs` | `render()`, `build_render_data()` layer dispatch, image data, pane dividers |
+| `frame.rs` | `Frame` (every visible pane of the active tab, plus chrome), `render()`, `build_render_data()` layer dispatch, image data, pane dividers |
 | `grid.rs` | `build_pane_grid()`: a grid's cached rows, cursor, and scrollbar |
 | `headless_tests.rs`, `image_crop_smoke.rs`, `benchmark.rs`, `visual_baseline.json` | GPU smokes run by `gpu_render_smoke`, the visual baseline they compare against, and the headless renderer benchmark (test builds only) |
 | `shaders/` | WGSL for the rectangle, text, and image pipelines (the background image draws through the image pipeline) |
-| `types.rs` | `*Info` structs and click/action enums (re-exported via `pub use types::*`) |
+| `types.rs` | `*Info` structs, click/action enums, `PaneRenderData`, and `PanePlacement`, which places panes in the window (re-exported via `pub use types::*`) |
 | `draw.rs` | Shared card, shadow, scrollbar, button, and focus-ring drawing for dialogs and menus |
 | `rect.rs`, `buffer.rs` | Rounded-rectangle pipeline and capacity-managed GPU upload buffers |
 | `text.rs`, `ui_text.rs` | Terminal glyph queue and text pipeline; chrome text in the desktop UI face |
@@ -223,6 +223,7 @@ Mouse, focus, alternate-scroll, and paste reports snapshot mode from the same fo
 - Child modules access the parent's private fields via `&mut self` on `impl Renderer` blocks
 - Types in `types.rs` are re-exported via `pub use types::*` in mod.rs; a type defined in another sub-module needs its own `pub use` there (e.g. `PopupMenuInfo`)
 - A hit test must use the same geometry as the `build_*` function that drew the element: the tab bar shares one geometry source (`TabChrome`), the side panels and the find box each compute one `*Layout` that their builder and hit test both use (`commands_panel_layout`, `session_panel_layout`, `SearchBarLayout::calculate`)
+- Terminal panes are placed by `PanePlacement::pane_bounds` for drawing, the Git completion anchor, pointer-to-cell mapping, the IME caret, and accessibility. It is the one place a tab's only pane differs from split panes: it fills the terminal area inside the padding on every side (its grid starts one padding below the tab bar) and shows its grid's own cells, while split panes sit at their layout rectangles from the area's top edge
 
 ### Animation Timing
 
