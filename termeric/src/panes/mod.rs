@@ -1929,7 +1929,6 @@ mod tests {
     use std::collections::{BTreeSet, HashSet};
     use std::time::{Duration, Instant};
 
-    #[cfg(unix)]
     fn property_manager(panes: usize) -> PaneManager {
         let shell = crate::test_support::sleeping_shell();
         let mut manager = PaneManager::new(
@@ -1956,7 +1955,6 @@ mod tests {
         manager
     }
 
-    #[cfg(unix)]
     fn assert_manager_invariants(manager: &PaneManager) {
         let ids = manager.pane_ids();
         let unique: HashSet<_> = ids.iter().copied().collect();
@@ -1979,12 +1977,8 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn exact_layout_primitives_preserve_owners_focus_and_atomicity() {
-        if !std::path::Path::new("/bin/sh").exists() {
-            return;
-        }
         let mut manager = property_manager(4);
         let original = manager.pane_ids();
         let child_ids: HashMap<_, _> = original
@@ -2165,7 +2159,6 @@ mod tests {
         assert_eq!(pair.get_dividers()[0].ratio_millis, 500);
     }
 
-    #[cfg(unix)]
     #[test]
     fn live_reconciliation_rejects_exhausted_local_pane_ids_before_relay_spawn() {
         use crate::domain::model::{LivePaneLayout, LiveTopologyPane, LiveTopologyTab};
@@ -2203,12 +2196,8 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn split_target_uses_exact_stable_id_and_preserves_focus_on_rejection() {
-        if !std::path::Path::new("/bin/sh").exists() {
-            return;
-        }
         let mut manager = property_manager(2);
         assert_eq!(manager.focused_id(), PaneId(1));
         assert!(
@@ -2246,12 +2235,8 @@ mod tests {
         assert_manager_invariants(&manager);
     }
 
-    #[cfg(unix)]
     #[test]
     fn exact_local_divider_ratio_resize_reports_previous_noop_and_stale_id() {
-        if !std::path::Path::new("/bin/sh").exists() {
-            return;
-        }
         let mut manager = property_manager(3);
         let divider_id = manager
             .get_dividers()
@@ -2281,7 +2266,6 @@ mod tests {
         assert!(manager.resize_local_divider(divider_id, 600).is_err());
     }
 
-    #[cfg(unix)]
     fn next_manager_property_value(state: &mut u64) -> u64 {
         *state ^= *state << 13;
         *state ^= *state >> 7;
@@ -2297,12 +2281,8 @@ mod tests {
         assert_eq!(id1, PaneId(0));
     }
 
-    #[cfg(unix)]
     #[test]
     fn generated_workspace_actions_preserve_focus_zoom_and_live_owner_invariants() {
-        if !std::path::Path::new("/bin/sh").exists() {
-            return;
-        }
         let mut manager = property_manager(7);
         let owners: HashMap<_, _> = manager
             .pane_ids()
@@ -2369,12 +2349,8 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn generated_detach_attach_moves_preserve_processes_and_valid_focus() {
-        if !std::path::Path::new("/bin/sh").exists() {
-            return;
-        }
         let mut source = property_manager(7);
         let mut destination = property_manager(1);
         let source_spawned = source.spawned_shell_count();
@@ -2453,12 +2429,8 @@ mod tests {
         assert_eq!(destination.spawned_shell_count(), destination_spawned);
     }
 
-    #[cfg(unix)]
     #[test]
     fn screen_checksum_policy_updates_existing_and_future_panes() {
-        if !std::path::Path::new("/bin/sh").exists() {
-            return;
-        }
         let shell = ShellConfig {
             program: Some("/bin/sh".into()),
             args: vec!["-c".into(), "sleep 1".into()],
@@ -2504,12 +2476,8 @@ mod tests {
         }));
     }
 
-    #[cfg(unix)]
     #[test]
     fn xterm_keyboard_profile_updates_existing_and_future_panes() {
-        if !std::path::Path::new("/bin/sh").exists() {
-            return;
-        }
         let shell = ShellConfig {
             program: Some("/bin/sh".into()),
             args: vec!["-c".into(), "sleep 1".into()],
@@ -2581,12 +2549,8 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn zoom_is_view_only_and_hidden_ptys_keep_their_geometry() {
-        if !std::path::Path::new("/bin/sh").exists() {
-            return;
-        }
         let shell = ShellConfig {
             program: Some("/bin/sh".into()),
             args: vec!["-c".into(), "sleep 1".into()],
@@ -2621,12 +2585,8 @@ mod tests {
         assert_ne!(panes.get_pane(PaneId(0)).unwrap().geometry, hidden_geometry);
     }
 
-    #[cfg(unix)]
     #[test]
     fn detach_and_attach_transfer_the_live_pty_without_recreation() {
-        if !std::path::Path::new("/bin/sh").exists() {
-            return;
-        }
         let shell = ShellConfig {
             program: Some("/bin/sh".into()),
             args: vec!["-c".into(), "sleep 1".into()],
@@ -2660,12 +2620,8 @@ mod tests {
         assert_eq!(destination.pane_count(), 2);
     }
 
-    #[cfg(unix)]
     #[test]
     fn transfer_guards_do_not_treat_closed_records_as_live_panes_or_anchors() {
-        if !std::path::Path::new("/bin/sh").exists() {
-            return;
-        }
         let shell = ShellConfig {
             program: Some("/bin/sh".into()),
             args: vec!["-c".into(), "sleep 1".into()],
@@ -2706,12 +2662,8 @@ mod tests {
         assert!(error.contains("is closed"), "{error}");
     }
 
-    #[cfg(unix)]
     #[test]
     fn each_new_pane_cwd_policy_uses_its_declared_process_source() {
-        if !std::path::Path::new("/bin/sh").exists() {
-            return;
-        }
         let temporary = tempfile::tempdir().unwrap();
         let primary_dir = temporary.path().join("primary");
         let focused_dir = temporary.path().join("focused");
@@ -2802,12 +2754,8 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn fractional_asymmetric_nested_panes_share_renderer_and_kernel_geometry() {
-        if !std::path::Path::new("/bin/sh").exists() {
-            return;
-        }
         let shell = ShellConfig {
             program: Some("/bin/sh".into()),
             args: vec!["-c".into(), "sleep 1".into()],
@@ -2861,12 +2809,8 @@ mod tests {
         crate::test_support::assert_pixel_geometry_retention_probe(&pane.terminal);
     }
 
-    #[cfg(unix)]
     #[test]
     fn simultaneous_real_pane_dsr_replies_return_to_each_origin() {
-        if !std::path::Path::new("/bin/sh").exists() {
-            return;
-        }
         let script = concat!(
             "stty raw -echo; ",
             "printf '\\033[6n'; ",
@@ -2927,12 +2871,8 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn close_during_event_heavy_output_discards_the_closed_origin_and_drains_survivor() {
-        if !std::path::Path::new("/bin/sh").exists() {
-            return;
-        }
         let script = concat!(
             "i=0; ",
             "while [ $i -lt 5000 ]; do printf '\\007'; i=$((i + 1)); done; ",

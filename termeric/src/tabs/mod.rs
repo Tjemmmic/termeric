@@ -2614,7 +2614,6 @@ mod tests {
     use std::collections::HashSet;
     use std::time::{Duration, Instant};
 
-    #[cfg(unix)]
     #[test]
     fn removing_closed_tabs_keeps_the_same_tab_active() {
         let shell = ShellConfig {
@@ -2649,12 +2648,8 @@ mod tests {
         assert_eq!(manager.count(), 0);
     }
 
-    #[cfg(unix)]
     #[test]
     fn runtime_scrollback_limits_bound_existing_panes_future_splits_and_future_tabs() {
-        if !std::path::Path::new("/bin/sh").exists() {
-            return;
-        }
         let shell = ShellConfig {
             program: Some("/bin/sh".into()),
             args: vec!["-c".into(), "sleep 5".into()],
@@ -2753,12 +2748,8 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn simultaneous_pane_exit_autosaves_the_focused_source_before_cleanup() {
-        if !std::path::Path::new("/bin/sh").exists() {
-            return;
-        }
         let session_root = tempfile::tempdir().unwrap();
         crate::session::set_test_sessions_base_dir(Some(session_root.path().to_path_buf()));
         let mut manager = TabManager::new(80, 8, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
@@ -2824,7 +2815,6 @@ mod tests {
         crate::session::set_test_sessions_base_dir(None);
     }
 
-    #[cfg(unix)]
     #[test]
     fn first_snapshot_failure_does_not_assign_session_identity() {
         let root = tempfile::tempdir().unwrap();
@@ -2878,12 +2868,8 @@ mod tests {
         assert_eq!(manager.next_id, next_id);
     }
 
-    #[cfg(unix)]
     #[test]
     fn screen_checksum_policy_updates_existing_and_future_tabs() {
-        if !std::path::Path::new("/bin/sh").exists() {
-            return;
-        }
         let mut manager = TabManager::for_test(ShellConfig::default());
         manager.set_screen_checksum_reporting(true);
         manager.set_kitty_file_transmission(true);
@@ -2919,12 +2905,8 @@ mod tests {
         }));
     }
 
-    #[cfg(unix)]
     #[test]
     fn xterm_keyboard_profile_updates_existing_and_future_tabs() {
-        if !std::path::Path::new("/bin/sh").exists() {
-            return;
-        }
         let mut manager = TabManager::for_test(ShellConfig::default());
         manager.set_xterm_keyboard_type(XtermKeyboardType::Legacy, true);
         manager
@@ -2970,12 +2952,8 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn rename_reorder_and_pin_preserve_stable_tab_identity() {
-        if !std::path::Path::new("/bin/sh").exists() {
-            return;
-        }
         let mut manager = TabManager::for_test(ShellConfig::default());
         for title in ["one", "two", "three"] {
             manager
@@ -3013,12 +2991,8 @@ mod tests {
         assert_eq!(manager.tab_info()[manager.active_index()].title, "mine");
     }
 
-    #[cfg(unix)]
     #[test]
     fn exact_tab_reorder_preserves_selection_and_rejects_pinned_boundary_crossing() {
-        if !std::path::Path::new("/bin/sh").exists() {
-            return;
-        }
         let mut manager = TabManager::for_test(ShellConfig::default());
         for title in ["one", "two", "three"] {
             manager
@@ -3050,7 +3024,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn tab_drag_reorder_requires_the_original_selected_owner() {
         let mut manager = TabManager::for_test(ShellConfig::default());
@@ -3094,12 +3067,8 @@ mod tests {
         assert!(!manager.move_dragged_tab_to(dragged, 2));
     }
 
-    #[cfg(unix)]
     #[test]
     fn focused_osc7_directory_drives_title_but_remote_paths_stay_display_only() {
-        if !std::path::Path::new("/bin/sh").exists() {
-            return;
-        }
         let temporary = tempfile::tempdir().unwrap();
         let local = temporary.path().join("local-cwd");
         std::fs::create_dir(&local).unwrap();
@@ -3162,7 +3131,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn launched_child_observer_follows_split_pane_transfer_collapse_and_window_transfer() {
         use termeric_core::pty::ChildExitStatus;
@@ -3248,12 +3216,8 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn moving_any_pane_between_tabs_preserves_child_and_restore_identity() {
-        if !std::path::Path::new("/bin/sh").exists() {
-            return;
-        }
         let shell = ShellConfig {
             program: Some("/bin/sh".into()),
             args: vec!["-c".into(), "sleep 1".into()],
@@ -3325,12 +3289,8 @@ mod tests {
         assert_eq!(round_trip.focused_pane, movable.0);
     }
 
-    #[cfg(unix)]
     #[test]
     fn exact_cross_tab_pane_transfer_uses_source_and_destination_ids() {
-        if !std::path::Path::new("/bin/sh").exists() {
-            return;
-        }
         let shell = ShellConfig {
             program: Some("/bin/sh".into()),
             args: vec!["-c".into(), "sleep 1".into()],
@@ -3430,12 +3390,8 @@ mod tests {
         assert!(layout[&attached].y > layout[&PaneId(0)].y);
     }
 
-    #[cfg(unix)]
     #[test]
     fn moved_profile_pane_keeps_launch_identity_through_restore_and_collapse() {
-        if !std::path::Path::new("/bin/sh").exists() {
-            return;
-        }
         let shell = ShellConfig {
             program: Some("/bin/sh".into()),
             args: vec!["-c".into(), "printf 'SHELL_OWNER\\n'; sleep 2".into()],
@@ -3558,12 +3514,8 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn plugin_primary_and_ordinary_sibling_can_move_without_relaunching() {
-        if !std::path::Path::new("/bin/sh").exists() {
-            return;
-        }
         let shell = crate::test_support::sleeping_shell();
         let mut manager = TabManager::for_test(shell.clone());
         manager
@@ -3630,12 +3582,8 @@ mod tests {
         assert_eq!(moved.launch, crate::workspace::WorkspaceLaunch::Shell);
     }
 
-    #[cfg(unix)]
     #[test]
     fn tab_spawn_and_pixel_only_resize_reach_kernel_winsize() {
-        if !std::path::Path::new("/bin/sh").exists() {
-            return;
-        }
         let initial = TerminalGeometry::from_cells(80, 24, 9.25, 18.5);
         let mut manager =
             TabManager::new_with_geometry(initial, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
@@ -3685,12 +3633,8 @@ mod tests {
         crate::test_support::assert_pixel_geometry_retention_probe(tab.focused_terminal().unwrap());
     }
 
-    #[cfg(unix)]
     #[test]
     fn inactive_tab_panes_poll_replies_and_tag_app_events_without_stealing_focus() {
-        if !std::path::Path::new("/bin/sh").exists() {
-            return;
-        }
         let mut manager = TabManager::for_test(ShellConfig::default());
         let dormant_tab_id = manager
             .new_tab_with_command(
@@ -3799,7 +3743,6 @@ mod tests {
         assert!(!active_text.contains("reply="));
     }
 
-    #[cfg(unix)]
     #[test]
     fn domain_attachment_reconstructs_nested_layout_and_stable_focus_mapping() {
         if !std::path::Path::new("/bin/true").exists() {
@@ -3932,7 +3875,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn domain_topology_revisions_incrementally_add_split_collapse_and_remove_relays() {
         if !std::path::Path::new("/bin/true").exists() {
@@ -4064,7 +4006,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn relay_driven_full_tab_exit_removes_the_tab_instead_of_leaving_an_empty_owner() {
         if !std::path::Path::new("/bin/echo").exists() {
@@ -4139,7 +4080,6 @@ mod tests {
         crate::session::set_test_sessions_base_dir(None);
     }
 
-    #[cfg(unix)]
     #[test]
     fn relay_driven_split_dissolution_remaps_focus_to_the_surviving_remote_pane() {
         use crate::domain::model::{

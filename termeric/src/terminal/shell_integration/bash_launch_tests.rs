@@ -49,7 +49,6 @@ fn bash_repreparing_a_launch_preserves_the_original_rc_without_recursion() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn bash_custom_rc_startup_matches_native_file_selection_and_child_environment() {
     let Some(program) = super::tests::test_shell("bash") else {

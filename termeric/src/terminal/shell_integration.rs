@@ -392,7 +392,7 @@ mod bash_export_tests;
 #[cfg(test)]
 mod bash_launch_tests;
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod bash_login_tests;
 
 #[cfg(test)]
@@ -404,7 +404,7 @@ mod zsh_cwd_tests;
 #[cfg(test)]
 mod zsh_startup_tests;
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod fish_cwd_tests;
 
 #[cfg(test)]
@@ -416,10 +416,10 @@ mod elvish_cwd_tests;
 #[cfg(test)]
 mod elvish_launch_tests;
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod elvish_environment_tests;
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod nushell_cwd_tests;
 
 #[cfg(test)]
@@ -644,7 +644,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(unix)]
     fn elvish_custom_rc_and_boolean_options_preserve_prompt_regions() {
         let Some(program) = test_shell("elvish") else {
             return;
@@ -706,7 +705,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(unix)]
     fn elvish_rc_environment_changes_survive_module_import_and_child_launch() {
         let Some(program) = test_shell("elvish") else {
             return;
@@ -806,7 +804,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(unix)]
     fn nushell_native_cwd_is_available_at_first_prompt_after_user_disables_it() {
         let Some(program) = test_shell("nu") else {
             return;
@@ -825,7 +822,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(unix)]
     fn nushell_repl_launch_options_preserve_custom_config_and_command_lifecycle() {
         let Some(program) = test_shell("nu") else {
             return;
@@ -851,7 +847,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(unix)]
     fn zsh_login_profile_emits_prompt_regions_with_nounset_when_available() {
         let Some(program) = test_shell("zsh") else {
             return;
@@ -870,7 +865,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(unix)]
     fn zsh_reenabled_startup_and_stdin_arguments_preserve_prompt_regions() {
         let Some(program) = test_shell("zsh") else {
             return;
@@ -902,7 +896,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(unix)]
     fn bash_custom_rc_and_stdin_arguments_preserve_prompt_regions() {
         let Some(program) = test_shell("bash") else {
             return;
@@ -951,7 +944,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(unix)]
     fn fish_init_commands_and_launch_options_preserve_prompt_regions() {
         let Some(program) = test_shell("fish") else {
             return;
@@ -999,7 +991,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(unix)]
     fn bash_login_profiles_preserve_first_cwd_and_multiline_command_regions() {
         let Some(program) = test_shell("bash") else {
             return;

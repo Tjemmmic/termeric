@@ -81,7 +81,6 @@ fn zsh_launch_eligibility_respects_option_order_and_stdin_operands() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn zsh_user_startup_chain_matches_native_order_scope_and_directory_changes() {
     let Some(program) = super::tests::test_shell("zsh") else {
@@ -276,7 +275,6 @@ fn zsh_nested_prepared_launch_recovers_unset_empty_and_custom_directories() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn zsh_startup_restores_user_directory_before_rc_and_nested_shells() {
     let Some(program) = super::tests::test_shell("zsh") else {

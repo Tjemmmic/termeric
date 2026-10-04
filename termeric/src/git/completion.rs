@@ -135,7 +135,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn valid_metacharacter_refs_round_trip_as_one_literal_posix_argument() {
         let directory = tempfile::tempdir().unwrap();
