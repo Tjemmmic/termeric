@@ -7886,7 +7886,7 @@ Apache License
 Used by:
 
 - [dpi 0.1.2](https://github.com/rust-windowing/winit)
-- [winit 0.30.12](https://github.com/rust-windowing/winit)
+- [winit 0.30.13](https://github.com/rust-windowing/winit)
 
 ```text
 Apache License
