@@ -1547,10 +1547,10 @@ The Linux binaries are built from the Rust crates below. Each license section li
 
 - Apache License 2.0
 - MIT License
-- BSD 3-Clause "New" or "Revised" License
-- BSD 2-Clause "Simplified" License
 - zlib License
+- BSD 3-Clause "New" or "Revised" License
 - BSD Zero Clause License
+- BSD 2-Clause "Simplified" License
 - Creative Commons Zero v1.0 Universal
 - ISC License
 - Mozilla Public License 2.0
@@ -2869,7 +2869,6 @@ Used by:
 
 Used by:
 
-- [zerocopy-derive 0.8.33](https://github.com/google/zerocopy)
 - [zerocopy 0.8.33](https://github.com/google/zerocopy)
 
 ```text
@@ -3294,7 +3293,6 @@ Used by:
 
 Used by:
 
-- [imgref 1.12.0](https://github.com/kornelski/imgref)
 - [self_cell 1.2.2](https://github.com/Voultapher/self_cell)
 - [sys-locale 0.3.2](https://github.com/1Password/sys-locale)
 - [unicode-linebreak 0.1.5](https://github.com/axelf4/unicode-linebreak)
@@ -3721,7 +3719,6 @@ Used by:
 
 Used by:
 
-- [bit_field 0.10.3](https://github.com/phil-opp/rust-bit-field)
 - [sublime_fuzzy 0.7.0](https://github.com/Schlechtwetterfront/fuzzy-rs)
 
 ```text
@@ -3942,13 +3939,11 @@ Used by:
 - [clap_derive 4.6.4](https://github.com/clap-rs/clap)
 - [clap_lex 1.1.0](https://github.com/clap-rs/clap)
 - [colorchoice 1.0.4](https://github.com/rust-cli/anstyle.git)
-- [core2 0.4.0](https://github.com/bbqsrc/core2)
 - [crc32fast 1.5.0](https://github.com/srijs/rust-crc32fast)
 - [env_filter 0.1.4](https://github.com/rust-cli/env_logger)
 - [env_logger 0.11.8](https://github.com/rust-cli/env_logger)
 - [hex 0.4.3](https://github.com/KokaKiwi/rust-hex)
 - [is_terminal_polyfill 1.70.2](https://github.com/polyfill-rs/is_terminal_polyfill)
-- [quick-error 2.0.1](http://github.com/tailhook/quick-error)
 - [serde_spanned 0.6.9](https://github.com/toml-rs/toml)
 - [toml 0.8.23](https://github.com/toml-rs/toml)
 - [toml_datetime 0.6.11](https://github.com/toml-rs/toml)
@@ -5640,9 +5635,7 @@ limitations under the License.
 Used by:
 
 - [ahash 0.8.12](https://github.com/tkaitchuck/ahash)
-- [aligned 0.4.3](https://github.com/rust-embedded-community/aligned)
 - [arrayvec 0.7.6](https://github.com/bluss/arrayvec)
-- [as-slice 0.2.1](https://github.com/japaric/as-slice)
 - [async-channel 2.5.0](https://github.com/smol-rs/async-channel)
 - [async-executor 1.14.0](https://github.com/smol-rs/async-executor)
 - [async-io 2.6.0](https://github.com/smol-rs/async-io)
@@ -5653,14 +5646,10 @@ Used by:
 - [atomic-waker 1.1.2](https://github.com/smol-rs/atomic-waker)
 - [base64 0.22.1](https://github.com/marshallpierce/rust-base64)
 - [bitflags 2.10.0](https://github.com/bitflags/bitflags)
-- [bitstream-io 4.9.0](https://github.com/tuffy/bitstream-io)
 - [blocking 1.7.0](https://github.com/smol-rs/blocking)
 - [cfg-if 1.0.4](https://github.com/rust-lang/cfg-if)
 - [concurrent-queue 2.5.0](https://github.com/smol-rs/concurrent-queue)
-- [crossbeam-deque 0.8.6](https://github.com/crossbeam-rs/crossbeam)
-- [crossbeam-epoch 0.9.21](https://github.com/crossbeam-rs/crossbeam)
 - [crossbeam-utils 0.8.21](https://github.com/crossbeam-rs/crossbeam)
-- [either 1.15.0](https://github.com/rayon-rs/either)
 - [equivalent 1.0.2](https://github.com/indexmap-rs/equivalent)
 - [errno 0.3.14](https://github.com/lambda-fairy/rust-errno)
 - [event-listener-strategy 0.5.4](https://github.com/smol-rs/event-listener-strategy)
@@ -5675,7 +5664,6 @@ Used by:
 - [hashbrown 0.16.1](https://github.com/rust-lang/hashbrown)
 - [heck 0.5.0](https://github.com/withoutboats/heck)
 - [indexmap 2.13.0](https://github.com/indexmap-rs/indexmap)
-- [itertools 0.14.0](https://github.com/rust-itertools/itertools)
 - [khronos-egl 6.0.0](https://github.com/timothee-haudebourg/khronos-egl)
 - [libgit2-sys 0.18.8+1.9.7](https://github.com/rust-lang/git2-rs)
 - [libz-sys 1.1.24](https://github.com/rust-lang/libz-sys)
@@ -5683,10 +5671,6 @@ Used by:
 - [linux-raw-sys 0.4.15](https://github.com/sunfishcode/linux-raw-sys)
 - [lock_api 0.4.14](https://github.com/Amanieu/parking_lot)
 - [log 0.4.29](https://github.com/rust-lang/log)
-- [num-bigint 0.4.6](https://github.com/rust-num/num-bigint)
-- [num-derive 0.4.2](https://github.com/rust-num/num-derive)
-- [num-integer 0.1.46](https://github.com/rust-num/num-integer)
-- [num-rational 0.4.2](https://github.com/rust-num/num-rational)
 - [num-traits 0.2.19](https://github.com/rust-num/num-traits)
 - [once_cell 1.21.3](https://github.com/matklad/once_cell)
 - [ordered-stream 0.2.0](https://github.com/danieldg/ordered-stream)
@@ -5699,8 +5683,6 @@ Used by:
 - [png 0.18.0](https://github.com/image-rs/image-png)
 - [polling 3.11.0](https://github.com/smol-rs/polling)
 - [pollster 0.4.0](https://github.com/zesterer/pollster)
-- [rayon-core 1.13.0](https://github.com/rayon-rs/rayon)
-- [rayon 1.11.0](https://github.com/rayon-rs/rayon)
 - [regex-automata 0.4.13](https://github.com/rust-lang/regex)
 - [regex-syntax 0.8.8](https://github.com/rust-lang/regex)
 - [regex 1.12.2](https://github.com/rust-lang/regex)
@@ -5715,7 +5697,6 @@ Used by:
 - [smallvec 1.15.1](https://github.com/servo/rust-smallvec)
 - [smol_str 0.2.2](https://github.com/rust-analyzer/smol_str)
 - [smol_str 0.3.5](https://github.com/rust-lang/rust-analyzer/tree/master/lib/smol_str)
-- [stable_deref_trait 1.2.1](https://github.com/storyyeller/stable_deref_trait)
 - [swash 0.2.6](https://github.com/dfrg/swash)
 - [tempfile 3.25.0](https://github.com/Stebalien/tempfile)
 - [ttf-parser 0.25.1](https://github.com/harfbuzz/ttf-parser)
@@ -5941,7 +5922,6 @@ Used by:
 - [bit-set 0.8.0](https://github.com/contain-rs/bit-set)
 - [bit-vec 0.8.0](https://github.com/contain-rs/bit-vec)
 - [downcast-rs 1.2.1](https://github.com/marcianx/downcast-rs)
-- [qoi 0.4.1](https://github.com/aldanor/qoi-rust)
 
 ```text
                               Apache License
@@ -8254,8 +8234,6 @@ Used by:
 - [gpu-alloc 0.6.0](https://github.com/zakarumych/gpu-alloc)
 - [gpu-descriptor-types 0.2.0](https://github.com/zakarumych/gpu-descriptor)
 - [gpu-descriptor 0.3.2](https://github.com/zakarumych/gpu-descriptor)
-- [half 2.7.1](https://github.com/VoidStarKat/half-rs)
-- [image-webp 0.2.4](https://github.com/image-rs/image-webp)
 - [image 0.25.9](https://github.com/image-rs/image)
 - [itoa 1.0.17](https://github.com/dtolnay/itoa)
 - [libc 0.2.180](https://github.com/rust-lang/libc)
@@ -8264,11 +8242,8 @@ Used by:
 - [miniz_oxide 0.8.9](https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide)
 - [naga 24.0.0](https://github.com/gfx-rs/wgpu/tree/trunk/naga)
 - [owned_ttf_parser 0.25.1](https://github.com/alexheretic/owned-ttf-parser)
-- [paste 1.0.15](https://github.com/dtolnay/paste)
-- [pastey 0.1.1](https://github.com/as1100k/pastey)
 - [pin-project-lite 0.2.16](https://github.com/taiki-e/pin-project-lite)
 - [proc-macro2 1.0.107](https://github.com/dtolnay/proc-macro2)
-- [profiling-procmacros 1.0.17](https://github.com/aclysma/profiling)
 - [profiling 1.0.17](https://github.com/aclysma/profiling)
 - [quote 1.0.47](https://github.com/dtolnay/quote)
 - [raw-window-handle 0.6.2](https://github.com/rust-windowing/raw-window-handle)
@@ -8296,9 +8271,6 @@ Used by:
 - [wgpu-hal 24.0.4](https://github.com/gfx-rs/wgpu)
 - [wgpu-types 24.0.0](https://github.com/gfx-rs/wgpu)
 - [wgpu 24.0.5](https://github.com/gfx-rs/wgpu)
-- [zune-core 0.4.12](https://crates.io/crates/zune-core)
-- [zune-inflate 0.2.54](https://crates.io/crates/zune-inflate)
-- [zune-jpeg 0.4.21](https://github.com/etemesi254/zune-image/tree/dev/crates/zune-jpeg)
 
 ```text
 Apache License
@@ -8381,167 +8353,6 @@ limitations under the License.
 
 Used by:
 
-- [rav1e 0.8.1](https://github.com/xiph/rav1e/)
-
-```text
-; Copyright © 2019-2022, VideoLAN and dav1d authors
-; Copyright © 2019-2022, Two Orioles, LLC
-; All rights reserved.
-;
-; Redistribution and use in source and binary forms, with or without
-; modification, are permitted provided that the following conditions are met:
-;
-; 1. Redistributions of source code must retain the above copyright notice, this
-;    list of conditions and the following disclaimer.
-;
-; 2. Redistributions in binary form must reproduce the above copyright notice,
-;    this list of conditions and the following disclaimer in the documentation
-;    and/or other materials provided with the distribution.
-;
-; THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-; ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-; WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-; DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
-; ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
-; (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
-; ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-; (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
-; SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-struc FGData
-    .seed:                      resd 1
-    .num_y_points:              resd 1
-    .y_points:                  resb 14 * 2
-    .chroma_scaling_from_luma:  resd 1
-    .num_uv_points:             resd 2
-    .uv_points:                 resb 2 * 10 * 2
-    .scaling_shift:             resd 1
-    .ar_coeff_lag:              resd 1
-    .ar_coeffs_y:               resb 24
-    .ar_coeffs_uv:              resb 2 * 28 ; includes padding
-    .ar_coeff_shift:            resq 1
-    .grain_scale_shift:         resd 1
-    .uv_mult:                   resd 2
-    .uv_luma_mult:              resd 2
-    .uv_offset:                 resd 2
-    .overlap_flag:              resd 1
-    .clip_to_restricted_range:  resd 1
-endstruc
-
-cextern gaussian_sequence
-
-```
-
-### BSD 2-Clause "Simplified" License
-
-Used by:
-
-- [v_frame 0.3.9](https://github.com/rust-av/v_frame)
-
-```text
-BSD 2-Clause License
-
-Copyright (c) 2017-2022, the rav1e contributors
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are met:
-
-- Redistributions of source code must retain the above copyright notice, this
-  list of conditions and the following disclaimer.
-
-- Redistributions in binary form must reproduce the above copyright notice,
-  this list of conditions and the following disclaimer in the documentation
-  and/or other materials provided with the distribution.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-```
-
-### BSD 2-Clause "Simplified" License
-
-Used by:
-
-- [rav1e 0.8.1](https://github.com/xiph/rav1e/)
-
-```text
-BSD 2-Clause License
-
-Copyright (c) 2017-2023, the rav1e contributors
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are met:
-
-* Redistributions of source code must retain the above copyright notice, this
-  list of conditions and the following disclaimer.
-
-* Redistributions in binary form must reproduce the above copyright notice,
-  this list of conditions and the following disclaimer in the documentation
-  and/or other materials provided with the distribution.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-```
-
-### BSD 2-Clause "Simplified" License
-
-Used by:
-
-- [av1-grain 0.2.5](https://github.com/rust-av/av1-grain)
-
-```text
-BSD 2-Clause License
-
-Copyright (c) 2022-2022, the rav1e contributors
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are met:
-
-- Redistributions of source code must retain the above copyright notice, this
-  list of conditions and the following disclaimer.
-
-- Redistributions in binary form must reproduce the above copyright notice,
-  this list of conditions and the following disclaimer in the documentation
-  and/or other materials provided with the distribution.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-```
-
-### BSD 2-Clause "Simplified" License
-
-Used by:
-
 - [arrayref 0.3.9](https://github.com/droundy/arrayref)
 
 ```text
@@ -8570,84 +8381,6 @@ LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
 DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
 THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-```
-
-### BSD 3-Clause "New" or "Revised" License
-
-Used by:
-
-- [avif-serialize 0.8.6](https://github.com/kornelski/avif-serialize)
-
-```text
-BSD 3-Clause License
-
-Copyright (c) 2020, Cloudflare, Inc.
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are met:
-
-1. Redistributions of source code must retain the above copyright notice, this
-   list of conditions and the following disclaimer.
-
-2. Redistributions in binary form must reproduce the above copyright notice,
-   this list of conditions and the following disclaimer in the documentation
-   and/or other materials provided with the distribution.
-
-3. Neither the name of the copyright holder nor the names of its
-   contributors may be used to endorse or promote products derived from
-   this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-```
-
-### BSD 3-Clause "New" or "Revised" License
-
-Used by:
-
-- [ravif 0.12.0](https://github.com/kornelski/cavif-rs)
-
-```text
-BSD 3-Clause License
-
-Copyright (c) 2020, Kornel
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are met:
-
-1. Redistributions of source code must retain the above copyright notice, this
-   list of conditions and the following disclaimer.
-
-2. Redistributions in binary form must reproduce the above copyright notice,
-   this list of conditions and the following disclaimer in the documentation
-   and/or other materials provided with the distribution.
-
-3. Neither the name of the copyright holder nor the names of its
-   contributors may be used to endorse or promote products derived from
-   this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ```
@@ -8690,63 +8423,6 @@ DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
 THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-```
-
-### BSD 3-Clause "New" or "Revised" License
-
-Used by:
-
-- [lebe 0.5.3](https://github.com/johannesvollmer/lebe)
-
-```text
-Copyright (c) 2022 Contributors to the lebe Project. All rights reserved.
-
-Redistribution and use in source and binary forms, with or without modification,
-are permitted provided that the following conditions are met:
-
-1. Redistributions of source code must retain the above copyright notice,
-this list of conditions and the following disclaimer.
-
-2. Redistributions in binary form must reproduce the above copyright notice,
-this list of conditions and the following disclaimer in the documentation
-and/or other materials provided with the distribution.
-
-3. Neither the name of the copyright holder nor the names of its contributors
-may be used to endorse or promote products derived from this software without
-specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
-USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-```
-
-### BSD 3-Clause "New" or "Revised" License
-
-Used by:
-
-- [exr 1.74.0](https://github.com/johannesvollmer/exrs)
-
-```text
-Copyright (c) <year> <owner>. 
-
-Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
-
-1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
-
-2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
-
-3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ```
 
@@ -9004,7 +8680,6 @@ THE SOFTWARE.
 
 Used by:
 
-- [new_debug_unreachable 1.0.6](https://github.com/mbrubeck/rust-debug-unreachable)
 - [ordered-float 4.6.0](https://github.com/reem/rust-ordered-float)
 
 ```text
@@ -9449,68 +9124,6 @@ SOFTWARE.
 
 Used by:
 
-- [arg_enum_proc_macro 0.3.4](https://github.com/lu-zero/arg_enum_proc_macro)
-
-```text
-MIT License
-
-Copyright (c) 2018 Luca Barbato
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-```
-
-### MIT License
-
-Used by:
-
-- [tiff 0.10.3](https://github.com/image-rs/image-tiff)
-
-```text
-MIT License
-
-Copyright (c) 2018 PistonDevelopers
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-```
-
-### MIT License
-
-Used by:
-
 - [filedescriptor 0.8.3](https://github.com/wezterm/wezterm)
 - [portable-pty 0.9.0](https://github.com/wezterm/wezterm)
 
@@ -9518,99 +9131,6 @@ Used by:
 MIT License
 
 Copyright (c) 2018 Wez Furlong
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-```
-
-### MIT License
-
-Used by:
-
-- [rgb 0.8.52](https://github.com/kornelski/rust-rgb)
-
-```text
-MIT License
-
-Copyright (c) 2019 Kornel
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-```
-
-### MIT License
-
-Used by:
-
-- [noop_proc_macro 0.3.0](https://github.com/lu-zero/noop_proc_macro)
-
-```text
-MIT License
-
-Copyright (c) 2019 Luca Barbato
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-```
-
-### MIT License
-
-Used by:
-
-- [av-scenechange 0.14.1](https://github.com/rust-av/av-scenechange)
-
-```text
-MIT License
-
-Copyright (c) 2019 Multimedia and Rust
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -9699,37 +9219,6 @@ SOFTWARE.
 
 Used by:
 
-- [maybe-rayon 0.1.1](https://github.com/shssoichiro/maybe-rayon)
-
-```text
-MIT License
-
-Copyright (c) 2021 Joshua Holmer
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-```
-
-### MIT License
-
-Used by:
-
 - [sctk-adwaita 0.10.1](https://github.com/PolyMeilex/sctk-adwaita)
 
 ```text
@@ -9767,69 +9256,6 @@ Used by:
 MIT License
 
 Copyright (c) 2022 Paul Delafosse
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-```
-
-### MIT License
-
-Used by:
-
-- [aligned-vec 0.6.4](https://github.com/sarah-ek/aligned-vec/)
-
-```text
-MIT License
-
-Copyright (c) 2022 sarah
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-```
-
-### MIT License
-
-Used by:
-
-- [equator-macro 0.4.2](https://github.com/sarah-ek/equator/)
-- [equator 0.4.2](https://github.com/sarah-ek/equator/)
-
-```text
-MIT License
-
-Copyright (c) 2023 sarah
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -9916,10 +9342,7 @@ SOFTWARE.
 Used by:
 
 - [dpi 0.1.2](https://github.com/rust-windowing/winit)
-- [fax 0.2.6](https://github.com/pdf-rs/fax)
-- [fax_derive 0.2.0](https://github.com/pdf-rs/fax)
 - [libm 0.2.15](https://github.com/rust-lang/compiler-builtins)
-- [simd_helpers 0.1.0](https://github.com/lu-zero/simd_helpers)
 
 ```text
 MIT License
@@ -10270,38 +9693,6 @@ SOFTWARE.
 
 Used by:
 
-- [y4m 0.8.0](https://github.com/image-rs/y4m.git)
-
-```text
-The MIT License (MIT)
-
-Copyright (c) 2015-2019 PistonDevelopers
-Copyright (c) 2019 image-rs contributors
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-```
-
-### MIT License
-
-Used by:
-
 - [color_quant 1.1.0](https://github.com/image-rs/color_quant.git)
 
 ```text
@@ -10512,23 +9903,6 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
-
-```
-
-### MIT License
-
-Used by:
-
-- [loop9 0.1.5](https://gitlab.com/kornelski/loop9.git)
-
-```text
-© Kornel Lesiński
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the “Software”), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ```
 
