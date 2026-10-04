@@ -712,15 +712,15 @@ impl PersistentHandler {
             .map_err(|error| bounded_error(&format!("handler launch failed: {error}")))?;
         let Some(mut stdin) = child.stdin.take() else {
             terminate_handler(&mut child);
-            return Err("persistent handler stdin was unavailable".into());
+            return Err("handler stdin was unavailable".into());
         };
         let Some(stdout) = child.stdout.take() else {
             terminate_handler(&mut child);
-            return Err("persistent handler stdout was unavailable".into());
+            return Err("handler stdout was unavailable".into());
         };
         let Some(stderr_stream) = child.stderr.take() else {
             terminate_handler(&mut child);
-            return Err("persistent handler stderr was unavailable".into());
+            return Err("handler stderr was unavailable".into());
         };
         let (request_sender, request_receiver) = sync_channel::<PersistentRequest>(1);
         let io_thread = thread::spawn(move || {
@@ -736,7 +736,7 @@ impl PersistentHandler {
                             .map_err(|error| {
                                 bounded_error(&format!("handler response read failed: {error}"))
                             })?
-                            .ok_or_else(|| "persistent handler closed stdout".to_string())
+                            .ok_or_else(|| "handler closed stdout".to_string())
                     });
                 let failed = result.is_err();
                 let _ = request.response.send(result);
@@ -796,16 +796,14 @@ impl PersistentHandler {
         let (response_sender, response_receiver) = sync_channel(1);
         self.requests
             .as_ref()
-            .ok_or_else(|| "persistent handler input is closed".to_string())?
+            .ok_or_else(|| "handler input is closed".to_string())?
             .try_send(PersistentRequest {
                 event,
                 response: response_sender,
             })
             .map_err(|error| match error {
-                TrySendError::Full(_) => {
-                    String::from("persistent handler already has a pending request")
-                }
-                TrySendError::Disconnected(_) => String::from("persistent handler input is closed"),
+                TrySendError::Full(_) => String::from("handler already has a pending request"),
+                TrySendError::Disconnected(_) => String::from("handler input is closed"),
             })?;
         let (bytes, truncated) = loop {
             if cancelled() {
@@ -823,7 +821,7 @@ impl PersistentHandler {
                 }
                 Err(RecvTimeoutError::Disconnected) => {
                     return Err(self.failure_error(
-                        "persistent handler response channel closed".into(),
+                        "handler response channel closed".into(),
                         deadline,
                         &cancelled,
                     ));
@@ -920,7 +918,7 @@ fn run_persistent_handler(
     if !handlers.contains_key(&invocation.plugin_id) {
         if handlers.len() >= MAX_PERSISTENT_HANDLERS {
             return Err(format!(
-                "persistent plugin handler limit reached ({MAX_PERSISTENT_HANDLERS})"
+                "plugin handler limit reached ({MAX_PERSISTENT_HANDLERS})"
             ));
         }
         handlers.insert(
@@ -931,9 +929,9 @@ fn run_persistent_handler(
     let result = {
         let handler = handlers
             .get_mut(&invocation.plugin_id)
-            .expect("persistent handler was inserted");
+            .expect("handler was inserted");
         if !handler.matches(invocation) {
-            Err("persistent handler descriptor changed within one plugin generation".into())
+            Err("handler descriptor changed within one plugin generation".into())
         } else {
             handler.request(
                 event,
@@ -958,22 +956,22 @@ fn persistent_request_json(event_json: &str, request_id: u64) -> Result<Vec<u8>,
         .map_err(|error| bounded_error(&format!("invalid structured event JSON: {error}")))?;
     let object = value
         .as_object_mut()
-        .ok_or_else(|| "persistent structured event must be a JSON object".to_string())?;
+        .ok_or_else(|| "structured event must be a JSON object".to_string())?;
     if object
         .get("schema_version")
         .and_then(serde_json::Value::as_u64)
         != Some(u64::from(SCHEMA_VERSION))
     {
         return Err(format!(
-            "persistent handlers require a schema-v{SCHEMA_VERSION} source event"
+            "handlers require a schema-v{SCHEMA_VERSION} source event"
         ));
     }
     object.insert("request_id".into(), serde_json::json!(request_id));
     let bytes = serde_json::to_vec(&value)
-        .map_err(|error| bounded_error(&format!("could not encode persistent event: {error}")))?;
+        .map_err(|error| bounded_error(&format!("could not encode the handler event: {error}")))?;
     if bytes.len() > MAX_STRUCTURED_EVENT_BYTES {
         return Err(format!(
-            "persistent structured event exceeds {MAX_STRUCTURED_EVENT_BYTES} bytes"
+            "structured event exceeds {MAX_STRUCTURED_EVENT_BYTES} bytes"
         ));
     }
     Ok(bytes)
@@ -990,7 +988,7 @@ fn read_response_line(reader: &mut impl BufRead) -> std::io::Result<Option<(Vec<
     if !read.terminated {
         return Err(std::io::Error::new(
             std::io::ErrorKind::UnexpectedEof,
-            "persistent handler response ended without a newline",
+            "handler response ended without a newline",
         ));
     }
     if bytes.last() == Some(&b'\r') {
