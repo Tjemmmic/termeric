@@ -1781,9 +1781,27 @@ pub fn read_frame<T: DeserializeOwned>(reader: &mut impl Read) -> anyhow::Result
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// `value` crosses the wire unchanged.
+    fn round_trip<T: Serialize + DeserializeOwned + PartialEq + std::fmt::Debug>(value: &T) {
+        let mut wire = Vec::new();
+        write_frame(&mut wire, value).unwrap();
+        assert_eq!(&read_frame::<T>(&mut wire.as_slice()).unwrap(), value);
+    }
+
+    /// `request` is valid and crosses the wire unchanged.
+    fn sends_unchanged(request: Request) {
+        request.validate().unwrap();
+        round_trip(&ClientFrame {
+            version: PROTOCOL_VERSION,
+            token: "secret".into(),
+            request,
+        });
+    }
+
     #[test]
     fn agent_lists_are_cut_to_fit_one_frame() {
-        use super::*;
         let summary = |index: u64| AgentSummary {
             window_id: 1,
             tab_id: index,
@@ -1816,7 +1834,6 @@ mod tests {
 
     #[test]
     fn launch_environment_policy_is_bounded_unambiguous_and_strict() {
-        use super::*;
         use termeric_core::pty::EnvironmentPolicy;
         let clear = EnvironmentPolicy {
             clear: true,
@@ -1929,23 +1946,12 @@ mod tests {
 
     #[test]
     fn launch_status_is_read_only_strict_and_preserves_portable_results() {
-        use super::*;
         let request = Request::LaunchStatus {
             launch_request_id: "1".repeat(32),
         };
         request.validate().unwrap();
         assert!(request.request_id().is_none());
-        let frame = ClientFrame {
-            version: PROTOCOL_VERSION,
-            token: "fixture".into(),
-            request,
-        };
-        let mut wire = Vec::new();
-        write_frame(&mut wire, &frame).unwrap();
-        assert_eq!(
-            read_frame::<ClientFrame>(&mut wire.as_slice()).unwrap(),
-            frame
-        );
+        sends_unchanged(request);
         assert!(
             Request::LaunchStatus {
                 launch_request_id: "wrong".into()
@@ -1985,15 +1991,9 @@ mod tests {
                 state,
                 terminal_closed: true,
             });
-            let mut wire = Vec::new();
-            write_frame(&mut wire, &response).unwrap();
-            assert_eq!(
-                read_frame::<ServerFrame>(&mut wire.as_slice()).unwrap(),
-                response
-            );
+            round_trip(&response);
         }
     }
-    use super::*;
 
     #[test]
     fn inventory_round_trips_with_stable_versioned_shape() {
@@ -2046,12 +2046,7 @@ mod tests {
             }],
             truncated: false,
         }));
-        let mut wire = Vec::new();
-        write_frame(&mut wire, &frame).unwrap();
-        assert_eq!(
-            read_frame::<ServerFrame>(&mut wire.as_slice()).unwrap(),
-            frame
-        );
+        round_trip(&frame);
     }
 
     #[test]
@@ -2061,30 +2056,14 @@ mod tests {
             request_id: request_id.clone(),
             source_window: 7,
         };
-        request.validate().unwrap();
-        let frame = ClientFrame {
-            version: PROTOCOL_VERSION,
-            token: "secret".into(),
-            request,
-        };
-        let mut wire = Vec::new();
-        write_frame(&mut wire, &frame).unwrap();
-        assert_eq!(
-            read_frame::<ClientFrame>(&mut wire.as_slice()).unwrap(),
-            frame
-        );
+        sends_unchanged(request);
 
         let response = ServerFrame::new(Response::WindowCreated {
             process_id: 42,
             request_id,
             window_id: 9,
         });
-        let mut wire = Vec::new();
-        write_frame(&mut wire, &response).unwrap();
-        assert_eq!(
-            read_frame::<ServerFrame>(&mut wire.as_slice()).unwrap(),
-            response
-        );
+        round_trip(&response);
 
         assert!(
             Request::CreateWindow {
@@ -2111,18 +2090,7 @@ mod tests {
             request_id: request_id.clone(),
             window_id: 7,
         };
-        request.validate().unwrap();
-        let frame = ClientFrame {
-            version: PROTOCOL_VERSION,
-            token: "secret".into(),
-            request,
-        };
-        let mut wire = Vec::new();
-        write_frame(&mut wire, &frame).unwrap();
-        assert_eq!(
-            read_frame::<ClientFrame>(&mut wire.as_slice()).unwrap(),
-            frame
-        );
+        sends_unchanged(request);
 
         let response = ServerFrame::new(Response::TabCreated {
             process_id: 42,
@@ -2130,12 +2098,7 @@ mod tests {
             window_id: 7,
             tab_id: 3,
         });
-        let mut wire = Vec::new();
-        write_frame(&mut wire, &response).unwrap();
-        assert_eq!(
-            read_frame::<ServerFrame>(&mut wire.as_slice()).unwrap(),
-            response
-        );
+        round_trip(&response);
 
         assert!(
             Request::CreateTab {
@@ -2205,18 +2168,7 @@ mod tests {
                 value: "= two words $HOME;🙂".into(),
             }],
         };
-        request.validate().unwrap();
-        let frame = ClientFrame {
-            version: PROTOCOL_VERSION,
-            token: "secret".into(),
-            request: request.clone(),
-        };
-        let mut wire = Vec::new();
-        write_frame(&mut wire, &frame).unwrap();
-        assert_eq!(
-            read_frame::<ClientFrame>(&mut wire.as_slice()).unwrap(),
-            frame
-        );
+        sends_unchanged(request.clone());
         assert_eq!(
             request.request_id(),
             Some("0123456789abcdef0123456789abcdef")
@@ -2315,18 +2267,7 @@ mod tests {
                 value: String::new(),
             }],
         };
-        request.validate().unwrap();
-        let frame = ClientFrame {
-            version: PROTOCOL_VERSION,
-            token: "secret".into(),
-            request: request.clone(),
-        };
-        let mut wire = Vec::new();
-        write_frame(&mut wire, &frame).unwrap();
-        assert_eq!(
-            read_frame::<ClientFrame>(&mut wire.as_slice()).unwrap(),
-            frame
-        );
+        sends_unchanged(request.clone());
         assert_eq!(request.request_id(), Some(request_id.as_str()));
 
         let response = ServerFrame::new(Response::WindowLaunched {
@@ -2335,12 +2276,7 @@ mod tests {
             window_id: 9,
             tab_id: 0,
         });
-        let mut wire = Vec::new();
-        write_frame(&mut wire, &response).unwrap();
-        assert_eq!(
-            read_frame::<ServerFrame>(&mut wire.as_slice()).unwrap(),
-            response
-        );
+        round_trip(&response);
 
         assert!(
             Request::LaunchWindow {
@@ -2543,18 +2479,7 @@ mod tests {
             pane_id: 0,
             direction: SplitDirection::Vertical,
         };
-        request.validate().unwrap();
-        let frame = ClientFrame {
-            version: PROTOCOL_VERSION,
-            token: "secret".into(),
-            request,
-        };
-        let mut wire = Vec::new();
-        write_frame(&mut wire, &frame).unwrap();
-        assert_eq!(
-            read_frame::<ClientFrame>(&mut wire.as_slice()).unwrap(),
-            frame
-        );
+        sends_unchanged(request);
 
         let response = ServerFrame::new(Response::PaneCreated {
             process_id: 42,
@@ -2563,12 +2488,7 @@ mod tests {
             tab_id: 3,
             pane_id: 1,
         });
-        let mut wire = Vec::new();
-        write_frame(&mut wire, &response).unwrap();
-        assert_eq!(
-            read_frame::<ServerFrame>(&mut wire.as_slice()).unwrap(),
-            response
-        );
+        round_trip(&response);
 
         assert!(
             Request::SplitPane {
@@ -2608,18 +2528,7 @@ mod tests {
                 pane_id: 1,
             },
         ] {
-            request.validate().unwrap();
-            let frame = ClientFrame {
-                version: PROTOCOL_VERSION,
-                token: "secret".into(),
-                request,
-            };
-            let mut wire = Vec::new();
-            write_frame(&mut wire, &frame).unwrap();
-            assert_eq!(
-                read_frame::<ClientFrame>(&mut wire.as_slice()).unwrap(),
-                frame
-            );
+            sends_unchanged(request);
         }
 
         for response in [
@@ -2652,12 +2561,7 @@ mod tests {
                 pane_changed: true,
             }),
         ] {
-            let mut wire = Vec::new();
-            write_frame(&mut wire, &response).unwrap();
-            assert_eq!(
-                read_frame::<ServerFrame>(&mut wire.as_slice()).unwrap(),
-                response
-            );
+            round_trip(&response);
         }
     }
 
@@ -2681,18 +2585,7 @@ mod tests {
                 pane_id: 1,
             },
         ] {
-            request.validate().unwrap();
-            let frame = ClientFrame {
-                version: PROTOCOL_VERSION,
-                token: "secret".into(),
-                request,
-            };
-            let mut wire = Vec::new();
-            write_frame(&mut wire, &frame).unwrap();
-            assert_eq!(
-                read_frame::<ClientFrame>(&mut wire.as_slice()).unwrap(),
-                frame
-            );
+            sends_unchanged(request);
         }
 
         for response in [
@@ -2717,12 +2610,7 @@ mod tests {
                 focused_pane_id: 0,
             }),
         ] {
-            let mut wire = Vec::new();
-            write_frame(&mut wire, &response).unwrap();
-            assert_eq!(
-                read_frame::<ServerFrame>(&mut wire.as_slice()).unwrap(),
-                response
-            );
+            round_trip(&response);
         }
     }
 
@@ -2736,18 +2624,7 @@ mod tests {
             destination_window_id: 9,
             destination_index: 2,
         };
-        request.validate().unwrap();
-        let frame = ClientFrame {
-            version: PROTOCOL_VERSION,
-            token: "secret".into(),
-            request,
-        };
-        let mut wire = Vec::new();
-        write_frame(&mut wire, &frame).unwrap();
-        assert_eq!(
-            read_frame::<ClientFrame>(&mut wire.as_slice()).unwrap(),
-            frame
-        );
+        sends_unchanged(request);
 
         let response = ServerFrame::new(Response::TabMoved {
             process_id: 42,
@@ -2760,12 +2637,7 @@ mod tests {
             source_window_closing: false,
             changed: true,
         });
-        let mut wire = Vec::new();
-        write_frame(&mut wire, &response).unwrap();
-        assert_eq!(
-            read_frame::<ServerFrame>(&mut wire.as_slice()).unwrap(),
-            response
-        );
+        round_trip(&response);
 
         assert!(
             Request::MoveTab {
@@ -2793,18 +2665,7 @@ mod tests {
             target_pane_id: 2,
             direction: SplitDirection::Horizontal,
         };
-        request.validate().unwrap();
-        let frame = ClientFrame {
-            version: PROTOCOL_VERSION,
-            token: "secret".into(),
-            request,
-        };
-        let mut wire = Vec::new();
-        write_frame(&mut wire, &frame).unwrap();
-        assert_eq!(
-            read_frame::<ClientFrame>(&mut wire.as_slice()).unwrap(),
-            frame
-        );
+        sends_unchanged(request);
 
         let response = ServerFrame::new(Response::PaneMoved {
             process_id: 42,
@@ -2817,12 +2678,7 @@ mod tests {
             destination_pane_id: 5,
             target_pane_id: 2,
         });
-        let mut wire = Vec::new();
-        write_frame(&mut wire, &response).unwrap();
-        assert_eq!(
-            read_frame::<ServerFrame>(&mut wire.as_slice()).unwrap(),
-            response
-        );
+        round_trip(&response);
     }
 
     #[test]
@@ -2836,17 +2692,7 @@ mod tests {
         };
         request.validate().unwrap();
         assert_eq!(request.request_id(), None);
-        let frame = ClientFrame {
-            version: PROTOCOL_VERSION,
-            token: "secret".into(),
-            request,
-        };
-        let mut wire = Vec::new();
-        write_frame(&mut wire, &frame).unwrap();
-        assert_eq!(
-            read_frame::<ClientFrame>(&mut wire.as_slice()).unwrap(),
-            frame
-        );
+        sends_unchanged(request);
 
         let response = ServerFrame::new(Response::Text {
             process_id: 42,
@@ -2858,12 +2704,7 @@ mod tests {
             text: "recent output".into(),
             truncated: false,
         });
-        let mut wire = Vec::new();
-        write_frame(&mut wire, &response).unwrap();
-        assert_eq!(
-            read_frame::<ServerFrame>(&mut wire.as_slice()).unwrap(),
-            response
-        );
+        round_trip(&response);
 
         for invalid in [
             Request::ReadText {
@@ -2906,17 +2747,7 @@ mod tests {
         };
         request.validate().unwrap();
         assert_eq!(request.request_id(), Some(request_id.as_str()));
-        let frame = ClientFrame {
-            version: PROTOCOL_VERSION,
-            token: "secret".into(),
-            request,
-        };
-        let mut wire = Vec::new();
-        write_frame(&mut wire, &frame).unwrap();
-        assert_eq!(
-            read_frame::<ClientFrame>(&mut wire.as_slice()).unwrap(),
-            frame
-        );
+        sends_unchanged(request);
 
         let response = ServerFrame::new(Response::InputAccepted {
             process_id: 42,
@@ -2931,12 +2762,7 @@ mod tests {
             disposition: InputDisposition::PendingConfirmation,
             confirmation_id: Some(9),
         });
-        let mut wire = Vec::new();
-        write_frame(&mut wire, &response).unwrap();
-        assert_eq!(
-            read_frame::<ServerFrame>(&mut wire.as_slice()).unwrap(),
-            response
-        );
+        round_trip(&response);
 
         for text in ["\u{1b}[31m", "bad\rreturn", "\0"] {
             assert!(
@@ -2986,18 +2812,7 @@ mod tests {
                 ratio_millis: 650,
             },
         ] {
-            request.validate().unwrap();
-            let frame = ClientFrame {
-                version: PROTOCOL_VERSION,
-                token: "secret".into(),
-                request,
-            };
-            let mut wire = Vec::new();
-            write_frame(&mut wire, &frame).unwrap();
-            assert_eq!(
-                read_frame::<ClientFrame>(&mut wire.as_slice()).unwrap(),
-                frame
-            );
+            sends_unchanged(request);
         }
 
         for response in [
@@ -3021,12 +2836,7 @@ mod tests {
                 changed: true,
             }),
         ] {
-            let mut wire = Vec::new();
-            write_frame(&mut wire, &response).unwrap();
-            assert_eq!(
-                read_frame::<ServerFrame>(&mut wire.as_slice()).unwrap(),
-                response
-            );
+            round_trip(&response);
         }
 
         assert!(
