@@ -408,7 +408,3 @@ See [Agent status](agents.md#agent-status).
 | `enabled` | `false` | Turn on Harvest. |
 | `show_indicators` | `true` | Show growth indicators while commands run. |
 | `max_history` | `100` | Commands kept, 1 to 10000. |
-
-### Retired sections
-
-Older releases configured Claude Code and Codex under `[plugins.claude_code]` and `[plugins.codex]`. Termeric still reads these and moves their settings into `[agents.claude-code]` and `[agents.codex]`, unless those tables already exist. The next save writes only the new form.

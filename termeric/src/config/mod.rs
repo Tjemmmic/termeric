@@ -59,10 +59,6 @@ pub struct Config {
     /// User-defined custom commands / shortcuts
     #[serde(default)]
     pub commands: Vec<CustomCommand>,
-    /// Retired `[plugins.*]` agent sections, read only to migrate them into
-    /// `agents` and never written back.
-    #[serde(default, skip_serializing)]
-    pub plugins: PluginsConfig,
     /// `[agents.<id>]`: overrides for built-in coding agents and definitions
     /// of custom ones.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -261,9 +257,8 @@ impl Config {
         if config_path.exists() {
             let content = std::fs::read_to_string(config_path)
                 .with_context(|| format!("failed to read {}", config_path.display()))?;
-            let mut config: Config = toml::from_str(&content)
+            let config: Config = toml::from_str(&content)
                 .with_context(|| format!("failed to parse {}", config_path.display()))?;
-            config.migrate_retired_agent_sections();
             config.validate()?;
             Ok(config)
         } else {
@@ -282,47 +277,6 @@ impl Config {
                 "{} has an error, so it was left as it is ({error:#}); fix it, or use Reset Configuration to replace it",
                 path.display()
             ),
-        }
-    }
-
-    /// Move settings from the retired `[plugins.claude_code]` and
-    /// `[plugins.codex]` sections into `[agents.*]`, unless an agent entry
-    /// already exists. The next save writes only the new form.
-    pub fn migrate_retired_agent_sections(&mut self) {
-        let plugins = std::mem::take(&mut self.plugins);
-        let migrated = [
-            (
-                "claude-code",
-                plugins
-                    .claude_code
-                    .as_ref()
-                    .and_then(crate::agents::config::migrate_claude_code),
-            ),
-            (
-                "codex",
-                plugins
-                    .codex
-                    .as_ref()
-                    .filter(|_| !self.agents.contains_key("codex"))
-                    .and_then(|legacy| {
-                        crate::agents::config::migrate_codex(legacy).unwrap_or_else(|error| {
-                            // The retired plugin refused to launch with
-                            // this; guessing a policy could be less careful.
-                            log::warn!(
-                                "{error:#}; Codex stays turned off until [agents.codex] says how to start it"
-                            );
-                            Some(crate::agents::AgentConfig {
-                                enabled: Some(false),
-                                ..Default::default()
-                            })
-                        })
-                    }),
-            ),
-        ];
-        for (id, entry) in migrated {
-            if let Some(entry) = entry {
-                self.agents.entry(id.to_string()).or_insert(entry);
-            }
         }
     }
 
@@ -1372,15 +1326,6 @@ impl Default for SplashConfig {
     }
 }
 
-/// Retired `[plugins]` section: agent settings from earlier releases, read
-/// only so they can migrate into `[agents.*]`.
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default)]
-pub struct PluginsConfig {
-    pub claude_code: Option<crate::agents::config::LegacyClaudeCodeConfig>,
-    pub codex: Option<crate::agents::config::LegacyCodexConfig>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1965,54 +1910,6 @@ mod tests {
             let invalid: Config = toml::from_str(source).unwrap();
             assert!(invalid.validate().is_err(), "accepted {source:?}");
         }
-    }
-
-    #[test]
-    fn retired_agent_sections_migrate_once_and_are_not_written_back() {
-        let mut config: Config = toml::from_str(
-            r#"
-            [plugins.claude_code]
-            approval_mode = "auto-accept"
-            [plugins.codex]
-            enabled = true
-            approval_mode = "full-auto"
-            sandbox_mode = "workspace-write"
-            [agents.codex]
-            args = ["--kept"]
-            "#,
-        )
-        .unwrap();
-        config.migrate_retired_agent_sections();
-        config.validate().unwrap();
-        assert_eq!(
-            config.agents["claude-code"].args.as_deref(),
-            Some(&["--dangerously-skip-permissions".to_string()][..])
-        );
-        // An existing agent entry always wins over a retired section.
-        assert_eq!(
-            config.agents["codex"].args.as_deref(),
-            Some(&["--kept".to_string()][..])
-        );
-        let encoded = toml::to_string(&config).unwrap();
-        assert!(!encoded.contains("[plugins"));
-        assert!(encoded.contains("[agents.claude-code]"));
-
-        // A name the retired plugin refused never costs the rest of the
-        // configuration: Codex is turned off instead, and an existing entry
-        // makes the retired section irrelevant.
-        let mut config: Config =
-            toml::from_str("[window]\nwidth = 1234\n[plugins.codex]\napproval_mode = \"yolo\"\n")
-                .unwrap();
-        config.migrate_retired_agent_sections();
-        config.validate().unwrap();
-        assert_eq!(config.window.width, 1234);
-        assert_eq!(config.agents["codex"].enabled, Some(false));
-        let mut config: Config = toml::from_str(
-            "[plugins.codex]\napproval_mode = \"yolo\"\n[agents.codex]\nargs = []\n",
-        )
-        .unwrap();
-        config.migrate_retired_agent_sections();
-        assert_eq!(config.agents["codex"].enabled, None);
     }
 
     #[test]
