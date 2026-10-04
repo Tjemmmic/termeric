@@ -130,6 +130,12 @@ pub fn invoked_name(message: &str) -> Option<&str> {
 /// Longest title kept for an earlier conversation.
 pub const EARLIER_TITLE_CHARS: usize = 80;
 
+/// An earlier conversation's title from `text`: its first line, cut to
+/// [`EARLIER_TITLE_CHARS`].
+pub fn earlier_title(text: &str) -> String {
+    crate::safe_text::first_line_truncated(text, EARLIER_TITLE_CHARS)
+}
+
 /// An earlier conversation in a folder, which the agent can continue.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EarlierConversation {

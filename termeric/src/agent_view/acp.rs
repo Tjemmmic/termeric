@@ -27,12 +27,14 @@ use serde_json::{Map, Value, json};
 
 use super::event::{
     AgentCommand, AgentEvent, ApprovalDecision, ApprovalRequest, AssistantMessage, BlockStart,
-    ContentBlock, ContextUsage, DECLINED_MESSAGE, EARLIER_TITLE_CHARS, EarlierConversation,
-    EffortChoice, Handshake, ModeChoice, ModelChoice, RememberOption, SessionInfo, SlashCommand,
-    StreamDelta, Thread, ToolResult, TurnOutcome,
+    ContentBlock, ContextUsage, DECLINED_MESSAGE, EarlierConversation, EffortChoice, Handshake,
+    ModeChoice, ModelChoice, RememberOption, SessionInfo, SlashCommand, StreamDelta, Thread,
+    TurnOutcome, earlier_title,
 };
 use super::present::PATCH_TOOL;
-use super::protocol::{Exchange, Protocol, line, preview};
+use super::protocol::{
+    Exchange, Incoming, Protocol, failed_turn, incoming, line, preview, text, tool_result, tool_use,
+};
 
 /// The protocol version this host speaks.
 const PROTOCOL_VERSION: u64 = 1;
@@ -1222,31 +1224,17 @@ impl Protocol for AcpCodec {
     }
 
     fn decode(&mut self, line: &str) -> Exchange {
-        let Ok(Value::Object(message)) = serde_json::from_str::<Value>(line) else {
-            return Exchange {
-                events: vec![AgentEvent::Unrecognized(preview(line))],
-                lines: Vec::new(),
-            };
-        };
-        let method = message.get("method").and_then(Value::as_str);
-        let params = message.get("params").cloned().unwrap_or(Value::Null);
-        match (message.get("id").filter(|id| !id.is_null()), method) {
-            (Some(id), Some(method)) => self.decode_request(id.clone(), method, &params),
-            (None, Some(method)) => self.decode_notification(method, &params),
-            (Some(id), None) => match id.as_u64() {
-                Some(id) => self.decode_response(id, &message),
-                None => Exchange::default(),
-            },
-            (None, None) => Exchange {
+        match incoming(line) {
+            Incoming::Request { id, method, params } => self.decode_request(id, &method, &params),
+            Incoming::Notification { method, params } => self.decode_notification(&method, &params),
+            Incoming::Response { id, message } => self.decode_response(id, &message),
+            Incoming::Stray => Exchange::default(),
+            Incoming::Unreadable => Exchange {
                 events: vec![AgentEvent::Unrecognized(preview(line))],
                 lines: Vec::new(),
             },
         }
     }
-}
-
-fn text(value: &Value, key: &str) -> Option<String> {
-    value.get(key).and_then(Value::as_str).map(str::to_owned)
 }
 
 /// The first of `keys` that holds text.
@@ -1543,41 +1531,6 @@ fn present_edit(
     }
 }
 
-fn tool_use(id: &str, name: &str, input: Value) -> AgentEvent {
-    AgentEvent::Message {
-        thread: Thread::Main,
-        message: AssistantMessage {
-            id: id.to_owned(),
-            blocks: vec![ContentBlock::ToolUse {
-                id: id.to_owned(),
-                name: name.to_owned(),
-                input,
-            }],
-            error: None,
-        },
-    }
-}
-
-fn tool_result(id: &str, content: String, is_error: bool) -> AgentEvent {
-    AgentEvent::ToolResult {
-        thread: Thread::Main,
-        result: ToolResult {
-            tool_use_id: id.to_owned(),
-            content,
-            is_error,
-            detail: None,
-        },
-    }
-}
-
-fn failed_turn(error: &str) -> AgentEvent {
-    AgentEvent::TurnFinished(TurnOutcome {
-        success: false,
-        error: Some(error.to_owned()),
-        ..TurnOutcome::default()
-    })
-}
-
 /// Earlier sessions, newest first, titled as the agent titled them.
 fn earlier(listed: Option<&Value>) -> Vec<EarlierConversation> {
     let mut sessions: Vec<EarlierConversation> = listed
@@ -1587,7 +1540,7 @@ fn earlier(listed: Option<&Value>) -> Vec<EarlierConversation> {
         .filter_map(|session| {
             let id = text(session, "sessionId")?;
             let title = text(session, "title")
-                .map(|title| crate::safe_text::first_line_truncated(&title, EARLIER_TITLE_CHARS))
+                .map(|title| earlier_title(&title))
                 .filter(|title| !title.is_empty())
                 .unwrap_or_else(|| "Untitled conversation".to_owned());
             let seconds = text(session, "updatedAt")

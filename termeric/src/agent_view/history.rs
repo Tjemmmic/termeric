@@ -13,7 +13,7 @@ use std::time::SystemTime;
 
 use serde_json::Value;
 
-use super::event::{EARLIER_TITLE_CHARS, EarlierConversation};
+use super::event::{EarlierConversation, earlier_title};
 
 /// How much of a log's start is searched for its first prompt.
 const HEAD_BYTES: u64 = 256 * 1024;
@@ -97,7 +97,7 @@ fn title_of(path: &Path) -> Option<String> {
     let mut file = std::fs::File::open(path).ok()?;
     let length = file.metadata().ok()?.len();
     if let Some(title) = read_tail(&mut file, length).and_then(|tail| named_title(&tail)) {
-        return Some(shorten(&title));
+        return Some(earlier_title(&title));
     }
     file.seek(SeekFrom::Start(0)).ok()?;
     let mut head = Vec::new();
@@ -106,7 +106,7 @@ fn title_of(path: &Path) -> Option<String> {
     head.lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .find_map(|entry| first_prompt(&entry))
-        .map(|prompt| shorten(&prompt))
+        .map(|prompt| earlier_title(&prompt))
 }
 
 fn read_tail(file: &mut std::fs::File, length: u64) -> Option<String> {
@@ -186,13 +186,10 @@ fn first_prompt(entry: &Value) -> Option<String> {
         .then(|| text.to_owned())
 }
 
-fn shorten(text: &str) -> String {
-    crate::safe_text::first_line_truncated(text, EARLIER_TITLE_CHARS)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent_view::event::EARLIER_TITLE_CHARS;
     use serde_json::json;
 
     fn write_log(folder: &Path, id: &str, lines: &[Value]) {
@@ -264,7 +261,7 @@ mod tests {
     #[test]
     fn long_titles_are_shortened_on_a_character_boundary() {
         let long = "é".repeat(100);
-        let short = shorten(&long);
+        let short = earlier_title(&long);
         assert_eq!(short.chars().count(), EARLIER_TITLE_CHARS);
         assert!(short.ends_with('…'));
     }

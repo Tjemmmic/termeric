@@ -23,12 +23,14 @@ use serde_json::{Map, Value, json};
 
 use super::event::{
     AgentCommand, AgentEvent, ApprovalDecision, ApprovalRequest, BlockStart, ContentBlock,
-    ContextUsage, DECLINED_MESSAGE, EARLIER_TITLE_CHARS, EarlierConversation, Handshake,
-    ModeChoice, ModelChoice, RememberOption, Retry, SessionInfo, SlashCommand, StreamDelta, Thread,
-    ToolResult, TurnOutcome, invoked_name,
+    ContextUsage, DECLINED_MESSAGE, EarlierConversation, Handshake, ModeChoice, ModelChoice,
+    RememberOption, Retry, SessionInfo, SlashCommand, StreamDelta, Thread, TurnOutcome,
+    earlier_title, invoked_name,
 };
 use super::present::PATCH_TOOL;
-use super::protocol::{Exchange, Protocol, line, preview};
+use super::protocol::{
+    Exchange, Incoming, Protocol, failed_turn, incoming, line, preview, text, tool_result, tool_use,
+};
 
 /// The mode Codex asks in: it reads freely and asks before changing
 /// anything.
@@ -1237,25 +1239,15 @@ impl Protocol for CodexCodec {
     }
 
     fn decode(&mut self, line: &str) -> Exchange {
-        let Ok(Value::Object(message)) = serde_json::from_str::<Value>(line) else {
-            return Exchange {
-                events: vec![AgentEvent::Unrecognized(preview(line))],
-                lines: Vec::new(),
-            };
-        };
-        let method = message.get("method").and_then(Value::as_str);
-        let params = message.get("params").cloned().unwrap_or(Value::Null);
-        match (message.get("id"), method) {
-            (Some(id), Some(method)) => self.decode_request(id.clone(), method, &params),
-            (None, Some(method)) => Exchange {
-                events: self.decode_notification(method, &params),
+        match incoming(line) {
+            Incoming::Request { id, method, params } => self.decode_request(id, &method, &params),
+            Incoming::Notification { method, params } => Exchange {
+                events: self.decode_notification(&method, &params),
                 lines: Vec::new(),
             },
-            (Some(id), None) => match id.as_u64() {
-                Some(id) => self.decode_response(id, &message),
-                None => Exchange::default(),
-            },
-            (None, None) => Exchange {
+            Incoming::Response { id, message } => self.decode_response(id, &message),
+            Incoming::Stray => Exchange::default(),
+            Incoming::Unreadable => Exchange {
                 events: vec![AgentEvent::Unrecognized(preview(line))],
                 lines: Vec::new(),
             },
@@ -1263,47 +1255,8 @@ impl Protocol for CodexCodec {
     }
 }
 
-fn text(value: &Value, key: &str) -> Option<String> {
-    value.get(key).and_then(Value::as_str).map(str::to_owned)
-}
-
 fn text_input(text: &str) -> Value {
     json!({ "type": "text", "text": text, "text_elements": [] })
-}
-
-fn tool_use(id: &str, name: &str, input: Value) -> AgentEvent {
-    AgentEvent::Message {
-        thread: Thread::Main,
-        message: super::event::AssistantMessage {
-            id: id.to_owned(),
-            blocks: vec![ContentBlock::ToolUse {
-                id: id.to_owned(),
-                name: name.to_owned(),
-                input,
-            }],
-            error: None,
-        },
-    }
-}
-
-fn tool_result(id: &str, content: String, is_error: bool) -> AgentEvent {
-    AgentEvent::ToolResult {
-        thread: Thread::Main,
-        result: ToolResult {
-            tool_use_id: id.to_owned(),
-            content,
-            is_error,
-            detail: None,
-        },
-    }
-}
-
-fn failed_turn(error: &str) -> AgentEvent {
-    AgentEvent::TurnFinished(TurnOutcome {
-        success: false,
-        error: Some(error.to_owned()),
-        ..TurnOutcome::default()
-    })
 }
 
 /// Codex's models, led by the one its settings choose.
@@ -1344,7 +1297,7 @@ fn earlier(listed: Option<&Value>) -> Vec<EarlierConversation> {
             let named = text(thread, "name").filter(|name| !name.trim().is_empty());
             let title = named
                 .or_else(|| text(thread, "preview"))
-                .map(|title| crate::safe_text::first_line_truncated(&title, EARLIER_TITLE_CHARS))
+                .map(|title| earlier_title(&title))
                 .filter(|title| !title.is_empty())?;
             let seconds = thread
                 .get("updatedAt")
@@ -1441,6 +1394,7 @@ fn unquote(text: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent_view::event::EARLIER_TITLE_CHARS;
 
     fn codec() -> CodexCodec {
         CodexCodec::new(Setup {
