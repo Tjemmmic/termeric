@@ -18,6 +18,7 @@ pub use client::request_focus_background;
 use client::run_ssh_stdio_bridge;
 pub use client::{DomainClient, UploadOptions};
 pub use paths::RuntimePaths;
+use protocol::{Request, Response};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DomainTopologyEvent {
@@ -30,10 +31,6 @@ pub enum DomainTopologyEvent {
         message: String,
     },
 }
-
-use crate::panes::{PaneLayoutPreset, SplitDirection};
-use model::SpawnSpec;
-use protocol::{Request, Response};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DomainAuthority {
@@ -122,95 +119,6 @@ pub enum DomainCommand {
         destination: String,
         command: Box<DomainCommand>,
     },
-    List {
-        json: bool,
-    },
-    Panes {
-        domain: String,
-        json: bool,
-    },
-    Show {
-        domain: String,
-        json: bool,
-    },
-    Create {
-        name: String,
-        spawn: SpawnSpec,
-        json: bool,
-    },
-    Spawn {
-        domain: String,
-        spawn: SpawnSpec,
-        json: bool,
-    },
-    Split {
-        domain: String,
-        pane: u32,
-        direction: SplitDirection,
-        spawn: SpawnSpec,
-        json: bool,
-    },
-    ResizeSplit {
-        domain: String,
-        split: u32,
-        ratio_millis: u16,
-    },
-    RenameTab {
-        domain: String,
-        tab: u32,
-        title: Option<String>,
-    },
-    SetTabPinned {
-        domain: String,
-        tab: u32,
-        pinned: bool,
-    },
-    MoveTab {
-        domain: String,
-        tab: u32,
-        index: u16,
-    },
-    SwapPaneNext {
-        domain: String,
-        pane: u32,
-    },
-    BalanceTab {
-        domain: String,
-        tab: u32,
-    },
-    ApplyPaneLayout {
-        domain: String,
-        tab: u32,
-        preset: PaneLayoutPreset,
-    },
-    MovePane {
-        domain: String,
-        pane: u32,
-        tab: u32,
-    },
-    Focus {
-        domain: String,
-        pane: u32,
-    },
-    ClosePane {
-        domain: String,
-        pane: u32,
-    },
-    CloseTab {
-        domain: String,
-        tab: u32,
-    },
-    Send {
-        domain: String,
-        pane: u32,
-        data: Vec<u8>,
-    },
-    GetText {
-        domain: String,
-        pane: u32,
-        max_bytes: usize,
-        json: bool,
-    },
     Upload {
         domain: String,
         pane: u32,
@@ -222,10 +130,31 @@ pub enum DomainCommand {
         domain: String,
         pane: u32,
     },
-    Kill {
-        domain: String,
+    /// Every other command is one daemon request, printed as JSON or text.
+    Request {
+        request: Request,
+        json: bool,
     },
-    StopServer,
+}
+
+impl DomainCommand {
+    /// A request whose reply prints as text.
+    pub fn request(request: Request) -> Self {
+        Self::Request {
+            request,
+            json: false,
+        }
+    }
+
+    fn stops_the_server(&self) -> bool {
+        matches!(
+            self,
+            Self::Request {
+                request: Request::Shutdown,
+                ..
+            }
+        )
+    }
 }
 
 pub fn execute(command: DomainCommand) -> anyhow::Result<Option<String>> {
@@ -265,14 +194,14 @@ pub fn execute(command: DomainCommand) -> anyhow::Result<Option<String>> {
     } = command
     {
         // Stopping must not start a daemon just to stop it.
-        let client = if *command == DomainCommand::StopServer {
+        let client = if command.stops_the_server() {
             DomainClient::for_running_ssh(destination)?
         } else {
             DomainClient::for_ssh(destination)?
         };
         return execute_with_client(*command, client);
     }
-    let client = if command == DomainCommand::StopServer {
+    let client = if command.stops_the_server() {
         DomainClient::connect_running()?
             .ok_or_else(|| anyhow::anyhow!(client::NO_SERVER_RUNNING))?
     } else {
@@ -304,117 +233,8 @@ fn execute_with_client(
             Ok(Some(format_human(response)))
         };
     }
-    let (request, json) = match command {
-        DomainCommand::List { json } => (Request::ListDomains, json),
-        DomainCommand::Panes { domain, json } => (Request::ListPanes { domain }, json),
-        DomainCommand::Show { domain, json } => (Request::Describe { domain }, json),
-        DomainCommand::Create { name, spawn, json } => {
-            (Request::CreateDomain { name, spawn }, json)
-        }
-        DomainCommand::Spawn {
-            domain,
-            spawn,
-            json,
-        } => (Request::SpawnTab { domain, spawn }, json),
-        DomainCommand::Split {
-            domain,
-            pane,
-            direction,
-            spawn,
-            json,
-        } => (
-            Request::SplitPane {
-                domain,
-                pane,
-                direction,
-                spawn,
-            },
-            json,
-        ),
-        DomainCommand::ResizeSplit {
-            domain,
-            split,
-            ratio_millis,
-        } => (
-            Request::ResizeSplit {
-                domain,
-                split,
-                ratio_millis,
-            },
-            false,
-        ),
-        DomainCommand::RenameTab { domain, tab, title } => {
-            (Request::RenameTab { domain, tab, title }, false)
-        }
-        DomainCommand::SetTabPinned {
-            domain,
-            tab,
-            pinned,
-        } => (
-            Request::SetTabPinned {
-                domain,
-                tab,
-                pinned,
-            },
-            false,
-        ),
-        DomainCommand::MoveTab { domain, tab, index } => {
-            (Request::MoveTab { domain, tab, index }, false)
-        }
-        DomainCommand::SwapPaneNext { domain, pane } => {
-            (Request::SwapPaneNext { domain, pane }, false)
-        }
-        DomainCommand::BalanceTab { domain, tab } => (Request::BalanceTab { domain, tab }, false),
-        DomainCommand::ApplyPaneLayout {
-            domain,
-            tab,
-            preset,
-        } => (
-            Request::ApplyPaneLayout {
-                domain,
-                tab,
-                preset,
-            },
-            false,
-        ),
-        DomainCommand::MovePane { domain, pane, tab } => (
-            Request::MovePane {
-                domain,
-                pane,
-                tab,
-                target: None,
-                direction: crate::panes::SplitDirection::Vertical,
-            },
-            false,
-        ),
-        DomainCommand::Focus { domain, pane } => (Request::FocusPane { domain, pane }, false),
-        DomainCommand::ClosePane { domain, pane } => (Request::ClosePane { domain, pane }, false),
-        DomainCommand::CloseTab { domain, tab } => (Request::CloseTab { domain, tab }, false),
-        DomainCommand::Send { domain, pane, data } => {
-            (Request::SendText { domain, pane, data }, false)
-        }
-        DomainCommand::GetText {
-            domain,
-            pane,
-            max_bytes,
-            json,
-        } => (
-            Request::GetText {
-                domain,
-                pane,
-                max_bytes,
-            },
-            json,
-        ),
-        DomainCommand::Kill { domain } => (Request::KillDomain { domain }, false),
-        DomainCommand::StopServer => (Request::Shutdown, false),
-        DomainCommand::ServerForeground
-        | DomainCommand::ProxyStdio { .. }
-        | DomainCommand::ProtocolVersion { .. }
-        | DomainCommand::Hosts { .. }
-        | DomainCommand::Remote { .. }
-        | DomainCommand::Relay { .. }
-        | DomainCommand::Upload { .. } => unreachable!(),
+    let DomainCommand::Request { request, json } = command else {
+        unreachable!("only daemon requests remain once transports and uploads are handled")
     };
     let response = client.request(request)?;
     if json {

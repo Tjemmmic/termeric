@@ -1501,6 +1501,7 @@ fn parse_domain(
     domains: &crate::config::DomainsConfig,
 ) -> anyhow::Result<ParseOutcome> {
     use crate::domain::DomainCommand;
+    use crate::domain::protocol::Request;
     use crate::panes::SplitDirection;
 
     let Some(command) = arguments.first().and_then(|argument| argument.to_str()) else {
@@ -1547,28 +1548,32 @@ fn parse_domain(
             },
             _ => anyhow::bail!("usage: termeric domain proxy-stdio [--no-start]"),
         },
-        "list" => DomainCommand::List {
+        "list" => DomainCommand::Request {
+            request: Request::ListDomains,
             json: parse_only_json(values, "domain list")?,
         },
         "panes" | "show" => {
             let (domain, json) = parse_id_and_json(values, command)?;
-            match command {
-                "panes" => DomainCommand::Panes { domain, json },
-                _ => DomainCommand::Show { domain, json },
-            }
+            let request = match command {
+                "panes" => Request::ListPanes { domain },
+                _ => Request::Describe { domain },
+            };
+            DomainCommand::Request { request, json }
         }
         "create" => {
             let name = domain_utf8(values.first(), "domain create requires NAME")?;
             let (spawn, json) = parse_spawn_options(&values[1..])?;
-            DomainCommand::Create { name, spawn, json }
+            DomainCommand::Request {
+                request: Request::CreateDomain { name, spawn },
+                json,
+            }
         }
         "spawn" => {
             let domain = domain_utf8(values.first(), "domain spawn requires DOMAIN")?;
             crate::domain::model::validate_id("domain id", &domain)?;
             let (spawn, json) = parse_spawn_options(&values[1..])?;
-            DomainCommand::Spawn {
-                domain,
-                spawn,
+            DomainCommand::Request {
+                request: Request::SpawnTab { domain, spawn },
                 json,
             }
         }
@@ -1590,11 +1595,13 @@ fn parse_domain(
                     ),
                 };
             let (spawn, json) = parse_spawn_options(&values[3..])?;
-            DomainCommand::Split {
-                domain,
-                pane,
-                direction,
-                spawn,
+            DomainCommand::Request {
+                request: Request::SplitPane {
+                    domain,
+                    pane,
+                    direction,
+                    spawn,
+                },
                 json,
             }
         }
@@ -1607,11 +1614,11 @@ fn parse_domain(
             if !(100..=900).contains(&ratio_millis) {
                 anyhow::bail!("split ratio must be between 100 and 900 thousandths");
             }
-            DomainCommand::ResizeSplit {
+            DomainCommand::request(Request::ResizeSplit {
                 domain: validated_domain_id(values.first())?,
                 split: parse_split_id(values.get(1))?,
                 ratio_millis,
-            }
+            })
         }
         "rename-tab" => {
             require_len(values, 3, "domain rename-tab DOMAIN TAB TITLE")?;
@@ -1620,44 +1627,44 @@ fn parse_domain(
             if let Some(title) = &title {
                 crate::domain::model::validate_name("tab title", title)?;
             }
-            DomainCommand::RenameTab {
+            DomainCommand::request(Request::RenameTab {
                 domain: validated_domain_id(values.first())?,
                 tab: parse_tab_id(values.get(1))?,
                 title,
-            }
+            })
         }
         "pin-tab" | "unpin-tab" => {
             require_len(values, 2, &format!("domain {command} DOMAIN TAB"))?;
-            DomainCommand::SetTabPinned {
+            DomainCommand::request(Request::SetTabPinned {
                 domain: validated_domain_id(values.first())?,
                 tab: parse_tab_id(values.get(1))?,
                 pinned: command == "pin-tab",
-            }
+            })
         }
         "move-tab" => {
             require_len(values, 3, "domain move-tab DOMAIN TAB INDEX")?;
             let index = domain_utf8(values.get(2), "domain move-tab requires INDEX")?
                 .parse()
                 .context("tab index must be an unsigned integer")?;
-            DomainCommand::MoveTab {
+            DomainCommand::request(Request::MoveTab {
                 domain: validated_domain_id(values.first())?,
                 tab: parse_tab_id(values.get(1))?,
                 index,
-            }
+            })
         }
         "swap-pane" => {
             require_len(values, 2, "domain swap-pane DOMAIN PANE")?;
-            DomainCommand::SwapPaneNext {
+            DomainCommand::request(Request::SwapPaneNext {
                 domain: validated_domain_id(values.first())?,
                 pane: parse_pane_id(values.get(1))?,
-            }
+            })
         }
         "balance-tab" => {
             require_len(values, 2, "domain balance-tab DOMAIN TAB")?;
-            DomainCommand::BalanceTab {
+            DomainCommand::request(Request::BalanceTab {
                 domain: validated_domain_id(values.first())?,
                 tab: parse_tab_id(values.get(1))?,
-            }
+            })
         }
         "layout-tab" => {
             require_len(
@@ -1677,40 +1684,43 @@ fn parse_domain(
                     "domain layout preset must be columns, rows, grid, tall, or fat, got {value:?}"
                 ),
             };
-            DomainCommand::ApplyPaneLayout {
+            DomainCommand::request(Request::ApplyPaneLayout {
                 domain: validated_domain_id(values.first())?,
                 tab: parse_tab_id(values.get(1))?,
                 preset,
-            }
+            })
         }
         "move-pane" => {
             require_len(values, 3, "domain move-pane DOMAIN PANE TAB")?;
-            DomainCommand::MovePane {
+            // The daemon picks the anchor: the destination's focused pane.
+            DomainCommand::request(Request::MovePane {
                 domain: validated_domain_id(values.first())?,
                 pane: parse_pane_id(values.get(1))?,
                 tab: parse_tab_id(values.get(2))?,
-            }
+                target: None,
+                direction: SplitDirection::Vertical,
+            })
         }
         "focus" => {
             require_len(values, 2, "domain focus DOMAIN PANE")?;
-            DomainCommand::Focus {
+            DomainCommand::request(Request::FocusPane {
                 domain: validated_domain_id(values.first())?,
                 pane: parse_pane_id(values.get(1))?,
-            }
+            })
         }
         "close-pane" => {
             require_len(values, 2, "domain close-pane DOMAIN PANE")?;
-            DomainCommand::ClosePane {
+            DomainCommand::request(Request::ClosePane {
                 domain: validated_domain_id(values.first())?,
                 pane: parse_pane_id(values.get(1))?,
-            }
+            })
         }
         "close-tab" => {
             require_len(values, 2, "domain close-tab DOMAIN TAB")?;
-            DomainCommand::CloseTab {
+            DomainCommand::request(Request::CloseTab {
                 domain: validated_domain_id(values.first())?,
                 tab: parse_tab_id(values.get(1))?,
-            }
+            })
         }
         "send" => parse_domain_send(values)?,
         "get-text" => parse_domain_get_text(values)?,
@@ -1764,13 +1774,13 @@ fn parse_domain(
         }
         "kill" => {
             require_len(values, 1, "domain kill DOMAIN")?;
-            DomainCommand::Kill {
+            DomainCommand::request(Request::KillDomain {
                 domain: validated_domain_id(values.first())?,
-            }
+            })
         }
         "stop-server" => {
             require_len(values, 0, "domain stop-server")?;
-            DomainCommand::StopServer
+            DomainCommand::request(Request::Shutdown)
         }
         _ => anyhow::bail!("unknown domain command {command:?}; use `termeric domain --help`"),
     };
@@ -1909,7 +1919,9 @@ fn parse_domain_send(arguments: &[OsString]) -> anyhow::Result<crate::domain::Do
     if data.len() > crate::domain::protocol::MAX_STREAM_CHUNK_BYTES {
         anyhow::bail!("domain send input exceeds 64 KiB");
     }
-    Ok(crate::domain::DomainCommand::Send { domain, pane, data })
+    Ok(crate::domain::DomainCommand::request(
+        crate::domain::protocol::Request::SendText { domain, pane, data },
+    ))
 }
 
 fn parse_domain_get_text(arguments: &[OsString]) -> anyhow::Result<crate::domain::DomainCommand> {
@@ -1937,10 +1949,12 @@ fn parse_domain_get_text(arguments: &[OsString]) -> anyhow::Result<crate::domain
         }
         index += 1;
     }
-    Ok(crate::domain::DomainCommand::GetText {
-        domain,
-        pane,
-        max_bytes,
+    Ok(crate::domain::DomainCommand::Request {
+        request: crate::domain::protocol::Request::GetText {
+            domain,
+            pane,
+            max_bytes,
+        },
         json,
     })
 }
@@ -3346,8 +3360,10 @@ mod tests {
             .map(OsString::from),
         )
         .unwrap();
-        let ParseOutcome::Domain(crate::domain::DomainCommand::Create { name, spawn, json }) =
-            outcome
+        let ParseOutcome::Domain(crate::domain::DomainCommand::Request {
+            request: crate::domain::protocol::Request::CreateDomain { name, spawn },
+            json,
+        }) = outcome
         else {
             panic!("expected domain create command");
         };
@@ -3408,30 +3424,36 @@ mod tests {
         );
 
         assert!(matches!(
-            parse(
-                ["domain", "close-pane", "domain-123", "42"]
-                    .into_iter()
-                    .map(OsString::from)
-            )
-            .unwrap(),
-            ParseOutcome::Domain(crate::domain::DomainCommand::ClosePane {
-                domain,
-                pane: 42,
-            }) if domain == "domain-123"
-        ));
+                   parse(
+                       ["domain", "close-pane", "domain-123", "42"]
+                           .into_iter()
+                           .map(OsString::from)
+                   )
+                   .unwrap(),
+                   ParseOutcome::Domain(crate::domain::DomainCommand::Request {
+        request: crate::domain::protocol::Request::ClosePane {
+                       domain,
+                       pane: 42,
+                   },
+        ..
+        }) if domain == "domain-123"
+               ));
         assert!(matches!(
-            parse(
-                ["domain", "--host", "dev@example.test", "list", "--json"]
-                    .into_iter()
-                    .map(OsString::from)
-            )
-            .unwrap(),
-            ParseOutcome::Domain(crate::domain::DomainCommand::Remote {
-                destination,
-                command,
-            }) if destination == "dev@example.test"
-                && matches!(*command, crate::domain::DomainCommand::List { json: true })
-        ));
+                   parse(
+                       ["domain", "--host", "dev@example.test", "list", "--json"]
+                           .into_iter()
+                           .map(OsString::from)
+                   )
+                   .unwrap(),
+                   ParseOutcome::Domain(crate::domain::DomainCommand::Remote {
+                       destination,
+                       command,
+                   }) if destination == "dev@example.test"
+                       && matches!(*command, crate::domain::DomainCommand::Request {
+        request: crate::domain::protocol::Request::ListDomains,
+        json: true,
+        })
+               ));
         assert!(matches!(
             parse(["domain", "proxy-stdio"].into_iter().map(OsString::from)).unwrap(),
             ParseOutcome::Domain(crate::domain::DomainCommand::ProxyStdio { start_server: true })
@@ -3457,43 +3479,52 @@ mod tests {
             ParseOutcome::Domain(crate::domain::DomainCommand::ProtocolVersion { json: true })
         ));
         assert!(matches!(
-            parse(
-                ["domain", "close-tab", "domain-123", "7"]
-                    .into_iter()
-                    .map(OsString::from)
-            )
-            .unwrap(),
-            ParseOutcome::Domain(crate::domain::DomainCommand::CloseTab {
-                domain,
-                tab: 7,
-            }) if domain == "domain-123"
-        ));
+                   parse(
+                       ["domain", "close-tab", "domain-123", "7"]
+                           .into_iter()
+                           .map(OsString::from)
+                   )
+                   .unwrap(),
+                   ParseOutcome::Domain(crate::domain::DomainCommand::Request {
+        request: crate::domain::protocol::Request::CloseTab {
+                       domain,
+                       tab: 7,
+                   },
+        ..
+        }) if domain == "domain-123"
+               ));
         assert!(matches!(
-            parse(
-                ["domain", "resize-split", "domain-123", "9", "375"]
-                    .into_iter()
-                    .map(OsString::from)
-            )
-            .unwrap(),
-            ParseOutcome::Domain(crate::domain::DomainCommand::ResizeSplit {
-                domain,
-                split: 9,
-                ratio_millis: 375,
-            }) if domain == "domain-123"
-        ));
+                   parse(
+                       ["domain", "resize-split", "domain-123", "9", "375"]
+                           .into_iter()
+                           .map(OsString::from)
+                   )
+                   .unwrap(),
+                   ParseOutcome::Domain(crate::domain::DomainCommand::Request {
+        request: crate::domain::protocol::Request::ResizeSplit {
+                       domain,
+                       split: 9,
+                       ratio_millis: 375,
+                   },
+        ..
+        }) if domain == "domain-123"
+               ));
         assert!(matches!(
-            parse(
-                ["domain", "rename-tab", "domain-123", "7", "Build λ"]
-                    .into_iter()
-                    .map(OsString::from)
-            )
-            .unwrap(),
-            ParseOutcome::Domain(crate::domain::DomainCommand::RenameTab {
-                domain,
-                tab: 7,
-                title: Some(title),
-            }) if domain == "domain-123" && title == "Build λ"
-        ));
+                   parse(
+                       ["domain", "rename-tab", "domain-123", "7", "Build λ"]
+                           .into_iter()
+                           .map(OsString::from)
+                   )
+                   .unwrap(),
+                   ParseOutcome::Domain(crate::domain::DomainCommand::Request {
+        request: crate::domain::protocol::Request::RenameTab {
+                       domain,
+                       tab: 7,
+                       title: Some(title),
+                   },
+        ..
+        }) if domain == "domain-123" && title == "Build λ"
+               ));
         assert!(matches!(
             parse(
                 ["domain", "rename-tab", "domain-123", "7", ""]
@@ -3501,9 +3532,12 @@ mod tests {
                     .map(OsString::from)
             )
             .unwrap(),
-            ParseOutcome::Domain(crate::domain::DomainCommand::RenameTab {
-                tab: 7,
-                title: None,
+            ParseOutcome::Domain(crate::domain::DomainCommand::Request {
+                request: crate::domain::protocol::Request::RenameTab {
+                    tab: 7,
+                    title: None,
+                    ..
+                },
                 ..
             })
         ));
@@ -3514,9 +3548,12 @@ mod tests {
                     .map(OsString::from)
             )
             .unwrap(),
-            ParseOutcome::Domain(crate::domain::DomainCommand::SetTabPinned {
-                tab: 7,
-                pinned: true,
+            ParseOutcome::Domain(crate::domain::DomainCommand::Request {
+                request: crate::domain::protocol::Request::SetTabPinned {
+                    tab: 7,
+                    pinned: true,
+                    ..
+                },
                 ..
             })
         ));
@@ -3527,9 +3564,12 @@ mod tests {
                     .map(OsString::from)
             )
             .unwrap(),
-            ParseOutcome::Domain(crate::domain::DomainCommand::MoveTab {
-                tab: 7,
-                index: 2,
+            ParseOutcome::Domain(crate::domain::DomainCommand::Request {
+                request: crate::domain::protocol::Request::MoveTab {
+                    tab: 7,
+                    index: 2,
+                    ..
+                },
                 ..
             })
         ));
@@ -3540,7 +3580,10 @@ mod tests {
                     .map(OsString::from)
             )
             .unwrap(),
-            ParseOutcome::Domain(crate::domain::DomainCommand::SwapPaneNext { pane: 42, .. })
+            ParseOutcome::Domain(crate::domain::DomainCommand::Request {
+                request: crate::domain::protocol::Request::SwapPaneNext { pane: 42, .. },
+                ..
+            })
         ));
         assert!(matches!(
             parse(
@@ -3549,7 +3592,10 @@ mod tests {
                     .map(OsString::from)
             )
             .unwrap(),
-            ParseOutcome::Domain(crate::domain::DomainCommand::BalanceTab { tab: 7, .. })
+            ParseOutcome::Domain(crate::domain::DomainCommand::Request {
+                request: crate::domain::protocol::Request::BalanceTab { tab: 7, .. },
+                ..
+            })
         ));
         assert!(matches!(
             parse(
@@ -3558,9 +3604,12 @@ mod tests {
                     .map(OsString::from)
             )
             .unwrap(),
-            ParseOutcome::Domain(crate::domain::DomainCommand::ApplyPaneLayout {
-                tab: 7,
-                preset: crate::panes::PaneLayoutPreset::Grid,
+            ParseOutcome::Domain(crate::domain::DomainCommand::Request {
+                request: crate::domain::protocol::Request::ApplyPaneLayout {
+                    tab: 7,
+                    preset: crate::panes::PaneLayoutPreset::Grid,
+                    ..
+                },
                 ..
             })
         ));
@@ -3571,9 +3620,12 @@ mod tests {
                     .map(OsString::from)
             )
             .unwrap(),
-            ParseOutcome::Domain(crate::domain::DomainCommand::ApplyPaneLayout {
-                tab: 7,
-                preset: crate::panes::PaneLayoutPreset::Tall,
+            ParseOutcome::Domain(crate::domain::DomainCommand::Request {
+                request: crate::domain::protocol::Request::ApplyPaneLayout {
+                    tab: 7,
+                    preset: crate::panes::PaneLayoutPreset::Tall,
+                    ..
+                },
                 ..
             })
         ));
@@ -3584,9 +3636,12 @@ mod tests {
                     .map(OsString::from)
             )
             .unwrap(),
-            ParseOutcome::Domain(crate::domain::DomainCommand::ApplyPaneLayout {
-                tab: 7,
-                preset: crate::panes::PaneLayoutPreset::Fat,
+            ParseOutcome::Domain(crate::domain::DomainCommand::Request {
+                request: crate::domain::protocol::Request::ApplyPaneLayout {
+                    tab: 7,
+                    preset: crate::panes::PaneLayoutPreset::Fat,
+                    ..
+                },
                 ..
             })
         ));
@@ -3597,9 +3652,12 @@ mod tests {
                     .map(OsString::from)
             )
             .unwrap(),
-            ParseOutcome::Domain(crate::domain::DomainCommand::MovePane {
-                pane: 42,
-                tab: 7,
+            ParseOutcome::Domain(crate::domain::DomainCommand::Request {
+                request: crate::domain::protocol::Request::MovePane {
+                    pane: 42,
+                    tab: 7,
+                    ..
+                },
                 ..
             })
         ));
@@ -3674,13 +3732,16 @@ mod tests {
             .map(OsString::from)
             .collect();
         assert!(matches!(
-            parse_collected(arguments, &config.domains).unwrap(),
-            ParseOutcome::Domain(crate::domain::DomainCommand::Remote {
-                destination,
-                command,
-            }) if destination == "developer@build.example"
-                && matches!(*command, crate::domain::DomainCommand::List { json: true })
-        ));
+                   parse_collected(arguments, &config.domains).unwrap(),
+                   ParseOutcome::Domain(crate::domain::DomainCommand::Remote {
+                       destination,
+                       command,
+                   }) if destination == "developer@build.example"
+                       && matches!(*command, crate::domain::DomainCommand::Request {
+        request: crate::domain::protocol::Request::ListDomains,
+        json: true,
+        })
+               ));
 
         let arguments = ["domain", "--host-profile", "build", "attach", "domain-123"]
             .into_iter()
@@ -3756,7 +3817,11 @@ mod tests {
         else {
             panic!("expected a remote domain command");
         };
-        let crate::domain::DomainCommand::Spawn { spawn, .. } = *command else {
+        let crate::domain::DomainCommand::Request {
+            request: crate::domain::protocol::Request::SpawnTab { spawn, .. },
+            ..
+        } = *command
+        else {
             panic!("expected domain spawn");
         };
         assert_eq!(
