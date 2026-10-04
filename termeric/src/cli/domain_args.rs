@@ -289,11 +289,11 @@ enum Preset {
 impl DomainCli {
     pub(super) fn into_outcome(
         self,
-        domains: &crate::config::DomainsConfig,
+        load_domains: super::LoadDomains,
     ) -> anyhow::Result<ParseOutcome> {
         let destination = match (self.host, self.host_profile) {
             (Some(destination), _) => Some(destination),
-            (None, Some(name)) => Some(domains.ssh_host(&name)?.destination.clone()),
+            (None, Some(name)) => Some(load_domains()?.ssh_host(&name)?.destination.clone()),
             (None, None) => None,
         };
         let request = DomainCommand::request;

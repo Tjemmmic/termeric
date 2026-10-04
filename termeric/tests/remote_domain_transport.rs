@@ -328,27 +328,39 @@ fn saved_host_inventory_and_resolution_use_validated_config_without_network() {
     let mut path = OsString::from(&fake_bin);
     path.push(":");
     path.push(std::env::var_os("PATH").unwrap_or_default());
-    let remote = Command::new(binary)
-        .args(["domain", "--host-profile", "build", "list"])
-        .env("XDG_CONFIG_HOME", &config_dir)
-        .env("PATH", path)
-        .env("TERMERIC_SSH_LOG", &ssh_log)
-        .output()
-        .unwrap();
-    assert!(!remote.status.success());
-    let arguments = fs::read_to_string(&ssh_log).unwrap();
-    assert!(
-        arguments
-            .lines()
-            .any(|argument| argument == "developer@build.example")
-    );
-    assert!(
-        arguments
-            .lines()
-            .any(|argument| argument == "-oStrictHostKeyChecking=yes")
-    );
+    for profile in [
+        ["--host-profile", "build"].as_slice(),
+        ["--host-profile=build"].as_slice(),
+    ] {
+        let remote = Command::new(binary)
+            .arg("domain")
+            .args(profile)
+            .arg("list")
+            .env("XDG_CONFIG_HOME", &config_dir)
+            .env("PATH", &path)
+            .env("TERMERIC_SSH_LOG", &ssh_log)
+            .output()
+            .unwrap();
+        assert!(!remote.status.success());
+        let arguments = fs::read_to_string(&ssh_log).unwrap_or_else(|_| {
+            panic!(
+                "{profile:?} did not reach ssh: {}",
+                String::from_utf8_lossy(&remote.stderr)
+            )
+        });
+        assert!(
+            arguments
+                .lines()
+                .any(|argument| argument == "developer@build.example")
+        );
+        assert!(
+            arguments
+                .lines()
+                .any(|argument| argument == "-oStrictHostKeyChecking=yes")
+        );
+        fs::remove_file(&ssh_log).unwrap();
+    }
 
-    fs::remove_file(&ssh_log).unwrap();
     let unknown = Command::new(binary)
         .args(["domain", "--host-profile", "missing", "list"])
         .env("XDG_CONFIG_HOME", &config_dir)

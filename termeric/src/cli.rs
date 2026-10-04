@@ -198,20 +198,20 @@ pub fn parse_env() -> anyhow::Result<Invocation> {
 }
 
 fn parse_command(arguments: Vec<OsString>) -> anyhow::Result<ParseOutcome> {
-    if arguments.first().and_then(|value| value.to_str()) == Some("domain")
-        && arguments.get(1).and_then(|value| value.to_str()) == Some("--host-profile")
-    {
-        let config = crate::config::Config::load_or_default()?;
-        return parse_collected(arguments, &config.domains);
-    }
-    parse_collected(arguments, &crate::config::DomainsConfig::default())
+    parse_collected(arguments, &|| {
+        Ok(crate::config::Config::load_or_default()?.domains)
+    })
 }
 
 #[cfg(test)]
 pub fn parse(arguments: impl IntoIterator<Item = OsString>) -> anyhow::Result<ParseOutcome> {
     let arguments: Vec<OsString> = arguments.into_iter().collect();
-    parse_collected(arguments, &crate::config::DomainsConfig::default())
+    parse_collected(arguments, &|| Ok(crate::config::DomainsConfig::default()))
 }
+
+/// Where `domain --host-profile` finds its profiles. Only that option reads
+/// the configuration, so every other command works with a broken one.
+type LoadDomains<'a> = &'a dyn Fn() -> anyhow::Result<crate::config::DomainsConfig>;
 
 /// `mcp [--process PID] [--supervisor TOKEN]`. The token is passed only by
 /// the supervisor Termeric starts.
@@ -266,7 +266,7 @@ fn parse_agent_event(arguments: &[OsString]) -> Option<crate::agents::hook::Hook
 
 fn parse_collected(
     arguments: Vec<OsString>,
-    domains: &crate::config::DomainsConfig,
+    load_domains: LoadDomains,
 ) -> anyhow::Result<ParseOutcome> {
     if crate::serial::is_internal_command(arguments.first()) {
         return Ok(ParseOutcome::SerialBridge(
@@ -274,7 +274,7 @@ fn parse_collected(
         ));
     }
     if arguments.first().and_then(|argument| argument.to_str()) == Some("domain") {
-        return parse_domain(&arguments[1..], domains);
+        return parse_domain(&arguments[1..], load_domains);
     }
     if arguments.first().and_then(|argument| argument.to_str()) == Some("control") {
         return parse_control(&arguments[1..]);
@@ -644,13 +644,10 @@ fn parse_plugin(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
     )
 }
 
-/// `domain` commands; `--host-profile` names resolve through `domains`.
-fn parse_domain(
-    arguments: &[OsString],
-    domains: &crate::config::DomainsConfig,
-) -> anyhow::Result<ParseOutcome> {
+/// `domain` commands; `--host-profile` names resolve through `load_domains`.
+fn parse_domain(arguments: &[OsString], load_domains: LoadDomains) -> anyhow::Result<ParseOutcome> {
     match parse_subcommand::<domain_args::DomainCli>(arguments)? {
-        Ok(domain) => domain.into_outcome(domains),
+        Ok(domain) => domain.into_outcome(load_domains),
         Err(help) => Ok(ParseOutcome::Print(help)),
     }
 }
@@ -2140,28 +2137,35 @@ mod tests {
         )
         .unwrap();
         config.validate().unwrap();
+        let domains = || Ok(config.domains.clone());
 
-        let arguments = ["domain", "--host-profile", "build", "list", "--json"]
-            .into_iter()
-            .map(OsString::from)
-            .collect();
-        assert!(matches!(
-                   parse_collected(arguments, &config.domains).unwrap(),
-                   ParseOutcome::Domain(crate::domain::DomainCommand::Remote {
-                       destination,
-                       command,
-                   }) if destination == "developer@build.example"
-                       && matches!(*command, crate::domain::DomainCommand::Request {
-        request: crate::domain::protocol::Request::ListDomains,
-        json: true,
-        })
-               ));
+        for arguments in [
+            ["domain", "--host-profile", "build", "list", "--json"].as_slice(),
+            ["domain", "--host-profile=build", "list", "--json"].as_slice(),
+        ] {
+            let arguments = arguments.iter().map(OsString::from).collect();
+            let ParseOutcome::Domain(crate::domain::DomainCommand::Remote {
+                destination,
+                command,
+            }) = parse_collected(arguments, &domains).unwrap()
+            else {
+                panic!("expected a remote domain command");
+            };
+            assert_eq!(destination, "developer@build.example");
+            assert_eq!(
+                *command,
+                crate::domain::DomainCommand::Request {
+                    request: crate::domain::protocol::Request::ListDomains,
+                    json: true,
+                }
+            );
+        }
 
         let arguments = ["domain", "--host-profile", "build", "attach", "domain-123"]
             .into_iter()
             .map(OsString::from)
             .collect();
-        let ParseOutcome::Run(plan) = parse_collected(arguments, &config.domains).unwrap() else {
+        let ParseOutcome::Run(plan) = parse_collected(arguments, &domains).unwrap() else {
             panic!("expected saved-host GUI launch");
         };
         let target = plan.windows[0].domain.as_ref().unwrap();
@@ -2208,7 +2212,25 @@ mod tests {
             .into_iter()
             .map(OsString::from)
             .collect();
-        assert!(parse_collected(nested, &config.domains).is_err());
+        assert!(parse_collected(nested, &domains).is_err());
+    }
+
+    #[test]
+    fn only_a_host_profile_reads_the_configuration() {
+        let broken = || anyhow::bail!("configuration unreadable");
+        let parse_with_broken_config = |arguments: &[&str]| {
+            let arguments = arguments.iter().map(OsString::from).collect();
+            parse_collected(arguments, &broken)
+        };
+        assert!(parse_with_broken_config(&["domain", "list"]).is_ok());
+        assert!(parse_with_broken_config(&["domain", "--host", "build.example", "list"]).is_ok());
+        for arguments in [
+            ["domain", "--host-profile", "build", "list"].as_slice(),
+            ["domain", "--host-profile=build", "list"].as_slice(),
+        ] {
+            let error = parse_with_broken_config(arguments).unwrap_err();
+            assert_eq!(error.to_string(), "configuration unreadable");
+        }
     }
 
     #[test]
