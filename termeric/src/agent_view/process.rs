@@ -8,7 +8,7 @@
 
 use std::collections::VecDeque;
 use std::ffi::OsString;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,6 +16,8 @@ use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+
+use crate::line_reader::read_bounded_line;
 
 use super::event::ExitReport;
 
@@ -294,20 +296,23 @@ fn read_output(
     stderr_tail: &Mutex<VecDeque<u8>>,
 ) {
     let mut reader = BufReader::with_capacity(64 * 1024, stdout);
+    let mut line = Vec::new();
     loop {
-        match read_bounded_line(&mut reader, MAX_LINE_BYTES) {
-            Ok(Some(BoundedLine::Line(bytes))) => {
-                let text = String::from_utf8_lossy(&bytes);
-                let text = text.trim_end_matches(['\r', '\n']);
+        // An oversized line is dropped whole; a last line without a newline
+        // still counts.
+        match read_bounded_line(&mut reader, MAX_LINE_BYTES, &mut line) {
+            Ok(Some(read)) if read.oversized => {
+                if output.send(ProcessOutput::Oversized).is_err() {
+                    return;
+                }
+            }
+            Ok(Some(_)) => {
+                let text = String::from_utf8_lossy(&line);
+                let text = text.trim_end_matches('\r');
                 if text.trim().is_empty() {
                     continue;
                 }
                 if output.send(ProcessOutput::Line(text.to_owned())).is_err() {
-                    return;
-                }
-            }
-            Ok(Some(BoundedLine::Oversized)) => {
-                if output.send(ProcessOutput::Oversized).is_err() {
                     return;
                 }
             }
@@ -434,53 +439,6 @@ fn leader_state(process_id: u32) -> Leader {
 #[cfg(not(unix))]
 fn leader_state(_process_id: u32) -> Leader {
     Leader::Reaped
-}
-
-enum BoundedLine {
-    Line(Vec<u8>),
-    Oversized,
-}
-
-/// Reads one line of at most `limit` bytes. A longer line is consumed and
-/// reported as oversized without being kept.
-fn read_bounded_line(
-    reader: &mut impl BufRead,
-    limit: usize,
-) -> std::io::Result<Option<BoundedLine>> {
-    let mut line = Vec::new();
-    let mut oversized = false;
-    loop {
-        let available = reader.fill_buf()?;
-        if available.is_empty() {
-            return Ok(match (line.is_empty() && !oversized, oversized) {
-                (true, _) => None,
-                (false, true) => Some(BoundedLine::Oversized),
-                (false, false) => Some(BoundedLine::Line(line)),
-            });
-        }
-        let (chunk, found_newline) = match available.iter().position(|byte| *byte == b'\n') {
-            Some(position) => (&available[..=position], true),
-            None => (available, false),
-        };
-        let consumed = chunk.len();
-        let content = consumed - usize::from(found_newline);
-        if !oversized {
-            if line.len() + content > limit {
-                oversized = true;
-                line = Vec::new();
-            } else {
-                line.extend_from_slice(chunk);
-            }
-        }
-        reader.consume(consumed);
-        if found_newline {
-            return Ok(Some(if oversized {
-                BoundedLine::Oversized
-            } else {
-                BoundedLine::Line(line)
-            }));
-        }
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -769,20 +727,6 @@ mod tests {
         let outputs = collect(&mut process, Duration::from_secs(10));
         assert_eq!(outputs.len(), 3);
         assert!(count.load(Ordering::Relaxed) >= 3);
-    }
-
-    #[test]
-    fn bounded_lines_drop_oversized_input_and_keep_reading() {
-        let data = format!("short\n{}\nafter\ntail", "x".repeat(40));
-        let mut reader = BufReader::with_capacity(8, data.as_bytes());
-        let mut lines = Vec::new();
-        while let Some(line) = read_bounded_line(&mut reader, 16).unwrap() {
-            lines.push(match line {
-                BoundedLine::Line(bytes) => String::from_utf8(bytes).unwrap(),
-                BoundedLine::Oversized => "<oversized>".into(),
-            });
-        }
-        assert_eq!(lines, ["short\n", "<oversized>", "after\n", "tail"]);
     }
 
     #[test]

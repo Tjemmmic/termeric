@@ -17,6 +17,7 @@ mod domain;
 mod git;
 mod harvest;
 mod input;
+mod line_reader;
 mod mcp;
 mod notifications;
 mod panes;

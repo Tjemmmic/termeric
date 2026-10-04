@@ -7,6 +7,7 @@
 //! response sits in its bounded follow-up chain.
 
 use super::permission::{Capability, PermissionScope, PluginPermissions};
+use crate::line_reader::read_bounded_line;
 use crate::panes::PaneLayoutPreset;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -731,7 +732,7 @@ impl PersistentHandler {
                     .and_then(|()| stdin.flush())
                     .map_err(|error| bounded_error(&format!("handler event write failed: {error}")))
                     .and_then(|()| {
-                        read_bounded_line(&mut stdout, MAX_OUTPUT_BYTES as usize)
+                        read_response_line(&mut stdout)
                             .map_err(|error| {
                                 bounded_error(&format!("handler response read failed: {error}"))
                             })?
@@ -937,38 +938,24 @@ fn persistent_request_json(event_json: &str, request_id: u64) -> Result<Vec<u8>,
     Ok(bytes)
 }
 
-fn read_bounded_line(
-    reader: &mut impl BufRead,
-    max_bytes: usize,
-) -> std::io::Result<Option<(Vec<u8>, bool)>> {
-    let mut bytes = Vec::with_capacity(max_bytes.min(4096));
-    let mut truncated = false;
-    loop {
-        let available = reader.fill_buf()?;
-        if available.is_empty() {
-            if bytes.is_empty() {
-                return Ok(None);
-            }
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                "persistent handler response ended without a newline",
-            ));
-        }
-        let newline = available.iter().position(|byte| *byte == b'\n');
-        let consumed = newline.map_or(available.len(), |index| index + 1);
-        let content = newline.map_or(available, |index| &available[..index]);
-        let remaining = max_bytes.saturating_sub(bytes.len());
-        let retained = content.len().min(remaining);
-        bytes.extend_from_slice(&content[..retained]);
-        truncated |= retained < content.len();
-        reader.consume(consumed);
-        if newline.is_some() {
-            if bytes.last() == Some(&b'\r') {
-                bytes.pop();
-            }
-            return Ok(Some((bytes, truncated)));
-        }
+/// Read one response line, without its newline or a trailing `\r`, and
+/// whether it ran past [`MAX_OUTPUT_BYTES`]. A response must end with a
+/// newline.
+fn read_response_line(reader: &mut impl BufRead) -> std::io::Result<Option<(Vec<u8>, bool)>> {
+    let mut bytes = Vec::new();
+    let Some(read) = read_bounded_line(reader, MAX_OUTPUT_BYTES as usize, &mut bytes)? else {
+        return Ok(None);
+    };
+    if !read.terminated {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "persistent handler response ended without a newline",
+        ));
     }
+    if bytes.last() == Some(&b'\r') {
+        bytes.pop();
+    }
+    Ok(Some((bytes, read.oversized)))
 }
 
 fn drain_persistent_stderr(mut stream: impl Read, target: &Mutex<BoundedStderr>) {
@@ -1575,17 +1562,21 @@ done"#,
     fn persistent_line_reader_bounds_and_drains_each_frame() {
         let oversized = format!("{}\nnext\n", "x".repeat(MAX_OUTPUT_BYTES as usize + 17));
         let mut reader = Cursor::new(oversized.into_bytes());
-        let (first, truncated) = read_bounded_line(&mut reader, MAX_OUTPUT_BYTES as usize)
-            .unwrap()
-            .unwrap();
+        let (first, truncated) = read_response_line(&mut reader).unwrap().unwrap();
         assert_eq!(first.len(), MAX_OUTPUT_BYTES as usize);
         assert!(truncated);
         assert_eq!(
-            read_bounded_line(&mut reader, MAX_OUTPUT_BYTES as usize)
-                .unwrap()
-                .unwrap(),
+            read_response_line(&mut reader).unwrap().unwrap(),
             (b"next".to_vec(), false)
         );
+        assert!(read_response_line(&mut reader).unwrap().is_none());
+
+        let mut crlf = Cursor::new(b"{}\r\npartial".to_vec());
+        assert_eq!(
+            read_response_line(&mut crlf).unwrap().unwrap(),
+            (b"{}".to_vec(), false)
+        );
+        assert!(read_response_line(&mut crlf).is_err());
     }
 
     #[test]
