@@ -818,6 +818,28 @@ mod tests {
     }
 
     #[test]
+    fn logical_url_cache_invalidates_when_only_column_spans_change() {
+        let detector = UrlDetector::new();
+        let mut terminal = termeric_core::Terminal::new(40, 3);
+        // One two-cell character, so the row text and its length stay the
+        // same when that character moves.
+        terminal.process(b"a https://e.test/x \x1b]66;w=2;b\x07");
+        let mut cache = UrlCache::new(0);
+        cache.update_grid(terminal.grid(), &detector);
+        assert_eq!(cache.url_at(0, 2).unwrap().url, "https://e.test/x");
+        let (scans, _) = cache.metrics();
+
+        // The same text, but now the leading `a` spans two cells.
+        terminal.process(b"\x1b[H\x1b[2K\x1b]66;w=2;a\x07 https://e.test/x b");
+        cache.update_grid(terminal.grid(), &detector);
+        assert_eq!(cache.metrics().0, scans + 1);
+        assert!(cache.url_at(0, 2).is_none());
+        assert_eq!(cache.url_at(0, 3).unwrap().url, "https://e.test/x");
+        assert_eq!(cache.url_at(0, 18).unwrap().url, "https://e.test/x");
+        assert!(cache.url_at(0, 19).is_none());
+    }
+
+    #[test]
     fn logical_url_cache_maps_wide_prefix_padding_and_resize() {
         let detector = UrlDetector::new();
         let mut terminal = termeric_core::Terminal::new(2, 12);
