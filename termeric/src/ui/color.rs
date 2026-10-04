@@ -38,6 +38,37 @@ pub fn luminance(color: [f32; 4]) -> f32 {
     0.2126 * color[0] + 0.7152 * color[1] + 0.0722 * color[2]
 }
 
+/// WCAG relative luminance: the channels linearized from sRGB, weighted.
+pub fn relative_luminance(color: [f32; 4]) -> f32 {
+    let linear = |channel: f32| {
+        if channel <= 0.04045 {
+            channel / 12.92
+        } else {
+            ((channel + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * linear(color[0]) + 0.7152 * linear(color[1]) + 0.0722 * linear(color[2])
+}
+
+/// WCAG contrast ratio of two opaque colors, from 1 to 21.
+pub fn contrast_ratio(first: [f32; 4], second: [f32; 4]) -> f32 {
+    let first = relative_luminance(first);
+    let second = relative_luminance(second);
+    (first.max(second) + 0.05) / (first.min(second) + 0.05)
+}
+
+/// The near-black or near-white text that contrasts more with `background`;
+/// high-contrast mode draws chrome text in it.
+pub fn high_contrast_text(background: [f32; 4]) -> [f32; 4] {
+    let dark = [0.04, 0.03, 0.02, 1.0];
+    let light = [1.0, 0.98, 0.95, 1.0];
+    if contrast_ratio(background, dark) >= contrast_ratio(background, light) {
+        dark
+    } else {
+        light
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -61,6 +92,16 @@ mod tests {
         assert_eq!(mix(black, white, 0.25), [0.25, 0.25, 0.25, 1.0]);
         assert_eq!(mix(black, white, -1.0), black);
         assert_eq!(mix(black, white, 2.0), white);
+    }
+
+    #[test]
+    fn high_contrast_text_reaches_aa_on_any_gray() {
+        for step in 0..=20 {
+            let gray = step as f32 / 20.0;
+            let background = [gray, gray, gray, 1.0];
+            assert!(contrast_ratio(high_contrast_text(background), background) >= 4.5);
+        }
+        assert!((contrast_ratio([0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0]) - 21.0).abs() < 0.01);
     }
 
     #[test]

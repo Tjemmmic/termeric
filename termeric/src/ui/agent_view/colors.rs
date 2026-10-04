@@ -5,7 +5,7 @@
 //! semantic hues: yellow asks for attention, green succeeded, red failed.
 
 use crate::config::theme::Theme;
-use crate::ui::color::{luminance, mix, with_alpha};
+use crate::ui::color::{high_contrast_text, luminance, mix, with_alpha};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Colors {
@@ -107,12 +107,10 @@ impl Colors {
         colors
     }
 
+    /// Flatten every surface to the background and draw all text, borders,
+    /// and focus in the chrome's high-contrast text color.
     fn enforce_high_contrast(&mut self, bg: [f32; 4]) {
-        let text = if luminance(bg) < 0.5 {
-            [1.0, 1.0, 1.0, 1.0]
-        } else {
-            [0.0, 0.0, 0.0, 1.0]
-        };
+        let text = high_contrast_text(bg);
         self.panel = bg;
         self.surface = bg;
         self.code_surface = bg;
@@ -151,17 +149,23 @@ mod tests {
     }
 
     #[test]
-    fn high_contrast_uses_full_strength_text_everywhere() {
-        let colors = Colors::from_theme(&Theme::default(), true);
-        for color in [
-            colors.text,
-            colors.text_secondary,
-            colors.text_muted,
-            colors.border,
-            colors.focus_ring,
-        ] {
-            assert_eq!(color[3], 1.0);
-            assert!(color[..3] == [1.0, 1.0, 1.0] || color[..3] == [0.0, 0.0, 0.0]);
+    fn high_contrast_text_reaches_aa_on_every_theme() {
+        for name in Theme::list_available() {
+            let theme = Theme::load_builtin(name).unwrap();
+            let colors = Colors::from_theme(&theme, true);
+            for color in [
+                colors.text,
+                colors.text_secondary,
+                colors.text_muted,
+                colors.border,
+                colors.focus_ring,
+            ] {
+                assert_eq!(color[3], 1.0);
+                assert!(
+                    crate::ui::color::contrast_ratio(color, colors.panel) >= 4.5,
+                    "{name}"
+                );
+            }
         }
     }
 }

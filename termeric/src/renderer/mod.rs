@@ -59,7 +59,7 @@ use crate::config::theme::Theme;
 use crate::config::{CursorStyle, RendererBackend, TabBarPosition};
 use crate::terminal::search::Search;
 use crate::terminal::url::UrlCache;
-use crate::ui::color::{luminance, mix, scale_rgb, with_alpha};
+use crate::ui::color::{contrast_ratio, high_contrast_text, luminance, mix, scale_rgb, with_alpha};
 use crate::ui::search_bar::SearchBarInfo;
 use crate::ui::settings::SettingsPanelInfo;
 use anyhow::Result;
@@ -474,33 +474,6 @@ fn contrast_text(bg: [f32; 4]) -> [f32; 4] {
     } else {
         [0.95, 0.92, 0.88, 1.0]
     }
-}
-
-fn high_contrast_text(bg: [f32; 4]) -> [f32; 4] {
-    let dark = [0.04, 0.03, 0.02, 1.0];
-    let light = [1.0, 0.98, 0.95, 1.0];
-    if contrast_ratio(bg, dark) >= contrast_ratio(bg, light) {
-        dark
-    } else {
-        light
-    }
-}
-
-fn relative_luminance(color: [f32; 4]) -> f32 {
-    let linear = |channel: f32| {
-        if channel <= 0.04045 {
-            channel / 12.92
-        } else {
-            ((channel + 0.055) / 1.055).powf(2.4)
-        }
-    };
-    0.2126 * linear(color[0]) + 0.7152 * linear(color[1]) + 0.0722 * linear(color[2])
-}
-
-fn contrast_ratio(first: [f32; 4], second: [f32; 4]) -> f32 {
-    let first = relative_luminance(first);
-    let second = relative_luminance(second);
-    (first.max(second) + 0.05) / (first.min(second) + 0.05)
 }
 
 #[derive(Clone)]
