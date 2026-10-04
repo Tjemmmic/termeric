@@ -1076,6 +1076,9 @@ pub struct App {
     allow_workspace_fallback: bool,
     /// False when one window is intentionally closed while siblings remain.
     retain_workspace_on_exit: bool,
+    /// The process's `--renderer` choice, which wins over
+    /// `renderer.backend` without ever entering the configuration.
+    renderer_backend_override: Option<crate::config::RendererBackend>,
     /// Archive identity owned by this native window, independent of global
     /// most-recent state used for startup compatibility.
     current_workspace_id: Option<String>,
@@ -1510,6 +1513,7 @@ impl App {
             allow_auto_restore: true,
             allow_workspace_fallback: false,
             retain_workspace_on_exit: true,
+            renderer_backend_override: None,
             current_workspace_id: None,
             automatic_persistence: use_system_state,
             config,
@@ -1742,7 +1746,7 @@ impl App {
             self.high_contrast_enabled(),
             self.config.font.ligatures,
             &self.config.font.features,
-            self.config.renderer.backend,
+            self.renderer_backend(),
             failure_callback,
         )?;
 
@@ -3787,6 +3791,13 @@ impl App {
 
     /// The configuration Save writes: live settings plus the recorded
     /// shortcuts, which the shortcut registry holds.
+    /// The renderer this window asks for: the process's `--renderer` choice,
+    /// else the configured one.
+    fn renderer_backend(&self) -> crate::config::RendererBackend {
+        self.renderer_backend_override
+            .unwrap_or(self.config.renderer.backend)
+    }
+
     fn persisted_config(&self) -> Config {
         let mut config = self.config.clone();
         config.shortcuts = self.shortcut_registry.user_overrides();

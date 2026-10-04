@@ -56,6 +56,10 @@ pub struct Application {
     plugin_paths: crate::plugin::runtime::PluginPaths,
     last_plugin_registry_mtime: Option<std::time::SystemTime>,
     last_plugin_registry_check: Instant,
+    /// The renderer `--renderer` chose for every window of this process,
+    /// kept apart from the configuration so a reload cannot drop it and a
+    /// save cannot write it.
+    renderer_backend: Option<crate::config::RendererBackend>,
 }
 
 /// A tab released outside its window. On Wayland no window knows where the
@@ -346,14 +350,12 @@ impl Application {
     }
 
     fn from_config(
-        mut config: Config,
+        config: Config,
         mut warning: Option<String>,
         launch: LaunchPlan,
     ) -> Result<Self> {
         validate_cli_launches(&config, &launch)?;
-        if let Some(backend) = launch.renderer_backend {
-            config.renderer.backend = backend;
-        }
+        let renderer_backend = launch.renderer_backend;
         let restores_last_session = launch.restores_last_session();
         let plugin_host = Arc::new(crate::plugin::structured::StructuredPluginHost::default());
         let plugin_paths = crate::plugin::runtime::PluginPaths::configured();
@@ -366,6 +368,7 @@ impl Application {
                 true,
                 Arc::clone(&plugin_host),
             )?;
+            window.renderer_backend_override = renderer_backend;
             window.launch = window_launch;
             window.allow_auto_restore = restores_last_session;
             if quick_access {
@@ -394,6 +397,7 @@ impl Application {
             last_plugin_registry_mtime: plugin_paths.registry_mtime(),
             last_plugin_registry_check: Instant::now(),
             plugin_paths,
+            renderer_backend,
         })
     }
 
@@ -471,6 +475,7 @@ impl Application {
 
     fn queue_window(&mut self, config: Config, launch: WindowLaunch) -> Result<()> {
         let mut window = App::from_config(config, None, true, Arc::clone(&self.plugin_host))?;
+        window.renderer_backend_override = self.renderer_backend;
         window.set_system_accessibility_preferences(self.system_accessibility);
         window.launch = launch;
         window.allow_auto_restore = false;

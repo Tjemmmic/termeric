@@ -3176,7 +3176,7 @@ fn sole_default_window_retains_automatic_restore_eligibility() {
 
 #[test]
 fn cli_renderer_override_becomes_every_window_recovery_policy() {
-    let application = Application::from_config(
+    let mut application = Application::from_config(
         Config::default(),
         None,
         LaunchPlan {
@@ -3186,8 +3186,14 @@ fn cli_renderer_override_becomes_every_window_recovery_policy() {
         },
     )
     .unwrap();
+    // A window opened later in the same process asks for the same renderer.
+    application
+        .queue_default_window(Config::default(), None)
+        .unwrap();
+    assert_eq!(application.pending.len(), 3);
     assert!(application.pending.iter().all(|window| {
-        window.config.renderer.backend == crate::config::RendererBackend::Software
+        window.renderer_backend() == crate::config::RendererBackend::Software
+            && window.config.renderer.backend == crate::config::RendererBackend::Auto
     }));
 }
 
@@ -3343,7 +3349,7 @@ fn automatic_restore_expands_each_remembered_window_workspace() {
         );
         assert!(application.pending.iter().all(|window| {
             window.allow_workspace_fallback
-                && window.config.renderer.backend
+                && window.renderer_backend()
                     == launch.renderer_backend.unwrap_or(config.renderer.backend)
         }));
         let plan = auto_restore_plan(&config, &state, &launch).unwrap();

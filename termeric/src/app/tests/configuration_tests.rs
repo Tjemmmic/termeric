@@ -576,6 +576,25 @@ fn changing_the_configured_size_ends_a_zoom() {
     assert_eq!(app.effective_font_size(), 13.0);
 }
 
+#[test]
+fn the_command_line_renderer_survives_reloads_and_is_never_saved() {
+    use crate::config::RendererBackend;
+    let (_directory, path, mut app) = app_with_config_file("[window]\npadding = 4\n");
+    app.renderer_backend_override = Some(RendererBackend::Software);
+    assert_eq!(app.renderer_backend(), RendererBackend::Software);
+
+    app.apply_settings_action(SettingsAction::SetVisualBell(false));
+    app.save_config().unwrap();
+    assert_eq!(
+        Config::load_from(&path).unwrap().renderer.backend,
+        RendererBackend::Auto
+    );
+    std::fs::write(&path, "[window]\npadding = 20\n").unwrap();
+    poll_config_now(&mut app);
+    assert_eq!(app.config.window.padding, 20);
+    assert_eq!(app.renderer_backend(), RendererBackend::Software);
+}
+
 /// Make the next poll look at the configuration file as if it had changed.
 fn poll_config_now(app: &mut App) {
     app.last_config_check = Instant::now()
