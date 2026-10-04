@@ -92,7 +92,7 @@ impl App {
     /// Keep the picked theme and save it to the configuration.
     pub(super) fn commit_theme(&mut self, name: &str) {
         if let Err(error) = self.adopt_theme(name) {
-            self.toasts.error(format!("Theme failed: {error}"));
+            self.toasts.error(format!("Theme failed: {error:#}"));
             return;
         }
         match self.save_config() {
@@ -102,9 +102,9 @@ impl App {
                     .info(format!("Theme: {}", theme_display_name(name)));
             }
             Err(error) => {
-                log::error!("Theme applied but save failed: {error}");
+                log::error!("Theme applied but save failed: {error:#}");
                 self.toasts
-                    .warning(format!("Theme applied but not saved: {error}"));
+                    .warning(format!("Theme applied but not saved: {error:#}"));
             }
         }
     }

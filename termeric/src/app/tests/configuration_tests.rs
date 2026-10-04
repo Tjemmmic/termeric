@@ -507,6 +507,24 @@ fn saving_from_settings_writes_only_the_changed_setting() {
 }
 
 #[test]
+fn a_failed_save_says_why() {
+    let (directory, _path, mut app) = app_with_config_file("");
+    // A configuration path under a regular file cannot be resolved; the
+    // operating system's reason is the part worth reading.
+    let blocker = directory.path().join("blocker");
+    std::fs::write(&blocker, "").unwrap();
+    app.config_path = blocker.join("config.toml");
+    app.apply_settings_action(SettingsAction::SetVisualBell(false));
+    app.apply_settings_action(SettingsAction::SaveConfig);
+    let message = &app.toasts.iter().last().unwrap().message;
+    assert!(
+        message.starts_with("Configuration save failed"),
+        "{message}"
+    );
+    assert!(message.contains("Not a directory"), "{message}");
+}
+
+#[test]
 fn a_save_that_keeps_an_edit_made_elsewhere_leaves_it_for_the_reload() {
     let (_directory, path, mut app) = app_with_config_file("[window]\npadding = 4\n");
     // A save that leaves the file holding just the live settings needs no

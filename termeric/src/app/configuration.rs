@@ -754,7 +754,7 @@ impl App {
                     Ok(path) => self.toasts.success(format!("Configuration saved: {path}")),
                     Err(error) => self
                         .toasts
-                        .error(format!("Configuration save failed: {error}")),
+                        .error(format!("Configuration save failed: {error:#}")),
                 };
                 return;
             }
@@ -869,8 +869,8 @@ impl App {
                         self.toasts.success(format!("Deleted command '{}'", name));
                     }
                     Err(error) => {
-                        log::error!("Deleted '{}' but save failed: {}", name, error);
-                        self.toasts.error(format!("Save failed: {}", error));
+                        log::error!("Deleted '{name}' but save failed: {error:#}");
+                        self.toasts.error(format!("Save failed: {error:#}"));
                     }
                 }
             }
@@ -885,8 +885,8 @@ impl App {
                             self.toasts.success(format!("Saved command '{}'", name));
                         }
                         Err(error) => {
-                            log::error!("Failed to save custom command: {}", error);
-                            self.toasts.error(format!("Save failed: {}", error));
+                            log::error!("Failed to save custom command: {error:#}");
+                            self.toasts.error(format!("Save failed: {error:#}"));
                         }
                     }
                 } else {
