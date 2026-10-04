@@ -493,11 +493,12 @@ pub enum SettingKind {
         selected: usize,
         choose: Choose,
     },
-    /// Predefined list of numeric values (for logarithmic-style stepping)
+    /// Ascending numeric values for logarithmic-style stepping; built by
+    /// `stepped_list`, so the current value is always one of them.
     SteppedList {
-        values: Vec<usize>,
+        values: Vec<f64>,
         selected: usize,
-        set: fn(usize) -> SettingsAction,
+        set: fn(f64) -> SettingsAction,
     },
     /// A row that invokes a bounded application action instead of changing a
     /// persisted configuration value.
@@ -539,6 +540,49 @@ impl Choose {
                 enabled: index == 0,
             },
         }
+    }
+}
+
+/// The values the Scrollback steppers offer. Each list starts and ends at its
+/// setting's file bounds, so stepping reaches every end the file allows.
+const SCROLLBACK_LINE_STEPS: [f64; 12] = [
+    100.0,
+    500.0,
+    1_000.0,
+    2_000.0,
+    5_000.0,
+    10_000.0,
+    25_000.0,
+    50_000.0,
+    100_000.0,
+    250_000.0,
+    500_000.0,
+    1_000_000.0,
+];
+const SCROLL_SPEED_STEPS: [f64; 14] = [
+    0.1, 0.25, 0.5, 1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 10.0, 15.0, 20.0, 50.0, 100.0,
+];
+const SCROLLBACK_MEMORY_MIB_STEPS: [f64; 10] = [
+    8.0, 16.0, 32.0, 64.0, 128.0, 256.0, 512.0, 1_024.0, 2_048.0, 4_096.0,
+];
+
+/// A stepped list over `steps` that also holds `current`. A value set in the
+/// file between two steps becomes its own entry, so the selection is exact:
+/// an arrow press moves to the neighbouring step in its own direction and the
+/// open list highlights the value in effect rather than a rounded one.
+fn stepped_list(steps: &[f64], current: f64, set: fn(f64) -> SettingsAction) -> SettingKind {
+    let mut values = steps.to_vec();
+    let selected = match values.binary_search_by(|value| value.total_cmp(&current)) {
+        Ok(index) => index,
+        Err(index) => {
+            values.insert(index, current);
+            index
+        }
+    };
+    SettingKind::SteppedList {
+        values,
+        selected,
+        set,
     }
 }
 
@@ -1285,57 +1329,38 @@ impl SettingsPanel {
         ));
 
         // Scrollback
-        {
-            let steps: Vec<usize> = vec![
-                100, 500, 1_000, 2_000, 5_000, 10_000, 25_000, 50_000, 100_000,
-            ];
-            let selected = steps
-                .iter()
-                .position(|&v| v >= config.scrollback.lines)
-                .unwrap_or(steps.len() - 1);
-            let speed_steps: Vec<usize> = vec![1, 2, 3, 4, 6, 8, 10, 15, 20];
-            let speed_selected = speed_steps
-                .iter()
-                .position(|&v| v >= config.scrollback.scroll_speed as usize)
-                .unwrap_or(speed_steps.len() - 1);
-            let memory_steps: Vec<usize> = vec![16, 32, 64, 128, 256, 512, 1_024];
-            let memory_selected = memory_steps
-                .iter()
-                .position(|&value| value >= config.scrollback.max_memory_mib)
-                .unwrap_or(memory_steps.len() - 1);
-            result.push((
-                SettingsSection::Scrollback,
-                vec![
-                    SettingItem {
-                        label: "Lines",
-                        value: format!("{}", config.scrollback.lines),
-                        kind: SettingKind::SteppedList {
-                            set: SettingsAction::SetScrollback,
-                            values: steps,
-                            selected,
-                        },
-                    },
-                    SettingItem {
-                        label: "Scroll Speed",
-                        value: format!("{}", config.scrollback.scroll_speed as usize),
-                        kind: SettingKind::SteppedList {
-                            set: |speed| SettingsAction::SetScrollSpeed(speed as f64),
-                            values: speed_steps,
-                            selected: speed_selected,
-                        },
-                    },
-                    SettingItem {
-                        label: "Memory Limit",
-                        value: format!("{} MiB", config.scrollback.max_memory_mib),
-                        kind: SettingKind::SteppedList {
-                            set: SettingsAction::SetScrollbackMemory,
-                            values: memory_steps,
-                            selected: memory_selected,
-                        },
-                    },
-                ],
-            ));
-        }
+        result.push((
+            SettingsSection::Scrollback,
+            vec![
+                SettingItem {
+                    label: "Lines",
+                    value: format!("{}", config.scrollback.lines),
+                    kind: stepped_list(
+                        &SCROLLBACK_LINE_STEPS,
+                        config.scrollback.lines as f64,
+                        |lines| SettingsAction::SetScrollback(lines as usize),
+                    ),
+                },
+                SettingItem {
+                    label: "Scroll Speed",
+                    value: format!("{}", config.scrollback.scroll_speed),
+                    kind: stepped_list(
+                        &SCROLL_SPEED_STEPS,
+                        config.scrollback.scroll_speed,
+                        SettingsAction::SetScrollSpeed,
+                    ),
+                },
+                SettingItem {
+                    label: "Memory Limit",
+                    value: format!("{} MiB", config.scrollback.max_memory_mib),
+                    kind: stepped_list(
+                        &SCROLLBACK_MEMORY_MIB_STEPS,
+                        config.scrollback.max_memory_mib as f64,
+                        |memory_mib| SettingsAction::SetScrollbackMemory(memory_mib as usize),
+                    ),
+                },
+            ],
+        ));
 
         // Startup
         {
@@ -2036,15 +2061,18 @@ impl SettingsPanel {
             SettingKind::SteppedList {
                 values, selected, ..
             } => {
-                if values.is_empty() {
-                    return SettingsAction::None;
-                }
+                // Past either end there is nowhere to step; setting the
+                // end again would only report a change that did not happen.
                 let new_idx = if direction > 0 {
-                    (*selected + 1).min(values.len() - 1)
+                    selected
+                        .checked_add(1)
+                        .filter(|&index| index < values.len())
                 } else {
-                    selected.saturating_sub(1)
+                    selected.checked_sub(1)
                 };
-                Self::option_action(&entry.kind, new_idx)
+                new_idx.map_or(SettingsAction::None, |index| {
+                    Self::option_action(&entry.kind, index)
+                })
             }
             SettingKind::Action { action } => {
                 if direction > 0 {
@@ -2914,8 +2942,153 @@ mod tests {
             .expect("scrollback memory setting");
         assert_eq!(memory.value, "64 MiB");
         assert!(matches!(
-            SettingsPanel::option_action(&memory.kind, 3),
+            SettingsPanel::option_action(&memory.kind, 4),
             SettingsAction::SetScrollbackMemory(128)
+        ));
+    }
+
+    /// Step the Scrollback row `label` once through the accessibility path,
+    /// which shares `adjust_selected_value` with the arrow keys.
+    fn step_scrollback(config: &Config, label: &str, direction: i32) -> SettingsAction {
+        terminal_page().accessibility_adjust_setting(
+            SettingsSection::Scrollback,
+            label,
+            direction,
+            config,
+            &default_registry(),
+        )
+    }
+
+    fn terminal_page() -> SettingsPanel {
+        let mut panel = SettingsPanel::new();
+        panel.select_page(SettingsPage::Terminal);
+        panel
+    }
+
+    fn scrollback_entry(config: &Config, label: &str) -> SettingEntry {
+        terminal_page()
+            .build_entries(config, &default_registry())
+            .into_iter()
+            .find(|entry| entry.section == SettingsSection::Scrollback && entry.label == label)
+            .expect("scrollback setting")
+    }
+
+    #[test]
+    fn scrollback_steps_span_the_file_bounds() {
+        use crate::config::{
+            SCROLL_SPEED_RANGE, SCROLLBACK_LINES_RANGE, SCROLLBACK_MEMORY_MIB_RANGE,
+        };
+        let usize_bounds =
+            |range: &std::ops::RangeInclusive<usize>| (*range.start() as f64, *range.end() as f64);
+        for (steps, (start, end)) in [
+            (
+                &SCROLLBACK_LINE_STEPS[..],
+                usize_bounds(&SCROLLBACK_LINES_RANGE),
+            ),
+            (
+                &SCROLLBACK_MEMORY_MIB_STEPS[..],
+                usize_bounds(&SCROLLBACK_MEMORY_MIB_RANGE),
+            ),
+            (
+                &SCROLL_SPEED_STEPS[..],
+                (*SCROLL_SPEED_RANGE.start(), *SCROLL_SPEED_RANGE.end()),
+            ),
+        ] {
+            assert_eq!(steps.first(), Some(&start));
+            assert_eq!(steps.last(), Some(&end));
+            assert!(steps.windows(2).all(|pair| pair[0] < pair[1]));
+        }
+    }
+
+    #[test]
+    fn scrollback_steps_never_cut_or_reverse_a_file_value() {
+        let mut config = Config::default();
+        config.scrollback.lines = 500_000;
+        assert!(matches!(
+            step_scrollback(&config, "Lines", 1),
+            SettingsAction::SetScrollback(1_000_000)
+        ));
+        assert!(matches!(
+            step_scrollback(&config, "Lines", -1),
+            SettingsAction::SetScrollback(250_000)
+        ));
+
+        // A value between two steps steps to the neighbour on its own side.
+        config.scrollback.lines = 300_000;
+        assert!(matches!(
+            step_scrollback(&config, "Lines", 1),
+            SettingsAction::SetScrollback(500_000)
+        ));
+        assert!(matches!(
+            step_scrollback(&config, "Lines", -1),
+            SettingsAction::SetScrollback(250_000)
+        ));
+
+        config.scrollback.max_memory_mib = 2_048;
+        assert!(matches!(
+            step_scrollback(&config, "Memory Limit", 1),
+            SettingsAction::SetScrollbackMemory(4_096)
+        ));
+        config.scrollback.max_memory_mib = 8;
+        assert!(matches!(
+            step_scrollback(&config, "Memory Limit", -1),
+            SettingsAction::None
+        ));
+        assert!(matches!(
+            step_scrollback(&config, "Memory Limit", 1),
+            SettingsAction::SetScrollbackMemory(16)
+        ));
+
+        config.scrollback.scroll_speed = 0.5;
+        assert!(matches!(
+            step_scrollback(&config, "Scroll Speed", -1),
+            SettingsAction::SetScrollSpeed(speed) if speed == 0.25
+        ));
+        config.scrollback.scroll_speed = 0.1;
+        assert!(matches!(
+            step_scrollback(&config, "Scroll Speed", -1),
+            SettingsAction::None
+        ));
+        config.scrollback.scroll_speed = 100.0;
+        assert!(matches!(
+            step_scrollback(&config, "Scroll Speed", 1),
+            SettingsAction::None
+        ));
+    }
+
+    #[test]
+    fn scrollback_list_shows_and_keeps_the_value_in_effect() {
+        let mut config = Config::default();
+        config.scrollback.scroll_speed = 0.7;
+        let speed = scrollback_entry(&config, "Scroll Speed");
+        assert_eq!(speed.value, "0.7");
+        let SettingKind::SteppedList {
+            values, selected, ..
+        } = &speed.kind
+        else {
+            panic!("Scroll Speed is a stepped list");
+        };
+        assert_eq!(values[*selected], 0.7);
+        assert_eq!(&values[..4], &[0.1, 0.25, 0.5, 0.7]);
+
+        // Opening the list and confirming keeps the file value, rather than
+        // the nearest step above it.
+        config.scrollback.lines = 500_000;
+        let registry = default_registry();
+        let mut panel = terminal_page();
+        assert!(panel.accessibility_focus_setting(
+            SettingsSection::Scrollback,
+            "Lines",
+            &config,
+            &registry
+        ));
+        assert!(matches!(
+            panel.handle_key(SettingsKey::Right, &config, &registry),
+            SettingsAction::None
+        ));
+        assert!(matches!(
+            panel.handle_key(SettingsKey::Enter, &config, &registry),
+            SettingsAction::SetScrollback(500_000)
         ));
     }
 

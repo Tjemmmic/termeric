@@ -357,17 +357,21 @@ impl Config {
             bail!("font.bold_weight must be greater than or equal to font.weight");
         }
         validate_range("font.line_height", self.font.line_height, LINE_HEIGHT_RANGE)?;
-        if !(100..=1_000_000).contains(&self.scrollback.lines) {
-            bail!("scrollback.lines must be between 100 and 1000000");
-        }
-        if !(8..=4_096).contains(&self.scrollback.max_memory_mib) {
-            bail!("scrollback.max_memory_mib must be between 8 and 4096");
-        }
-        if !(0.1..=100.0).contains(&self.scrollback.scroll_speed)
-            || !self.scrollback.scroll_speed.is_finite()
-        {
-            bail!("scrollback.scroll_speed must be between 0.1 and 100");
-        }
+        validate_range(
+            "scrollback.lines",
+            self.scrollback.lines,
+            SCROLLBACK_LINES_RANGE,
+        )?;
+        validate_range(
+            "scrollback.max_memory_mib",
+            self.scrollback.max_memory_mib,
+            SCROLLBACK_MEMORY_MIB_RANGE,
+        )?;
+        validate_range(
+            "scrollback.scroll_speed",
+            self.scrollback.scroll_speed,
+            SCROLL_SPEED_RANGE,
+        )?;
         validate_launch_profiles(&self.profiles)?;
         if self.copy_mode.patterns.len() > 32 {
             bail!("copy_mode.patterns must contain at most 32 entries");
@@ -458,6 +462,10 @@ pub const CURSOR_BLINK_RATE_RANGE: RangeInclusive<u32> = 100..=5_000;
 /// Milliseconds.
 pub const BELL_DURATION_RANGE: RangeInclusive<u64> = 10..=5_000;
 pub const HARVEST_HISTORY_RANGE: RangeInclusive<usize> = 1..=10_000;
+pub const SCROLLBACK_LINES_RANGE: RangeInclusive<usize> = 100..=1_000_000;
+pub const SCROLLBACK_MEMORY_MIB_RANGE: RangeInclusive<usize> = 8..=4_096;
+/// Lines per mouse-wheel step.
+pub const SCROLL_SPEED_RANGE: RangeInclusive<f64> = 0.1..=100.0;
 
 /// Refuse `value` outside `range`; NaN and infinities are outside every
 /// float range here.
