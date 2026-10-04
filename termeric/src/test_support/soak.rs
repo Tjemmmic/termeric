@@ -237,9 +237,19 @@ impl ProcessResources {
         let count = |path: &str| std::fs::read_dir(path).unwrap().count();
         let children = std::fs::read_dir("/proc/self/task")
             .unwrap()
-            .filter_map(Result::ok)
-            .filter_map(|task| std::fs::read_to_string(task.path().join("children")).ok())
-            .map(|children| children.split_whitespace().count())
+            .filter_map(|task| {
+                let task = task.unwrap().path();
+                match std::fs::read_to_string(task.join("children")) {
+                    Ok(children) => Some(children.split_whitespace().count()),
+                    // The thread exited after the listing.
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::NotFound && !task.exists() =>
+                    {
+                        None
+                    }
+                    Err(error) => panic!("cannot count {}'s children: {error}", task.display()),
+                }
+            })
             .sum();
         Self {
             rss_kib,

@@ -590,9 +590,10 @@ mod tests {
     fn a_session_started_ahead_stays_out_of_every_list_until_its_first_message() {
         let fake = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/agent_view/fake_claude.py");
-        if crate::agents::find_executable("python3").is_none() {
-            return;
-        }
+        assert!(
+            crate::agents::find_executable("python3").is_some(),
+            "python3 is required by this test"
+        );
         let mut config = Config::default();
         config.agents.insert(
             "claude-code".into(),
@@ -641,9 +642,10 @@ mod tests {
 
     #[test]
     fn choosing_another_agent_starts_it_ahead_instead() {
-        if crate::agents::find_executable("python3").is_none() {
-            return;
-        }
+        assert!(
+            crate::agents::find_executable("python3").is_some(),
+            "python3 is required by this test"
+        );
         let fixture = |name: &str| {
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("tests/fixtures/agent_view")
@@ -707,9 +709,10 @@ mod tests {
 
     #[test]
     fn earlier_codex_conversations_are_offered_and_continued_with_codex() {
-        if crate::agents::find_executable("python3").is_none() {
-            return;
-        }
+        assert!(
+            crate::agents::find_executable("python3").is_some(),
+            "python3 is required by this test"
+        );
         let fake = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/agent_view/fake_codex.py");
         let mut config = Config::default();
@@ -772,9 +775,10 @@ mod tests {
 
     #[test]
     fn the_session_started_ahead_follows_the_folder_while_the_terminal_types() {
-        if crate::agents::find_executable("python3").is_none() {
-            return;
-        }
+        assert!(
+            crate::agents::find_executable("python3").is_some(),
+            "python3 is required by this test"
+        );
         let fake = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/agent_view/fake_claude.py");
         let mut config = Config::default();

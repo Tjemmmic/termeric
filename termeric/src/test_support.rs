@@ -204,17 +204,7 @@ fn resize_fixture_reflows_real_terminal_content() {
 }
 
 #[test]
-fn plugin_quick_exit_crosses_pty_tab_and_diagnostic_capture_when_shell_exists() {
-    if std::process::Command::new("/bin/sh")
-        .arg("-c")
-        .arg("exit 0")
-        .status()
-        .is_err()
-    {
-        eprintln!("skipping plugin quick-exit fixture: /bin/sh is unavailable");
-        return;
-    }
-
+fn plugin_quick_exit_crosses_pty_tab_and_diagnostic_capture() {
     let mut tabs = TabManager::new(
         80,
         24,

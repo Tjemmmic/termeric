@@ -1065,15 +1065,21 @@ mod tests {
     use crate::agent_view::transcript::{Item, ToolState};
     use std::sync::Arc;
 
-    fn fake() -> Option<AgentProgram> {
-        let python = crate::agents::find_executable("python3")?;
+    /// The fake agents are Python scripts; CI has python3, so its absence
+    /// fails the test rather than skipping it.
+    fn python3() -> std::path::PathBuf {
+        crate::agents::find_executable("python3").expect("python3 is required by this test")
+    }
+
+    fn fake() -> AgentProgram {
+        let python = python3();
         let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/agent_view/fake_claude.py");
-        Some(AgentProgram {
+        AgentProgram {
             program: python.display().to_string(),
             args: vec![script.display().to_string()],
             env: vec![("FAKE_CLAUDE_DELAY".into(), "0".into())],
-        })
+        }
     }
 
     fn start(program: AgentProgram) -> AgentSession {
@@ -1139,10 +1145,7 @@ mod tests {
 
     #[test]
     fn a_conversation_runs_through_the_fake_agent() {
-        let Some(program) = fake() else {
-            eprintln!("skipping: python3 is unavailable");
-            return;
-        };
+        let program = fake();
         let mut session = start(program);
         pump_until(&mut session, |session| {
             session.transcript().handshake().is_some()
@@ -1171,9 +1174,7 @@ mod tests {
 
     #[test]
     fn approvals_round_trip_and_remember_rules() {
-        let Some(program) = fake() else {
-            return;
-        };
+        let program = fake();
         let mut session = start(program);
         session.prompt("please run the tests", Vec::new()).unwrap();
         pump_until(&mut session, |session| {
@@ -1208,9 +1209,7 @@ mod tests {
 
     #[test]
     fn denials_questions_and_plans_are_answered() {
-        let Some(program) = fake() else {
-            return;
-        };
+        let program = fake();
         let mut session = start(program);
         session.prompt("edit the file", Vec::new()).unwrap();
         pump_until(&mut session, |session| {
@@ -1266,9 +1265,7 @@ mod tests {
 
     #[test]
     fn interrupting_ends_the_turn_and_a_closed_agent_relaunches() {
-        let Some(mut program) = fake() else {
-            return;
-        };
+        let mut program = fake();
         program.env = vec![("FAKE_CLAUDE_DELAY".into(), "0.02".into())];
         let mut session = start(program);
         session.prompt("go slow", Vec::new()).unwrap();
@@ -1301,9 +1298,7 @@ mod tests {
 
     #[test]
     fn a_message_sent_while_closing_relaunches_once_the_agent_exits() {
-        let Some(program) = fake() else {
-            return;
-        };
+        let program = fake();
         let mut session = start(program);
         pump_until(&mut session, |session| {
             session.transcript().handshake().is_some()
@@ -1321,9 +1316,7 @@ mod tests {
 
     #[test]
     fn claude_restarts_to_bypass_when_the_opt_in_came_after_it_started() {
-        let Some(mut program) = fake() else {
-            return;
-        };
+        let mut program = fake();
         program.env = vec![("FAKE_CLAUDE_DELAY".into(), "0.02".into())];
         let mut session = start(program);
         session.prompt("hello", Vec::new()).unwrap();
@@ -1360,9 +1353,7 @@ mod tests {
 
     #[test]
     fn a_continued_conversation_keeps_its_id_across_relaunches() {
-        let Some(program) = fake() else {
-            return;
-        };
+        let program = fake();
         let mut session = AgentSession::start(
             program,
             StartOptions {
@@ -1394,9 +1385,7 @@ mod tests {
 
     #[test]
     fn a_conversation_handed_to_a_terminal_is_never_written_here_again() {
-        let Some(program) = fake() else {
-            return;
-        };
+        let program = fake();
         let mut session = start(program);
         session.prompt("hello", Vec::new()).unwrap();
         pump_until(&mut session, |session| {
@@ -1417,9 +1406,7 @@ mod tests {
 
     #[test]
     fn messages_written_during_a_turn_wait_for_it_to_end() {
-        let Some(mut program) = fake() else {
-            return;
-        };
+        let mut program = fake();
         program.env = vec![("FAKE_CLAUDE_DELAY".into(), "0.02".into())];
         let mut session = start(program);
         session.prompt("go slow", Vec::new()).unwrap();
@@ -1447,15 +1434,15 @@ mod tests {
         });
     }
 
-    fn fake_codex() -> Option<AgentProgram> {
-        let python = crate::agents::find_executable("python3")?;
+    fn fake_codex() -> AgentProgram {
+        let python = python3();
         let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/agent_view/fake_codex.py");
-        Some(AgentProgram {
+        AgentProgram {
             program: python.display().to_string(),
             args: vec![script.display().to_string()],
             env: vec![("FAKE_CODEX_DELAY".into(), "0".into())],
-        })
+        }
     }
 
     fn start_codex(program: AgentProgram, resume: Option<(String, String)>) -> AgentSession {
@@ -1482,10 +1469,7 @@ mod tests {
 
     #[test]
     fn a_codex_conversation_runs_through_the_fake_app_server() {
-        let Some(program) = fake_codex() else {
-            eprintln!("skipping: python3 is unavailable");
-            return;
-        };
+        let program = fake_codex();
         let mut session = start_codex(program, None);
         pump_until(&mut session, |session| {
             session
@@ -1549,9 +1533,7 @@ mod tests {
 
     #[test]
     fn codex_commands_and_patches_are_approved_and_declined() {
-        let Some(program) = fake_codex() else {
-            return;
-        };
+        let program = fake_codex();
         let mut session = start_codex(program, None);
         session.prompt("please run the tests", Vec::new()).unwrap();
         pump_until(&mut session, |session| {
@@ -1635,9 +1617,7 @@ mod tests {
 
     #[test]
     fn codex_lists_the_folders_earlier_threads_and_continues_one() {
-        let Some(program) = fake_codex() else {
-            return;
-        };
+        let program = fake_codex();
         let mut session = start_codex(program.clone(), None);
         let started = Instant::now();
         let listed = loop {
@@ -1673,9 +1653,7 @@ mod tests {
 
     #[test]
     fn a_person_denying_a_codex_change_stops_the_turn() {
-        let Some(program) = fake_codex() else {
-            return;
-        };
+        let program = fake_codex();
         let mut session = start_codex(program, None);
         session.prompt("edit the answer", Vec::new()).unwrap();
         pump_until(&mut session, |session| {
@@ -1689,9 +1667,7 @@ mod tests {
 
     #[test]
     fn codex_questions_plans_and_reasoning_reach_the_transcript() {
-        let Some(program) = fake_codex() else {
-            return;
-        };
+        let program = fake_codex();
         let mut session = start_codex(program, None);
         session.prompt("ask me something", Vec::new()).unwrap();
         pump_until(&mut session, |session| {
@@ -1741,9 +1717,7 @@ mod tests {
 
     #[test]
     fn codex_takes_the_mode_model_and_skill_with_each_message() {
-        let Some(program) = fake_codex() else {
-            return;
-        };
+        let program = fake_codex();
         let mut session = start_codex(program, None);
         let answer = |session: &mut AgentSession, prompt: &str| {
             session.prompt(prompt, Vec::new()).unwrap();
@@ -1788,9 +1762,7 @@ mod tests {
 
     #[test]
     fn a_session_never_starts_unrestricted_without_the_opt_in() {
-        let Some(program) = fake_codex() else {
-            return;
-        };
+        let program = fake_codex();
         let mut session = AgentSession::start(
             program,
             StartOptions {
@@ -1817,9 +1789,7 @@ mod tests {
 
     #[test]
     fn codex_compacts_reviews_and_refuses_terminal_commands() {
-        let Some(program) = fake_codex() else {
-            return;
-        };
+        let program = fake_codex();
         let mut session = start_codex(program, None);
         session.prompt("/compact", Vec::new()).unwrap();
         pump_until(&mut session, finished);
@@ -1856,9 +1826,7 @@ mod tests {
 
     #[test]
     fn codex_turns_stop_and_a_closed_codex_continues_its_thread() {
-        let Some(mut program) = fake_codex() else {
-            return;
-        };
+        let mut program = fake_codex();
         program.env = vec![("FAKE_CODEX_DELAY".into(), "0.02".into())];
         let mut session = start_codex(program, None);
         session.prompt("go slow", Vec::new()).unwrap();
@@ -1885,9 +1853,7 @@ mod tests {
 
     #[test]
     fn a_codex_thread_that_cannot_continue_starts_anew_and_says_so() {
-        let Some(program) = fake_codex() else {
-            return;
-        };
+        let program = fake_codex();
         let mut session = start_codex(program, Some(("missing".into(), "Gone".into())));
         session.prompt("hello", Vec::new()).unwrap();
         pump_until(&mut session, finished);
@@ -1901,9 +1867,7 @@ mod tests {
 
     #[test]
     fn a_signed_out_codex_is_explained_before_the_first_message() {
-        let Some(mut program) = fake_codex() else {
-            return;
-        };
+        let mut program = fake_codex();
         program
             .env
             .push(("FAKE_CODEX_SIGNED_OUT".into(), "1".into()));
@@ -1923,9 +1887,7 @@ mod tests {
 
     #[test]
     fn a_crash_is_explained_from_stderr() {
-        let Some(program) = fake() else {
-            return;
-        };
+        let program = fake();
         let mut session = start(program);
         session.prompt("crash now", Vec::new()).unwrap();
         pump_until(&mut session, |session| {
@@ -1943,15 +1905,15 @@ mod tests {
         );
     }
 
-    fn fake_opencode() -> Option<AgentProgram> {
-        let python = crate::agents::find_executable("python3")?;
+    fn fake_opencode() -> AgentProgram {
+        let python = python3();
         let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/agent_view/fake_opencode.py");
-        Some(AgentProgram {
+        AgentProgram {
             program: python.display().to_string(),
             args: vec![script.display().to_string()],
             env: vec![("FAKE_OPENCODE_DELAY".into(), "0".into())],
-        })
+        }
     }
 
     fn turn_ends(session: &AgentSession) -> usize {
@@ -1983,10 +1945,7 @@ mod tests {
 
     #[test]
     fn an_opencode_conversation_runs_over_acp() {
-        let Some(program) = fake_opencode() else {
-            eprintln!("skipping: python3 is unavailable");
-            return;
-        };
+        let program = fake_opencode();
         let mut session = start_opencode(program, None);
         let started = Instant::now();
         let listed = loop {
@@ -2081,9 +2040,7 @@ mod tests {
 
     #[test]
     fn opencode_edits_are_approved_and_its_file_writes_left_to_it() {
-        let Some(program) = fake_opencode() else {
-            return;
-        };
+        let program = fake_opencode();
         let mut session = start_opencode(program, None);
         session.prompt("edit the notes", Vec::new()).unwrap();
         pump_until(&mut session, |session| {
@@ -2119,9 +2076,7 @@ mod tests {
 
     #[test]
     fn stopping_opencode_while_it_asks_cancels_the_turn() {
-        let Some(program) = fake_opencode() else {
-            return;
-        };
+        let program = fake_opencode();
         let mut session = start_opencode(program, None);
         session.prompt("run the tests", Vec::new()).unwrap();
         pump_until(&mut session, |session| {
@@ -2136,9 +2091,7 @@ mod tests {
 
     #[test]
     fn opencode_runs_in_the_mode_and_model_chosen_before_its_session_opens() {
-        let Some(program) = fake_opencode() else {
-            return;
-        };
+        let program = fake_opencode();
         let mut session = start_opencode(program, None);
         pump_until(&mut session, |session| {
             session.transcript().handshake().is_some()
@@ -2210,9 +2163,7 @@ mod tests {
 
     #[test]
     fn an_opencode_session_nothing_was_said_in_is_forgotten() {
-        let Some(program) = fake_opencode() else {
-            return;
-        };
+        let program = fake_opencode();
         let directory = std::env::temp_dir().join(format!(
             "termeric-forget-{}-{:?}",
             std::process::id(),
@@ -2259,9 +2210,7 @@ mod tests {
 
     #[test]
     fn opencode_auto_approve_needs_the_opt_in_and_then_asks_about_nothing() {
-        let Some(program) = fake_opencode() else {
-            return;
-        };
+        let program = fake_opencode();
         let mut refused = opencode_with(program.clone(), None, true, false, None);
         assert!(!refused.auto_approve());
         refused.set_auto_approve(true);
@@ -2289,9 +2238,7 @@ mod tests {
 
     #[test]
     fn opencode_continues_an_earlier_session_or_starts_anew_and_says_so() {
-        let Some(program) = fake_opencode() else {
-            return;
-        };
+        let program = fake_opencode();
         let mut continued = start_opencode(
             program.clone(),
             Some(("ses_earlier_one".into(), "Fix the tab bar".into())),

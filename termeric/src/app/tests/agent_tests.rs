@@ -1458,9 +1458,10 @@ fn the_supervisor_hears_about_agents_and_sends_only_as_its_mode_allows() {
     use crate::control::protocol::AgentEventKind;
     use crate::ui::command_palette::palette::AgentPlacement;
     use std::os::unix::fs::PermissionsExt;
-    if crate::agents::find_executable("python3").is_none() {
-        return;
-    }
+    assert!(
+        crate::agents::find_executable("python3").is_some(),
+        "python3 is required by this test"
+    );
     let temp = tempfile::tempdir().unwrap();
     let log = temp.path().join("agents.log");
     // The worker is an agent in a terminal that logs what it is typed.
@@ -1744,9 +1745,10 @@ fn codex_supervises_as_an_agent_view_conversation() {
     use crate::agent_view::transcript::{Activity, Item};
     use crate::agents::supervisor::SupervisorMode;
 
-    if crate::agents::find_executable("python3").is_none() {
-        return;
-    }
+    assert!(
+        crate::agents::find_executable("python3").is_some(),
+        "python3 is required by this test"
+    );
     let temp = tempfile::tempdir().unwrap();
     let fake_codex = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/agent_view/fake_codex.py");

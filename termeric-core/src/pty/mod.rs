@@ -824,10 +824,8 @@ mod tests {
     fn child_winsize_probe_observes_startup_and_resize_pixels() {
         let python = ["/usr/bin/python3", "/bin/python3"]
             .into_iter()
-            .find(|path| std::path::Path::new(path).is_file());
-        let Some(python) = python else {
-            return;
-        };
+            .find(|path| std::path::Path::new(path).is_file())
+            .expect("python3 is required by this test");
         let probe = concat!(
             "import fcntl,struct,sys,termios\n",
             "def size(): return struct.unpack('HHHH', fcntl.ioctl(0, termios.TIOCGWINSZ, b'\\0'*8))\n",
