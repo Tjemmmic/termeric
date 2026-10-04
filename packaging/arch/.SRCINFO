@@ -9,6 +9,7 @@ pkgbase = termeric-git
 	license = Apache-2.0
 	license = BSD-2-Clause
 	license = BSD-3-Clause
+	license = BSD-3-Clause WITH PCRE2-exception
 	license = CC0-1.0
 	license = GPL-2.0-only WITH GCC-exception-2.0
 	license = ISC

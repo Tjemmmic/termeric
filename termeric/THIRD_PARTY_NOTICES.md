@@ -54,7 +54,7 @@ SPDX-License-Identifier: Unicode-3.0
 
 ## libgit2
 
-The Git integration statically links libgit2 1.8.1, built from the copy bundled with the `libgit2-sys` crate, together with the third-party code libgit2 bundles. libgit2 is licensed under the GNU General Public License version 2 with a linking exception that permits linking it into programs under other licenses; its bundled components carry the licenses below.
+The Git integration statically links libgit2 1.9.7, built from the copy bundled with the `libgit2-sys` crate, together with the third-party code libgit2 bundles. libgit2 is licensed under the GNU General Public License version 2 with a linking exception that permits linking it into programs under other licenses; its bundled components carry the licenses below.
 
 ```text
  libgit2 is Copyright (C) the libgit2 contributors,
@@ -465,23 +465,85 @@ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ----------------------------------------------------------------------
 
-The bundled PCRE implementation (deps/pcre/) is licensed under the BSD
-license.
+The bundled PCRE implementation (deps/pcre2/) is licensed under the
+PCRE2 Licence.
+
+PCRE2 is a library of functions to support regular expressions whose syntax
+and semantics are as close as possible to those of the Perl 5 language.
+
+Releases 10.00 and above of PCRE2 are distributed under the terms of the "BSD"
+licence, as specified below, with one exemption for certain binary
+redistributions. The documentation for PCRE2, supplied in the "doc" directory,
+is distributed under the same terms as the software itself. The data in the
+testdata directory is not copyrighted and is in the public domain.
+
+The basic library functions are written in C and are freestanding. Also
+included in the distribution is a just-in-time compiler that can be used to
+optimize pattern matching. This is an optional feature that can be omitted when
+the library is built. The just-in-time compiler is separately licensed under the
+"2-clause BSD" licence.
+
+
+COPYRIGHT
+---------
+
+### The basic library functions
+
+    Written by:       Philip Hazel
+    Email local part: Philip.Hazel
+    Email domain:     gmail.com
+
+    Retired from University of Cambridge Computing Service,
+    Cambridge, England.
+
+    Copyright (c) 1997-2007 University of Cambridge
+    Copyright (c) 2007-2024 Philip Hazel
+    All rights reserved.
+
+### PCRE2 Just-In-Time compilation support
+
+    Written by:       Zoltan Herczeg
+    Email local part: hzmester
+    Email domain:     freemail.hu
+
+    Copyright (c) 2010-2024 Zoltan Herczeg
+    All rights reserved.
+
+### Stack-less Just-In-Time compiler
+
+    Written by:       Zoltan Herczeg
+    Email local part: hzmester
+    Email domain:     freemail.hu
+
+    Copyright (c) 2009-2024 Zoltan Herczeg
+    All rights reserved.
+
+The code in the `deps/sljit` directory has its own LICENSE file.
+
+### All other contributions
+
+Many other contributors have participated in the authorship of PCRE2. As PCRE2
+has never required a Contributor Licensing Agreement, or other copyright
+assignment agreement, all contributions have copyright retained by each
+original contributor or their employer.
+
+
+THE "BSD" LICENCE
+-----------------
 
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions are met:
 
-    * Redistributions of source code must retain the above copyright notice,
-      this list of conditions and the following disclaimer.
+* Redistributions of source code must retain the above copyright notices,
+  this list of conditions and the following disclaimer.
 
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in the
-      documentation and/or other materials provided with the distribution.
+* Redistributions in binary form must reproduce the above copyright
+  notices, this list of conditions and the following disclaimer in the
+  documentation and/or other materials provided with the distribution.
 
-    * Neither the name of the University of Cambridge nor the name of Google
-      Inc. nor the names of their contributors may be used to endorse or
-      promote products derived from this software without specific prior
-      written permission.
+* Neither the name of the University of Cambridge nor the names of any
+  contributors may be used to endorse or promote products derived from this
+  software without specific prior written permission.
 
 THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
 AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
@@ -494,6 +556,16 @@ INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
 CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 POSSIBILITY OF SUCH DAMAGE.
+
+
+EXEMPTION FOR BINARY LIBRARY-LIKE PACKAGES
+------------------------------------------
+
+The second condition in the BSD licence (covering binary redistributions) does
+not apply all the way down a chain of software. If binary package A includes
+PCRE2, it must respect the condition, but if package B is software that
+includes package A, the condition is not imposed on package B unless it uses
+PCRE2 independently.
 
 ----------------------------------------------------------------------
 
@@ -1475,7 +1547,6 @@ The Linux binaries are built from the Rust crates below. Each license section li
 
 - Apache License 2.0
 - MIT License
-- Unicode License v3
 - BSD 3-Clause "New" or "Revised" License
 - BSD 2-Clause "Simplified" License
 - zlib License
@@ -1483,6 +1554,7 @@ The Linux binaries are built from the Rust crates below. Each license section li
 - Creative Commons Zero v1.0 Universal
 - ISC License
 - Mozilla Public License 2.0
+- Unicode License v3
 - Unicode License Agreement - Data Files and Software (2016)
 
 ### BSD Zero Clause License
@@ -1938,7 +2010,6 @@ Used by:
 - [as-raw-xcb-connection 1.0.1](https://github.com/psychon/as-raw-xcb-connection)
 - [static_assertions 1.1.0](https://github.com/nvzqz/static-assertions-rs)
 - [tinyvec 1.10.0](https://github.com/Lokathor/tinyvec)
-- [utf8_iter 1.0.4](https://github.com/hsivonen/utf8_iter)
 - [x11rb-protocol 0.13.2](https://github.com/psychon/x11rb)
 - [x11rb 0.13.2](https://github.com/psychon/x11rb)
 
@@ -5590,7 +5661,6 @@ Used by:
 - [crossbeam-deque 0.8.6](https://github.com/crossbeam-rs/crossbeam)
 - [crossbeam-epoch 0.9.21](https://github.com/crossbeam-rs/crossbeam)
 - [crossbeam-utils 0.8.21](https://github.com/crossbeam-rs/crossbeam)
-- [displaydoc 0.2.5](https://github.com/yaahc/displaydoc)
 - [either 1.15.0](https://github.com/rayon-rs/either)
 - [equivalent 1.0.2](https://github.com/indexmap-rs/equivalent)
 - [errno 0.3.14](https://github.com/lambda-fairy/rust-errno)
@@ -5599,19 +5669,16 @@ Used by:
 - [fastrand 2.3.0](https://github.com/smol-rs/fastrand)
 - [fixedbitset 0.5.7](https://github.com/petgraph/fixedbitset)
 - [flate2 1.1.8](https://github.com/rust-lang/flate2-rs)
-- [form_urlencoded 1.2.2](https://github.com/servo/rust-url)
 - [futures-lite 2.6.1](https://github.com/smol-rs/futures-lite)
 - [gethostname 1.1.0](https://codeberg.org/swsnr/gethostname.rs.git)
-- [git2 0.19.0](https://github.com/rust-lang/git2-rs)
+- [git2 0.21.0](https://github.com/rust-lang/git2-rs)
 - [hashbrown 0.15.5](https://github.com/rust-lang/hashbrown)
 - [hashbrown 0.16.1](https://github.com/rust-lang/hashbrown)
 - [heck 0.5.0](https://github.com/withoutboats/heck)
-- [idna 1.1.0](https://github.com/servo/rust-url/)
-- [idna_adapter 1.2.1](https://github.com/hsivonen/idna_adapter)
 - [indexmap 2.13.0](https://github.com/indexmap-rs/indexmap)
 - [itertools 0.14.0](https://github.com/rust-itertools/itertools)
 - [khronos-egl 6.0.0](https://github.com/timothee-haudebourg/khronos-egl)
-- [libgit2-sys 0.17.0+1.8.1](https://github.com/rust-lang/git2-rs)
+- [libgit2-sys 0.18.8+1.9.7](https://github.com/rust-lang/git2-rs)
 - [libz-sys 1.1.24](https://github.com/rust-lang/libz-sys)
 - [linux-raw-sys 0.11.0](https://github.com/sunfishcode/linux-raw-sys)
 - [linux-raw-sys 0.4.15](https://github.com/sunfishcode/linux-raw-sys)
@@ -5659,7 +5726,6 @@ Used by:
 - [unicode-width 0.2.2](https://github.com/unicode-rs/unicode-width)
 - [unicode-xid 0.2.6](https://github.com/unicode-rs/unicode-xid)
 - [unicode_names2 4.0.0](https://github.com/progval/unicode_names2)
-- [url 2.5.8](https://github.com/servo/rust-url)
 - [uuid 1.26.0](https://github.com/uuid-rs/uuid)
 - [wl-clipboard-rs 0.9.3](https://github.com/YaLTeR/wl-clipboard-rs)
 - [xdg 2.5.2](https://github.com/whitequark/rust-xdg)
@@ -9370,23 +9436,6 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
-- [synstructure 0.13.2](https://github.com/mystor/synstructure)
-
-```text
-Copyright 2016 Nika Layzell
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-```
-
-### MIT License
-
-Used by:
-
 - [wayland-protocols 0.32.10](https://github.com/smithay/wayland-rs)
 
 ```text
@@ -10974,79 +11023,6 @@ Except as contained in this notice, the name of a copyright holder shall
 not be used in advertising or otherwise to promote the sale, use or other
 dealings in these Data Files or Software without prior written
 authorization of the copyright holder.
-
-```
-
-### Unicode License v3
-
-Used by:
-
-- [icu_collections 2.1.1](https://github.com/unicode-org/icu4x)
-- [icu_locale_core 2.1.1](https://github.com/unicode-org/icu4x)
-- [icu_normalizer 2.1.1](https://github.com/unicode-org/icu4x)
-- [icu_normalizer_data 2.1.1](https://github.com/unicode-org/icu4x)
-- [icu_properties 2.1.2](https://github.com/unicode-org/icu4x)
-- [icu_properties_data 2.1.2](https://github.com/unicode-org/icu4x)
-- [icu_provider 2.1.1](https://github.com/unicode-org/icu4x)
-- [litemap 0.8.1](https://github.com/unicode-org/icu4x)
-- [potential_utf 0.1.4](https://github.com/unicode-org/icu4x)
-- [tinystr 0.8.2](https://github.com/unicode-org/icu4x)
-- [writeable 0.6.2](https://github.com/unicode-org/icu4x)
-- [yoke-derive 0.8.1](https://github.com/unicode-org/icu4x)
-- [yoke 0.8.1](https://github.com/unicode-org/icu4x)
-- [zerofrom-derive 0.1.6](https://github.com/unicode-org/icu4x)
-- [zerofrom 0.1.6](https://github.com/unicode-org/icu4x)
-- [zerotrie 0.2.3](https://github.com/unicode-org/icu4x)
-- [zerovec-derive 0.11.2](https://github.com/unicode-org/icu4x)
-- [zerovec 0.11.5](https://github.com/unicode-org/icu4x)
-
-```text
-UNICODE LICENSE V3
-
-COPYRIGHT AND PERMISSION NOTICE
-
-Copyright © 2020-2024 Unicode, Inc.
-
-NOTICE TO USER: Carefully read the following legal agreement. BY
-DOWNLOADING, INSTALLING, COPYING OR OTHERWISE USING DATA FILES, AND/OR
-SOFTWARE, YOU UNEQUIVOCALLY ACCEPT, AND AGREE TO BE BOUND BY, ALL OF THE
-TERMS AND CONDITIONS OF THIS AGREEMENT. IF YOU DO NOT AGREE, DO NOT
-DOWNLOAD, INSTALL, COPY, DISTRIBUTE OR USE THE DATA FILES OR SOFTWARE.
-
-Permission is hereby granted, free of charge, to any person obtaining a
-copy of data files and any associated documentation (the "Data Files") or
-software and any associated documentation (the "Software") to deal in the
-Data Files or Software without restriction, including without limitation
-the rights to use, copy, modify, merge, publish, distribute, and/or sell
-copies of the Data Files or Software, and to permit persons to whom the
-Data Files or Software are furnished to do so, provided that either (a)
-this copyright and permission notice appear with all copies of the Data
-Files or Software, or (b) this copyright and permission notice appear in
-associated Documentation.
-
-THE DATA FILES AND SOFTWARE ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY
-KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT OF
-THIRD PARTY RIGHTS.
-
-IN NO EVENT SHALL THE COPYRIGHT HOLDER OR HOLDERS INCLUDED IN THIS NOTICE
-BE LIABLE FOR ANY CLAIM, OR ANY SPECIAL INDIRECT OR CONSEQUENTIAL DAMAGES,
-OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS,
-WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
-ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THE DATA
-FILES OR SOFTWARE.
-
-Except as contained in this notice, the name of a copyright holder shall
-not be used in advertising or otherwise to promote the sale, use or other
-dealings in these Data Files or Software without prior written
-authorization of the copyright holder.
-
-SPDX-License-Identifier: Unicode-3.0
-
-—
-
-Portions of ICU4X may have been adapted from ICU4C and/or ICU4J.
-ICU 1.8.1 to ICU 57.1 © 1995-2016 International Business Machines Corporation and others.
 
 ```
 

@@ -55,7 +55,7 @@ impl GitRepo {
     pub fn current_branch(&self) -> Option<String> {
         let head = self.repo.head().ok()?;
         if head.is_branch() {
-            head.shorthand().map(|s| s.to_string())
+            head.shorthand().ok().map(str::to_owned)
         } else {
             // Detached HEAD — show short hash
             let oid = head.target()?;
@@ -406,6 +406,30 @@ mod tests {
             .unwrap(),
             Some(Vec::new())
         );
+    }
+
+    #[test]
+    fn current_branch_names_the_branch_or_the_detached_commit() {
+        let directory = tempfile::tempdir().unwrap();
+        let repo = Repository::init_bare(directory.path()).unwrap();
+        let tree_id = repo.treebuilder(None).unwrap().write().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let signature =
+            git2::Signature::new("Fixture", "fixture@example.invalid", &git2::Time::new(1, 0))
+                .unwrap();
+        let commit = repo
+            .commit(None, &signature, &signature, "fixture", &tree, &[])
+            .unwrap();
+        drop(tree);
+        repo.reference("refs/heads/feature/roots", commit, false, "fixture")
+            .unwrap();
+        repo.set_head("refs/heads/feature/roots").unwrap();
+        let git = GitRepo { repo };
+        assert_eq!(git.current_branch().as_deref(), Some("feature/roots"));
+
+        git.repo.set_head_detached(commit).unwrap();
+        let short = commit.to_string()[..7].to_owned();
+        assert_eq!(git.current_branch(), Some(short));
     }
 
     #[test]

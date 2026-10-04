@@ -9,13 +9,15 @@ arch=('x86_64')
 url="https://github.com/Tjemmmic/termeric"
 # Termeric is MIT. The rest covers what the binary links, as listed in the
 # shipped THIRD_PARTY_NOTICES.md: the Rust crates, the Unicode CLDR data, and
-# the bundled libgit2 (GPL-2.0 with its linking exception) and its xdiff (LGPL).
+# the bundled libgit2 (GPL-2.0 with its linking exception), its xdiff (LGPL),
+# and its PCRE2 (BSD-3-Clause with the PCRE2 exception).
 license=(
   'MIT'
   '0BSD'
   'Apache-2.0'
   'BSD-2-Clause'
   'BSD-3-Clause'
+  'BSD-3-Clause WITH PCRE2-exception'
   'CC0-1.0'
   'GPL-2.0-only WITH GCC-exception-2.0'
   'ISC'

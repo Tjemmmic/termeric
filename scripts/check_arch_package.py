@@ -70,6 +70,7 @@ REQUIRED_LICENSES = {
     "Apache-2.0",
     "BSD-2-Clause",
     "BSD-3-Clause",
+    "BSD-3-Clause WITH PCRE2-exception",
     "CC0-1.0",
     "GPL-2.0-only WITH GCC-exception-2.0",
     "ISC",

@@ -60,11 +60,12 @@ directories = "6.0"
 # Fuzzy matching for command palette
 sublime_fuzzy = "0.7"
 
-# Git integration. Termeric only reads and edits local repositories, so the
-# default HTTPS/SSH transports (and their OpenSSL/libssh2 dependency) are off.
+# Git integration. Termeric only reads and edits local repositories, so git2's
+# HTTPS/SSH transports (and their OpenSSL/libssh2 dependency) stay off, even if
+# a later release enables them by default again.
 # libgit2 is always built from the bundled source, so the binary never depends
 # on whichever system libgit2 the build machine happens to have.
-git2 = { version = "0.19", default-features = false, features = ["vendored-libgit2"] }
+git2 = { version = "0.21", default-features = false, features = ["vendored-libgit2"] }
 
 # Regular expressions for search
 regex = "1"
