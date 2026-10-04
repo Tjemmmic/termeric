@@ -13,7 +13,10 @@ impl App {
             return;
         };
         let current = renderer.font_size();
-        let new_size = (current + delta).clamp(8.0, 72.0);
+        let new_size = (current + delta).clamp(
+            *crate::config::FONT_SIZE_RANGE.start(),
+            *crate::config::FONT_SIZE_RANGE.end(),
+        );
         self.set_font_size(new_size);
     }
 

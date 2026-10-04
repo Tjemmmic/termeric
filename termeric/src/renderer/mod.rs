@@ -601,10 +601,13 @@ impl Renderer {
             self.ui = UiPalette::from_theme_with_contrast(theme, enabled);
         }
     }
-
+    /// Set window opacity (1.0 = fully opaque), held to the range the file allows.
     /// Set window opacity (0.0 = fully transparent, 1.0 = fully opaque)
     pub fn set_opacity(&mut self, opacity: f32) {
-        self.opacity = opacity.clamp(0.1, 1.0);
+        self.opacity = opacity.clamp(
+            *crate::config::WINDOW_OPACITY_RANGE.start(),
+            *crate::config::WINDOW_OPACITY_RANGE.end(),
+        );
     }
 
     fn invalidate_terminal_rows(&mut self) {
