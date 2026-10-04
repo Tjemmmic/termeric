@@ -5,7 +5,6 @@ use super::*;
 /// Opt-in process-level resource exercise: repeats terminal, pane, tab,
 /// session, transcript, and diff work, then checks this process's own memory,
 /// threads, open files, and children stayed within bounds.
-#[cfg(target_os = "linux")]
 #[test]
 #[ignore = "a resource soak: cargo test -p termeric -- --ignored scheduled_resource_soak_scenario"]
 fn scheduled_resource_soak_scenario() {
@@ -198,7 +197,6 @@ fn scheduled_resource_soak_scenario() {
 }
 
 /// This process's resident memory, threads, open files, and live children.
-#[cfg(target_os = "linux")]
 #[derive(Clone, Copy, Debug)]
 struct ProcessResources {
     rss_kib: u64,
@@ -207,7 +205,6 @@ struct ProcessResources {
     children: usize,
 }
 
-#[cfg(target_os = "linux")]
 impl ProcessResources {
     fn sample() -> Self {
         let status = std::fs::read_to_string("/proc/self/status").unwrap();
@@ -234,7 +231,6 @@ impl ProcessResources {
 
 /// Feed one persistent history past both its count and owned-capacity ceilings.
 /// All bytes are synthetic; no provider, process, or working tree is involved.
-#[cfg(target_os = "linux")]
 fn soak_diff_history(
     detector: &mut crate::terminal::diff_detector::DiffDetector,
     iteration: usize,
@@ -291,7 +287,6 @@ fn soak_diff_history(
     (completed, evicted, retained, peak_count, peak_bytes)
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn persistent_diff_history_soak_exercises_count_and_byte_eviction() {
     let mut detector = crate::terminal::diff_detector::DiffDetector::new();
