@@ -68,10 +68,11 @@ See [Fonts and text](fonts-and-text.md) for more.
 
 Termeric uses the Wayland or X11 clipboard of your desktop session. On Wayland it uses the compositor's data-control protocol when the compositor offers it, and otherwise the X11 clipboard through XWayland, so on a compositor without data-control, XWayland must be running. If copying fails:
 
+- When Termeric can't reach the clipboard, or the clipboard refuses the text, copying shows an error notice with the reason, and the key isn't passed to the program. The same reason is in the log (see [Collect logs](#collect-logs)). Termeric tries to reach the clipboard again each time you copy or paste, so starting a clipboard manager or XWayland afterwards is enough; you don't need to restart Termeric.
 - Check that you're using **Ctrl+Shift+C** and **Ctrl+Shift+V**; plain Ctrl+C sends an interrupt to the program in the terminal, as in any terminal.
 - If a program in the terminal uses the mouse, hold **Shift** while selecting.
 - Try running Termeric under X11 (see above) to see whether the problem is Wayland-specific.
-- Programs in the terminal can write to the clipboard with OSC 52 escape sequences, but can't read it unless you allow it with `allow_read = true` under `[security.osc52]`.
+- Programs in the terminal can write to the clipboard with OSC 52 escape sequences, but can't read it unless you allow it with `allow_read = true` under `[security.osc52]`. A program's write made while the clipboard can't be reached is dropped, and the first one is noted in the log.
 
 ## "unknown terminal type: xterm-termeric"
 

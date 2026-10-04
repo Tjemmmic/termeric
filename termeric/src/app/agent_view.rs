@@ -1102,13 +1102,13 @@ impl App {
     /// Copies text; an empty `label` copies quietly.
     pub(super) fn copy_agent_view_text(&mut self, text: &str, label: &str) {
         if label.is_empty() {
-            match &mut self.clipboard {
-                Some(clipboard) => {
-                    if let Err(error) = clipboard.set_text(text) {
-                        self.toasts.error(format!("Copy failed: {error}"));
-                    }
-                }
-                None => self.toasts.warning("Clipboard not available"),
+            if let Err(error) = self.clipboard.set_text(
+                termeric_core::ClipboardRequest::Clipboard,
+                text,
+                super::clipboard::ClipboardAccess::Explicit,
+            ) {
+                log::warn!("Copy failed: {error}");
+                self.toasts.error(format!("Copy failed: {error}"));
             }
         } else {
             self.copy_to_clipboard(text.to_owned(), label);
@@ -1116,9 +1116,17 @@ impl App {
     }
 
     pub(super) fn agent_view_clipboard_text(&mut self) -> Option<String> {
-        let clipboard = self.clipboard.as_mut()?;
-        match clipboard.get_text() {
+        match self.clipboard.text(
+            termeric_core::ClipboardRequest::Clipboard,
+            super::clipboard::ClipboardAccess::Explicit,
+        ) {
             Ok(text) => Some(text),
+            Err(error @ super::clipboard::ClipboardError::Unavailable(_)) => {
+                log::warn!("Paste failed: {error}");
+                self.toasts.error(format!("Paste failed: {error}"));
+                None
+            }
+            // Usually an empty clipboard, which pastes nothing.
             Err(error) => {
                 log::debug!("agent view: clipboard read failed: {error}");
                 None

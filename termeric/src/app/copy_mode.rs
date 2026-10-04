@@ -8,7 +8,7 @@ use crate::config::CopyModeBindings;
 use crate::input::keybindings::BindableAction;
 use crate::terminal::copy_mode::{CopyMotion, HintAction};
 
-use super::App;
+use super::{App, CopyOutcome};
 
 impl App {
     pub(super) fn copy_mode_render_info(&self) -> Option<crate::renderer::CopyModeRenderInfo> {
@@ -469,14 +469,17 @@ impl App {
                 self.copy_mode.toggle_selection(selection_type);
                 self.sync_copy_mode_selection();
             }
-            CopyModeCommand::Yank => {
-                if self.copy_selection() {
+            CopyModeCommand::Yank => match self.copy_selection() {
+                CopyOutcome::Copied => {
                     self.toasts.success("Copied selection");
                     self.leave_copy_mode(false);
-                } else {
+                }
+                CopyOutcome::NothingSelected => {
                     self.toasts.warning("Start a selection before copying");
                 }
-            }
+                // The failure has been reported; stay so the person can retry.
+                CopyOutcome::Failed => {}
+            },
         }
     }
 

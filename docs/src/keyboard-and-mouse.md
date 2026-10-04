@@ -12,7 +12,7 @@ The **ID** column is the name to use in your configuration file; see [Change key
 
 | Key | Action | ID |
 | --- | --- | --- |
-| `Ctrl+Shift+C` | Copy the selection. With nothing selected, the key goes to the program instead. | `copy` |
+| `Ctrl+Shift+C` | Copy the selection. With nothing selected, the key goes to the program instead. If the copy fails, a notice says why and the key isn't sent. | `copy` |
 | `Ctrl+Shift+V` | Paste | `paste` |
 | `Ctrl+Shift+F` | Find | `toggle_search` |
 | `Ctrl+Shift+P` | Command palette | `toggle_command_palette` |

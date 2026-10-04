@@ -148,10 +148,9 @@ fn live_search_invalidates_filtered_copy_before_the_next_render() {
     app.active_terminal_mut()
         .unwrap()
         .process(b"\x1b[H\x1b[2Khidden replacement");
-    // The headless fixture has no clipboard; the action must fail before any
-    // clipboard path, without needing a render to clear the old projection.
-    assert!(app.clipboard.is_none());
-    assert!(!app.copy_selection());
+    // The copy must find nothing to copy before any clipboard path, without
+    // needing a render to clear the old projection.
+    assert_eq!(app.copy_selection(), CopyOutcome::NothingSelected);
     assert!(app.active_terminal().unwrap().selection().is_none());
     assert!(app.search.is_searching());
 }

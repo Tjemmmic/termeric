@@ -10,6 +10,7 @@ mod agents;
 mod agents_panel;
 mod application;
 mod broadcast;
+mod clipboard;
 mod commands_input;
 mod configuration;
 mod context_picker;
@@ -872,6 +873,15 @@ enum BroadcastState {
     },
 }
 
+/// What a request to copy the selection did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CopyOutcome {
+    NothingSelected,
+    Copied,
+    /// The clipboard refused the text; the person has been told why.
+    Failed,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PendingUnicodePicker {
     terminal: crate::tabs::TerminalIdentity,
@@ -1196,8 +1206,8 @@ pub struct App {
     ime: ime::ImeState,
     /// Whether the layout's AltGraph modifier key is currently held.
     alt_graph_active: bool,
-    /// Clipboard
-    clipboard: Option<arboard::Clipboard>,
+    /// The desktop clipboard and primary selection.
+    clipboard: clipboard::Clipboard,
     /// Last cursor screen position (for mouse input events)
     last_cursor_pos: Option<(f64, f64)>,
     /// Native file drag is hovering this window. It owns the cursor until the
@@ -1486,12 +1496,13 @@ impl App {
         // Initialize bell from config
         let bell = Bell::new(config.bell.clone());
 
-        // Initialize clipboard (may fail on some systems)
-        let clipboard = use_system_state
-            .then(arboard::Clipboard::new)
-            .transpose()
-            .ok()
-            .flatten();
+        // A clipboard that cannot be reached now is retried on the next
+        // copy or paste.
+        let clipboard = if use_system_state {
+            clipboard::Clipboard::system()
+        } else {
+            clipboard::Clipboard::unavailable()
+        };
 
         // Initialize unified shortcut registry with defaults + user overrides
         let mut shortcut_registry = ShortcutRegistry::new();
@@ -3058,9 +3069,10 @@ impl App {
     fn handle_action(&mut self, action: Action) -> bool {
         match action {
             Action::Copy => {
-                // If nothing was copied, don't consume the keystroke — let it
-                // pass through (e.g. Ctrl+Shift+C falls through to the PTY).
-                if !self.copy_selection() {
+                // With nothing selected the keystroke passes through (e.g.
+                // Ctrl+Shift+C reaches the PTY). A failed copy keeps it: the
+                // program must not receive ^C for a copy the person asked for.
+                if self.copy_selection() == CopyOutcome::NothingSelected {
                     return false;
                 }
             }
@@ -3499,9 +3511,9 @@ impl App {
         }
     }
 
-    /// Copy selection to clipboard. Returns true if anything was copied so
-    /// the caller can decide whether to consume the keybinding.
-    fn copy_selection(&mut self) -> bool {
+    /// Copy the selection to the clipboard. A failure is reported here, with
+    /// its reason; the caller decides only what happens to the keystroke.
+    fn copy_selection(&mut self) -> CopyOutcome {
         // Output may have invalidated a filtered projection since the last
         // frame. Never copy its old row coordinates as an ordinary selection.
         self.reconcile_mouse_selection_presentation();
@@ -3510,22 +3522,28 @@ impl App {
         } else {
             self.native_selection_text()
         }) else {
-            return false;
+            return CopyOutcome::NothingSelected;
         };
         if text.is_empty() {
-            return false;
+            return CopyOutcome::NothingSelected;
         }
 
-        if let Some(clipboard) = &mut self.clipboard {
-            if let Err(e) = clipboard.set_text(&text) {
-                log::error!("Failed to copy to clipboard: {}", e);
-                return false;
+        match self.clipboard.set_text(
+            termeric_core::ClipboardRequest::Clipboard,
+            &text,
+            clipboard::ClipboardAccess::Explicit,
+        ) {
+            Ok(()) => {
+                log::debug!("Copied {} bytes to clipboard", text.len());
+                self.copy_flash_start = Some(Instant::now());
+                CopyOutcome::Copied
             }
-            log::debug!("Copied {} bytes to clipboard", text.len());
-            self.copy_flash_start = Some(Instant::now());
-            return true;
+            Err(error) => {
+                log::warn!("Copy failed: {error}");
+                self.toasts.error(format!("Copy failed: {error}"));
+                CopyOutcome::Failed
+            }
         }
-        false
     }
 
     /// Calculate copy flash intensity (0.0 = no flash, 1.0 = full flash)
@@ -3622,15 +3640,14 @@ impl App {
         if self.clipboard_paste_blocked() {
             return;
         }
-        let text = match self.clipboard.as_mut().map(|c| c.get_text()) {
-            Some(Ok(text)) => text,
-            Some(Err(e)) => {
-                log::error!("Failed to paste from clipboard: {}", e);
-                self.toasts.error(format!("Paste failed: {}", e));
-                return;
-            }
-            None => {
-                self.toasts.warning("Clipboard not available");
+        let text = match self.clipboard.text(
+            termeric_core::ClipboardRequest::Clipboard,
+            clipboard::ClipboardAccess::Explicit,
+        ) {
+            Ok(text) => text,
+            Err(error) => {
+                log::warn!("Paste failed: {error}");
+                self.toasts.error(format!("Paste failed: {error}"));
                 return;
             }
         };

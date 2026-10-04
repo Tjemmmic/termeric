@@ -177,44 +177,19 @@ impl App {
 
     /// Copy `text` to the clipboard, emit a success toast with `label`.
     pub(super) fn copy_to_clipboard(&mut self, text: String, label: &str) {
-        if let Some(clipboard) = &mut self.clipboard {
-            match clipboard.set_text(&text) {
-                Ok(()) => {
-                    self.copy_flash_start = Some(Instant::now());
-                    self.toasts.success(label.to_string());
-                }
-                Err(e) => {
-                    log::error!("Clipboard write failed: {}", e);
-                    self.toasts.error(format!("Copy failed: {}", e));
-                }
+        match self.clipboard.set_text(
+            termeric_core::ClipboardRequest::Clipboard,
+            &text,
+            super::clipboard::ClipboardAccess::Explicit,
+        ) {
+            Ok(()) => {
+                self.copy_flash_start = Some(Instant::now());
+                self.toasts.success(label.to_string());
             }
-        } else {
-            self.toasts.warning("Clipboard not available");
+            Err(error) => {
+                log::warn!("Copy failed: {error}");
+                self.toasts.error(format!("Copy failed: {error}"));
+            }
         }
     }
-}
-
-pub(super) fn clipboard_text(
-    clipboard: &mut arboard::Clipboard,
-    selection: termeric_core::ClipboardRequest,
-) -> Result<String, arboard::Error> {
-    use arboard::{GetExtLinux, LinuxClipboardKind};
-    let kind = match selection {
-        termeric_core::ClipboardRequest::Primary => LinuxClipboardKind::Primary,
-        termeric_core::ClipboardRequest::Clipboard => LinuxClipboardKind::Clipboard,
-    };
-    clipboard.get().clipboard(kind).text()
-}
-
-pub(super) fn set_clipboard_text(
-    clipboard: &mut arboard::Clipboard,
-    selection: termeric_core::ClipboardRequest,
-    text: String,
-) -> Result<(), arboard::Error> {
-    use arboard::{LinuxClipboardKind, SetExtLinux};
-    let kind = match selection {
-        termeric_core::ClipboardRequest::Primary => LinuxClipboardKind::Primary,
-        termeric_core::ClipboardRequest::Clipboard => LinuxClipboardKind::Clipboard,
-    };
-    clipboard.set().clipboard(kind).text(text)
 }

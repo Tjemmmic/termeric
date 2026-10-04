@@ -1367,7 +1367,10 @@ done
             let request_id = app.diff_review.request_id();
             app.diff_review.dismiss(request_id);
             app.run_agent_command("agent.copy-diff");
-            assert_eq!(latest_toast(&app), Some("Clipboard not available"));
+            assert_eq!(
+                latest_toast(&app),
+                Some("Copy failed: clipboard unavailable: a headless app has no desktop clipboard")
+            );
 
             app.run_agent_command("agent.insert-context");
             assert!(app.context_picker.is_active());

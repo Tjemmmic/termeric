@@ -1,7 +1,7 @@
 //! Events a terminal raises for the window: titles, bells, notifications,
 //! clipboard requests, color queries, and the other app-mediated replies.
 
-use super::desktop_io::{clipboard_text, set_clipboard_text};
+use super::clipboard::{ClipboardAccess, ClipboardError};
 use super::*;
 use base64::Engine as _;
 
@@ -123,8 +123,8 @@ impl App {
                 // not hang and no clipboard content leaks.
                 let text = if self.config.security.osc52.allow_read {
                     self.clipboard
-                        .as_mut()
-                        .and_then(|clipboard| clipboard_text(clipboard, which).ok())
+                        .text(which, ClipboardAccess::Implicit)
+                        .ok()
                         .filter(|text| text.len() <= self.config.security.osc52.max_bytes)
                         .unwrap_or_default()
                 } else {
@@ -151,10 +151,21 @@ impl App {
                     log::debug!("Denied OSC 52 {:?} write from {:?}", selection, origin);
                 } else if text.len() > self.config.security.osc52.max_bytes {
                     log::warn!("Rejected oversized OSC 52 write from {:?}", origin);
-                } else if let Some(clipboard) = &mut self.clipboard
-                    && let Err(error) = set_clipboard_text(clipboard, selection, text)
-                {
-                    log::error!("Failed to set clipboard: {}", error);
+                } else {
+                    match self
+                        .clipboard
+                        .set_text(selection, &text, ClipboardAccess::Implicit)
+                    {
+                        Ok(()) => {}
+                        Err(error @ ClipboardError::Unavailable(_)) => {
+                            if self.clipboard.first_missing_write() {
+                                log::warn!(
+                                    "Dropped OSC 52 {selection:?} write from {origin:?}: {error}"
+                                );
+                            }
+                        }
+                        Err(error) => log::error!("Failed to set clipboard: {error}"),
+                    }
                 }
             }
             TerminalEvent::DynamicColor(operation) => {

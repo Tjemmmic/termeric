@@ -332,3 +332,61 @@ fn osc_titles_and_dynamic_colors_apply_to_exact_inactive_tab_and_pane_origins() 
         "an empty OSC title must clear persisted pane title metadata"
     );
 }
+
+/// Select the start of the active terminal's first line with the mouse.
+fn select_first_word(app: &mut App) {
+    app.begin_native_selection(MouseButton::Left, termeric_core::Point::new(0, 0));
+    app.extend_native_selection(termeric_core::Point::new(0, 4));
+    app.finish_native_selection();
+}
+
+#[test]
+fn a_copy_the_clipboard_refuses_keeps_its_key_and_says_why() {
+    use winit::keyboard::Key;
+    let mut app = scrollbar_owner_fixture();
+    app.active_terminal_mut()
+        .unwrap()
+        .process(b"\x1b[H\x1b[2Jcopied text");
+    app.modifiers = ModifiersState::CONTROL | ModifiersState::SHIFT;
+    let copy = Key::Character("C".into());
+
+    // With nothing selected, Ctrl+Shift+C still reaches the program.
+    assert!(!app.handle_bound_key(&copy));
+
+    // The headless clipboard cannot be reached: the key must not become ^C.
+    select_first_word(&mut app);
+    assert!(app.handle_bound_key(&copy));
+    let toast = latest_toast(&app).unwrap();
+    assert!(
+        toast.starts_with("Copy failed: clipboard unavailable: "),
+        "{toast}"
+    );
+
+    // A clipboard that refuses the write is reported the same way.
+    let (clipboard, memory) = super::super::clipboard::Clipboard::in_memory();
+    memory.lock().unwrap().failure = Some("owner went away".into());
+    app.clipboard = clipboard;
+    assert_eq!(app.copy_selection(), CopyOutcome::Failed);
+    assert_eq!(latest_toast(&app), Some("Copy failed: owner went away"));
+
+    memory.lock().unwrap().failure = None;
+    assert!(app.handle_bound_key(&copy));
+    assert_eq!(memory.lock().unwrap().clipboard.as_deref(), Some("copie"));
+}
+
+#[test]
+fn a_clipboard_unreachable_at_startup_connects_on_the_next_copy() {
+    let mut app = scrollbar_owner_fixture();
+    app.active_terminal_mut()
+        .unwrap()
+        .process(b"\x1b[H\x1b[2Jcopied text");
+    let reachable = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (clipboard, memory) =
+        super::super::clipboard::Clipboard::unreachable_until("no display", reachable.clone());
+    app.clipboard = clipboard;
+    select_first_word(&mut app);
+    assert_eq!(app.copy_selection(), CopyOutcome::Failed);
+    reachable.store(true, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(app.copy_selection(), CopyOutcome::Copied);
+    assert_eq!(memory.lock().unwrap().clipboard.as_deref(), Some("copie"));
+}

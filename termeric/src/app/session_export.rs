@@ -72,8 +72,12 @@ impl App {
                 let path = export.markdown.display().to_string();
                 let copied = self
                     .clipboard
-                    .as_mut()
-                    .is_some_and(|clipboard| clipboard.set_text(path.clone()).is_ok());
+                    .set_text(
+                        termeric_core::ClipboardRequest::Clipboard,
+                        &path,
+                        super::clipboard::ClipboardAccess::Implicit,
+                    )
+                    .is_ok();
                 let format = if export.includes_jsonl {
                     "transcript Markdown + JSONL"
                 } else {
