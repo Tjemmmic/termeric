@@ -68,7 +68,7 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 | `tabs/` | Tab management |
 | `panes/` | Each tab's pane tree (one leaf until it is split), its layout over the tab's `TerminalArea`, and pane/divider ID history |
 | `session/` | Per-terminal agent state, transcripts and their export, and what the workspace panel lists |
-| `workspace/` | Complete workspace schema, atomic storage, migration, and recovery |
+| `workspace/` | Complete workspace schema, atomic storage, and recovery |
 | `domain/` | Same-user local daemon, control protocol/client, PTY ownership, and GUI relay |
 | `control/` | Local control socket for running GUI processes: inventory, text queries, launches, opt-in input, and `agent-event` reports |
 | `agent_view/` | Agent view core: agent-neutral events, the agents it drives and their protocols (Claude Code stream-json, Codex app-server, ACP for OpenCode), agent process and pipes, sessions, transcript, Markdown, tool presentation, earlier-conversation history |

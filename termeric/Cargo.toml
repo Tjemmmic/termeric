@@ -43,7 +43,7 @@ image = "0.25"
 flate2 = "1.1"
 # Private staging files for atomic writes of Termeric's own files (safe_fs)
 tempfile = "3"
-# Scrollback encoding in session snapshots
+# OSC 52 clipboard-read replies
 base64 = "0.22"
 
 # Clipboard (wayland-data-control needed for Wayland support)

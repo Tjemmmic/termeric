@@ -3865,7 +3865,11 @@ Used by:
 - [anstream 0.6.21](https://github.com/rust-cli/anstyle.git)
 - [anstyle-parse 0.2.7](https://github.com/rust-cli/anstyle.git)
 - [anstyle-query 1.1.5](https://github.com/rust-cli/anstyle.git)
-- [anstyle 1.0.13](https://github.com/rust-cli/anstyle.git)
+- [anstyle 1.0.14](https://github.com/rust-cli/anstyle.git)
+- [clap 4.6.6](https://github.com/clap-rs/clap)
+- [clap_builder 4.6.6](https://github.com/clap-rs/clap)
+- [clap_derive 4.6.4](https://github.com/clap-rs/clap)
+- [clap_lex 1.1.0](https://github.com/clap-rs/clap)
 - [colorchoice 1.0.4](https://github.com/rust-cli/anstyle.git)
 - [core2 0.4.0](https://github.com/bbqsrc/core2)
 - [crc32fast 1.5.0](https://github.com/srijs/rust-crc32fast)
@@ -8198,10 +8202,10 @@ Used by:
 - [paste 1.0.15](https://github.com/dtolnay/paste)
 - [pastey 0.1.1](https://github.com/as1100k/pastey)
 - [pin-project-lite 0.2.16](https://github.com/taiki-e/pin-project-lite)
-- [proc-macro2 1.0.105](https://github.com/dtolnay/proc-macro2)
+- [proc-macro2 1.0.107](https://github.com/dtolnay/proc-macro2)
 - [profiling-procmacros 1.0.17](https://github.com/aclysma/profiling)
 - [profiling 1.0.17](https://github.com/aclysma/profiling)
-- [quote 1.0.43](https://github.com/dtolnay/quote)
+- [quote 1.0.47](https://github.com/dtolnay/quote)
 - [raw-window-handle 0.6.2](https://github.com/rust-windowing/raw-window-handle)
 - [rustc-hash 2.1.1](https://github.com/rust-lang/rustc-hash)
 - [rustversion 1.0.22](https://github.com/dtolnay/rustversion)
@@ -10239,6 +10243,39 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+
+```
+
+### MIT License
+
+Used by:
+
+- [strsim 0.11.1](https://github.com/rapidfuzz/strsim-rs)
+
+```text
+The MIT License (MIT)
+
+Copyright (c) 2015 Danny Guo
+Copyright (c) 2016 Titus Wormer <tituswormer@gmail.com>
+Copyright (c) 2018 Akash Kurdekar
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 ```
 
