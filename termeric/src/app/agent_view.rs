@@ -2001,6 +2001,36 @@ mod tests {
         key(&mut app, Key::Named(NamedKey::Escape), None);
         assert!(app.agent_view.state.menu.is_none());
 
+        // A full search still takes a typed space, and drops it, rather than
+        // letting it choose the highlighted model.
+        open(&mut app);
+        let words = "opus ".repeat(30);
+        for letter in words.split_inclusive(|_| true) {
+            let pressed = if letter == " " {
+                Key::Named(NamedKey::Space)
+            } else {
+                character(letter)
+            };
+            key(&mut app, pressed, Some(letter));
+        }
+        let full = &words[..128];
+        assert!(full.ends_with("opu"));
+        assert_eq!(
+            app.agent_view.state.menu.as_ref().unwrap().filter.text(),
+            full
+        );
+        key(&mut app, Key::Named(NamedKey::Space), Some(" "));
+        let menu = app
+            .agent_view
+            .state
+            .menu
+            .as_ref()
+            .expect("the menu stays open");
+        assert_eq!(menu.filter.text(), full);
+        key(&mut app, Key::Named(NamedKey::Escape), None);
+        key(&mut app, Key::Named(NamedKey::Escape), None);
+        assert!(app.agent_view.state.menu.is_none());
+
         // It opens on the checked model, far down; the wheel scrolls from
         // there, and a key down from the last model wraps to the top.
         app.agent_view.state.new_session.model = Some("model-29".into());

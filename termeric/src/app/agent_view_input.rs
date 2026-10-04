@@ -740,7 +740,14 @@ impl App {
             .as_ref()
             .is_some_and(|scene| scene.hit_for(&Target::MenuSearch).is_some());
         let control = self.modifiers.control_key() || self.modifiers.alt_key();
-        let typed = text.filter(|text| searchable && !control && menu.filter.can_insert(text));
+        // Typing goes to the search even when its field is full and refuses
+        // it: a typed space must never fall through and choose an item.
+        let typed = text.filter(|text| {
+            searchable
+                && !control
+                && !text.is_empty()
+                && !text.chars().any(crate::safe_text::breaks_single_line)
+        });
         match key {
             Key::Named(NamedKey::Escape) if !menu.filter.text().is_empty() => {
                 self.edit_agent_view_menu_filter(|filter| {
