@@ -68,13 +68,21 @@ def locked_libgit2_version(lock_text: str) -> str:
 
 
 def validate_notice(notice_text: str, lock_text: str) -> None:
-    """The third-party notice carries the Unicode license and names the libgit2 that is linked.
+    """The third-party notice carries the Unicode license, names the libgit2 that is
+    linked, and lists at least one crate under every crate license.
 
     The libgit2 section is pasted by hand into packaging/notices/notices.hbs, so a
-    libgit2-sys upgrade leaves it stale until someone refreshes it.
+    libgit2-sys upgrade leaves it stale until someone refreshes it. A license used
+    only by a crate cargo-about should have skipped (Termeric's own, unless they
+    are unpublished) would show up as a section that lists no crates.
     """
     if "Unicode License v3" not in notice_text:
         raise CheckError("third-party notice omits the Unicode License v3")
+    if re.search(r"^Used by:\s*```", notice_text, re.MULTILINE):
+        raise CheckError(
+            "third-party notice has a license section that lists no crates; keep "
+            "Termeric's own crates unpublished (publish = false) so cargo-about skips them"
+        )
     expected = locked_libgit2_version(lock_text)
     named = re.findall(r"\blinks libgit2 (\d+\.\d+\.\d+)\b", notice_text)
     if named != [expected]:

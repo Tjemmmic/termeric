@@ -12,6 +12,9 @@ repository = "https://github.com/Tjemmmic/termeric"
 homepage = "https://github.com/Tjemmmic/termeric"
 keywords = ["terminal", "emulator", "gpu", "rust"]
 categories = ["command-line-utilities"]
+# Termeric ships as a program, not as crates. This also keeps both crates out
+# of the generated third-party notices (cargo-about skips unpublished crates).
+publish = false
 
 [workspace.dependencies]
 # Logging

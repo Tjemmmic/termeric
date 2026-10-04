@@ -1555,9 +1555,7 @@ The Linux binaries are built from the Rust crates below. Each license section li
 Used by:
 
 {{#each used_by}}
-{{#unless (or (eq crate.name "termeric") (eq crate.name "termeric-core"))}}
 - [{{crate.name}} {{crate.version}}]({{#if crate.repository}}{{crate.repository}}{{else}}https://crates.io/crates/{{crate.name}}{{/if}})
-{{/unless}}
 {{/each}}
 
 ```text

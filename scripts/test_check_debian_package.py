@@ -95,6 +95,14 @@ class DebianPackageCheckTests(unittest.TestCase):
         with self.assertRaisesRegex(CheckError, "found 0"):
             locked_libgit2_version('name = "git2"\nversion = "0.19.0"\n')
 
+    def test_notice_must_list_a_crate_under_every_license(self):
+        notice = "Unicode License v3\nstatically links libgit2 1.8.1, built\n"
+        listed = "### MIT License\n\nUsed by:\n\n- [dpi 0.1.2](https://example.invalid)\n\n```text\nMIT\n```\n"
+        validate_notice(notice + listed, LOCK_FIXTURE)
+        empty = "### MIT License\n\nUsed by:\n\n\n```text\nMIT\n```\n"
+        with self.assertRaisesRegex(CheckError, "lists no crates"):
+            validate_notice(notice + empty, LOCK_FIXTURE)
+
     def test_repository_notices_name_the_libgit2_that_cargo_lock_bundles(self):
         lock_text = CARGO_LOCK.read_text(encoding="utf-8")
         for notice in (ROOT / "packaging/notices/notices.hbs", ROOT / "termeric/THIRD_PARTY_NOTICES.md"):
