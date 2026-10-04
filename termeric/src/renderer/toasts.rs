@@ -2,7 +2,7 @@
 
 use super::Renderer;
 use crate::ui::color::with_alpha;
-use crate::ui::constants::CARD_CORNER_RADIUS;
+use crate::ui::constants::{BORDER_WIDTH, CARD_CORNER_RADIUS};
 use crate::ui::toast::{ToastInfo, ToastSeverity, toast_layout};
 
 impl Renderer {
@@ -21,6 +21,7 @@ impl Renderer {
         let cell_width = self.cell_width();
         let cell_height = self.cell_height();
         let padding = cell_width;
+        let label_size = self.ui_label_px();
         for placement in toast_layout(toasts, window_width, window_height, cell_width, cell_height)
         {
             let toast = &toasts[placement.toast_index];
@@ -69,19 +70,16 @@ impl Renderer {
                 [0.0, 0.0, 0.0, 0.25 * opacity],
                 CARD_CORNER_RADIUS,
             );
-            // Background
             self.rect_pipeline
                 .push_rounded_rect(x, y, w, row_h, bg, CARD_CORNER_RADIUS);
-            // Border (outer)
-            self.rect_pipeline
-                .push_rounded_rect(x, y, w, row_h, border_color, CARD_CORNER_RADIUS);
-            self.rect_pipeline.push_rounded_rect(
-                x + 1.0,
-                y + 1.0,
-                w - 2.0,
-                row_h - 2.0,
-                bg,
-                CARD_CORNER_RADIUS - 1.0,
+            self.rect_pipeline.push_rounded_outline(
+                x,
+                y,
+                w,
+                row_h,
+                border_color,
+                CARD_CORNER_RADIUS,
+                BORDER_WIDTH,
             );
             // Left accent bar (severity indicator)
             self.rect_pipeline.push_rounded_rect(
@@ -93,21 +91,16 @@ impl Renderer {
                 2.0,
             );
 
-            // Message text
             let text_x = x + padding + cell_width * 0.8;
-            let text_y = y + (row_h - cell_height) / 2.0;
-            let text_color = with_alpha(self.ui.palette_text, opacity);
-            let max_chars = ((w - padding * 2.0 - cell_width) / cell_width) as usize;
-            let mut cx = text_x;
-            for (i, c) in toast.message.chars().enumerate() {
-                if i >= max_chars.saturating_sub(1) && max_chars > 0 {
-                    // Ellipsis if we run out of room.
-                    self.text_pipeline.push_char('…', cx, text_y, text_color);
-                    break;
-                }
-                self.text_pipeline.push_char(c, cx, text_y, text_color);
-                cx += cell_width;
-            }
+            self.push_ui_label(
+                &toast.message,
+                text_x,
+                y,
+                row_h,
+                x + w - padding - text_x,
+                label_size,
+                with_alpha(self.ui.palette_text, opacity),
+            );
         }
     }
 }

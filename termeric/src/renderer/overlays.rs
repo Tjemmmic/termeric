@@ -1,9 +1,11 @@
 //! Overlay rendering — info overlay, diff review, context picker, guardrail confirmation
 //!
 //! These are centered modal overlays that dim the background with a scrim.
+//! Their chrome text is drawn in the UI face; text addressed by column (the
+//! info overlay's lines and field, diff rows, the file-path field, and the
+//! guarded command) keeps the monospace grid it is laid out and hit-tested in.
 
 use super::Renderer;
-use super::draw::DrawCtx;
 use super::icons::draw_icon;
 use super::types::*;
 use crate::ui::color::{mix, scale_alpha, with_alpha};
@@ -12,6 +14,18 @@ use crate::ui::guardrail::GuardrailLayout;
 use crate::ui::icon::Icon;
 
 impl Renderer {
+    /// A one-pixel rule across `width` whose outer sixths fade out.
+    fn draw_faded_separator(&mut self, x: f32, y: f32, width: f32, anim: f32) {
+        let fade_width = width * 0.15;
+        let center = with_alpha(self.ui.palette_border, 0.25 * anim);
+        let faded = with_alpha(self.ui.palette_border, 0.08 * anim);
+        self.rect_pipeline
+            .push_rect(x + fade_width, y, width - fade_width * 2.0, 1.0, center);
+        self.rect_pipeline.push_rect(x, y, fade_width, 1.0, faded);
+        self.rect_pipeline
+            .push_rect(x + width - fade_width, y, fade_width, 1.0, faded);
+    }
+
     /// Build the info overlay (error/info centered card with Copy/Continue buttons)
     pub(super) fn build_info_overlay(
         &mut self,
@@ -20,7 +34,6 @@ impl Renderer {
         window_height: f32,
     ) {
         let anim = info.animation;
-        let cell_width = self.cell_width();
         let cell_height = self.cell_height();
 
         // ── Scrim ──
@@ -35,69 +48,15 @@ impl Renderer {
         let card_x = layout.card.x;
         let card_y = layout.card.y;
         let card_width = layout.card.width;
-        let card_height = layout.card.height;
         let padding = layout.padding;
         let line_height = layout.line_height;
         let content_height = layout.content.height;
         let char_scale = layout.char_scale;
-        // ── Drop shadow (layered for softness) ──
-        let shadow_layers = 3;
-        for i in 0..shadow_layers {
-            let spread = (i as f32 + 1.0) * 4.0;
-            let alpha = 0.08 * anim / (i as f32 + 1.0);
-            let shadow_color = [0.0, 0.0, 0.0, alpha];
-            self.rect_pipeline.push_rounded_rect(
-                card_x - spread,
-                card_y - spread * 0.5 + spread * 0.8,
-                card_width + spread * 2.0,
-                card_height + spread * 1.5,
-                shadow_color,
-                CARD_CORNER_RADIUS + spread,
-            );
-        }
-
-        // ── Card background ──
-        let card_bg = with_alpha(self.ui.palette_bg, anim);
-        self.rect_pipeline.push_rounded_rect(
-            card_x,
-            card_y,
-            card_width,
-            card_height,
-            card_bg,
-            CARD_CORNER_RADIUS,
-        );
-
-        // ── Card border (subtle) ──
-        let border = with_alpha(self.ui.palette_border, 0.3 * anim);
-        // Top/bottom
-        self.rect_pipeline.push_rect(
-            card_x + CARD_CORNER_RADIUS,
-            card_y,
-            card_width - CARD_CORNER_RADIUS * 2.0,
-            BORDER_WIDTH,
-            border,
-        );
-        self.rect_pipeline.push_rect(
-            card_x + CARD_CORNER_RADIUS,
-            card_y + card_height - BORDER_WIDTH,
-            card_width - CARD_CORNER_RADIUS * 2.0,
-            BORDER_WIDTH,
-            border,
-        );
-        // Left/right
-        self.rect_pipeline.push_rect(
-            card_x,
-            card_y + CARD_CORNER_RADIUS,
-            BORDER_WIDTH,
-            card_height - CARD_CORNER_RADIUS * 2.0,
-            border,
-        );
-        self.rect_pipeline.push_rect(
-            card_x + card_width - BORDER_WIDTH,
-            card_y + CARD_CORNER_RADIUS,
-            BORDER_WIDTH,
-            card_height - CARD_CORNER_RADIUS * 2.0,
-            border,
+        self.draw_card_shadow(layout.card, 0.08 * anim, 3);
+        self.draw_card(
+            layout.card,
+            with_alpha(self.ui.palette_bg, anim),
+            with_alpha(self.ui.palette_border, 0.3 * anim),
         );
 
         // ── Outer glow accent line at top ──
@@ -112,41 +71,23 @@ impl Renderer {
 
         // ── Title — centered, accent ──
         let title_y = card_y + padding;
-        let title_color = with_alpha(self.ui.palette_accent, anim);
-        let max_title_chars = ((card_width - padding * 2.0) / cell_width).floor().max(1.0) as usize;
-        let visible_title: String = info.title.chars().take(max_title_chars).collect();
-        let title_x =
-            card_x + (card_width - visible_title.chars().count() as f32 * cell_width) / 2.0;
-        for (i, c) in visible_title.chars().enumerate() {
-            self.text_pipeline
-                .push_char(c, title_x + i as f32 * cell_width, title_y, title_color);
-        }
-
-        // ── Separator under title (faded edges) ──
-        let sep_y = title_y + cell_height * 1.5;
-        let sep_full = (card_width - padding * 2.0).max(1.0);
-        let sep_fade_w = sep_full * 0.15;
-
-        // Center segment (full opacity)
-        let sep_color = with_alpha(self.ui.palette_border, 0.25 * anim);
-        self.rect_pipeline.push_rect(
-            card_x + padding + sep_fade_w,
-            sep_y,
-            sep_full - sep_fade_w * 2.0,
-            1.0,
-            sep_color,
+        let label_size = self.ui_label_px();
+        self.push_ui_label_centered(
+            &info.title,
+            card_x + card_width / 2.0,
+            title_y,
+            cell_height,
+            card_width - padding * 2.0,
+            label_size,
+            with_alpha(self.ui.palette_accent, anim),
         );
-        // Left fade
-        let sep_dim = with_alpha(self.ui.palette_border, 0.08 * anim);
-        self.rect_pipeline
-            .push_rect(card_x + padding, sep_y, sep_fade_w, 1.0, sep_dim);
-        // Right fade
-        self.rect_pipeline.push_rect(
-            card_x + padding + sep_full - sep_fade_w,
-            sep_y,
-            sep_fade_w,
-            1.0,
-            sep_dim,
+
+        let separator_width = (card_width - padding * 2.0).max(1.0);
+        self.draw_faded_separator(
+            card_x + padding,
+            title_y + cell_height * 1.5,
+            separator_width,
+            anim,
         );
 
         // ── Content lines ──
@@ -237,43 +178,22 @@ impl Renderer {
             }
         }
 
-        {
-            let mut ctx = DrawCtx {
-                rect: &mut self.rect_pipeline,
-                text: &mut self.text_pipeline,
-                cell_width,
-                cell_height,
-                ui: &self.ui,
-            };
-            ctx.draw_scrollbar(
-                layout.scrollbar_x,
-                layout.content.y,
-                layout.content.height,
-                info.total_lines,
-                layout.rows_that_fit,
-                info.scroll_offset,
-                anim,
-                4.0,
-            );
-        }
-
-        // ── Separator above buttons (same faded style) ──
-        let btn_sep_y = content_start_y + content_height + cell_height * 0.5;
-        self.rect_pipeline.push_rect(
-            card_x + padding + sep_fade_w,
-            btn_sep_y,
-            sep_full - sep_fade_w * 2.0,
-            1.0,
-            sep_color,
+        self.draw_scrollbar(
+            layout.scrollbar_x,
+            layout.content.y,
+            layout.content.height,
+            info.total_lines,
+            layout.rows_that_fit,
+            info.scroll_offset,
+            anim,
+            4.0,
         );
-        self.rect_pipeline
-            .push_rect(card_x + padding, btn_sep_y, sep_fade_w, 1.0, sep_dim);
-        self.rect_pipeline.push_rect(
-            card_x + padding + sep_full - sep_fade_w,
-            btn_sep_y,
-            sep_fade_w,
-            1.0,
-            sep_dim,
+
+        self.draw_faded_separator(
+            card_x + padding,
+            content_start_y + content_height + cell_height * 0.5,
+            separator_width,
+            anim,
         );
 
         // ── Two buttons: "Copy" and "Continue" ──
@@ -283,122 +203,23 @@ impl Renderer {
         } else {
             "Continue"
         };
-        let copy_btn_x = layout.copy_button.x;
-        let copy_btn_w = layout.copy_button.width;
-        let continue_btn_x = layout.continue_button.x;
-        let continue_btn_w = layout.continue_button.width;
-        let btn_y = layout.copy_button.y;
-        let btn_h = layout.copy_button.height;
-
-        // --- Hit-testing for hover/click ---
         let copy_hovered = info.awaiting && layout.copy_button.contains(mouse_x, mouse_y);
         let continue_hovered = info.awaiting && layout.continue_button.contains(mouse_x, mouse_y);
-        let copy_pressed = copy_hovered && info.mouse_pressed;
-        let continue_pressed = continue_hovered && info.mouse_pressed;
-
-        // Helper: draw a single button
-        let draw_button = |this: &mut Renderer,
-                           bx: f32,
-                           by: f32,
-                           bw: f32,
-                           bh: f32,
-                           label: &str,
-                           primary: bool,
-                           hovered: bool,
-                           pressed: bool| {
-            let base_alpha = if primary { 0.12 } else { 0.05 };
-            let bg_alpha = if pressed {
-                base_alpha + 0.18
-            } else if hovered {
-                base_alpha + 0.10
-            } else {
-                base_alpha
-            };
-
-            let inset = if pressed { 1.0 } else { 0.0 };
-            let bx = bx + inset;
-            let by = by + inset;
-            let bw = bw - inset * 2.0;
-            let bh = bh - inset * 2.0;
-
-            let btn_bg = with_alpha(this.ui.palette_accent, bg_alpha * anim);
-            this.rect_pipeline
-                .push_rounded_rect(bx, by, bw, bh, btn_bg, BUTTON_CORNER_RADIUS);
-
-            let border_alpha = if hovered { 0.65 } else { 0.35 };
-            let btn_border = with_alpha(this.ui.palette_accent, border_alpha * anim);
-            this.rect_pipeline.push_rect(
-                bx + BUTTON_CORNER_RADIUS,
-                by,
-                bw - BUTTON_CORNER_RADIUS * 2.0,
-                BORDER_WIDTH,
-                btn_border,
-            );
-            this.rect_pipeline.push_rect(
-                bx + BUTTON_CORNER_RADIUS,
-                by + bh - BORDER_WIDTH,
-                bw - BUTTON_CORNER_RADIUS * 2.0,
-                BORDER_WIDTH,
-                btn_border,
-            );
-            this.rect_pipeline.push_rect(
-                bx,
-                by + BUTTON_CORNER_RADIUS,
-                BORDER_WIDTH,
-                bh - BUTTON_CORNER_RADIUS * 2.0,
-                btn_border,
-            );
-            this.rect_pipeline.push_rect(
-                bx + bw - BORDER_WIDTH,
-                by + BUTTON_CORNER_RADIUS,
-                BORDER_WIDTH,
-                bh - BUTTON_CORNER_RADIUS * 2.0,
-                btn_border,
-            );
-
-            if hovered && !pressed {
-                let glow = with_alpha(this.ui.palette_accent, 0.06 * anim);
-                this.rect_pipeline.push_rounded_rect(
-                    bx - 2.0,
-                    by - 2.0,
-                    bw + 4.0,
-                    bh + 4.0,
-                    glow,
-                    8.0,
-                );
-            }
-
-            let text_alpha = if hovered { 1.0 } else { 0.8 };
-            let text_color = with_alpha(this.ui.palette_accent, text_alpha * anim);
-            let text_x = bx + (bw - label.chars().count() as f32 * cell_width) / 2.0;
-            let text_y = by + (bh - cell_height) / 2.0;
-            for (i, c) in label.chars().enumerate() {
-                this.text_pipeline
-                    .push_char(c, text_x + i as f32 * cell_width, text_y, text_color);
-            }
-        };
-
-        draw_button(
-            self,
-            copy_btn_x,
-            btn_y,
-            copy_btn_w,
-            btn_h,
+        self.draw_button(
+            layout.copy_button,
             copy_label,
             false,
             copy_hovered,
-            copy_pressed,
+            copy_hovered && info.mouse_pressed,
+            anim,
         );
-        draw_button(
-            self,
-            continue_btn_x,
-            btn_y,
-            continue_btn_w,
-            btn_h,
+        self.draw_button(
+            layout.continue_button,
             continue_label,
             true,
             continue_hovered,
-            continue_pressed,
+            continue_hovered && info.mouse_pressed,
+            anim,
         );
 
         // Keyboard and assistive focus use the same geometry as hit testing.
@@ -423,31 +244,12 @@ impl Renderer {
                 InfoOverlayFocus::Continue => Some(layout.continue_button),
             };
             if let Some(bounds) = bounds {
-                let color = with_alpha(self.ui.palette_accent, anim);
-                self.rect_pipeline
-                    .push_rect(bounds.x, bounds.y, bounds.width, 2.0, color);
-                self.rect_pipeline.push_rect(
-                    bounds.x,
-                    bounds.y + bounds.height - 2.0,
-                    bounds.width,
-                    2.0,
-                    color,
-                );
-                self.rect_pipeline
-                    .push_rect(bounds.x, bounds.y, 2.0, bounds.height, color);
-                self.rect_pipeline.push_rect(
-                    bounds.x + bounds.width - 2.0,
-                    bounds.y,
-                    2.0,
-                    bounds.height,
-                    color,
-                );
+                self.draw_focus_ring(bounds, with_alpha(self.ui.palette_accent, anim));
             }
         }
 
         // ── Keyboard hint ──
-        let hint_y = btn_y + btn_h + cell_height * 0.5;
-        let hint_color = with_alpha(self.ui.palette_text_dim, 0.35 * anim);
+        let hint_y = layout.copy_button.bottom() + cell_height * 0.5;
         let first_line = info
             .scroll_offset
             .saturating_add(1)
@@ -465,16 +267,15 @@ impl Renderer {
         } else {
             "Tab focus | Enter act | Esc close".into()
         };
-        let hint_text: String = hint_text
-            .chars()
-            .take(((card_width - padding * 2.0) / char_scale).floor() as usize)
-            .collect();
-        let hint_w = hint_text.chars().count() as f32 * char_scale;
-        let hint_x = card_x + (card_width - hint_w) / 2.0;
-        for (i, c) in hint_text.chars().enumerate() {
-            self.text_pipeline
-                .push_char(c, hint_x + i as f32 * char_scale, hint_y, hint_color);
-        }
+        self.push_ui_label_centered(
+            &hint_text,
+            card_x + card_width / 2.0,
+            hint_y,
+            cell_height,
+            card_width - padding * 2.0,
+            label_size,
+            with_alpha(self.ui.palette_text_dim, 0.35 * anim),
+        );
     }
 
     /// Build the diff review overlay
@@ -487,7 +288,6 @@ impl Renderer {
         use crate::ui::diff_review::DiffReviewRow;
 
         let anim = info.animation;
-        let cell_width = self.cell_width();
         let cell_height = self.cell_height();
         let layout = info.layout;
         let char_scale = layout.char_scale;
@@ -515,17 +315,16 @@ impl Renderer {
         self.rect_pipeline
             .push_rounded_rect(card_x, card_y, card_width, 1.0, border, 0.0);
 
-        let title_y = card_y + padding;
-        let title = format!("Diff: {}", info.filename);
-        let title_color = with_alpha(self.ui.palette_accent, anim);
-        let title_x = card_x + padding;
-        for (i, c) in title.chars().enumerate() {
-            let cx = title_x + i as f32 * char_scale;
-            if cx + char_scale > card_x + card_width - padding {
-                break;
-            }
-            self.text_pipeline.push_char(c, cx, title_y, title_color);
-        }
+        let label_size = self.ui_label_px();
+        self.push_ui_label(
+            &format!("Diff: {}", info.filename),
+            card_x + padding,
+            card_y + padding,
+            cell_height,
+            card_width - padding * 2.0,
+            label_size,
+            with_alpha(self.ui.palette_accent, anim),
+        );
 
         let content_start_y = layout.content.y;
         let dim_color = with_alpha(self.ui.palette_text_dim, 0.7 * anim);
@@ -576,67 +375,49 @@ impl Renderer {
         let (mouse_x, mouse_y) = info.mouse_pos.unwrap_or((-1.0, -1.0));
         let copy_hovered = info.awaiting && layout.copy_button.contains(mouse_x, mouse_y);
         let done_hovered = info.awaiting && layout.done_button.contains(mouse_x, mouse_y);
-        {
-            let mut ctx = DrawCtx {
-                rect: &mut self.rect_pipeline,
-                text: &mut self.text_pipeline,
-                cell_width,
-                cell_height,
-                ui: &self.ui,
+        self.draw_scrollbar(
+            layout.scrollbar_x,
+            layout.content.y,
+            layout.content.height,
+            info.total_rows,
+            layout.rows_that_fit,
+            info.scroll_offset,
+            anim,
+            4.0,
+        );
+        for (button, label) in [
+            (layout.stage_button, "Stage"),
+            (layout.revert_button, "Revert"),
+        ] {
+            let Some(button) = button else {
+                continue;
             };
-            ctx.draw_scrollbar(
-                layout.scrollbar_x,
-                layout.content.y,
-                layout.content.height,
-                info.total_rows,
-                layout.rows_that_fit,
-                info.scroll_offset,
-                anim,
-                4.0,
-            );
-            for (button, label) in [
-                (layout.stage_button, "Stage"),
-                (layout.revert_button, "Revert"),
-            ] {
-                let Some(button) = button else {
-                    continue;
-                };
-                let hovered = info.awaiting && button.contains(mouse_x, mouse_y);
-                ctx.draw_button(
-                    button.x,
-                    button.y,
-                    button.width,
-                    button.height,
-                    label,
-                    false,
-                    hovered,
-                    hovered && info.mouse_pressed,
-                    anim,
-                );
-            }
-            ctx.draw_button(
-                layout.copy_button.x,
-                layout.copy_button.y,
-                layout.copy_button.width,
-                layout.copy_button.height,
-                "Copy",
+            let hovered = info.awaiting && button.contains(mouse_x, mouse_y);
+            self.draw_button(
+                button,
+                label,
                 false,
-                copy_hovered,
-                copy_hovered && info.mouse_pressed,
-                anim,
-            );
-            ctx.draw_button(
-                layout.done_button.x,
-                layout.done_button.y,
-                layout.done_button.width,
-                layout.done_button.height,
-                "Done",
-                true,
-                done_hovered,
-                done_hovered && info.mouse_pressed,
+                hovered,
+                hovered && info.mouse_pressed,
                 anim,
             );
         }
+        self.draw_button(
+            layout.copy_button,
+            "Copy",
+            false,
+            copy_hovered,
+            copy_hovered && info.mouse_pressed,
+            anim,
+        );
+        self.draw_button(
+            layout.done_button,
+            "Done",
+            true,
+            done_hovered,
+            done_hovered && info.mouse_pressed,
+            anim,
+        );
 
         let first = info
             .scroll_offset
@@ -658,21 +439,15 @@ impl Renderer {
                 info.horizontal_offset + 1
             )
         };
-        let hint: String = hint
-            .chars()
-            .take(((card_width - padding * 2.0) / char_scale).floor().max(1.0) as usize)
-            .collect();
-        let hint_color = with_alpha(self.ui.palette_text_dim, 0.5 * anim);
-        let hint_x = card_x + (card_width - hint.chars().count() as f32 * char_scale) / 2.0;
-        let hint_y = layout.done_button.y + layout.done_button.height + cell_height * 0.45;
-        for (index, character) in hint.chars().enumerate() {
-            self.text_pipeline.push_char(
-                character,
-                hint_x + index as f32 * char_scale,
-                hint_y,
-                hint_color,
-            );
-        }
+        self.push_ui_label_centered(
+            &hint,
+            card_x + card_width / 2.0,
+            layout.done_button.bottom() + cell_height * 0.45,
+            cell_height,
+            card_width - padding * 2.0,
+            label_size,
+            with_alpha(self.ui.palette_text_dim, 0.5 * anim),
+        );
     }
 
     /// Build the context picker overlay
@@ -686,7 +461,6 @@ impl Renderer {
 
         let snapshot = &info.snapshot;
         let anim = snapshot.animation;
-        let cell_width = self.cell_width();
         let cell_height = self.cell_height();
         let layout = info.layout;
         let char_scale = layout.char_scale;
@@ -725,12 +499,16 @@ impl Renderer {
             ContextPickerPhase::FilePaths => "Choose Workspace Files",
             ContextPickerPhase::Gathering => "Gathering Context",
         };
-        let title_color = with_alpha(self.ui.palette_accent, anim);
-        let title_x = card_x + (card_width - title.chars().count() as f32 * cell_width) / 2.0;
-        for (i, c) in title.chars().enumerate() {
-            self.text_pipeline
-                .push_char(c, title_x + i as f32 * cell_width, title_y, title_color);
-        }
+        let label_size = self.ui_label_px();
+        self.push_ui_label_centered(
+            title,
+            card_x + card_width / 2.0,
+            title_y,
+            cell_height,
+            card_width - padding * 2.0,
+            label_size,
+            with_alpha(self.ui.palette_accent, anim),
+        );
 
         let content_start_y = layout.content.y;
         let text_color = with_alpha(self.ui.palette_text, anim);
@@ -765,38 +543,27 @@ impl Renderer {
                     } else {
                         dim_color
                     };
-                    let display = format!("{checkbox}{}", source.label);
-                    for (column, character) in display
-                        .chars()
-                        .take((layout.content.width / char_scale).floor() as usize)
-                        .enumerate()
-                    {
-                        if !character.is_whitespace() {
-                            self.text_pipeline.push_char(
-                                character,
-                                layout.content.x + column as f32 * char_scale,
-                                line_y + (layout.row_height - cell_height) / 2.0,
-                                color,
-                            );
-                        }
-                    }
+                    self.push_ui_label(
+                        &format!("{checkbox}{}", source.label),
+                        layout.content.x,
+                        line_y,
+                        layout.row_height,
+                        layout.content.width,
+                        label_size,
+                        color,
+                    );
                 }
             }
             ContextPickerPhase::FilePaths => {
-                let help = "Comma-separated paths inside the working directory:";
-                for (column, character) in help.chars().enumerate() {
-                    if column as f32 * char_scale >= layout.content.width {
-                        break;
-                    }
-                    if !character.is_whitespace() {
-                        self.text_pipeline.push_char(
-                            character,
-                            layout.content.x + column as f32 * char_scale,
-                            layout.content.y,
-                            dim_color,
-                        );
-                    }
-                }
+                self.push_ui_label(
+                    "Comma-separated paths inside the working directory:",
+                    layout.content.x,
+                    layout.content.y,
+                    cell_height,
+                    layout.content.width,
+                    label_size,
+                    dim_color,
+                );
                 self.rect_pipeline.push_rounded_rect(
                     layout.file_input.x,
                     layout.file_input.y,
@@ -828,23 +595,15 @@ impl Renderer {
                     .status
                     .as_deref()
                     .unwrap_or("Gathering bounded context…");
-                let visible: String = status
-                    .chars()
-                    .take((layout.content.width / char_scale).floor() as usize)
-                    .collect();
-                let x = layout.content.x
-                    + (layout.content.width - visible.chars().count() as f32 * char_scale) / 2.0;
-                let y = layout.content.y + (layout.content.height - cell_height) / 2.0;
-                for (column, character) in visible.chars().enumerate() {
-                    if !character.is_whitespace() {
-                        self.text_pipeline.push_char(
-                            character,
-                            x + column as f32 * char_scale,
-                            y,
-                            text_color,
-                        );
-                    }
-                }
+                self.push_ui_label_centered(
+                    status,
+                    layout.content.center()[0],
+                    layout.content.y,
+                    layout.content.height,
+                    layout.content.width,
+                    label_size,
+                    text_color,
+                );
             }
         }
 
@@ -852,49 +611,34 @@ impl Renderer {
         let cancel_hovered = snapshot.awaiting && layout.cancel_button.contains(mouse_x, mouse_y);
         let primary_enabled = snapshot.awaiting && snapshot.phase != ContextPickerPhase::Gathering;
         let primary_hovered = primary_enabled && layout.primary_button.contains(mouse_x, mouse_y);
-        {
-            let mut ctx = DrawCtx {
-                rect: &mut self.rect_pipeline,
-                text: &mut self.text_pipeline,
-                cell_width,
-                cell_height,
-                ui: &self.ui,
-            };
-            if snapshot.phase == ContextPickerPhase::Sources {
-                ctx.draw_scrollbar(
-                    layout.scrollbar_x,
-                    layout.content.y,
-                    layout.content.height,
-                    snapshot.sources.len(),
-                    layout.visible_count,
-                    snapshot.scroll_offset,
-                    anim,
-                    4.0,
-                );
-            }
-            ctx.draw_button(
-                layout.cancel_button.x,
-                layout.cancel_button.y,
-                layout.cancel_button.width,
-                layout.cancel_button.height,
-                snapshot.cancel_label(),
-                false,
-                cancel_hovered,
-                cancel_hovered && info.mouse_pressed,
+        if snapshot.phase == ContextPickerPhase::Sources {
+            self.draw_scrollbar(
+                layout.scrollbar_x,
+                layout.content.y,
+                layout.content.height,
+                snapshot.sources.len(),
+                layout.visible_count,
+                snapshot.scroll_offset,
                 anim,
-            );
-            ctx.draw_button(
-                layout.primary_button.x,
-                layout.primary_button.y,
-                layout.primary_button.width,
-                layout.primary_button.height,
-                snapshot.primary_label(),
-                true,
-                primary_hovered,
-                primary_hovered && info.mouse_pressed,
-                if primary_enabled { anim } else { anim * 0.4 },
+                4.0,
             );
         }
+        self.draw_button(
+            layout.cancel_button,
+            snapshot.cancel_label(),
+            false,
+            cancel_hovered,
+            cancel_hovered && info.mouse_pressed,
+            anim,
+        );
+        self.draw_button(
+            layout.primary_button,
+            snapshot.primary_label(),
+            true,
+            primary_hovered,
+            primary_hovered && info.mouse_pressed,
+            if primary_enabled { anim } else { anim * 0.4 },
+        );
 
         let hint = snapshot.status.as_deref().unwrap_or(match snapshot.phase {
             ContextPickerPhase::Sources => {
@@ -903,17 +647,15 @@ impl Renderer {
             ContextPickerPhase::FilePaths => "Type paths · Enter Save · Esc Back",
             ContextPickerPhase::Gathering => "Esc cancels this request",
         });
-        let hint: String = hint
-            .chars()
-            .take(((card_width - padding * 2.0) / char_scale).floor().max(1.0) as usize)
-            .collect();
-        let hint_color = with_alpha(self.ui.palette_text_dim, 0.5 * anim);
-        let hint_x = card_x + (card_width - hint.chars().count() as f32 * char_scale) / 2.0;
-        let hint_y = layout.cancel_button.y + layout.cancel_button.height + cell_height * 0.45;
-        for (i, c) in hint.chars().enumerate() {
-            self.text_pipeline
-                .push_char(c, hint_x + i as f32 * char_scale, hint_y, hint_color);
-        }
+        self.push_ui_label_centered(
+            hint,
+            card_x + card_width / 2.0,
+            layout.cancel_button.bottom() + cell_height * 0.45,
+            cell_height,
+            card_width - padding * 2.0,
+            label_size,
+            with_alpha(self.ui.palette_text_dim, 0.5 * anim),
+        );
     }
 
     /// Build the guardrail confirmation overlay
@@ -927,55 +669,24 @@ impl Renderer {
         let cell_width = self.cell_width();
         let cell_height = self.cell_height();
         let char_scale = cell_width * CONTENT_CHAR_SCALE;
+        let label_size = self.ui_label_px();
 
-        // Scrim — stronger for dangerous operations (drawn via DrawCtx)
+        // Scrim — stronger for dangerous operations
         let scrim_alpha = if info.is_critical { 0.6 } else { 0.4 };
-        {
-            let mut ctx = DrawCtx {
-                rect: &mut self.rect_pipeline,
-                text: &mut self.text_pipeline,
-                cell_width,
-                cell_height,
-                ui: &self.ui,
-            };
-            ctx.draw_scrim(
-                window_width,
-                window_height,
-                self.ui.palette_scrim,
-                scrim_alpha * anim,
-            );
-
-            // Draw the severity label via DrawCtx helpers so all DrawCtx fields
-            // (`text`, `cell_width`, `cell_height`, `ui`) are exercised.
-            let severity_label = if info.is_critical {
-                "BLOCKED"
-            } else {
-                "REVIEW"
-            };
-            let label_color = with_alpha(ctx.ui.palette_text_dim, 0.12 * anim);
-            let label_y = window_height * 0.15;
-            ctx.draw_centered_text(severity_label, window_width / 2.0, label_y, label_color);
-            // Thin separator line under the scrim label, spaced by cell_height
-            let sep_color = with_alpha(ctx.ui.palette_border, 0.06 * anim);
-            ctx.draw_separator(
-                window_width * 0.3,
-                label_y + ctx.cell_height,
-                window_width * 0.4,
-                sep_color,
-            );
-        }
+        self.rect_pipeline.push_rect(
+            0.0,
+            0.0,
+            window_width,
+            window_height,
+            scale_alpha(self.ui.palette_scrim, scrim_alpha * anim),
+        );
 
         // Card geometry — shared with pointer and accessibility hit targets.
         let layout =
             GuardrailLayout::calculate(window_width, window_height, cell_width, cell_height, anim);
         let padding = layout.padding;
-        let title_height = layout.title_height;
-        let cmd_height = layout.command_height;
-        let reason_height = layout.reason_height;
-        let card_height = layout.card.height;
-        let card_width = layout.card.width;
-        let card_x = layout.card.x;
-        let card_y = layout.card.y;
+        let card = layout.card;
+        let text_width = card.width - padding * 2.0;
 
         // The card is the theme's surface tinted by the severity's hue, so it
         // reads correctly on light and dark themes alike.
@@ -986,155 +697,97 @@ impl Renderer {
         };
         let card_bg = with_alpha(mix(self.ui.palette_bg, severity_color, 0.12), anim);
         let border_color = with_alpha(severity_color, 0.8 * anim);
+        self.draw_card_shadow(card, 0.06 * anim, 2);
+        self.draw_card(card, card_bg, border_color);
 
-        {
-            let mut ctx = DrawCtx {
-                rect: &mut self.rect_pipeline,
-                text: &mut self.text_pipeline,
-                cell_width,
-                cell_height,
-                ui: &self.ui,
-            };
+        // severity-colored top accent bar
+        self.rect_pipeline
+            .push_rect(card.x, card.y, card.width, 3.0, border_color);
 
-            // Shadow, card background + border via DrawCtx
-            ctx.draw_card_shadow(card_x, card_y, card_width, card_height, 0.06 * anim, 2);
-            ctx.draw_card(
-                card_x,
-                card_y,
-                card_width,
-                card_height,
-                card_bg,
-                border_color,
-            );
-
-            // severity-colored top accent bar
-            ctx.rect
-                .push_rounded_rect(card_x, card_y, card_width, 3.0, border_color, 0.0);
-
-            // Title — centered with char_scale
-            let title_y = card_y + padding;
-            let icon = if info.is_critical {
+        let title_y = card.y + padding;
+        self.push_ui_label_centered(
+            if info.is_critical {
                 "DANGEROUS COMMAND"
             } else {
                 "Caution"
-            };
-            ctx.draw_centered_text_scaled(
-                icon,
-                card_x + card_width / 2.0,
-                title_y,
-                border_color,
-                char_scale,
-            );
+            },
+            card.center()[0],
+            title_y,
+            cell_height,
+            text_width,
+            label_size,
+            border_color,
+        );
 
-            // Command display — clipped
-            let cmd_y = title_y + title_height;
-            let cmd_label = format!("> {}", info.command);
-            let cmd_color = with_alpha(ctx.ui.palette_text, anim);
-            ctx.draw_clipped_text_scaled(
-                &cmd_label,
-                card_x + padding,
-                cmd_y,
-                cmd_color,
-                char_scale,
-                card_x + card_width - padding,
-            );
-
-            // Reason text — clipped
-            let reason_y = cmd_y + cmd_height;
-            let reason_color = with_alpha(ctx.ui.palette_text_dim, 0.8 * anim);
-            ctx.draw_clipped_text_scaled(
-                &info.reason,
-                card_x + padding,
-                reason_y,
-                reason_color,
-                char_scale,
-                card_x + card_width - padding,
-            );
-
-            // Context line — clipped at cell_width scale (uses draw_clipped_text)
-            let context_y = reason_y + reason_height;
-            let context_label = format!("Where: {} · As: {}", info.target, info.user);
-            let context_color = with_alpha(ctx.ui.palette_text_dim, 0.6 * anim);
-            ctx.draw_clipped_text(
-                &context_label,
-                card_x + padding,
-                context_y,
-                context_color,
-                card_x + card_width - padding,
-            );
-            // Also render separator text via draw_text_scaled
-            let mid_sep_color = with_alpha(ctx.ui.palette_border, 0.15 * anim);
-            ctx.draw_text_scaled(
-                "---",
-                card_x + padding,
-                context_y + cell_height,
-                mid_sep_color,
-                char_scale,
-            );
-
-            // Close icon in top-right corner
-            let close_color = with_alpha(ctx.ui.palette_text_dim, 0.4 * anim);
-            // The close cross spans 9 of its icon's 16 units.
-            draw_icon(
-                ctx.rect,
-                Icon::Close,
-                [card_x + card_width - padding, card_y + padding],
-                cell_height * 0.4 * 16.0 / 9.0,
-                close_color,
-            );
-
-            // Footer hint keeps the keyboard path discoverable without making
-            // Enter the visually preferred destructive choice.
-            let footer_y = layout.cancel_button.y - cell_height * 1.25;
-            let hint_color = with_alpha(ctx.ui.palette_text_dim, 0.5 * anim);
-            ctx.draw_centered_text_scaled(
-                "Enter/Esc Cancel  Ctrl+Enter Run anyway",
-                card_x + card_width / 2.0,
-                footer_y,
-                hint_color,
-                char_scale,
-            );
-
-            // Draw a scrollbar (zero items so it won't actually show, but wires the method)
-            ctx.draw_scrollbar(
-                card_x + card_width - 6.0,
-                card_y + padding,
-                card_height - padding * 2.0,
-                0,
-                0,
-                0,
-                anim,
-                4.0,
-            );
-
-            let cancel = layout.cancel_button;
-            ctx.draw_button(
-                cancel.x,
-                cancel.y,
-                cancel.width,
-                cancel.height,
-                "Cancel",
-                true,
-                false,
-                false,
-                anim,
-            );
-            let confirm = layout.confirm_button;
-            ctx.draw_button(
-                confirm.x,
-                confirm.y,
-                confirm.width,
-                confirm.height,
-                if info.is_critical {
-                    "Run anyway"
-                } else {
-                    "Confirm"
-                },
-                false,
-                false,
-                false,
-                anim,
-            );
+        // The command itself stays in the terminal's monospace grid.
+        let cmd_y = title_y + layout.title_height;
+        let cmd_color = with_alpha(self.ui.palette_text, anim);
+        let mut x = card.x + padding;
+        for character in format!("> {}", info.command).chars() {
+            if x + char_scale > card.right() - padding {
+                break;
+            }
+            if !character.is_whitespace() {
+                self.text_pipeline.push_char(character, x, cmd_y, cmd_color);
+            }
+            x += char_scale;
         }
+
+        let reason_y = cmd_y + layout.command_height;
+        self.push_ui_label(
+            &info.reason,
+            card.x + padding,
+            reason_y,
+            cell_height,
+            text_width,
+            label_size,
+            with_alpha(self.ui.palette_text_dim, 0.8 * anim),
+        );
+
+        let context_y = reason_y + layout.reason_height;
+        self.push_ui_label(
+            &format!("Where: {} · As: {}", info.target, info.user),
+            card.x + padding,
+            context_y,
+            cell_height,
+            text_width,
+            label_size,
+            with_alpha(self.ui.palette_text_dim, 0.6 * anim),
+        );
+
+        // The close cross spans 9 of its icon's 16 units.
+        draw_icon(
+            &mut self.rect_pipeline,
+            Icon::Close,
+            [card.right() - padding, card.y + padding],
+            cell_height * 0.4 * 16.0 / 9.0,
+            with_alpha(self.ui.palette_text_dim, 0.4 * anim),
+        );
+
+        // Footer hint keeps the keyboard path discoverable without making
+        // Enter the visually preferred destructive choice.
+        self.push_ui_label_centered(
+            "Enter/Esc Cancel  Ctrl+Enter Run anyway",
+            card.center()[0],
+            layout.cancel_button.y - cell_height * 1.25,
+            cell_height,
+            text_width,
+            label_size,
+            with_alpha(self.ui.palette_text_dim, 0.5 * anim),
+        );
+
+        self.draw_button(layout.cancel_button, "Cancel", true, false, false, anim);
+        self.draw_button(
+            layout.confirm_button,
+            if info.is_critical {
+                "Run anyway"
+            } else {
+                "Confirm"
+            },
+            false,
+            false,
+            false,
+            anim,
+        );
     }
 }

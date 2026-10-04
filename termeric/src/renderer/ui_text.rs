@@ -51,6 +51,29 @@ impl Renderer {
             .push_ui_text(&fitted, x.round(), baseline, size_px, color, None);
         width
     }
+
+    /// [`Renderer::push_ui_label`] centred on `center_x`.
+    pub(super) fn push_ui_label_centered(
+        &mut self,
+        text: &str,
+        center_x: f32,
+        top: f32,
+        height: f32,
+        max_width: f32,
+        size_px: f32,
+        color: [f32; 4],
+    ) -> f32 {
+        let width = self.ui_text_width(text, size_px).min(max_width);
+        self.push_ui_label(
+            text,
+            center_x - width / 2.0,
+            top,
+            height,
+            max_width,
+            size_px,
+            color,
+        )
+    }
 }
 
 impl TextMeasure for GlyphCache {

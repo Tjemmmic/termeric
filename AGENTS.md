@@ -111,7 +111,7 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 |------|----------|
 | `mod.rs` | `Renderer` struct, `new()`, `render()`, `build_render_data()` dispatch, pane grid and image data, `UiPalette`, color helpers |
 | `types.rs` | `*Info` structs and click/action enums (re-exported via `pub use types::*`) |
-| `draw.rs` | `DrawCtx` shared drawing helpers |
+| `draw.rs` | Shared card, shadow, scrollbar, button, and focus-ring drawing for dialogs and menus |
 | `rect.rs`, `buffer.rs` | Rounded-rectangle pipeline and capacity-managed GPU upload buffers |
 | `text.rs`, `ui_text.rs` | Terminal glyph queue and text pipeline; chrome text in the desktop UI face |
 | `style.rs` | Resolved SGR cell style, decoration geometry, visibility, and color/face ordering |

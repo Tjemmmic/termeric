@@ -102,7 +102,7 @@ Chrome geometry lands on whole physical pixels. Rendering, hit testing, keyboard
 ## 4. Typography
 
 - **Terminal text** uses the configured monospace font (default `monospace`, 12pt). `font.size` is in points at 96/72 logical pixels per point, from 8pt to 72pt. The Settings stepper moves 1pt; the zoom shortcuts move 2pt. Terminal text keeps the monospace grid: no custom letter-spacing or squeezed advances.
-- **UI text** (tabs, Settings, the palette, panels, menus, the find box) uses the desktop's sans-serif face at 10pt, resolved through fontconfig, so chrome reads like the rest of the desktop. Draw it with `Renderer::push_ui_label`, which measures proportionally, centres on the face's own metrics, and shortens with an ellipsis.
+- **UI text** (tabs, Settings, the palette, panels, menus, dialogs, toasts, the find box) uses the desktop's sans-serif face at 10pt, resolved through fontconfig, so chrome reads like the rest of the desktop. Draw it with `Renderer::push_ui_label`, which measures proportionally, centres on the face's own metrics, and shortens with an ellipsis.
 - **Emoji** render inline when a font supports them and fall back gracefully.
 
 ## 5. Accessibility

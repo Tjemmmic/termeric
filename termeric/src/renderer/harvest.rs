@@ -6,9 +6,9 @@
 //! - `build_sprout_menu()` — context menu for command actions
 
 use super::Renderer;
-use super::draw::DrawCtx;
 use crate::renderer::types::{CellarRenderInfo, IndicatorRenderInfo, SproutMenuRenderInfo};
 use crate::ui::color::{scale_alpha, with_alpha};
+use crate::ui::constants::BORDER_WIDTH;
 
 /// Return the sprout action row under a pointer. Geometry intentionally uses
 /// the same padding and item-height math as `build_sprout_menu`.
@@ -52,7 +52,7 @@ impl Renderer {
     pub(super) fn build_root_cellar(
         &mut self,
         cellar: &CellarRenderInfo,
-        _window_width: f32,
+        window_width: f32,
         window_height: f32,
     ) {
         if cellar.animation_progress < 0.001 {
@@ -66,139 +66,151 @@ impl Renderer {
         let panel_x = layout.panel.x;
         let panel_y = layout.panel.y;
         let panel_width = layout.panel.width;
-        let panel_height = layout.panel.height;
 
-        // Use DrawCtx for card and text rendering
         let bg = with_alpha(self.ui.menu_bg, 0.95 * anim);
         let border = with_alpha(self.ui.tab_border, 0.5 * anim);
+        let label_size = self.ui_label_px();
 
-        {
-            let mut ctx = DrawCtx {
-                rect: &mut self.rect_pipeline,
-                text: &mut self.text_pipeline,
-                cell_width,
-                cell_height,
-                ui: &self.ui,
-            };
+        // Scrim (dim area behind panel)
+        self.rect_pipeline.push_rect(
+            0.0,
+            0.0,
+            window_width,
+            window_height,
+            scale_alpha(self.ui.scrim, anim * 0.5),
+        );
+        self.draw_card(layout.panel, bg, border);
 
-            // Scrim (dim area behind panel)
-            ctx.draw_scrim(_window_width, window_height, ctx.ui.scrim, anim * 0.5);
+        // Header
+        let header_y = panel_y + cell_height * 0.5;
+        let text_color = with_alpha(self.ui.menu_text, anim);
+        let dim_color = with_alpha(self.ui.menu_text_dim, anim);
+        let text_width = panel_width - cell_width * 2.0;
+        self.push_ui_label(
+            "Root Cellar",
+            panel_x + cell_width,
+            header_y,
+            cell_height,
+            text_width,
+            label_size,
+            text_color,
+        );
+        self.text_pipeline
+            .push_char('×', layout.close.x, layout.close.y, text_color);
 
-            // Panel background
-            ctx.draw_card(panel_x, panel_y, panel_width, panel_height, bg, border);
+        // Success rate badge
+        let rate_text = if cellar.evicted_entries == 0 {
+            format!(
+                "{:.0}% healthy · {} kept",
+                cellar.success_rate * 100.0,
+                cellar.total_entries
+            )
+        } else {
+            format!(
+                "{:.0}% healthy · {} kept · {} evicted",
+                cellar.success_rate * 100.0,
+                cellar.total_entries,
+                cellar.evicted_entries
+            )
+        };
+        let rate_color = if cellar.success_rate > 0.8 {
+            with_alpha(self.ui.success, anim)
+        } else if cellar.success_rate > 0.5 {
+            with_alpha(self.ui.warning, anim)
+        } else {
+            with_alpha(self.ui.error, anim)
+        };
+        self.push_ui_label(
+            &rate_text,
+            panel_x + cell_width,
+            header_y + cell_height,
+            cell_height,
+            text_width,
+            label_size,
+            rate_color,
+        );
 
-            // Header
-            let header_y = panel_y + cell_height * 0.5;
-            let text_color = with_alpha(ctx.ui.menu_text, anim);
-            let dim_color = with_alpha(ctx.ui.menu_text_dim, anim);
-            ctx.draw_text("Root Cellar", panel_x + cell_width, header_y, text_color);
-            ctx.text
-                .push_char('×', layout.close.x, layout.close.y, text_color);
+        // Separator
+        self.rect_pipeline.push_rect(
+            panel_x + cell_width * 0.5,
+            layout.list.y - cell_height * 0.5,
+            panel_width - cell_width,
+            BORDER_WIDTH,
+            border,
+        );
 
-            // Success rate badge
-            let rate_text = if cellar.evicted_entries == 0 {
-                format!(
-                    "{:.0}% healthy · {} kept",
-                    cellar.success_rate * 100.0,
-                    cellar.total_entries
-                )
-            } else {
-                format!(
-                    "{:.0}% healthy · {} kept · {} evicted",
-                    cellar.success_rate * 100.0,
-                    cellar.total_entries,
-                    cellar.evicted_entries
-                )
-            };
-            let rate_color = if cellar.success_rate > 0.8 {
-                with_alpha(self.ui.success, anim)
-            } else if cellar.success_rate > 0.5 {
-                with_alpha(self.ui.warning, anim)
-            } else {
-                with_alpha(self.ui.error, anim)
-            };
-            ctx.draw_text(
-                &rate_text,
-                panel_x + cell_width,
-                header_y + cell_height,
-                rate_color,
-            );
+        // Entry list
+        for (entry, (_, row)) in cellar.entries.iter().zip(&layout.rows) {
+            let entry_y = row.y;
+            let entry_color = with_alpha(entry.health_color, anim);
 
-            // Separator
-            let sep_y = layout.list.y - cell_height * 0.5;
-            ctx.draw_separator(
-                panel_x + cell_width * 0.5,
-                sep_y,
-                panel_width - cell_width,
-                border,
-            );
-
-            // Entry list
-            for (entry, (_, row)) in cellar.entries.iter().zip(&layout.rows) {
-                let entry_y = row.y;
-                let entry_color = with_alpha(entry.health_color, anim);
-
-                if cellar.selected_id == Some(entry.id) {
-                    ctx.rect.push_rounded_rect(
-                        row.x,
-                        row.y,
-                        row.width,
-                        row.height,
-                        with_alpha(ctx.ui.palette_accent, 0.14 * anim),
-                        4.0,
-                    );
-                }
-
-                // Health indicator character
-                let health_char = match entry.health {
-                    0 => '\u{25CF}', // filled circle (healthy)
-                    1 => '\u{25CB}', // empty circle (warning)
-                    _ => '\u{2716}', // heavy X (sick)
-                };
-                ctx.text
-                    .push_char(health_char, row.x + cell_width * 0.5, entry_y, entry_color);
-
-                // Exit code
-                let mut code_text = match entry.exit_code {
-                    Some(0) => "ok".to_string(),
-                    Some(code) => format!("E{}", code),
-                    None => "...".to_string(),
-                };
-                if entry.output_truncated {
-                    code_text.push_str(" clipped");
-                }
-                let code_width = code_text.chars().count() as f32 * cell_width;
-                let code_x = row.x + row.width - code_width - cell_width * 0.5;
-                ctx.draw_text(&code_text, code_x, entry_y, dim_color);
-
-                let command_x = row.x + cell_width * 2.0;
-                let command_chars = ((code_x - command_x - cell_width * 0.5) / cell_width)
-                    .floor()
-                    .max(0.0) as usize;
-                let mut command = entry
-                    .command
-                    .chars()
-                    .take(command_chars)
-                    .collect::<String>();
-                if entry.command.chars().count() > command_chars && command_chars > 0 {
-                    command.pop();
-                    command.push('…');
-                }
-                ctx.draw_text(&command, command_x, entry_y, text_color);
+            if cellar.selected_id == Some(entry.id) {
+                self.rect_pipeline.push_rounded_rect(
+                    row.x,
+                    row.y,
+                    row.width,
+                    row.height,
+                    with_alpha(self.ui.palette_accent, 0.14 * anim),
+                    4.0,
+                );
             }
 
-            // Scrollbar
-            ctx.draw_scrollbar(
-                layout.scrollbar.x,
-                layout.scrollbar.y,
-                layout.scrollbar.height,
-                cellar.total_entries,
-                layout.max_visible,
-                cellar.scroll,
-                anim,
-                4.0,
+            // Health indicator character
+            let health_char = match entry.health {
+                0 => '\u{25CF}', // filled circle (healthy)
+                1 => '\u{25CB}', // empty circle (warning)
+                _ => '\u{2716}', // heavy X (sick)
+            };
+            self.text_pipeline.push_char(
+                health_char,
+                row.x + cell_width * 0.5,
+                entry_y,
+                entry_color,
+            );
+
+            // Exit code, right-aligned
+            let mut code_text = match entry.exit_code {
+                Some(0) => "ok".to_string(),
+                Some(code) => format!("E{}", code),
+                None => "...".to_string(),
+            };
+            if entry.output_truncated {
+                code_text.push_str(" clipped");
+            }
+            let code_width = self.ui_text_width(&code_text, label_size);
+            let code_x = row.x + row.width - code_width - cell_width * 0.5;
+            self.push_ui_label(
+                &code_text,
+                code_x,
+                entry_y,
+                cell_height,
+                code_width,
+                label_size,
+                dim_color,
+            );
+
+            let command_x = row.x + cell_width * 2.0;
+            self.push_ui_label(
+                &entry.command,
+                command_x,
+                entry_y,
+                cell_height,
+                code_x - command_x - cell_width * 0.5,
+                label_size,
+                text_color,
             );
         }
+
+        self.draw_scrollbar(
+            layout.scrollbar.x,
+            layout.scrollbar.y,
+            layout.scrollbar.height,
+            cellar.total_entries,
+            layout.max_visible,
+            cellar.scroll,
+            anim,
+            4.0,
+        );
     }
 
     /// Draw the sprout context menu at a click position.
@@ -219,62 +231,54 @@ impl Renderer {
         let highlight_bg = with_alpha(self.ui.palette_accent, 0.15 * anim);
         let icon_color = with_alpha(self.ui.palette_accent, 0.8 * anim);
 
+        let label_size = self.ui_label_px();
+
+        // Card shadow + background
+        let panel = menu.layout.panel;
+        self.draw_card_shadow(panel, 0.2, 2);
+        self.draw_card(panel, bg, border);
+
+        // Action items
+        for (i, ((name, icon, enabled), row)) in
+            menu.actions.iter().zip(&menu.layout.rows).enumerate()
         {
-            let mut ctx = DrawCtx {
-                rect: &mut self.rect_pipeline,
-                text: &mut self.text_pipeline,
-                cell_width,
-                cell_height,
-                ui: &self.ui,
-            };
-
-            // Card shadow + background
-            let panel = menu.layout.panel;
-            ctx.draw_card_shadow(panel.x, panel.y, panel.width, panel.height, 0.2, 2);
-            ctx.draw_card(panel.x, panel.y, panel.width, panel.height, bg, border);
-
-            // Action items
-            for (i, ((name, icon, enabled), row)) in
-                menu.actions.iter().zip(&menu.layout.rows).enumerate()
-            {
-                let item_y = row.y;
-
-                // Highlight selected item
-                if i == menu.selected && *enabled {
-                    ctx.rect.push_rounded_rect(
-                        row.x,
-                        row.y,
-                        row.width,
-                        row.height,
-                        highlight_bg,
-                        4.0,
-                    );
-                }
-
-                // Icon
-                ctx.text.push_char(
-                    *icon,
-                    row.x + menu.layout.padding,
-                    item_y + (row.height - cell_height) / 2.0,
-                    if *enabled {
-                        icon_color
-                    } else {
-                        with_alpha(ctx.ui.palette_text, 0.35 * anim)
-                    },
-                );
-
-                // Action name
-                ctx.draw_text(
-                    name,
-                    row.x + menu.layout.padding + cell_width * 2.0,
-                    item_y + (row.height - cell_height) / 2.0,
-                    if *enabled {
-                        text_color
-                    } else {
-                        with_alpha(ctx.ui.palette_text, 0.45 * anim)
-                    },
+            // Highlight selected item
+            if i == menu.selected && *enabled {
+                self.rect_pipeline.push_rounded_rect(
+                    row.x,
+                    row.y,
+                    row.width,
+                    row.height,
+                    highlight_bg,
+                    4.0,
                 );
             }
+
+            self.text_pipeline.push_char(
+                *icon,
+                row.x + menu.layout.padding,
+                row.y + (row.height - cell_height) / 2.0,
+                if *enabled {
+                    icon_color
+                } else {
+                    with_alpha(self.ui.palette_text, 0.35 * anim)
+                },
+            );
+
+            let name_x = row.x + menu.layout.padding + cell_width * 2.0;
+            self.push_ui_label(
+                name,
+                name_x,
+                row.y,
+                row.height,
+                row.right() - name_x,
+                label_size,
+                if *enabled {
+                    text_color
+                } else {
+                    with_alpha(self.ui.palette_text, 0.45 * anim)
+                },
+            );
         }
     }
 }

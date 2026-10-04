@@ -1,6 +1,5 @@
 //! Git branch completion dropdown rendering and bounded viewport layout.
 
-use super::glyph_cache::FontStyle;
 use super::icons::draw_icon;
 use super::types::*;
 use super::{Renderer, TextClip};
@@ -234,27 +233,23 @@ impl Renderer {
         .is_some()
     }
 
-    // Bound queued text to its visible cells, including the ellipsis; do not
-    // enqueue a multi-megabyte branch and rely solely on a GPU scissor.
+    /// Draw one line of the dropdown in the UI face, shortened to the
+    /// visible width. A monospace cell bounds the text first, so a
+    /// multi-megabyte branch name is never measured or shaped whole.
     fn git_completion_text(
         &mut self,
         value: &str,
         x: f32,
-        y: f32,
+        top: f32,
+        row_height: f32,
         color: [f32; 4],
         clip: TextClip,
     ) {
-        let cells = ((clip.right - x).max(0.0) / self.cell_width()).floor() as usize;
-        for (column, character) in completion_text_chars(value, cells).enumerate() {
-            self.text_pipeline.push_styled_char(
-                character,
-                x + column as f32 * self.cell_width(),
-                y,
-                color,
-                FontStyle::default(),
-                clip,
-            );
-        }
+        let max_width = (clip.right - x).max(0.0);
+        let cells = (max_width / self.cell_width()).floor() as usize;
+        let bounded: String = completion_text_chars(value, cells).collect();
+        let size = self.ui_label_px();
+        self.push_ui_label(&bounded, x, top, row_height, max_width, size, color);
     }
 
     pub(super) fn build_git_completions(
@@ -287,7 +282,6 @@ impl Renderer {
         let text_color = self.ui.menu_text;
         let bg = self.ui.menu_bg;
         let clip = layout.clip();
-        let text_offset = (layout.row_height - cell_h) / 2.0;
         self.rect_pipeline.push_rounded_rect(
             layout.x,
             layout.y,
@@ -307,9 +301,8 @@ impl Renderer {
         }
 
         if layout.header {
-            let header_y = layout.y + EDGE + text_offset;
             let icon_cx = layout.x + cw * 1.3;
-            let icon_cy = header_y + cell_h * 0.5;
+            let icon_cy = layout.y + EDGE + layout.row_height / 2.0;
             // The branch's stem spans 10 of its icon's 16 units.
             let arm = (cell_h * 0.25).min(cw);
             draw_icon(
@@ -322,7 +315,8 @@ impl Renderer {
             self.git_completion_text(
                 " branches",
                 layout.x + cw * 2.3,
-                header_y,
+                layout.y + EDGE,
+                layout.row_height,
                 [accent[0], accent[1], accent[2], 0.7],
                 clip,
             );
@@ -350,7 +344,8 @@ impl Renderer {
             self.git_completion_text(
                 &info.completions[index],
                 layout.x + cw,
-                y + text_offset,
+                y,
+                layout.row_height,
                 if selected { accent } else { text_color },
                 clip,
             );
@@ -365,9 +360,8 @@ impl Renderer {
             self.git_completion_text(
                 &label,
                 layout.x + cw,
-                layout.items_y()
-                    + (layout.end - layout.start) as f32 * layout.row_height
-                    + text_offset,
+                layout.items_y() + (layout.end - layout.start) as f32 * layout.row_height,
+                layout.row_height,
                 [text_color[0], text_color[1], text_color[2], 0.5],
                 clip,
             );
