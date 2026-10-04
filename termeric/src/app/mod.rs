@@ -3764,12 +3764,8 @@ impl App {
             Action::SplitHorizontal => {
                 self.split_pane(SplitDirection::Horizontal);
             }
-            Action::NavigatePane(dir) => {
-                if let Some(d) = crate::panes::PaneDir::parse(&dir) {
-                    self.navigate_focused_pane(d);
-                } else {
-                    log::warn!("Unknown pane navigation direction: {}", dir);
-                }
+            Action::NavigatePane(direction) => {
+                self.navigate_focused_pane(direction);
             }
             Action::ClosePane => {
                 self.close_focused_pane();

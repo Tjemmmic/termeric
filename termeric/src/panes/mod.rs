@@ -68,17 +68,6 @@ pub struct PaneTerminalEvent {
 }
 
 impl PaneDir {
-    /// Parse "up" / "down" / "left" / "right" (case-insensitive).
-    pub fn parse(s: &str) -> Option<Self> {
-        match s.to_ascii_lowercase().as_str() {
-            "up" => Some(Self::Up),
-            "down" => Some(Self::Down),
-            "left" => Some(Self::Left),
-            "right" => Some(Self::Right),
-            _ => None,
-        }
-    }
-
     fn opposite(self) -> Self {
         match self {
             Self::Up => Self::Down,
@@ -2317,16 +2306,6 @@ mod tests {
         let id2 = PaneId(1);
         assert_ne!(id1, id2);
         assert_eq!(id1, PaneId(0));
-    }
-
-    #[test]
-    fn test_pane_dir_parse() {
-        assert_eq!(PaneDir::parse("up"), Some(PaneDir::Up));
-        assert_eq!(PaneDir::parse("DOWN"), Some(PaneDir::Down));
-        assert_eq!(PaneDir::parse("Left"), Some(PaneDir::Left));
-        assert_eq!(PaneDir::parse("right"), Some(PaneDir::Right));
-        assert_eq!(PaneDir::parse("diagonal"), None);
-        assert_eq!(PaneDir::parse(""), None);
     }
 
     #[cfg(unix)]

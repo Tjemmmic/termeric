@@ -66,7 +66,7 @@ pub enum Action {
     /// Split pane horizontally
     SplitHorizontal,
     /// Navigate to pane in direction
-    NavigatePane(String),
+    NavigatePane(crate::panes::PaneDir),
     /// Close current pane
     ClosePane,
     RenameTab,
