@@ -26,6 +26,7 @@ pub mod search_bar;
 pub mod settings;
 pub mod shortcuts_panel;
 pub mod text_area;
+pub mod text_card;
 pub mod text_input;
 pub mod text_input_viewport;
 pub mod text_layout;

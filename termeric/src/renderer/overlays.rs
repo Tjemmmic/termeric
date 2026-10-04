@@ -442,7 +442,7 @@ impl Renderer {
         self.push_ui_label_centered(
             &hint,
             card_x + card_width / 2.0,
-            layout.done_button.bottom() + cell_height * 0.45,
+            layout.done_button.bottom() + cell_height * 0.5,
             cell_height,
             card_width - padding * 2.0,
             label_size,

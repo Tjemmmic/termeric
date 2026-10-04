@@ -1,7 +1,7 @@
 //! Bounded modal notices used for application information, errors, and choices.
 
 use super::animation::OverlayAnimation;
-use super::constants::CONTENT_CHAR_SCALE;
+use super::text_card::{TextCard, TextViewport};
 use super::text_input::{TextInput, TextInputEdit, TextLimit, grapheme_boundary};
 use crate::ui::geometry::Bounds;
 
@@ -149,78 +149,36 @@ impl InfoOverlayLayout {
         total_lines: usize,
         max_line_chars: usize,
     ) -> Self {
-        let char_scale = (cell_width * CONTENT_CHAR_SCALE).max(1.0);
-        let padding = (cell_width * 2.5).max(12.0);
-        let line_height = (cell_height * 1.6).max(1.0);
-        let title_height = cell_height * 2.8;
-        let footer_height = cell_height * 4.5;
-        let outer_margin = (cell_width * 2.0).max(12.0);
-
-        let hint_chars = 41_usize; // "Esc / Enter dismiss · C copy · arrows scroll"
-        let content_width = max_line_chars.max(hint_chars) as f32 * char_scale;
-        let title_width = title.chars().count() as f32 * cell_width;
-        let preferred_width = content_width.max(title_width) + padding * 2.0 + cell_width * 2.0;
-        let available_width = (window_width - outer_margin * 2.0).max(1.0);
-        let card_width = preferred_width.max(380.0).min(available_width);
-
-        let fixed_height = padding + title_height + footer_height + padding * 0.5;
-        let available_height = (window_height - outer_margin * 2.0).max(line_height);
-        let content_budget = (available_height - fixed_height).max(line_height);
-        let rows_that_fit = ((content_budget / line_height).floor() as usize).max(1);
-        let visible_rows = total_lines.max(1).min(rows_that_fit);
-        let content_height = visible_rows as f32 * line_height;
-        let card_height = fixed_height + content_height;
-        let card_x = (window_width - card_width) / 2.0;
-        let card_y = (window_height - card_height) / 2.0 + (1.0 - animation) * -30.0;
-
-        let content_x = card_x + padding;
-        let content_y = card_y + padding + title_height;
-        let scrollbar_gutter = cell_width.max(6.0);
-        let content_rect_width = (card_width - padding * 2.0 - scrollbar_gutter).max(char_scale);
-        let columns_that_fit = ((content_rect_width / char_scale).floor() as usize).max(1);
-
-        let button_height = cell_height * 1.8;
-        let button_gap = cell_width * 1.5;
-        let button_y = content_y + content_height + cell_height * 1.3;
-        let available_button_width = (card_width - padding * 2.0 - button_gap).max(2.0);
+        let text = TextCard::calculate(
+            window_width,
+            window_height,
+            cell_width,
+            cell_height,
+            animation,
+            max_line_chars,
+            title.chars().count(),
+            380.0,
+            total_lines,
+        );
+        let available_button_width = text.button_row_width(1).max(2.0);
         let copy_width = (available_button_width * 0.38).max(1.0);
         let continue_width = (available_button_width - copy_width).max(1.0);
-        let copy_x = card_x + padding;
-        let continue_x = copy_x + copy_width + button_gap;
+        let copy_x = text.card.x + text.padding;
+        let continue_x = copy_x + copy_width + text.button_gap;
 
         Self {
-            card: Bounds {
-                x: card_x,
-                y: card_y,
-                width: card_width,
-                height: card_height,
-            },
-            content: Bounds {
-                x: content_x,
-                y: content_y,
-                width: content_rect_width,
-                height: content_height,
-            },
-            copy_button: Bounds {
-                x: copy_x,
-                y: button_y,
-                width: copy_width,
-                height: button_height,
-            },
-            continue_button: Bounds {
-                x: continue_x,
-                y: button_y,
-                width: continue_width,
-                height: button_height,
-            },
-            padding,
-            title_height,
-            line_height,
-            char_scale,
-            footer_height,
-            rows_that_fit,
-            columns_that_fit,
-            scrollbar_x: card_x + card_width - padding - 4.0,
+            card: text.card,
+            content: text.content,
+            copy_button: text.button(copy_x, copy_width),
+            continue_button: text.button(continue_x, continue_width),
+            padding: text.padding,
+            title_height: text.title_height,
+            line_height: text.line_height,
+            char_scale: text.char_scale,
+            footer_height: text.footer_height,
+            rows_that_fit: text.rows_that_fit,
+            columns_that_fit: text.columns_that_fit,
+            scrollbar_x: text.scrollbar_x,
         }
     }
 
@@ -268,11 +226,7 @@ pub struct InfoOverlay {
     choices: Vec<InfoOverlayChoice>,
     request_id: u64,
     accepting: bool,
-    scroll_offset: usize,
-    horizontal_offset: usize,
-    viewport_rows: usize,
-    viewport_columns: usize,
-    max_line_chars: usize,
+    viewport: TextViewport,
     input: Option<InfoOverlayInput>,
     focus: Option<InfoOverlayFocus>,
 }
@@ -286,11 +240,7 @@ impl InfoOverlay {
             choices: Vec::new(),
             request_id: 0,
             accepting: false,
-            scroll_offset: 0,
-            horizontal_offset: 0,
-            viewport_rows: 1,
-            viewport_columns: 1,
-            max_line_chars: 0,
+            viewport: TextViewport::default(),
             input: None,
             focus: None,
         }
@@ -327,20 +277,14 @@ impl InfoOverlay {
             self.title = "Notice".into();
         }
         self.lines = bounded_lines(lines);
-        self.max_line_chars = self
-            .lines
-            .iter()
-            .map(|line| line.chars().count())
-            .max()
-            .unwrap_or(0);
+        self.viewport
+            .reset(self.lines.len(), widest_line_chars(&self.lines));
         self.choices = bounded_choices(choices, self.lines.len());
         self.input = None;
         // Continue is the safe default, never the first (possibly consenting)
         // choice. A new request cannot inherit a previous choice's focus.
         self.focus = Some(InfoOverlayFocus::Continue);
         self.accepting = true;
-        self.scroll_offset = 0;
-        self.horizontal_offset = 0;
         self.animation.open();
         self.request_id
     }
@@ -431,7 +375,7 @@ impl InfoOverlay {
         }
         self.focus = focus;
         if matches!(self.focus, Some(InfoOverlayFocus::Choice(_))) {
-            self.horizontal_offset = 0;
+            self.viewport.scroll_to(None, Some(0));
         }
         self.ensure_focus_visible();
         true
@@ -483,9 +427,7 @@ impl InfoOverlay {
             Some(InfoOverlayFocus::Input) => self.ensure_input_visible(),
             Some(InfoOverlayFocus::Choice(id)) => {
                 let line = self.choice(self.request_id, id).unwrap().source_line;
-                self.scroll_offset =
-                    crate::ui::scroll::reveal_row(self.scroll_offset, line, self.viewport_rows);
-                self.clamp_scroll();
+                self.viewport.reveal_row(line);
             }
             _ => {}
         }
@@ -611,12 +553,8 @@ impl InfoOverlay {
             return;
         };
         self.lines[input.source_line] = format!("{}{}", input.label, input.value.text());
-        self.max_line_chars = self
-            .lines
-            .iter()
-            .map(|line| line.chars().count())
-            .max()
-            .unwrap_or(0);
+        self.viewport
+            .set_content(self.lines.len(), widest_line_chars(&self.lines));
         self.ensure_input_visible();
     }
 
@@ -624,22 +562,14 @@ impl InfoOverlay {
         let Some(column) = self.input_cursor_source_column(self.request_id) else {
             return;
         };
-        if column < self.horizontal_offset {
-            self.horizontal_offset = column;
-        } else if column >= self.horizontal_offset.saturating_add(self.viewport_columns) {
-            self.horizontal_offset = column
-                .saturating_add(1)
-                .saturating_sub(self.viewport_columns);
-        }
-        self.clamp_scroll();
+        self.viewport.reveal_column(column);
     }
 
     fn ensure_input_visible(&mut self) {
         let Some(source_line) = self.input.as_ref().map(|input| input.source_line) else {
             return;
         };
-        self.scroll_offset =
-            crate::ui::scroll::reveal_row(self.scroll_offset, source_line, self.viewport_rows);
+        self.viewport.reveal_row(source_line);
         self.ensure_input_cursor_visible();
     }
 
@@ -673,117 +603,91 @@ impl InfoOverlay {
     }
 
     pub fn set_viewport(&mut self, rows: usize, columns: usize) {
-        self.viewport_rows = rows.max(1);
-        self.viewport_columns = columns.max(1);
-        self.clamp_scroll();
+        self.viewport.resize(rows, columns);
         self.ensure_focus_visible();
     }
 
     pub fn scroll_lines(&mut self, request_id: u64, delta: isize) -> bool {
-        if !self.is_awaiting(request_id) {
-            return false;
-        }
-        let before = self.scroll_offset;
-        self.scroll_offset = self.scroll_offset.saturating_add_signed(delta);
-        self.clamp_scroll();
-        if before != self.scroll_offset && matches!(self.focus(), Some(InfoOverlayFocus::Choice(_)))
-        {
-            self.focus = None;
-        }
-        before != self.scroll_offset
+        self.set_scroll(request_id, |viewport| viewport.scroll_by(delta, 0))
     }
 
     pub fn scroll_columns(&mut self, request_id: u64, delta: isize) -> bool {
-        if !self.is_awaiting(request_id) {
-            return false;
-        }
-        let before = self.horizontal_offset;
-        self.horizontal_offset = self.horizontal_offset.saturating_add_signed(delta);
-        self.clamp_scroll();
-        before != self.horizontal_offset
+        self.set_scroll(request_id, |viewport| viewport.scroll_by(0, delta))
     }
 
     pub fn scroll_to_top(&mut self, request_id: u64) -> bool {
-        self.set_scroll(request_id, Some(0), None)
+        self.set_scroll(request_id, |viewport| viewport.scroll_to(Some(0), None))
     }
 
     pub fn scroll_to_bottom(&mut self, request_id: u64) -> bool {
-        self.set_scroll(request_id, Some(self.max_scroll_offset()), None)
+        self.set_scroll(request_id, |viewport| {
+            viewport.scroll_to(Some(viewport.max_row()), None)
+        })
     }
 
     pub fn scroll_to_left(&mut self, request_id: u64) -> bool {
-        self.set_scroll(request_id, None, Some(0))
+        self.set_scroll(request_id, |viewport| viewport.scroll_to(None, Some(0)))
     }
 
     pub fn scroll_to_right(&mut self, request_id: u64) -> bool {
-        self.set_scroll(request_id, None, Some(self.max_horizontal_offset()))
+        self.set_scroll(request_id, |viewport| {
+            viewport.scroll_to(None, Some(viewport.max_column()))
+        })
     }
 
+    /// Scroll for the current request. A choice scrolled out of view loses
+    /// keyboard focus, so Enter cannot act on something no longer shown.
     fn set_scroll(
         &mut self,
         request_id: u64,
-        vertical: Option<usize>,
-        horizontal: Option<usize>,
+        scroll: impl FnOnce(&mut TextViewport) -> bool,
     ) -> bool {
         if !self.is_awaiting(request_id) {
             return false;
         }
-        let before = (self.scroll_offset, self.horizontal_offset);
-        if let Some(vertical) = vertical {
-            self.scroll_offset = vertical;
-        }
-        if let Some(horizontal) = horizontal {
-            self.horizontal_offset = horizontal;
-        }
-        self.clamp_scroll();
-        if before.0 != self.scroll_offset
-            && matches!(self.focus(), Some(InfoOverlayFocus::Choice(_)))
-        {
+        let row = self.viewport.row();
+        let moved = scroll(&mut self.viewport);
+        if self.viewport.row() != row && matches!(self.focus(), Some(InfoOverlayFocus::Choice(_))) {
             self.focus = None;
         }
-        before != (self.scroll_offset, self.horizontal_offset)
+        moved
     }
 
     pub fn scroll_offset(&self) -> usize {
-        self.scroll_offset
+        self.viewport.row()
     }
 
     pub fn horizontal_offset(&self) -> usize {
-        self.horizontal_offset
+        self.viewport.column()
     }
 
     pub fn viewport_rows(&self) -> usize {
-        self.viewport_rows
+        self.viewport.rows()
     }
 
     pub fn viewport_columns(&self) -> usize {
-        self.viewport_columns
+        self.viewport.columns()
     }
 
     pub fn max_scroll_offset(&self) -> usize {
-        self.lines.len().saturating_sub(self.viewport_rows)
+        self.viewport.max_row()
     }
 
     pub fn max_horizontal_offset(&self) -> usize {
-        self.max_line_chars.saturating_sub(self.viewport_columns)
+        self.viewport.max_column()
     }
 
     pub fn max_line_chars(&self) -> usize {
-        self.max_line_chars
+        self.viewport.content_columns()
     }
 
     pub fn visible_lines(&self) -> impl Iterator<Item = (usize, &str)> {
         self.lines
             .iter()
             .enumerate()
-            .skip(self.scroll_offset)
-            .take(self.viewport_rows)
+            .skip(self.viewport.row())
+            .take(self.viewport.rows())
             .map(|(index, line)| (index, line.as_str()))
-    }
-
-    fn clamp_scroll(&mut self) {
-        self.scroll_offset = self.scroll_offset.min(self.max_scroll_offset());
-        self.horizontal_offset = self.horizontal_offset.min(self.max_horizontal_offset());
     }
 
     pub fn is_active(&self) -> bool {
@@ -809,12 +713,18 @@ impl InfoOverlay {
             self.lines.clear();
             self.choices.clear();
             self.input = None;
-            self.scroll_offset = 0;
-            self.horizontal_offset = 0;
-            self.max_line_chars = 0;
+            self.viewport.reset(0, 0);
         }
         animating
     }
+}
+
+fn widest_line_chars(lines: &[String]) -> usize {
+    lines
+        .iter()
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or(0)
 }
 
 fn bounded_lines(lines: Vec<String>) -> Vec<String> {
@@ -1107,7 +1017,7 @@ mod tests {
         // These are explicit inputs, independent of scheduler/Instant timing.
         for phase in [0.0, 0.125, 0.5, 0.875, 1.0, 0.875, 0.5, 0.125, 0.0] {
             let layout = calculate(phase);
-            let translation = (1.0 - phase) * -30.0;
+            let translation = (1.0 - phase) * -20.0;
             assert_eq!(layout.rows_that_fit, settled.rows_that_fit);
             assert_eq!(layout.columns_that_fit, settled.columns_that_fit);
             for (actual, expected) in [
@@ -1148,7 +1058,7 @@ mod tests {
                 None
             );
         }
-        assert!((calculate(0.0).card.y - settled.card.y + 30.0).abs() < 0.001);
+        assert!((calculate(0.0).card.y - settled.card.y + 20.0).abs() < 0.001);
     }
 
     fn input_overlay(value: &str, max_bytes: usize) -> (InfoOverlay, u64) {

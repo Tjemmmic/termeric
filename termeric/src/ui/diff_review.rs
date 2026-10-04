@@ -3,7 +3,7 @@
 //! staged or reverted from here.
 
 use super::animation::OverlayAnimation;
-use super::constants::CONTENT_CHAR_SCALE;
+use super::text_card::{TextCard, TextViewport};
 use crate::terminal::diff_detector::{DetectedDiff, DiffLine};
 use crate::ui::geometry::Bounds;
 
@@ -143,95 +143,56 @@ impl DiffReviewLayout {
         max_line_chars: usize,
         change_actions: bool,
     ) -> Self {
-        let char_scale = (cell_width * CONTENT_CHAR_SCALE).max(1.0);
-        let padding = (cell_width * 1.5).max(10.0);
-        let line_height = (cell_height * 1.4).max(1.0);
-        let title_height = cell_height * 2.5;
-        let footer_height = cell_height * 4.2;
-        let outer_margin = (cell_width * 2.0).max(12.0);
-
-        let title_width = ("Diff: ".chars().count() + filename.chars().count()) as f32 * char_scale;
-        let preferred_columns = max_line_chars.clamp(50, 100);
-        let preferred_width = (preferred_columns as f32 * char_scale).max(title_width)
-            + padding * 2.0
-            + cell_width.max(6.0);
-        let available_width = (window_width - outer_margin * 2.0).max(1.0);
-        let card_width = preferred_width.max(500.0).min(available_width);
-
-        let fixed_height = padding + title_height + footer_height + padding * 0.5;
-        let available_height = (window_height - outer_margin * 2.0).max(line_height);
-        let content_budget = (available_height - fixed_height).max(line_height);
-        let rows_that_fit = ((content_budget / line_height).floor() as usize).max(1);
-        let visible_rows = total_rows.max(1).min(rows_that_fit);
-        let content_height = visible_rows as f32 * line_height;
-        let card_height = fixed_height + content_height;
-        let card_x = (window_width - card_width) / 2.0;
-        let card_y = (window_height - card_height) / 2.0 + (1.0 - animation) * -20.0;
-
-        let content_x = card_x + padding;
-        let content_y = card_y + padding + title_height;
-        let scrollbar_gutter = cell_width.max(6.0);
-        let content_width = (card_width - padding * 2.0 - scrollbar_gutter).max(char_scale);
-        let columns_that_fit = ((content_width / char_scale).floor() as usize).max(1);
-
-        let button_height = cell_height * 1.8;
-        let button_gap = cell_width * 1.5;
-        let button_y = content_y + content_height + cell_height * 1.15;
-        let button = |x: f32, width: f32| Bounds {
-            x,
-            y: button_y,
-            width: width.max(1.0),
-            height: button_height,
-        };
-        let row_x = card_x + padding;
+        let text = TextCard::calculate(
+            window_width,
+            window_height,
+            cell_width,
+            cell_height,
+            animation,
+            max_line_chars.clamp(50, 100),
+            "Diff: ".chars().count() + filename.chars().count(),
+            500.0,
+            total_rows,
+        );
+        let row_x = text.card.x + text.padding;
         let (stage_button, revert_button, copy_button, done_button) = if change_actions {
             // Stage, Revert, and Copy share the row equally with a wider Done.
-            let available = (card_width - padding * 2.0 - button_gap * 3.0).max(4.0);
+            let available = text.button_row_width(3).max(4.0);
             let small = available * 0.22;
             let done = available - small * 3.0;
-            let step = small + button_gap;
+            let step = small + text.button_gap;
             (
-                Some(button(row_x, small)),
-                Some(button(row_x + step, small)),
-                button(row_x + step * 2.0, small),
-                button(row_x + step * 3.0, done),
+                Some(text.button(row_x, small)),
+                Some(text.button(row_x + step, small)),
+                text.button(row_x + step * 2.0, small),
+                text.button(row_x + step * 3.0, done),
             )
         } else {
-            let available = (card_width - padding * 2.0 - button_gap).max(2.0);
+            let available = text.button_row_width(1).max(2.0);
             let copy = available * 0.38;
             (
                 None,
                 None,
-                button(row_x, copy),
-                button(row_x + copy + button_gap, available - copy),
+                text.button(row_x, copy),
+                text.button(row_x + copy + text.button_gap, available - copy),
             )
         };
 
         Self {
-            card: Bounds {
-                x: card_x,
-                y: card_y,
-                width: card_width,
-                height: card_height,
-            },
-            content: Bounds {
-                x: content_x,
-                y: content_y,
-                width: content_width,
-                height: content_height,
-            },
+            card: text.card,
+            content: text.content,
             copy_button,
             done_button,
             stage_button,
             revert_button,
-            padding,
-            title_height,
-            line_height,
-            char_scale,
-            footer_height,
-            rows_that_fit,
-            columns_that_fit,
-            scrollbar_x: card_x + card_width - padding - 4.0,
+            padding: text.padding,
+            title_height: text.title_height,
+            line_height: text.line_height,
+            char_scale: text.char_scale,
+            footer_height: text.footer_height,
+            rows_that_fit: text.rows_that_fit,
+            columns_that_fit: text.columns_that_fit,
+            scrollbar_x: text.scrollbar_x,
         }
     }
 
@@ -268,11 +229,7 @@ pub struct DiffReviewOverlay {
     change_text: String,
     request_id: u64,
     accepting: bool,
-    scroll_offset: usize,
-    horizontal_offset: usize,
-    viewport_rows: usize,
-    viewport_columns: usize,
-    max_line_chars: usize,
+    viewport: TextViewport,
 }
 
 impl DiffReviewOverlay {
@@ -286,11 +243,7 @@ impl DiffReviewOverlay {
             change_text: String::new(),
             request_id: 0,
             accepting: false,
-            scroll_offset: 0,
-            horizontal_offset: 0,
-            viewport_rows: 1,
-            viewport_columns: 1,
-            max_line_chars: 0,
+            viewport: TextViewport::default(),
         }
     }
 
@@ -329,15 +282,14 @@ impl DiffReviewOverlay {
     }
 
     fn open_rows(&mut self) -> u64 {
-        self.max_line_chars = self
+        let widest = self
             .rows
             .iter()
             .map(|row| row.prefix().chars().count() + row.text().chars().count())
             .max()
             .unwrap_or(0);
+        self.viewport.reset(self.rows.len(), widest);
         self.accepting = true;
-        self.scroll_offset = 0;
-        self.horizontal_offset = 0;
         self.animation.open();
         self.request_id
     }
@@ -396,106 +348,69 @@ impl DiffReviewOverlay {
     }
 
     pub fn max_line_chars(&self) -> usize {
-        self.max_line_chars
+        self.viewport.content_columns()
     }
 
     pub fn set_viewport(&mut self, rows: usize, columns: usize) {
-        self.viewport_rows = rows.max(1);
-        self.viewport_columns = columns.max(1);
-        self.clamp_scroll();
+        self.viewport.resize(rows, columns);
     }
 
     pub fn scroll_rows(&mut self, request_id: u64, delta: isize) -> bool {
-        if !self.is_awaiting(request_id) {
-            return false;
-        }
-        let before = self.scroll_offset;
-        self.scroll_offset = self.scroll_offset.saturating_add_signed(delta);
-        self.clamp_scroll();
-        before != self.scroll_offset
+        self.is_awaiting(request_id) && self.viewport.scroll_by(delta, 0)
     }
 
     pub fn scroll_columns(&mut self, request_id: u64, delta: isize) -> bool {
-        if !self.is_awaiting(request_id) {
-            return false;
-        }
-        let before = self.horizontal_offset;
-        self.horizontal_offset = self.horizontal_offset.saturating_add_signed(delta);
-        self.clamp_scroll();
-        before != self.horizontal_offset
+        self.is_awaiting(request_id) && self.viewport.scroll_by(0, delta)
     }
 
     pub fn scroll_to_top(&mut self, request_id: u64) -> bool {
-        self.set_scroll(request_id, Some(0), None)
+        self.is_awaiting(request_id) && self.viewport.scroll_to(Some(0), None)
     }
 
     pub fn scroll_to_bottom(&mut self, request_id: u64) -> bool {
-        self.set_scroll(request_id, Some(self.max_scroll_offset()), None)
+        let bottom = self.viewport.max_row();
+        self.is_awaiting(request_id) && self.viewport.scroll_to(Some(bottom), None)
     }
 
     pub fn scroll_to_left(&mut self, request_id: u64) -> bool {
-        self.set_scroll(request_id, None, Some(0))
+        self.is_awaiting(request_id) && self.viewport.scroll_to(None, Some(0))
     }
 
     pub fn scroll_to_right(&mut self, request_id: u64) -> bool {
-        self.set_scroll(request_id, None, Some(self.max_horizontal_offset()))
-    }
-
-    fn set_scroll(
-        &mut self,
-        request_id: u64,
-        vertical: Option<usize>,
-        horizontal: Option<usize>,
-    ) -> bool {
-        if !self.is_awaiting(request_id) {
-            return false;
-        }
-        let before = (self.scroll_offset, self.horizontal_offset);
-        if let Some(vertical) = vertical {
-            self.scroll_offset = vertical;
-        }
-        if let Some(horizontal) = horizontal {
-            self.horizontal_offset = horizontal;
-        }
-        self.clamp_scroll();
-        before != (self.scroll_offset, self.horizontal_offset)
+        let right = self.viewport.max_column();
+        self.is_awaiting(request_id) && self.viewport.scroll_to(None, Some(right))
     }
 
     pub fn scroll_offset(&self) -> usize {
-        self.scroll_offset
+        self.viewport.row()
     }
 
     pub fn horizontal_offset(&self) -> usize {
-        self.horizontal_offset
+        self.viewport.column()
     }
 
     pub fn viewport_rows(&self) -> usize {
-        self.viewport_rows
+        self.viewport.rows()
     }
 
     pub fn viewport_columns(&self) -> usize {
-        self.viewport_columns
+        self.viewport.columns()
     }
 
     pub fn max_scroll_offset(&self) -> usize {
-        self.rows.len().saturating_sub(self.viewport_rows)
+        self.viewport.max_row()
     }
 
     pub fn max_horizontal_offset(&self) -> usize {
-        self.max_line_chars.saturating_sub(self.viewport_columns)
+        self.viewport.max_column()
     }
 
     pub fn visible_rows(&self) -> impl Iterator<Item = (usize, &DiffReviewRow)> {
         self.rows
             .iter()
             .enumerate()
-            .skip(self.scroll_offset)
-            .take(self.viewport_rows)
-    }
-
-    fn clamp_scroll(&mut self) {
-        self.scroll_offset = self.scroll_offset.min(self.max_scroll_offset());
-        self.horizontal_offset = self.horizontal_offset.min(self.max_horizontal_offset());
+            .skip(self.viewport.row())
+            .take(self.viewport.rows())
     }
 
     pub fn is_active(&self) -> bool {
@@ -522,9 +437,7 @@ impl DiffReviewOverlay {
             self.target = None;
             self.change = None;
             self.change_text.clear();
-            self.scroll_offset = 0;
-            self.horizontal_offset = 0;
-            self.max_line_chars = 0;
+            self.viewport.reset(0, 0);
         }
         animating
     }
