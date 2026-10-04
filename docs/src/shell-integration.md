@@ -8,7 +8,7 @@ For Bash, Zsh, Fish, and Nushell this is set up automatically. Elvish needs one 
 
 - **Prompt jumping.** Ctrl+Shift+Up and Ctrl+Shift+Down scroll to the previous or next prompt in the focused pane, so you can step back through long output one command at a time.
 - **Failed-command jumping.** **Jump to Previous Failed Command** and **Jump to Next Failed Command** in the command palette scroll to commands that exited with a non-zero status. They have no default shortcut; bind one on the **Keyboard** page in Settings.
-- **Accurate working directory.** Your shell reports its directory at every prompt. Termeric uses it for the tab title, for the directory of new split panes (see `[panes].cwd` in [Configuration](configuration.md)), for Git branch status, and when saving [workspaces](workspaces-and-sessions.md).
+- **Accurate working directory.** Your shell reports its directory at every prompt. Termeric uses it for the tab title, for the directory of new split panes (see `[panes].cwd` in [Configuration](configuration.md)), for Git branch completion, and when saving [workspaces](workspaces-and-sessions.md).
 - **Harvest.** The experimental command history described [below](#harvest) is built entirely from shell integration.
 
 Without integration, Termeric falls back to reading the shell's directory from the system, which is usually right for local shells. Prompt and failed-command jumping and Harvest need integration.
@@ -45,7 +45,7 @@ Then open a new tab. Termeric makes the `termeric-integration` module available 
 
 ### Remote shells
 
-Integration covers shells Termeric starts on your own computer. A shell on another machine over `ssh` doesn't report prompts or directories unless you set it up to send the same OSC 7 and OSC 133 sequences. When a remote shell does report its directory, Termeric shows it in the tab title but never treats it as a local path, so new panes and Git status don't use it.
+Integration covers shells Termeric starts on your own computer. A shell on another machine over `ssh` doesn't report prompts or directories unless you set it up to send the same OSC 7 and OSC 133 sequences. When a remote shell does report its directory, Termeric shows it in the tab title but never treats it as a local path, so new panes and Git branch completion don't use it.
 
 ### Known limitations
 

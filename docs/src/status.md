@@ -75,7 +75,7 @@ This page sums up what Termeric supports today. Use it to check whether somethin
 | Quick-access terminal | A drop-down terminal toggled with `termeric --quick-access`. | On Wayland, exact placement and focus may need a compositor rule for its `termeric-quick-access` app ID. |
 | Drag and drop | Dropping a file or folder inserts its quoted path. On an experimental live-domain pane, it uploads the file or folder after you confirm. | Live-domain uploads are limited to 64 MiB. |
 | Fullscreen | F11 makes the current window fullscreen. | Fullscreen isn't remembered between launches. |
-| Git | The current branch and status, and branch-name completion for Git commands. | Termeric isn't a Git client: staging and reverting are limited to reviewing an agent's changes. |
+| Git | Branch-name completion for Git commands, and the branch recorded with an agent transcript. | Termeric isn't a Git client: staging and reverting are limited to reviewing an agent's changes. |
 | Notifications and bells | Visual and audio bells, desktop notifications from programs (OSC 9, 777, and 99), link opening. | How notifications look and behave is up to your desktop. |
 
 ## Experimental

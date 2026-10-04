@@ -30,7 +30,6 @@ const DENIED_HINT: &str = "Say what to do instead…";
 const PLAN_HINT: &str = "Say what to change in the plan…";
 const ANSWER_HINT: &str = "Type your answer…";
 
-/// A long menu's search keeps at most this many characters.
 impl App {
     // ── Actions ──────────────────────────────────────────────────────────
 

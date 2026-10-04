@@ -71,7 +71,7 @@ The terminal content comes first; the chrome around it stays quiet.
 - **Tab bar:** compact and "quiet native". The strip uses the theme's `tab_inactive` color; the active tab is a slightly raised surface with a 2px `tab_active` accent line (a left bar in the vertical rail); inactive titles are dimmed; × appears on the active or hovered tab, and background activity shows as a small dot in its place. Never fill a whole tab with a saturated color.
 - **Settings:** one centered dialog with a sidebar of pages and one search across every page. Values sit in one column with steppers, dropdown chevrons, or a trailing chevron for actions. The footer only says whether changes are saved (with a Save button when they aren't); no key-hint strips.
 - **Dialogs and menus:** start from the shared pieces — `build_modal_frame` (`renderer/palette.rs`) for centered dialogs, `build_side_panel_frame` (`renderer/panels.rs`) for side panels, and `build_popup_menu` (`renderer/popup_menu.rs`) for anchored menus; a menu with its own rows, such as the Settings dropdown, still sits on the shared `push_menu_surface`.
-- **Icons:** use the vector icons in `renderer/icons.rs` (`Icon`, `push_icon`) rather than text glyphs such as ◀ ▶ ×.
+- **Icons:** use the vector icons (`ui::icon::Icon`, drawn with `push_icon`/`draw_icon` from `renderer/icons.rs`) rather than text glyphs such as ◀ ▶ ×.
 - **Hover and feedback:** a gentle background tint, not a color change. Prefer status text and toasts over modal dialogs.
 
 ### Corners

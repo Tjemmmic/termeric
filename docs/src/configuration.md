@@ -224,7 +224,7 @@ See [Workspaces and sessions](workspaces-and-sessions.md).
 | --- | --- | --- |
 | `enabled` | `true` | `false` turns off all automatic saving and restoring, as if `auto_save` and `auto_restore` were both off. **Save Workspace** and opening a workspace by hand still work. |
 | `auto_restore` | `false` | Reopen the windows from your last session when Termeric starts with no arguments. |
-| `auto_save` | `true` | Save a window's workspace when the window closes, and save a [tab snapshot](workspaces-and-sessions.md#tab-snapshots) when a tab with output closes. |
+| `auto_save` | `true` | Save a window's workspace when it closes, if it is the last window open or belongs to a saved workspace, and save a [tab snapshot](workspaces-and-sessions.md#tab-snapshots) when a tab with output closes. |
 | `save_scrollback` | `true` | Include terminal history in workspaces and tab snapshots. |
 
 ### [splash]

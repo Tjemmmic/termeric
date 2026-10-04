@@ -1987,7 +1987,6 @@ impl SettingsPanel {
         }
     }
 
-    /// Map a dropdown option selection to a SettingsAction
     /// The action picking option `index` of a dropdown or stepped list takes.
     fn option_action(kind: &SettingKind, index: usize) -> SettingsAction {
         match kind {

@@ -85,7 +85,7 @@ Termeric supports the 16 ANSI colors (from your [theme](themes.md)), the 256-col
 | Keyboard | Application cursor and keypad modes, xterm `modifyOtherKeys` and the other `modify*Keys` resources, the Kitty keyboard protocol (all five progressive flags), and legacy/VT220 keyboard types (modes 1060 and 1061). |
 | Titles (OSC 0, 1, 2) | Set the tab and window title; title reports and the title stack are supported. |
 | Colors (OSC 4, 10, 11, 12, 104, 110–112) | Set, query, and reset palette entries and the default foreground, background, and cursor colors, for that terminal only. |
-| Working directory (OSC 7) | Used for new tabs and panes, titles, and Git status. See [Shell integration](shell-integration.md). |
+| Working directory (OSC 7) | Used for new tabs and panes, titles, and Git branch completion. See [Shell integration](shell-integration.md). |
 | Hyperlinks (OSC 8) | Ctrl+click opens the link. See [Search, copy mode, and links](search-and-copy-mode.md). |
 | Notifications (OSC 9, 777, 99) | Desktop notifications, including the Kitty OSC 99 protocol with buttons, icons, urgency, and close reports on Linux. |
 | Pointer shape (OSC 22) | Programs can change the mouse pointer over their terminal. |

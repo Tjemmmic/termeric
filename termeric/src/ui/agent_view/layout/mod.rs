@@ -931,7 +931,6 @@ impl Builder<'_, '_> {
     }
 }
 
-/// Appends `other` to `region`, keeping its hits' reading order.
 impl Builder<'_, '_> {
     /// A card: `bounds` filled and outlined at one corner `radius`.
     fn card(
@@ -998,6 +997,7 @@ impl Builder<'_, '_> {
     }
 }
 
+/// Appends `other` to `region`, keeping its hits' reading order.
 fn merge(region: &mut Region, other: Region) {
     let offset = region.hits.len();
     region.prims.extend(other.prims);

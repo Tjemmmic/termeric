@@ -73,7 +73,7 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 | `control/` | Local control socket for running GUI processes: inventory, text queries, launches, opt-in input, and `agent-event` reports |
 | `agent_view/` | Agent view core: agent-neutral events, the agents it drives and their protocols (Claude Code stream-json, Codex app-server, ACP for OpenCode), agent process and pipes, sessions, transcript, Markdown, tool presentation, earlier-conversation history |
 | `ui/agent_view/` | Agent view panel state, colors, scene (primitives, hits, accessibility nodes), and layout |
-| `agents/` | Coding-agent catalog (built-in + `[agents.<id>]`), foreground-process detection, config migration, hook status (`status`, `hook`, `setup`, `transcript`), Git change review (`changes`), context gathering for the context picker (`context`), supervisor policy (`supervisor`) |
+| `agents/` | Coding-agent catalog (built-in + `[agents.<id>]`), foreground-process detection, hook status (`status`, `hook`, `setup`, `transcript`), Git change review (`changes`), context gathering for the context picker (`context`), supervisor policy (`supervisor`) |
 | `plugin/` | Plugin trait, hooks, and manager; `AgentPlugin` launch integration for catalog agents; third-party plugins: `permission.rs` (capabilities and `:all-windows` scopes), `runtime.rs` (manifests, registry, install/update/enable), `structured.rs` (handler processes, protocol, follow-up authority) |
 | `terminal/` | Search, copy mode, URL detection, diff detection, shell integration, shared terminal-event draining (`events.rs`), and guardrails for automated (control-protocol and plugin) input |
 | `git/` | Branch detection, Git completion, and repository watching |
@@ -160,7 +160,7 @@ Two animation types in `ui/animation.rs`:
 **`OverlayAnimation`** — modal overlays (fade in/out)
 - `close()` keeps `active = true` during the close animation. `update()` clears it when done.
 - `is_active()` = blocks input. `is_visible()` = should render.
-- Every component using OverlayAnimation **must** call `update()` each frame (the calls live in `App::render()`).
+- Every component using OverlayAnimation **must** call `update()` each frame (the calls live in `App::build_chrome`, `app/frame.rs`).
 - CommandPalette uses `close_immediately()`, which clears `active` right away. With reduced motion on, `close()` does the same.
 
 **`PanelAnimation`** — slide-in panels (supports mid-animation reversal)

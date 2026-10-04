@@ -111,7 +111,7 @@ A saved host holds only a name, a destination, and an optional description. Keep
 
 ## Command reference
 
-`DOMAIN` is a domain ID such as `domain-…`, printed when you create one and by `termeric domain list`. A command that needs the daemon starts it if it isn't running. Only the commands shown with `[--json]` accept it, for script-friendly output. To run a command on another computer, put `--host SSH_DESTINATION` or `--host-profile NAME` right after `domain`, as described [above](#domains-on-another-computer).
+`DOMAIN` is a domain ID such as `domain-…`, printed when you create one and by `termeric domain list`. A command that needs the daemon starts it if it isn't running. The commands shown with `[--json]`, and `create`, `spawn`, and `split`, accept `--json` for script-friendly output. To run a command on another computer, put `--host SSH_DESTINATION` or `--host-profile NAME` right after `domain`, as described [above](#domains-on-another-computer).
 
 | Command | What it does |
 | --- | --- |

@@ -46,7 +46,7 @@ impl OverlayPage {
     }
 }
 
-/// Append a line reading "[K] label" and a choice on it picked by `key`,
+/// Append a line reading "\[K\] label" and a choice on it picked by `key`,
 /// which shows upper-case.
 pub fn push_key_choice(
     lines: &mut Vec<String>,

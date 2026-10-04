@@ -35,7 +35,7 @@ impl BranchBudget {
     }
 }
 
-/// Wrapper around a git repository for querying branches, status, etc.
+/// Wrapper around a git repository for querying its branches.
 pub struct GitRepo {
     repo: Repository,
 }
