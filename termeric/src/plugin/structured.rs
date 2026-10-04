@@ -25,9 +25,15 @@ use std::os::unix::process::CommandExt;
 
 const QUEUE_CAPACITY: usize = 32;
 const MAX_PERSISTENT_HANDLERS: usize = 8;
-pub(crate) const MAX_STRUCTURED_EVENT_BYTES: usize = 16 * 1024;
+/// One request's envelope before its settings and `request_id`: an event,
+/// or the result of a query or action.
 pub(crate) const MAX_PERSISTENT_SOURCE_EVENT_BYTES: usize =
-    MAX_STRUCTURED_EVENT_BYTES - PERSISTENT_PROTOCOL_RESERVE_BYTES;
+    16 * 1024 - PERSISTENT_PROTOCOL_RESERVE_BYTES;
+/// The plugin's settings document, bounded where settings are validated.
+/// Every request of a conversation repeats the values, so they have their
+/// own share of the request rather than competing with results.
+pub(crate) const MAX_REQUEST_SETTINGS_BYTES: usize = 8 * 1024;
+pub(crate) const MAX_STRUCTURED_EVENT_BYTES: usize = 16 * 1024 + MAX_REQUEST_SETTINGS_BYTES;
 pub(crate) const MAX_TERMINAL_QUERY_BYTES: u32 = 8 * 1024;
 const MAX_TERMINAL_INPUT_BYTES: usize = 8 * 1024;
 const PERSISTENT_PROTOCOL_RESERVE_BYTES: usize = 64;
@@ -52,6 +58,10 @@ pub struct StructuredHandlerInvocation {
     pub program: String,
     pub args: Vec<String>,
     pub event_json: String,
+    /// The plugin's effective settings, when its manifest declares any. They
+    /// come from the event that started the conversation and are sent with
+    /// that event and with every result that follows it.
+    pub settings: Option<serde_json::Value>,
     pub authority: HandlerAuthority,
 }
 
@@ -519,7 +529,7 @@ struct WorkItem {
 
 #[derive(Debug)]
 enum WorkerMessage {
-    Run(WorkItem),
+    Run(Box<WorkItem>),
     Shutdown,
 }
 
@@ -637,7 +647,7 @@ impl StructuredPluginWorker {
             invocation,
             proxy,
         };
-        match self.sender.try_send(WorkerMessage::Run(item)) {
+        match self.sender.try_send(WorkerMessage::Run(Box::new(item))) {
             Ok(()) => Ok(request_id),
             Err(TrySendError::Full(_)) => Err(format!(
                 "structured plugin queue is full ({QUEUE_CAPACITY} pending requests)"
@@ -913,7 +923,11 @@ fn run_persistent_handler(
     active_generation: &AtomicU64,
     expected_generation: u64,
 ) -> Result<Vec<StructuredResponseAction>, String> {
-    let event = persistent_request_json(&invocation.event_json, request_id)?;
+    let event = persistent_request_json(
+        &invocation.event_json,
+        invocation.settings.as_ref(),
+        request_id,
+    )?;
     handlers.retain(|_, handler| handler.is_running());
     if !handlers.contains_key(&invocation.plugin_id) {
         if handlers.len() >= MAX_PERSISTENT_HANDLERS {
@@ -949,9 +963,15 @@ fn run_persistent_handler(
     result
 }
 
-/// Add the correlation ID to a schema-v1 source event for a persistent
-/// handler. The schema version is unchanged: `request_id` is part of v1.
-fn persistent_request_json(event_json: &str, request_id: u64) -> Result<Vec<u8>, String> {
+/// Add the plugin's settings and the correlation ID to a schema-v1 event or
+/// result for a persistent handler. The source envelope stays within
+/// [`MAX_PERSISTENT_SOURCE_EVENT_BYTES`] and the settings document within
+/// [`MAX_REQUEST_SETTINGS_BYTES`], so a valid request always fits.
+fn persistent_request_json(
+    event_json: &str,
+    settings: Option<&serde_json::Value>,
+    request_id: u64,
+) -> Result<Vec<u8>, String> {
     let mut value: serde_json::Value = serde_json::from_str(event_json)
         .map_err(|error| bounded_error(&format!("invalid structured event JSON: {error}")))?;
     let object = value
@@ -965,6 +985,9 @@ fn persistent_request_json(event_json: &str, request_id: u64) -> Result<Vec<u8>,
         return Err(format!(
             "handlers require a schema-v{SCHEMA_VERSION} source event"
         ));
+    }
+    if let Some(settings) = settings {
+        object.insert("settings".into(), settings.clone());
     }
     object.insert("request_id".into(), serde_json::json!(request_id));
     let bytes = serde_json::to_vec(&value)
@@ -1092,6 +1115,7 @@ impl StructuredHandlerInvocation {
             program: "fixture".into(),
             args: Vec::new(),
             event_json: "{}".into(),
+            settings: None,
             authority: HandlerAuthority::for_event(grants, false),
         }
     }
@@ -1134,6 +1158,7 @@ mod tests {
             program: "/bin/sh".into(),
             args: vec!["-c".into(), script.into()],
             event_json: r#"{"schema_version":1,"event":{"type":"app-ready"}}"#.into(),
+            settings: None,
             authority: persistent_authority(&["ui-actions"]),
         }
     }
@@ -1587,14 +1612,28 @@ done"#,
 
     #[test]
     fn persistent_protocol_requires_object_source_and_keeps_one_schema() {
-        let request =
-            persistent_request_json(r#"{"schema_version":1,"event":{"type":"app-ready"}}"#, 42)
-                .unwrap();
+        let source = r#"{"schema_version":1,"event":{"type":"app-ready"}}"#;
+        let request = persistent_request_json(source, None, 42).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&request).unwrap();
         assert_eq!(value["schema_version"], SCHEMA_VERSION);
         assert_eq!(value["request_id"], 42);
-        assert!(persistent_request_json("[]", 1).is_err());
-        assert!(persistent_request_json(r#"{"schema_version":2}"#, 1).is_err());
+        assert!(value.get("settings").is_none());
+        assert!(persistent_request_json("[]", None, 1).is_err());
+        assert!(persistent_request_json(r#"{"schema_version":2}"#, None, 1).is_err());
+    }
+
+    #[test]
+    fn every_request_of_a_conversation_carries_its_settings() {
+        let settings = serde_json::json!({"direction": "horizontal"});
+        let event = r#"{"schema_version":1,"plugin_id":"split-here","origin_window_id":3,"event":{"type":"command-invoked","command_id":"split-here.split"}}"#;
+        let result = r#"{"schema_version":1,"plugin_id":"split-here","origin_window_id":3,"event":{"type":"action-result","action":"create-pane","ok":true}}"#;
+        for source in [event, result] {
+            let request = persistent_request_json(source, Some(&settings), 7).unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&request).unwrap();
+            assert_eq!(value["settings"], settings);
+            assert_eq!(value["request_id"], 7);
+            assert!(value.get("context").is_none());
+        }
     }
 
     #[test]
@@ -1774,7 +1813,7 @@ done"#,
     }
 
     #[test]
-    fn handler_events_are_refused_past_sixteen_kib() {
+    fn handler_requests_are_refused_past_their_limit() {
         // The request ID the worker adds counts toward the bound.
         let event_of = |padding: usize| {
             format!(
@@ -1784,10 +1823,29 @@ done"#,
         };
         let request_id = u64::MAX;
         let added = r#","request_id":18446744073709551615"#.len();
+
+        // The largest source envelope with the largest settings document
+        // the runtime accepts always fits.
+        let document_of = |values: &serde_json::Value| {
+            serde_json::json!({"schema_version": 1, "plugin_id": "p", "values": values}).to_string()
+        };
+        let empty = serde_json::json!({"s": ""});
+        let largest_settings = serde_json::json!({
+            "s": "x".repeat(MAX_REQUEST_SETTINGS_BYTES - document_of(&empty).len()),
+        });
+        assert_eq!(
+            document_of(&largest_settings).len(),
+            MAX_REQUEST_SETTINGS_BYTES
+        );
+        let largest_source = event_of(MAX_PERSISTENT_SOURCE_EVENT_BYTES - event_of(0).len());
+        assert!(
+            persistent_request_json(&largest_source, Some(&largest_settings), request_id).is_ok()
+        );
+
         let fits = MAX_STRUCTURED_EVENT_BYTES - added - event_of(0).len();
-        let encoded = persistent_request_json(&event_of(fits), request_id).unwrap();
+        let encoded = persistent_request_json(&event_of(fits), None, request_id).unwrap();
         assert_eq!(encoded.len(), MAX_STRUCTURED_EVENT_BYTES);
-        let error = persistent_request_json(&event_of(fits + 1), request_id).unwrap_err();
+        let error = persistent_request_json(&event_of(fits + 1), None, request_id).unwrap_err();
         assert!(
             error.contains(&format!("exceeds {MAX_STRUCTURED_EVENT_BYTES} bytes")),
             "{error}"
@@ -1877,6 +1935,7 @@ done"#,
             program: handler.program,
             args: handler.args,
             event_json: String::new(),
+            settings: None,
             authority: HandlerAuthority::for_event(manifest.permissions, command_invoked),
         }
     }
@@ -1981,8 +2040,8 @@ done"#,
     }
 
     /// A persistent-handler conversation with a checked-in example, granted
-    /// everything its manifest requests. Like the host, it sends settings
-    /// only with events, never with results.
+    /// everything its manifest requests. Like the host, it sends a command's
+    /// settings with the command and with every result that follows it.
     struct ExampleConversation {
         handlers: HashMap<String, PersistentHandler>,
         shutdown: AtomicBool,
@@ -2012,14 +2071,12 @@ done"#,
         ) -> Vec<StructuredResponseAction> {
             self.invocation.authority =
                 HandlerAuthority::for_event(self.invocation.authority.grants().clone(), true);
+            self.invocation.settings = settings;
             let plugin_id = self.invocation.plugin_id.clone();
-            let mut envelope = self.envelope(serde_json::json!({
+            let envelope = self.envelope(serde_json::json!({
                 "type": "command-invoked",
                 "command_id": format!("{plugin_id}.{command}"),
             }));
-            if let Some(settings) = settings {
-                envelope["settings"] = settings;
-            }
             self.send(envelope)
         }
 
@@ -2145,9 +2202,8 @@ done"#,
             );
         }
 
-        // Jump to Tab matches the title setting from the command event even
-        // though the query result carries no settings; without it, the empty
-        // title would match window 3's "shell" tab first.
+        // Jump to Tab reads the title setting from the workspace query
+        // result, which carries the command's settings.
         conversation.origin_window_id = 3;
         let select = StructuredResponseAction::SelectTab {
             action_id: "jump".into(),

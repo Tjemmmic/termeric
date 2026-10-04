@@ -77,11 +77,8 @@ def jump_to_tab(windows, needle):
             ]
     return [{"type": "show-message", "message": "No tab title contains " + short(repr(needle), 200)}]
 
-# Settings arrive with events, not with query results, so keep the latest.
-settings = {}
 for line in sys.stdin:
     request = json.loads(line)
-    settings = request.get("settings", settings)
     event = request["event"]
     actions = []
     if event["type"] == "command-invoked":
@@ -92,7 +89,7 @@ for line in sys.stdin:
         if event["query_id"] == "next-window":
             actions = next_window(windows, request["origin_window_id"])
         else:
-            actions = jump_to_tab(windows, settings.get("tab-title", ""))
+            actions = jump_to_tab(windows, request["settings"]["tab-title"])
     elif event["type"] == "action-result" and not event["ok"]:
         actions.append({"type": "show-message", "message": "Window switch failed: " + short(event["error"])})
     reply = {"schema_version": 1, "request_id": request["request_id"], "actions": actions}

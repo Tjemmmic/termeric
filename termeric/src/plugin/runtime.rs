@@ -32,11 +32,11 @@ const MAX_HANDLER_COMMANDS: usize = 32;
 const MAX_SETTINGS: usize = 32;
 pub(crate) const MAX_SETTING_TEXT_BYTES: usize = 512;
 const MAX_SETTING_CHOICES: usize = 32;
-const MAX_SETTING_VALUE_BYTES: usize = 8 * 1024;
+const MAX_SETTING_VALUE_BYTES: usize = super::structured::MAX_REQUEST_SETTINGS_BYTES;
 const MAX_ARGS: usize = 64;
 const MAX_ARG_BYTES: usize = 4096;
 const MAX_TOTAL_ARG_BYTES: usize = 32 * 1024;
-const MAX_STRUCTURED_CONTEXT_BYTES: usize = super::structured::MAX_STRUCTURED_EVENT_BYTES;
+const MAX_STRUCTURED_CONTEXT_BYTES: usize = MAX_PERSISTENT_SOURCE_EVENT_BYTES;
 const MAX_STRUCTURED_COMMAND_JSON_BYTES: usize = 2 * 1024;
 const MAX_STRUCTURED_OUTPUT_JSON_BYTES: usize = 8 * 1024;
 /// Version of the launch-context and settings documents handed to profiles
@@ -1004,10 +1004,10 @@ impl DeclarativePlugin {
             "origin_window_id": context.window_id,
             "event": event,
         });
-        if !self.manifest.settings.is_empty() {
-            envelope["settings"] = serde_json::to_value(&self.settings)
-                .expect("validated plugin settings serialize to JSON");
-        }
+        let settings = (!self.manifest.settings.is_empty()).then(|| {
+            serde_json::to_value(&self.settings)
+                .expect("validated plugin settings serialize to JSON")
+        });
         if self.grants.contains(Capability::WorkspaceQuery) {
             envelope["context"] = serde_json::json!({
                 "active_working_directory": context.cwd,
@@ -1047,6 +1047,7 @@ impl DeclarativePlugin {
                 program: handler.program.clone(),
                 args: handler.args.clone(),
                 event_json,
+                settings,
                 authority: HandlerAuthority::for_event(
                     self.grants.clone(),
                     kind == StructuredEventKind::CommandInvoked,
@@ -2865,6 +2866,8 @@ events = ["command-invoked"]
         );
         assert_eq!(invocation.plugin_id, "handler-fixture");
         assert_eq!(invocation.authority.grants(), &grants);
+        // A plugin without settings sends none, with the event or its results.
+        assert!(invocation.settings.is_none());
         let value: serde_json::Value = serde_json::from_str(&invocation.event_json).unwrap();
         assert_eq!(value["schema_version"], 1);
         assert_eq!(value["origin_window_id"], 7);
@@ -3321,10 +3324,14 @@ events = ["command-invoked"]
         ) else {
             panic!("configured handler command did not produce an invocation")
         };
+        // Settings travel with the invocation, so the event's results carry
+        // them too; the event envelope itself holds none.
+        let settings = invocation.settings.as_ref().unwrap();
+        assert_eq!(settings["detail"], "full");
+        assert_eq!(settings["label"], "configured");
         let handler_event: serde_json::Value =
             serde_json::from_str(&invocation.event_json).unwrap();
-        assert_eq!(handler_event["settings"]["detail"], "full");
-        assert_eq!(handler_event["settings"]["label"], "configured");
+        assert!(handler_event.get("settings").is_none());
 
         let shown: serde_json::Value = serde_json::from_str(
             &execute_admin_at(

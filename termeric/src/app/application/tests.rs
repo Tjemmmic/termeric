@@ -3049,6 +3049,7 @@ fn plugin_host_results_continue_under_the_follow_up_rule() {
         program: "handler".into(),
         args: Vec::new(),
         event_json: "{}".into(),
+        settings: Some(serde_json::json!({"direction": "horizontal"})),
         authority: HandlerAuthority::for_event(grants.clone(), false),
     };
     let query = StructuredResponseAction::QueryWorkspace {
@@ -3077,6 +3078,8 @@ fn plugin_host_results_continue_under_the_follow_up_rule() {
     let result: serde_json::Value = serde_json::from_str(&after_query.event_json).unwrap();
     assert_eq!(result["event"]["type"], "workspace-query-result");
     assert_eq!(after_query.authority.grants(), &grants);
+    // Results carry the settings of the event that began the conversation.
+    assert_eq!(after_query.settings, event_continuation.settings);
     assert!(
         after_query
             .authority
@@ -3098,6 +3101,10 @@ fn plugin_host_results_continue_under_the_follow_up_rule() {
         let result: serde_json::Value = serde_json::from_str(&after_action.event_json).unwrap();
         assert_eq!(result["event"]["type"], "action-result");
         assert_eq!(result["event"]["ok"], true, "{result}");
+        assert_eq!(
+            after_action.settings,
+            Some(serde_json::json!({"direction": "horizontal"}))
+        );
         assert!(
             after_action
                 .authority

@@ -177,7 +177,7 @@ Every setting has a `type`, an `id`, a `name` (at most 80 bytes), and an optiona
 | `text` | `default` (optional, empty if left out) | One line of at most 512 bytes |
 | `choice` | `default`, `choices` (1 to 32 values, each at most 80 bytes) | One of `choices` |
 
-The effective values, your changes over the manifest's defaults, reach profiles in `TERMERIC_PLUGIN_SETTINGS_JSON` and the event handler in each event's `settings`. All values together must fit in 8 KiB of JSON.
+The effective values, your changes over the manifest's defaults, reach profiles in `TERMERIC_PLUGIN_SETTINGS_JSON` and the event handler in each request's `settings`. All values together must fit in 8 KiB of JSON.
 
 ## Permissions
 
@@ -232,10 +232,10 @@ The handler also receives the results of its queries and actions. If it fails a 
 | `origin_window_id` | The window the event happened in, with the same IDs as `termeric control list`. |
 | `event` | The event, with its `type`. |
 | `request_id` | The number to echo in the response. |
-| `settings` | Event requests only, when the plugin declares settings: `{"SETTING-ID": value, …}`. |
+| `settings` | When the plugin declares settings: `{"SETTING-ID": value, …}`. A result carries the settings of the event that began its conversation. |
 | `context` | Event requests only, when `workspace-query` is granted: `active_working_directory`, `tab_count`, `active_tab_index`, and `terminal` (`columns`, `rows`) for the origin window. |
 
-Result events (below) carry no `settings` or `context`; a handler that needs them later keeps them from the event that started the conversation.
+Result events (below) carry no `context`; a handler that needs it later keeps it from the event that started the conversation.
 
 ### Events
 
@@ -304,7 +304,7 @@ A query or action gets exactly one result, sent to the handler as a request with
 
 `workspace-query-result` has the `query_id`, a `windows` array, and `truncated`. Each window has `id`, `focused`, `visible`, `quick_access`, `workspace_id`, `pixel_width`, `pixel_height`, `tabs`, and `truncated`; each tab has `id`, `title`, `kind`, `active`, `pinned`, `activity`, `closed`, `domain_id`, `panes`, `dividers`, and `truncated`; each pane has `id`, `title`, `focused`, `closed`, `cols`, and `rows`; each divider has `id`, `kind`, `direction`, and `ratio_millis`. With window scope only the origin window is listed. The result covers at most 8 windows, 16 tabs, 32 panes, and 31 dividers, and `truncated` is `true` when something was left out.
 
-`terminal-query-result` echoes `query_id`, `window_id`, `tab_id`, `pane_id`, `requested_history_lines`, and `requested_max_bytes`, and has `ok`. On success it adds `screen` (`primary` or `alternate`), `history_lines` (the scrollback lines included), `text`, `text_bytes`, and `truncated`. The text is cut further when needed to fit the 16 KiB request.
+`terminal-query-result` echoes `query_id`, `window_id`, `tab_id`, `pane_id`, `requested_history_lines`, and `requested_max_bytes`, and has `ok`. On success it adds `screen` (`primary` or `alternate`), `history_lines` (the scrollback lines included), `text`, `text_bytes`, and `truncated`. The text is cut further when needed to fit the request.
 
 `action-result` has `action` (the action's type), `ok`, and the action's own fields, with omitted window IDs filled in and `text` left out. On success it adds the result fields from the table; on failure, `error` and `error_truncated`.
 
@@ -325,7 +325,7 @@ The limit applies to one conversation, not across events. An action can cause a 
 | Limit | Value |
 | --- | --- |
 | Time to answer one request | 2 seconds |
-| Request size | 16 KiB |
+| Request size | 16 KiB, plus up to 8 KiB of settings |
 | Response size | 64 KiB |
 | Actions per response | 8, with at most one query or action |
 | Handler processes per window | 8 |
@@ -369,8 +369,6 @@ The handler, `handler.py`:
 import json
 import sys
 
-settings = {}
-
 
 def reply(request, actions):
     response = {"schema_version": 1, "request_id": request["request_id"], "actions": actions}
@@ -394,8 +392,6 @@ for line in sys.stdin:
     event = request["event"]
     actions = []
     if event["type"] == "command-invoked":
-        # Results carry no settings, so keep them from the command's event.
-        settings = request.get("settings", {})
         actions.append({"type": "query-workspace", "query_id": "split"})
     elif event["type"] == "workspace-query-result":
         target = focused_pane(event["windows"], request["origin_window_id"])
@@ -408,7 +404,7 @@ for line in sys.stdin:
                 "action_id": "split",
                 "tab_id": tab_id,
                 "pane_id": pane_id,
-                "direction": settings.get("direction", "vertical"),
+                "direction": request["settings"]["direction"],
             })
     elif event["type"] == "action-result" and not event["ok"]:
         actions.append({"type": "show-message", "message": "Split failed: " + event["error"][:200]})
