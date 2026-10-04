@@ -1199,6 +1199,26 @@ impl TabManager {
         self.active = active.min(self.tabs.len().saturating_sub(1));
     }
 
+    /// Move the tab a workspace restore just appended at `index` into the
+    /// leading pinned group when it is pinned, as pinning it would, keeping
+    /// the same tab active. Returns the tab's index.
+    pub(crate) fn settle_restored_workspace_tab(&mut self, index: usize) -> usize {
+        let boundary = self.tabs[..index]
+            .iter()
+            .take_while(|tab| tab.pinned)
+            .count();
+        if !self.tabs[index].pinned || boundary == index {
+            return index;
+        }
+        let active_id = self.active_tab_id();
+        let tab = self.tabs.remove(index);
+        self.tabs.insert(boundary, tab);
+        self.active = active_id
+            .and_then(|id| self.tabs.iter().position(|tab| tab.id == id))
+            .unwrap_or(boundary);
+        boundary
+    }
+
     pub(crate) fn new_shell_tab_from_workspace(
         &mut self,
         snapshot: &crate::workspace::WorkspaceTabSnapshot,

@@ -208,11 +208,13 @@ impl App {
                 .push("workspace metadata was recovered from its backup".into());
         }
 
-        let mut restored_indices = vec![None; report.workspace.tabs.len()];
+        // Restored tabs by their runtime IDs: a pinned tab restored after an
+        // unpinned one moves into the pinned group, shifting earlier indices.
+        let mut restored_ids = vec![None; report.workspace.tabs.len()];
         for (source_index, snapshot) in report.workspace.tabs.iter().enumerate() {
             match self.restore_workspace_tab(&mut replacement, snapshot) {
                 Ok((index, warnings)) => {
-                    restored_indices[source_index] = Some(index);
+                    restored_ids[source_index] = Some(replacement.all_tabs()[index].id);
                     outcome.restored_tabs += 1;
                     outcome.warnings.extend(warnings);
                 }
@@ -231,10 +233,11 @@ impl App {
             self.tabs = Some(original);
             anyhow::bail!("none of the workspace's tabs could be relaunched");
         }
-        if let Some(index) = restored_indices
+        if let Some(index) = restored_ids
             .get(report.workspace.active_tab)
             .copied()
             .flatten()
+            .and_then(|id| replacement.all_tabs().iter().position(|tab| tab.id == id))
         {
             replacement.set_active_workspace_tab(index);
         } else {
@@ -264,11 +267,13 @@ impl App {
         snapshot.validate()?;
         let count = tabs.count();
         let active = tabs.active_index();
-        let result = self.restore_workspace_tab_inner(tabs, snapshot);
-        if result.is_err() {
-            tabs.rollback_workspace_tab(count, active);
+        match self.restore_workspace_tab_inner(tabs, snapshot) {
+            Ok((index, warnings)) => Ok((tabs.settle_restored_workspace_tab(index), warnings)),
+            Err(error) => {
+                tabs.rollback_workspace_tab(count, active);
+                Err(error)
+            }
         }
-        result
     }
 
     fn restore_workspace_tab_inner(
