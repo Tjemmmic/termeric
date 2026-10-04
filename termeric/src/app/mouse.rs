@@ -1300,6 +1300,9 @@ impl App {
         let icon = self.last_cursor_pos.zip(self.renderer.as_ref()).map_or(
             winit::window::CursorIcon::Default,
             |(position, renderer)| {
+                if self.floating_chrome_at(position) {
+                    return winit::window::CursorIcon::Default;
+                }
                 let (cell_width, cell_height) = renderer.cell_size();
                 self.terminal_pointer_icon_at(
                     position,
@@ -1313,9 +1316,24 @@ impl App {
         window.set_cursor(icon);
     }
 
+    /// Whether chrome drawn over the panes lies at `position`: the find box,
+    /// a toast, or a pane's scrollbar. Each takes presses there before the
+    /// pane does, so the pointer is its plain arrow, never the terminal's.
+    fn floating_chrome_at(&self, position: (f64, f64)) -> bool {
+        self.search_bar_click_at(position) != SearchBarClick::None
+            || self.renderer.as_ref().is_some_and(|renderer| {
+                renderer
+                    .toast_hit_test(position.0 as f32, position.1 as f32)
+                    .is_some()
+            })
+            || self.is_click_on_scrollbar(position.0, position.1)
+    }
+
     /// Ctrl makes the pointer a hand over links, so pressing or releasing it
-    /// reshapes the pointer where it rests over a pane. Over a divider or
-    /// outside the panes the pointer belongs to whatever drew it there.
+    /// reshapes the pointer where it rests over a pane, through the same
+    /// check of what lies there as motion, so chrome over the pane keeps its
+    /// arrow. Over a divider or outside the panes the pointer belongs to
+    /// whatever drew it there.
     pub(super) fn refresh_pointer_after_modifiers(&self, previous: ModifiersState) {
         if previous.control_key() == self.modifiers.control_key() {
             return;
