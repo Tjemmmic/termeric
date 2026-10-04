@@ -1695,6 +1695,39 @@ mod tests {
         value
     }
 
+    const UNIDENTIFIED: PhysicalKey =
+        PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified);
+
+    fn ch(text: &str) -> Key {
+        Key::Character(text.into())
+    }
+
+    /// The conventional xterm encoding under the startup profile.
+    fn legacy(
+        logical: &Key,
+        text: Option<&str>,
+        modifiers: ModifiersState,
+        alt_graph_active: bool,
+        mode: TerminalMode,
+    ) -> Option<Vec<u8>> {
+        encode_legacy_xterm(
+            logical,
+            UNIDENTIFIED,
+            text,
+            modifiers,
+            alt_graph_active,
+            mode,
+            XtermKeyProfile::default(),
+        )
+    }
+
+    fn other_keys(other_keys: XtermModifyOtherKeys) -> XtermKeyProfile {
+        XtermKeyProfile {
+            other_keys,
+            ..XtermKeyProfile::default()
+        }
+    }
+
     fn named(key: NamedKey, modifiers: ModifiersState, mode: TerminalMode) -> Vec<u8> {
         encode_legacy_xterm(
             &Key::Named(key),
@@ -1709,23 +1742,20 @@ mod tests {
     }
 
     fn modify_other(
-        logical: Key,
+        logical: &Key,
         text: Option<&str>,
         modifiers: ModifiersState,
         level: u8,
         mask: u8,
     ) -> Vec<u8> {
         encode_xterm(
-            &logical,
-            PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified),
+            logical,
+            UNIDENTIFIED,
             text,
             modifiers,
             false,
             TerminalMode::default(),
-            XtermKeyProfile {
-                other_keys: XtermModifyOtherKeys::new(level, mask).unwrap(),
-                ..XtermKeyProfile::default()
-            },
+            other_keys(XtermModifyOtherKeys::new(level, mask).unwrap()),
         )
         .unwrap()
     }
@@ -1830,7 +1860,7 @@ mod tests {
 
     fn profile_key(
         logical: NamedKey,
-        physical: PhysicalKey,
+        physical: KeyCode,
         modifiers: ModifiersState,
         mode: TerminalMode,
         keyboard_type: XtermKeyboardType,
@@ -1838,7 +1868,7 @@ mod tests {
     ) -> Vec<u8> {
         encode_xterm(
             &Key::Named(logical),
-            physical,
+            PhysicalKey::Code(physical),
             None,
             modifiers,
             false,
@@ -1854,129 +1884,51 @@ mod tests {
 
     #[test]
     fn legacy_and_vt220_profiles_match_xterm_function_and_editing_keys() {
+        use NamedKey::{Delete, End, F1, Home};
+        use XtermKeyboardType::{Legacy, Normal, Vt220};
         let none = ModifiersState::empty();
         let alt = mods(false, true, false);
         let shift = mods(true, false, false);
         let ctrl = mods(false, false, true);
-        let physical = PhysicalKey::Code(KeyCode::F1);
-
-        assert_eq!(
-            profile_key(
-                NamedKey::F1,
-                physical,
+        let normal = TerminalMode::default();
+        let application = TerminalMode::CURSOR_KEYS_APPLICATION;
+        for (key, physical, modifiers, mode, keyboard_type, modify_keyboard, expected) in [
+            (
+                F1,
+                KeyCode::F1,
                 none,
-                TerminalMode::default(),
-                XtermKeyboardType::Normal,
+                normal,
+                Normal,
                 0,
+                b"\x1bOP".as_slice(),
             ),
-            b"\x1bOP"
-        );
-        assert_eq!(
-            profile_key(
-                NamedKey::F1,
-                physical,
-                none,
-                TerminalMode::default(),
-                XtermKeyboardType::Legacy,
-                0,
-            ),
-            b"\x1b[11~"
-        );
-        assert_eq!(
-            profile_key(
-                NamedKey::F1,
-                physical,
-                none,
-                TerminalMode::default(),
-                XtermKeyboardType::Vt220,
-                0,
-            ),
-            b"\x1bOP"
-        );
-
-        // Both historical profiles reserve Shift for UDKs and consume
-        // Control to select F(n+10), independently of the permission mask.
-        for keyboard_type in [XtermKeyboardType::Legacy, XtermKeyboardType::Vt220] {
+            (F1, KeyCode::F1, none, normal, Legacy, 0, b"\x1b[11~"),
+            (F1, KeyCode::F1, none, normal, Vt220, 0, b"\x1bOP"),
+            // Both historical profiles reserve Shift for UDKs and consume
+            // Control to select F(n+10), independently of the permission mask.
+            (F1, KeyCode::F1, ctrl, normal, Legacy, 0, b"\x1b[23~"),
+            (F1, KeyCode::F1, ctrl, normal, Vt220, 0, b"\x1b[23~"),
+            (F1, KeyCode::F1, shift, normal, Legacy, 0, b"\x1b[11~"),
+            (F1, KeyCode::F1, shift, normal, Legacy, 4, b"\x1b[11;2~"),
+            // VT220 translates the PC Home/End identities to DEC Find/Select.
+            (Home, KeyCode::Home, alt, application, Vt220, 0, b"\x1b[1~"),
+            (End, KeyCode::End, alt, normal, Vt220, 2, b"\x1b[4;3~"),
+            (Delete, KeyCode::Delete, none, normal, Legacy, 0, b"\x7f"),
+            (Delete, KeyCode::Delete, none, normal, Vt220, 0, b"\x1b[3~"),
+        ] {
             assert_eq!(
                 profile_key(
-                    NamedKey::F1,
+                    key,
                     physical,
-                    ctrl,
-                    TerminalMode::default(),
+                    modifiers,
+                    mode,
                     keyboard_type,
-                    0,
+                    modify_keyboard
                 ),
-                b"\x1b[23~"
+                expected,
+                "{key:?} {modifiers:?} {keyboard_type:?} {modify_keyboard}"
             );
         }
-        assert_eq!(
-            profile_key(
-                NamedKey::F1,
-                physical,
-                shift,
-                TerminalMode::default(),
-                XtermKeyboardType::Legacy,
-                0,
-            ),
-            b"\x1b[11~"
-        );
-        assert_eq!(
-            profile_key(
-                NamedKey::F1,
-                physical,
-                shift,
-                TerminalMode::default(),
-                XtermKeyboardType::Legacy,
-                4,
-            ),
-            b"\x1b[11;2~"
-        );
-
-        // VT220 translates the PC Home/End identities to DEC Find/Select.
-        assert_eq!(
-            profile_key(
-                NamedKey::Home,
-                PhysicalKey::Code(KeyCode::Home),
-                alt,
-                TerminalMode::CURSOR_KEYS_APPLICATION,
-                XtermKeyboardType::Vt220,
-                0,
-            ),
-            b"\x1b[1~"
-        );
-        assert_eq!(
-            profile_key(
-                NamedKey::End,
-                PhysicalKey::Code(KeyCode::End),
-                alt,
-                TerminalMode::default(),
-                XtermKeyboardType::Vt220,
-                2,
-            ),
-            b"\x1b[4;3~"
-        );
-        assert_eq!(
-            profile_key(
-                NamedKey::Delete,
-                PhysicalKey::Code(KeyCode::Delete),
-                none,
-                TerminalMode::default(),
-                XtermKeyboardType::Legacy,
-                0,
-            ),
-            [0x7f]
-        );
-        assert_eq!(
-            profile_key(
-                NamedKey::Delete,
-                PhysicalKey::Code(KeyCode::Delete),
-                none,
-                TerminalMode::default(),
-                XtermKeyboardType::Vt220,
-                0,
-            ),
-            b"\x1b[3~"
-        );
     }
 
     #[test]
@@ -2022,155 +1974,86 @@ mod tests {
     #[test]
     fn modify_keyboard_bits_gate_each_historical_profile_category() {
         let alt = mods(false, true, false);
+        let normal = TerminalMode::default();
         for keyboard_type in [XtermKeyboardType::Legacy, XtermKeyboardType::Vt220] {
-            assert_eq!(
-                profile_key(
-                    NamedKey::F5,
-                    PhysicalKey::Code(KeyCode::F5),
-                    alt,
-                    TerminalMode::default(),
-                    keyboard_type,
-                    0,
-                ),
-                b"\x1b[15~"
-            );
-            assert_eq!(
-                profile_key(
-                    NamedKey::F5,
-                    PhysicalKey::Code(KeyCode::F5),
-                    alt,
-                    TerminalMode::default(),
-                    keyboard_type,
-                    4,
-                ),
-                b"\x1b[15;3~"
-            );
-            assert_eq!(
-                profile_key(
-                    NamedKey::Help,
-                    PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified),
-                    alt,
-                    TerminalMode::default(),
-                    keyboard_type,
-                    0,
-                ),
-                b"\x1b[28~"
-            );
-            assert_eq!(
-                profile_key(
-                    NamedKey::Help,
-                    PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified),
-                    alt,
-                    TerminalMode::default(),
-                    keyboard_type,
-                    8,
-                ),
-                b"\x1b[28;3~"
-            );
-            assert_eq!(
-                profile_key(
-                    NamedKey::End,
-                    PhysicalKey::Code(KeyCode::End),
-                    alt,
-                    TerminalMode::default(),
-                    keyboard_type,
-                    0,
-                ),
-                if keyboard_type == XtermKeyboardType::Vt220 {
-                    b"\x1b[4~".as_slice()
-                } else {
-                    b"\x1b[F".as_slice()
-                }
-            );
+            let end = if keyboard_type == XtermKeyboardType::Vt220 {
+                b"\x1b[4~".as_slice()
+            } else {
+                b"\x1b[F"
+            };
+            for (key, physical, modify_keyboard, expected) in [
+                (NamedKey::F5, KeyCode::F5, 0, b"\x1b[15~".as_slice()),
+                (NamedKey::F5, KeyCode::F5, 4, b"\x1b[15;3~"),
+                (NamedKey::Help, KeyCode::Help, 0, b"\x1b[28~"),
+                (NamedKey::Help, KeyCode::Help, 8, b"\x1b[28;3~"),
+                (NamedKey::End, KeyCode::End, 0, end),
+            ] {
+                assert_eq!(
+                    profile_key(key, physical, alt, normal, keyboard_type, modify_keyboard),
+                    expected,
+                    "{keyboard_type:?} {key:?} {modify_keyboard}"
+                );
+            }
         }
 
-        assert_eq!(
-            profile_key(
-                NamedKey::Enter,
-                PhysicalKey::Code(KeyCode::NumpadAdd),
-                alt,
-                TerminalMode::KEYPAD_APPLICATION,
-                XtermKeyboardType::Vt220,
-                0,
-            ),
-            b"\x1bOl"
-        );
-        assert_eq!(
-            profile_key(
-                NamedKey::Enter,
-                PhysicalKey::Code(KeyCode::NumpadAdd),
-                alt,
-                TerminalMode::KEYPAD_APPLICATION,
-                XtermKeyboardType::Vt220,
-                1,
-            ),
-            b"\x1bO3l"
-        );
-        assert_eq!(
-            profile_key(
-                NamedKey::Enter,
-                PhysicalKey::Code(KeyCode::NumpadAdd),
-                mods(false, false, true),
-                TerminalMode::KEYPAD_APPLICATION,
-                XtermKeyboardType::Vt220,
-                0,
-            ),
-            b"\x1bOm"
-        );
+        // VT220's keypad Add key is its Separator, and Control+Separator is
+        // Subtract with the Control consumed.
+        let keypad = TerminalMode::KEYPAD_APPLICATION;
+        for (modifiers, modify_keyboard, expected) in [
+            (alt, 0, b"\x1bOl".as_slice()),
+            (alt, 1, b"\x1bO3l"),
+            (mods(false, false, true), 0, b"\x1bOm"),
+        ] {
+            assert_eq!(
+                profile_key(
+                    NamedKey::Enter,
+                    KeyCode::NumpadAdd,
+                    modifiers,
+                    keypad,
+                    XtermKeyboardType::Vt220,
+                    modify_keyboard,
+                ),
+                expected,
+                "{modifiers:?} {modify_keyboard}"
+            );
+        }
     }
 
     #[test]
     fn xterm_function_key_modes_formats_remapping_and_codes_match_xterm() {
+        use XtermKeyMode::{Control, Disabled, Original, Parameter, Private};
         let modified = mods(false, true, true);
-        for (mode, expected) in [
-            (XtermKeyMode::Disabled, b"\x1b[42~".as_slice()),
-            (XtermKeyMode::Original, b"\x1bO7P".as_slice()),
-            (XtermKeyMode::Control, b"\x1b[7P".as_slice()),
-            (XtermKeyMode::Parameter, b"\x1b[1;7P".as_slice()),
-            (XtermKeyMode::Private, b"\x1b[>1;7P".as_slice()),
+        for (key, modifiers, mode, expected) in [
+            (NamedKey::F1, modified, Disabled, b"\x1b[42~".as_slice()),
+            (NamedKey::F1, modified, Original, b"\x1bO7P"),
+            (NamedKey::F1, modified, Control, b"\x1b[7P"),
+            (NamedKey::F1, modified, Parameter, b"\x1b[1;7P"),
+            (NamedKey::F1, modified, Private, b"\x1b[>1;7P"),
+            (NamedKey::F5, modified, Private, b"\x1b[>15;7~"),
+            // Disabled mode uses xterm's default ctrlFKeys=10 remapping and
+            // then discards any remaining Alt/Meta state.
+            (
+                NamedKey::F1,
+                mods(true, false, false),
+                Disabled,
+                b"\x1b[23~",
+            ),
+            (
+                NamedKey::F1,
+                mods(false, false, true),
+                Disabled,
+                b"\x1b[42~",
+            ),
+            (NamedKey::F1, mods(true, false, true), Disabled, b"\x1b[52~"),
+            (NamedKey::F1, mods(false, true, false), Disabled, b"\x1bOP"),
         ] {
+            let policy = XtermKeyResource::Function.default_setting().with_mode(mode);
             assert_eq!(
-                function_key_with_policy(
-                    NamedKey::F1,
-                    modified,
-                    XtermKeyResource::Function.default_setting().with_mode(mode),
-                ),
+                function_key_with_policy(key, modifiers, policy),
                 expected,
-                "mode {mode:?}"
+                "{key:?} {modifiers:?} {mode:?}"
             );
         }
-        assert_eq!(
-            function_key_with_policy(
-                NamedKey::F5,
-                modified,
-                XtermKeyResource::Function
-                    .default_setting()
-                    .with_mode(XtermKeyMode::Private),
-            ),
-            b"\x1b[>15;7~"
-        );
-
-        // Disabled mode uses xterm's default ctrlFKeys=10 remapping and then
-        // discards any remaining Alt/Meta state.
-        let disabled = XtermKeyResource::Function
-            .default_setting()
-            .with_mode(XtermKeyMode::Disabled);
-        assert_eq!(
-            function_key_with_policy(NamedKey::F1, mods(true, false, false), disabled),
-            b"\x1b[23~"
-        );
-        assert_eq!(
-            function_key_with_policy(NamedKey::F1, mods(false, false, true), disabled),
-            b"\x1b[42~"
-        );
-        assert_eq!(
-            function_key_with_policy(NamedKey::F1, mods(true, false, true), disabled),
-            b"\x1b[52~"
-        );
-        assert_eq!(
-            function_key_with_policy(NamedKey::F1, mods(false, true, false), disabled),
-            b"\x1bOP"
-        );
 
         for (key, expected) in [
             (NamedKey::F13, b"\x1b[25~".as_slice()),
@@ -2250,61 +2133,28 @@ mod tests {
 
     #[test]
     fn xterm_cursor_key_modes_formats_and_codes_match_xterm() {
+        use XtermKeyMode::{Control, Disabled, Original, Parameter, Private};
         let modified = mods(false, true, true);
-        let policies = [
-            (XtermKeyMode::Disabled, b"\x1b[A".as_slice()),
-            (XtermKeyMode::Original, b"\x1b[7A".as_slice()),
-            (XtermKeyMode::Control, b"\x1b[7A".as_slice()),
-            (XtermKeyMode::Parameter, b"\x1b[1;7A".as_slice()),
-            (XtermKeyMode::Private, b"\x1b[>1;7A".as_slice()),
-        ];
-        for (mode, expected) in policies {
+        let normal = TerminalMode::default();
+        let application = TerminalMode::CURSOR_KEYS_APPLICATION;
+        for (key, mode, policy, expected) in [
+            (NamedKey::ArrowUp, normal, Disabled, b"\x1b[A".as_slice()),
+            (NamedKey::ArrowUp, normal, Original, b"\x1b[7A"),
+            (NamedKey::ArrowUp, normal, Control, b"\x1b[7A"),
+            (NamedKey::ArrowUp, normal, Parameter, b"\x1b[1;7A"),
+            (NamedKey::ArrowUp, normal, Private, b"\x1b[>1;7A"),
+            // Disabling strips modifiers but keeps DECCKM for cursor finals.
+            (NamedKey::ArrowUp, application, Original, b"\x1bO7A"),
+            (NamedKey::ArrowUp, application, Disabled, b"\x1bOA"),
+            (NamedKey::PageUp, normal, Private, b"\x1b[>5;7~"),
+        ] {
+            let setting = XtermKeyResource::Cursor.default_setting().with_mode(policy);
             assert_eq!(
-                cursor_key_with_policy(
-                    NamedKey::ArrowUp,
-                    modified,
-                    TerminalMode::default(),
-                    XtermKeyResource::Cursor.default_setting().with_mode(mode),
-                ),
+                cursor_key_with_policy(key, modified, mode, setting),
                 expected,
-                "mode {mode:?}"
+                "{key:?} {mode:?} {policy:?}"
             );
         }
-
-        // Disabling strips modifiers but retains DECCKM for cursor finals.
-        assert_eq!(
-            cursor_key_with_policy(
-                NamedKey::ArrowUp,
-                modified,
-                TerminalMode::CURSOR_KEYS_APPLICATION,
-                XtermKeyResource::Cursor
-                    .default_setting()
-                    .with_mode(XtermKeyMode::Original),
-            ),
-            b"\x1bO7A"
-        );
-        assert_eq!(
-            cursor_key_with_policy(
-                NamedKey::ArrowUp,
-                modified,
-                TerminalMode::CURSOR_KEYS_APPLICATION,
-                XtermKeyResource::Cursor
-                    .default_setting()
-                    .with_mode(XtermKeyMode::Disabled),
-            ),
-            b"\x1bOA"
-        );
-        assert_eq!(
-            cursor_key_with_policy(
-                NamedKey::PageUp,
-                modified,
-                TerminalMode::default(),
-                XtermKeyResource::Cursor
-                    .default_setting()
-                    .with_mode(XtermKeyMode::Private),
-            ),
-            b"\x1b[>5;7~"
-        );
 
         let extended = XtermKeySetting::new(XtermKeyMode::Extended, XtermKeyFormat::FunctionKey27);
         let mappings = [
@@ -2347,122 +2197,77 @@ mod tests {
 
     #[test]
     fn xterm_modify_other_keys_levels_masks_and_unicode_are_unambiguous() {
-        // User level preserves familiar one-modifier character mappings but
-        // disambiguates Control+Shift and modified terminal control keys.
-        assert_eq!(
-            modify_other(
-                Key::Character("R".into()),
+        let none = ModifiersState::empty();
+        let tab = Key::Named(NamedKey::Tab);
+        let backspace = Key::Named(NamedKey::Backspace);
+        for (logical, text, modifiers, level, mask, expected) in [
+            // User level preserves familiar one-modifier character mappings
+            // but disambiguates Control+Shift and modified control keys.
+            (
+                ch("R"),
                 Some("R"),
                 mods(true, false, true),
                 1,
                 0,
+                "\x1b[27;6;82~",
             ),
-            b"\x1b[27;6;82~"
-        );
-        assert_eq!(
-            modify_other(
-                Key::Character("x".into()),
+            (ch("x"), Some("x"), mods(false, true, false), 1, 0, "\x1bx"),
+            (
+                tab.clone(),
+                None,
+                mods(false, true, false),
+                1,
+                0,
+                "\x1b[27;3;9~",
+            ),
+            (tab, None, mods(true, false, false), 1, 0, "\x1b[Z"),
+            // Program level encodes every modified ordinary/control key, and
+            // level three also encodes unmodified keys.
+            (
+                ch("i"),
+                None,
+                mods(false, false, true),
+                2,
+                0,
+                "\x1b[27;5;105~",
+            ),
+            (
+                backspace,
+                None,
+                mods(false, false, true),
+                2,
+                0,
+                "\x1b[27;5;127~",
+            ),
+            (ch("λ"), Some("λ"), none, 2, 0, "λ"),
+            (ch("λ"), Some("λ"), none, 3, 0, "\x1b[27;1;955~"),
+            // A sole masked modifier keeps its legacy behavior. Super is
+            // carried as xterm's Meta bit when it is not masked.
+            (ch("!"), Some("!"), mods(true, false, false), 2, 1, "!"),
+            (
+                ch("x"),
                 Some("x"),
-                mods(false, true, false),
-                1,
-                0,
-            ),
-            b"\x1bx"
-        );
-        assert_eq!(
-            modify_other(
-                Key::Named(NamedKey::Tab),
-                None,
-                mods(false, true, false),
-                1,
-                0,
-            ),
-            b"\x1b[27;3;9~"
-        );
-        assert_eq!(
-            modify_other(
-                Key::Named(NamedKey::Tab),
-                None,
-                mods(true, false, false),
-                1,
-                0,
-            ),
-            b"\x1b[Z"
-        );
-
-        // Program level encodes every modified ordinary/control key, while
-        // level three additionally encodes unmodified keys.
-        assert_eq!(
-            modify_other(
-                Key::Character("i".into()),
-                None,
-                mods(false, false, true),
+                ModifiersState::SUPER,
                 2,
                 0,
+                "\x1b[27;9;120~",
             ),
-            b"\x1b[27;5;105~"
-        );
-        assert_eq!(
-            modify_other(
-                Key::Named(NamedKey::Backspace),
-                None,
-                mods(false, false, true),
-                2,
-                0,
-            ),
-            b"\x1b[27;5;127~"
-        );
-        assert_eq!(
-            modify_other(
-                Key::Character("λ".into()),
-                Some("λ"),
-                ModifiersState::empty(),
-                2,
-                0,
-            ),
-            "λ".as_bytes()
-        );
-        assert_eq!(
-            modify_other(
-                Key::Character("λ".into()),
-                Some("λ"),
-                ModifiersState::empty(),
-                3,
-                0,
-            ),
-            b"\x1b[27;1;955~"
-        );
-
-        // A sole masked modifier retains legacy behavior. Super is carried
-        // as xterm's Meta bit when it is not masked.
-        assert_eq!(
-            modify_other(
-                Key::Character("!".into()),
-                Some("!"),
-                mods(true, false, false),
-                2,
-                1,
-            ),
-            b"!"
-        );
-        let mut super_only = ModifiersState::empty();
-        super_only.insert(ModifiersState::SUPER);
-        assert_eq!(
-            modify_other(Key::Character("x".into()), Some("x"), super_only, 2, 0,),
-            b"\x1b[27;9;120~"
-        );
+        ] {
+            assert_eq!(
+                modify_other(&logical, text, modifiers, level, mask),
+                expected.as_bytes(),
+                "{logical:?} {modifiers:?} level {level} mask {mask}"
+            );
+        }
 
         let altgr = encode_xterm(
-            &Key::Character("€".into()),
-            PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified),
+            &ch("€"),
+            UNIDENTIFIED,
             Some("€"),
             mods(false, true, true),
             true,
             TerminalMode::default(),
-            XtermKeyProfile {
-                other_keys: XtermModifyOtherKeys::new(2, 0).unwrap(),
-                ..XtermKeyProfile::default()
-            },
+            other_keys(XtermModifyOtherKeys::new(2, 0).unwrap()),
         );
         assert_eq!(altgr, Some("€".as_bytes().to_vec()));
 
@@ -2471,70 +2276,66 @@ mod tests {
         // as layout composition there too, not as Control+Alt.
         for level in [0, 1] {
             let unproduced = encode_xterm(
-                &Key::Character("e".into()),
-                PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified),
+                &ch("e"),
+                UNIDENTIFIED,
                 None,
                 mods(false, true, true),
                 true,
                 TerminalMode::default(),
-                XtermKeyProfile {
-                    other_keys: XtermModifyOtherKeys::new(level, 0).unwrap(),
-                    ..XtermKeyProfile::default()
-                },
+                other_keys(XtermModifyOtherKeys::new(level, 0).unwrap()),
             );
-            let legacy = encode_legacy_xterm(
-                &Key::Character("e".into()),
-                PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified),
-                None,
-                mods(false, true, true),
-                true,
-                TerminalMode::default(),
-                XtermKeyProfile::default(),
+            assert_eq!(
+                unproduced,
+                legacy(
+                    &ch("e"),
+                    None,
+                    mods(false, true, true),
+                    true,
+                    TerminalMode::default()
+                ),
+                "level {level}"
             );
-            assert_eq!(unproduced, legacy, "level {level}");
             assert_eq!(unproduced, Some(b"e".to_vec()), "level {level}");
         }
     }
 
     #[test]
     fn xterm_modify_other_keys_csi_u_format_preserves_codes_and_modifiers() {
-        let program = XtermModifyOtherKeys::new(2, 0)
-            .unwrap()
-            .with_format(XtermKeyFormat::CsiU);
-        assert_eq!(
-            encode_xterm(
-                &Key::Character("i".into()),
+        for (logical, physical, text, modifiers, level, expected) in [
+            (
+                ch("i"),
                 PhysicalKey::Code(KeyCode::KeyI),
                 None,
                 mods(false, false, true),
-                false,
-                TerminalMode::default(),
-                XtermKeyProfile {
-                    other_keys: program,
-                    ..XtermKeyProfile::default()
-                }
+                2,
+                b"\x1b[105;5u".as_slice(),
             ),
-            Some(b"\x1b[105;5u".to_vec())
-        );
-
-        let all_keys = XtermModifyOtherKeys::new(3, 0)
-            .unwrap()
-            .with_format(XtermKeyFormat::CsiU);
-        assert_eq!(
-            encode_xterm(
-                &Key::Character("λ".into()),
-                PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified),
+            (
+                ch("λ"),
+                UNIDENTIFIED,
                 Some("λ"),
                 ModifiersState::empty(),
-                false,
-                TerminalMode::default(),
-                XtermKeyProfile {
-                    other_keys: all_keys,
-                    ..XtermKeyProfile::default()
-                }
+                3,
+                b"\x1b[955;1u",
             ),
-            Some(b"\x1b[955;1u".to_vec())
-        );
+        ] {
+            let policy = XtermModifyOtherKeys::new(level, 0)
+                .unwrap()
+                .with_format(XtermKeyFormat::CsiU);
+            assert_eq!(
+                encode_xterm(
+                    &logical,
+                    physical,
+                    text,
+                    modifiers,
+                    false,
+                    TerminalMode::default(),
+                    other_keys(policy),
+                ),
+                Some(expected.to_vec()),
+                "{logical:?}"
+            );
+        }
     }
 
     #[test]
@@ -3106,32 +2907,15 @@ mod tests {
             (KeyCode::NumpadSubtract, b"-", b"\x1bOm"),
         ];
 
+        let policy = XtermKeyResource::Keypad.default_setting();
+        let none = ModifiersState::empty();
         for (physical, normal, application) in cases {
-            let logical = Key::Character("not-the-keypad-value".into());
             assert_eq!(
-                encode_legacy_xterm(
-                    &logical,
-                    PhysicalKey::Code(physical),
-                    None,
-                    ModifiersState::empty(),
-                    false,
-                    TerminalMode::default(),
-                    XtermKeyProfile::default()
-                )
-                .unwrap(),
+                keypad_key_with_policy(physical, none, TerminalMode::default(), policy),
                 normal
             );
             assert_eq!(
-                encode_legacy_xterm(
-                    &logical,
-                    PhysicalKey::Code(physical),
-                    None,
-                    ModifiersState::empty(),
-                    false,
-                    TerminalMode::KEYPAD_APPLICATION,
-                    XtermKeyProfile::default()
-                )
-                .unwrap(),
+                keypad_key_with_policy(physical, none, TerminalMode::KEYPAD_APPLICATION, policy),
                 application
             );
         }
@@ -3245,79 +3029,27 @@ mod tests {
 
     #[test]
     fn control_meta_altgr_and_unicode_text_do_not_conflict() {
-        let unidentified = PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified);
-        assert_eq!(
-            encode_legacy_xterm(
-                &Key::Character("C".into()),
-                unidentified,
-                Some("C"),
-                mods(true, false, true),
-                false,
-                TerminalMode::default(),
-                XtermKeyProfile::default()
-            ),
-            Some(vec![0x03])
-        );
-        assert_eq!(
-            encode_legacy_xterm(
-                &Key::Character("x".into()),
-                unidentified,
-                Some("x"),
-                mods(false, true, false),
-                false,
-                TerminalMode::default(),
-                XtermKeyProfile::default()
-            ),
-            Some(b"\x1bx".to_vec())
-        );
-        assert_eq!(
-            encode_legacy_xterm(
-                &Key::Character("€".into()),
-                unidentified,
-                Some("€"),
-                mods(false, true, true),
-                true,
-                TerminalMode::default(),
-                XtermKeyProfile::default()
-            ),
-            Some("€".as_bytes().to_vec())
-        );
-        assert_eq!(
-            encode_legacy_xterm(
-                &Key::Named(NamedKey::Space),
-                unidentified,
-                Some("\u{a0}"),
-                mods(false, true, true),
-                true,
-                TerminalMode::default(),
-                XtermKeyProfile::default()
-            ),
-            Some("\u{a0}".as_bytes().to_vec())
-        );
-        assert_eq!(
-            encode_legacy_xterm(
-                &Key::Character("x".into()),
-                unidentified,
-                Some("x"),
-                mods(false, true, true),
-                false,
-                TerminalMode::default(),
-                XtermKeyProfile::default()
-            ),
-            Some(vec![0x1b, 0x18])
-        );
-        assert_eq!(
-            encode_legacy_xterm(
-                &Key::Character("界".into()),
-                unidentified,
-                Some("界"),
-                ModifiersState::empty(),
-                false,
-                TerminalMode::default(),
-                XtermKeyProfile::default()
-            ),
-            Some("界".as_bytes().to_vec())
-        );
+        let space = Key::Named(NamedKey::Space);
+        for (logical, text, modifiers, alt_graph_active, expected) in [
+            (ch("C"), "C", mods(true, false, true), false, "\x03"),
+            (ch("x"), "x", mods(false, true, false), false, "\x1bx"),
+            (ch("€"), "€", mods(false, true, true), true, "€"),
+            (space, "\u{a0}", mods(false, true, true), true, "\u{a0}"),
+            (ch("x"), "x", mods(false, true, true), false, "\x1b\x18"),
+            (ch("界"), "界", ModifiersState::empty(), false, "界"),
+        ] {
+            assert_eq!(
+                legacy(
+                    &logical,
+                    Some(text),
+                    modifiers,
+                    alt_graph_active,
+                    TerminalMode::default()
+                ),
+                Some(expected.as_bytes().to_vec()),
+                "{logical:?} {modifiers:?} AltGr {alt_graph_active}"
+            );
+        }
     }
 
     #[test]
