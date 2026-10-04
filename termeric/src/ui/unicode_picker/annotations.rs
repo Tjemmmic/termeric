@@ -1,6 +1,7 @@
 //! Zero-copy access to the generated CLDR English annotation index.
 
 use std::sync::OnceLock;
+#[cfg(test)]
 use unicode_segmentation::UnicodeSegmentation;
 
 pub(super) const CLDR_VERSION: &str = "48.0.0";
@@ -55,11 +56,15 @@ impl<'a> AnnotationIndex<'a> {
         let records = &data[HEADER_BYTES..pool_start];
         let pool =
             std::str::from_utf8(&data[pool_start..]).expect("CLDR annotation pool is not UTF-8");
-        let index = Self { records, pool };
-        index.validate();
-        index
+        Self { records, pool }
     }
 
+    /// Check every record: contiguous, ordered, on UTF-8 boundaries, one
+    /// grapheme with no control characters, sorted by text. The embedded
+    /// index comes from `scripts/generate_cldr_annotations.py` and the tests
+    /// run this check on it, so loading checks only the header, length, and
+    /// UTF-8.
+    #[cfg(test)]
     fn validate(&self) {
         let mut previous_end = 0;
         let mut previous_text: Option<&str> = None;
@@ -157,9 +162,12 @@ pub(super) fn index() -> &'static AnnotationIndex<'static> {
     INDEX.get_or_init(|| AnnotationIndex::load(DATA))
 }
 
+/// Load and fully validate the embedded index.
 #[cfg(test)]
 pub(super) fn validate_embedded_index() -> AnnotationIndex<'static> {
-    AnnotationIndex::load(DATA)
+    let index = AnnotationIndex::load(DATA);
+    index.validate();
+    index
 }
 
 #[cfg(test)]
