@@ -575,3 +575,49 @@ fn changing_the_configured_size_ends_a_zoom() {
     app.apply_config(reloaded).unwrap();
     assert_eq!(app.effective_font_size(), 13.0);
 }
+
+/// Make the next poll look at the configuration file as if it had changed.
+fn poll_config_now(app: &mut App) {
+    app.last_config_check = Instant::now()
+        .checked_sub(App::CONFIG_POLL_INTERVAL)
+        .expect("the clock is past one poll interval");
+    app.last_config_mtime = None;
+    app.poll_config_for_hot_reload();
+}
+
+/// Messages of the toasts that stay until dismissed.
+fn lasting_toasts(app: &App) -> Vec<String> {
+    let later = Instant::now() + std::time::Duration::from_secs(3600);
+    app.toasts
+        .iter()
+        .filter(|toast| !toast.is_expired(later))
+        .map(|toast| toast.message.clone())
+        .collect()
+}
+
+#[test]
+fn a_reload_with_a_typo_keeps_the_settings_and_says_so_until_fixed() {
+    let (_directory, path, mut app) = app_with_config_file("[window]\npadding = 4\n");
+    std::fs::write(&path, "[window]\npadding = 6\npading = 7\n").unwrap();
+    poll_config_now(&mut app);
+    assert_eq!(app.config.window.padding, 4, "the previous settings stay");
+    let problems = lasting_toasts(&app);
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(
+        problems[0].contains("unknown field `pading`"),
+        "{problems:?}"
+    );
+    assert!(problems[0].contains("line 3"), "{problems:?}");
+
+    // A second problem replaces the first rather than stacking.
+    std::fs::write(&path, "[window]\npadding = 9999\n").unwrap();
+    poll_config_now(&mut app);
+    let problems = lasting_toasts(&app);
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(problems[0].contains("window.padding"), "{problems:?}");
+
+    std::fs::write(&path, "[window]\npadding = 6\n").unwrap();
+    poll_config_now(&mut app);
+    assert_eq!(app.config.window.padding, 6);
+    assert!(lasting_toasts(&app).is_empty());
+}

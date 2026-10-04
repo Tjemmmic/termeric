@@ -1151,6 +1151,9 @@ pub struct App {
     /// when live changes have not been saved, and a save writes only what
     /// differs from it.
     saved_config: Option<toml::Table>,
+    /// The notice about the configuration file's current problem: it stays
+    /// until the file next loads, or a newer problem replaces it.
+    config_problem_toast: Option<u64>,
     /// Last installed-plugin registry mtime for live enable/update/remove.
     last_plugin_registry_mtime: Option<std::time::SystemTime>,
     /// File backing the active custom/explicit theme, when applicable.
@@ -1527,6 +1530,7 @@ impl App {
             last_agent_scan: Instant::now(),
             pending_agent_submits: Vec::new(),
             saved_config: None,
+            config_problem_toast: None,
             agents: crate::agents::AgentCatalog::default(),
             last_config_mtime: use_system_state
                 .then(|| std::fs::metadata(&config_path))
@@ -1652,8 +1656,7 @@ impl App {
         app.apply_config_side_effects(true);
         app.mark_config_saved();
         if let Some(warning) = startup_config_warning {
-            log::error!("{}", warning);
-            app.toasts.error(warning);
+            app.report_config_problem(crate::ui::toast::ToastSeverity::Error, warning);
         }
 
         Ok(app)
@@ -3396,17 +3399,21 @@ impl App {
         match Config::load_from(&self.config_path) {
             Ok(config) => {
                 if let Err(error) = self.apply_config(config) {
-                    self.toasts.error(format!("Reload failed: {error}"));
+                    self.report_config_problem(
+                        crate::ui::toast::ToastSeverity::Error,
+                        format!("Reload failed; keeping the current settings: {error}"),
+                    );
                 } else {
                     self.mark_config_saved();
+                    self.clear_config_problem();
                     log::info!("Configuration reloaded");
                     self.toasts.success("Configuration reloaded");
                 }
             }
-            Err(e) => {
-                log::error!("Failed to reload config: {}", e);
-                self.toasts.error(format!("Reload failed: {}", e));
-            }
+            Err(error) => self.report_config_problem(
+                crate::ui::toast::ToastSeverity::Error,
+                format!("Reload failed; keeping the current settings: {error:#}"),
+            ),
         }
     }
 
@@ -3431,6 +3438,7 @@ impl App {
             return;
         }
         self.mark_config_saved();
+        self.clear_config_problem();
         match backup {
             Some(backup) => self.toasts.success(format!(
                 "Configuration reset; the old file is {}",
@@ -3767,6 +3775,25 @@ impl App {
         let mut config = self.config.clone();
         config.shortcuts = self.shortcut_registry.user_overrides();
         config
+    }
+
+    /// Show `message`, a problem with the configuration file, until the file
+    /// next loads, in place of any earlier one.
+    fn report_config_problem(
+        &mut self,
+        severity: crate::ui::toast::ToastSeverity,
+        message: String,
+    ) {
+        log::error!("{message}");
+        self.clear_config_problem();
+        self.config_problem_toast = Some(self.toasts.persistent(severity, message));
+    }
+
+    /// The configuration file loaded: its problem notice is out of date.
+    fn clear_config_problem(&mut self) {
+        if let Some(toast) = self.config_problem_toast.take() {
+            self.toasts.dismiss(toast);
+        }
     }
 
     /// The live configuration as `config::save::config_table` gives it.

@@ -19,7 +19,7 @@ mkdir -p ~/.config/termeric
 cp assets/config.example.toml ~/.config/termeric/config.toml
 ```
 
-Keys are grouped into tables such as `[font]` and `[window]`. A key you leave out keeps its default. Termeric ignores keys it does not recognize in most tables, so check the spelling if a change seems to have no effect. The `[profiles.*]`, `[agents.*]`, `[agent_status]`, `[agent_view]`, and `[supervisor]` tables are strict: an unknown key there is an error.
+Keys are grouped into tables such as `[font]` and `[window]`. A key you leave out keeps its default. A key Termeric does not recognize, anywhere in the file, is an error that names the key and its line, so a misspelling never silently does nothing. Theme files follow the same rule.
 
 ## Live reload
 
@@ -38,6 +38,7 @@ Termeric never lets a mistake in `config.toml` stop it from starting, and never 
 
 - **At startup**, an unreadable or invalid file makes Termeric start with the default settings and show an error notice explaining the problem.
 - **On reload**, an invalid edit is rejected with a warning notice, and the settings you were already using stay in effect. Fix the file and save it again.
+- These notices stay on screen until the file loads again (or you reset it), and a newer problem replaces an older one.
 - **Saving** from Settings (or anything else that saves) refuses to replace a file that has an error, so your settings are never lost to a typo. The notice tells you to fix the file, or to use **Reset Configuration to Defaults**.
 - **Reset Configuration to Defaults** in the command palette replaces the file with one that sets nothing, so every setting returns to its default. Termeric first keeps the old file, whether or not it had an error, beside it as `config.toml.<seconds>.bak`, where `<seconds>` is the current Unix time, and the notice names the copy.
 

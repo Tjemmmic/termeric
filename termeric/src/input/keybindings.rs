@@ -377,6 +377,7 @@ fn capitalize_key(key: &str) -> String {
 /// A user override persisted in config.toml.
 /// Only bindings that differ from defaults are saved.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ShortcutOverride {
     /// The `BindableAction` string id (e.g. "copy", "new_tab").
     pub action: String,
@@ -534,6 +535,7 @@ impl Default for ShortcutRegistry {
 
 /// A key binding definition for plugin/custom actions (SendText, RunCommand, etc.)
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct KeyBinding {
     pub key: String,
     #[serde(default)]
@@ -543,6 +545,7 @@ pub struct KeyBinding {
 
 /// Modifier keys for a binding
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct KeyModifiers {
     #[serde(default)]
     pub ctrl: bool,
@@ -557,7 +560,7 @@ pub struct KeyModifiers {
 /// Action to perform when a plugin/custom key binding is triggered.
 /// These are dynamic/parameterized and cannot be part of BindableAction.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum KeyAction {
     SendText { text: String },
     RunCommand { command: String },

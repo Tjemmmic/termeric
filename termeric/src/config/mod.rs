@@ -13,7 +13,7 @@ use crate::input::keybindings::{KeyBinding, ShortcutOverride};
 
 /// Application configuration
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Config {
     /// Renderer adapter selection and recovery policy.
     pub renderer: RendererConfig,
@@ -127,7 +127,7 @@ impl PaneCwdMode {
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct PanesConfig {
     pub cwd: PaneCwdMode,
 }
@@ -153,7 +153,7 @@ impl XtermKeyboardTypeConfig {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct KeyboardConfig {
     /// `normal`, `legacy`, or `vt220`.
     pub xterm_type: XtermKeyboardTypeConfig,
@@ -183,7 +183,7 @@ impl std::fmt::Display for RendererBackend {
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct RendererConfig {
     /// Adapter policy: auto, gpu, or software.
     pub backend: RendererBackend,
@@ -223,7 +223,7 @@ impl AccessibilityPreference {
 /// Accessibility presentation preferences. Each policy can follow the native
 /// desktop signal or use a portable explicit override.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct AccessibilityConfig {
     /// Remove non-essential panel, overlay, toast, hover, and menu transitions.
     pub reduce_motion: AccessibilityPreference,
@@ -234,6 +234,7 @@ pub struct AccessibilityConfig {
 
 /// A user-defined custom command (e.g. SSH into a box)
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct CustomCommand {
     /// Display name (e.g. "SSH Production")
     pub name: String,
@@ -522,12 +523,13 @@ fn serialize_shortest_f32<S: serde::Serializer>(
 /// remains the source of truth for ports, identities, proxies, certificates,
 /// and known-host policy; Termeric profiles only provide bounded stable names.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct DomainsConfig {
     pub ssh_hosts: BTreeMap<String, SshHostProfile>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SshHostProfile {
     pub destination: String,
     #[serde(default)]
@@ -586,7 +588,7 @@ fn validate_ssh_profile_name(name: &str) -> Result<()> {
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct SecurityConfig {
     /// Permit terminal applications to derive visible cell contents through
     /// DECRQCRA checksum reports. Disabled by default to prevent screen scraping.
@@ -604,7 +606,7 @@ pub struct SecurityConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Osc52Config {
     /// Permit terminal applications to read desktop clipboard contents.
     pub allow_read: bool,
@@ -626,7 +628,7 @@ impl Default for Osc52Config {
 
 /// Harvest mode configuration
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct HarvestConfig {
     /// Enable harvest mode (command visualization)
     pub enabled: bool,
@@ -648,7 +650,7 @@ impl Default for HarvestConfig {
 
 /// Shell configuration
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ShellConfig {
     /// Path to shell program
     pub program: Option<String>,
@@ -920,6 +922,7 @@ pub const DEFAULT_BOLD_FONT_WEIGHT: u16 = 700;
 
 /// Inclusive Unicode-scalar interval routed to one preferred font family.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[serde(deny_unknown_fields)]
 pub struct FontRangeOverride {
     /// First included Unicode scalar value.
     pub start: u32,
@@ -930,7 +933,7 @@ pub struct FontRangeOverride {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct FontConfig {
     /// Font family name
     pub family: String,
@@ -975,7 +978,7 @@ impl Default for FontConfig {
 
 /// Scrollback configuration
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ScrollbackConfig {
     /// Maximum number of lines to keep
     pub lines: usize,
@@ -1012,6 +1015,7 @@ pub enum CopyModeBindings {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct QuickSelectPattern {
     pub name: String,
     pub regex: String,
@@ -1020,7 +1024,7 @@ pub struct QuickSelectPattern {
 /// Copy mode deliberately keeps semantic patterns bounded and compiles them
 /// during validated configuration application, never in the render loop.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct CopyModeConfig {
     pub bindings: CopyModeBindings,
     pub patterns: Vec<QuickSelectPattern>,
@@ -1050,7 +1054,7 @@ impl Default for CopyModeConfig {
 
 /// Theme configuration
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ThemeConfig {
     /// Theme name (looks in themes directory)
     pub name: String,
@@ -1166,7 +1170,7 @@ impl BackgroundImageFit {
 
 /// Optional, local-only terminal background image policy.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct BackgroundImageConfig {
     /// PNG or JPEG path. Relative paths are resolved beside `config.toml`.
     pub path: Option<PathBuf>,
@@ -1215,7 +1219,7 @@ impl BackgroundImageConfig {
 
 /// Window configuration
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct WindowConfig {
     /// Initial width
     pub width: u32,
@@ -1279,7 +1283,7 @@ impl CursorStyle {
 
 /// Cursor configuration
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct CursorConfig {
     /// Cursor style
     pub style: CursorStyle,
@@ -1301,7 +1305,7 @@ impl Default for CursorConfig {
 
 /// Bell configuration (serializable version)
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct BellConfigFile {
     /// Enable visual bell (screen flash)
     pub visual: bool,
@@ -1324,7 +1328,7 @@ impl Default for BellConfigFile {
 /// `[session]`: automatic saving and restoring of workspaces and closed-tab
 /// snapshots, the two things that carry a session across restarts.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct SessionConfig {
     /// Allow automatic saving and restoring at all; manual workspace saves
     /// work either way
@@ -1378,7 +1382,7 @@ impl SplashMode {
 
 /// Splash screen configuration
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct SplashConfig {
     /// When to show the splash screen
     pub mode: SplashMode,
@@ -2053,6 +2057,33 @@ mod tests {
         ] {
             let invalid: Config = toml::from_str(source).unwrap();
             assert!(invalid.validate().is_err(), "accepted {source:?}");
+        }
+    }
+
+    #[test]
+    fn a_misspelled_key_anywhere_is_refused_with_its_line() {
+        let path = std::path::Path::new("config.toml");
+        for (source, line) in [
+            ("[window]\npadding = 4\n\n[windwo]\nopacity = 0.9\n", 4),
+            ("[font]\nsize = 13\nlineheight = 1.4\n", 3),
+            ("[window.background_image]\nfti = \"cover\"\n", 2),
+            (
+                "[[commands]]\nname = \"db\"\ncommand = \"ssh db\"\nalais = \"d\"\n",
+                4,
+            ),
+            (
+                "[[keybindings]]\nkey = \"a\"\naction = { type = \"send_text\", txt = \"x\" }\n",
+                3,
+            ),
+            (
+                "[[shortcuts]]\naction = \"copy\"\nkey = \"c\"\ncrtl = true\n",
+                4,
+            ),
+            ("themee = \"nord\"\n", 1),
+        ] {
+            let error = format!("{:#}", Config::from_toml(source, path).unwrap_err());
+            assert!(error.contains("unknown field"), "{source}: {error}");
+            assert!(error.contains(&format!("line {line}")), "{source}: {error}");
         }
     }
 

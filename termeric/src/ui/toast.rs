@@ -144,7 +144,13 @@ impl ToastManager {
     /// Add an explicitly-dismissed progress/status toast and return its stable
     /// ID so background work can update one bounded UI entry in place.
     pub fn persistent_info(&mut self, message: impl Into<String>) -> u64 {
-        let id = self.push_inner(ToastSeverity::Info, message.into());
+        self.persistent(ToastSeverity::Info, message)
+    }
+
+    /// Add a toast that stays until it is dismissed by ID, such as a problem
+    /// that lasts until the person fixes it.
+    pub fn persistent(&mut self, severity: ToastSeverity, message: impl Into<String>) -> u64 {
+        let id = self.push_inner(severity, message.into());
         if let Some(toast) = self.toasts.iter_mut().find(|toast| toast.id == id) {
             toast.persistent = true;
         }

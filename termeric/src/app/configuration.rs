@@ -206,19 +206,23 @@ impl App {
                 match crate::config::Config::load_from(&self.config_path) {
                     Ok(config) => {
                         if let Err(error) = self.apply_config(config) {
-                            log::warn!("Config hot-reload rejected: {}", error);
-                            self.toasts
-                                .warning(format!("Config reload rejected: {error}"));
+                            self.report_config_problem(
+                                crate::ui::toast::ToastSeverity::Warning,
+                                format!(
+                                    "Config reload rejected; keeping the current settings: {error}"
+                                ),
+                            );
                         } else {
                             self.mark_config_saved();
+                            self.clear_config_problem();
                             log::info!("Config hot-reloaded");
                             self.toasts.info("Config reloaded");
                         }
                     }
-                    Err(e) => {
-                        log::warn!("Config hot-reload failed: {}", e);
-                        self.toasts.warning(format!("Config reload failed: {}", e));
-                    }
+                    Err(error) => self.report_config_problem(
+                        crate::ui::toast::ToastSeverity::Warning,
+                        format!("Config reload failed; keeping the current settings: {error:#}"),
+                    ),
                 }
             }
         }

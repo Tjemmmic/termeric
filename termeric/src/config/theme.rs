@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 /// A complete color theme
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Theme {
     /// Theme metadata
     pub meta: ThemeMeta,
@@ -191,6 +192,7 @@ impl Theme {
 
 /// Theme metadata
 #[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct ThemeMeta {
     pub name: String,
     pub author: String,
@@ -200,6 +202,7 @@ pub struct ThemeMeta {
 
 /// Primary ANSI colors (0-7)
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PrimaryColors {
     pub black: Color,
     pub red: Color,
@@ -213,6 +216,7 @@ pub struct PrimaryColors {
 
 /// Bright ANSI colors (8-15)
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BrightColors {
     pub black: Color,
     pub red: Color,
@@ -226,6 +230,7 @@ pub struct BrightColors {
 
 /// UI-specific colors
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UiColors {
     pub background: Color,
     pub foreground: Color,
@@ -321,11 +326,10 @@ impl Default for Color {
 
 /// Helper for deserializing colors from various formats
 #[derive(Deserialize)]
-#[serde(untagged)]
+#[serde(untagged, deny_unknown_fields)]
 enum ColorDef {
     Hex(String),
-    // Untagged variants are tried in order, and `Rgb` would also accept a
-    // table carrying `a` (dropping it), so the alpha form must come first.
+    // Unknown keys are refused, so a table matches exactly one of these.
     Rgba { r: u8, g: u8, b: u8, a: f32 },
     Rgb { r: u8, g: u8, b: u8 },
 }
@@ -378,6 +382,25 @@ mod tests {
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../assets/themes/custom-example.toml");
         let theme = Theme::load(&example).unwrap();
         assert_eq!(theme.meta.name, "Custom Example");
+    }
+
+    #[test]
+    fn a_misspelled_theme_key_is_refused_with_its_line() {
+        let turmeric = BUILTIN_THEMES[0].1;
+        toml::from_str::<Theme>(turmeric).unwrap();
+        for (from, to) in [
+            ("[ui]\n", "[ui]\nselction = \"#000000\"\n"),
+            ("[meta]\n", "[meta]\nversion = 2\n"),
+            ("[primary]\n", "[secondary]\nred = \"#000000\"\n[primary]\n"),
+        ] {
+            assert!(turmeric.contains(from));
+            let misspelled = turmeric.replacen(from, to, 1);
+            let error = toml::from_str::<Theme>(&misspelled)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("unknown field"), "{error}");
+            assert!(error.contains("line"), "{error}");
+        }
     }
 
     #[test]
