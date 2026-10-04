@@ -161,10 +161,12 @@ impl App {
 
     /// A modal takes native pointer ownership even if the physical button
     /// remains held. Do this before dispatch/dismissal and animation cleanup,
-    /// not only on release (which the modal may consume).
+    /// not only on release (which the modal may consume). The agent view's
+    /// divider and text drags end with them: their release may never come.
     pub(super) fn finish_obscured_native_pointer_gesture(&mut self) {
         if self.top_modal_layer().is_some() {
             self.finish_native_pointer_gesture();
+            self.cancel_agent_view_gestures();
         }
     }
 
@@ -711,7 +713,9 @@ impl App {
     /// Handle mouse movement
     pub(super) fn handle_mouse_move(&mut self, position: (f64, f64)) {
         self.finish_obscured_native_pointer_gesture();
-        if !self.pointer_panel_owns_input()
+        // Any modal layer, not only a side panel, hides the agent view from
+        // the pointer: no hover, no drag.
+        if self.top_modal_layer().is_none()
             && !self.native_pointer_gesture_active()
             && self.handle_agent_view_motion(position.0 as f32, position.1 as f32)
         {

@@ -907,6 +907,25 @@ fn native_modal_cleanup_preserves_unobscured_drag_and_protocol_button() {
 }
 
 #[test]
+fn a_modal_ends_agent_view_drags_whose_release_it_swallows() {
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.agent_view.state.begin_resize(900.0, 1200.0, 1.0);
+    app.agent_view.selecting = true;
+    // A modal opens mid-drag, as the guardrail can for a control write.
+    app.command_palette.open();
+    app.handle_mouse_move((800.0, 300.0));
+    assert!(!app.agent_view.state.resizing());
+    assert!(!app.agent_view.selecting);
+    assert!(app.agent_view.state.hover.is_none());
+    // The release went to the modal; once it closes, motion with no button
+    // held must not pick the drag back up.
+    app.command_palette.close();
+    app.handle_mouse_move((700.0, 300.0));
+    assert!(!app.agent_view.state.resizing());
+    assert!(!app.agent_view.selecting);
+}
+
+#[test]
 fn closing_modal_still_finishes_native_gesture_before_animation_cleanup() {
     let mut app = App::new_headless(Config::default()).unwrap();
     app.shortcuts_panel.open();

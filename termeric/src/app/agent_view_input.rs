@@ -1405,7 +1405,8 @@ impl App {
         used
     }
 
-    /// Ends pointer gestures, as when the window loses focus.
+    /// Ends pointer gestures, as when the window loses focus or a modal
+    /// layer takes the pointer.
     pub(super) fn cancel_agent_view_gestures(&mut self) {
         self.agent_view.state.end_resize();
         self.agent_view.selecting = false;
