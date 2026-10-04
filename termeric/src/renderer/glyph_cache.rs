@@ -129,31 +129,19 @@ impl GlyphKey {
     }
 }
 
-/// Key for cached ligature runs
+/// Key for cached shaped runs. Only what can differ between runs of one
+/// font configuration is keyed: any change to the family, fallbacks, weights,
+/// line height, ligatures, or OpenType features clears the run caches
+/// (`clear_atlas`, `set_ligatures`, `set_font_features`).
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct LigatureKey {
     /// The string being shaped
     pub text: String,
-    /// Font size as bits
+    /// Font size as bits; OSC 66 scaled text shapes at several sizes, and the
+    /// line height follows from it.
     pub size_bits: u32,
     /// Requested SGR weight/slant.
     pub style: FontStyle,
-    /// Exact line-height metric used by the shaping buffer.
-    pub line_height_bits: u32,
-    /// Whether programming-ligature OpenType features are enabled.
-    pub ligatures: bool,
-    /// Effective ordered shaping features, including explicit overrides.
-    pub font_features: FontFeatures,
-    /// Resolved primary font family.
-    pub family: String,
-    /// Ordered configured fallback identity.
-    pub fallbacks: Vec<String>,
-    /// Whether the generic monospace family replaced the requested family.
-    pub monospace_fallback: bool,
-    /// Configured ordinary-text OpenType `wght` value.
-    pub normal_weight: u16,
-    /// Configured bold-text OpenType `wght` value.
-    pub bold_weight: u16,
     /// Whether glyph offsets follow the cell grid or the shaped advances.
     pub placement: GlyphPlacement,
     /// Terminal font configuration or the desktop's UI sans-serif face.
@@ -164,15 +152,7 @@ impl LigatureKey {
     pub fn new(
         text: &str,
         font_size: f32,
-        line_height: f32,
         style: FontStyle,
-        ligatures: bool,
-        font_features: FontFeatures,
-        family: &str,
-        fallbacks: &[String],
-        monospace_fallback: bool,
-        normal_weight: u16,
-        bold_weight: u16,
         placement: GlyphPlacement,
         face: TextFace,
     ) -> Self {
@@ -180,14 +160,6 @@ impl LigatureKey {
             text: text.to_string(),
             size_bits: font_size.to_bits(),
             style,
-            line_height_bits: line_height.to_bits(),
-            ligatures,
-            font_features,
-            family: family.to_string(),
-            fallbacks: fallbacks.to_vec(),
-            monospace_fallback,
-            normal_weight,
-            bold_weight,
             placement,
             face,
         }
@@ -682,23 +654,6 @@ impl ShapedRunCache {
         std::mem::size_of::<LigatureKey>()
             .saturating_add(std::mem::size_of::<(LigatureRun, usize)>())
             .saturating_add(key.text.capacity())
-            .saturating_add(key.family.capacity())
-            .saturating_add(
-                key.font_features
-                    .features
-                    .capacity()
-                    .saturating_mul(std::mem::size_of::<cosmic_text::Feature>()),
-            )
-            .saturating_add(
-                key.fallbacks
-                    .capacity()
-                    .saturating_mul(std::mem::size_of::<String>()),
-            )
-            .saturating_add(
-                key.fallbacks
-                    .iter()
-                    .fold(0usize, |sum, family| sum.saturating_add(family.capacity())),
-            )
     }
 }
 
@@ -1593,20 +1548,10 @@ impl GlyphCache {
             self.metrics.font_size * font_scale,
             self.metrics.line_height * font_scale,
         );
-        let font_features =
-            terminal_font_features(self.ligatures_enabled, &self.font_feature_overrides);
         let key = LigatureKey::new(
             text,
             metrics.font_size,
-            metrics.line_height,
             style,
-            self.ligatures_enabled,
-            font_features,
-            &self.font_family,
-            &self.fallback_families,
-            self.use_monospace_fallback,
-            self.font_weight.0,
-            self.bold_font_weight.0,
             placement,
             TextFace::Terminal,
         );
@@ -1633,15 +1578,7 @@ impl GlyphCache {
         let key = LigatureKey::new(
             text,
             metrics.font_size,
-            metrics.line_height,
             style,
-            false,
-            FontFeatures::new(),
-            "",
-            &[],
-            false,
-            Weight::NORMAL.0,
-            Weight::BOLD.0,
             GlyphPlacement::Shaped,
             if face.mono {
                 TextFace::UiMono
@@ -3371,15 +3308,7 @@ mod tests {
         let key = LigatureKey::new(
             text,
             16.0,
-            20.0,
             FontStyle::default(),
-            false,
-            FontFeatures::new(),
-            "monospace",
-            &["fallback".into()],
-            false,
-            400,
-            700,
             GlyphPlacement::CellGrid,
             TextFace::Terminal,
         );
@@ -3414,11 +3343,6 @@ mod tests {
                 std::mem::size_of::<LigatureKey>()
                     + std::mem::size_of::<(LigatureRun, usize)>()
                     + key.text.capacity()
-                    + key.family.capacity()
-                    + key.font_features.features.capacity()
-                        * std::mem::size_of::<cosmic_text::Feature>()
-                    + key.fallbacks.capacity() * std::mem::size_of::<String>()
-                    + key.fallbacks.iter().map(String::capacity).sum::<usize>()
                     + run.glyphs.capacity() * std::mem::size_of::<ShapedGlyph>()
             })
             .sum()
@@ -3429,10 +3353,6 @@ mod tests {
         let mut cache = ShapedRunCache::new(64 * 1024);
         let (mut key, run) = cache_fixture("same", 3);
         key.text.reserve(400);
-        key.family.reserve(300);
-        key.font_features.features.reserve(32);
-        key.fallbacks.reserve(16);
-        key.fallbacks[0].reserve(200);
         cache.insert(key.clone(), &run);
         assert_eq!(cache.bytes, recount_run_cache(&cache));
         let before = cache.bytes;
@@ -4144,51 +4064,19 @@ mod tests {
             LigatureKey::new(
                 "e\u{301}",
                 14.0,
-                16.8,
                 regular,
-                true,
-                FontFeatures::new(),
-                "Mono",
-                &[],
-                false,
-                400,
-                700,
                 GlyphPlacement::CellGrid,
-                TextFace::Terminal,
+                TextFace::Terminal
             ),
             LigatureKey::new(
                 "e\u{301}",
                 14.0,
-                16.8,
                 bold_italic,
-                true,
-                FontFeatures::new(),
-                "Mono",
-                &[],
-                false,
-                400,
-                700,
                 GlyphPlacement::CellGrid,
-                TextFace::Terminal,
+                TextFace::Terminal
             )
         );
-        let grid = |placement| {
-            LigatureKey::new(
-                "ab",
-                14.0,
-                16.8,
-                regular,
-                true,
-                FontFeatures::new(),
-                "Mono",
-                &[],
-                false,
-                400,
-                700,
-                placement,
-                TextFace::Terminal,
-            )
-        };
+        let grid = |placement| LigatureKey::new("ab", 14.0, regular, placement, TextFace::Terminal);
         assert_ne!(
             grid(GlyphPlacement::CellGrid),
             grid(GlyphPlacement::Shaped),
@@ -4203,38 +4091,17 @@ mod tests {
             GlyphKey::new('x', 14.0, regular, 450),
             "normal weight must participate in scalar cache identity"
         );
+        let shaped =
+            |size, face| LigatureKey::new("fi", size, regular, GlyphPlacement::Shaped, face);
         assert_ne!(
-            LigatureKey::new(
-                "fi",
-                14.0,
-                16.8,
-                regular,
-                true,
-                FontFeatures::new(),
-                "Mono",
-                &[],
-                false,
-                350,
-                700,
-                GlyphPlacement::CellGrid,
-                TextFace::Terminal,
-            ),
-            LigatureKey::new(
-                "fi",
-                14.0,
-                16.8,
-                regular,
-                true,
-                FontFeatures::new(),
-                "Mono",
-                &[],
-                false,
-                450,
-                800,
-                GlyphPlacement::CellGrid,
-                TextFace::Terminal,
-            ),
-            "configured weight pair must participate in shaped-run identity"
+            shaped(14.0, TextFace::Terminal),
+            shaped(28.0, TextFace::Terminal),
+            "OSC 66 scaled runs must not share a cached run"
+        );
+        assert_ne!(
+            shaped(14.0, TextFace::Terminal),
+            shaped(14.0, TextFace::UiSans),
+            "terminal and chrome text must not share a cached run"
         );
     }
 
@@ -4416,39 +4283,6 @@ mod tests {
             shape_signature(data, text, true),
             "explicit one values must override the disabled preset"
         );
-
-        let default_key = LigatureKey::new(
-            text,
-            14.0,
-            16.8,
-            FontStyle::default(),
-            true,
-            terminal_font_features(true, &FontFeatures::new()),
-            "Fira Mono",
-            &[],
-            false,
-            400,
-            700,
-            GlyphPlacement::CellGrid,
-            TextFace::Terminal,
-        );
-        let custom = compile_font_feature_overrides(&enabled);
-        let custom_key = LigatureKey::new(
-            text,
-            14.0,
-            16.8,
-            FontStyle::default(),
-            true,
-            terminal_font_features(true, &custom),
-            "Fira Mono",
-            &[],
-            false,
-            400,
-            700,
-            GlyphPlacement::CellGrid,
-            TextFace::Terminal,
-        );
-        assert_ne!(default_key, custom_key);
     }
 
     #[test]
