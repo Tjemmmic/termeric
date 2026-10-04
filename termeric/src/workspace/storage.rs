@@ -295,7 +295,14 @@ fn list_archives(closed_tabs: bool) -> Vec<WorkspaceListEntry> {
             }
         })
         .collect();
-    workspaces.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    // An unreadable archive has no time to sort by, so it goes after every
+    // readable one rather than wherever its placeholder text would fall.
+    workspaces.sort_by(|left, right| {
+        left.warning
+            .is_some()
+            .cmp(&right.warning.is_some())
+            .then_with(|| right.updated_at.cmp(&left.updated_at))
+    });
     workspaces
 }
 
@@ -970,6 +977,44 @@ mod tests {
             assert!(entries[0].warning.is_some());
             delete_workspace("workspace-broken").unwrap();
             assert!(list_workspaces().is_empty());
+        });
+        set_test_workspaces_base_dir(None);
+        result.unwrap();
+    }
+
+    #[test]
+    fn unreadable_archives_are_listed_after_readable_ones() {
+        let temp = tempfile::tempdir().unwrap();
+        set_test_workspaces_base_dir(Some(temp.path().to_path_buf()));
+        let result = std::panic::catch_unwind(|| {
+            for id in ["workspace-broken-b", "workspace-broken-a"] {
+                let broken = temp.path().join(id);
+                fs::create_dir_all(&broken).unwrap();
+                fs::write(broken.join("workspace.toml"), "not = [toml").unwrap();
+            }
+            for (id, updated_at) in [
+                ("workspace-older", "2026-01-01T00:00:00Z"),
+                ("workspace-newer", "2026-02-01T00:00:00Z"),
+            ] {
+                let mut workspace = sample_workspace();
+                workspace.id = id.into();
+                save_workspace(&mut workspace).unwrap();
+                // Saving stamps the archive with the current time; set the
+                // times apart so the order between them is known.
+                let path = temp.path().join(id).join("workspace.toml");
+                let mut encoded: toml::Value =
+                    toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+                encoded["updated_at"] = toml::Value::String(updated_at.into());
+                fs::write(&path, toml::to_string_pretty(&encoded).unwrap()).unwrap();
+            }
+            let order: Vec<_> = list_workspaces()
+                .into_iter()
+                .map(|entry| entry.id)
+                .collect();
+            assert_eq!(order[..2], ["workspace-newer", "workspace-older"]);
+            let mut unreadable = order[2..].to_vec();
+            unreadable.sort();
+            assert_eq!(unreadable, ["workspace-broken-a", "workspace-broken-b"]);
         });
         set_test_workspaces_base_dir(None);
         result.unwrap();

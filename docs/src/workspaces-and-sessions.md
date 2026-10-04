@@ -67,7 +67,7 @@ Automatic saving happens when a window closes with tabs still open. If you end t
 
 While renaming, Enter saves the new name and Escape cancels. Names can be up to 128 characters. Deleting a workspace or tab snapshot asks for confirmation first, then removes it from disk; there's no undo.
 
-A workspace that can't be read stays in the list, marked as unavailable, so you can delete it.
+A workspace that can't be read stays at the end of the list, marked as unavailable, so you can delete it.
 
 The **Workspaces** menu also works from the keyboard: press F6 to move focus to the window controls, select the Workspaces button, and press Enter. In the menu, Up, Down, Home, and End move between entries, Enter or Space chooses one, and Escape closes it.
 

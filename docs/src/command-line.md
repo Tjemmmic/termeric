@@ -91,7 +91,7 @@ Tabs can't move between separate processes.
 termeric workspace list [--json]
 ```
 
-Lists your saved workspaces, most recently saved first: each one's ID, tab count, when it was last saved, and name. Open one with `termeric --workspace ID`. It reads the saved files directly, so it works whether or not Termeric is running. An archive that can't be read is listed with the reason, so you can find and delete it. `--json` prints an array of objects with `id`, `name`, `tabs`, `panes`, `updated_at`, and `warning` (`null` unless the archive can't be read).
+Lists your saved workspaces, most recently saved first: each one's ID, tab count, when it was last saved, and name. Open one with `termeric --workspace ID`. It reads the saved files directly, so it works whether or not Termeric is running. An archive that can't be read is listed last, with the reason, so you can find and delete it. `--json` prints an array of objects with `id`, `name`, `tabs`, `panes`, `updated_at`, and `warning` (`null` unless the archive can't be read).
 
 ### `termeric mcp`
 
