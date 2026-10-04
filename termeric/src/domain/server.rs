@@ -1330,9 +1330,23 @@ fn process_request(state: &SharedState, request: Request) -> anyhow::Result<Resp
     }
 }
 
+/// Whether the working directory exists, on the computer that runs the
+/// process: clients can't tell whether a remote folder exists. Checked
+/// before taking the state lock, so a stalled network filesystem holds up
+/// only this request.
+fn check_working_directory(spawn: &SpawnSpec) -> anyhow::Result<()> {
+    if let Some(cwd) = &spawn.working_directory
+        && !std::path::Path::new(cwd).is_dir()
+    {
+        anyhow::bail!("working directory {cwd:?} does not exist");
+    }
+    Ok(())
+}
+
 fn create_domain(state: &SharedState, name: String, spawn: SpawnSpec) -> anyhow::Result<Response> {
     validate_name("domain name", &name)?;
     spawn.validate()?;
+    check_working_directory(&spawn)?;
     let id = format!("domain-{}", crate::session::generate_session_id());
     let title = spawn.title.clone().unwrap_or_else(|| name.clone());
     let created_at = crate::session::format_unix_timestamp(
@@ -1394,6 +1408,7 @@ fn create_domain(state: &SharedState, name: String, spawn: SpawnSpec) -> anyhow:
 fn spawn_tab(state: &SharedState, domain_id: &str, spawn: SpawnSpec) -> anyhow::Result<Response> {
     validate_id("domain id", domain_id)?;
     spawn.validate()?;
+    check_working_directory(&spawn)?;
     let (pane_id, reader) = {
         let mut state_guard = state.lock().unwrap();
         if state_guard.pane_count() >= MAX_DAEMON_PANES {
@@ -1464,6 +1479,22 @@ fn split_pane(
     mut spawn: SpawnSpec,
 ) -> anyhow::Result<Response> {
     validate_id("domain id", domain_id)?;
+    if spawn.working_directory.is_none() {
+        let state_guard = state.lock().unwrap();
+        let pane = state_guard
+            .domains
+            .get(domain_id)
+            .context("domain not found")?
+            .tabs
+            .iter()
+            .find_map(|tab| tab.panes.get(&pane_id))
+            .context("pane not found")?;
+        spawn.working_directory = crate::tabs::terminal_working_directory(&pane.terminal)
+            .or_else(|| pane.pty.child_id().and_then(crate::tabs::get_process_cwd))
+            .or_else(|| pane.requested_cwd.clone());
+    }
+    spawn.validate()?;
+    check_working_directory(&spawn)?;
     let (new_id, reader, tab_id, old_layout, old_focus, old_active) = {
         let mut state_guard = state.lock().unwrap();
         if state_guard.pane_count() >= MAX_DAEMON_PANES {
@@ -1475,17 +1506,13 @@ fn split_pane(
             .domains
             .get_mut(domain_id)
             .context("domain not found")?;
-        let pane = domain
+        if !domain
             .tabs
             .iter()
-            .find_map(|tab| tab.panes.get(&pane_id))
-            .context("pane not found")?;
-        if spawn.working_directory.is_none() {
-            spawn.working_directory = crate::tabs::terminal_working_directory(&pane.terminal)
-                .or_else(|| pane.pty.child_id().and_then(crate::tabs::get_process_cwd))
-                .or_else(|| pane.requested_cwd.clone());
+            .any(|tab| tab.panes.contains_key(&pane_id))
+        {
+            anyhow::bail!("pane not found");
         }
-        spawn.validate()?;
         let new_id = domain.next_pane;
         let split_id = domain.next_split;
         let (new_pane, reader) = PaneRuntime::spawn(
@@ -2754,11 +2781,6 @@ impl PaneRuntime {
     ) -> anyhow::Result<(Self, Box<dyn Read + Send>)> {
         let mut environment = Vec::new();
         if let Some(cwd) = &spec.working_directory {
-            // Checked here, on the computer that runs the process; clients
-            // can't tell whether a remote folder exists.
-            if !std::path::Path::new(cwd).is_dir() {
-                anyhow::bail!("working directory {cwd:?} does not exist");
-            }
             environment.push(("PWD".to_string(), cwd.clone()));
         }
         let initial_size = default_pty_size(spec.cols, spec.rows);
@@ -3685,17 +3707,79 @@ mod tests {
         );
     }
 
+    fn empty_state() -> SharedState {
+        Arc::new(Mutex::new(ServerState {
+            domains: HashMap::new(),
+            allow_screen_checksum_reports: false,
+            xterm_keyboard_type: XtermKeyboardType::Normal,
+            shutdown: Arc::new(AtomicBool::new(false)),
+            wake_socket: None,
+            next_attachment: AtomicU64::new(1),
+            next_topology_subscription: AtomicU64::new(1),
+            active_uploads: 0,
+            upload_ids_in_flight: HashMap::new(),
+            upload_records: HashMap::new(),
+            upload_janitor_running: false,
+        }))
+    }
+
+    /// Run `request` while this thread holds the state lock, as a stalled
+    /// spawn would, and expect it to refuse a missing working directory
+    /// without waiting for the lock.
+    fn refused_while_locked(
+        state: &SharedState,
+        request: impl FnOnce(&SharedState) -> anyhow::Result<Response> + Send + 'static,
+    ) {
+        let held = state.lock().unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let worker_state = Arc::clone(state);
+        let worker = std::thread::spawn(move || {
+            sender.send(request(&worker_state).err()).unwrap();
+        });
+        let error = receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the working-directory check waited for the state lock")
+            .expect("a missing working directory must be refused");
+        drop(held);
+        worker.join().unwrap();
+        assert!(error.to_string().contains("does not exist"), "{error}");
+    }
+
     #[test]
-    fn the_daemon_refuses_a_working_directory_missing_on_its_computer() {
-        let spec = SpawnSpec {
+    fn the_daemon_refuses_a_missing_working_directory_without_waiting_for_its_lock() {
+        let state = empty_state();
+        let Response::Domain { domain } = create_domain(
+            &state,
+            "cwd-check".into(),
+            SpawnSpec {
+                program: Some("/bin/sh".into()),
+                args: vec!["-c".into(), "sleep 5".into()],
+                ..SpawnSpec::default()
+            },
+        )
+        .unwrap() else {
+            panic!("expected created domain");
+        };
+        let missing = || SpawnSpec {
             program: Some("/bin/true".into()),
             working_directory: Some("/path/that/does/not/exist/here".into()),
             ..SpawnSpec::default()
         };
-        let error = PaneRuntime::spawn(0, &spec, false, XtermKeyboardType::Normal)
-            .err()
-            .expect("a missing working directory must be refused");
-        assert!(error.to_string().contains("does not exist"), "{error}");
+        let id = domain.id.clone();
+        refused_while_locked(&state, move |state| {
+            create_domain(state, "missing".into(), missing())
+        });
+        refused_while_locked(&state, move |state| spawn_tab(state, &id, missing()));
+        let id = domain.id.clone();
+        refused_while_locked(&state, move |state| {
+            split_pane(state, &id, 0, SplitDirection::Vertical, missing())
+        });
+        {
+            let state = state.lock().unwrap();
+            assert_eq!(state.domains.len(), 1);
+            assert_eq!(state.pane_count(), 1);
+        }
+        process_request(&state, Request::KillDomain { domain: domain.id }).unwrap();
     }
 
     #[test]
@@ -5040,22 +5124,6 @@ mod tests {
             }
             panic!("could not probe Unix-domain socket I/O: {error}");
         }
-        let empty_state = || {
-            Arc::new(Mutex::new(ServerState {
-                domains: HashMap::new(),
-                allow_screen_checksum_reports: false,
-                xterm_keyboard_type: XtermKeyboardType::Normal,
-                shutdown: Arc::new(AtomicBool::new(false)),
-                wake_socket: None,
-                next_attachment: AtomicU64::new(1),
-                next_topology_subscription: AtomicU64::new(1),
-                active_uploads: 0,
-                upload_ids_in_flight: HashMap::new(),
-                upload_records: HashMap::new(),
-                upload_janitor_running: false,
-            }))
-        };
-
         let state = empty_state();
         let (server, mut client) = UnixStream::pair().unwrap();
         serve_shutdown(server, Arc::clone(&state)).unwrap();
