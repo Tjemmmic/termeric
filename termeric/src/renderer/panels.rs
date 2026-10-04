@@ -272,24 +272,15 @@ impl Renderer {
                 self.build_panel_button(delete, "Delete", false, danger);
             }
         }
-        if layout.visible_count > 0 && layout.visible_count < info.commands.len() {
-            let track_top = layout.list_start_y;
-            let track_height = layout.visible_count as f32 * layout.row_height;
-            let thumb_height = (track_height * layout.visible_count as f32
-                / info.commands.len() as f32)
-                .max(px(24.0));
-            let travel = (track_height - thumb_height).max(0.0);
-            let max_offset = (info.commands.len() - layout.visible_count) as f32;
-            let thumb_top = track_top + travel * layout.scroll_offset as f32 / max_offset;
-            self.rect_pipeline.push_rounded_rect(
-                panel.x + panel.width - px(6.0),
-                thumb_top,
-                px(3.0),
-                thumb_height,
-                with_alpha(dim, 0.45),
-                px(1.5),
-            );
-        }
+        self.draw_panel_scroll_thumb(
+            panel,
+            layout.list_start_y,
+            layout.row_height,
+            layout.visible_count,
+            info.commands.len(),
+            layout.scroll_offset,
+            with_alpha(dim, 0.45),
+        );
 
         // Keyboard and assistive focus use the same geometry as clicks.
         if let Some(rect) = info
@@ -462,23 +453,15 @@ impl Renderer {
                 dim,
             );
         }
-        if layout.visible_count > 0 && layout.visible_count < info.rows.len() {
-            let track_top = layout.list_start_y;
-            let track_height = layout.visible_count as f32 * layout.row_height;
-            let thumb_height =
-                (track_height * layout.visible_count as f32 / info.rows.len() as f32).max(px(24.0));
-            let travel = (track_height - thumb_height).max(0.0);
-            let max_offset = (info.rows.len() - layout.visible_count) as f32;
-            let thumb_top = track_top + travel * layout.scroll_offset as f32 / max_offset;
-            self.rect_pipeline.push_rounded_rect(
-                panel.x + panel.width - px(6.0),
-                thumb_top,
-                px(3.0),
-                thumb_height,
-                with_alpha(dim, 0.45),
-                px(1.5),
-            );
-        }
+        self.draw_panel_scroll_thumb(
+            panel,
+            layout.list_start_y,
+            layout.row_height,
+            layout.visible_count,
+            info.rows.len(),
+            layout.scroll_offset,
+            with_alpha(dim, 0.45),
+        );
 
         // ── Supervisor ──
         if let (Some(section), Some(supervisor)) = (layout.supervisor, info.supervisor.as_ref()) {
@@ -545,6 +528,36 @@ impl Renderer {
                 self.ui.palette_accent,
             );
         }
+    }
+
+    /// The thin scroll thumb at a side panel's right edge, beside a list of
+    /// `visible` of `total` rows scrolled by `offset`; nothing while it fits.
+    fn draw_panel_scroll_thumb(
+        &mut self,
+        panel: Bounds,
+        list_top: f32,
+        row_height: f32,
+        visible: usize,
+        total: usize,
+        offset: usize,
+        color: [f32; 4],
+    ) {
+        if visible == 0 || visible >= total {
+            return;
+        }
+        let px = |logical: f32| (logical * self.scale_factor).round().max(1.0);
+        let track_height = visible as f32 * row_height;
+        let thumb_height = (track_height * visible as f32 / total as f32).max(px(24.0));
+        let travel = (track_height - thumb_height).max(0.0);
+        let thumb_top = list_top + travel * offset as f32 / (total - visible) as f32;
+        self.rect_pipeline.push_rounded_rect(
+            panel.x + panel.width - px(6.0),
+            thumb_top,
+            px(3.0),
+            thumb_height,
+            color,
+            px(1.5),
+        );
     }
 
     /// Scrim over the terminal beside a side panel, the panel surface, and

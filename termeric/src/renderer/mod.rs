@@ -2071,9 +2071,13 @@ impl Renderer {
                     && (is_hyperlink || is_detected_url)
                     && style.underline.is_none()
                 {
-                    let link_color = scale_rgb(self.ui.url, brightness);
-                    let underline_y = y + cell_height - 2.0;
-                    self.draw_dotted_underline(x, underline_y, cell_width, link_color);
+                    style::push_dotted_line(
+                        &mut self.rect_pipeline,
+                        x,
+                        y + cell_height - 2.0,
+                        cell_width,
+                        scale_rgb(self.ui.url, brightness),
+                    );
                 }
             }
             text_run.flush(&mut self.text_pipeline);

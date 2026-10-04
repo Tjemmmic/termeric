@@ -501,23 +501,4 @@ impl Renderer {
             );
         }
     }
-
-    /// Draw a dotted underline
-    pub(super) fn draw_dotted_underline(&mut self, x: f32, y: f32, width: f32, color: [f32; 4]) {
-        let dot_size: f32 = 1.5;
-        let gap: f32 = 2.0;
-        let step = dot_size + gap;
-
-        let mut current_x = x;
-        while current_x < x + width {
-            self.rect_pipeline.push_rect(
-                current_x,
-                y,
-                dot_size.min(x + width - current_x),
-                1.0,
-                color,
-            );
-            current_x += step;
-        }
-    }
 }

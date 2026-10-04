@@ -91,12 +91,6 @@ impl CompletionViewport {
             right: self.content_left + self.content_width - self.padding,
             bottom: self.window_height - self.padding,
         };
-        if ![bounds.left, bounds.top, bounds.right, bounds.bottom]
-            .iter()
-            .all(|value| value.is_finite())
-        {
-            return None;
-        }
         // At least one item row, one character and horizontal text margins.
         (bounds.right - bounds.left >= self.cell_width * 3.0 + EDGE * 2.0
             && bounds.bottom - bounds.top >= self.cell_height * 1.6 + EDGE * 2.0)
@@ -125,7 +119,8 @@ impl CompletionLayout {
     ) -> Option<Self> {
         let bounds = view.bounds()?;
         let count = info.completions.len();
-        if count == 0 || !anchor.x.is_finite() || !anchor.y.is_finite() {
+        // `CompletionAnchor::for_view` admits only finite anchors.
+        if count == 0 {
             return None;
         }
         let row_height = view.cell_height * 1.6;

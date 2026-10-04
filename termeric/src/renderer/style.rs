@@ -155,17 +155,7 @@ pub(super) fn queue_sgr_decorations(
             rects.push_rect(x, underline_y, width, 1.0, underline_color);
         }
         Some(UnderlineStyle::Dotted) => {
-            let mut current_x = x;
-            while current_x < x + width {
-                rects.push_rect(
-                    current_x,
-                    underline_y,
-                    1.5_f32.min(x + width - current_x),
-                    1.0,
-                    underline_color,
-                );
-                current_x += 3.5;
-            }
+            push_dotted_line(rects, x, underline_y, width, underline_color);
         }
         Some(UnderlineStyle::Dashed) => {
             let mut current_x = x;
@@ -197,6 +187,22 @@ pub(super) fn queue_sgr_decorations(
         );
         let strike_y = (y + cell_height * 0.52).round();
         rects.push_rect(x, strike_y, width, 1.0, strike_color);
+    }
+}
+
+/// A one-pixel line of 1.5px dots every 3.5px: the SGR dotted underline,
+/// also used to mark links.
+pub(super) fn push_dotted_line(
+    rects: &mut super::rect::RectPipeline,
+    x: f32,
+    y: f32,
+    width: f32,
+    color: [f32; 4],
+) {
+    let mut current_x = x;
+    while current_x < x + width {
+        rects.push_rect(current_x, y, 1.5_f32.min(x + width - current_x), 1.0, color);
+        current_x += 3.5;
     }
 }
 
