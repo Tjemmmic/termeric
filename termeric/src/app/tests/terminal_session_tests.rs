@@ -11,7 +11,7 @@ fn transcript_utf8_carry_follows_owner_through_split_collapse_and_sibling_close(
     {
         let tabs = app.tabs.as_mut().unwrap();
         let tab = tabs.active_tab_mut().unwrap();
-        tab.replace_single_test_output(receiver);
+        tab.replace_lone_test_output(receiver);
         tab.start_transcript(
             TranscriptRecorder::new(directory.path(), None, None, "Local", "owner").unwrap(),
         );
@@ -29,12 +29,7 @@ fn transcript_utf8_carry_follows_owner_through_split_collapse_and_sibling_close(
     {
         let tabs = app.tabs.as_mut().unwrap();
         let tab = tabs.active_tab_mut().unwrap();
-        let pane = tab
-            .pane_manager
-            .as_mut()
-            .unwrap()
-            .get_pane_mut(sibling)
-            .unwrap();
+        let pane = tab.panes.get_pane_mut(sibling).unwrap();
         let (sibling_sender, receiver) = std::sync::mpsc::channel();
         _sibling_sender = sibling_sender;
         pane.pty_rx = receiver;
@@ -57,18 +52,14 @@ fn transcript_utf8_carry_follows_owner_through_split_collapse_and_sibling_close(
         let pane = tabs
             .active_tab_mut()
             .unwrap()
-            .pane_manager
-            .as_mut()
-            .unwrap()
+            .panes
             .get_pane_mut(owner)
             .unwrap();
         pane.read_only = true;
         assert!(tabs.write_user_to_origin(origin, b"\xa2DENIED").is_err());
         tabs.active_tab_mut()
             .unwrap()
-            .pane_manager
-            .as_mut()
-            .unwrap()
+            .panes
             .get_pane_mut(owner)
             .unwrap()
             .read_only = false;
@@ -87,7 +78,7 @@ fn transcript_utf8_carry_follows_owner_through_split_collapse_and_sibling_close(
     assert_eq!(read(&sibling_path, EntryKind::Output), "sibling �");
     assert_eq!(read(&sibling_path, EntryKind::Input), "sibling input �");
     let tabs = app.tabs.as_mut().unwrap();
-    assert!(tabs.active_tab().unwrap().pane_manager.is_none());
+    assert!(tabs.active_tab().unwrap().panes.pane_count() == 1);
     sender
         .send(PtyEvent::Output(b"\x82\xac collapsed".to_vec()))
         .unwrap();
@@ -117,17 +108,12 @@ fn single_and_split_diff_capture_waits_for_real_eof_not_poll_boundaries() {
             mark_capture_plugin_owner(&mut app, owner, "codex");
             let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
             let (sender, receiver) = std::sync::mpsc::channel();
-            if let Some(panes) = &mut tab.pane_manager {
-                panes.get_pane_mut(owner).unwrap().pty_rx = receiver;
-            } else {
-                tab.replace_single_test_output(receiver);
-            }
+            tab.panes.get_pane_mut(owner).unwrap().pty_rx = receiver;
             let poll = |tab: &mut crate::tabs::Tab| {
-                if let Some(panes) = &mut tab.pane_manager {
-                    panes.get_pane_mut(owner).unwrap().poll_events(|_, _| {});
-                } else {
-                    tab.poll_single(|_, _| {});
-                }
+                tab.panes
+                    .get_pane_mut(owner)
+                    .unwrap()
+                    .poll_events(|_, _| {});
             };
             let first = "--- a/根\n+++ b/根\n@@ -1 +1 @@\n-old\n+🌱\n";
             for byte in first.as_bytes().chunks(1) {
@@ -173,11 +159,7 @@ fn single_and_split_diff_capture_waits_for_real_eof_not_poll_boundaries() {
             assert_eq!(diff.raw, format!("{first}{second}\n"));
             // Capture sees the same bytes as the terminal, but does not own or
             // rewrite the terminal display path.
-            let terminal = if let Some(panes) = &tab.pane_manager {
-                &panes.get_pane(owner).unwrap().terminal
-            } else {
-                tab.focused_terminal().unwrap()
-            };
+            let terminal = &tab.panes.get_pane(owner).unwrap().terminal;
             assert!(terminal.grid().plain_lines().join("\n").contains("🌱"));
         }
     }
@@ -341,7 +323,7 @@ fn split_transcript_records_only_its_original_terminal() {
     {
         let tabs = app.tabs.as_mut().unwrap();
         let tab = tabs.active_tab_mut().unwrap();
-        let panes = tab.pane_manager.as_mut().unwrap();
+        let panes = &mut tab.panes;
         for (id, text) in [
             (PaneId(entry.source.pane_id), b"OWNED_OUTPUT\n".as_slice()),
             (sibling, b"SIBLING_OUTPUT\n".as_slice()),
@@ -428,14 +410,7 @@ fn transcript_controls_and_close_keep_independent_owner_state() {
     };
     assert_ne!(paths[0], paths[1]);
     // Refusing a read-only control must not toggle a different focused plugin.
-    app.tabs
-        .as_mut()
-        .unwrap()
-        .active_tab_mut()
-        .unwrap()
-        .pane_manager
-        .as_mut()
-        .unwrap()
+    app.active_panes_mut()
         .get_pane_mut(PaneId(0))
         .unwrap()
         .read_only = true;
@@ -461,7 +436,7 @@ fn transcript_controls_and_close_keep_independent_owner_state() {
     app.close_pane_for(Requester::Control, entry.source.tab_id as u64, 1)
         .unwrap();
     let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
-    assert!(tab.pane_manager.is_none());
+    assert!(tab.panes.pane_count() == 1);
     let state = tab.focused_integration().unwrap();
     assert_eq!(state.agent.as_ref().unwrap().agent_id, "claude-code");
     assert_eq!(state.transcript.as_ref().unwrap().path(), paths[1]);
@@ -488,12 +463,7 @@ fn diff_observation_and_delayed_review_are_terminal_local() {
     let mut senders = Vec::new();
     {
         let tabs = app.tabs.as_mut().unwrap();
-        let panes = tabs
-            .active_tab_mut()
-            .unwrap()
-            .pane_manager
-            .as_mut()
-            .unwrap();
+        let panes = &mut tabs.active_tab_mut().unwrap().panes;
         for id in panes.pane_ids() {
             let (sender, receiver) = std::sync::mpsc::channel();
             panes.get_pane_mut(id).unwrap().pty_rx = receiver;

@@ -70,7 +70,7 @@ fn app_mediated_clipboard_reply_returns_to_requesting_pane_not_focus() {
         args: vec!["-c".into(), script.into()],
         env: Default::default(),
     };
-    let mut panes = PaneManager::new(
+    let mut panes = PaneManager::for_test(
         80,
         24,
         shell,
@@ -84,7 +84,7 @@ fn app_mediated_clipboard_reply_returns_to_requesting_pane_not_focus() {
     .unwrap();
     let requesting_pane = panes.split(SplitDirection::Vertical).unwrap();
     panes.focus(PaneId(0));
-    tabs.active_tab_mut().unwrap().pane_manager = Some(panes);
+    tabs.active_tab_mut().unwrap().panes = panes;
     app.tabs = Some(tabs);
 
     app.handle_terminal_event(RoutedTerminalEvent {
@@ -102,14 +102,7 @@ fn app_mediated_clipboard_reply_returns_to_requesting_pane_not_focus() {
     while Instant::now() < deadline {
         app.tabs.as_mut().unwrap().poll_events();
         let text = app
-            .tabs
-            .as_ref()
-            .unwrap()
-            .active_tab()
-            .unwrap()
-            .pane_manager
-            .as_ref()
-            .unwrap()
+            .active_panes()
             .get_pane(requesting_pane)
             .unwrap()
             .terminal
@@ -122,15 +115,7 @@ fn app_mediated_clipboard_reply_returns_to_requesting_pane_not_focus() {
         std::thread::sleep(Duration::from_millis(2));
     }
 
-    let panes = app
-        .tabs
-        .as_ref()
-        .unwrap()
-        .active_tab()
-        .unwrap()
-        .pane_manager
-        .as_ref()
-        .unwrap();
+    let panes = app.active_panes();
     let requesting_text = panes
         .get_pane(requesting_pane)
         .unwrap()
@@ -151,15 +136,7 @@ fn app_mediated_clipboard_reply_returns_to_requesting_pane_not_focus() {
 
     // Give each pane deliberately different state, then prove all global
     // surfaces rebind when pane focus moves.
-    let panes = app
-        .tabs
-        .as_mut()
-        .unwrap()
-        .active_tab_mut()
-        .unwrap()
-        .pane_manager
-        .as_mut()
-        .unwrap();
+    let panes = app.active_panes_mut();
     for index in 0..30 {
         panes
             .get_pane_mut(PaneId(0))
@@ -201,15 +178,7 @@ fn app_mediated_clipboard_reply_returns_to_requesting_pane_not_focus() {
     assert!(app.active_terminal().unwrap().selection().is_some());
     assert!(!app.active_terminal().unwrap().is_synchronized_output());
 
-    app.tabs
-        .as_mut()
-        .unwrap()
-        .active_tab_mut()
-        .unwrap()
-        .pane_manager
-        .as_mut()
-        .unwrap()
-        .focus(requesting_pane);
+    app.active_panes_mut().focus(requesting_pane);
     app.refresh_focused_terminal_surfaces();
 
     assert_eq!(app.search.match_count(), 0);
@@ -230,14 +199,7 @@ fn app_mediated_clipboard_reply_returns_to_requesting_pane_not_focus() {
     app.handle_scroll(3.0);
     assert!(app.active_terminal().unwrap().grid().scroll_offset() > 0);
     assert_eq!(
-        app.tabs
-            .as_ref()
-            .unwrap()
-            .active_tab()
-            .unwrap()
-            .pane_manager
-            .as_ref()
-            .unwrap()
+        app.active_panes()
             .get_pane(PaneId(0))
             .unwrap()
             .terminal
@@ -261,7 +223,7 @@ fn osc_titles_and_dynamic_colors_apply_to_exact_inactive_tab_and_pane_origins() 
             HashMap::new(),
         )
         .unwrap();
-    let mut panes = PaneManager::new(
+    let mut panes = PaneManager::for_test(
         40,
         8,
         crate::test_support::sleeping_shell(),
@@ -275,7 +237,7 @@ fn osc_titles_and_dynamic_colors_apply_to_exact_inactive_tab_and_pane_origins() 
     .unwrap();
     let second_pane = panes.split(SplitDirection::Vertical).unwrap();
     panes.focus(PaneId(0));
-    tabs.active_tab_mut().unwrap().pane_manager = Some(panes);
+    tabs.active_tab_mut().unwrap().panes = panes;
     let active_tab_id = tabs
         .new_tab_with_command(
             "/bin/sh",
@@ -344,8 +306,7 @@ fn osc_titles_and_dynamic_colors_apply_to_exact_inactive_tab_and_pane_origins() 
     assert_eq!(
         tabs.iter()
             .find(|(_, tab)| tab.id == dormant_tab_id)
-            .and_then(|(_, tab)| tab.pane_manager.as_ref())
-            .and_then(|panes| panes.get_pane(PaneId(0)))
+            .and_then(|(_, tab)| tab.panes.get_pane(PaneId(0)))
             .and_then(|pane| pane.title.as_deref()),
         Some("pane-build")
     );
@@ -365,8 +326,7 @@ fn osc_titles_and_dynamic_colors_apply_to_exact_inactive_tab_and_pane_origins() 
     assert_eq!(
         tabs.iter()
             .find(|(_, tab)| tab.id == dormant_tab_id)
-            .and_then(|(_, tab)| tab.pane_manager.as_ref())
-            .and_then(|panes| panes.get_pane(PaneId(0)))
+            .and_then(|(_, tab)| tab.panes.get_pane(PaneId(0)))
             .and_then(|pane| pane.title.as_deref()),
         None,
         "an empty OSC title must clear persisted pane title metadata"

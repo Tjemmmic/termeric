@@ -444,7 +444,7 @@ fn hook_reports_track_an_agent_started_from_a_shell_until_it_exits() {
         .unwrap()
         .active_tab()
         .unwrap()
-        .single_pty()
+        .lone_pty()
         .unwrap()
         .terminal_id()
         .unwrap()
@@ -462,7 +462,7 @@ fn hook_reports_track_an_agent_started_from_a_shell_until_it_exits() {
     let deadline = Instant::now() + Duration::from_secs(5);
     let foreground = loop {
         let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
-        let pty = tab.single_pty().unwrap();
+        let pty = tab.lone_pty().unwrap();
         let group = pty.foreground_process_group();
         if let Some(group) =
             group.filter(|group| Some(*group) != pty.child_id().map(|pid| pid as i32))
@@ -1067,7 +1067,7 @@ fn plugin_context_cwd_follows_the_focused_pane_and_single_terminal() {
     }
 
     let shell = crate::test_support::sleeping_shell();
-    let mut panes = PaneManager::new(
+    let mut panes = PaneManager::for_test(
         80,
         24,
         shell,
@@ -1102,20 +1102,12 @@ fn plugin_context_cwd_follows_the_focused_pane_and_single_terminal() {
         HashMap::new(),
     )
     .unwrap();
-    tabs.active_tab_mut().unwrap().pane_manager = Some(panes);
+    tabs.active_tab_mut().unwrap().panes = panes;
     let mut app = App::new_headless(Config::default()).unwrap();
     app.tabs = Some(tabs);
 
     assert_eq!(app.build_plugin_context().cwd.as_deref(), left_cwd.to_str());
-    app.tabs
-        .as_mut()
-        .unwrap()
-        .active_tab_mut()
-        .unwrap()
-        .pane_manager
-        .as_mut()
-        .unwrap()
-        .focus(right);
+    app.active_panes_mut().focus(right);
     app.refresh_focused_terminal_surfaces();
     assert_eq!(
         app.build_plugin_context().cwd.as_deref(),

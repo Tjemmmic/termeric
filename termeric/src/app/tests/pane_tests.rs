@@ -6,7 +6,7 @@ use super::*;
 fn keyboard_mode_snapshot_follows_the_focused_pane() {
     let mut app = App::new_headless(Config::default()).unwrap();
     let shell = crate::test_support::sleeping_shell();
-    let mut panes = PaneManager::new(
+    let mut panes = PaneManager::for_test(
         80,
         24,
         shell,
@@ -45,18 +45,10 @@ fn keyboard_mode_snapshot_follows_the_focused_pane() {
         HashMap::new(),
     )
     .unwrap();
-    tabs.active_tab_mut().unwrap().pane_manager = Some(panes);
+    tabs.active_tab_mut().unwrap().panes = panes;
     app.tabs = Some(tabs);
 
-    app.tabs
-        .as_mut()
-        .unwrap()
-        .active_tab_mut()
-        .unwrap()
-        .pane_manager
-        .as_mut()
-        .unwrap()
-        .focus(PaneId(0));
+    app.active_panes_mut().focus(PaneId(0));
     assert!(
         app.active_keyboard_mode()
             .contains(termeric_core::term::TerminalMode::CURSOR_KEYS_APPLICATION)
@@ -127,15 +119,7 @@ fn keyboard_mode_snapshot_follows_the_focused_pane() {
         termeric_core::term::XtermKeyFormat::FunctionKey27
     );
 
-    app.tabs
-        .as_mut()
-        .unwrap()
-        .active_tab_mut()
-        .unwrap()
-        .pane_manager
-        .as_mut()
-        .unwrap()
-        .focus(right);
+    app.active_panes_mut().focus(right);
     assert!(
         app.active_keyboard_mode()
             .contains(termeric_core::term::TerminalMode::KEYPAD_APPLICATION)
@@ -221,7 +205,7 @@ fn keyboard_mode_snapshot_follows_the_focused_pane() {
 fn copy_mode_is_owned_by_one_focused_pane_and_disappears_after_focus_changes() {
     let mut app = App::new_headless(Config::default()).unwrap();
     let shell = crate::test_support::sleeping_shell();
-    let mut panes = PaneManager::new(
+    let mut panes = PaneManager::for_test(
         80,
         24,
         shell,
@@ -244,30 +228,14 @@ fn copy_mode_is_owned_by_one_focused_pane_and_disappears_after_focus_changes() {
         HashMap::new(),
     )
     .unwrap();
-    tabs.active_tab_mut().unwrap().pane_manager = Some(panes);
+    tabs.active_tab_mut().unwrap().panes = panes;
     app.tabs = Some(tabs);
 
-    app.tabs
-        .as_mut()
-        .unwrap()
-        .active_tab_mut()
-        .unwrap()
-        .pane_manager
-        .as_mut()
-        .unwrap()
-        .focus(PaneId(0));
+    app.active_panes_mut().focus(PaneId(0));
     app.enter_copy_mode();
     assert!(app.copy_mode_render_info().is_some());
 
-    app.tabs
-        .as_mut()
-        .unwrap()
-        .active_tab_mut()
-        .unwrap()
-        .pane_manager
-        .as_mut()
-        .unwrap()
-        .focus(right);
+    app.active_panes_mut().focus(right);
     assert!(app.copy_mode_render_info().is_none());
     assert!(
         app.tabs
@@ -296,7 +264,7 @@ fn mouse_focus_and_bracketed_paste_reach_the_focused_pane_in_order() {
         args: vec!["-c".into(), script.into()],
         env: Default::default(),
     };
-    let mut panes = PaneManager::new(
+    let mut panes = PaneManager::for_test(
         80,
         24,
         shell,
@@ -333,7 +301,7 @@ fn mouse_focus_and_bracketed_paste_reach_the_focused_pane_in_order() {
         HashMap::new(),
     )
     .unwrap();
-    tabs.active_tab_mut().unwrap().pane_manager = Some(panes);
+    tabs.active_tab_mut().unwrap().panes = panes;
     app.tabs = Some(tabs);
 
     let ready_deadline = Instant::now() + Duration::from_secs(3);
@@ -341,14 +309,7 @@ fn mouse_focus_and_bracketed_paste_reach_the_focused_pane_in_order() {
     while Instant::now() < ready_deadline {
         app.tabs.as_mut().unwrap().poll_events();
         let ready = app
-            .tabs
-            .as_ref()
-            .unwrap()
-            .active_tab()
-            .unwrap()
-            .pane_manager
-            .as_ref()
-            .unwrap()
+            .active_panes()
             .get_pane(receiving_pane)
             .unwrap()
             .terminal
@@ -401,14 +362,7 @@ fn mouse_focus_and_bracketed_paste_reach_the_focused_pane_in_order() {
     while Instant::now() < deadline {
         app.tabs.as_mut().unwrap().poll_events();
         output = app
-            .tabs
-            .as_ref()
-            .unwrap()
-            .active_tab()
-            .unwrap()
-            .pane_manager
-            .as_ref()
-            .unwrap()
+            .active_panes()
             .get_pane(receiving_pane)
             .unwrap()
             .terminal
@@ -436,7 +390,7 @@ fn mouse_focus_and_bracketed_paste_reach_the_focused_pane_in_order() {
 }
 
 #[test]
-fn split_adopts_one_owner_and_dissolve_preserves_output_without_orphans() {
+fn splitting_and_closing_back_to_one_pane_keep_the_first_terminal_without_orphans() {
     let mut tab = Tab::new_with_command(
         0,
         80,
@@ -454,7 +408,7 @@ fn split_adopts_one_owner_and_dissolve_preserves_output_without_orphans() {
         8 * 1024 * 1024,
     )
     .unwrap();
-    let original_pid = tab.single_child_id().unwrap();
+    let original_pid = tab.lone_child_id().unwrap();
     let original_cwd = std::fs::read_link(format!("/proc/{original_pid}/cwd")).unwrap();
 
     let before_deadline = Instant::now() + Duration::from_secs(2);
@@ -465,7 +419,7 @@ fn split_adopts_one_owner_and_dissolve_preserves_output_without_orphans() {
             .rows_text(0, 23)
             .contains("before")
     {
-        tab.poll_single(|_, _| {});
+        tab.poll_events(|_, _| {});
         std::thread::sleep(Duration::from_millis(2));
     }
 
@@ -474,20 +428,11 @@ fn split_adopts_one_owner_and_dissolve_preserves_output_without_orphans() {
         args: vec!["-c".into(), "sleep 5".into()],
         env: Default::default(),
     };
+    tab.panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
     for cycle in 0..3 {
-        let owner = tab.take_terminal_owner().unwrap();
-        assert!(!tab.has_single_terminal_owner());
-        let mut panes = PaneManager::from_existing(
-            owner,
-            shell.clone(),
-            1_000,
-            8 * 1024 * 1024,
-            800.0,
-            480.0,
-            10.0,
-            20.0,
-        );
-        assert_eq!(panes.spawned_shell_count(), 0);
+        let panes = &mut tab.panes;
+        assert_eq!(panes.pane_count(), 1);
+        assert_eq!(panes.spawned_shell_count(), cycle as usize);
         assert_eq!(
             panes.get_pane(PaneId(0)).unwrap().pty.child_id(),
             Some(original_pid)
@@ -504,7 +449,7 @@ fn split_adopts_one_owner_and_dissolve_preserves_output_without_orphans() {
             crate::panes::DividerTarget::Local(u64::from(cycle + 1)),
             "retired divider IDs must not be reused"
         );
-        assert_eq!(panes.spawned_shell_count(), 1);
+        assert_eq!(panes.spawned_shell_count(), cycle as usize + 1);
         let added_pid = panes.get_pane(added).unwrap().pty.child_id().unwrap();
         assert_eq!(
             std::fs::read_link(format!("/proc/{added_pid}/cwd")).unwrap(),
@@ -528,11 +473,7 @@ fn split_adopts_one_owner_and_dissolve_preserves_output_without_orphans() {
 
         assert!(panes.close_focused());
         assert_eq!(panes.pane_count(), 1);
-        let remaining = panes.take_remaining_pane().unwrap();
-        assert_eq!(remaining.pane.pty.child_id(), Some(original_pid));
-        tab.restore_terminal_owner(remaining);
-        assert!(tab.has_single_terminal_owner());
-        assert_eq!(tab.single_child_id(), Some(original_pid));
+        assert_eq!(tab.lone_child_id(), Some(original_pid));
         assert!(
             tab.focused_terminal()
                 .unwrap()
@@ -566,7 +507,7 @@ fn split_adopts_one_owner_and_dissolve_preserves_output_without_orphans() {
 }
 
 #[test]
-fn pane_identity_survives_collapse_and_the_next_split() {
+fn pane_identity_survives_closing_back_to_one_pane_and_the_next_split() {
     let shell = crate::test_support::sleeping_shell();
     let mut tab = Tab::new_with_command(
         0,
@@ -582,22 +523,10 @@ fn pane_identity_survives_collapse_and_the_next_split() {
         8 * 1024 * 1024,
     )
     .unwrap();
-    let owner = tab.take_terminal_owner().unwrap();
-    let mut panes = PaneManager::from_existing(
-        owner,
-        shell.clone(),
-        1_000,
-        8 * 1024 * 1024,
-        800.0,
-        480.0,
-        10.0,
-        20.0,
-    );
+    let panes = tab.panes_for_test(shell.clone(), 800.0, 480.0, 10.0, 20.0);
     assert_eq!(panes.split(SplitDirection::Vertical).unwrap(), PaneId(1));
     assert!(panes.close(PaneId(0)));
-    let remaining = panes.take_remaining_pane().unwrap();
-    tab.restore_terminal_owner(remaining);
-    assert_eq!(tab.single_pane_id(), PaneId(1));
+    assert_eq!(tab.panes.focused_id(), PaneId(1));
     let snapshot = tab.capture_workspace_tab(0, false).unwrap();
     assert_eq!(snapshot.primary_pane, 1);
     assert_eq!(snapshot.focused_pane, 1);
@@ -606,21 +535,13 @@ fn pane_identity_survives_collapse_and_the_next_split() {
     restored
         .new_shell_tab_from_workspace(&snapshot, &HashMap::new())
         .unwrap();
-    assert_eq!(restored.active_tab().unwrap().single_pane_id(), PaneId(1));
+    assert_eq!(restored.active_tab().unwrap().panes.focused_id(), PaneId(1));
 
-    let owner = tab.take_terminal_owner().unwrap();
-    let mut panes = PaneManager::from_existing(
-        owner,
-        shell,
-        1_000,
-        8 * 1024 * 1024,
-        800.0,
-        480.0,
-        10.0,
-        20.0,
+    assert!(tab.panes.get_pane(PaneId(1)).is_some());
+    assert_eq!(
+        tab.panes.split(SplitDirection::Horizontal).unwrap(),
+        PaneId(2)
     );
-    assert!(panes.get_pane(PaneId(1)).is_some());
-    assert_eq!(panes.split(SplitDirection::Horizontal).unwrap(), PaneId(2));
 }
 
 #[test]
@@ -631,14 +552,7 @@ fn collapsed_tab_rejects_retired_pane_and_divider_requests_after_resplit() {
     // Keep a history action addressed to a pane that is about to disappear.
     entry.source.pane_id = 1;
     let original_pid = app
-        .tabs
-        .as_ref()
-        .unwrap()
-        .active_tab()
-        .unwrap()
-        .pane_manager
-        .as_ref()
-        .unwrap()
+        .active_panes()
         .get_pane(PaneId(0))
         .unwrap()
         .pty
@@ -654,8 +568,8 @@ fn collapsed_tab_rejects_retired_pane_and_divider_requests_after_resplit() {
         (1, 0)
     );
     let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
-    assert!(tab.pane_manager.is_none());
-    assert_eq!(tab.single_child_id(), original_pid);
+    assert!(tab.panes.pane_count() == 1);
+    assert_eq!(tab.lone_child_id(), original_pid);
     let shell = ShellConfig {
         program: Some("/bin/sh".into()),
         args: vec![
@@ -669,16 +583,7 @@ fn collapsed_tab_rejects_retired_pane_and_divider_requests_after_resplit() {
     };
     // Only the renderer-dependent first adoption is performed directly; all
     // closure and stale control requests below use the real app handlers.
-    let mut panes = PaneManager::from_existing(
-        tab.take_terminal_owner().unwrap(),
-        shell,
-        100,
-        1024 * 1024,
-        800.0,
-        480.0,
-        10.0,
-        20.0,
-    );
+    let panes = tab.panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
     let replacement = panes.split(SplitDirection::Vertical).unwrap();
     assert_eq!(replacement, PaneId(3));
     assert_eq!(
@@ -707,7 +612,6 @@ fn collapsed_tab_rejects_retired_pane_and_divider_requests_after_resplit() {
             directory.path().join(replacement_pid.to_string()),
         ),
     ];
-    tab.pane_manager = Some(panes);
     let deadline = Instant::now() + std::time::Duration::from_secs(3);
     loop {
         app.process_pty_events();
@@ -758,15 +662,7 @@ fn collapsed_tab_rejects_retired_pane_and_divider_requests_after_resplit() {
         );
     }
     app.execute_sprout_action(crate::harvest::sprouts::SproutAction::Rerun, Some(entry));
-    let panes = app
-        .tabs
-        .as_ref()
-        .unwrap()
-        .active_tab()
-        .unwrap()
-        .pane_manager
-        .as_ref()
-        .unwrap();
+    let panes = app.active_panes();
     assert_eq!(panes.focused_id(), replacement);
     assert_eq!(panes.pane_count(), 2);
     assert_eq!(panes.get_dividers()[0].ratio_millis, 500);
@@ -804,45 +700,20 @@ fn pane_allocation_history_survives_failed_split_and_exhaustion() {
     ] {
         let (mut app, _directory, _, _) = harvest_rerun_capture_fixture_in(false);
         let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
-        let original_pid = tab.single_child_id();
-        let mut owner = tab.take_terminal_owner().unwrap();
-        owner.allocation = crate::panes::PaneAllocationState {
-            next_pane,
-            next_divider,
-        };
+        let original_pid = tab.lone_child_id();
         let mut shell = ShellConfig {
             program: Some("/definitely/missing/termeric-shell".into()),
             args: vec!["-c".into(), "sleep 5".into()],
             env: Default::default(),
         };
-        let mut panes = PaneManager::from_existing(
-            owner,
-            shell.clone(),
-            100,
-            1024 * 1024,
-            800.0,
-            480.0,
-            10.0,
-            20.0,
-        );
+        let panes = tab.panes_for_test(shell.clone(), 800.0, 480.0, 10.0, 20.0);
+        panes.set_next_ids_for_test(next_pane, next_divider);
         assert!(panes.split(SplitDirection::Vertical).is_err());
         assert_eq!(panes.spawned_shell_count(), 0);
-        tab.restore_terminal_owner(panes.take_remaining_pane().unwrap());
-        let owner = tab.take_terminal_owner().unwrap();
-        assert_eq!(owner.allocation.next_pane, next_pane);
-        assert_eq!(owner.allocation.next_divider, next_divider);
         shell.program = Some("/bin/sh".into());
-        let mut panes = PaneManager::from_existing(
-            owner,
-            shell.clone(),
-            100,
-            1024 * 1024,
-            800.0,
-            480.0,
-            10.0,
-            20.0,
-        );
-        if next_pane == u32::MAX - 1 {
+        panes.adopt_primary_shell(shell);
+        let spawned = next_pane == u32::MAX - 1;
+        if spawned {
             let last = panes.split(SplitDirection::Vertical).unwrap();
             assert_eq!(last, PaneId(u32::MAX - 1));
             assert_eq!(
@@ -851,18 +722,8 @@ fn pane_allocation_history_survives_failed_split_and_exhaustion() {
             );
             assert!(panes.close(last));
         }
-        tab.restore_terminal_owner(panes.take_remaining_pane().unwrap());
-        assert_eq!(tab.single_child_id(), original_pid);
-        let mut panes = PaneManager::from_existing(
-            tab.take_terminal_owner().unwrap(),
-            shell,
-            100,
-            1024 * 1024,
-            800.0,
-            480.0,
-            10.0,
-            20.0,
-        );
+        assert_eq!(tab.lone_child_id(), original_pid);
+        let panes = &mut tab.panes;
         assert!(
             panes
                 .split(SplitDirection::Vertical)
@@ -870,7 +731,7 @@ fn pane_allocation_history_survives_failed_split_and_exhaustion() {
                 .to_string()
                 .contains(expected_error)
         );
-        assert_eq!(panes.spawned_shell_count(), 0);
+        assert_eq!(panes.spawned_shell_count(), usize::from(spawned));
         assert_eq!(panes.pane_count(), 1);
     }
 }
@@ -904,19 +765,8 @@ fn pane_read_only_blocks_user_routes_but_not_protocol_replies_and_follows_owners
             .is_ok()
     );
 
-    let owner = tab.take_terminal_owner().unwrap();
-    assert!(owner.pane.read_only);
-    let primary = owner.pane.id;
-    let mut panes = PaneManager::from_existing(
-        owner,
-        shell,
-        1_000,
-        8 * 1024 * 1024,
-        800.0,
-        480.0,
-        10.0,
-        20.0,
-    );
+    let primary = tab.panes.focused_id();
+    let panes = tab.panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
     assert!(panes.get_pane(primary).unwrap().read_only);
     assert_eq!(
         panes.write_to(primary, b"blocked").unwrap_err().kind(),
@@ -927,7 +777,6 @@ fn pane_read_only_blocks_user_routes_but_not_protocol_replies_and_follows_owners
     assert!(panes.write_to(writable, b"").is_ok());
     assert!(panes.close(writable));
 
-    tab.restore_terminal_owner(panes.take_remaining_pane().unwrap());
     assert!(tab.focused_pane_read_only());
     assert!(!tab.toggle_focused_pane_read_only());
     assert!(tab.write(b"").is_ok());
@@ -945,7 +794,7 @@ fn read_only_focused_pane_rejects_keyboard_and_running_gui_control_input() {
 
     let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
     let tab_id = tab.id as u64;
-    let pane_id = tab.single_pane_id().0;
+    let pane_id = tab.panes.focused_id().0;
     assert!(tab.focused_pane_read_only());
     assert!(app.tabs.as_ref().unwrap().tab_info()[0].read_only);
     assert!(!app.write_terminal_protocol_input(b"blocked"));
@@ -1019,22 +868,12 @@ fn a_closed_split_tab_keeps_every_pane_and_is_named_for_the_focused_one() {
         8 * 1024 * 1024,
     )
     .unwrap();
-    let owner = tab.take_terminal_owner().unwrap();
     let shell = ShellConfig {
         program: Some("/bin/sh".into()),
         args: Vec::new(),
         env: Default::default(),
     };
-    let mut panes = PaneManager::from_existing(
-        owner,
-        shell,
-        1_000,
-        8 * 1024 * 1024,
-        800.0,
-        160.0,
-        10.0,
-        20.0,
-    );
+    let panes = tab.panes_for_test(shell, 800.0, 160.0, 10.0, 20.0);
     let right_id = panes.split(SplitDirection::Vertical).unwrap();
 
     for (pane_id, directory) in [(PaneId(0), &left_dir), (right_id, &right_dir)] {
@@ -1077,13 +916,12 @@ fn a_closed_split_tab_keeps_every_pane_and_is_named_for_the_focused_one() {
         }
         pane.last_command = Some(command.into());
     }
-    tab.pane_manager = Some(panes);
 
     for (focused, directory, command) in [
         (PaneId(0), &left_dir, "left-command"),
         (right_id, &right_dir, "right-command"),
     ] {
-        tab.pane_manager.as_mut().unwrap().focus(focused);
+        tab.panes.focus(focused);
         let snapshot = tab.closed_tab_snapshot(true).unwrap();
         assert!(snapshot.closed_tab);
         let name = directory.file_name().unwrap().to_str().unwrap();

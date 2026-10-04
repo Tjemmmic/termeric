@@ -90,11 +90,7 @@ fn process_pane_count(windows: &HashMap<WindowId, App>) -> usize {
         .values()
         .filter_map(|window| window.tabs.as_ref())
         .flat_map(|tabs| tabs.all_tabs())
-        .map(|tab| {
-            tab.pane_manager
-                .as_ref()
-                .map_or(1, crate::panes::PaneManager::pane_count)
-        })
+        .map(|tab| tab.panes.pane_count())
         .sum()
 }
 

@@ -1609,7 +1609,7 @@ fn plugin_navigation_is_exact_atomic_non_activating_and_hook_suppressed() {
             std::collections::HashMap::new(),
         )
         .unwrap();
-    let first_pane = tabs.tab_by_id(first).unwrap().single_pane_id().0;
+    let first_pane = tabs.tab_by_id(first).unwrap().panes.focused_id().0;
     assert_eq!(tabs.active_tab_id(), Some(second));
 
     let observed_switches = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -1944,21 +1944,10 @@ fn plugin_pane_creation_is_exact_atomic_and_non_activating() {
     let mut tabs = crate::tabs::TabManager::for_test(shell.clone());
     let tab_id = tabs.new_tab().unwrap();
     let tab = tabs.tab_mut_by_id(tab_id).unwrap();
-    let owner = tab.take_terminal_owner().unwrap();
-    let mut panes = crate::panes::PaneManager::from_existing(
-        owner,
-        shell,
-        1_000,
-        8 * 1024 * 1024,
-        800.0,
-        480.0,
-        10.0,
-        20.0,
-    );
+    let panes = tab.panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
     panes
         .split(crate::panes::SplitDirection::Horizontal)
         .unwrap();
-    tab.pane_manager = Some(panes);
 
     let mut target = App::new_headless(Config::default()).unwrap();
     target.tabs = Some(tabs);
@@ -1996,15 +1985,13 @@ fn plugin_pane_creation_is_exact_atomic_and_non_activating() {
     let target = &application.windows[&native_id];
     assert!(target.window.is_none());
     assert_eq!(target.tabs.as_ref().unwrap().active_tab_id(), Some(tab_id));
-    let manager = target
+    let manager = &target
         .tabs
         .as_ref()
         .unwrap()
         .tab_by_id(tab_id)
         .unwrap()
-        .pane_manager
-        .as_ref()
-        .unwrap();
+        .panes;
     assert_eq!(manager.pane_count(), 3);
     assert!(
         manager
@@ -2035,9 +2022,7 @@ fn plugin_pane_creation_is_exact_atomic_and_non_activating() {
             .unwrap()
             .tab_by_id(tab_id)
             .unwrap()
-            .pane_manager
-            .as_ref()
-            .unwrap()
+            .panes
             .pane_count(),
         4
     );
@@ -2083,9 +2068,7 @@ fn plugin_pane_creation_is_exact_atomic_and_non_activating() {
             .unwrap()
             .tab_by_id(tab_id)
             .unwrap()
-            .pane_manager
-            .as_ref()
-            .unwrap()
+            .panes
             .pane_count(),
         4
     );
@@ -2886,8 +2869,7 @@ fn actions_targeting_window_8(
                 direction: SplitDirection::Vertical,
             },
             Capability::PaneCreate,
-            // Headless windows cannot size a new pane.
-            Err("Target window has no initialized renderer"),
+            Ok(()),
         ),
         (
             StructuredResponseAction::ClosePane {
@@ -3322,7 +3304,7 @@ fn queued_domain_window_preserves_remote_authority_and_disables_auto_restore() {
 
 fn pane_transfer_fixture() -> (App, App, Option<u32>) {
     use crate::config::ShellConfig;
-    use crate::panes::{PaneManager, SplitDirection};
+    use crate::panes::SplitDirection;
     use crate::tabs::TabManager;
     use std::collections::HashMap;
 
@@ -3342,16 +3324,8 @@ fn pane_transfer_fixture() -> (App, App, Option<u32>) {
             HashMap::new(),
         )
         .unwrap();
-    let owner = source_tabs
-        .active_tab_mut()
-        .unwrap()
-        .take_terminal_owner()
-        .unwrap();
-    let mut source_panes = PaneManager::from_existing(
-        owner,
+    let source_panes = source_tabs.active_tab_mut().unwrap().panes_for_test(
         shell.clone(),
-        1_000,
-        1024 * 1024,
         800.0,
         480.0,
         10.0,
@@ -3360,7 +3334,6 @@ fn pane_transfer_fixture() -> (App, App, Option<u32>) {
     let moved = source_panes.split(SplitDirection::Vertical).unwrap();
     source_panes.get_pane_mut(moved).unwrap().title = Some("moved-owner".into());
     let moved_child = source_panes.get_pane(moved).unwrap().pty.child_id();
-    source_tabs.active_tab_mut().unwrap().pane_manager = Some(source_panes);
 
     let mut destination_tabs = TabManager::new(100, 30, shell, 1_000, 1024 * 1024);
     destination_tabs
@@ -3386,26 +3359,10 @@ fn cross_window_transfer_preserves_live_owner_and_retargets_destination_geometry
     let (mut source, mut destination, moved_child) = pane_transfer_fixture();
 
     let attached = Application::transfer_focused_pane(&mut source, &mut destination).unwrap();
-    let source_manager = source
-        .tabs
-        .as_ref()
-        .unwrap()
-        .active_tab()
-        .unwrap()
-        .pane_manager
-        .as_ref()
-        .unwrap();
+    let source_manager = source.active_panes();
     assert_eq!(source_manager.pane_count(), 1);
 
-    let destination_manager = destination
-        .tabs
-        .as_ref()
-        .unwrap()
-        .active_tab()
-        .unwrap()
-        .pane_manager
-        .as_ref()
-        .unwrap();
+    let destination_manager = destination.active_panes();
     let pane = destination_manager.get_pane(attached).unwrap();
     assert_eq!(destination_manager.pane_count(), 2);
     assert_eq!(destination_manager.focused_id(), attached);
@@ -3450,19 +3407,7 @@ fn exact_control_pane_transfer_validates_both_paths_before_detaching() {
     )
     .unwrap_err();
     assert!(error.contains("does not exist"), "{error}");
-    assert_eq!(
-        source
-            .tabs
-            .as_ref()
-            .unwrap()
-            .active_tab()
-            .unwrap()
-            .pane_manager
-            .as_ref()
-            .unwrap()
-            .pane_count(),
-        2
-    );
+    assert_eq!(source.active_panes().pane_count(), 2);
     assert!(
         destination
             .tabs
@@ -3470,8 +3415,9 @@ fn exact_control_pane_transfer_validates_both_paths_before_detaching() {
             .unwrap()
             .active_tab()
             .unwrap()
-            .pane_manager
-            .is_none()
+            .panes
+            .pane_count()
+            == 1
     );
 
     let destination_id = Application::transfer_control_pane(
@@ -3485,15 +3431,7 @@ fn exact_control_pane_transfer_validates_both_paths_before_detaching() {
     )
     .unwrap();
     assert_eq!(destination_id, 1);
-    let destination_manager = destination
-        .tabs
-        .as_ref()
-        .unwrap()
-        .active_tab()
-        .unwrap()
-        .pane_manager
-        .as_ref()
-        .unwrap();
+    let destination_manager = destination.active_panes();
     assert_eq!(destination_manager.pane_count(), 2);
     assert_eq!(destination_manager.focused_id().0, destination_id);
     assert_eq!(
@@ -3550,9 +3488,7 @@ fn plugin_pane_movement_routes_exactly_across_windows_and_is_atomic() {
             .unwrap()
             .active_tab()
             .unwrap()
-            .pane_manager
-            .as_ref()
-            .unwrap()
+            .panes
             .pane_count(),
         2
     );
@@ -3593,21 +3529,17 @@ fn plugin_pane_movement_routes_exactly_across_windows_and_is_atomic() {
             .unwrap()
             .active_tab()
             .unwrap()
-            .pane_manager
-            .as_ref()
-            .unwrap()
+            .panes
             .pane_count(),
         1
     );
-    let destination_manager = application.windows[&destination_native]
+    let destination_manager = &application.windows[&destination_native]
         .tabs
         .as_ref()
         .unwrap()
         .active_tab()
         .unwrap()
-        .pane_manager
-        .as_ref()
-        .unwrap();
+        .panes;
     assert_eq!(destination_manager.pane_count(), 2);
     assert_eq!(destination_manager.focused_id().0, destination_pane_id);
     assert_eq!(
@@ -3651,15 +3583,7 @@ fn cross_window_transfer_rejects_live_endpoints_without_detaching_source() {
         .unwrap_err()
         .to_string();
     assert!(error.contains("live-domain tab"), "{error}");
-    let source_manager = source
-        .tabs
-        .as_ref()
-        .unwrap()
-        .active_tab()
-        .unwrap()
-        .pane_manager
-        .as_ref()
-        .unwrap();
+    let source_manager = source.active_panes();
     assert_eq!(source_manager.pane_count(), 2);
     assert!(
         source_manager
@@ -3673,16 +3597,15 @@ fn cross_window_transfer_rejects_live_endpoints_without_detaching_source() {
             .unwrap()
             .active_tab()
             .unwrap()
-            .pane_manager
-            .is_none()
+            .panes
+            .pane_count()
+            == 1
     );
 
     let (mut live_source, mut ordinary_destination, moved_child) = pane_transfer_fixture();
     let source_tab = live_source.tabs.as_mut().unwrap().active_tab_mut().unwrap();
     let pane_ids = source_tab
-        .pane_manager
-        .as_ref()
-        .unwrap()
+        .panes
         .pane_ids()
         .into_iter()
         .enumerate()
@@ -3699,14 +3622,7 @@ fn cross_window_transfer_rejects_live_endpoints_without_detaching_source() {
     assert!(error.contains("daemon-owned"), "{error}");
     assert!(
         live_source
-            .tabs
-            .as_ref()
-            .unwrap()
-            .active_tab()
-            .unwrap()
-            .pane_manager
-            .as_ref()
-            .unwrap()
+            .active_panes()
             .iter_with_layout()
             .any(|(pane, _)| pane.pty.child_id() == moved_child)
     );
@@ -3717,18 +3633,14 @@ fn cross_window_transfer_rejects_live_endpoints_without_detaching_source() {
             .unwrap()
             .active_tab()
             .unwrap()
-            .pane_manager
-            .is_none()
+            .panes
+            .pane_count()
+            == 1
     );
 
     let source_tab = live_source.tabs.as_mut().unwrap().active_tab_mut().unwrap();
     source_tab.live_domain = None;
-    let focused = source_tab
-        .pane_manager
-        .as_mut()
-        .unwrap()
-        .focused_pane_mut()
-        .unwrap();
+    let focused = source_tab.panes.focused_pane_mut().unwrap();
     focused.launch = crate::workspace::WorkspaceLaunch::Profile { name: "dev".into() };
     let attached =
         Application::transfer_focused_pane(&mut live_source, &mut ordinary_destination).unwrap();
@@ -3759,16 +3671,11 @@ fn cross_window_transfer_rejects_live_endpoints_without_detaching_source() {
     source_tab.tab_type = crate::tabs::TabType::Plugin {
         plugin_id: "fake".into(),
     };
-    source_tab
-        .pane_manager
-        .as_mut()
-        .unwrap()
-        .focused_pane_mut()
-        .unwrap()
-        .launch = crate::workspace::WorkspaceLaunch::Plugin {
-        plugin_id: "fake".into(),
-        profile: None,
-    };
+    source_tab.panes.focused_pane_mut().unwrap().launch =
+        crate::workspace::WorkspaceLaunch::Plugin {
+            plugin_id: "fake".into(),
+            profile: None,
+        };
     let moved =
         Application::transfer_focused_pane(&mut plugin_source, &mut plugin_destination).unwrap();
     assert_eq!(
@@ -3781,19 +3688,7 @@ fn cross_window_transfer_rejects_live_endpoints_without_detaching_source() {
             .pane_plugin_id(moved),
         Some("fake")
     );
-    assert_eq!(
-        plugin_source
-            .tabs
-            .as_ref()
-            .unwrap()
-            .active_tab()
-            .unwrap()
-            .pane_manager
-            .as_ref()
-            .unwrap()
-            .pane_count(),
-        1
-    );
+    assert_eq!(plugin_source.active_panes().pane_count(), 1);
     assert!(
         plugin_destination
             .tabs
@@ -3801,8 +3696,9 @@ fn cross_window_transfer_rejects_live_endpoints_without_detaching_source() {
             .unwrap()
             .active_tab()
             .unwrap()
-            .pane_manager
-            .is_some()
+            .panes
+            .pane_count()
+            > 1
     );
 }
 
@@ -3830,7 +3726,7 @@ fn whole_tab_transfer_preserves_plugin_panes_pinning_and_closes_empty_source() {
         &tab.tab_type,
         crate::tabs::TabType::Plugin { plugin_id } if plugin_id == "fake-ai"
     ));
-    let panes = tab.pane_manager.as_ref().unwrap();
+    let panes = &tab.panes;
     assert_eq!(panes.pane_count(), 2);
     assert!(
         panes
@@ -3912,9 +3808,7 @@ fn exact_control_tab_transfer_is_atomic_and_returns_destination_identity() {
     assert_eq!(moved.id, destination_tab_id);
     assert!(
         moved
-            .pane_manager
-            .as_ref()
-            .unwrap()
+            .panes
             .iter_with_layout()
             .any(|(pane, _)| pane.pty.child_id() == moved_child)
     );
@@ -4026,9 +3920,7 @@ fn plugin_tab_movement_preserves_state_and_refuses_final_source_tab() {
     let transferred = destination_tabs.tab_by_id(1).unwrap();
     assert!(
         transferred
-            .pane_manager
-            .as_ref()
-            .unwrap()
+            .panes
             .iter_with_layout()
             .any(|(pane, _)| pane.pty.child_id() == moved_child)
     );
@@ -4068,9 +3960,7 @@ fn plugin_pane_closure_targets_exact_same_or_sibling_window_and_preserves_tab() 
         .unwrap()
         .active_tab()
         .unwrap()
-        .pane_manager
-        .as_ref()
-        .unwrap()
+        .panes
         .focused_id()
         .0;
     let stale = plugin_event(
@@ -4145,13 +4035,7 @@ fn plugin_pane_closure_targets_exact_same_or_sibling_window_and_preserves_tab() 
         .unwrap()
         .active_tab()
         .unwrap();
-    assert_eq!(
-        target_tab
-            .pane_manager
-            .as_ref()
-            .map_or(1, crate::panes::PaneManager::pane_count),
-        1
-    );
+    assert_eq!(target_tab.panes.pane_count(), 1);
 
     assert!(
         refused.to_string().len() <= crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES
@@ -4274,15 +4158,13 @@ fn plugin_pane_layout_targets_exact_window_and_preserves_identity_and_focus() {
         .active_tab_id()
         .unwrap();
     let (initial_order, initial_focus) = {
-        let manager = application.windows[&target_native]
+        let manager = &application.windows[&target_native]
             .tabs
             .as_ref()
             .unwrap()
             .tab_by_id(target_tab_id)
             .unwrap()
-            .pane_manager
-            .as_ref()
-            .unwrap();
+            .panes;
         (
             manager
                 .pane_ids()
@@ -4369,15 +4251,13 @@ fn plugin_pane_layout_targets_exact_window_and_preserves_identity_and_focus() {
     assert_eq!(applied["event"]["preset"], "fat");
     assert_eq!(applied["event"]["ok"], true);
     assert_eq!(applied["event"]["focused_pane_id"], initial_focus);
-    let target_manager = application.windows[&target_native]
+    let target_manager = &application.windows[&target_native]
         .tabs
         .as_ref()
         .unwrap()
         .tab_by_id(target_tab_id)
         .unwrap()
-        .pane_manager
-        .as_ref()
-        .unwrap();
+        .panes;
     let target_layout = target_manager.calculate_layout();
     let detail = target_manager
         .pane_ids()
@@ -4681,9 +4561,7 @@ fn whole_tab_transfer_rejects_live_source_atomically() {
     let (mut source, mut destination, moved_child) = pane_transfer_fixture();
     let tab = source.tabs.as_mut().unwrap().active_tab_mut().unwrap();
     let pane_ids = tab
-        .pane_manager
-        .as_ref()
-        .unwrap()
+        .panes
         .pane_ids()
         .into_iter()
         .enumerate()
@@ -4700,15 +4578,7 @@ fn whole_tab_transfer_rejects_live_source_atomically() {
         .to_string();
     assert!(error.contains("topology-owned"), "{error}");
     assert!(!source.should_exit);
-    let source_panes = source
-        .tabs
-        .as_ref()
-        .unwrap()
-        .active_tab()
-        .unwrap()
-        .pane_manager
-        .as_ref()
-        .unwrap();
+    let source_panes = source.active_panes();
     assert_eq!(source_panes.pane_count(), 2);
     assert!(
         source_panes

@@ -211,7 +211,7 @@ impl App {
             self.git_completion_index = None;
         }
 
-        // Tab owns the focused terminal/PTTY route in both single and pane mode.
+        // The tab routes to its focused pane's terminal and PTY.
         if let Some(tabs) = &mut self.tabs {
             if let Some(tab) = tabs.active_tab_mut() {
                 if let Some(terminal) = tab.focused_terminal_mut() {
@@ -593,9 +593,7 @@ mod tests {
         let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
         tab.focused_pane_mut().unwrap().shell_integration =
             ShellIntegrationSupport::Enabled("bash");
-        let owner = tab.take_terminal_owner().unwrap();
-        let mut panes =
-            PaneManager::from_existing(owner, shell, 100, 1024 * 1024, 1600.0, 480.0, 8.0, 16.0);
+        let panes = tab.panes_for_test(shell, 1600.0, 480.0, 8.0, 16.0);
         let original = panes.focused_id();
         panes.split(SplitDirection::Vertical).unwrap();
         let second = panes
@@ -604,15 +602,10 @@ mod tests {
             .find(|id| *id != original)
             .unwrap();
         panes.focus(second);
-        tab.pane_manager = Some(panes);
         wait_command_output(&mut app, "READY");
         let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
-        tab.pane_manager
-            .as_mut()
-            .unwrap()
-            .focused_pane_mut()
-            .unwrap()
-            .shell_integration = ShellIntegrationSupport::Enabled("fish");
+        tab.panes.focused_pane_mut().unwrap().shell_integration =
+            ShellIntegrationSupport::Enabled("fish");
         app.write_to_pty(b"git checkout a");
         app.git_completions = vec!["a'b".into()].into();
         app.git_completion_index = Some(0);
@@ -625,9 +618,7 @@ mod tests {
             .unwrap()
             .active_tab_mut()
             .unwrap()
-            .pane_manager
-            .as_mut()
-            .unwrap()
+            .panes
             .focus(original);
         app.write_to_pty(b"Z");
         assert_command_bytes(&mut app, b"Z");
@@ -753,7 +744,7 @@ mod tests {
         let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
         app.broadcast = BroadcastState::Armed {
             tab_id: tab.id,
-            targets: vec![tab.single_pane_id()],
+            targets: vec![tab.panes.focused_id()],
             expires: Instant::now() + Duration::from_secs(10),
         };
         app.run_custom_command("B");
@@ -772,13 +763,10 @@ mod tests {
             env: Default::default(),
         };
         let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
-        let owner = tab.take_terminal_owner().unwrap();
-        let mut panes =
-            PaneManager::from_existing(owner, shell, 100, 1024 * 1024, 800.0, 480.0, 8.0, 16.0);
+        let panes = tab.panes_for_test(shell, 800.0, 480.0, 8.0, 16.0);
         panes.split(SplitDirection::Vertical).unwrap();
         let targets = panes.pane_ids();
         let tab_id = tab.id;
-        tab.pane_manager = Some(panes);
         let wait_all = |app: &mut App, expected: &str| {
             let deadline = Instant::now() + Duration::from_secs(3);
             loop {
@@ -789,8 +777,7 @@ mod tests {
                     .unwrap()
                     .active_tab()
                     .unwrap()
-                    .pane_manager
-                    .as_ref()
+                    .split_panes()
                     .expect("both raw readers must remain live until observed");
                 let outputs: Vec<_> = targets
                     .iter()

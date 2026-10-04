@@ -556,10 +556,7 @@ impl App {
         let tab = self.tabs.as_ref()?.active_tab()?;
         Some(crate::harvest::HarvestSource {
             tab_id: tab.id,
-            pane_id: tab
-                .pane_manager
-                .as_ref()
-                .map_or(tab.single_pane_id().0, |panes| panes.focused_id().0),
+            pane_id: tab.panes.focused_id().0,
         })
     }
 
@@ -608,12 +605,10 @@ impl App {
 
         let mut pane_changed = false;
         let mut live_focus = None;
-        if let Some(tab) = self.tabs.as_mut().and_then(TabManager::active_tab_mut)
-            && let Some(panes) = &mut tab.pane_manager
-        {
+        if let Some(tab) = self.tabs.as_mut().and_then(TabManager::active_tab_mut) {
             let pane_id = PaneId(source.pane_id);
-            pane_changed = panes.focused_id() != pane_id;
-            panes.focus(pane_id);
+            pane_changed = tab.panes.focused_id() != pane_id;
+            tab.panes.focus(pane_id);
             live_focus = tab
                 .live_domain_focus_route()
                 .map(|(domain, pane)| (domain.to_string(), pane));

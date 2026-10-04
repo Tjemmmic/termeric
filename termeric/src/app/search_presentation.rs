@@ -5,7 +5,7 @@ use super::*;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct SearchPresentation {
     tab: usize,
-    pane: Option<PaneId>,
+    pane: PaneId,
     deadline: Option<Instant>,
     alternate_screen: bool,
     cols: usize,
@@ -31,10 +31,7 @@ impl App {
             let grid = terminal.presentation_grid();
             Some(SearchPresentation {
                 tab: tab.id,
-                pane: tab
-                    .pane_manager
-                    .as_ref()
-                    .map(crate::panes::PaneManager::focused_id),
+                pane: tab.panes.focused_id(),
                 deadline: terminal.synchronized_output_deadline(),
                 alternate_screen: terminal.presentation_alternate_screen_active(),
                 cols: grid.cols(),

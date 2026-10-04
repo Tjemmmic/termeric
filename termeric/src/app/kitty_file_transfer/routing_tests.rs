@@ -57,22 +57,8 @@ fn change_owner_layout(
     match transition {
         "closed" => tab.closed = true,
         "closing" => tab.closing_at = Some(Instant::now()),
-        "pane-closed" => {
-            tab.pane_manager
-                .as_mut()
-                .unwrap()
-                .get_pane_mut(owner.pane_id)
-                .unwrap()
-                .closed = true
-        }
-        "read-only" => {
-            tab.pane_manager
-                .as_mut()
-                .unwrap()
-                .get_pane_mut(owner.pane_id)
-                .unwrap()
-                .read_only = true
-        }
+        "pane-closed" => tab.panes.get_pane_mut(owner.pane_id).unwrap().closed = true,
+        "read-only" => tab.panes.get_pane_mut(owner.pane_id).unwrap().read_only = true,
         _ => {}
     }
     captures

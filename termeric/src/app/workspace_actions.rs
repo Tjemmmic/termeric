@@ -72,8 +72,7 @@ impl App {
             .tabs
             .as_mut()
             .and_then(TabManager::active_tab_mut)
-            .and_then(|tab| tab.pane_manager.as_mut())
-            .is_some_and(action);
+            .is_some_and(|tab| action(&mut tab.panes));
         if changed {
             self.refresh_focused_terminal_surfaces();
             self.toasts.success(success);
@@ -89,7 +88,7 @@ impl App {
             .tabs
             .as_ref()
             .and_then(TabManager::active_tab)
-            .filter(|tab| tab.pane_manager.is_some())
+            .filter(|tab| tab.split_panes().is_some())
             .and_then(|tab| {
                 tab.live_domain_focus_route()
                     .map(|(domain, pane)| (domain.to_string(), pane))
@@ -109,7 +108,7 @@ impl App {
             .tabs
             .as_ref()
             .and_then(TabManager::active_tab)
-            .filter(|tab| tab.pane_manager.is_some())
+            .filter(|tab| tab.split_panes().is_some())
             .and_then(|tab| {
                 tab.live_domain_tab_route()
                     .map(|(domain, tab)| (domain.to_string(), tab))
@@ -129,7 +128,7 @@ impl App {
             .tabs
             .as_ref()
             .and_then(TabManager::active_tab)
-            .filter(|tab| tab.pane_manager.is_some())
+            .filter(|tab| tab.split_panes().is_some())
             .and_then(|tab| {
                 tab.live_domain_tab_route()
                     .map(|(domain, tab)| (domain.to_string(), tab))
@@ -158,7 +157,7 @@ impl App {
             let source = tabs.active_tab()?;
             let (domain_id, source_tab_id) = source.live_domain_tab_route()?;
             let (_, remote_pane_id) = source.live_domain_focus_route()?;
-            let has_multiple_panes = source.pane_manager.is_some();
+            let has_multiple_panes = source.panes.pane_count() > 1;
             let tab_count = tabs.iter().count();
             let destination = tabs
                 .iter()
@@ -208,7 +207,7 @@ impl App {
             .tabs
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("No workspace is active"))
-            .and_then(|tabs| tabs.move_focused_pane_to_next_tab(self.config.panes.cwd));
+            .and_then(TabManager::move_focused_pane_to_next_tab);
         match result {
             Ok(_) => {
                 self.broadcast = BroadcastState::Inactive;
@@ -263,9 +262,7 @@ impl App {
         self.config.panes.cwd = self.config.panes.cwd.next();
         if let Some(tabs) = &mut self.tabs {
             for tab in tabs.all_tabs_mut() {
-                if let Some(manager) = &mut tab.pane_manager {
-                    manager.set_cwd_mode(self.config.panes.cwd);
-                }
+                tab.panes.set_cwd_mode(self.config.panes.cwd);
             }
         }
         let label = self.config.panes.cwd.label();
@@ -303,7 +300,7 @@ impl App {
         let Some(tab) = tabs.active_tab() else {
             return Vec::new();
         };
-        let Some(ref pm) = tab.pane_manager else {
+        let Some(pm) = tab.split_panes() else {
             return Vec::new();
         };
         let layout = pm.calculate_layout();
@@ -335,9 +332,6 @@ impl App {
             });
             return;
         }
-        let Some(renderer) = &self.renderer else {
-            return;
-        };
         let Some(tabs) = &mut self.tabs else { return };
         let Some(tab) = tabs.active_tab_mut() else {
             return;
@@ -348,57 +342,12 @@ impl App {
             self.request_redraw(RedrawReason::Action);
             return;
         }
-
-        let Some(focused_terminal) = tab.focused_terminal() else {
-            return;
-        };
-        let cols = focused_terminal.grid().cols();
-        let rows = focused_terminal.grid().rows();
-        let cell_width = renderer.cell_width();
-        let cell_height = renderer.cell_height();
-        let total_width = cols as f32 * cell_width;
-        let total_height = rows as f32 * cell_height;
-
-        if let Some(ref mut pm) = tab.pane_manager {
-            // Already in pane mode — split the focused pane
-            pm.set_cwd_mode(self.config.panes.cwd);
-            match pm.split(direction) {
-                Ok(new_id) => {
-                    log::info!("Split pane {:?}, created pane {:?}", direction, new_id);
-                }
-                Err(e) => log::error!("Failed to split pane: {}", e),
+        tab.panes.set_cwd_mode(self.config.panes.cwd);
+        match tab.panes.split(direction) {
+            Ok(new_id) => {
+                log::info!("Split pane {:?}, created pane {:?}", direction, new_id);
             }
-        } else {
-            // Adopt the tab's live terminal directly. The first split creates
-            // only the one new pane requested by the user.
-            let split_shell = tab.split_shell_config();
-            let Some(owner) = tab.take_terminal_owner() else {
-                log::error!("Cannot enter pane mode without a single terminal owner");
-                return;
-            };
-            let mut pm = PaneManager::from_existing(
-                owner,
-                split_shell,
-                self.config.scrollback.lines,
-                self.config.scrollback.max_memory_bytes(),
-                total_width,
-                total_height,
-                cell_width,
-                cell_height,
-            );
-            pm.set_cwd_mode(self.config.panes.cwd);
-            match pm.split(direction) {
-                Ok(new_id) => {
-                    log::info!("Entered pane mode, created pane {:?}", new_id);
-                    tab.pane_manager = Some(pm);
-                }
-                Err(error) => {
-                    log::error!("Failed initial pane split: {}", error);
-                    if let Some(original) = pm.take_remaining_pane() {
-                        tab.restore_terminal_owner(original);
-                    }
-                }
-            }
+            Err(e) => log::error!("Failed to split pane: {}", e),
         }
 
         self.refresh_focused_terminal_surfaces();
@@ -437,71 +386,31 @@ impl App {
 
         let direction_name = direction.name();
         let target = PaneId(pane_id);
-        let new_id = if let Some(manager) = &mut tab.pane_manager {
-            let pane = manager
-                .get_pane(target)
-                .ok_or_else(|| format!("GUI pane {pane_id} does not exist in tab {tab_id}"))?;
-            if pane.closed {
-                return Err(format!("GUI pane {pane_id} in tab {tab_id} is closed"));
-            }
-            if manager.pane_count() >= crate::control::protocol::MAX_PANES_PER_TAB {
-                return Err(format!(
-                    "GUI tab pane limit of {} reached",
-                    crate::control::protocol::MAX_PANES_PER_TAB
-                ));
-            }
-            manager.set_cwd_mode(self.config.panes.cwd);
-            manager.split_target(target, direction).map_err(|error| {
-                format!("Could not split pane {pane_id} {direction_name}: {error:#}")
-            })?
-        } else {
-            let (cell_width, cell_height) = self
-                .renderer
-                .as_ref()
-                .map(|renderer| (renderer.cell_width(), renderer.cell_height()))
-                .ok_or_else(|| "Target window has no initialized renderer".to_string())?;
-            let sole_pane = tab.single_pane_id();
-            if target != sole_pane {
-                return Err(format!(
-                    "GUI pane {pane_id} does not exist in unsplit tab {tab_id}; its sole pane ID is {}",
-                    sole_pane.0
-                ));
-            }
-            let terminal = tab
-                .focused_terminal()
-                .ok_or_else(|| format!("GUI tab {tab_id} has no live terminal"))?;
-            let total_width = terminal.grid().cols() as f32 * cell_width;
-            let total_height = terminal.grid().rows() as f32 * cell_height;
-            let split_shell = tab.split_shell_config();
-            let owner = tab.take_terminal_owner().ok_or_else(|| {
-                format!("GUI tab {tab_id} cannot transfer its terminal into pane mode")
-            })?;
-            let mut manager = PaneManager::from_existing(
-                owner,
-                split_shell,
-                self.config.scrollback.lines,
-                self.config.scrollback.max_memory_bytes(),
-                total_width,
-                total_height,
-                cell_width,
-                cell_height,
-            );
-            manager.set_cwd_mode(self.config.panes.cwd);
-            match manager.split_target(sole_pane, direction) {
-                Ok(new_id) => {
-                    tab.pane_manager = Some(manager);
-                    new_id
-                }
-                Err(error) => {
-                    if let Some(original) = manager.take_remaining_pane() {
-                        tab.restore_terminal_owner(original);
-                    }
-                    return Err(format!(
-                        "Could not split pane {pane_id} {direction_name}: {error:#}"
-                    ));
-                }
-            }
-        };
+        let manager = &mut tab.panes;
+        if let Some(sole) = manager.lone_pane()
+            && sole.id != target
+        {
+            return Err(format!(
+                "GUI pane {pane_id} does not exist in unsplit tab {tab_id}; its sole pane ID is {}",
+                sole.id.0
+            ));
+        }
+        let pane = manager
+            .get_pane(target)
+            .ok_or_else(|| format!("GUI pane {pane_id} does not exist in tab {tab_id}"))?;
+        if pane.closed {
+            return Err(format!("GUI pane {pane_id} in tab {tab_id} is closed"));
+        }
+        if manager.pane_count() >= crate::control::protocol::MAX_PANES_PER_TAB {
+            return Err(format!(
+                "GUI tab pane limit of {} reached",
+                crate::control::protocol::MAX_PANES_PER_TAB
+            ));
+        }
+        manager.set_cwd_mode(self.config.panes.cwd);
+        let new_id = manager.split_target(target, direction).map_err(|error| {
+            format!("Could not split pane {pane_id} {direction_name}: {error:#}")
+        })?;
 
         log::info!(
             "Control split pane {pane_id} {direction_name}, created pane {}",
@@ -512,19 +421,14 @@ impl App {
         Ok(new_id.0)
     }
 
-    /// Move focus to the adjacent pane in `dir`. No-op if no pane manager
-    /// or no pane in that direction; in the no-neighbor case we surface a
-    /// short info toast so the user knows the key was registered but the
-    /// layout has nowhere to go.
+    /// Move focus to the adjacent pane in `dir`. With no pane in that
+    /// direction we surface a short info toast so the user knows the key was
+    /// registered but the layout has nowhere to go.
     pub(super) fn navigate_focused_pane(&mut self, dir: crate::panes::PaneDir) {
         let moved = {
             let mut moved = false;
-            if let Some(tabs) = &mut self.tabs {
-                if let Some(tab) = tabs.active_tab_mut() {
-                    if let Some(ref mut pm) = tab.pane_manager {
-                        moved = pm.navigate(dir);
-                    }
-                }
+            if let Some(tab) = self.tabs.as_mut().and_then(TabManager::active_tab_mut) {
+                moved = tab.panes.navigate(dir);
             }
             moved
         };
@@ -605,8 +509,7 @@ impl App {
         }
     }
 
-    /// Close the focused pane, collapsing back to a single-terminal tab if
-    /// only one pane remains.
+    /// Close the focused pane. A tab's last pane is closed with the tab.
     pub(super) fn close_focused_pane(&mut self) {
         let live_route = self
             .tabs
@@ -618,7 +521,7 @@ impl App {
                         tab.id,
                         domain.to_string(),
                         remote_pane,
-                        tab.pane_manager.as_ref().map_or(1, PaneManager::pane_count),
+                        tab.panes.pane_count(),
                     )
                 })
             });
@@ -636,31 +539,10 @@ impl App {
             return;
         }
         let mut changed = false;
-        let mut dissolved = false;
-        if let Some(tabs) = &mut self.tabs {
-            if let Some(tab) = tabs.active_tab_mut() {
-                if let Some(ref mut pm) = tab.pane_manager {
-                    changed = pm.close_focused();
-                }
-                if changed {
-                    tab.reconcile_primary_pane_launch();
-                }
-                let dissolve = tab
-                    .pane_manager
-                    .as_ref()
-                    .is_some_and(|panes| panes.pane_count() <= 1);
-                if dissolve {
-                    let mut panes = tab.pane_manager.take().unwrap();
-                    if let Some(remaining) = panes.take_remaining_pane() {
-                        tab.restore_terminal_owner(remaining);
-                    }
-                    dissolved = true;
-                }
-            }
-        }
-        if dissolved {
-            if let Some(size) = self.window.as_ref().map(|window| window.inner_size()) {
-                self.sync_terminal_geometry(size.width, size.height);
+        if let Some(tab) = self.tabs.as_mut().and_then(TabManager::active_tab_mut) {
+            changed = tab.panes.close_focused();
+            if changed {
+                tab.reconcile_primary_pane_launch();
             }
         }
         if changed {
@@ -669,9 +551,6 @@ impl App {
                 self.toasts.info("Broadcast cancelled after pane closure");
             }
             self.refresh_focused_terminal_surfaces();
-        } else if dissolved {
-            self.toasts
-                .info("The last pane was retained as the tab's terminal");
         } else {
             self.toasts
                 .warning("Cannot close the last pane; close the tab instead");

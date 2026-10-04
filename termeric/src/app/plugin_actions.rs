@@ -346,7 +346,7 @@ impl App {
                                 && let Some(tab) = tabs.tab_mut_by_id(id)
                             {
                                 tab.set_plugin_profile_reference(
-                                    tab.single_pane_id(),
+                                    tab.panes.focused_id(),
                                     &plugin_id,
                                     profile,
                                 );

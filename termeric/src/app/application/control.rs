@@ -1126,16 +1126,6 @@ impl Application {
             .ok_or_else(|| "Destination window has no initialized tab manager".to_string())?
             .validate_pane_transfer_destination_by_id(destination_tab_id, target_pane_id)
             .map_err(|error| format!("Could not move pane {}: {error:#}", pane_id.0))?;
-        destination
-            .tabs
-            .as_mut()
-            .expect("validated destination tab manager remains present")
-            .prepare_pane_transfer_destination_by_id(
-                destination_tab_id,
-                target_pane_id,
-                destination.config.panes.cwd,
-            )
-            .map_err(|error| format!("Could not prepare destination pane: {error:#}"))?;
         let pane = source
             .tabs
             .as_mut()
@@ -1145,7 +1135,7 @@ impl Application {
         let destination_pane_id = destination
             .tabs
             .as_mut()
-            .expect("prepared destination tab manager remains present")
+            .expect("validated destination tab manager remains present")
             .attach_transferred_pane_by_id(destination_tab_id, target_pane_id, pane, direction)
             .expect("prevalidated destination remains attachable");
 

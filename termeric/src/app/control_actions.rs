@@ -264,7 +264,6 @@ impl App {
                 destination_tab_id,
                 PaneId(target_pane_id),
                 direction,
-                self.config.panes.cwd,
             )
             .map_err(|error| format!("Could not move pane {pane_id}: {error:#}"))?;
         self.broadcast = BroadcastState::Inactive;
@@ -349,8 +348,7 @@ impl App {
         if matches!(tab.tab_type, crate::tabs::TabType::Serial { .. }) {
             return Err(format!("GUI tab {tab_id} is a serial terminal"));
         }
-        tab.pane_manager
-            .as_mut()
+        tab.split_panes_mut()
             .ok_or_else(|| format!("GUI tab {tab_id} is not split"))
     }
 
@@ -389,8 +387,7 @@ impl App {
             );
         }
         let manager = tab
-            .pane_manager
-            .as_mut()
+            .split_panes_mut()
             .ok_or_else(|| format!("GUI tab {tab_id} has no split dividers"))?;
         let result = manager
             .resize_local_divider(divider_id, ratio_millis)
@@ -422,21 +419,18 @@ impl App {
         if tab.closed || tab.closing_at.is_some() {
             return Err(format!("GUI tab {tab_id} is closing"));
         }
-        let terminal = if let Some(manager) = &tab.pane_manager {
-            manager
-                .get_pane(PaneId(pane_id))
-                .map(|pane| &pane.terminal)
-                .ok_or_else(|| format!("GUI pane {pane_id} does not exist in tab {tab_id}"))?
-        } else {
-            if PaneId(pane_id) != tab.single_pane_id() {
-                return Err(format!(
-                    "GUI pane {pane_id} does not exist in tab {tab_id}; its sole pane ID is {}",
-                    tab.single_pane_id().0
-                ));
-            }
-            tab.focused_terminal()
-                .ok_or_else(|| format!("GUI pane {pane_id} has no live terminal"))?
-        };
+        if let Some(sole) = tab.panes.lone_pane()
+            && sole.id != PaneId(pane_id)
+        {
+            return Err(format!(
+                "GUI pane {pane_id} does not exist in tab {tab_id}; its sole pane ID is {}",
+                sole.id.0
+            ));
+        }
+        let terminal = &tab
+            .pane(PaneId(pane_id))
+            .ok_or_else(|| format!("GUI pane {pane_id} does not exist in tab {tab_id}"))?
+            .terminal;
         let alternate = terminal.presentation_alternate_screen_active();
         let (text, included_history, truncated) = terminal.bounded_presentation_text(
             usize::from(history_lines),
@@ -496,45 +490,29 @@ impl App {
             if tab.closed || tab.closing_at.is_some() {
                 return Err(format!("GUI tab {tab_id} is closing"));
             }
-            let origin = if let Some(manager) = &tab.pane_manager {
-                let pane = manager
-                    .get_pane(PaneId(pane_id))
-                    .ok_or_else(|| format!("GUI pane {pane_id} does not exist in tab {tab_id}"))?;
-                if pane.closed {
-                    return Err(format!("GUI pane {pane_id} is closed in tab {tab_id}"));
-                }
-                (
-                    crate::tabs::TerminalEventOrigin {
-                        tab_id,
-                        pane_id: PaneId(pane_id),
-                    },
-                    pane.terminal.mode(),
-                    pane.read_only,
-                )
-            } else {
-                if PaneId(pane_id) != tab.single_pane_id() {
-                    return Err(format!(
-                        "GUI pane {pane_id} does not exist in tab {tab_id}; its sole pane ID is {}",
-                        tab.single_pane_id().0
-                    ));
-                }
-                (
-                    crate::tabs::TerminalEventOrigin {
-                        tab_id,
-                        pane_id: PaneId(pane_id),
-                    },
-                    tab.focused_terminal()
-                        .ok_or_else(|| format!("GUI pane {pane_id} has no live terminal"))?
-                        .mode(),
-                    tab.focused_pane_read_only(),
-                )
-            };
+            if let Some(sole) = tab.panes.lone_pane()
+                && sole.id != PaneId(pane_id)
+            {
+                return Err(format!(
+                    "GUI pane {pane_id} does not exist in tab {tab_id}; its sole pane ID is {}",
+                    sole.id.0
+                ));
+            }
+            let pane = tab
+                .pane(PaneId(pane_id))
+                .ok_or_else(|| format!("GUI pane {pane_id} does not exist in tab {tab_id}"))?;
+            if pane.closed {
+                return Err(format!("GUI pane {pane_id} is closed in tab {tab_id}"));
+            }
             (
-                origin.0,
-                origin.1,
+                crate::tabs::TerminalEventOrigin {
+                    tab_id,
+                    pane_id: PaneId(pane_id),
+                },
+                pane.terminal.mode(),
                 requester.always_guards_destructive_input()
                     || matches!(tab.tab_type, crate::tabs::TabType::Plugin { .. }),
-                origin.2,
+                pane.read_only,
             )
         };
 
@@ -620,24 +598,21 @@ impl App {
             return Err(format!("GUI tab {tab_id} is closing"));
         }
         let target = PaneId(pane_id);
-        let pane_changed = if let Some(manager) = &tab.pane_manager {
-            let pane = manager
-                .get_pane(target)
-                .ok_or_else(|| format!("GUI pane {pane_id} does not exist in tab {tab_id}"))?;
-            if pane.closed {
-                return Err(format!("GUI pane {pane_id} in tab {tab_id} is closed"));
-            }
-            manager.focused_id() != target
-        } else {
-            let sole_pane = tab.single_pane_id();
-            if target != sole_pane {
-                return Err(format!(
-                    "GUI pane {pane_id} does not exist in unsplit tab {tab_id}; its sole pane ID is {}",
-                    sole_pane.0
-                ));
-            }
-            false
-        };
+        if let Some(sole) = tab.panes.lone_pane()
+            && sole.id != target
+        {
+            return Err(format!(
+                "GUI pane {pane_id} does not exist in unsplit tab {tab_id}; its sole pane ID is {}",
+                sole.id.0
+            ));
+        }
+        let pane = tab
+            .pane(target)
+            .ok_or_else(|| format!("GUI pane {pane_id} does not exist in tab {tab_id}"))?;
+        if pane.closed {
+            return Err(format!("GUI pane {pane_id} in tab {tab_id} is closed"));
+        }
+        let pane_changed = tab.panes.focused_id() != target;
         let from = tabs.active_index();
         let tab_changed = from != index;
 
@@ -653,10 +628,7 @@ impl App {
                 .tab_mut_by_id(tab_id)
                 .expect("validated control tab disappeared");
             if pane_changed {
-                tab.pane_manager
-                    .as_mut()
-                    .expect("validated pane manager disappeared")
-                    .focus(target);
+                tab.panes.focus(target);
             }
             tab.live_domain_focus_route()
                 .map(|(domain, pane)| (domain.to_string(), pane))
@@ -775,14 +747,9 @@ impl App {
             return Err("Serial terminal tabs do not contain closable panes".into());
         }
         let target = PaneId(pane_id);
-        let manager = tab.pane_manager.as_ref().ok_or_else(|| {
+        let manager = tab.split_panes().ok_or_else(|| {
             format!("Cannot close the sole pane {pane_id} in unsplit tab {tab_id}; close the tab instead")
         })?;
-        if manager.pane_count() <= 1 {
-            return Err(format!(
-                "Cannot close the last pane {pane_id} in tab {tab_id}; close the tab instead"
-            ));
-        }
         let pane = manager
             .get_pane(target)
             .ok_or_else(|| format!("GUI pane {pane_id} does not exist in tab {tab_id}"))?;
@@ -797,44 +764,19 @@ impl App {
                 pane_id: target,
             });
 
-        let (remaining, focused, dissolved) = {
+        let (remaining, focused) = {
             let tab = self
                 .tabs
                 .as_mut()
                 .expect("validated tab manager disappeared")
                 .tab_mut_by_id(tab_id)
                 .expect("validated control tab disappeared");
-            let manager = tab
-                .pane_manager
-                .as_mut()
-                .expect("validated pane manager disappeared");
-            if !manager.close(target) {
+            if !tab.panes.close(target) {
                 return Err(format!("GUI pane {pane_id} could not be closed"));
             }
-            let remaining = manager.pane_count();
-            let focused = manager.focused_id().0;
             tab.reconcile_primary_pane_launch();
-            let dissolved = remaining == 1;
-            if dissolved {
-                let mut manager = tab.pane_manager.take().unwrap();
-                let owner = manager
-                    .take_remaining_pane()
-                    .ok_or_else(|| "Remaining pane disappeared during collapse".to_string())?;
-                tab.restore_terminal_owner(owner);
-            }
-            (
-                remaining,
-                if dissolved {
-                    tab.single_pane_id().0
-                } else {
-                    focused
-                },
-                dissolved,
-            )
+            (tab.panes.pane_count(), tab.panes.focused_id().0)
         };
-        if dissolved && let Some(size) = self.window.as_ref().map(|window| window.inner_size()) {
-            self.sync_terminal_geometry(size.width, size.height);
-        }
         if close_copy_mode {
             self.leave_copy_mode(false);
         }

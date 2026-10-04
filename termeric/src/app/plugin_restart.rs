@@ -142,7 +142,7 @@ impl App {
                 .unwrap()
                 .tab_mut_by_id(replacement)
                 .unwrap();
-            tab.set_plugin_profile_reference(tab.single_pane_id(), plugin_id, profile);
+            tab.set_plugin_profile_reference(tab.panes.focused_id(), plugin_id, profile);
         }
         if let Some(identity) = target
             && let Err(error) = self.retire_restarted_plugin_owner(identity, plugin_id)
@@ -171,11 +171,7 @@ impl App {
         if tab.pane_plugin_id(identity.pane_id) != Some(plugin_id) {
             return Err("original plugin owner changed".into());
         }
-        if tab
-            .pane_manager
-            .as_ref()
-            .is_some_and(|panes| panes.pane_count() > 1)
-        {
+        if tab.panes.pane_count() > 1 {
             self.close_pane_for(
                 Requester::Plugin,
                 identity.tab_id as u64,

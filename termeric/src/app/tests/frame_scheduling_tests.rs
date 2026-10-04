@@ -359,7 +359,7 @@ fn kitty_animation_uses_its_exact_deadline_and_requests_one_frame() {
 fn synchronized_output_timeout_is_terminal_local_even_when_its_pane_is_unfocused() {
     let mut app = App::new_headless(Config::default()).unwrap();
     let shell = crate::test_support::sleeping_shell();
-    let mut panes = PaneManager::new(
+    let mut panes = PaneManager::for_test(
         80,
         24,
         shell,
@@ -395,7 +395,7 @@ fn synchronized_output_timeout_is_terminal_local_even_when_its_pane_is_unfocused
         HashMap::new(),
     )
     .unwrap();
-    tabs.active_tab_mut().unwrap().pane_manager = Some(panes);
+    tabs.active_tab_mut().unwrap().panes = panes;
     app.tabs = Some(tabs);
 
     assert!(!app.active_terminal().unwrap().is_synchronized_output());
@@ -403,15 +403,7 @@ fn synchronized_output_timeout_is_terminal_local_even_when_its_pane_is_unfocused
 
     assert_eq!(app.expire_synchronized_outputs(deadline), 1);
 
-    let panes = app
-        .tabs
-        .as_ref()
-        .unwrap()
-        .active_tab()
-        .unwrap()
-        .pane_manager
-        .as_ref()
-        .unwrap();
+    let panes = app.active_panes();
     assert!(
         !panes
             .get_pane(right)

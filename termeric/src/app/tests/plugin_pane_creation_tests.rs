@@ -20,7 +20,7 @@ fn fixture() -> (App, tempfile::TempDir, TerminalIdentity) {
         .unwrap();
     let target = TerminalIdentity {
         tab_id,
-        pane_id: tabs.active_tab().unwrap().single_pane_id(),
+        pane_id: tabs.active_tab().unwrap().panes.focused_id(),
     };
     app.tabs = Some(tabs);
     (app, dir, target)
@@ -64,7 +64,7 @@ fn explicit_plugin_panes_spawn_one_owner_with_exact_profile_cwd_and_geometry() {
             format!("{} {}", expected_geometry.rows, expected_geometry.cols)
         );
         let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
-        let panes = tab.pane_manager.as_ref().unwrap();
+        let panes = &tab.panes;
         assert_eq!(panes.focused_id(), id);
         let pid = panes
             .get_pane(target.pane_id)
@@ -128,7 +128,7 @@ fn explicit_plugin_panes_spawn_one_owner_with_exact_profile_cwd_and_geometry() {
         );
     }
     let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
-    let panes = tab.pane_manager.as_mut().unwrap();
+    let panes = &mut tab.panes;
     let ordinary = panes.split(SplitDirection::Vertical).unwrap();
     assert_eq!(
         panes.get_pane(ordinary).unwrap().launch,
@@ -161,9 +161,8 @@ fn agents_split_through_the_picker_instead_of_per_agent_commands() {
             .unwrap()
             .active_tab()
             .unwrap()
-            .pane_manager
-            .as_ref()
-            .map_or(1, |panes| panes.pane_count())
+            .panes
+            .pane_count()
     };
     app.start_picked_agent(AgentPlacement::SplitRight, "codex/red");
     wait_for_file_text(&dir.path().join("red"), "--fixture=red");
@@ -183,24 +182,12 @@ fn created_plugin_owner_survives_close_collapse_and_resplit_with_its_exact_profi
     let id = app
         .launch_plugin_pane(target, SplitDirection::Vertical, "codex", Some("default"))
         .unwrap();
-    let before = app
-        .tabs
-        .as_ref()
-        .unwrap()
-        .active_tab()
-        .unwrap()
-        .pane_manager
-        .as_ref()
-        .unwrap()
-        .get_pane(id)
-        .unwrap()
-        .pty
-        .child_id();
+    let before = app.active_panes().get_pane(id).unwrap().pty.child_id();
     app.close_pane_for(Requester::Plugin, target.tab_id as u64, target.pane_id.0)
         .unwrap();
     let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
-    assert!(tab.pane_manager.is_none());
-    assert_eq!(tab.single_pane_id(), id);
+    assert!(tab.panes.pane_count() == 1);
+    assert_eq!(tab.panes.focused_id(), id);
     assert_eq!(tab.pane_plugin_launch(id), Some(("codex", Some("default"))));
     let source = TerminalIdentity {
         tab_id: target.tab_id,
@@ -210,15 +197,7 @@ fn created_plugin_owner_survives_close_collapse_and_resplit_with_its_exact_profi
         .launch_plugin_pane(source, SplitDirection::Horizontal, "codex", Some("blue"))
         .unwrap();
     assert!(sibling.0 > id.0);
-    let panes = app
-        .tabs
-        .as_ref()
-        .unwrap()
-        .active_tab()
-        .unwrap()
-        .pane_manager
-        .as_ref()
-        .unwrap();
+    let panes = app.active_panes();
     assert_eq!(panes.get_pane(id).unwrap().pty.child_id(), before);
     assert_eq!(
         panes.get_pane(id).unwrap().launch_profile(),
@@ -237,15 +216,7 @@ fn plugin_pane_spawn_failure_rolls_back_single_and_split_owners() {
         if split {
             app.launch_plugin_pane(target, SplitDirection::Vertical, "codex", Some("red"))
                 .unwrap();
-            app.tabs
-                .as_mut()
-                .unwrap()
-                .active_tab_mut()
-                .unwrap()
-                .pane_manager
-                .as_mut()
-                .unwrap()
-                .toggle_zoom();
+            app.active_panes_mut().toggle_zoom();
         }
         let before = app
             .tabs
@@ -268,12 +239,9 @@ fn plugin_pane_spawn_failure_rolls_back_single_and_split_owners() {
             .is_err()
         );
         let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
-        assert_eq!(tab.pane_manager.is_some(), split);
+        assert_eq!(tab.panes.pane_count() > 1, split);
         if split {
-            assert_eq!(
-                tab.pane_manager.as_ref().unwrap().zoomed_id(),
-                Some(PaneId(1))
-            );
+            assert_eq!(tab.panes.zoomed_id(), Some(PaneId(1)));
         }
         let after = tab.capture_workspace_tab(0, false).unwrap();
         assert_eq!(before.layout, after.layout);
@@ -295,15 +263,7 @@ fn explicit_plugin_panes_respect_target_tab_and_process_cwd_modes() {
             .launch_plugin_pane(target, SplitDirection::Vertical, "codex", Some("red"))
             .unwrap();
         let reported = dir.path().join("cwd-7");
-        let panes = app
-            .tabs
-            .as_mut()
-            .unwrap()
-            .active_tab_mut()
-            .unwrap()
-            .pane_manager
-            .as_mut()
-            .unwrap();
+        let panes = app.active_panes_mut();
         panes
             .get_pane_mut(pane)
             .unwrap()
@@ -418,8 +378,9 @@ fn plugin_pane_launch_refuses_stale_read_only_missing_profile_and_broadcast_targ
                 .unwrap()
                 .active_tab()
                 .unwrap()
-                .pane_manager
-                .is_none()
+                .panes
+                .pane_count()
+                == 1
         );
     }
 }

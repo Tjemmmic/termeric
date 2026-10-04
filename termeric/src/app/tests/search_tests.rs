@@ -453,15 +453,7 @@ fn filtered_selection_invalidates_on_query_restart_toggle_or_focus_change() {
                 app.search.toggle_filter();
             }
             "focus" => {
-                let panes = app
-                    .tabs
-                    .as_mut()
-                    .unwrap()
-                    .active_tab_mut()
-                    .unwrap()
-                    .pane_manager
-                    .as_mut()
-                    .unwrap();
+                let panes = app.active_panes_mut();
                 let other = panes
                     .pane_ids()
                     .into_iter()

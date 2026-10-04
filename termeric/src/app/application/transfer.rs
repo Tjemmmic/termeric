@@ -26,9 +26,9 @@ impl Application {
             .validate_window_pane_transfer_source()?;
         destination
             .tabs
-            .as_mut()
+            .as_ref()
             .expect("destination tabs were inspected")
-            .prepare_window_pane_transfer_destination(destination.config.panes.cwd)?;
+            .validate_window_pane_transfer_destination()?;
 
         let pane = source
             .tabs
@@ -38,7 +38,7 @@ impl Application {
         let id = destination
             .tabs
             .as_mut()
-            .expect("destination tabs were prepared")
+            .expect("destination tabs were validated")
             .attach_window_transferred_pane(pane);
 
         source.broadcast = crate::app::BroadcastState::Inactive;

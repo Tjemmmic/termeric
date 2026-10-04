@@ -115,12 +115,7 @@ fn failed_restart_preserves_old_owners_layout_and_focus() {
             Some("saved-profile".into()),
         );
         if mode == "read-only" {
-            tab.pane_manager
-                .as_mut()
-                .unwrap()
-                .get_pane_mut(PaneId(0))
-                .unwrap()
-                .read_only = true;
+            tab.panes.get_pane_mut(PaneId(0)).unwrap().read_only = true;
         }
         if mode == "live-domain" {
             tab.live_domain = Some(crate::tabs::LiveDomainTab {
@@ -135,7 +130,7 @@ fn failed_restart_preserves_old_owners_layout_and_focus() {
         assert_eq!(tabs.count(), 1, "{mode}");
         let tab = tabs.tab_by_id(entry.source.tab_id).unwrap();
         assert!(!tab.is_closing(), "{mode}");
-        assert_eq!(tab.pane_manager.as_ref().unwrap().pane_count(), 3, "{mode}");
+        assert_eq!(tab.panes.pane_count(), 3, "{mode}");
         assert_eq!(app.active_harvest_source(), focused, "{mode}");
         assert_eq!(
             seen.lock().unwrap().len(),
@@ -190,7 +185,8 @@ fn successful_restart_retires_only_source_and_preserves_cwd_profile_and_siblings
                     plugin_id: "synthetic-capture".into(),
                 };
             }
-            if let Some(panes) = &mut tab.pane_manager {
+            {
+                let panes = &mut tab.panes;
                 for id in panes.pane_ids().into_iter().filter(|id| *id != source) {
                     panes.get_pane_mut(id).unwrap().terminal.process(
                         format!(
@@ -223,7 +219,7 @@ fn successful_restart_retires_only_source_and_preserves_cwd_profile_and_siblings
             assert!(old.is_closing(), "{mode}");
         } else {
             assert!(!old.is_closing(), "{mode}");
-            let panes = old.pane_manager.as_ref().unwrap();
+            let panes = &old.panes;
             assert_eq!(panes.pane_count(), surviving.len(), "{mode}");
             assert!(panes.get_pane(source).is_none());
             for (origin, path) in &surviving {
@@ -241,11 +237,12 @@ fn successful_restart_retires_only_source_and_preserves_cwd_profile_and_siblings
         }
         let tab = tabs.active_tab().unwrap();
         assert_eq!(
-            tab.pane_plugin_launch(tab.single_pane_id()),
+            tab.pane_plugin_launch(tab.panes.focused_id()),
             Some(("synthetic-capture", Some("saved-profile")))
         );
         assert_eq!(
-            tab.pane_working_directory(tab.single_pane_id()).as_deref(),
+            tab.pane_working_directory(tab.panes.focused_id())
+                .as_deref(),
             source_cwd.path().to_str()
         );
         let observations = seen.lock().unwrap();

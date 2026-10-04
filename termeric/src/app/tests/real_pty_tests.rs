@@ -21,7 +21,7 @@ fn real_pty_unicode_clusters_preserve_width_and_content() {
     .unwrap();
     let deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < deadline {
-        tab.poll_single(|_, _| {});
+        tab.poll_events(|_, _| {});
         if tab
             .focused_terminal()
             .unwrap()
@@ -64,7 +64,7 @@ fn real_pty_sgr_attributes_reach_the_terminal_grid_without_leaking() {
     .unwrap();
     let deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < deadline {
-        tab.poll_single(|_, _| {});
+        tab.poll_events(|_, _| {});
         if tab
             .focused_terminal()
             .unwrap()

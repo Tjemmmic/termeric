@@ -114,12 +114,7 @@ fn copy_mode_anchor_cleanup_targets_original_pane_and_screen_changes_reset_mode(
     app.enter_copy_mode();
     let target = app.copy_mode_target.unwrap();
     let tabs = app.tabs.as_mut().unwrap();
-    let panes = tabs
-        .active_tab_mut()
-        .unwrap()
-        .pane_manager
-        .as_mut()
-        .unwrap();
+    let panes = &mut tabs.active_tab_mut().unwrap().panes;
     let other = panes
         .pane_ids()
         .into_iter()
@@ -737,15 +732,7 @@ fn native_selection_drag_rejects_snapshot_resize_and_owner_replacement() {
                 .process(b"\x1b[?2026l\x1b[?2026h"),
             "resize" => app.active_terminal_mut().unwrap().resize(9, 4),
             "focus" => {
-                let panes = app
-                    .tabs
-                    .as_mut()
-                    .unwrap()
-                    .active_tab_mut()
-                    .unwrap()
-                    .pane_manager
-                    .as_mut()
-                    .unwrap();
+                let panes = app.active_panes_mut();
                 let other = panes
                     .pane_ids()
                     .into_iter()

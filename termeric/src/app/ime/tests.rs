@@ -983,7 +983,7 @@ fn ime_commit_reaches_only_the_focused_pane_pty() {
         env: Default::default(),
     };
     let mut panes =
-        PaneManager::new(40, 8, shell, 100, 1024 * 1024, 400.0, 160.0, 10.0, 20.0).unwrap();
+        PaneManager::for_test(40, 8, shell, 100, 1024 * 1024, 400.0, 160.0, 10.0, 20.0).unwrap();
     let right = panes.split(SplitDirection::Vertical).unwrap();
     panes.focus(right);
 
@@ -997,7 +997,7 @@ fn ime_commit_reaches_only_the_focused_pane_pty() {
         HashMap::new(),
     )
     .unwrap();
-    tabs.active_tab_mut().unwrap().pane_manager = Some(panes);
+    tabs.active_tab_mut().unwrap().panes = panes;
     let mut app = App::new_headless(Config::default()).unwrap();
     app.tabs = Some(tabs);
 
@@ -1008,14 +1008,7 @@ fn ime_commit_reaches_only_the_focused_pane_pty() {
         std::thread::yield_now();
     }
     let pane_text = |app: &App, id| {
-        app.tabs
-            .as_ref()
-            .unwrap()
-            .active_tab()
-            .unwrap()
-            .pane_manager
-            .as_ref()
-            .unwrap()
+        app.active_panes()
             .get_pane(id)
             .unwrap()
             .terminal

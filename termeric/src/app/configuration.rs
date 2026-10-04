@@ -340,9 +340,7 @@ impl App {
             );
             tabs.set_shell_config(self.config.shell.clone());
             for tab in tabs.all_tabs_mut() {
-                if let Some(manager) = &mut tab.pane_manager {
-                    manager.set_cwd_mode(self.config.panes.cwd);
-                }
+                tab.panes.set_cwd_mode(self.config.panes.cwd);
             }
         }
         self.shortcut_registry = ShortcutRegistry::new();

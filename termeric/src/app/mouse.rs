@@ -40,12 +40,11 @@ impl App {
                             .iter()
                             .any(|pending| pending.domain_id() == domain)
                     })
-                    && tab.pane_manager.as_ref().is_some_and(|panes| {
-                        panes
-                            .get_dividers()
-                            .iter()
-                            .any(|divider| divider.target == drag.target)
-                    })
+                    && tab
+                        .panes
+                        .get_dividers()
+                        .iter()
+                        .any(|divider| divider.target == drag.target)
             });
         if !valid {
             // Do not drop a live-domain preview: finalize it once through
@@ -63,8 +62,7 @@ impl App {
             .tabs
             .as_mut()
             .and_then(|tabs| tabs.tab_mut_by_id(drag.tab_id))
-            .and_then(|tab| tab.pane_manager.as_mut())
-            .and_then(|panes| panes.resize_divider_target(drag.target, x, y));
+            .and_then(|tab| tab.panes.resize_divider_target(drag.target, x, y));
         if let Some(ratio_millis) = ratio {
             if let Some(active_drag) = &mut self.divider_dragging {
                 active_drag.last_ratio_millis = ratio_millis;
@@ -292,7 +290,7 @@ impl App {
                     // Check if click is on a pane divider (for drag-to-resize)
                     if let Some(tabs) = &self.tabs {
                         if let Some(tab) = tabs.active_tab() {
-                            if let Some(ref pm) = tab.pane_manager {
+                            if let Some(pm) = tab.split_panes() {
                                 let local_x = position.0 as f32 - content_left - padding;
                                 let local_y = position.1 as f32 - content_top;
                                 if let Some(divider) = pm.divider_at(
@@ -804,7 +802,7 @@ impl App {
             && let Some(tabs) = &self.tabs
         {
             if let Some(tab) = tabs.active_tab() {
-                if let Some(ref pm) = tab.pane_manager {
+                if let Some(pm) = tab.split_panes() {
                     let local_x = position.0 as f32 - content_left - padding;
                     let local_y = position.1 as f32 - content_top;
                     if let Some(is_vertical) = pm.hit_test_divider(local_x, local_y) {
@@ -1243,7 +1241,7 @@ impl App {
             .map_or(0.0, crate::renderer::Renderer::tab_bar_width);
         let (origin_x, origin_y, viewport_width, viewport_height) = if let Some(tab) =
             self.tabs.as_ref().and_then(TabManager::active_tab)
-            && let Some(panes) = &tab.pane_manager
+            && let Some(panes) = tab.split_panes()
             && let Some(rect) = panes.calculate_layout().get(&panes.focused_id())
         {
             (
@@ -1281,7 +1279,7 @@ impl App {
         padding: f32,
     ) -> termeric_core::Point {
         if let Some(tab) = self.tabs.as_ref().and_then(TabManager::active_tab)
-            && let Some(panes) = &tab.pane_manager
+            && let Some(panes) = tab.split_panes()
             && let Some(pane) = panes.focused_pane()
             && let Some(rect) = panes.calculate_layout().get(&pane.id)
         {
@@ -1401,7 +1399,7 @@ impl App {
             .tabs
             .as_ref()
             .and_then(TabManager::active_tab)
-            .and_then(|tab| tab.pane_manager.as_ref())
+            .and_then(|tab| tab.split_panes())
             .and_then(|panes| {
                 panes.calculate_layout().into_iter().find_map(|(id, rect)| {
                     (local_x >= rect.x
@@ -1423,7 +1421,7 @@ impl App {
         let Some(tab) = self.tabs.as_mut().and_then(TabManager::active_tab_mut) else {
             return false;
         };
-        let Some(panes) = &mut tab.pane_manager else {
+        let Some(panes) = tab.split_panes_mut() else {
             return false;
         };
         let local_x = position.0 as f32 - content_left - padding;
@@ -1515,7 +1513,7 @@ impl App {
             .tabs
             .as_ref()
             .and_then(TabManager::active_tab)
-            .and_then(|tab| tab.pane_manager.as_ref())
+            .and_then(|tab| tab.split_panes())
         {
             return panes.iter_with_layout().any(|(pane, rect)| {
                 let pane_right = content_left + padding + rect.x + rect.width;
@@ -1556,7 +1554,7 @@ impl App {
             .tabs
             .as_ref()
             .and_then(TabManager::active_tab)
-            .and_then(|tab| tab.pane_manager.as_ref())
+            .and_then(|tab| tab.split_panes())
             .and_then(|panes| panes.calculate_layout().get(&panes.focused_id()).copied())
             .map(|rect| (content_top + rect.y, content_top + rect.y + rect.height))
             .unwrap_or((scrollbar_top, scrollbar_bottom));
@@ -1713,7 +1711,7 @@ mod tests {
 
     fn mouse_report_position(app: &App) -> (f64, f64) {
         let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
-        let (x, y) = tab.pane_manager.as_ref().map_or((0.0, 0.0), |panes| {
+        let (x, y) = tab.split_panes().map_or((0.0, 0.0), |panes| {
             let rect = panes.calculate_layout()[&panes.focused_id()];
             (rect.x, rect.y)
         });
@@ -1740,9 +1738,7 @@ mod tests {
                         .unwrap()
                         .active_tab_mut()
                         .unwrap()
-                        .pane_manager
-                        .as_mut()
-                        .unwrap()
+                        .panes
                         .focus(PaneId(0));
                 }
                 let mode = TerminalMode::MOUSE_BUTTON_EVENT | TerminalMode::MOUSE_SGR;
@@ -1759,15 +1755,7 @@ mod tests {
                 // Change ownership without a refresh callback: the write boundary
                 // itself must prevent stale presses reaching another application.
                 if split {
-                    let panes = app
-                        .tabs
-                        .as_mut()
-                        .unwrap()
-                        .active_tab_mut()
-                        .unwrap()
-                        .pane_manager
-                        .as_mut()
-                        .unwrap();
+                    let panes = &mut app.tabs.as_mut().unwrap().active_tab_mut().unwrap().panes;
                     let other = panes
                         .pane_ids()
                         .into_iter()
@@ -1839,9 +1827,7 @@ mod tests {
                 .unwrap()
                 .active_tab()
                 .unwrap()
-                .pane_manager
-                .as_ref()
-                .unwrap()
+                .panes
                 .focused_id();
             let original_index = captures
                 .iter()
@@ -1853,15 +1839,7 @@ mod tests {
             );
             let position = mouse_report_position(&app);
             assert!(app.try_report_mouse_press(MouseButton::Left, position, 10.0, 20.0, 0.0, 0.0));
-            let panes = app
-                .tabs
-                .as_mut()
-                .unwrap()
-                .active_tab_mut()
-                .unwrap()
-                .pane_manager
-                .as_mut()
-                .unwrap();
+            let panes = &mut app.tabs.as_mut().unwrap().active_tab_mut().unwrap().panes;
             if closed {
                 panes.get_pane_mut(original).unwrap().closed = true;
             } else {
@@ -1874,15 +1852,7 @@ mod tests {
             }
             app.refresh_focused_terminal_surfaces();
             assert!(app.terminal_mouse_capture.is_none());
-            let panes = app
-                .tabs
-                .as_mut()
-                .unwrap()
-                .active_tab_mut()
-                .unwrap()
-                .pane_manager
-                .as_mut()
-                .unwrap();
+            let panes = &mut app.tabs.as_mut().unwrap().active_tab_mut().unwrap().panes;
             panes.get_pane_mut(original).unwrap().closed = false;
             panes.focus(original);
             app.try_report_mouse_motion(position, 10.0, 20.0, 0.0, 0.0);

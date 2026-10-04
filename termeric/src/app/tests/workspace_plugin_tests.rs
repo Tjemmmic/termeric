@@ -126,8 +126,12 @@ pub(super) fn fixture() -> (App, tempfile::TempDir, WorkspaceTabSnapshot) {
 }
 
 pub(super) fn manager(app: &App) -> TabManager {
-    TabManager::new_with_geometry(
-        crate::terminal::geometry::TerminalGeometry::from_cells(120, 40, 10.0, 20.0),
+    TabManager::new_with_area(
+        crate::terminal::geometry::TerminalArea::new(
+            crate::terminal::geometry::TerminalGeometry::from_cells(120, 40, 10.0, 20.0),
+            10.0,
+            20.0,
+        ),
         app.config.shell.clone(),
         crate::terminal::policy::TerminalPolicy::with_scrollback(1_000, 8 * 1024 * 1024),
     )
@@ -165,7 +169,7 @@ fn mixed_plugin_workspaces_restore_exact_profiles_cwds_and_terminal_owners() {
         let tab = tabs.active_tab().unwrap();
         assert!(tab.pane_integration(PaneId(0)).unwrap().agent.is_none());
         assert!(tab.pane_integration(PaneId(13)).unwrap().agent.is_none());
-        assert_eq!(tab.pane_manager.as_ref().unwrap().focused_id(), PaneId(9));
+        assert_eq!(tab.panes.focused_id(), PaneId(9));
         let mut captured = tabs
             .capture_workspace("roundtrip".into(), true, Default::default())
             .unwrap();

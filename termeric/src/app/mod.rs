@@ -589,82 +589,59 @@ impl App {
             .take(tab_limit)
             .map(|tab| {
                 let mut tab_truncated = false;
-                let mut panes = if let Some(manager) = &tab.pane_manager {
-                    let focused = manager.focused_id();
-                    let all = manager.iter_panes();
-                    let pane_limit = MAX_PANES_PER_TAB.min(budget.panes);
-                    tab_truncated |= all.len() > pane_limit;
-                    budget.panes -= all.len().min(pane_limit);
-                    all.into_iter()
-                        .take(pane_limit)
-                        .map(|pane| PaneInventory {
-                            id: pane.id.0,
-                            title: pane.title.as_deref().map(|title| {
-                                let (title, title_truncated) =
-                                    control_metadata(title, &mut budget.metadata_bytes);
-                                tab_truncated |= title_truncated;
-                                title
-                            }),
-                            focused: pane.id == focused,
-                            closed: pane.closed,
-                            cols: pane.terminal.cols().min(u16::MAX as usize) as u16,
-                            rows: pane.terminal.rows().min(u16::MAX as usize) as u16,
-                        })
-                        .collect::<Vec<_>>()
-                } else {
-                    let pane = tab.focused_terminal().and_then(|terminal| {
-                        if budget.panes == 0 {
-                            tab_truncated = true;
-                            return None;
-                        }
-                        budget.panes -= 1;
-                        Some(PaneInventory {
-                            id: tab.single_pane_id().0,
-                            title: None,
-                            focused: true,
-                            closed: tab.closed,
-                            cols: terminal.cols().min(u16::MAX as usize) as u16,
-                            rows: terminal.rows().min(u16::MAX as usize) as u16,
-                        })
-                    });
-                    pane.into_iter().collect()
-                };
-                panes.sort_by_key(|pane| pane.id);
-                let mut dividers = tab
-                    .pane_manager
-                    .as_ref()
-                    .map(|manager| {
-                        let all = manager.get_dividers();
-                        let divider_limit = MAX_DIVIDERS_PER_TAB
-                            .min(budget.dividers)
-                            .min(panes.len().saturating_sub(1));
-                        tab_truncated |= all.len() > divider_limit;
-                        budget.dividers -= all.len().min(divider_limit);
-                        all.into_iter()
-                            .take(divider_limit)
-                            .map(|divider| {
-                                let (id, kind) = match divider.target {
-                                    crate::panes::DividerTarget::Local(id) => {
-                                        (id, DividerKind::Local)
-                                    }
-                                    crate::panes::DividerTarget::Domain(id) => {
-                                        (u64::from(id), DividerKind::LiveDomain)
-                                    }
-                                };
-                                DividerInventory {
-                                    id,
-                                    kind,
-                                    direction: if divider.vertical {
-                                        crate::panes::SplitDirection::Vertical
-                                    } else {
-                                        crate::panes::SplitDirection::Horizontal
-                                    },
-                                    ratio_millis: divider.ratio_millis,
-                                }
-                            })
-                            .collect::<Vec<_>>()
+                let manager = &tab.panes;
+                let focused = manager.focused_id();
+                let all = manager.iter_panes();
+                let pane_limit = MAX_PANES_PER_TAB.min(budget.panes);
+                tab_truncated |= all.len() > pane_limit;
+                budget.panes -= all.len().min(pane_limit);
+                let mut panes = all
+                    .into_iter()
+                    .take(pane_limit)
+                    .map(|pane| PaneInventory {
+                        id: pane.id.0,
+                        // A tab's only pane has no title of its own.
+                        title: pane.title.as_deref().map(|title| {
+                            let (title, title_truncated) =
+                                control_metadata(title, &mut budget.metadata_bytes);
+                            tab_truncated |= title_truncated;
+                            title
+                        }),
+                        focused: pane.id == focused,
+                        closed: pane.closed,
+                        cols: pane.terminal.cols().min(u16::MAX as usize) as u16,
+                        rows: pane.terminal.rows().min(u16::MAX as usize) as u16,
                     })
-                    .unwrap_or_default();
+                    .collect::<Vec<_>>();
+                panes.sort_by_key(|pane| pane.id);
+                let all = manager.get_dividers();
+                let divider_limit = MAX_DIVIDERS_PER_TAB
+                    .min(budget.dividers)
+                    .min(panes.len().saturating_sub(1));
+                tab_truncated |= all.len() > divider_limit;
+                budget.dividers -= all.len().min(divider_limit);
+                let mut dividers = all
+                    .into_iter()
+                    .take(divider_limit)
+                    .map(|divider| {
+                        let (id, kind) = match divider.target {
+                            crate::panes::DividerTarget::Local(id) => (id, DividerKind::Local),
+                            crate::panes::DividerTarget::Domain(id) => {
+                                (u64::from(id), DividerKind::LiveDomain)
+                            }
+                        };
+                        DividerInventory {
+                            id,
+                            kind,
+                            direction: if divider.vertical {
+                                crate::panes::SplitDirection::Vertical
+                            } else {
+                                crate::panes::SplitDirection::Horizontal
+                            },
+                            ratio_millis: divider.ratio_millis,
+                        }
+                    })
+                    .collect::<Vec<_>>();
                 dividers.sort_by_key(|divider| divider.id);
                 let domain_id = tab.live_domain_tab_route().map(|(domain, _)| {
                     let (domain, domain_truncated) =
@@ -1425,6 +1402,27 @@ impl App {
         app
     }
 
+    /// The active tab's panes.
+    #[cfg(test)]
+    pub(crate) fn active_panes(&self) -> &PaneManager {
+        &self
+            .tabs
+            .as_ref()
+            .and_then(TabManager::active_tab)
+            .expect("a tab is active")
+            .panes
+    }
+
+    #[cfg(test)]
+    pub(crate) fn active_panes_mut(&mut self) -> &mut PaneManager {
+        &mut self
+            .tabs
+            .as_mut()
+            .and_then(TabManager::active_tab_mut)
+            .expect("a tab is active")
+            .panes
+    }
+
     fn from_config(
         mut config: Config,
         mut startup_config_warning: Option<String>,
@@ -1928,59 +1926,22 @@ impl App {
         let show_indicators = self.harvest.is_some() && self.config.harvest.show_indicators;
         if let Some(tabs) = &mut self.tabs {
             for tab in tabs.all_tabs_mut() {
-                if let Some(panes) = &mut tab.pane_manager {
-                    for pane in panes.all_panes_mut() {
-                        let regions = pane
-                            .harvest
-                            .observe(pane.terminal.prompt_tracker(), show_indicators);
-                        for region in regions {
-                            let (command, command_truncated) =
-                                Self::extract_command_text(&pane.terminal, &region);
-                            let (output, output_truncated) =
-                                Self::extract_output_text(&pane.terminal, &region);
-                            if let Some(harvest) = &mut self.harvest {
-                                harvest.record_command(
-                                    crate::harvest::HarvestSource {
-                                        tab_id: tab.id,
-                                        pane_id: pane.id.0,
-                                    },
-                                    &region,
-                                    command.clone(),
-                                    command_truncated,
-                                    output.clone(),
-                                );
-                            }
-                            completed_hooks.push(crate::plugin::Hook::CommandExecuted {
-                                region_id: region.id,
-                                tab_id: tab.id,
-                                pane_id: Some(pane.id.0),
-                                command,
-                                command_truncated,
-                                output,
-                                output_truncated,
-                                content_available: region.content_available,
-                                exit_code: region.exit_code,
-                            });
-                        }
-                    }
-                } else {
-                    let regions = tab.observe_harvest(show_indicators);
+                // Hooks name the pane only in a split tab.
+                let split = tab.panes.pane_count() > 1;
+                for pane in tab.panes.all_panes_mut() {
+                    let regions = pane
+                        .harvest
+                        .observe(pane.terminal.prompt_tracker(), show_indicators);
                     for region in regions {
-                        let ((command, command_truncated), (output, output_truncated)) =
-                            tab.focused_terminal().map_or_else(
-                                || ((String::new(), false), (String::new(), false)),
-                                |terminal| {
-                                    (
-                                        Self::extract_command_text(terminal, &region),
-                                        Self::extract_output_text(terminal, &region),
-                                    )
-                                },
-                            );
+                        let (command, command_truncated) =
+                            Self::extract_command_text(&pane.terminal, &region);
+                        let (output, output_truncated) =
+                            Self::extract_output_text(&pane.terminal, &region);
                         if let Some(harvest) = &mut self.harvest {
                             harvest.record_command(
                                 crate::harvest::HarvestSource {
                                     tab_id: tab.id,
-                                    pane_id: tab.single_pane_id().0,
+                                    pane_id: pane.id.0,
                                 },
                                 &region,
                                 command.clone(),
@@ -1991,7 +1952,7 @@ impl App {
                         completed_hooks.push(crate::plugin::Hook::CommandExecuted {
                             region_id: region.id,
                             tab_id: tab.id,
-                            pane_id: None,
+                            pane_id: split.then_some(pane.id.0),
                             command,
                             command_truncated,
                             output,
@@ -2094,23 +2055,15 @@ impl App {
         let Some(renderer) = &self.renderer else {
             return;
         };
-        let geometry = renderer.calculate_grid_geometry(width, height);
-        let cell_width = renderer.cell_width();
-        let cell_height = renderer.cell_height();
+        let area = renderer.terminal_area(width, height);
+        let geometry = area.geometry;
         self.cols = geometry.cols;
         self.rows = geometry.rows;
 
         self.prepare_copy_mode_reflow();
 
         if let Some(tabs) = &mut self.tabs {
-            tabs.resize_geometry(geometry);
-            let content_width = geometry.cols as f32 * cell_width;
-            let content_height = geometry.rows as f32 * cell_height;
-            for tab in tabs.all_tabs_mut() {
-                if let Some(panes) = &mut tab.pane_manager {
-                    panes.resize(content_width, content_height, cell_width, cell_height);
-                }
-            }
+            tabs.resize(area);
         }
         self.finish_copy_mode_reflow();
         log::debug!(
@@ -2130,23 +2083,21 @@ impl App {
             return;
         };
         let size = window.inner_size();
-        let geometry = renderer.calculate_grid_geometry(size.width, size.height);
-        let cell = (renderer.cell_width(), renderer.cell_height());
-        let content = (geometry.cols as f32 * cell.0, geometry.rows as f32 * cell.1);
+        let area = renderer.terminal_area(size.width, size.height);
         if self
             .tabs
             .as_ref()
-            .is_none_or(|tabs| tabs.active_has_geometry(geometry, content, cell))
+            .is_none_or(|tabs| tabs.active_has_area(area))
         {
             return;
         }
         // A geometry change invalidates native drag coordinates.
         self.finish_native_pointer_gesture();
-        self.cols = geometry.cols;
-        self.rows = geometry.rows;
+        self.cols = area.geometry.cols;
+        self.rows = area.geometry.rows;
         self.prepare_copy_mode_reflow();
         if let Some(tabs) = &mut self.tabs {
-            tabs.resize_active_geometry(geometry, content, cell);
+            tabs.resize_active(area);
         }
         self.finish_copy_mode_reflow();
     }
@@ -2360,7 +2311,7 @@ impl App {
         }
 
         // Collect image placements for rendering
-        let image_data: Vec<_> = if tab.pane_manager.is_none() {
+        let image_data: Vec<_> = if tab.split_panes().is_none() {
             terminal.presentation_images()
         } else {
             Vec::new()
@@ -2407,7 +2358,7 @@ impl App {
         }
 
         // Build pane render data for multi-pane mode (per-tab)
-        let pane_render_data: Vec<PaneRenderData> = if let Some(ref pm) = tab.pane_manager {
+        let pane_render_data: Vec<PaneRenderData> = if let Some(pm) = tab.split_panes() {
             let pane_grids = pm.iter_panes_identified();
             let active_terminal_ids: std::collections::HashSet<usize> = pane_grids
                 .iter()
@@ -2485,8 +2436,7 @@ impl App {
             Vec::new()
         };
         let pane_dividers = tab
-            .pane_manager
-            .as_ref()
+            .split_panes()
             .map(crate::panes::PaneManager::get_dividers)
             .unwrap_or_default();
 
@@ -2686,15 +2636,10 @@ impl App {
         let Some(tab) = self.tabs.as_ref().and_then(TabManager::active_tab) else {
             return false;
         };
-        if let Some(panes) = &tab.pane_manager {
-            let focused = panes.focused_id();
-            panes
-                .iter_panes()
-                .any(|pane| requires(&pane.terminal, pane.id == focused))
-        } else {
-            tab.focused_terminal()
-                .is_some_and(|terminal| requires(terminal, true))
-        }
+        let focused = tab.panes.focused_id();
+        tab.panes
+            .iter_panes()
+            .any(|pane| requires(&pane.terminal, pane.id == focused))
     }
 
     fn cursor_blink_phase(&self, now: Instant) -> bool {
@@ -2788,12 +2733,8 @@ impl App {
         };
         let mut expired = 0;
         for tab in tabs.all_tabs_mut() {
-            if let Some(panes) = &mut tab.pane_manager {
-                for pane in panes.all_panes_mut() {
-                    expired += usize::from(pane.terminal.expire_synchronized_output(now));
-                }
-            } else if let Some(terminal) = tab.focused_terminal_mut() {
-                expired += usize::from(terminal.expire_synchronized_output(now));
+            for pane in tab.panes.all_panes_mut() {
+                expired += usize::from(pane.terminal.expire_synchronized_output(now));
             }
         }
         expired
@@ -2803,18 +2744,10 @@ impl App {
         let tabs = self.tabs.as_ref()?;
         tabs.iter()
             .flat_map(|(_, tab)| {
-                if let Some(panes) = &tab.pane_manager {
-                    panes
-                        .iter_panes_identified()
-                        .into_iter()
-                        .filter_map(|(_, terminal, _, _)| terminal.synchronized_output_deadline())
-                        .collect::<Vec<_>>()
-                } else {
-                    tab.focused_terminal()
-                        .and_then(termeric_core::Terminal::synchronized_output_deadline)
-                        .into_iter()
-                        .collect()
-                }
+                tab.panes
+                    .iter_panes_identified()
+                    .into_iter()
+                    .filter_map(|(_, terminal, _, _)| terminal.synchronized_output_deadline())
             })
             .min()
     }
@@ -2823,31 +2756,19 @@ impl App {
         let Some(tab) = self.tabs.as_mut().and_then(TabManager::active_tab_mut) else {
             return 0;
         };
-        if let Some(panes) = &mut tab.pane_manager {
-            panes
-                .all_panes_mut()
-                .map(|pane| usize::from(pane.terminal.advance_graphics_animations(now)))
-                .sum()
-        } else {
-            usize::from(
-                tab.focused_terminal_mut()
-                    .is_some_and(|terminal| terminal.advance_graphics_animations(now)),
-            )
-        }
+        tab.panes
+            .all_panes_mut()
+            .map(|pane| usize::from(pane.terminal.advance_graphics_animations(now)))
+            .sum()
     }
 
     fn next_graphics_animation_deadline(&self) -> Option<Instant> {
         let tab = self.tabs.as_ref()?.active_tab()?;
-        if let Some(panes) = &tab.pane_manager {
-            panes
-                .iter_panes_identified()
-                .into_iter()
-                .filter_map(|(_, terminal, _, _)| terminal.graphics_animation_deadline())
-                .min()
-        } else {
-            tab.focused_terminal()
-                .and_then(termeric_core::Terminal::graphics_animation_deadline)
-        }
+        tab.panes
+            .iter_panes_identified()
+            .into_iter()
+            .filter_map(|(_, terminal, _, _)| terminal.graphics_animation_deadline())
+            .min()
     }
 
     fn poll_idle_sources(&mut self, now: Instant) {

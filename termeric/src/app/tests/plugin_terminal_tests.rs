@@ -19,7 +19,7 @@ fn unavailable_plugin_restart_preserves_the_original_mixed_tab() {
         !tab.is_closing(),
         "an unavailable replacement must not close the old tab"
     );
-    assert_eq!(tab.pane_manager.as_ref().unwrap().pane_count(), 3);
+    assert_eq!(tab.panes.pane_count(), 3);
     assert!(
         fenced_harvest_capture(&mut app, &captures)
             .iter()

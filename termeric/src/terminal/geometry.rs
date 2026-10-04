@@ -66,6 +66,51 @@ impl TerminalGeometry {
     }
 }
 
+/// The area a tab's terminals share: its whole-cell grid geometry and the
+/// cell size that grid was measured with. Its pixel extent is the cells'
+/// own, `cols * cell_width` by `rows * cell_height`, so a terminal filling
+/// the area takes `geometry` exactly instead of re-deriving it from pixels,
+/// which rounding can shrink by a cell.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TerminalArea {
+    pub geometry: TerminalGeometry,
+    pub cell_width: f32,
+    pub cell_height: f32,
+}
+
+impl TerminalArea {
+    pub(crate) fn new(geometry: TerminalGeometry, cell_width: f32, cell_height: f32) -> Self {
+        Self {
+            geometry,
+            cell_width,
+            cell_height,
+        }
+    }
+
+    /// The area holding as many whole cells as fit in `width` by `height`.
+    #[cfg(test)]
+    pub(crate) fn from_available_pixels(
+        width: f32,
+        height: f32,
+        cell_width: f32,
+        cell_height: f32,
+    ) -> Self {
+        Self::new(
+            TerminalGeometry::from_available_pixels(width, height, cell_width, cell_height),
+            cell_width,
+            cell_height,
+        )
+    }
+
+    pub(crate) fn width(self) -> f32 {
+        self.geometry.cols as f32 * self.cell_width
+    }
+
+    pub(crate) fn height(self) -> f32 {
+        self.geometry.rows as f32 * self.cell_height
+    }
+}
+
 fn valid_cell_extent(value: f32) -> f32 {
     if value.is_finite() && value > 0.0 {
         value

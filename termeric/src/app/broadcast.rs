@@ -16,7 +16,7 @@ impl App {
             self.toasts.warning("No tab is active");
             return;
         };
-        let Some(manager) = &tab.pane_manager else {
+        let Some(manager) = tab.split_panes() else {
             self.toasts.warning("Broadcast requires at least two panes");
             return;
         };
@@ -108,7 +108,7 @@ impl App {
             .as_ref()
             .and_then(TabManager::active_tab)
             .filter(|tab| tab.id == tab_id)
-            .and_then(|tab| tab.pane_manager.as_ref())
+            .and_then(|tab| tab.split_panes())
             .and_then(|manager| manager.get_pane(target))
             .map(|pane| pane.read_only);
         let Some(target_read_only) = target_state else {
@@ -166,7 +166,7 @@ impl App {
                 .tabs
                 .as_ref()
                 .and_then(TabManager::active_tab)
-                .and_then(|tab| tab.pane_manager.as_ref())
+                .and_then(|tab| tab.split_panes())
                 .map(PaneManager::focused_id)
             {
                 self.toggle_armed_broadcast_target(target);
@@ -301,7 +301,7 @@ impl App {
             } => {
                 let manager = active_tab
                     .filter(|tab| tab.id == tab_id)
-                    .and_then(|tab| tab.pane_manager.as_ref());
+                    .and_then(|tab| tab.split_panes());
                 if manager.is_none_or(|manager| manager.pane_ids().len() < 2) {
                     self.broadcast = BroadcastState::Inactive;
                     self.toasts
@@ -325,7 +325,7 @@ impl App {
             } => {
                 let manager = active_tab
                     .filter(|tab| tab.id == tab_id)
-                    .and_then(|tab| tab.pane_manager.as_ref());
+                    .and_then(|tab| tab.split_panes());
                 targets.retain(|id| {
                     manager.is_some_and(|manager| {
                         manager.get_pane(*id).is_some_and(|pane| !pane.read_only)
@@ -355,7 +355,7 @@ impl App {
             return false;
         };
         debug_assert_eq!(tab.id, tab_id);
-        let Some(manager) = &mut tab.pane_manager else {
+        let Some(manager) = tab.split_panes_mut() else {
             self.broadcast = BroadcastState::Inactive;
             return false;
         };
@@ -385,7 +385,7 @@ impl App {
             .as_ref()
             .and_then(TabManager::active_tab)
             .filter(|tab| tab.id == tab_id)
-            .and_then(|tab| tab.pane_manager.as_ref())
+            .and_then(|tab| tab.split_panes())
         else {
             self.broadcast = BroadcastState::Inactive;
             return true;
@@ -417,7 +417,7 @@ impl App {
             .tabs
             .as_mut()
             .and_then(TabManager::active_tab_mut)
-            .and_then(|tab| tab.pane_manager.as_mut())
+            .and_then(|tab| tab.split_panes_mut())
         else {
             self.broadcast = BroadcastState::Inactive;
             return true;
@@ -453,7 +453,7 @@ impl App {
             .as_ref()
             .and_then(TabManager::active_tab)
             .filter(|tab| tab.id == tab_id)
-            .and_then(|tab| tab.pane_manager.as_ref())
+            .and_then(|tab| tab.split_panes())
             .map(|manager| {
                 targets
                     .iter()
@@ -474,7 +474,7 @@ impl App {
             .tabs
             .as_mut()
             .and_then(TabManager::active_tab_mut)
-            .and_then(|tab| tab.pane_manager.as_mut())
+            .and_then(|tab| tab.split_panes_mut())
         else {
             self.broadcast = BroadcastState::Inactive;
             return true;
@@ -533,17 +533,13 @@ mod tests {
             HashMap::new(),
         )
         .unwrap();
-        let owner = tabs
+        let panes = tabs
             .active_tab_mut()
             .unwrap()
-            .take_terminal_owner()
-            .unwrap();
-        let mut panes =
-            PaneManager::from_existing(owner, shell, 100, 1024 * 1024, 400.0, 160.0, 10.0, 20.0);
+            .panes_for_test(shell, 400.0, 160.0, 10.0, 20.0);
         panes.split(SplitDirection::Vertical).unwrap();
         let locked = panes.split(SplitDirection::Horizontal).unwrap();
         panes.get_pane_mut(locked).unwrap().read_only = true;
-        tabs.active_tab_mut().unwrap().pane_manager = Some(panes);
         let mut app = App::new_headless(Config::default()).unwrap();
         app.tabs = Some(tabs);
 
@@ -593,31 +589,19 @@ mod tests {
             HashMap::new(),
         )
         .unwrap();
-        let owner = tabs
+        let panes = tabs
             .active_tab_mut()
             .unwrap()
-            .take_terminal_owner()
-            .unwrap();
-        let mut panes =
-            PaneManager::from_existing(owner, shell, 100, 1024 * 1024, 400.0, 160.0, 10.0, 20.0);
+            .panes_for_test(shell, 400.0, 160.0, 10.0, 20.0);
         panes.split(SplitDirection::Vertical).unwrap();
         panes.split(SplitDirection::Horizontal).unwrap();
-        tabs.active_tab_mut().unwrap().pane_manager = Some(panes);
         let mut app = App::new_headless(Config::default()).unwrap();
         app.tabs = Some(tabs);
 
         app.toggle_broadcast();
         assert!(matches!(app.broadcast, BroadcastState::Armed { .. }));
         let (pane_ids, excluded) = {
-            let manager = app
-                .tabs
-                .as_ref()
-                .unwrap()
-                .active_tab()
-                .unwrap()
-                .pane_manager
-                .as_ref()
-                .unwrap();
+            let manager = &app.tabs.as_ref().unwrap().active_tab().unwrap().panes;
             (manager.pane_ids(), manager.focused_id())
         };
         assert!(app.toggle_armed_broadcast_target(excluded));
@@ -648,15 +632,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
             app.process_pty_events();
-            let manager = app
-                .tabs
-                .as_ref()
-                .unwrap()
-                .active_tab()
-                .unwrap()
-                .pane_manager
-                .as_ref()
-                .unwrap();
+            let manager = &app.tabs.as_ref().unwrap().active_tab().unwrap().panes;
             let reached = pane_ids.iter().all(|id| {
                 let output = manager.get_pane(*id).unwrap().terminal.rows_text(0, 7);
                 output.contains("78") == (*id != excluded)
@@ -676,9 +652,7 @@ mod tests {
             .unwrap()
             .active_tab_mut()
             .unwrap()
-            .pane_manager
-            .as_mut()
-            .unwrap()
+            .panes
             .close_focused();
         app.reconcile_broadcast_state();
         assert!(matches!(

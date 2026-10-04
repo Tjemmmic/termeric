@@ -429,6 +429,20 @@ impl Renderer {
         )
     }
 
+    /// The terminal area of a `width` by `height` window: its grid geometry
+    /// and the cell size it was measured with.
+    pub(crate) fn terminal_area(
+        &self,
+        width: u32,
+        height: u32,
+    ) -> crate::terminal::geometry::TerminalArea {
+        crate::terminal::geometry::TerminalArea::new(
+            self.calculate_grid_geometry(width, height),
+            self.cell_width(),
+            self.cell_height(),
+        )
+    }
+
     /// Calculate terminal cell dimensions from window size.
     pub fn calculate_grid_size(&self, width: u32, height: u32) -> (usize, usize) {
         let geometry = self.calculate_grid_geometry(width, height);

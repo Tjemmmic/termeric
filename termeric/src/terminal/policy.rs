@@ -39,21 +39,6 @@ impl TerminalPolicy {
         }
     }
 
-    /// The settings an adopted terminal already runs under, so the panes
-    /// split from it inherit them.
-    pub(crate) fn inherited_from(
-        terminal: &Terminal,
-        scrollback_lines: usize,
-        scrollback_bytes: usize,
-    ) -> Self {
-        Self {
-            screen_checksum_reporting: terminal.screen_checksum_reporting(),
-            kitty_file_transmission: terminal.kitty_file_transmission(),
-            xterm_keyboard_type: terminal.initial_xterm_keyboard_type(),
-            ..Self::with_scrollback(scrollback_lines, scrollback_bytes)
-        }
-    }
-
     /// The policy for a live-domain relay. Its bytes come from the daemon's
     /// PTY, so a Kitty `t=f` path names a daemon file and must never read a
     /// same-named file on this host.

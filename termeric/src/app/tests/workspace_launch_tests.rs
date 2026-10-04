@@ -50,16 +50,12 @@ fn complete_workspace_round_trip_restores_nested_panes_plugin_profile_and_focus(
         {
             let tab = tabs.active_tab_mut().unwrap();
             tab.title = "nested-shell".into();
-            let owner = tab.take_terminal_owner().unwrap();
-            let mut panes = PaneManager::from_existing(
-                owner,
+            let panes = tab.panes_for_test(
                 ShellConfig {
                     program: Some("/bin/sh".into()),
                     args: vec!["-c".into(), "sleep 30".into()],
                     env: Default::default(),
                 },
-                1_000,
-                8 * 1024 * 1024,
                 800.0,
                 480.0,
                 10.0,
@@ -69,7 +65,6 @@ fn complete_workspace_round_trip_restores_nested_panes_plugin_profile_and_focus(
             panes.focus(right);
             let lower_right = panes.split(SplitDirection::Horizontal).unwrap();
             panes.focus(lower_right);
-            tab.pane_manager = Some(panes);
         }
         app.tabs = Some(tabs);
         app.execute_plugin_command("codex.open");
@@ -83,7 +78,7 @@ fn complete_workspace_round_trip_restores_nested_panes_plugin_profile_and_focus(
         assert_eq!(tabs.count(), 2);
         assert_eq!(tabs.active_index(), 1);
         let shell = tabs.iter().find(|(index, _)| *index == 0).unwrap().1;
-        let panes = shell.pane_manager.as_ref().unwrap();
+        let panes = &shell.panes;
         assert_eq!(panes.pane_count(), 3);
         assert_eq!(panes.focused_id(), PaneId(2));
         let plugin = tabs.iter().find(|(index, _)| *index == 1).unwrap().1;
@@ -316,13 +311,10 @@ fn background_command_launch_preserves_focused_pane_and_interaction_surfaces() {
                 HashMap::new(),
             )
             .unwrap();
-        let owner = tabs
+        let panes = tabs
             .active_tab_mut()
             .unwrap()
-            .take_terminal_owner()
-            .unwrap();
-        let mut panes =
-            PaneManager::from_existing(owner, shell, 100, 1024 * 1024, 800.0, 480.0, 10.0, 20.0);
+            .panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
         let focused = panes.split(SplitDirection::Vertical).unwrap();
         panes.focus(focused);
         panes
@@ -330,7 +322,6 @@ fn background_command_launch_preserves_focused_pane_and_interaction_surfaces() {
             .unwrap()
             .terminal
             .process(b"kept content");
-        tabs.active_tab_mut().unwrap().pane_manager = Some(panes);
         app.tabs = Some(tabs);
         app.search.start();
         app.with_search_and_active_grid(|search, grid| {
@@ -382,20 +373,7 @@ fn background_command_launch_preserves_focused_pane_and_interaction_surfaces() {
             "quiet creation must redraw tab chrome"
         );
         assert_eq!(app.tabs.as_ref().unwrap().active_tab_id(), Some(original));
-        assert_eq!(
-            app.tabs
-                .as_ref()
-                .unwrap()
-                .active_tab()
-                .unwrap()
-                .pane_manager
-                .as_ref()
-                .unwrap()
-                .focused_pane()
-                .unwrap()
-                .id,
-            focused
-        );
+        assert_eq!(app.active_panes().focused_pane().unwrap().id, focused);
         assert_eq!(app.ime, ime);
         assert_eq!(app.copy_mode_target, copy_target);
         let selection_state = |selection: Option<&termeric_core::Selection>| {
@@ -634,8 +612,8 @@ fn terminal_profile_cli_launch_applies_env_cwd_title_and_workspace_identity() {
         crate::tabs::TabType::Profile { name } if name == "dev"
     ));
     assert_eq!(
-        tab.split_shell_config(),
-        config.profiles["dev"].shell_config()
+        tab.panes.split_shell(),
+        &config.profiles["dev"].shell_config()
     );
 
     let deadline = Instant::now() + Duration::from_secs(2);
@@ -760,12 +738,7 @@ fn mixed_shell_and_profile_panes_restore_each_saved_launch() {
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
         restored.poll_events();
-        let panes = restored
-            .active_tab()
-            .unwrap()
-            .pane_manager
-            .as_ref()
-            .unwrap();
+        let panes = &restored.active_tab().unwrap().panes;
         let default_text = panes
             .get_pane(crate::panes::PaneId(0))
             .unwrap()

@@ -387,21 +387,17 @@ pub struct PaneTree {
 }
 
 impl PaneTree {
-    /// Create a new tree with a single pane
-    #[cfg(test)]
+    /// A tree of one pane.
     pub fn new(id: PaneId) -> Self {
-        Self::with_next_local_split_id(id, 1)
-    }
-
-    pub(super) fn with_next_local_split_id(id: PaneId, next_local_split_id: u64) -> Self {
         Self {
             root: PaneNode::Leaf(id),
-            next_local_split_id,
+            next_local_split_id: 1,
         }
     }
 
-    pub(super) fn next_local_split_id(&self) -> u64 {
-        self.next_local_split_id
+    #[cfg(test)]
+    pub(super) fn set_next_local_split_id(&mut self, next_local_split_id: u64) {
+        self.next_local_split_id = next_local_split_id;
     }
 
     pub(crate) fn root(&self) -> &PaneNode {

@@ -180,18 +180,10 @@ impl App {
             .pane_ids
             .get(&PaneId(pane_id))
             .ok_or_else(|| format!("GUI pane {pane_id} does not exist in tab {tab_id}"))?;
-        let terminal = if let Some(manager) = &tab.pane_manager {
-            &manager
-                .get_pane(PaneId(pane_id))
-                .ok_or_else(|| format!("GUI pane {pane_id} does not exist in tab {tab_id}"))?
-                .terminal
-        } else {
-            if tab.single_pane_id() != PaneId(pane_id) {
-                return Err(format!("GUI pane {pane_id} does not exist in tab {tab_id}"));
-            }
-            tab.focused_terminal()
-                .ok_or_else(|| format!("GUI pane {pane_id} has no live terminal"))?
-        };
+        let terminal = &tab
+            .pane(PaneId(pane_id))
+            .ok_or_else(|| format!("GUI pane {pane_id} does not exist in tab {tab_id}"))?
+            .terminal;
         let spawn = crate::domain::model::SpawnSpec {
             program: self.config.shell.program.clone(),
             args: self.config.shell.args.clone(),
@@ -269,16 +261,13 @@ impl App {
             .pane_ids
             .get(&target)
             .ok_or_else(|| format!("GUI pane {pane_id} does not exist in tab {tab_id}"))?;
-        let pane_count = tab.pane_manager.as_ref().map_or(1, PaneManager::pane_count);
-        if pane_count <= 1 {
+        if tab.panes.pane_count() <= 1 {
             return Err(format!(
                 "Cannot close the sole pane {pane_id} in unsplit tab {tab_id}; close the tab instead"
             ));
         }
         let pane = tab
-            .pane_manager
-            .as_ref()
-            .and_then(|panes| panes.get_pane(target))
+            .pane(target)
             .ok_or_else(|| format!("GUI pane {pane_id} does not exist in tab {tab_id}"))?;
         if pane.closed {
             return Err(format!(
@@ -303,10 +292,7 @@ impl App {
             .as_ref()
             .and_then(|tabs| tabs.tab_by_id(tab_id))
             .ok_or_else(|| format!("GUI tab {tab_id} disappeared after live-domain closure"))?;
-        let (count, focused) = tab.pane_manager.as_ref().map_or_else(
-            || (1, tab.single_pane_id().0),
-            |panes| (panes.pane_count(), panes.focused_id().0),
-        );
+        let (count, focused) = (tab.panes.pane_count(), tab.panes.focused_id().0);
         Ok((
             u16::try_from(count).expect("pane count is bounded below u16::MAX"),
             focused,
@@ -340,8 +326,7 @@ impl App {
         let remote_split_id = u32::try_from(divider_id)
             .map_err(|_| format!("GUI divider {divider_id} is not a live-domain divider"))?;
         let previous_ratio_millis = tab
-            .pane_manager
-            .as_ref()
+            .split_panes()
             .ok_or_else(|| format!("GUI tab {tab_id} has no split dividers"))?
             .get_dividers()
             .into_iter()
@@ -372,9 +357,8 @@ impl App {
         self.tabs
             .as_ref()
             .and_then(|tabs| tabs.tab_by_id(tab_id))
-            .and_then(|tab| tab.pane_manager.as_ref())
-            .and_then(|panes| {
-                panes.get_dividers().into_iter().find_map(|divider| {
+            .and_then(|tab| {
+                tab.panes.get_dividers().into_iter().find_map(|divider| {
                     (divider.target == crate::panes::DividerTarget::Domain(remote_split_id))
                         .then_some(divider.ratio_millis)
                 })
@@ -516,7 +500,7 @@ impl App {
         let remote_pane_id = *source_live.pane_ids.get(&source_pane).ok_or_else(|| {
             format!("GUI pane {pane_id} does not exist in source tab {source_tab_id}")
         })?;
-        let source_manager = source.pane_manager.as_ref().ok_or_else(|| {
+        let source_manager = source.split_panes().ok_or_else(|| {
             format!("Cannot move the sole pane {pane_id} from unsplit tab {source_tab_id}")
         })?;
         if source_manager.pane_count() <= 1 {
@@ -541,11 +525,7 @@ impl App {
                     "GUI target pane {target_pane_id} does not exist in destination tab {destination_tab_id}"
                 )
             })?;
-        if destination
-            .pane_manager
-            .as_ref()
-            .is_some_and(|panes| panes.get_pane(target).is_none_or(|pane| pane.closed))
-        {
+        if destination.pane(target).is_none_or(|pane| pane.closed) {
             return Err(format!(
                 "GUI target pane {target_pane_id} in destination tab {destination_tab_id} is closed or missing"
             ));
@@ -1242,9 +1222,7 @@ mod tests {
                 .unwrap()
                 .active_tab()
                 .unwrap()
-                .pane_manager
-                .as_ref()
-                .unwrap()
+                .panes
                 .get_dividers()[0]
                 .ratio_millis,
             500
@@ -1280,13 +1258,7 @@ mod tests {
             assert_eq!(tab.id, stable_routes[&remote]);
         }
         let active_local_id = tabs.active_tab().unwrap().id;
-        let active_pane_id = tabs
-            .active_tab()
-            .unwrap()
-            .pane_manager
-            .as_ref()
-            .unwrap()
-            .focused_id();
+        let active_pane_id = tabs.active_tab().unwrap().panes.focused_id();
         assert!(app.tabs.as_mut().unwrap().set_title_for_origin(
             crate::tabs::TerminalEventOrigin {
                 tab_id: active_local_id,
@@ -1352,7 +1324,7 @@ mod tests {
         );
         let active = app.tabs.as_ref().unwrap().active_tab().unwrap();
         assert_eq!(active.live_domain.as_ref().unwrap().pane_ids, relay_routes);
-        let divider = active.pane_manager.as_ref().unwrap().get_dividers()[0];
+        let divider = active.panes.get_dividers()[0];
         assert_eq!(divider.target, crate::panes::DividerTarget::Domain(55));
         assert!(!divider.vertical);
 
@@ -1361,9 +1333,7 @@ mod tests {
             .unwrap()
             .active_tab_mut()
             .unwrap()
-            .pane_manager
-            .as_mut()
-            .unwrap()
+            .panes
             .resize_divider_target(crate::panes::DividerTarget::Domain(55), 60.0, 10.0)
             .unwrap();
         app.handle_live_domain_control_completed(
@@ -1380,9 +1350,7 @@ mod tests {
                 .unwrap()
                 .active_tab()
                 .unwrap()
-                .pane_manager
-                .as_ref()
-                .unwrap()
+                .panes
                 .get_dividers()[0]
                 .ratio_millis,
             500
@@ -1412,10 +1380,12 @@ mod tests {
                 .unwrap()
                 .active_tab_mut()
                 .unwrap()
-                .pane_manager
-                .as_mut()
-                .unwrap()
-                .resize(800.0, 480.0, 10.0, 20.0);
+                .panes
+                .resize(
+                    crate::terminal::geometry::TerminalArea::from_available_pixels(
+                        800.0, 480.0, 10.0, 20.0,
+                    ),
+                );
             app.divider_dragging = Some(DividerDrag {
                 tab_id: dragged_tab,
                 domain: Some(("domain-topology".into(), 20)),
@@ -1444,9 +1414,7 @@ mod tests {
                     .unwrap()
                     .tab_by_id(dragged_tab)
                     .unwrap()
-                    .pane_manager
-                    .as_ref()
-                    .unwrap()
+                    .panes
                     .get_dividers()[0]
                     .ratio_millis,
                 500
@@ -1488,14 +1456,14 @@ mod tests {
                     .and_then(|(_, remote)| (remote == 20).then_some(tab))
             })
             .unwrap();
-        assert!(source.pane_manager.is_none());
+        assert!(source.panes.pane_count() == 1);
         assert_eq!(
             source.live_domain.as_ref().unwrap().pane_ids,
             std::collections::HashMap::from([(crate::panes::PaneId(0), 200)])
         );
         let destination = tabs.active_tab().unwrap();
         assert_eq!(destination.live_domain_tab_route().unwrap().1, 10);
-        let destination_panes = destination.pane_manager.as_ref().unwrap();
+        let destination_panes = &destination.panes;
         assert_eq!(destination_panes.pane_count(), 2);
         assert_eq!(
             destination_panes.spawned_shell_count(),

@@ -72,20 +72,9 @@ fn notification_occasions_use_exact_tab_pane_zoom_focus_and_visibility_state() {
     let mut tabs = TabManager::for_test(shell.clone());
     let split_tab_id = tabs.new_tab().unwrap();
     let split_tab = tabs.tab_mut_by_id(split_tab_id).unwrap();
-    let owner = split_tab.take_terminal_owner().unwrap();
-    let mut panes = PaneManager::from_existing(
-        owner,
-        shell,
-        1_000,
-        8 * 1024 * 1024,
-        800.0,
-        480.0,
-        10.0,
-        20.0,
-    );
+    let panes = split_tab.panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
     panes.split(SplitDirection::Vertical).unwrap();
     assert_eq!(panes.focused_id(), PaneId(1));
-    split_tab.pane_manager = Some(panes);
     let active_tab_id = tabs.new_tab().unwrap();
 
     let split_visible = TerminalEventOrigin {
@@ -120,17 +109,7 @@ fn notification_occasions_use_exact_tab_pane_zoom_focus_and_visibility_state() {
     assert!(app.should_present_terminal_notification(split_visible, Unfocused));
     assert!(!app.should_present_terminal_notification(split_visible, Invisible));
 
-    assert!(
-        app.tabs
-            .as_mut()
-            .unwrap()
-            .active_tab_mut()
-            .unwrap()
-            .pane_manager
-            .as_mut()
-            .unwrap()
-            .toggle_zoom()
-    );
+    assert!(app.active_panes_mut().toggle_zoom());
     assert!(app.should_present_terminal_notification(split_visible, Invisible));
 
     app.window_focused = false;
@@ -224,7 +203,7 @@ fn delayed_notification_reply_returns_to_requesting_pane_without_a_focus_fallbac
             HashMap::new(),
         )
         .unwrap();
-    let mut panes = PaneManager::new(
+    let mut panes = PaneManager::for_test(
         80,
         24,
         shell,
@@ -238,7 +217,7 @@ fn delayed_notification_reply_returns_to_requesting_pane_without_a_focus_fallbac
     .unwrap();
     let requesting_pane = panes.split(SplitDirection::Vertical).unwrap();
     panes.focus(PaneId(0));
-    tabs.active_tab_mut().unwrap().pane_manager = Some(panes);
+    tabs.active_tab_mut().unwrap().panes = panes;
     app.tabs = Some(tabs);
 
     assert!(!app.handle_notification_completion(
@@ -258,14 +237,7 @@ fn delayed_notification_reply_returns_to_requesting_pane_without_a_focus_fallbac
     while Instant::now() < deadline {
         app.tabs.as_mut().unwrap().poll_events();
         requesting_text = app
-            .tabs
-            .as_ref()
-            .unwrap()
-            .active_tab()
-            .unwrap()
-            .pane_manager
-            .as_ref()
-            .unwrap()
+            .active_panes()
             .get_pane(requesting_pane)
             .unwrap()
             .terminal
@@ -283,15 +255,7 @@ fn delayed_notification_reply_returns_to_requesting_pane_without_a_focus_fallbac
         std::thread::sleep(Duration::from_millis(2));
     }
 
-    let panes = app
-        .tabs
-        .as_ref()
-        .unwrap()
-        .active_tab()
-        .unwrap()
-        .pane_manager
-        .as_ref()
-        .unwrap();
+    let panes = app.active_panes();
     let focused_text = panes
         .get_pane(PaneId(0))
         .unwrap()
@@ -350,20 +314,9 @@ fn notification_activation_selects_the_exact_origin_and_stale_origins_fail_close
         .unwrap();
     let origin = {
         let tab = tabs.tab_mut_by_id(origin_tab).unwrap();
-        let owner = tab.take_terminal_owner().unwrap();
-        let mut panes = PaneManager::from_existing(
-            owner,
-            shell,
-            1_000,
-            8 * 1024 * 1024,
-            800.0,
-            480.0,
-            10.0,
-            20.0,
-        );
+        let panes = tab.panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
         let pane_id = panes.split(SplitDirection::Vertical).unwrap();
         panes.focus(PaneId(0));
-        tab.pane_manager = Some(panes);
         crate::tabs::TerminalIdentity {
             tab_id: origin_tab,
             pane_id,
@@ -383,12 +336,7 @@ fn notification_activation_selects_the_exact_origin_and_stale_origins_fail_close
     let tabs = app.tabs.as_ref().unwrap();
     assert_eq!(tabs.active_tab_id(), Some(origin_tab));
     assert_eq!(
-        tabs.active_tab()
-            .unwrap()
-            .pane_manager
-            .as_ref()
-            .unwrap()
-            .focused_id(),
+        tabs.active_tab().unwrap().panes.focused_id(),
         origin.pane_id
     );
 

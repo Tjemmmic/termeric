@@ -180,8 +180,8 @@ impl App {
         origin: TerminalEventOrigin,
         command: KittyFileTransferCommand,
     ) {
-        // Event routes are mode-specific. Consent, session lookup, and worker
-        // callbacks must retain the owner, never the current tab/pane mode.
+        // Consent, session lookup, and worker callbacks retain the exact
+        // originating terminal, never whichever one is focused later.
         let Some(origin) = self
             .tabs
             .as_ref()

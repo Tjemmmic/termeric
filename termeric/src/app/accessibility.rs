@@ -833,7 +833,7 @@ impl App {
             self.accessibility.keyboard_focus = ChromeFocus::Terminal;
             let pane_id = PaneId((id - PANE_BASE) as u32);
             if let Some(tab) = self.tabs.as_mut().and_then(TabManager::active_tab_mut)
-                && let Some(panes) = &mut tab.pane_manager
+                && let Some(panes) = tab.split_panes_mut()
                 && panes.get_pane(pane_id).is_some()
             {
                 panes.focus(pane_id);
@@ -2737,7 +2737,7 @@ impl App {
 
         let mut semantic_focus = ROOT;
         if let Some(tab) = self.tabs.as_ref().and_then(TabManager::active_tab) {
-            if let Some(panes) = &tab.pane_manager {
+            if let Some(panes) = tab.split_panes() {
                 let focused = panes.focused_id();
                 let mut ordered: Vec<_> = panes.iter_with_layout().collect();
                 ordered.sort_by_key(|(pane, _)| pane.id.0);
@@ -2775,7 +2775,7 @@ impl App {
                     );
                 }
             } else if let Some(terminal) = tab.focused_terminal() {
-                let pane_id = tab.single_pane_id();
+                let pane_id = tab.panes.focused_id();
                 let id = pane_node(pane_id);
                 root_children.push(id);
                 semantic_focus = id;

@@ -14,14 +14,14 @@ pub(crate) use title::{
 };
 
 use crate::config::ShellConfig;
-use crate::panes::{PaneId, replay_workspace_scrollback, usable_workspace_cwd};
+use crate::panes::{PaneId, usable_workspace_cwd};
 use anyhow::Context;
 use std::collections::HashMap;
 use std::io;
 use termeric_core::{Terminal, TerminalEvent};
 
 use crate::terminal::events::MAX_FORWARDED_TERMINAL_EVENTS_PER_POLL;
-use crate::terminal::geometry::TerminalGeometry;
+use crate::terminal::geometry::TerminalArea;
 use crate::terminal::policy::TerminalPolicy;
 
 /// The exact terminal an app-facing event came from: its tab's stable ID and
@@ -35,7 +35,7 @@ pub struct TerminalEventOrigin {
     pub pane_id: PaneId,
 }
 
-/// Long-lived terminal identity for UI work that can outlast a split/collapse.
+/// Long-lived terminal identity for UI work that can outlast the terminal.
 /// Resolve it to an event/write route only at the point of use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TerminalIdentity {
@@ -63,8 +63,8 @@ pub struct TabManager {
     active: usize,
     /// Next tab ID to assign
     next_id: usize,
-    /// Cell and physical-pixel dimensions for new and single-terminal tabs.
-    geometry: TerminalGeometry,
+    /// The terminal area every tab's panes divide, and new tabs fill.
+    area: TerminalArea,
     /// Shell configuration for new tabs
     shell: ShellConfig,
     /// Host settings of every terminal, inherited by terminals created later.
@@ -91,15 +91,19 @@ impl TabManager {
         scrollback_lines: usize,
         scrollback_bytes: usize,
     ) -> Self {
-        Self::new_with_geometry(
-            TerminalGeometry::from_cells(cols, rows, 1.0, 1.0),
+        Self::new_with_area(
+            TerminalArea::new(
+                crate::terminal::geometry::TerminalGeometry::from_cells(cols, rows, 1.0, 1.0),
+                1.0,
+                1.0,
+            ),
             shell,
             TerminalPolicy::with_scrollback(scrollback_lines, scrollback_bytes),
         )
     }
 
-    pub(crate) fn new_with_geometry(
-        geometry: TerminalGeometry,
+    pub(crate) fn new_with_area(
+        area: TerminalArea,
         shell: ShellConfig,
         policy: TerminalPolicy,
     ) -> Self {
@@ -107,7 +111,7 @@ impl TabManager {
             tabs: Vec::new(),
             active: 0,
             next_id: 0,
-            geometry,
+            area,
             shell,
             policy,
             persistence_notices: Vec::new(),
@@ -117,7 +121,7 @@ impl TabManager {
     }
 
     pub(crate) fn empty_like(&self) -> Self {
-        let mut manager = Self::new_with_geometry(self.geometry, self.shell.clone(), self.policy);
+        let mut manager = Self::new_with_area(self.area, self.shell.clone(), self.policy);
         manager.reduced_motion = self.reduced_motion;
         manager
     }
@@ -140,18 +144,7 @@ impl TabManager {
         let id = self.next_id;
         self.next_id += 1;
 
-        let tab = if working_dir.is_none() && title.is_none() {
-            Tab::new_with_geometry(id, self.geometry, &self.shell, &self.policy)?
-        } else {
-            Tab::new_with_cwd_geometry(
-                id,
-                self.geometry,
-                &self.shell,
-                &self.policy,
-                working_dir,
-                title,
-            )?
-        };
+        let tab = Tab::new_shell(id, self.area, &self.shell, &self.policy, working_dir, title)?;
         self.tabs.push(tab);
         self.active = self.tabs.len() - 1;
 
@@ -170,14 +163,7 @@ impl TabManager {
     ) -> anyhow::Result<usize> {
         let id = self.next_id;
         self.next_id += 1;
-        let mut tab = Tab::new_with_cwd_geometry(
-            id,
-            self.geometry,
-            &shell,
-            &self.policy,
-            working_dir,
-            title,
-        )?;
+        let mut tab = Tab::new_shell(id, self.area, &shell, &self.policy, working_dir, title)?;
         tab.tab_type = TabType::Profile {
             name: name.to_string(),
         };
@@ -209,7 +195,7 @@ impl TabManager {
             }),
             ..CommandLaunch::default()
         };
-        let mut tab = Tab::new_command(id, self.geometry, &launch, &self.policy)?;
+        let mut tab = Tab::new_command(id, self.area, &launch, &self.policy)?;
         tab.set_serial_profile_launch(name, title.to_string());
         self.tabs.push(tab);
         self.active = self.tabs.len() - 1;
@@ -253,7 +239,7 @@ impl TabManager {
         let id = self.next_id;
         self.next_id += 1;
 
-        let mut tab = Tab::new_command(id, self.geometry, &launch, &self.policy)?;
+        let mut tab = Tab::new_command(id, self.area, &launch, &self.policy)?;
         tab.set_split_shell_config(self.shell.clone());
         self.tabs.push(tab);
         if !background || self.tabs.len() == 1 {
@@ -311,8 +297,7 @@ impl TabManager {
         )?;
         let index = self.tabs.len() - 1;
         let tab = &mut self.tabs[index];
-        tab.set_graphics_relay_snapshot_allowed(true);
-        tab.live_domain = Some(LiveDomainTab {
+        tab.attach_live_domain(LiveDomainTab {
             domain_id: domain_id.to_string(),
             tab_id: remote_tab.id,
             pane_ids: remote_panes
@@ -328,24 +313,8 @@ impl TabManager {
             remote_tab.pinned,
         );
         if remote_panes.len() > 1 {
-            let owner = tab
-                .take_terminal_owner()
-                .ok_or_else(|| anyhow::anyhow!("domain relay tab could not enter pane mode"))?;
-            let cell_width = f32::from(self.geometry.pixel_width) / self.geometry.cols as f32;
-            let cell_height = f32::from(self.geometry.pixel_height) / self.geometry.rows as f32;
-            tab.pane_manager = Some(crate::panes::PaneManager::from_domain(
-                owner,
-                self.shell.clone(),
-                self.policy.scrollback_lines,
-                self.policy.scrollback_bytes,
-                f32::from(self.geometry.pixel_width),
-                f32::from(self.geometry.pixel_height),
-                cell_width,
-                cell_height,
-                domain_id,
-                remote_tab,
-                relay_command,
-            )?);
+            tab.panes
+                .adopt_domain_layout(domain_id, remote_tab, relay_command)?;
         }
         Ok(index)
     }
@@ -370,8 +339,7 @@ impl TabManager {
             HashMap::new(),
         )?;
         let index = self.tabs.len() - 1;
-        self.tabs[index].set_graphics_relay_snapshot_allowed(true);
-        self.tabs[index].live_domain = Some(LiveDomainTab {
+        self.tabs[index].attach_live_domain(LiveDomainTab {
             domain_id: domain_id.to_string(),
             tab_id: remote_tab.id,
             pane_ids: HashMap::from([(PaneId(0), primary.id)]),
@@ -490,13 +458,6 @@ impl TabManager {
             }
         }
 
-        let shell = self.shell.clone();
-        let scrollback_lines = self.policy.scrollback_lines;
-        let scrollback_bytes = self.policy.scrollback_bytes;
-        let total_width = f32::from(self.geometry.pixel_width);
-        let total_height = f32::from(self.geometry.pixel_height);
-        let cell_width = total_width / self.geometry.cols as f32;
-        let cell_height = total_height / self.geometry.rows as f32;
         let mut changed = false;
         for (remote_pane, source_tab_id, destination_tab_id) in moves {
             let source_index = self.tabs.iter().position(|tab| {
@@ -527,11 +488,7 @@ impl TabManager {
             let Some(source_local) = source_local else {
                 continue;
             };
-            if self.tabs[source_index]
-                .pane_manager
-                .as_ref()
-                .is_none_or(|panes| panes.pane_count() <= 1)
-            {
+            if self.tabs[source_index].panes.pane_count() <= 1 {
                 // A skipped intermediate revision can make a direct transfer
                 // impossible. The ordinary reconciliation path will replace
                 // only that relay and still converge to daemon state.
@@ -545,25 +502,9 @@ impl TabManager {
                 let (before, after) = self.tabs.split_at_mut(source_index);
                 (&mut after[0], &mut before[destination_index])
             };
-            if destination.pane_manager.is_none() {
-                let owner = destination
-                    .take_terminal_owner()
-                    .context("live-domain destination tab lost its terminal owner")?;
-                destination.pane_manager = Some(crate::panes::PaneManager::from_existing(
-                    owner,
-                    shell.clone(),
-                    scrollback_lines,
-                    scrollback_bytes,
-                    total_width,
-                    total_height,
-                    cell_width,
-                    cell_height,
-                ));
-            }
             let pane = source
-                .pane_manager
-                .as_mut()
-                .and_then(|panes| panes.detach(source_local))
+                .panes
+                .detach(source_local)
                 .context("live-domain source relay could not be detached")?;
             source
                 .live_domain
@@ -572,9 +513,7 @@ impl TabManager {
                 .pane_ids
                 .remove(&source_local);
             let destination_local = destination
-                .pane_manager
-                .as_mut()
-                .expect("destination pane manager was installed")
+                .panes
                 .attach(pane, crate::panes::SplitDirection::Vertical);
             destination
                 .live_domain
@@ -649,8 +588,6 @@ impl TabManager {
         remote_tab: &crate::domain::model::LiveTopologyTab,
         relay_command: &crate::domain::DomainRelayCommand,
     ) -> anyhow::Result<()> {
-        let cell_width = f32::from(self.geometry.pixel_width) / self.geometry.cols as f32;
-        let cell_height = f32::from(self.geometry.pixel_height) / self.geometry.rows as f32;
         let tab = &mut self.tabs[index];
         tab.set_live_domain_metadata(
             &remote_tab.title,
@@ -665,48 +602,9 @@ impl TabManager {
                 .pane_ids,
         );
 
-        let result = (|| {
-            if remote_tab.panes.len() > 1 && tab.pane_manager.is_none() {
-                let owner = tab
-                    .take_terminal_owner()
-                    .context("live-domain tab lost its terminal owner")?;
-                tab.pane_manager = Some(crate::panes::PaneManager::from_existing(
-                    owner,
-                    self.shell.clone(),
-                    self.policy.scrollback_lines,
-                    self.policy.scrollback_bytes,
-                    f32::from(self.geometry.pixel_width),
-                    f32::from(self.geometry.pixel_height),
-                    cell_width,
-                    cell_height,
-                ));
-            }
-
-            if let Some(panes) = &mut tab.pane_manager {
-                panes.reconcile_domain(&mut pane_ids, domain_id, remote_tab, relay_command)?;
-                if remote_tab.panes.len() == 1 {
-                    let remaining_local = panes.focused_id();
-                    let remaining_remote = pane_ids.get(&remaining_local).copied();
-                    let mut panes = tab.pane_manager.take().unwrap();
-                    let owner = panes
-                        .take_remaining_pane()
-                        .context("live-domain pane reconciliation did not leave one owner")?;
-                    tab.restore_terminal_owner(owner);
-                    pane_ids.clear();
-                    if let Some(remote) = remaining_remote {
-                        pane_ids.insert(remaining_local, remote);
-                    }
-                }
-            } else {
-                let remote = remote_tab
-                    .panes
-                    .first()
-                    .context("live domain tab has no panes")?;
-                pane_ids.clear();
-                pane_ids.insert(tab.single_pane_id(), remote.id);
-            }
-            Ok(())
-        })();
+        let result =
+            tab.panes
+                .reconcile_domain(&mut pane_ids, domain_id, remote_tab, relay_command);
         tab.live_domain.as_mut().unwrap().pane_ids = pane_ids;
         result
     }
@@ -1006,18 +904,7 @@ impl TabManager {
         self.next_id = self.next_id.saturating_add(1);
         tab.id = id;
         tab.has_activity = false;
-        if let Some(panes) = &mut tab.pane_manager {
-            let cell_width = f32::from(self.geometry.pixel_width) / self.geometry.cols as f32;
-            let cell_height = f32::from(self.geometry.pixel_height) / self.geometry.rows as f32;
-            panes.resize(
-                f32::from(self.geometry.pixel_width),
-                f32::from(self.geometry.pixel_height),
-                cell_width,
-                cell_height,
-            );
-        } else if let Err(error) = tab.resize_geometry(self.geometry) {
-            log::warn!("Transferred tab {id} could not be resized immediately: {error:#}");
-        }
+        tab.panes.resize(self.area);
         let insertion = if tab.pinned {
             self.tabs.iter().take_while(|tab| tab.pinned).count()
         } else {
@@ -1043,28 +930,14 @@ impl TabManager {
             .context("Destination window exhausted its stable tab ID space")?;
         tab.id = id;
         tab.has_activity = false;
-        if let Some(panes) = &mut tab.pane_manager {
-            let cell_width = f32::from(self.geometry.pixel_width) / self.geometry.cols as f32;
-            let cell_height = f32::from(self.geometry.pixel_height) / self.geometry.rows as f32;
-            panes.resize(
-                f32::from(self.geometry.pixel_width),
-                f32::from(self.geometry.pixel_height),
-                cell_width,
-                cell_height,
-            );
-        } else if let Err(error) = tab.resize_geometry(self.geometry) {
-            log::warn!("Transferred tab {id} could not be resized immediately: {error:#}");
-        }
+        tab.panes.resize(self.area);
         self.tabs.insert(target, tab);
         self.active = target;
         Ok(id)
     }
 
     /// Move the active pane through the same prevalidated path as exact-ID moves.
-    pub(crate) fn move_focused_pane_to_next_tab(
-        &mut self,
-        cwd_mode: crate::config::PaneCwdMode,
-    ) -> anyhow::Result<PaneId> {
+    pub(crate) fn move_focused_pane_to_next_tab(&mut self) -> anyhow::Result<PaneId> {
         if self.tabs.len() < 2 {
             anyhow::bail!("A second tab is required");
         }
@@ -1087,7 +960,6 @@ impl TabManager {
             target.tab_id,
             target.pane_id,
             crate::panes::SplitDirection::Vertical,
-            cwd_mode,
         )
     }
 
@@ -1118,10 +990,10 @@ impl TabManager {
                 "Live-domain panes are daemon-owned and require an acknowledged topology change"
             );
         }
-        let manager = tab
-            .pane_manager
-            .as_ref()
-            .context("Split the source tab before moving a pane")?;
+        let manager = &tab.panes;
+        if manager.pane_count() == 1 {
+            anyhow::bail!("Split the source tab before moving a pane");
+        }
         let pane = manager
             .get_pane(pane_id)
             .with_context(|| format!("GUI pane {} does not exist in tab {tab_id}", pane_id.0))?;
@@ -1155,52 +1027,16 @@ impl TabManager {
         if !tab.allows_pane_splits() {
             anyhow::bail!("A pane cannot be attached to a serial terminal tab");
         }
-        if let Some(manager) = &tab.pane_manager {
-            manager.validate_attach_target(target)
-        } else if target != tab.single_pane_id() {
+        if let Some(sole) = tab.panes.lone_pane()
+            && sole.id != target
+        {
             anyhow::bail!(
                 "GUI pane {} does not exist in unsplit tab {tab_id}; its sole pane ID is {}",
                 target.0,
-                tab.single_pane_id().0
-            )
-        } else {
-            tab.validate_single_pane_attachment()
-        }
-    }
-
-    pub(crate) fn prepare_pane_transfer_destination_by_id(
-        &mut self,
-        tab_id: usize,
-        target: PaneId,
-        cwd_mode: crate::config::PaneCwdMode,
-    ) -> anyhow::Result<()> {
-        self.validate_pane_transfer_destination_by_id(tab_id, target)?;
-        let destination = self
-            .tabs
-            .iter()
-            .position(|tab| tab.id == tab_id)
-            .expect("validated destination tab remains present");
-        if self.tabs[destination].pane_manager.is_none() {
-            let cell_width = f32::from(self.geometry.pixel_width) / self.geometry.cols as f32;
-            let cell_height = f32::from(self.geometry.pixel_height) / self.geometry.rows as f32;
-            let split_shell = self.tabs[destination].split_shell_config();
-            let owner = self.tabs[destination]
-                .take_terminal_owner()
-                .context("Destination tab does not own a terminal")?;
-            let mut manager = crate::panes::PaneManager::from_existing(
-                owner,
-                split_shell,
-                self.policy.scrollback_lines,
-                self.policy.scrollback_bytes,
-                f32::from(self.geometry.pixel_width),
-                f32::from(self.geometry.pixel_height),
-                cell_width,
-                cell_height,
+                sole.id.0
             );
-            manager.set_cwd_mode(cwd_mode);
-            self.tabs[destination].pane_manager = Some(manager);
         }
-        Ok(())
+        tab.panes.validate_attach_target(target)
     }
 
     pub(crate) fn detach_pane_for_transfer_by_id(
@@ -1213,9 +1049,8 @@ impl TabManager {
             .tab_mut_by_id(tab_id)
             .expect("validated source tab remains present");
         let pane = tab
-            .pane_manager
-            .as_mut()
-            .and_then(|manager| manager.detach(pane_id))
+            .panes
+            .detach(pane_id)
             .context("The selected pane could not be detached")?;
         tab.reconcile_primary_pane_launch();
         Ok(pane)
@@ -1236,9 +1071,7 @@ impl TabManager {
                 format!("GUI tab {tab_id} does not exist in the destination window")
             })?;
         let id = self.tabs[destination]
-            .pane_manager
-            .as_mut()
-            .context("Destination tab was not prepared for pane attachment")?
+            .panes
             .attach_target(pane, target, direction)?;
         self.active = destination;
         Ok(id)
@@ -1251,14 +1084,12 @@ impl TabManager {
         destination_tab_id: usize,
         target: PaneId,
         direction: crate::panes::SplitDirection,
-        cwd_mode: crate::config::PaneCwdMode,
     ) -> anyhow::Result<PaneId> {
         if source_tab_id == destination_tab_id {
             anyhow::bail!("Moving a pane within the same tab requires a layout-tree rearrangement");
         }
         self.validate_pane_transfer_source_by_id(source_tab_id, pane_id)?;
         self.validate_pane_transfer_destination_by_id(destination_tab_id, target)?;
-        self.prepare_pane_transfer_destination_by_id(destination_tab_id, target, cwd_mode)?;
         let pane = self
             .detach_pane_for_transfer_by_id(source_tab_id, pane_id)
             .expect("prevalidated source pane remains detachable");
@@ -1266,16 +1097,14 @@ impl TabManager {
             .context("prevalidated destination pane remains attachable")
     }
 
-    /// Normalize only after validating the same limits used by exact-ID moves.
-    pub(crate) fn prepare_window_pane_transfer_destination(
-        &mut self,
-        cwd_mode: crate::config::PaneCwdMode,
-    ) -> anyhow::Result<()> {
+    /// Validate the destination half of a cross-window pane move: beside the
+    /// active tab's focused pane, under the same limits as exact-ID moves.
+    pub(crate) fn validate_window_pane_transfer_destination(&self) -> anyhow::Result<()> {
         let target = self
             .active_tab()
             .context("No destination tab is active")?
             .focused_terminal_identity();
-        self.prepare_pane_transfer_destination_by_id(target.tab_id, target.pane_id, cwd_mode)
+        self.validate_pane_transfer_destination_by_id(target.tab_id, target.pane_id)
     }
 
     /// Detach the validated focused pane while retaining its PTY, reader,
@@ -1286,8 +1115,7 @@ impl TabManager {
         self.validate_window_pane_transfer_source()?;
         let pane = self
             .active_tab_mut()
-            .and_then(|tab| tab.pane_manager.as_mut())
-            .and_then(crate::panes::PaneManager::detach_focused)
+            .and_then(|tab| tab.panes.detach_focused())
             .context("The focused pane could not be detached")?;
         self.active_tab_mut()
             .expect("validated source tab remains active")
@@ -1295,12 +1123,9 @@ impl TabManager {
         Ok(pane)
     }
 
-    /// Attach a detached owner to the already prepared active destination.
+    /// Attach a detached owner to the already validated active destination.
     pub(crate) fn attach_window_transferred_pane(&mut self, pane: crate::panes::Pane) -> PaneId {
-        let manager = self.tabs[self.active]
-            .pane_manager
-            .as_mut()
-            .expect("window transfer destination must be prepared");
+        let manager = &mut self.tabs[self.active].panes;
         manager
             .attach_target(
                 pane,
@@ -1399,15 +1224,14 @@ impl TabManager {
         );
         let id = self.next_id;
         self.next_id += 1;
-        let tab = Tab::new_with_cwd_geometry(
+        let mut tab = Tab::new_shell(
             id,
-            self.geometry,
+            self.area,
             &self.shell,
             &self.policy,
             cwd.as_deref(),
             Some(&snapshot.title),
         )?;
-        let mut tab = tab;
         tab.user_title.clone_from(&snapshot.user_title);
         tab.pinned = snapshot.pinned;
         if let Some(title) = &tab.user_title {
@@ -1473,50 +1297,9 @@ impl TabManager {
         if let Some(title) = &tab.user_title {
             tab.title.clone_from(title);
         }
-        let primary = snapshot
+        let warnings = tab
             .panes
-            .iter()
-            .find(|pane| pane.id == snapshot.primary_pane)
-            .ok_or_else(|| anyhow::anyhow!("workspace tab {} has no primary pane", snapshot.id))?;
-        tab.set_single_last_command(primary.last_command.clone());
-
-        if snapshot.panes.len() == 1 {
-            tab.set_single_pane_id(PaneId(snapshot.primary_pane));
-            if let Some(terminal) = tab.focused_terminal_mut() {
-                replay_workspace_scrollback(terminal, &primary.scrollback_lines);
-            }
-            if let crate::workspace::WorkspaceLaunch::Plugin { plugin_id, profile } = pane_launches
-                .get(&snapshot.primary_pane)
-                .map_or(snapshot.launch()?, |(launch, _)| launch)
-            {
-                tab.set_plugin_profile_reference(
-                    PaneId(snapshot.primary_pane),
-                    plugin_id,
-                    profile.clone(),
-                );
-            }
-            return Ok(Vec::new());
-        }
-
-        let split_shell = tab.split_shell_config();
-        let owner = tab
-            .take_terminal_owner()
-            .ok_or_else(|| anyhow::anyhow!("workspace tab owner could not enter pane mode"))?;
-        let cell_width = f32::from(self.geometry.pixel_width) / self.geometry.cols as f32;
-        let cell_height = f32::from(self.geometry.pixel_height) / self.geometry.rows as f32;
-        let (panes, warnings) = crate::panes::PaneManager::from_workspace(
-            owner,
-            split_shell,
-            self.policy.scrollback_lines,
-            self.policy.scrollback_bytes,
-            f32::from(self.geometry.pixel_width),
-            f32::from(self.geometry.pixel_height),
-            cell_width,
-            cell_height,
-            snapshot,
-            pane_launches,
-        )?;
-        tab.pane_manager = Some(panes);
+            .restore_workspace_layout(snapshot, pane_launches)?;
         if let crate::workspace::WorkspaceLaunch::Plugin { plugin_id, profile } = pane_launches
             .get(&snapshot.primary_pane)
             .map_or(snapshot.launch()?, |(launch, _)| launch)
@@ -1624,38 +1407,11 @@ impl TabManager {
         }) else {
             return false;
         };
-        let Some(panes) = &mut tab.pane_manager else {
-            return false;
-        };
-        if !panes.close(local_id) {
+        if !tab.panes.close(local_id) {
             return false;
         }
         if let Some(live) = &mut tab.live_domain {
             live.pane_ids.remove(&local_id);
-        }
-
-        if panes.pane_count() == 1 {
-            let remaining_local = panes.focused_id();
-            let remaining_remote = tab
-                .live_domain
-                .as_ref()
-                .and_then(|live| live.pane_ids.get(&remaining_local).copied());
-            let mut panes = tab.pane_manager.take().unwrap();
-            if let Some(remaining) = panes.take_remaining_pane() {
-                tab.restore_terminal_owner(remaining);
-            }
-            if let Some(live) = &mut tab.live_domain {
-                live.pane_ids.clear();
-                if let Some(remote) = remaining_remote {
-                    live.pane_ids.insert(remaining_local, remote);
-                }
-            }
-            if let Err(error) = tab.resize_geometry(self.geometry) {
-                log::error!(
-                    "Failed to resize live-domain tab {} after pane close: {error}",
-                    tab.id
-                );
-            }
         }
         true
     }
@@ -1682,32 +1438,16 @@ impl TabManager {
             let tab_id = tab.id;
             let mut saw_output = false;
             let on_output = |_: PaneId, data: &[u8]| saw_output |= !data.is_empty();
-            let (tab_changed, events): (bool, Vec<RoutedTerminalEvent>) =
-                if let Some(panes) = &mut tab.pane_manager {
-                    let (pane_changed, pane_events) = panes.poll_events(on_output);
-                    let events = pane_events
-                        .into_iter()
-                        .map(|pane_event| RoutedTerminalEvent {
-                            origin: TerminalEventOrigin {
-                                tab_id,
-                                pane_id: pane_event.pane_id,
-                            },
-                            event: pane_event.event,
-                        })
-                        .collect();
-                    (pane_changed, events)
-                } else {
-                    let pane_id = tab.single_pane_id();
-                    let (single_changed, single_events) = tab.poll_single(on_output);
-                    let events = single_events
-                        .into_iter()
-                        .map(|event| RoutedTerminalEvent {
-                            origin: TerminalEventOrigin { tab_id, pane_id },
-                            event,
-                        })
-                        .collect();
-                    (single_changed, events)
-                };
+            let (tab_changed, pane_events) = tab.poll_events(on_output);
+            let events = pane_events
+                .into_iter()
+                .map(|pane_event| RoutedTerminalEvent {
+                    origin: TerminalEventOrigin {
+                        tab_id,
+                        pane_id: pane_event.pane_id,
+                    },
+                    event: pane_event.event,
+                });
             if saw_output {
                 tab.update_title();
             }
@@ -1736,67 +1476,32 @@ impl TabManager {
         (changed || !all_events.is_empty(), all_events)
     }
 
-    /// Resize all tabs
-    ///
-    /// Skips tabs with active pane managers — those terminals are at pane
-    /// dimensions and are managed by PaneManager::resize() instead.
-    /// Whether the active tab already has `geometry`, so fitting it would
-    /// change nothing.
-    pub(crate) fn active_has_geometry(
-        &self,
-        geometry: TerminalGeometry,
-        content_size: (f32, f32),
-        cell_size: (f32, f32),
-    ) -> bool {
-        self.geometry == geometry
+    /// Whether the active tab is already laid out for `area`, so fitting it
+    /// would change nothing.
+    pub(crate) fn active_has_area(&self, area: TerminalArea) -> bool {
+        self.area == area
             && self
                 .tabs
                 .get(self.active)
-                .is_none_or(|tab| match &tab.pane_manager {
-                    Some(panes) => panes.is_laid_out_for(
-                        content_size.0,
-                        content_size.1,
-                        cell_size.0,
-                        cell_size.1,
-                    ),
-                    None => tab.has_geometry(geometry),
-                })
+                .is_none_or(|tab| tab.panes.is_laid_out_for(area))
     }
 
-    /// Fits only the active tab to `geometry`, which new tabs then take too.
+    /// Fits only the active tab to `area`, which new tabs then take too.
     /// Other tabs keep their size until they are shown, so a change that
     /// differs from tab to tab, such as the agent view's dock, never
     /// reflows or signals programs in tabs nobody is looking at.
-    pub(crate) fn resize_active_geometry(
-        &mut self,
-        geometry: TerminalGeometry,
-        content_size: (f32, f32),
-        cell_size: (f32, f32),
-    ) {
-        self.geometry = geometry;
-        let Some(tab) = self.tabs.get_mut(self.active) else {
-            return;
-        };
-        match &mut tab.pane_manager {
-            Some(panes) => panes.resize(content_size.0, content_size.1, cell_size.0, cell_size.1),
-            None => {
-                if let Err(error) = tab.resize_geometry(geometry) {
-                    log::error!("Failed to resize tab {}: {error}", tab.id);
-                }
-            }
+    pub(crate) fn resize_active(&mut self, area: TerminalArea) {
+        self.area = area;
+        if let Some(tab) = self.tabs.get_mut(self.active) {
+            tab.panes.resize(area);
         }
     }
 
-    pub(crate) fn resize_geometry(&mut self, geometry: TerminalGeometry) {
-        self.geometry = geometry;
-
+    /// Fit every tab, and the tabs created later, to `area`.
+    pub(crate) fn resize(&mut self, area: TerminalArea) {
+        self.area = area;
         for tab in &mut self.tabs {
-            if tab.pane_manager.is_some() {
-                continue; // Pane terminals are resized via PaneManager::resize()
-            }
-            if let Err(e) = tab.resize_geometry(geometry) {
-                log::error!("Failed to resize tab {}: {}", tab.id, e);
-            }
+            tab.panes.resize(area);
         }
     }
 
@@ -1845,59 +1550,28 @@ impl TabManager {
         results
     }
 
-    /// Remove closed panes and dissolve a one-pane manager only after App has
-    /// handled the routed terminal events from the current poll. This ordering
-    /// keeps app-mediated replies addressable by their exact pane ID.
+    /// Remove exited panes from tabs that stay open, only after App has
+    /// handled the routed terminal events from the current poll. This
+    /// ordering keeps app-mediated replies addressable by their exact pane ID.
+    /// A tab whose every pane exited closes with all of them, so its closing
+    /// snapshot saves the whole tab.
     fn cleanup_pane_topology(&mut self) -> bool {
         let mut changed = false;
         for tab in &mut self.tabs {
-            let Some(panes) = &mut tab.pane_manager else {
-                continue;
-            };
-            let before = panes.pane_count();
-            panes.cleanup_closed();
-            changed |= panes.pane_count() != before;
-
-            if let Some(live) = &mut tab.live_domain {
-                live.pane_ids.retain(|local, _| panes.contains(*local));
+            if tab.panes.all_closed() {
+                tab.closed = true;
             }
-
-            let all_closed = panes.all_closed();
-            if all_closed || panes.pane_count() <= 1 {
-                let remaining_route = (!all_closed).then(|| {
-                    let local = panes.focused_id();
-                    let remote = tab
-                        .live_domain
-                        .as_ref()
-                        .and_then(|live| live.pane_ids.get(&local).copied());
-                    (local, remote)
-                });
-                let mut panes = tab.pane_manager.take().unwrap();
-                if all_closed {
-                    tab.closed = true;
-                    if let Some(live) = &mut tab.live_domain {
-                        live.pane_ids.clear();
-                    }
-                } else if let Some(remaining) = panes.take_remaining_pane() {
-                    tab.restore_terminal_owner(remaining);
-                    if let Some((local, Some(remote))) = remaining_route
-                        && let Some(live) = &mut tab.live_domain
-                    {
-                        live.pane_ids.clear();
-                        live.pane_ids.insert(local, remote);
-                    }
-                }
-                if let Err(error) = tab.resize_geometry(self.geometry) {
-                    log::error!(
-                        "Failed to resize tab {} after pane close: {}",
-                        tab.id,
-                        error
-                    );
-                }
-                log::info!("Tab {} exited pane mode after pane cleanup", tab.id);
-                changed = true;
-            } else {
+            if tab.closed {
+                continue;
+            }
+            let before = tab.panes.pane_count();
+            tab.panes.cleanup_closed();
+            if let Some(live) = &mut tab.live_domain {
+                live.pane_ids.retain(|local, _| tab.panes.contains(*local));
+            }
+            if tab.panes.pane_count() != before {
                 tab.reconcile_primary_pane_launch();
+                changed = true;
             }
         }
         changed
@@ -1907,45 +1581,17 @@ impl TabManager {
     /// Before removing, saves each non-empty tab when auto-save is enabled.
     /// Returns true if tab or pane topology changed.
     pub fn cleanup_closed(&mut self, auto_save: bool, save_scrollback: bool) -> bool {
-        let mut saved_closed_tab = false;
-        // If every pane exited in the same poll, topology cleanup has no live
-        // owner to collapse back into the tab and must drop the pane manager.
-        // Capture its still-addressable focused pane before that destructive
-        // transition so close-time persistence captures the same focused
-        // terminal as an ordinary tab close.
-        let mut handled_before_topology_cleanup = Vec::new();
-        if auto_save {
-            for tab in &mut self.tabs {
-                if !tab
-                    .pane_manager
-                    .as_ref()
-                    .is_some_and(crate::panes::PaneManager::all_closed)
-                {
-                    continue;
-                }
-                handled_before_topology_cleanup.push(tab.id);
-                saved_closed_tab |= auto_save_closing_tab(
-                    tab,
-                    "split tab",
-                    save_scrollback,
-                    &mut self.persistence_notices,
-                );
-            }
-        }
         let pane_topology_changed = self.cleanup_pane_topology();
         let initial_count = self.tabs.len();
 
         // Save sessions for tabs about to be removed
+        let mut saved_closed_tab = false;
         for tab in self.tabs.iter_mut() {
             let removing =
                 tab.closed || tab.is_close_complete() || (self.reduced_motion && tab.is_closing());
-            if auto_save && removing && !handled_before_topology_cleanup.contains(&tab.id) {
-                saved_closed_tab |= auto_save_closing_tab(
-                    tab,
-                    "tab",
-                    save_scrollback,
-                    &mut self.persistence_notices,
-                );
+            if auto_save && removing {
+                saved_closed_tab |=
+                    auto_save_closing_tab(tab, save_scrollback, &mut self.persistence_notices);
             }
         }
 
@@ -2238,11 +1884,10 @@ impl TabManager {
 }
 
 /// Saves a closing tab as a closed-tab snapshot when it has content and is not a
-/// live-domain relay, recording the outcome for the person. `kind` names the
-/// tab in the log. Returns whether a snapshot was saved.
+/// live-domain relay, recording the outcome for the person. Returns whether a
+/// snapshot was saved.
 fn auto_save_closing_tab(
     tab: &mut Tab,
-    kind: &str,
     save_scrollback: bool,
     notices: &mut Vec<PersistenceNotice>,
 ) -> bool {
@@ -2254,13 +1899,13 @@ fn auto_save_closing_tab(
         return false;
     }
     if !tab.has_content() {
-        log::debug!("Skipping empty closing {kind} {} (no content)", tab.id);
+        log::debug!("Skipping empty closing tab {} (no content)", tab.id);
         return false;
     }
     match tab.save_closed_tab(save_scrollback) {
         Ok(outcome) => {
             log::info!(
-                "Auto-saved closing {kind} {} as closed tab '{}'",
+                "Auto-saved closing tab {} as closed tab '{}'",
                 tab.id,
                 outcome.id
             );
@@ -2271,7 +1916,7 @@ fn auto_save_closing_tab(
             true
         }
         Err(error) => {
-            log::error!("Failed to auto-save closing {kind} {}: {error:#}", tab.id);
+            log::error!("Failed to auto-save closing tab {}: {error:#}", tab.id);
             notices.push(PersistenceNotice::SaveFailed {
                 tab_id: tab.id,
                 error: format!("{error:#}"),
@@ -2307,8 +1952,40 @@ pub struct TabInfo {
 mod tests {
     use super::*;
     use crate::panes::{PaneManager, SplitDirection};
+    use crate::terminal::geometry::TerminalGeometry;
     use std::collections::HashSet;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn a_lone_pane_shows_the_tab_title_and_a_split_pane_keeps_its_own() {
+        let mut manager = TabManager::for_test(crate::test_support::sleeping_shell());
+        let tab_id = manager.new_tab().unwrap();
+        let origin = TerminalEventOrigin {
+            tab_id,
+            pane_id: PaneId(0),
+        };
+        assert!(manager.set_title_for_origin(origin, "lone".into()));
+        let tab = manager.active_tab_mut().unwrap();
+        assert_eq!(tab.title, "lone");
+        assert_eq!(tab.panes.get_pane(PaneId(0)).unwrap().title, None);
+
+        let right = tab.panes.split(SplitDirection::Vertical).unwrap();
+        assert!(manager.set_title_for_origin(origin, "split".into()));
+        let tab = manager.active_tab_mut().unwrap();
+        assert_eq!(
+            tab.panes.get_pane(PaneId(0)).unwrap().title.as_deref(),
+            Some("split")
+        );
+
+        assert!(tab.panes.close(right));
+        assert_eq!(tab.panes.get_pane(PaneId(0)).unwrap().title, None);
+        let saved = tab.capture_workspace_tab(0, false).unwrap();
+        assert_eq!(saved.panes[0].title.as_deref(), Some("split"));
+        assert_eq!(
+            saved.layout,
+            crate::workspace::WorkspacePaneLayout::Pane { pane: 0 }
+        );
+    }
 
     #[test]
     fn removing_closed_tabs_keeps_the_same_tab_active() {
@@ -2363,23 +2040,11 @@ mod tests {
             )
             .unwrap();
 
-        let owner = manager
+        let panes = manager
             .active_tab_mut()
             .unwrap()
-            .take_terminal_owner()
-            .unwrap();
-        let mut panes = PaneManager::from_existing(
-            owner,
-            shell,
-            1_000,
-            8 * 1024 * 1024,
-            800.0,
-            160.0,
-            10.0,
-            20.0,
-        );
+            .panes_for_test(shell, 800.0, 160.0, 10.0, 20.0);
         panes.split(SplitDirection::Vertical).unwrap();
-        manager.active_tab_mut().unwrap().pane_manager = Some(panes);
 
         const LINE_LIMIT: usize = 32;
         const BYTE_LIMIT: usize = 4 * 1024;
@@ -2390,9 +2055,7 @@ mod tests {
         manager
             .active_tab_mut()
             .unwrap()
-            .pane_manager
-            .as_mut()
-            .unwrap()
+            .panes
             .split(SplitDirection::Horizontal)
             .unwrap();
         manager
@@ -2408,18 +2071,9 @@ mod tests {
 
         let line = format!("{}\r\n", "bounded-history".repeat(32));
         for tab in &mut manager.tabs {
-            if let Some(panes) = &mut tab.pane_manager {
-                let pane_ids: Vec<_> = panes.iter_with_layout().map(|(pane, _)| pane.id).collect();
-                for pane_id in pane_ids {
-                    let terminal = &mut panes.get_pane_mut(pane_id).unwrap().terminal;
-                    for _ in 0..64 {
-                        terminal.process(line.as_bytes());
-                    }
-                }
-            } else {
-                let terminal = tab.focused_terminal_mut().unwrap();
+            for pane in tab.panes.all_panes_mut() {
                 for _ in 0..64 {
-                    terminal.process(line.as_bytes());
+                    pane.terminal.process(line.as_bytes());
                 }
             }
         }
@@ -2428,14 +2082,9 @@ mod tests {
             .tabs
             .iter()
             .flat_map(|tab| {
-                if let Some(panes) = &tab.pane_manager {
-                    panes
-                        .iter_with_layout()
-                        .map(|(pane, _)| pane.terminal.memory_usage())
-                        .collect::<Vec<_>>()
-                } else {
-                    vec![tab.focused_terminal().unwrap().memory_usage()]
-                }
+                tab.panes
+                    .iter_panes()
+                    .map(|pane| pane.terminal.memory_usage())
             })
             .collect();
         assert_eq!(usages.len(), 4);
@@ -2464,17 +2113,7 @@ mod tests {
             .unwrap();
 
         let tab = manager.active_tab_mut().unwrap();
-        let owner = tab.take_terminal_owner().unwrap();
-        let mut panes = PaneManager::from_existing(
-            owner,
-            ShellConfig::default(),
-            1_000,
-            8 * 1024 * 1024,
-            800.0,
-            160.0,
-            10.0,
-            20.0,
-        );
+        let panes = tab.panes_for_test(ShellConfig::default(), 800.0, 160.0, 10.0, 20.0);
         let right = panes.split(SplitDirection::Vertical).unwrap();
         for (id, marker, command) in [
             (PaneId(0), "left-history", "left-command"),
@@ -2489,7 +2128,6 @@ mod tests {
             pane.closed = true;
         }
         panes.focus(right);
-        tab.pane_manager = Some(panes);
 
         assert!(manager.cleanup_closed(true, true));
         assert!(manager.is_empty());
@@ -2769,21 +2407,10 @@ mod tests {
                 HashMap::new(),
             )
             .unwrap();
-        let owner = manager
+        let panes = manager
             .active_tab_mut()
             .unwrap()
-            .take_terminal_owner()
-            .unwrap();
-        let mut panes = PaneManager::from_existing(
-            owner,
-            shell,
-            1_000,
-            8 * 1024 * 1024,
-            800.0,
-            480.0,
-            10.0,
-            20.0,
-        );
+            .panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
         let remote = panes.split(SplitDirection::Vertical).unwrap();
         panes
             .get_pane_mut(PaneId(0))
@@ -2796,14 +2423,13 @@ mod tests {
             .terminal
             .process(b"\x1b]7;file://remote.example/srv/remote-project\x07");
         let tab = manager.active_tab_mut().unwrap();
-        tab.pane_manager = Some(panes);
 
-        tab.pane_manager.as_mut().unwrap().focus(PaneId(0));
+        tab.panes.focus(PaneId(0));
         tab.update_title();
         assert_eq!(tab.title, "local-cwd");
         assert_eq!(tab.working_directory().as_deref(), local.to_str());
 
-        tab.pane_manager.as_mut().unwrap().focus(remote);
+        tab.panes.focus(remote);
         tab.update_title();
         assert_eq!(tab.title, "remote-project");
         assert_ne!(
@@ -2832,16 +2458,12 @@ mod tests {
             )
             .unwrap();
         let observer = source.active_tab().unwrap().child_observer().unwrap();
-        let owner = source
+        let panes = source
             .active_tab_mut()
             .unwrap()
-            .take_terminal_owner()
-            .unwrap();
-        let mut panes =
-            PaneManager::from_existing(owner, shell, 100, 1024 * 1024, 800.0, 480.0, 10.0, 20.0);
+            .panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
         panes.split(SplitDirection::Vertical).unwrap();
         panes.focus(PaneId(0));
-        source.active_tab_mut().unwrap().pane_manager = Some(panes);
         source
             .new_tab_with_command(
                 "/bin/sh",
@@ -2853,23 +2475,19 @@ mod tests {
             )
             .unwrap();
         source.switch_to(0);
-        let moved = source
-            .move_focused_pane_to_next_tab(crate::config::PaneCwdMode::Focused)
-            .unwrap();
+        let moved = source.move_focused_pane_to_next_tab().unwrap();
         // Drop the destination's unrelated original pane so the tracked owner
-        // collapses back into a single-terminal tab.
+        // is left as the tab's only pane.
         source
             .active_tab_mut()
             .unwrap()
-            .pane_manager
-            .as_mut()
-            .unwrap()
+            .panes
             .get_pane_mut(PaneId(0))
             .unwrap()
             .closed = true;
         source.cleanup_closed(false, false);
-        assert!(source.active_tab().unwrap().pane_manager.is_none());
-        assert_eq!(source.active_tab().unwrap().single_pane_id(), moved);
+        assert!(source.active_tab().unwrap().panes.pane_count() == 1);
+        assert_eq!(source.active_tab().unwrap().panes.focused_id(), moved);
         let mut destination = source.empty_like();
         let tab = source.detach_active_tab_for_window_transfer().unwrap();
         destination.attach_window_transferred_tab(tab);
@@ -2918,39 +2536,22 @@ mod tests {
                 .unwrap();
         }
         manager.switch_to(0);
-        let owner = manager
+        let panes = manager
             .active_tab_mut()
             .unwrap()
-            .take_terminal_owner()
-            .unwrap();
-        let mut panes = PaneManager::from_existing(
-            owner,
-            shell,
-            1_000,
-            8 * 1024 * 1024,
-            800.0,
-            480.0,
-            10.0,
-            20.0,
-        );
+            .panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
         let movable = panes.split(SplitDirection::Vertical).unwrap();
         panes.focus(PaneId(0));
         let child = panes.get_pane(PaneId(0)).unwrap().pty.child_id();
-        manager.active_tab_mut().unwrap().pane_manager = Some(panes);
 
-        let attached = manager
-            .move_focused_pane_to_next_tab(crate::config::PaneCwdMode::Focused)
-            .unwrap();
+        let attached = manager.move_focused_pane_to_next_tab().unwrap();
         assert_eq!(manager.active_index(), 1);
-        assert_eq!(
-            manager.tabs[0].pane_manager.as_ref().unwrap().pane_count(),
-            1
-        );
+        assert_eq!(manager.tabs[0].panes.pane_count(), 1);
         let source_snapshot = manager.tabs[0].capture_workspace_tab(0, false).unwrap();
         source_snapshot.validate().unwrap();
         assert_eq!(source_snapshot.primary_pane, movable.0);
         assert_eq!(source_snapshot.focused_pane, movable.0);
-        let destination = manager.active_tab().unwrap().pane_manager.as_ref().unwrap();
+        let destination = &manager.active_tab().unwrap().panes;
         assert_eq!(destination.pane_count(), 2);
         assert_eq!(destination.focused_id(), attached);
         assert_eq!(
@@ -2963,8 +2564,8 @@ mod tests {
             .new_shell_tab_from_workspace(&source_snapshot, &HashMap::new())
             .unwrap();
         let restored_tab = restored.active_tab().unwrap();
-        assert!(restored_tab.pane_manager.is_none());
-        assert_eq!(restored_tab.single_pane_id(), movable);
+        assert!(restored_tab.panes.pane_count() == 1);
+        assert_eq!(restored_tab.panes.focused_id(), movable);
         let round_trip = restored_tab.capture_workspace_tab(0, false).unwrap();
         assert_eq!(round_trip.primary_pane, movable.0);
         assert_eq!(round_trip.focused_pane, movable.0);
@@ -2991,31 +2592,13 @@ mod tests {
                 .unwrap();
         }
         manager.switch_to(0);
-        let owner = manager.tabs[0].take_terminal_owner().unwrap();
-        let mut panes = PaneManager::from_existing(
-            owner,
-            shell,
-            1_000,
-            8 * 1024 * 1024,
-            800.0,
-            480.0,
-            10.0,
-            20.0,
-        );
+        let panes = manager.tabs[0].panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
         let remaining = panes.split(SplitDirection::Vertical).unwrap();
         panes.focus(remaining);
         let child = panes.get_pane(PaneId(0)).unwrap().pty.child_id();
-        manager.tabs[0].pane_manager = Some(panes);
 
         let same_tab_error = manager
-            .transfer_pane_by_id(
-                0,
-                PaneId(0),
-                0,
-                remaining,
-                SplitDirection::Horizontal,
-                crate::config::PaneCwdMode::Focused,
-            )
+            .transfer_pane_by_id(0, PaneId(0), 0, remaining, SplitDirection::Horizontal)
             .unwrap_err()
             .to_string();
         assert!(same_tab_error.contains("layout-tree"), "{same_tab_error}");
@@ -3024,44 +2607,20 @@ mod tests {
             name: "board".into(),
         };
         let serial_error = manager
-            .transfer_pane_by_id(
-                0,
-                PaneId(0),
-                1,
-                PaneId(0),
-                SplitDirection::Horizontal,
-                crate::config::PaneCwdMode::Focused,
-            )
+            .transfer_pane_by_id(0, PaneId(0), 1, PaneId(0), SplitDirection::Horizontal)
             .unwrap_err()
             .to_string();
         assert!(serial_error.contains("serial terminal"), "{serial_error}");
-        assert!(
-            manager.tabs[0]
-                .pane_manager
-                .as_ref()
-                .unwrap()
-                .get_pane(PaneId(0))
-                .is_some()
-        );
-        assert!(manager.tabs[1].pane_manager.is_none());
+        assert!(manager.tabs[0].panes.get_pane(PaneId(0)).is_some());
+        assert!(manager.tabs[1].panes.pane_count() == 1);
         manager.tabs[1].tab_type = TabType::Shell;
 
         let attached = manager
-            .transfer_pane_by_id(
-                0,
-                PaneId(0),
-                1,
-                PaneId(0),
-                SplitDirection::Horizontal,
-                crate::config::PaneCwdMode::Focused,
-            )
+            .transfer_pane_by_id(0, PaneId(0), 1, PaneId(0), SplitDirection::Horizontal)
             .unwrap();
         assert_eq!(manager.active_index(), 1);
-        assert_eq!(
-            manager.tabs[0].pane_manager.as_ref().unwrap().pane_ids(),
-            vec![remaining]
-        );
-        let destination = manager.tabs[1].pane_manager.as_ref().unwrap();
+        assert_eq!(manager.tabs[0].panes.pane_ids(), vec![remaining]);
+        let destination = &manager.tabs[1].panes;
         assert_eq!(destination.focused_id(), attached);
         assert_eq!(
             destination.get_pane(attached).unwrap().pty.child_id(),
@@ -3087,29 +2646,18 @@ mod tests {
         manager
             .new_tab_with_profile("dev", profile_shell.clone(), None, Some("profile"))
             .unwrap();
-        let owner = manager
-            .active_tab_mut()
-            .unwrap()
-            .take_terminal_owner()
-            .unwrap();
-        let mut profile_panes = PaneManager::from_existing(
-            owner,
+        let profile_panes = manager.active_tab_mut().unwrap().panes_for_test(
             profile_shell.clone(),
-            1_000,
-            8 * 1024 * 1024,
             800.0,
             480.0,
             10.0,
             20.0,
         );
         profile_panes.split(SplitDirection::Vertical).unwrap();
-        manager.active_tab_mut().unwrap().pane_manager = Some(profile_panes);
         manager.new_tab_with_cwd(None, Some("shell")).unwrap();
         manager.switch_to(0);
 
-        let attached = manager
-            .move_focused_pane_to_next_tab(crate::config::PaneCwdMode::Focused)
-            .unwrap();
+        let attached = manager.move_focused_pane_to_next_tab().unwrap();
         let snapshot = manager
             .active_tab()
             .unwrap()
@@ -3142,9 +2690,7 @@ mod tests {
             let text = restored
                 .active_tab()
                 .unwrap()
-                .pane_manager
-                .as_ref()
-                .unwrap()
+                .panes
                 .get_pane(attached)
                 .unwrap()
                 .terminal
@@ -3159,13 +2705,10 @@ mod tests {
         }
 
         let tab = manager.active_tab_mut().unwrap();
-        let panes = tab.pane_manager.as_mut().unwrap();
-        panes.focus(PaneId(0));
-        assert!(panes.close_focused());
-        let mut panes = tab.pane_manager.take().unwrap();
-        let remaining = panes.take_remaining_pane().unwrap();
-        assert_eq!(remaining.pane.id, attached);
-        tab.restore_terminal_owner(remaining);
+        tab.panes.focus(PaneId(0));
+        assert!(tab.panes.close_focused());
+        tab.reconcile_primary_pane_launch();
+        assert_eq!(tab.panes.lone_pane().unwrap().id, attached);
         let collapsed = tab.capture_workspace_tab(1, false).unwrap();
         assert_eq!(
             collapsed.launch().unwrap(),
@@ -3173,18 +2716,8 @@ mod tests {
         );
         assert!(matches!(tab.tab_type, TabType::Profile { ref name } if name == "dev"));
 
-        let owner = tab.take_terminal_owner().unwrap();
-        let mut panes = PaneManager::from_existing(
-            owner,
-            tab.split_shell_config(),
-            1_000,
-            8 * 1024 * 1024,
-            800.0,
-            480.0,
-            10.0,
-            20.0,
-        );
-        let new_pane = panes.split(SplitDirection::Vertical).unwrap();
+        let new_pane = tab.panes.split(SplitDirection::Vertical).unwrap();
+        let panes = &tab.panes;
         assert_eq!(
             panes.get_pane(new_pane).unwrap().launch,
             crate::workspace::WorkspaceLaunch::Profile { name: "dev".into() }
@@ -3211,63 +2744,31 @@ mod tests {
                 HashMap::new(),
             )
             .unwrap();
-        let owner = manager
+        let panes = manager
             .active_tab_mut()
             .unwrap()
-            .take_terminal_owner()
-            .unwrap();
-        let mut panes = PaneManager::from_existing(
-            owner,
-            shell,
-            1_000,
-            8 * 1024 * 1024,
-            800.0,
-            480.0,
-            10.0,
-            20.0,
-        );
+            .panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
         let ordinary = panes.split(SplitDirection::Vertical).unwrap();
         panes.focus(PaneId(0));
-        manager.active_tab_mut().unwrap().pane_manager = Some(panes);
         manager.new_tab().unwrap();
         manager.switch_to(0);
 
-        let moved_plugin = manager
-            .move_focused_pane_to_next_tab(crate::config::PaneCwdMode::Focused)
-            .unwrap();
+        let moved_plugin = manager.move_focused_pane_to_next_tab().unwrap();
         assert_eq!(manager.tabs[1].pane_plugin_id(moved_plugin), Some("fake"));
-        manager
-            .move_focused_pane_to_next_tab(crate::config::PaneCwdMode::Focused)
-            .unwrap();
-        assert_eq!(
-            manager.tabs[0].pane_manager.as_ref().unwrap().pane_count(),
-            2
-        );
+        manager.move_focused_pane_to_next_tab().unwrap();
+        assert_eq!(manager.tabs[0].panes.pane_count(), 2);
 
-        manager.tabs[0]
-            .pane_manager
-            .as_mut()
-            .unwrap()
-            .focus(ordinary);
-        manager
-            .move_focused_pane_to_next_tab(crate::config::PaneCwdMode::Focused)
-            .unwrap();
-        let moved = manager
-            .active_tab()
-            .unwrap()
-            .pane_manager
-            .as_ref()
-            .unwrap()
-            .focused_pane()
-            .unwrap();
+        manager.tabs[0].panes.focus(ordinary);
+        manager.move_focused_pane_to_next_tab().unwrap();
+        let moved = manager.active_tab().unwrap().panes.focused_pane().unwrap();
         assert_eq!(moved.launch, crate::workspace::WorkspaceLaunch::Shell);
     }
 
     #[test]
     fn tab_spawn_and_pixel_only_resize_reach_kernel_winsize() {
         let initial = TerminalGeometry::from_cells(80, 24, 9.25, 18.5);
-        let mut manager = TabManager::new_with_geometry(
-            initial,
+        let mut manager = TabManager::new_with_area(
+            TerminalArea::new(initial, 9.25, 18.5),
             ShellConfig::default(),
             TerminalPolicy::with_scrollback(1_000, 8 * 1024 * 1024),
         );
@@ -3282,14 +2783,14 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            manager.active_tab().unwrap().single_pty_size(),
+            manager.active_tab().unwrap().lone_pty_size(),
             Some(initial.pty_size())
         );
 
         let pixel_only = TerminalGeometry::from_cells(80, 24, 10.0, 20.0);
-        manager.resize_geometry(pixel_only);
+        manager.resize(TerminalArea::new(pixel_only, 10.0, 20.0));
         assert_eq!(
-            manager.active_tab().unwrap().single_pty_size(),
+            manager.active_tab().unwrap().lone_pty_size(),
             Some(pixel_only.pty_size())
         );
         assert_eq!(
@@ -3302,7 +2803,11 @@ mod tests {
                 .cols(),
             80
         );
-        manager.resize_geometry(TerminalGeometry::from_cells(8, 5, 2.0, 3.0));
+        manager.resize(TerminalArea::new(
+            TerminalGeometry::from_cells(8, 5, 2.0, 3.0),
+            2.0,
+            3.0,
+        ));
         crate::test_support::seed_pixel_geometry_retention_probe(
             manager
                 .active_tab_mut()
@@ -3311,9 +2816,9 @@ mod tests {
                 .unwrap(),
         );
         let scaled = TerminalGeometry::from_cells(8, 2, 1.0, 1.0);
-        manager.resize_geometry(scaled);
+        manager.resize(TerminalArea::new(scaled, 1.0, 1.0));
         let tab = manager.active_tab().unwrap();
-        assert_eq!(tab.single_pty_size(), Some(scaled.pty_size()));
+        assert_eq!(tab.lone_pty_size(), Some(scaled.pty_size()));
         crate::test_support::assert_pixel_geometry_retention_probe(tab.focused_terminal().unwrap());
     }
 
@@ -3348,7 +2853,7 @@ mod tests {
             args: vec!["-c".into(), script.into()],
             env: Default::default(),
         };
-        let mut panes = PaneManager::new(
+        let mut panes = PaneManager::for_test(
             80,
             24,
             shell,
@@ -3362,7 +2867,7 @@ mod tests {
         .unwrap();
         panes.split(SplitDirection::Vertical).unwrap();
         let pane_ids: HashSet<PaneId> = panes.iter_with_layout().map(|(pane, _)| pane.id).collect();
-        manager.tabs[0].pane_manager = Some(panes);
+        manager.tabs[0].panes = panes;
 
         manager
             .new_tab_with_command(
@@ -3395,18 +2900,13 @@ mod tests {
                     _ => {}
                 }
             }
-            let all_replied = manager.tabs[0]
-                .pane_manager
-                .as_ref()
-                .unwrap()
-                .iter_with_layout()
-                .all(|(pane, _)| {
-                    let text = pane.terminal.grid().plain_lines().join("\n");
-                    text.contains("1b 5b 31 3b 31 52")
-                        && text.contains("1b 5b 3f 31 3b 32 63")
-                        && text.contains("1b 5b 3e 30 3b 31 3b 30 63")
-                        && text.contains("1b 5f 47 69 3d 37 37 3b 4f 4b 1b 5c")
-                });
+            let all_replied = manager.tabs[0].panes.iter_with_layout().all(|(pane, _)| {
+                let text = pane.terminal.grid().plain_lines().join("\n");
+                text.contains("1b 5b 31 3b 31 52")
+                    && text.contains("1b 5b 3f 31 3b 32 63")
+                    && text.contains("1b 5b 3e 30 3b 31 3b 30 63")
+                    && text.contains("1b 5f 47 69 3d 37 37 3b 4f 4b 1b 5c")
+            });
             if all_replied && bells == pane_ids && notifications == pane_ids {
                 break;
             }
@@ -3457,8 +2957,8 @@ mod tests {
             .unwrap();
         let local_tab_id = {
             let tab = manager.active_tab().unwrap();
-            assert_eq!(tab.pane_manager.as_ref().unwrap().pane_count(), 3);
-            let domain_panes = tab.pane_manager.as_ref().unwrap();
+            assert_eq!(tab.panes.pane_count(), 3);
+            let domain_panes = &tab.panes;
             assert!(domain_panes.pane_ids().into_iter().all(|id| {
                 domain_panes
                     .get_pane(id)
@@ -3468,14 +2968,12 @@ mod tests {
 
             assert_eq!(tab.live_domain_tab_route(), Some(("domain-layout", 7)));
             assert!(matches!(
-                tab.pane_manager.as_ref().unwrap().workspace_layout(),
+                tab.panes.workspace_layout(),
                 crate::workspace::WorkspacePaneLayout::Split { ratio, .. }
                     if (ratio - 0.4).abs() < f32::EPSILON
             ));
             let mut split_ids: Vec<_> = tab
-                .pane_manager
-                .as_ref()
-                .unwrap()
+                .panes
                 .get_dividers()
                 .into_iter()
                 .filter_map(|divider| match divider.target {
@@ -3488,17 +2986,10 @@ mod tests {
             tab.id
         };
 
-        // The primary owner transferred into pane mode and every later pane
-        // must accept exactly one daemon snapshot. An invalid private end
+        // The first relay and every later one must accept exactly one
+        // daemon snapshot. An invalid private end
         // consumes that permission and clears a deliberately seeded image.
-        for pane in manager
-            .active_tab_mut()
-            .unwrap()
-            .pane_manager
-            .as_mut()
-            .unwrap()
-            .all_panes_mut()
-        {
+        for pane in manager.active_tab_mut().unwrap().panes.all_panes_mut() {
             pane.terminal
                 .process(b"\x1b_Ga=T,f=32,s=1,v=1,i=9,c=1,r=1,C=1;AQIDBA==\x1b\\");
             assert!(pane.terminal.has_images());
@@ -3506,7 +2997,7 @@ mod tests {
             assert!(!pane.terminal.has_images());
         }
         manager.set_terminal_policy(kitty_files, false);
-        let domain_panes = manager.active_tab().unwrap().pane_manager.as_ref().unwrap();
+        let domain_panes = &manager.active_tab().unwrap().panes;
         assert!(domain_panes.pane_ids().into_iter().all(|id| {
             domain_panes
                 .get_pane(id)
@@ -3514,12 +3005,12 @@ mod tests {
         }));
         assert!(manager.reconcile_closed_live_domain_pane(local_tab_id, 9));
         let tab = manager.active_tab().unwrap();
-        assert_eq!(tab.pane_manager.as_ref().unwrap().pane_count(), 2);
+        assert_eq!(tab.panes.pane_count(), 2);
         assert_eq!(tab.live_domain_focus_route(), Some(("domain-layout", 12)));
 
         assert!(manager.reconcile_closed_live_domain_pane(local_tab_id, 12));
         let tab = manager.active_tab().unwrap();
-        assert!(tab.pane_manager.is_none());
+        assert!(tab.panes.pane_count() == 1);
         assert_eq!(tab.live_domain_focus_route(), Some(("domain-layout", 5)));
         assert!(
             !manager.reconcile_closed_live_domain_pane(local_tab_id, 12),
@@ -3565,7 +3056,7 @@ mod tests {
             .iter()
             .find(|tab| tab.id == stable_first_tab)
             .unwrap();
-        assert_eq!(first.pane_manager.as_ref().unwrap().pane_count(), 2);
+        assert_eq!(first.panes.pane_count(), 2);
         assert_eq!(
             first.live_domain_focus_route(),
             Some(("domain-revisions", 9))
@@ -3601,7 +3092,7 @@ mod tests {
             .iter()
             .find(|tab| tab.id == stable_first_tab)
             .unwrap();
-        assert!(first.pane_manager.is_none());
+        assert!(first.panes.pane_count() == 1);
         assert_eq!(
             first.live_domain_focus_route(),
             Some(("domain-revisions", 5))
@@ -3694,7 +3185,7 @@ mod tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         while manager
             .active_tab()
-            .is_some_and(|tab| tab.pane_manager.is_some())
+            .is_some_and(|tab| tab.panes.pane_count() > 1)
             && std::time::Instant::now() < deadline
         {
             manager.poll_events();
@@ -3702,7 +3193,7 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         let tab = manager.active_tab().unwrap();
-        assert!(tab.pane_manager.is_none());
+        assert!(tab.panes.pane_count() == 1);
         assert_eq!(
             tab.live_domain_focus_route(),
             Some(("domain-partial-exit", 4))

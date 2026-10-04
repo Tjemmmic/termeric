@@ -15,12 +15,7 @@ fn fixture(primary: bool) -> (App, tempfile::TempDir, usize, usize, PaneId) {
     let source = tabs.active_tab().unwrap().id;
     let destination = tabs.new_tab().unwrap();
     tabs.switch_to(0);
-    tabs.active_tab_mut()
-        .unwrap()
-        .pane_manager
-        .as_mut()
-        .unwrap()
-        .focus(PaneId(7));
+    tabs.active_tab_mut().unwrap().panes.focus(PaneId(7));
     app.tabs = Some(tabs);
     (app, dir, source, destination, PaneId(7))
 }
@@ -34,9 +29,7 @@ fn moved_agent_restart_and_archive_keep_its_resolved_profile() {
         .unwrap()
         .tab_by_id(source)
         .unwrap()
-        .pane_manager
-        .as_ref()
-        .unwrap()
+        .panes
         .get_pane(owner)
         .unwrap()
         .pty
@@ -45,7 +38,7 @@ fn moved_agent_restart_and_archive_keep_its_resolved_profile() {
         .tabs
         .as_mut()
         .unwrap()
-        .move_focused_pane_to_next_tab(app.config.panes.cwd)
+        .move_focused_pane_to_next_tab()
         .unwrap();
     let launch = |app: &App| {
         app.tabs
@@ -106,7 +99,7 @@ fn moved_agent_restart_and_archive_keep_its_resolved_profile() {
     assert!(tabs.origin_for_pane(destination, moved).is_none());
     assert!(observer.poll().unwrap().terminal_closed);
     assert_eq!(
-        replacement.pane_plugin_launch(replacement.single_pane_id()),
+        replacement.pane_plugin_launch(replacement.panes.focused_id()),
         Some(("codex", Some("red")))
     );
     let mut saved = tabs
@@ -133,7 +126,7 @@ fn moved_agent_restart_and_archive_keep_its_resolved_profile() {
     }
     let tab = restored.active_tab().unwrap();
     assert_eq!(
-        tab.pane_plugin_launch(tab.single_pane_id()),
+        tab.pane_plugin_launch(tab.panes.focused_id()),
         Some(("codex", Some("red")))
     );
 }
@@ -165,9 +158,7 @@ fn plugin_transfer_keeps_streaming_transcript_diff_and_read_only_state_with_one_
                 .unwrap()
                 .tab_mut_by_id(source)
                 .unwrap()
-                .pane_manager
-                .as_mut()
-                .unwrap()
+                .panes
                 .get_pane_mut(owner)
                 .unwrap();
             pane.pty_rx = receiver;
@@ -185,9 +176,7 @@ fn plugin_transfer_keeps_streaming_transcript_diff_and_read_only_state_with_one_
         let pane = tabs
             .tab_mut_by_id(source)
             .unwrap()
-            .pane_manager
-            .as_mut()
-            .unwrap()
+            .panes
             .get_pane_mut(owner)
             .unwrap();
         pane.read_only = true;
@@ -221,24 +210,14 @@ fn plugin_transfer_keeps_streaming_transcript_diff_and_read_only_state_with_one_
                 assert!(matches!(app.broadcast, BroadcastState::Inactive));
                 assert!(!app.copy_mode.is_active());
                 assert!(app.terminal_mouse_capture.is_none());
-                app.tabs
-                    .as_ref()
-                    .unwrap()
-                    .active_tab()
-                    .unwrap()
-                    .pane_manager
-                    .as_ref()
-                    .unwrap()
-                    .focused_id()
+                app.active_panes().focused_id()
             }
             "window" => {
                 // Use the focused cross-window handoff used by the application,
                 // with a separate local ID namespace and no process recreation.
                 let mut manager = super::workspace_plugin_tests::manager(&app);
                 manager.new_tab().unwrap();
-                manager
-                    .prepare_window_pane_transfer_destination(app.config.panes.cwd)
-                    .unwrap();
+                manager.validate_window_pane_transfer_destination().unwrap();
                 let pane = app
                     .tabs
                     .as_mut()
@@ -270,14 +249,7 @@ fn plugin_transfer_keeps_streaming_transcript_diff_and_read_only_state_with_one_
             .unwrap_or_else(|| app.tabs.as_mut().unwrap());
         let destination_id = tabs.active_tab().unwrap().id;
         let origin = tabs.origin_for_pane(destination_id, moved).unwrap();
-        let pane = tabs
-            .active_tab()
-            .unwrap()
-            .pane_manager
-            .as_ref()
-            .unwrap()
-            .get_pane(moved)
-            .unwrap();
+        let pane = tabs.active_tab().unwrap().panes.get_pane(moved).unwrap();
         assert_eq!(pane.pty.child_id(), pid);
         assert!(!observer.poll().unwrap().terminal_closed);
         assert!(pane.read_only);
@@ -288,9 +260,7 @@ fn plugin_transfer_keeps_streaming_transcript_diff_and_read_only_state_with_one_
         tabs.write_to_origin(origin, b"PROTOCOL_ONLY").unwrap();
         tabs.active_tab_mut()
             .unwrap()
-            .pane_manager
-            .as_mut()
-            .unwrap()
+            .panes
             .get_pane_mut(moved)
             .unwrap()
             .read_only = false;
@@ -361,9 +331,7 @@ fn plugin_pane_moves_to_next_tab_without_relaunching_primary_or_sibling_owner() 
             .unwrap()
             .tab_by_id(source)
             .unwrap()
-            .pane_manager
-            .as_ref()
-            .unwrap()
+            .panes
             .get_pane(owner)
             .unwrap();
         let pid = pane.pty.child_id();
@@ -372,7 +340,7 @@ fn plugin_pane_moves_to_next_tab_without_relaunching_primary_or_sibling_owner() 
             .tabs
             .as_mut()
             .unwrap()
-            .move_focused_pane_to_next_tab(app.config.panes.cwd)
+            .move_focused_pane_to_next_tab()
             .unwrap();
         let tabs = app.tabs.as_ref().unwrap();
         assert_eq!(tabs.active_tab().unwrap().id, destination);
@@ -380,9 +348,7 @@ fn plugin_pane_moves_to_next_tab_without_relaunching_primary_or_sibling_owner() 
         let pane = tabs
             .tab_by_id(destination)
             .unwrap()
-            .pane_manager
-            .as_ref()
-            .unwrap()
+            .panes
             .get_pane(moved)
             .unwrap();
         assert_eq!(pane.pty.child_id(), pid);
@@ -421,26 +387,12 @@ fn focused_moves_reject_exhausted_collapsed_destinations_before_detaching() {
         let (mut app, _dir, source, destination, owner) = fixture(true);
         let tabs = app.tabs.as_mut().unwrap();
         let tab = tabs.tab_mut_by_id(destination).unwrap();
-        let mut terminal = tab.take_terminal_owner().unwrap();
-        if divider {
-            terminal.allocation.next_divider = u64::MAX;
-        } else {
-            terminal.allocation.next_pane = u32::MAX;
-        }
-        let observer = terminal.pane.pty.child_observer();
-        let mut panes = PaneManager::from_existing(
-            terminal,
-            app.config.shell.clone(),
-            1000,
-            8 * 1024 * 1024,
-            1200.0,
-            800.0,
-            10.0,
-            20.0,
-        );
-        tab.restore_terminal_owner(panes.take_remaining_pane().unwrap());
+        let next_pane = if divider { 1 } else { u32::MAX };
+        let next_divider = if divider { u64::MAX } else { 1 };
+        tab.panes.set_next_ids_for_test(next_pane, next_divider);
+        let observer = tab.panes.lone_pane().unwrap().pty.child_observer();
         let error = tabs
-            .move_focused_pane_to_next_tab(app.config.panes.cwd)
+            .move_focused_pane_to_next_tab()
             .unwrap_err()
             .to_string();
         assert!(
@@ -449,22 +401,11 @@ fn focused_moves_reject_exhausted_collapsed_destinations_before_detaching() {
         );
         assert_eq!(tabs.active_tab().unwrap().id, source);
         assert!(tabs.origin_for_pane(source, owner).is_some());
-        assert_eq!(
-            tabs.tab_by_id(source)
-                .unwrap()
-                .pane_manager
-                .as_ref()
-                .unwrap()
-                .pane_count(),
-            5
-        );
-        assert!(tabs.tab_by_id(destination).unwrap().pane_manager.is_none());
+        assert_eq!(tabs.tab_by_id(source).unwrap().panes.pane_count(), 5);
+        assert!(tabs.tab_by_id(destination).unwrap().panes.pane_count() == 1);
         tabs.switch_to(1);
-        assert!(
-            tabs.prepare_window_pane_transfer_destination(app.config.panes.cwd)
-                .is_err()
-        );
-        assert!(tabs.tab_by_id(destination).unwrap().pane_manager.is_none());
+        assert!(tabs.validate_window_pane_transfer_destination().is_err());
+        assert!(tabs.tab_by_id(destination).unwrap().panes.pane_count() == 1);
         assert!(!observer.poll().unwrap().terminal_closed);
     }
 }

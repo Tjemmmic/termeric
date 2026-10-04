@@ -7,21 +7,25 @@ impl App {
     /// Initialize this window from explicit CLI controls, the referenced last
     /// workspace, or one default shell (in that precedence order).
     pub(super) fn init_tabs(&mut self) -> Result<()> {
-        let geometry = self
+        let area = self
             .renderer
             .as_ref()
             .zip(self.window.as_ref())
             .map(|(renderer, window)| {
                 let size = window.inner_size();
-                renderer.calculate_grid_geometry(size.width, size.height)
+                renderer.terminal_area(size.width, size.height)
             })
             .unwrap_or_else(|| {
-                crate::terminal::geometry::TerminalGeometry::from_cells(
-                    self.cols, self.rows, 1.0, 1.0,
+                crate::terminal::geometry::TerminalArea::new(
+                    crate::terminal::geometry::TerminalGeometry::from_cells(
+                        self.cols, self.rows, 1.0, 1.0,
+                    ),
+                    1.0,
+                    1.0,
                 )
             });
-        let tabs = TabManager::new_with_geometry(
-            geometry,
+        let tabs = TabManager::new_with_area(
+            area,
             self.config.shell.clone(),
             crate::terminal::policy::TerminalPolicy::from_config(&self.config),
         );
@@ -306,15 +310,13 @@ impl App {
                     .tabs
                     .as_ref()
                     .and_then(|tabs| tabs.active_tab())
-                    .and_then(|tab| tab.pane_manager.as_ref())
-                    .map_or(1, PaneManager::pane_count);
+                    .map_or(1, |tab| tab.panes.pane_count());
                 self.split_pane(direction);
                 let after = self
                     .tabs
                     .as_ref()
                     .and_then(|tabs| tabs.active_tab())
-                    .and_then(|tab| tab.pane_manager.as_ref())
-                    .map_or(1, PaneManager::pane_count);
+                    .map_or(1, |tab| tab.panes.pane_count());
                 if after != before + 1 {
                     anyhow::bail!("could not create requested {} pane", direction.name());
                 }

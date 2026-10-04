@@ -22,9 +22,8 @@ impl App {
         let active = tabs.active_tab_id() == Some(origin.tab_id);
         let terminal_focused = tab.focused_terminal_identity().pane_id == origin.pane_id;
         let terminal_visible = tab
-            .pane_manager
-            .as_ref()
-            .and_then(crate::panes::PaneManager::zoomed_id)
+            .panes
+            .zoomed_id()
             .is_none_or(|zoomed| zoomed == origin.pane_id);
         let native_interactive = self.window_focused && !self.window_occluded;
         Some(NotificationOriginPresentation {

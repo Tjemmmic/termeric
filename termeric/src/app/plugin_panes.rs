@@ -64,10 +64,7 @@ impl App {
                 .ok_or_else(|| anyhow::anyhow!("no active terminal"))?;
             let target = TerminalIdentity {
                 tab_id: tab.id,
-                pane_id: tab
-                    .pane_manager
-                    .as_ref()
-                    .map_or(tab.single_pane_id(), PaneManager::focused_id),
+                pane_id: tab.panes.focused_id(),
             };
             self.launch_plugin_pane(
                 target,
@@ -101,13 +98,7 @@ impl App {
         let tab = tabs.tab_by_id(target.tab_id).expect("validated target");
         let cwd = self.config.panes.cwd.resolve(
             || tab.pane_working_directory(target.pane_id),
-            || {
-                tab.pane_working_directory(
-                    tab.pane_manager
-                        .as_ref()
-                        .map_or(tab.single_pane_id(), PaneManager::primary_id),
-                )
-            },
+            || tab.pane_working_directory(tab.panes.primary_id()),
         );
         if cwd
             .as_ref()

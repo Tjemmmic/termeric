@@ -1,7 +1,5 @@
-//! Pane management for split terminal views
-//!
-//! This module provides support for splitting a tab into multiple terminal panes,
-//! arranged in a binary tree structure for flexible horizontal and vertical splits.
+//! A tab's terminals as panes in a binary split tree. Every tab has one
+//! tree; a tab with a single terminal is a one-leaf tree.
 
 mod tree;
 pub use termeric_core::split::PaneLayoutPreset;
@@ -11,34 +9,9 @@ pub use tree::{PaneId, PaneTree, SplitDirection};
 pub const PANE_DIVIDER_THICKNESS: f32 = 4.0;
 pub const PANE_DIVIDER_HIT_MARGIN: f32 = 8.0;
 
-/// Tab-local allocation history, including IDs no longer present in the tree.
-/// This follows the tab's ownership mode, never an individually moved pane.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct PaneAllocationState {
-    pub next_pane: u32,
-    pub next_divider: u64,
-}
-
-impl Default for PaneAllocationState {
-    fn default() -> Self {
-        Self {
-            next_pane: 1,
-            next_divider: 1,
-        }
-    }
-}
-
-/// A tab's one live terminal with the tab's pane allocation history. It moves
-/// as a unit between the tab's direct ownership and pane mode, so splitting
-/// and collapsing never lose either.
-pub(crate) struct PaneOwner {
-    pub pane: Pane,
-    pub allocation: PaneAllocationState,
-}
-
 use crate::config::ShellConfig;
 use crate::terminal::events::{MAX_FORWARDED_TERMINAL_EVENTS_PER_POLL, drain_terminal_events};
-use crate::terminal::geometry::TerminalGeometry;
+use crate::terminal::geometry::{TerminalArea, TerminalGeometry};
 use crate::terminal::shell_integration::{
     ShellIntegrationSupport, ShellLaunch, prepare_shell_launch,
 };
@@ -529,7 +502,7 @@ fn domain_layout_to_local(
     })
 }
 
-/// Manager for panes within a single tab
+/// A tab's panes: the split tree, the terminal in each leaf, and focus.
 pub struct PaneManager {
     /// The pane tree structure
     tree: PaneTree,
@@ -545,32 +518,53 @@ pub struct PaneManager {
     /// an asymmetric split reversible: bottom-right -> left -> right returns
     /// to bottom-right instead of re-running an ambiguous geometric tie.
     navigation_memory: HashMap<(PaneId, PaneDir), PaneId>,
-    /// Shell configuration for new panes
-    shell: ShellConfig,
-    /// Persisted identity paired with `shell` for future panes.
-    split_launch: crate::workspace::WorkspaceLaunch,
+    /// The shell a split launches when it is given no launch of its own. It
+    /// follows the primary pane's (see [`Self::adopt_primary_shell`]).
+    split_shell: ShellConfig,
     /// Host settings of every pane, inherited by panes created later.
     policy: TerminalPolicy,
-    /// Next pane ID
+    /// Next pane ID. IDs are never reused within a tab, so this only grows.
     next_id: u32,
-    /// Total available width in pixels (for layout calculations)
-    total_width: f32,
-    /// Total available height in pixels
-    total_height: f32,
-    /// Cell width in pixels
-    cell_width: f32,
-    /// Cell height in pixels
-    cell_height: f32,
+    /// The tab's terminal area, which the tree divides.
+    area: TerminalArea,
     event_overflow_reported: bool,
-    /// Shells spawned by this manager (the adopted first pane is excluded).
+    /// Shells spawned by this manager (the tab's first terminal is excluded).
     spawned_shells: usize,
     cwd_mode: crate::config::PaneCwdMode,
 }
 
 impl PaneManager {
-    /// Create a new pane manager with a single pane
+    /// A tab's tree around its first terminal: one leaf, focused and primary.
+    /// `pane` already fills `area`; later splits launch `split_shell` under
+    /// `policy`.
+    pub(crate) fn new(
+        pane: Pane,
+        split_shell: ShellConfig,
+        policy: TerminalPolicy,
+        area: TerminalArea,
+    ) -> Self {
+        let id = pane.id;
+        Self {
+            tree: PaneTree::new(id),
+            panes: HashMap::from([(id, pane)]),
+            focused: id,
+            primary: id,
+            zoomed: None,
+            navigation_memory: HashMap::new(),
+            split_shell,
+            policy,
+            next_id: id.0.saturating_add(1),
+            area,
+            event_overflow_reported: false,
+            spawned_shells: 0,
+            cwd_mode: crate::config::PaneCwdMode::Focused,
+        }
+    }
+
+    /// A one-leaf tree whose `cols` by `rows` shell runs in a `total_width`
+    /// by `total_height` area.
     #[cfg(test)]
-    pub fn new(
+    pub fn for_test(
         cols: usize,
         rows: usize,
         shell: ShellConfig,
@@ -581,154 +575,99 @@ impl PaneManager {
         cell_width: f32,
         cell_height: f32,
     ) -> anyhow::Result<Self> {
-        let id = PaneId(0);
         let geometry = TerminalGeometry::from_cells(cols, rows, cell_width, cell_height);
         let pane = Pane::new(
-            id,
+            PaneId(0),
             geometry,
             &shell,
             scrollback_lines,
             scrollback_bytes,
             None,
         )?;
-
-        let mut panes = HashMap::new();
-        panes.insert(id, pane);
-
-        Ok(Self {
-            tree: PaneTree::new(id),
-            panes,
-            focused: id,
-            primary: id,
-            zoomed: None,
-            navigation_memory: HashMap::new(),
+        let mut manager = Self::new(
+            pane,
             shell,
-            split_launch: crate::workspace::WorkspaceLaunch::Shell,
-            policy: TerminalPolicy::with_scrollback(scrollback_lines, scrollback_bytes),
-            next_id: id.0.saturating_add(1),
-            total_width,
-            total_height,
-            cell_width,
-            cell_height,
-            event_overflow_reported: false,
-            spawned_shells: 1,
-            cwd_mode: crate::config::PaneCwdMode::Focused,
-        })
-    }
-
-    /// Enter pane mode by adopting a tab's existing live owner. This performs
-    /// no PTY or reader-thread creation; only subsequent splits spawn shells.
-    pub(crate) fn from_existing(
-        owner: PaneOwner,
-        shell: ShellConfig,
-        scrollback_lines: usize,
-        scrollback_bytes: usize,
-        total_width: f32,
-        total_height: f32,
-        cell_width: f32,
-        cell_height: f32,
-    ) -> Self {
-        let PaneOwner {
-            mut pane,
-            allocation,
-        } = owner;
-        let id = pane.id;
-        let split_launch = match &pane.launch {
-            crate::workspace::WorkspaceLaunch::Profile { name } => {
-                crate::workspace::WorkspaceLaunch::Profile { name: name.clone() }
-            }
-            _ => crate::workspace::WorkspaceLaunch::Shell,
-        };
-        let policy =
-            TerminalPolicy::inherited_from(&pane.terminal, scrollback_lines, scrollback_bytes);
-        pane.geometry = TerminalGeometry::from_cells(
-            pane.terminal.grid().cols(),
-            pane.terminal.grid().rows(),
-            cell_width,
-            cell_height,
+            TerminalPolicy::with_scrollback(scrollback_lines, scrollback_bytes),
+            TerminalArea::from_available_pixels(total_width, total_height, cell_width, cell_height),
         );
-        pane.title = None;
-        pane.event_overflow_reported = false;
-        let mut panes = HashMap::new();
-        panes.insert(id, pane);
-        Self {
-            tree: PaneTree::with_next_local_split_id(id, allocation.next_divider),
-            panes,
-            focused: id,
-            primary: id,
-            zoomed: None,
-            navigation_memory: HashMap::new(),
-            shell,
-            split_launch,
-            policy,
-            next_id: allocation.next_pane.max(id.0.saturating_add(1)),
-            total_width,
-            total_height,
-            cell_width,
-            cell_height,
-            event_overflow_reported: false,
-            spawned_shells: 0,
-            cwd_mode: crate::config::PaneCwdMode::Focused,
-        }
+        manager.spawned_shells = 1;
+        Ok(manager)
     }
 
-    pub(crate) fn from_workspace(
-        owner: PaneOwner,
-        shell: ShellConfig,
-        scrollback_lines: usize,
-        scrollback_bytes: usize,
-        total_width: f32,
-        total_height: f32,
-        cell_width: f32,
-        cell_height: f32,
+    /// Continue the tab's ID allocation history from `next_pane` and
+    /// `next_divider`, as a long-lived tab would.
+    #[cfg(test)]
+    pub(crate) fn set_next_ids_for_test(&mut self, next_pane: u32, next_divider: u64) {
+        self.next_id = next_pane;
+        self.tree.set_next_local_split_id(next_divider);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn split_shell(&self) -> &ShellConfig {
+        &self.split_shell
+    }
+
+    /// The tab's only pane, while it has just one.
+    pub(crate) fn lone_pane(&self) -> Option<&Pane> {
+        (self.panes.len() == 1)
+            .then(|| self.panes.values().next())
+            .flatten()
+    }
+
+    pub(crate) fn lone_pane_mut(&mut self) -> Option<&mut Pane> {
+        (self.panes.len() == 1)
+            .then(|| self.panes.values_mut().next())
+            .flatten()
+    }
+
+    /// Rebuild a saved tab's layout around this one-leaf tree. Its terminal
+    /// becomes the saved primary pane, keeping the scrollback and command
+    /// the snapshot remembers; every other saved pane is relaunched fresh.
+    /// Returns warnings about saved state that could not be used.
+    pub(crate) fn restore_workspace_layout(
+        &mut self,
         snapshot: &crate::workspace::WorkspaceTabSnapshot,
         pane_launches: &HashMap<u32, (crate::workspace::WorkspaceLaunch, ShellConfig)>,
-    ) -> anyhow::Result<(Self, Vec<String>)> {
+    ) -> anyhow::Result<Vec<String>> {
         snapshot.validate()?;
-        let mut manager = Self::from_existing(
-            owner,
-            shell,
-            scrollback_lines,
-            scrollback_bytes,
-            total_width,
-            total_height,
-            cell_width,
-            cell_height,
+        anyhow::ensure!(
+            self.panes.len() == 1,
+            "a saved layout is restored only into a tab's first terminal"
         );
-        manager.tree = PaneTree::from_root(PaneNode::from(&snapshot.layout));
-        manager.focused = PaneId(snapshot.focused_pane);
-        manager.next_id = snapshot
+        let saved_primary = snapshot
+            .panes
+            .iter()
+            .find(|pane| pane.id == snapshot.primary_pane)
+            .context("workspace tab has no primary pane")?;
+        let primary_id = PaneId(snapshot.primary_pane);
+        let mut primary = self
+            .panes
+            .drain()
+            .map(|(_, pane)| pane)
+            .next()
+            .context("workspace primary owner disappeared during restore")?;
+        primary.id = primary_id;
+        // A tab's only pane shows the tab's title rather than its own.
+        if snapshot.panes.len() > 1 {
+            primary.title.clone_from(&saved_primary.title);
+        }
+        primary.last_command.clone_from(&saved_primary.last_command);
+        replay_workspace_scrollback(&mut primary.terminal, &saved_primary.scrollback_lines);
+        self.panes.insert(primary_id, primary);
+        self.tree = PaneTree::from_root(PaneNode::from(&snapshot.layout));
+        self.focused = PaneId(snapshot.focused_pane);
+        self.primary = primary_id;
+        self.next_id = snapshot
             .panes
             .iter()
             .map(|pane| pane.id)
             .max()
             .unwrap_or(0)
             .saturating_add(1);
-        let primary_id = PaneId(snapshot.primary_pane);
-        manager.primary = primary_id;
-        if primary_id != PaneId(0) {
-            let mut primary = manager
-                .panes
-                .remove(&PaneId(0))
-                .context("workspace primary owner disappeared during restore")?;
-            primary.id = primary_id;
-            manager.panes.insert(primary_id, primary);
-        }
-        manager.recalculate_sizes();
+        self.recalculate_sizes();
 
         let mut warnings = Vec::new();
-        let primary = snapshot
-            .panes
-            .iter()
-            .find(|pane| pane.id == snapshot.primary_pane)
-            .context("workspace tab has no primary pane")?;
-        if let Some(pane) = manager.panes.get_mut(&primary_id) {
-            pane.title.clone_from(&primary.title);
-            pane.last_command.clone_from(&primary.last_command);
-            replay_workspace_scrollback(&mut pane.terminal, &primary.scrollback_lines);
-        }
-
-        let layout = manager.calculate_layout();
+        let layout = self.calculate_layout();
         for pane_snapshot in snapshot
             .panes
             .iter()
@@ -741,8 +680,8 @@ impl PaneManager {
             let geometry = TerminalGeometry::from_available_pixels(
                 rect.width,
                 rect.height,
-                cell_width,
-                cell_height,
+                self.area.cell_width,
+                self.area.cell_height,
             );
             let cwd = usable_workspace_cwd(
                 pane_snapshot.working_directory.as_deref(),
@@ -760,7 +699,7 @@ impl PaneManager {
                 id,
                 geometry,
                 shell,
-                &manager.policy,
+                &self.policy,
                 cwd.as_deref(),
                 matches!(launch, crate::workspace::WorkspaceLaunch::Plugin { .. }),
             )?;
@@ -769,26 +708,27 @@ impl PaneManager {
             pane.title.clone_from(&pane_snapshot.title);
             pane.last_command.clone_from(&pane_snapshot.last_command);
             replay_workspace_scrollback(&mut pane.terminal, &pane_snapshot.scrollback_lines);
-            manager.panes.insert(id, pane);
-            manager.spawned_shells += 1;
+            self.panes.insert(id, pane);
+            self.spawned_shells += 1;
         }
-        manager.recalculate_sizes();
-        Ok((manager, warnings))
+        self.recalculate_sizes();
+        Ok(warnings)
     }
 
-    pub(crate) fn from_domain(
-        owner: PaneOwner,
-        shell: ShellConfig,
-        scrollback_lines: usize,
-        scrollback_bytes: usize,
-        total_width: f32,
-        total_height: f32,
-        cell_width: f32,
-        cell_height: f32,
+    /// Lay a live-domain tab's panes out around this one-leaf tree, whose
+    /// relay shows the remote pane with the lowest ID. Every other remote
+    /// pane gets its own relay; local pane IDs number the remote panes in
+    /// ascending order.
+    pub(crate) fn adopt_domain_layout(
+        &mut self,
         domain_id: &str,
         snapshot: &crate::domain::model::LiveTab,
         relay_command: &crate::domain::DomainRelayCommand,
-    ) -> anyhow::Result<Self> {
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.panes.len() == 1 && self.panes.contains_key(&PaneId(0)),
+            "a live-domain layout is adopted only by a tab's first relay"
+        );
         let mut remote_panes = snapshot.panes.clone();
         remote_panes.sort_by_key(|pane| pane.id);
         let primary = remote_panes
@@ -799,27 +739,19 @@ impl PaneManager {
             .enumerate()
             .map(|(index, pane)| (pane.id, PaneId(index as u32)))
             .collect();
-        let mut manager = Self::from_existing(
-            owner,
-            shell,
-            scrollback_lines,
-            scrollback_bytes,
-            total_width,
-            total_height,
-            cell_width,
-            cell_height,
-        );
-        manager.tree = PaneTree::from_root(domain_layout_to_local(&snapshot.layout, &id_map)?);
-        manager.focused = *id_map
+        self.tree = PaneTree::from_root(domain_layout_to_local(&snapshot.layout, &id_map)?);
+        self.focused = *id_map
             .get(&snapshot.focused_pane)
             .context("live domain focus references a missing pane")?;
-        manager.next_id = remote_panes.len() as u32;
-        manager.recalculate_sizes();
-        if let Some(pane) = manager.panes.get_mut(&PaneId(0)) {
+        self.next_id = remote_panes.len() as u32;
+        self.recalculate_sizes();
+        if remote_panes.len() > 1
+            && let Some(pane) = self.panes.get_mut(&PaneId(0))
+        {
             pane.title = Some(primary.title.clone());
         }
 
-        let layout = manager.calculate_layout();
+        let layout = self.calculate_layout();
         for remote in remote_panes.iter().skip(1) {
             let local_id = id_map[&remote.id];
             let rect = layout
@@ -828,8 +760,8 @@ impl PaneManager {
             let geometry = TerminalGeometry::from_available_pixels(
                 rect.width,
                 rect.height,
-                cell_width,
-                cell_height,
+                self.area.cell_width,
+                self.area.cell_height,
             );
             let arguments = relay_command.pane_arguments(domain_id, remote.id);
             let pane = Pane::new_with_command(
@@ -837,14 +769,14 @@ impl PaneManager {
                 geometry,
                 relay_command.program(),
                 &arguments,
-                &manager.policy,
+                &self.policy,
                 Some(remote.title.clone()),
             )?;
-            manager.panes.insert(local_id, pane);
-            manager.spawned_shells += 1;
+            self.panes.insert(local_id, pane);
+            self.spawned_shells += 1;
         }
-        manager.recalculate_sizes();
-        Ok(manager)
+        self.recalculate_sizes();
+        Ok(())
     }
 
     /// Reconcile a daemon-published tab snapshot without replacing relay PTYs
@@ -880,16 +812,11 @@ impl PaneManager {
             }
             let local_id = PaneId(next_id);
             next_id = next_id.checked_add(1).context("pane ID space exhausted")?;
-            let geometry = TerminalGeometry::from_available_pixels(
-                self.total_width,
-                self.total_height,
-                self.cell_width,
-                self.cell_height,
-            );
             let arguments = relay_command.pane_arguments(domain_id, remote.id);
+            // Laying the tree out below gives the relay its own share.
             let pane = Pane::new_with_command(
                 local_id,
-                geometry,
+                self.area.geometry,
                 relay_command.program(),
                 &arguments,
                 &self.policy,
@@ -930,6 +857,7 @@ impl PaneManager {
                 pane.title = Some(remote.title.clone());
             }
         }
+        self.settle_lone_pane();
         self.recalculate_sizes();
         Ok(())
     }
@@ -1063,13 +991,13 @@ impl PaneManager {
         Ok(Self::child_geometry(
             rect.width,
             rect.height,
-            self.cell_width,
-            self.cell_height,
+            self.area.cell_width,
+            self.area.cell_height,
             direction,
         ))
     }
 
-    pub(crate) fn child_geometry(
+    fn child_geometry(
         width: f32,
         height: f32,
         cell_width: f32,
@@ -1117,7 +1045,7 @@ impl PaneManager {
         let working_dir = self
             .cwd_mode
             .resolve(|| pane_cwd(self.focused), || pane_cwd(self.primary_id()));
-        let shell = launch.map_or(&self.shell, |launch| &launch.shell);
+        let shell = launch.map_or(&self.split_shell, |launch| &launch.shell);
         let cwd = launch.map_or(working_dir.as_deref(), |launch| launch.cwd.as_deref());
         let mut pane = match Pane::new_local(
             new_id,
@@ -1139,8 +1067,7 @@ impl PaneManager {
                 return Err(error);
             }
         };
-        pane.launch
-            .clone_from(launch.map_or(&self.split_launch, |launch| &launch.identity));
+        pane.launch = launch.map_or_else(|| self.split_launch(), |launch| launch.identity.clone());
         self.spawned_shells += 1;
         self.panes.insert(new_id, pane);
 
@@ -1251,6 +1178,7 @@ impl PaneManager {
         }
         self.navigation_memory
             .retain(|(from, _), to| *from != to_close && *to != to_close);
+        self.settle_lone_pane();
 
         // Recalculate sizes
         self.recalculate_sizes();
@@ -1324,32 +1252,14 @@ impl PaneManager {
         (changed || !all_events.is_empty(), all_events)
     }
 
-    /// Resize the total available space
-    /// Whether the panes are already laid out for this area and cell size.
-    pub fn is_laid_out_for(
-        &self,
-        total_width: f32,
-        total_height: f32,
-        cell_width: f32,
-        cell_height: f32,
-    ) -> bool {
-        self.total_width == total_width
-            && self.total_height == total_height
-            && self.cell_width == cell_width
-            && self.cell_height == cell_height
+    /// Whether the panes are already laid out for `area`.
+    pub(crate) fn is_laid_out_for(&self, area: TerminalArea) -> bool {
+        self.area == area
     }
 
-    pub fn resize(
-        &mut self,
-        total_width: f32,
-        total_height: f32,
-        cell_width: f32,
-        cell_height: f32,
-    ) {
-        self.total_width = total_width;
-        self.total_height = total_height;
-        self.cell_width = cell_width;
-        self.cell_height = cell_height;
+    /// Lay the panes out in a new terminal area.
+    pub(crate) fn resize(&mut self, area: TerminalArea) {
+        self.area = area;
         self.recalculate_sizes();
     }
 
@@ -1358,8 +1268,8 @@ impl PaneManager {
         Bounds {
             x: 0.0,
             y: 0.0,
-            width: self.total_width,
-            height: self.total_height,
+            width: self.area.width(),
+            height: self.area.height(),
         }
     }
 
@@ -1374,6 +1284,16 @@ impl PaneManager {
 
     /// Recalculate and apply sizes to all panes
     fn recalculate_sizes(&mut self) {
+        // A tree of one leaf fills the area, so its terminal takes the area's
+        // own geometry rather than one re-derived from its pixel extent.
+        if let PaneNode::Leaf(id) = self.tree.root() {
+            if let Some(pane) = self.panes.get_mut(id)
+                && let Err(e) = pane.resize_geometry(self.area.geometry)
+            {
+                log::error!("Failed to resize pane {:?}: {}", id, e);
+            }
+            return;
+        }
         let layout = self.calculate_layout();
 
         for (id, rect) in layout {
@@ -1381,8 +1301,8 @@ impl PaneManager {
                 let geometry = TerminalGeometry::from_available_pixels(
                     rect.width,
                     rect.height,
-                    self.cell_width,
-                    self.cell_height,
+                    self.area.cell_width,
+                    self.area.cell_height,
                 );
                 if let Err(e) = pane.resize_geometry(geometry) {
                     log::error!("Failed to resize pane {:?}: {}", id, e);
@@ -1632,6 +1552,7 @@ impl PaneManager {
         self.navigation_memory
             .retain(|(from, _), to| *from != detached && *to != detached);
         let pane = self.panes.remove(&detached)?;
+        self.settle_lone_pane();
         self.recalculate_sizes();
         Some(pane)
     }
@@ -1717,23 +1638,37 @@ impl PaneManager {
         self.spawned_shells
     }
 
-    /// Take the last remaining pane out of the manager.
-    ///
-    /// Returns the sole pane and both allocation high-water marks, consuming
-    /// the pane from the internal map. Used when dissolving pane mode back to a
-    /// single-terminal tab; retired IDs must remain retired on the next split.
-    pub(crate) fn take_remaining_pane(&mut self) -> Option<PaneOwner> {
+    /// Settle a tree that has come down to one pane: it is the tab's primary
+    /// and focused pane, and unzoomed. As the tab's only pane it shows the
+    /// tab's title, so it keeps none of its own.
+    fn settle_lone_pane(&mut self) {
         if self.panes.len() != 1 {
-            return None;
+            return;
         }
-        let id = *self.panes.keys().next()?;
-        Some(PaneOwner {
-            pane: self.panes.remove(&id)?,
-            allocation: PaneAllocationState {
-                next_pane: self.next_id,
-                next_divider: self.tree.next_local_split_id(),
-            },
-        })
+        let Some((&id, pane)) = self.panes.iter_mut().next() else {
+            return;
+        };
+        pane.title = None;
+        self.primary = id;
+        self.focused = id;
+        self.zoomed = None;
+        self.navigation_memory.clear();
+    }
+
+    /// How a split launches when it is given no launch of its own: as the
+    /// primary pane's terminal profile when it has one, else as a shell.
+    fn split_launch(&self) -> crate::workspace::WorkspaceLaunch {
+        match self.panes.get(&self.primary_id()).map(|pane| &pane.launch) {
+            Some(crate::workspace::WorkspaceLaunch::Profile { name }) => {
+                crate::workspace::WorkspaceLaunch::Profile { name: name.clone() }
+            }
+            _ => crate::workspace::WorkspaceLaunch::Shell,
+        }
+    }
+
+    /// Have later splits launch `shell`, as the tab's primary pane now does.
+    pub(crate) fn adopt_primary_shell(&mut self, shell: ShellConfig) {
+        self.split_shell = shell;
     }
 
     /// Iterate over all panes with their layouts
@@ -1797,6 +1732,7 @@ impl PaneManager {
 
         // Resize remaining panes to fill the space vacated by closed panes
         if removed_any {
+            self.settle_lone_pane();
             self.recalculate_sizes();
         }
 
@@ -1917,7 +1853,7 @@ mod tests {
 
     fn property_manager(panes: usize) -> PaneManager {
         let shell = crate::test_support::sleeping_shell();
-        let mut manager = PaneManager::new(
+        let mut manager = PaneManager::for_test(
             120,
             40,
             shell,
@@ -2193,7 +2129,7 @@ mod tests {
         );
         assert_eq!(manager.focused_id(), PaneId(1));
 
-        manager.shell.program = Some("/definitely/missing/termeric-shell".into());
+        manager.split_shell.program = Some("/definitely/missing/termeric-shell".into());
         assert!(
             manager
                 .split_target(PaneId(0), SplitDirection::Horizontal)
@@ -2201,7 +2137,7 @@ mod tests {
         );
         assert_eq!(manager.focused_id(), PaneId(1));
         assert_eq!(manager.pane_count(), 2);
-        manager.shell.program = Some("/bin/sh".into());
+        manager.split_shell.program = Some("/bin/sh".into());
         manager.next_id = u32::MAX;
         assert!(
             manager
@@ -2260,6 +2196,68 @@ mod tests {
     }
 
     #[test]
+    fn a_lone_pane_takes_the_tab_geometry_exactly() {
+        // Floating point divides 27 cells of this width, multiplied out to
+        // pixels, back into 26.999998 cells: re-deriving the geometry from
+        // the area's pixels would lose a column.
+        let cell_width = 42.909_317;
+        let geometry = TerminalGeometry::from_cells(27, 10, cell_width, 20.0);
+        let area = TerminalArea::new(geometry, cell_width, 20.0);
+        assert_eq!(
+            TerminalGeometry::from_available_pixels(area.width(), area.height(), cell_width, 20.0)
+                .cols,
+            26
+        );
+        let mut panes = PaneManager::for_test(
+            80,
+            24,
+            crate::test_support::sleeping_shell(),
+            1_000,
+            8 * 1024 * 1024,
+            800.0,
+            480.0,
+            10.0,
+            20.0,
+        )
+        .unwrap();
+        panes.resize(area);
+        let lone = panes.get_pane(PaneId(0)).unwrap();
+        assert_eq!(lone.geometry, geometry);
+        assert_eq!(lone.pty.size().unwrap(), geometry.pty_size());
+
+        let right = panes.split(SplitDirection::Vertical).unwrap();
+        assert_ne!(panes.get_pane(PaneId(0)).unwrap().geometry, geometry);
+        assert!(panes.close(right));
+        let lone = panes.get_pane(PaneId(0)).unwrap();
+        assert_eq!(lone.geometry, geometry);
+        assert_eq!(lone.pty.size().unwrap(), geometry.pty_size());
+    }
+
+    #[test]
+    fn closing_back_to_one_pane_leaves_an_unzoomed_untitled_primary() {
+        let mut panes = property_manager(2);
+        assert_eq!(panes.focused_id(), PaneId(1));
+        panes.get_pane_mut(PaneId(1)).unwrap().title = Some("right".into());
+        assert!(panes.toggle_zoom());
+        assert!(panes.close(PaneId(0)));
+
+        assert_eq!(panes.pane_count(), 1);
+        assert_eq!(panes.focused_id(), PaneId(1));
+        assert_eq!(panes.primary_id(), PaneId(1));
+        assert_eq!(panes.zoomed_id(), None);
+        assert_eq!(panes.get_pane(PaneId(1)).unwrap().title, None);
+        assert!(panes.lone_pane().is_some());
+
+        // IDs are never reused, and the survivor stays primary wherever a
+        // later split moves it in the tree.
+        let added = panes.split(SplitDirection::Vertical).unwrap();
+        assert_eq!(added, PaneId(2));
+        assert!(panes.swap_focused_next());
+        assert_eq!(panes.pane_ids(), vec![PaneId(2), PaneId(1)]);
+        assert_eq!(panes.primary_id(), PaneId(1));
+    }
+
+    #[test]
     fn test_pane_id() {
         let id1 = PaneId(0);
         let id2 = PaneId(1);
@@ -2315,12 +2313,12 @@ mod tests {
                     };
                     manager.navigate(direction);
                 }
-                _ => manager.resize(
+                _ => manager.resize(TerminalArea::from_available_pixels(
                     900.0 + (value % 600) as f32,
                     600.0 + ((value >> 10) % 400) as f32,
                     8.0 + ((value >> 20) % 5) as f32,
                     16.0 + ((value >> 24) % 8) as f32,
-                ),
+                )),
             }
 
             if step % 17 == 0 {
@@ -2422,7 +2420,7 @@ mod tests {
             args: vec!["-c".into(), "sleep 1".into()],
             env: Default::default(),
         };
-        let mut panes = PaneManager::new(
+        let mut panes = PaneManager::for_test(
             80,
             24,
             shell,
@@ -2475,7 +2473,7 @@ mod tests {
             args: vec!["-c".into(), "sleep 1".into()],
             env: Default::default(),
         };
-        let mut panes = PaneManager::new(
+        let mut panes = PaneManager::for_test(
             80,
             24,
             shell,
@@ -2552,7 +2550,7 @@ mod tests {
             args: vec!["-c".into(), "sleep 1".into()],
             env: Default::default(),
         };
-        let mut panes = PaneManager::new(
+        let mut panes = PaneManager::for_test(
             80,
             24,
             shell,
@@ -2572,7 +2570,9 @@ mod tests {
         assert!(panes.toggle_zoom());
         assert_eq!(panes.calculate_layout().len(), 1);
         assert!(panes.get_dividers().is_empty());
-        panes.resize(1_000.0, 700.0, 10.0, 20.0);
+        panes.resize(TerminalArea::from_available_pixels(
+            1_000.0, 700.0, 10.0, 20.0,
+        ));
         assert_eq!(panes.get_pane(PaneId(0)).unwrap().geometry, hidden_geometry);
 
         assert!(panes.toggle_zoom());
@@ -2589,7 +2589,7 @@ mod tests {
             env: Default::default(),
         };
         let make = || {
-            PaneManager::new(
+            PaneManager::for_test(
                 80,
                 24,
                 shell.clone(),
@@ -2624,7 +2624,7 @@ mod tests {
             env: Default::default(),
         };
         let make = || {
-            PaneManager::new(
+            PaneManager::for_test(
                 80,
                 24,
                 shell.clone(),
@@ -2674,7 +2674,7 @@ mod tests {
             args: Vec::new(),
             env: Default::default(),
         };
-        let mut panes = PaneManager::new(
+        let mut panes = PaneManager::for_test(
             80,
             24,
             shell,
@@ -2757,7 +2757,7 @@ mod tests {
             args: vec!["-c".into(), "sleep 1".into()],
             env: Default::default(),
         };
-        let mut panes = PaneManager::new(
+        let mut panes = PaneManager::for_test(
             100,
             40,
             shell,
@@ -2784,8 +2784,8 @@ mod tests {
             let expected = TerminalGeometry::from_available_pixels(
                 rect.width,
                 rect.height,
-                panes.cell_width,
-                panes.cell_height,
+                panes.area.cell_width,
+                panes.area.cell_height,
             );
             let pane = panes.get_pane(id).unwrap();
             assert_eq!(pane.geometry, expected);
@@ -2820,7 +2820,7 @@ mod tests {
             args: vec!["-c".into(), script.into()],
             env: Default::default(),
         };
-        let mut panes = PaneManager::new(
+        let mut panes = PaneManager::for_test(
             80,
             24,
             shell,
@@ -2879,7 +2879,7 @@ mod tests {
             args: vec!["-c".into(), script.into()],
             env: Default::default(),
         };
-        let mut panes = PaneManager::new(
+        let mut panes = PaneManager::for_test(
             80,
             24,
             shell,

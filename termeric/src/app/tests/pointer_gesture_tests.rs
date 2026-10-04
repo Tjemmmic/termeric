@@ -401,10 +401,7 @@ fn divider_drag_pending_request_interrupts_preview_and_preserves_earlier_authori
             "pending request must stop further previews"
         );
         let source = app.tabs.as_ref().unwrap().active_tab().unwrap();
-        assert_eq!(
-            source.pane_manager.as_ref().unwrap().get_dividers()[0].ratio_millis,
-            500
-        );
+        assert_eq!(source.panes.get_dividers()[0].ratio_millis, 500);
         assert_eq!(source.live_domain.as_ref().unwrap().pane_ids, routes);
         assert_eq!(app.pending_live_domain_controls.len(), 1);
         assert!(app.pending_live_domain_controls.contains(&pending));
@@ -412,16 +409,7 @@ fn divider_drag_pending_request_interrupts_preview_and_preserves_earlier_authori
         app.pending_live_domain_controls.remove(&pending);
         app.apply_divider_drag_position(700.0, 200.0);
         assert_eq!(
-            app.tabs
-                .as_ref()
-                .unwrap()
-                .active_tab()
-                .unwrap()
-                .pane_manager
-                .as_ref()
-                .unwrap()
-                .get_dividers()[0]
-                .ratio_millis,
+            app.active_panes().get_dividers()[0].ratio_millis,
             500,
             "completing an earlier request must not revive the interrupted drag"
         );
@@ -476,10 +464,7 @@ fn occlusion_finalizes_divider_previews_and_preserves_pending_domain_authority()
         assert!(app.take_native_drag_controls().is_empty());
         let expected_ratio = if remote { 500 } else { preview_ratio };
         let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
-        assert_eq!(
-            tab.pane_manager.as_ref().unwrap().get_dividers()[0].ratio_millis,
-            expected_ratio
-        );
+        assert_eq!(tab.panes.get_dividers()[0].ratio_millis, expected_ratio);
         assert_eq!(
             tab.live_domain.as_ref().map(|live| live.pane_ids.clone()),
             routes
@@ -492,16 +477,7 @@ fn occlusion_finalizes_divider_previews_and_preserves_pending_domain_authority()
         app.handle_window_occlusion_change(false);
         app.apply_divider_drag_position(700.0, 200.0);
         assert_eq!(
-            app.tabs
-                .as_ref()
-                .unwrap()
-                .active_tab()
-                .unwrap()
-                .pane_manager
-                .as_ref()
-                .unwrap()
-                .get_dividers()[0]
-                .ratio_millis,
+            app.active_panes().get_dividers()[0].ratio_millis,
             expected_ratio
         );
         assert!(app.pending_live_domain_controls.is_empty());
@@ -527,19 +503,7 @@ fn divider_drag_cannot_follow_a_rebound_remote_owner() {
             if !release_only {
                 app.apply_divider_drag_position(700.0, 200.0);
                 assert!(app.divider_dragging.is_none(), "{change}");
-                assert_eq!(
-                    app.tabs
-                        .as_ref()
-                        .unwrap()
-                        .active_tab()
-                        .unwrap()
-                        .pane_manager
-                        .as_ref()
-                        .unwrap()
-                        .get_dividers()[0]
-                        .ratio_millis,
-                    ratio
-                );
+                assert_eq!(app.active_panes().get_dividers()[0].ratio_millis, ratio);
             }
             assert!(
                 app.take_native_drag_controls().is_empty(),
@@ -581,19 +545,7 @@ fn local_divider_drag_cannot_acquire_a_remote_owner() {
     });
     app.apply_divider_drag_position(700.0, 200.0);
     assert!(app.divider_dragging.is_none());
-    assert_eq!(
-        app.tabs
-            .as_ref()
-            .unwrap()
-            .active_tab()
-            .unwrap()
-            .pane_manager
-            .as_ref()
-            .unwrap()
-            .get_dividers()[0]
-            .ratio_millis,
-        ratio
-    );
+    assert_eq!(app.active_panes().get_dividers()[0].ratio_millis, ratio);
     assert!(app.take_native_drag_controls().is_empty());
     assert!(app.pending_live_domain_controls.is_empty());
 }
@@ -632,15 +584,7 @@ fn divider_drag_mutation_revalidates_owner_and_cannot_resume() {
                     crate::panes::DividerTarget::Local(u64::MAX)
             }
             "zoom" => {
-                app.tabs
-                    .as_mut()
-                    .unwrap()
-                    .active_tab_mut()
-                    .unwrap()
-                    .pane_manager
-                    .as_mut()
-                    .unwrap()
-                    .toggle_zoom();
+                app.active_panes_mut().toggle_zoom();
             }
             _ => unreachable!(),
         }
@@ -654,9 +598,7 @@ fn divider_drag_mutation_revalidates_owner_and_cannot_resume() {
                 .unwrap()
                 .tab_mut_by_id(tab_id)
                 .unwrap()
-                .pane_manager
-                .as_mut()
-                .unwrap()
+                .panes
                 .toggle_zoom();
         }
         app.tabs.as_mut().unwrap().switch_to(0);
@@ -667,9 +609,7 @@ fn divider_drag_mutation_revalidates_owner_and_cannot_resume() {
                 .unwrap()
                 .tab_by_id(tab_id)
                 .unwrap()
-                .pane_manager
-                .as_ref()
-                .unwrap()
+                .panes
                 .get_dividers()[0]
                 .ratio_millis,
             preview_ratio,
@@ -681,15 +621,7 @@ fn divider_drag_mutation_revalidates_owner_and_cannot_resume() {
 #[test]
 fn divider_drag_survives_pane_focus_within_its_selected_tab() {
     let mut app = divider_owner_fixture();
-    let panes = app
-        .tabs
-        .as_mut()
-        .unwrap()
-        .active_tab_mut()
-        .unwrap()
-        .pane_manager
-        .as_mut()
-        .unwrap();
+    let panes = app.active_panes_mut();
     let current = panes.focused_id();
     let other = panes
         .pane_ids()
@@ -704,16 +636,7 @@ fn divider_drag_survives_pane_focus_within_its_selected_tab() {
     app.finish_native_pointer_gesture();
     app.apply_divider_drag_position(640.0, 240.0);
     assert_eq!(
-        app.tabs
-            .as_ref()
-            .unwrap()
-            .active_tab()
-            .unwrap()
-            .pane_manager
-            .as_ref()
-            .unwrap()
-            .get_dividers()[0]
-            .ratio_millis,
+        app.active_panes().get_dividers()[0].ratio_millis,
         preview_ratio
     );
 }
@@ -770,9 +693,7 @@ fn scrollbar_drag_cannot_migrate_between_panes_in_the_same_tab() {
         env: Default::default(),
     };
     let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
-    let owner = tab.take_terminal_owner().unwrap();
-    let mut panes =
-        PaneManager::from_existing(owner, shell, 100, 1024 * 1024, 800.0, 480.0, 10.0, 20.0);
+    let panes = tab.panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
     let first = panes.focused_id();
     let second = panes.split(SplitDirection::Vertical).unwrap();
     panes
@@ -781,31 +702,14 @@ fn scrollbar_drag_cannot_migrate_between_panes_in_the_same_tab() {
         .terminal
         .process(b"sibling\r\n".repeat(80).as_slice());
     panes.focus(first);
-    tab.pane_manager = Some(panes);
     app.begin_scrollbar_drag();
     app.apply_scrollbar_drag_fraction(1.0);
     assert!(app.active_terminal().unwrap().grid().scroll_offset() > 0);
-    app.tabs
-        .as_mut()
-        .unwrap()
-        .active_tab_mut()
-        .unwrap()
-        .pane_manager
-        .as_mut()
-        .unwrap()
-        .focus(second);
+    app.active_panes_mut().focus(second);
     app.apply_scrollbar_drag_fraction(1.0);
     assert_eq!(app.active_terminal().unwrap().grid().scroll_offset(), 0);
     assert!(app.scrollbar_dragging.is_none());
-    app.tabs
-        .as_mut()
-        .unwrap()
-        .active_tab_mut()
-        .unwrap()
-        .pane_manager
-        .as_mut()
-        .unwrap()
-        .focus(first);
+    app.active_panes_mut().focus(first);
     app.apply_scrollbar_drag_fraction(0.0);
     assert!(app.active_terminal().unwrap().grid().scroll_offset() > 0);
 }

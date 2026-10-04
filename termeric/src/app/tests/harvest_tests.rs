@@ -498,28 +498,14 @@ fn harvest_rerun_refuses_armed_read_only_stale_and_closing_sources_without_write
         match refusal {
             "armed" => app.toggle_broadcast(),
             "read-only" => {
-                app.tabs
-                    .as_mut()
-                    .unwrap()
-                    .active_tab_mut()
-                    .unwrap()
-                    .pane_manager
-                    .as_mut()
-                    .unwrap()
+                app.active_panes_mut()
                     .get_pane_mut(PaneId(entry.source.pane_id))
                     .unwrap()
                     .read_only = true
             }
             "stale" => entry.source.pane_id = u32::MAX,
             "pane-closed" => {
-                app.tabs
-                    .as_mut()
-                    .unwrap()
-                    .active_tab_mut()
-                    .unwrap()
-                    .pane_manager
-                    .as_mut()
-                    .unwrap()
+                app.active_panes_mut()
                     .get_pane_mut(PaneId(entry.source.pane_id))
                     .unwrap()
                     .closed = true

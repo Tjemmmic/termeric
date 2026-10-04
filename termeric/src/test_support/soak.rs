@@ -71,7 +71,7 @@ fn scheduled_resource_soak_scenario() {
             args: vec!["-c".into(), "printf 'pane-soak\\n'".into()],
             env: Default::default(),
         };
-        let mut panes = PaneManager::new(
+        let mut panes = PaneManager::for_test(
             100,
             36,
             shell,
@@ -85,7 +85,9 @@ fn scheduled_resource_soak_scenario() {
         .unwrap();
         panes.split(SplitDirection::Vertical).unwrap();
         panes.split(SplitDirection::Horizontal).unwrap();
-        panes.resize(900.0, 600.0, 9.0, 18.0);
+        panes.resize(
+            crate::terminal::geometry::TerminalArea::from_available_pixels(900.0, 600.0, 9.0, 18.0),
+        );
         let pane_deadline = Instant::now() + Duration::from_secs(2);
         while !panes.all_closed() && Instant::now() < pane_deadline {
             panes.poll_events(|_, _| {});

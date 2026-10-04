@@ -114,17 +114,7 @@ fn hyperlink_owner_gate_rejects_closed_and_removed_panes_but_follows_survivors()
     let mut app = divider_owner_fixture();
     let old_origin = app.active_terminal_origin().unwrap();
     let TerminalEventOrigin { tab_id, pane_id } = old_origin;
-    app.tabs
-        .as_mut()
-        .unwrap()
-        .active_tab_mut()
-        .unwrap()
-        .pane_manager
-        .as_mut()
-        .unwrap()
-        .get_pane_mut(pane_id)
-        .unwrap()
-        .closed = true;
+    app.active_panes_mut().get_pane_mut(pane_id).unwrap().closed = true;
     assert_eq!(
         app.open_hyperlink_for_origin(Some(old_origin), "--help", None)
             .unwrap_err()
@@ -132,7 +122,7 @@ fn hyperlink_owner_gate_rejects_closed_and_removed_panes_but_follows_survivors()
         std::io::ErrorKind::NotFound
     );
     let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
-    let panes = tab.pane_manager.as_mut().unwrap();
+    let panes = &mut tab.panes;
     panes.get_pane_mut(pane_id).unwrap().closed = false;
     let other = panes
         .pane_ids()
@@ -140,9 +130,6 @@ fn hyperlink_owner_gate_rejects_closed_and_removed_panes_but_follows_survivors()
         .find(|id| *id != pane_id)
         .unwrap();
     panes.close(other);
-    let owner = panes.take_remaining_pane().unwrap();
-    tab.pane_manager = None;
-    tab.restore_terminal_owner(owner);
     assert!(app.validate_hyperlink_origin(Some(old_origin)).is_ok());
     assert!(
         app.validate_hyperlink_origin(Some(TerminalEventOrigin {
@@ -201,15 +188,7 @@ fn routed_hyperlink_directory_does_not_follow_focus_to_another_pane() {
     app.active_terminal_mut()
         .unwrap()
         .process(b"\x1bc\x1b]7;file:///tmp/original\x07");
-    let panes = app
-        .tabs
-        .as_mut()
-        .unwrap()
-        .active_tab_mut()
-        .unwrap()
-        .pane_manager
-        .as_mut()
-        .unwrap();
+    let panes = app.active_panes_mut();
     let other = panes
         .pane_ids()
         .into_iter()

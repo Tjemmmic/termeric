@@ -62,23 +62,21 @@ fn scrollbar_owner_fixture() -> App {
 fn divider_owner_fixture() -> App {
     let mut app = scrollbar_owner_fixture();
     let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
-    let owner = tab.take_terminal_owner().unwrap();
+    let tab_id = tab.id;
     let shell = ShellConfig {
         program: Some("/bin/sh".into()),
         args: vec!["-c".into(), "sleep 5".into()],
         env: Default::default(),
     };
-    let mut panes =
-        PaneManager::from_existing(owner, shell, 100, 1024 * 1024, 800.0, 480.0, 10.0, 20.0);
+    let panes = tab.panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
     panes.split(SplitDirection::Vertical).unwrap();
     let divider = panes.get_dividers()[0];
     app.divider_dragging = Some(DividerDrag {
-        tab_id: tab.id,
+        tab_id,
         domain: None,
         target: divider.target,
         last_ratio_millis: divider.ratio_millis,
     });
-    tab.pane_manager = Some(panes);
     app
 }
 
@@ -100,10 +98,9 @@ fn domain_divider_pending_fixture() -> App {
     let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 100, 1024 * 1024);
     tabs.attach_domain(&snapshot, &relay).unwrap();
     let tab = tabs.active_tab_mut().unwrap();
-    tab.pane_manager
-        .as_mut()
-        .unwrap()
-        .resize(800.0, 480.0, 10.0, 20.0);
+    tab.panes.resize(
+        crate::terminal::geometry::TerminalArea::from_available_pixels(800.0, 480.0, 10.0, 20.0),
+    );
     let drag = DividerDrag {
         tab_id: tab.id,
         domain: Some(("divider-pending".into(), 10)),
@@ -287,20 +284,9 @@ fn background_split_tab_app() -> (App, usize, usize) {
     let first = sleeping_tab("first");
     let second = sleeping_tab("second");
     let first_tab = tabs.tab_mut_by_id(first).unwrap();
-    let owner = first_tab.take_terminal_owner().unwrap();
-    let mut panes = PaneManager::from_existing(
-        owner,
-        shell,
-        1_000,
-        8 * 1024 * 1024,
-        800.0,
-        480.0,
-        10.0,
-        20.0,
-    );
+    let panes = first_tab.panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
     panes.split(SplitDirection::Vertical).unwrap();
     assert_eq!(panes.focused_id(), PaneId(1));
-    first_tab.pane_manager = Some(panes);
     assert_eq!(tabs.active_tab_id(), Some(second));
 
     let mut app = App::new_headless(Config::default()).unwrap();
@@ -314,9 +300,7 @@ fn split_pane_mut(app: &mut App, tab_id: usize, pane_id: PaneId) -> &mut crate::
         .unwrap()
         .tab_mut_by_id(tab_id)
         .unwrap()
-        .pane_manager
-        .as_mut()
-        .unwrap()
+        .panes
         .get_pane_mut(pane_id)
         .unwrap()
 }
@@ -371,13 +355,10 @@ pub(super) fn harvest_rerun_capture_fixture_in(
             shell.env.clone().into_iter().collect(),
         )
         .unwrap();
-    let owner = tabs
+    let panes = tabs
         .active_tab_mut()
         .unwrap()
-        .take_terminal_owner()
-        .unwrap();
-    let mut panes =
-        PaneManager::from_existing(owner, shell, 100, 1024 * 1024, 800.0, 480.0, 10.0, 20.0);
+        .panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
     let source = panes.focused_id();
     if split {
         panes.split(SplitDirection::Vertical).unwrap();
@@ -397,13 +378,6 @@ pub(super) fn harvest_rerun_capture_fixture_in(
             )
         })
         .collect::<Vec<_>>();
-    if split {
-        tabs.active_tab_mut().unwrap().pane_manager = Some(panes);
-    } else {
-        tabs.active_tab_mut()
-            .unwrap()
-            .restore_terminal_owner(panes.take_remaining_pane().unwrap());
-    }
     let mut app = App::new_headless(Config::default()).unwrap();
     app.tabs = Some(tabs);
     let deadline = Instant::now() + std::time::Duration::from_secs(3);
@@ -491,19 +465,9 @@ pub(super) fn split_harvest_capture_owner(app: &mut App, directory: &std::path::
             directory.display().to_string(),
         )]),
     };
-    let mut panes = PaneManager::from_existing(
-        tab.take_terminal_owner().unwrap(),
-        shell,
-        100,
-        1024 * 1024,
-        800.0,
-        480.0,
-        10.0,
-        20.0,
-    );
-    let sibling = panes.split(SplitDirection::Vertical).unwrap();
-    tab.pane_manager = Some(panes);
-    sibling
+    tab.panes_for_test(shell, 800.0, 480.0, 10.0, 20.0)
+        .split(SplitDirection::Vertical)
+        .unwrap()
 }
 
 pub(super) fn current_harvest_capture_routes(
@@ -512,30 +476,21 @@ pub(super) fn current_harvest_capture_routes(
 ) -> Vec<(crate::tabs::TerminalEventOrigin, std::path::PathBuf)> {
     use crate::tabs::TerminalEventOrigin;
     let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
-    let captures = if let Some(panes) = &tab.pane_manager {
-        panes
-            .pane_ids()
-            .into_iter()
-            .map(|pane_id| {
-                let pid = panes.get_pane(pane_id).unwrap().pty.child_id().unwrap();
-                (
-                    TerminalEventOrigin {
-                        tab_id: tab.id,
-                        pane_id,
-                    },
-                    directory.join(pid.to_string()),
-                )
-            })
-            .collect::<Vec<_>>()
-    } else {
-        vec![(
-            TerminalEventOrigin {
-                tab_id: tab.id,
-                pane_id: tab.single_pane_id(),
-            },
-            directory.join(tab.single_child_id().unwrap().to_string()),
-        )]
-    };
+    let captures = tab
+        .panes
+        .pane_ids()
+        .into_iter()
+        .map(|pane_id| {
+            let pid = tab.panes.get_pane(pane_id).unwrap().pty.child_id().unwrap();
+            (
+                TerminalEventOrigin {
+                    tab_id: tab.id,
+                    pane_id,
+                },
+                directory.join(pid.to_string()),
+            )
+        })
+        .collect::<Vec<_>>();
     let deadline = Instant::now() + std::time::Duration::from_secs(3);
     loop {
         app.process_pty_events();
@@ -592,23 +547,10 @@ fn mark_capture_plugin_owner(app: &mut App, pane_id: PaneId, plugin_id: &str) {
         plugin_id: plugin_id.into(),
         profile: None,
     };
-    if let Some(panes) = &mut tab.pane_manager {
-        panes.get_pane_mut(pane_id).unwrap().launch = launch;
-    } else {
-        let mut owner = tab.take_terminal_owner().unwrap();
-        assert_eq!(owner.pane.id, pane_id);
-        owner.pane.launch = launch;
-        let mut panes = PaneManager::from_existing(
-            owner,
-            ShellConfig::default(),
-            100,
-            1024 * 1024,
-            800.0,
-            480.0,
-            10.0,
-            20.0,
-        );
-        tab.restore_terminal_owner(panes.take_remaining_pane().unwrap());
+    tab.panes.get_pane_mut(pane_id).unwrap().launch = launch;
+    // A tab's only terminal also decides what kind of tab it is.
+    if tab.panes.pane_count() == 1 {
+        tab.reconcile_primary_pane_launch();
     }
     // What an agent scan records for a terminal Termeric launched.
     tab.pane_integration_mut(pane_id).unwrap().agent = Some(crate::agents::AgentSession {

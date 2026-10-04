@@ -152,15 +152,7 @@ fn control_selection_validates_complete_stable_paths_before_changing_focus() {
     );
     let tabs = app.tabs.as_ref().unwrap();
     assert_eq!(tabs.active_tab_id(), Some(first));
-    assert_eq!(
-        tabs.active_tab()
-            .unwrap()
-            .pane_manager
-            .as_ref()
-            .unwrap()
-            .focused_id(),
-        PaneId(0)
-    );
+    assert_eq!(tabs.active_tab().unwrap().panes.focused_id(), PaneId(0));
     assert_eq!(
         app.focus_pane_for(Requester::Control, first as u64, 0),
         Ok((false, false))
@@ -205,8 +197,7 @@ fn divider_resizes_report_ratios_reach_the_inventory_and_refuse_live_domain_tabs
         .all_tabs()
         .iter()
         .find(|tab| tab.id == first)
-        .and_then(|tab| tab.pane_manager.as_ref())
-        .and_then(|manager| manager.get_dividers().first().copied())
+        .and_then(|tab| tab.panes.get_dividers().first().copied())
         .and_then(|divider| match divider.target {
             crate::panes::DividerTarget::Local(id) => Some(id),
             crate::panes::DividerTarget::Domain(_) => None,
@@ -287,8 +278,8 @@ fn control_pane_and_tab_closure_leave_the_survivor_addressable_and_reject_repeat
     let tabs = app.tabs.as_ref().unwrap();
     assert_eq!(tabs.active_tab_id(), Some(second));
     let first_tab = tabs.tab_by_id(first).unwrap();
-    assert!(first_tab.pane_manager.is_none());
-    assert_eq!(first_tab.single_pane_id(), PaneId(1));
+    assert!(first_tab.panes.pane_count() == 1);
+    assert_eq!(first_tab.panes.focused_id(), PaneId(1));
     assert!(app.read_control_text(first as u64, 1, 0, 64).is_ok());
     assert!(app.read_control_text(first as u64, 0, 0, 64).is_err());
     assert!(
@@ -314,19 +305,8 @@ fn plugin_pane_creation_is_exact_correlated_and_rejects_unsupported_tabs() {
     let mut tabs = TabManager::for_test(shell.clone());
     let tab_id = tabs.new_tab().unwrap();
     let tab = tabs.tab_mut_by_id(tab_id).unwrap();
-    let owner = tab.take_terminal_owner().unwrap();
-    let mut panes = PaneManager::from_existing(
-        owner,
-        shell,
-        1_000,
-        8 * 1024 * 1024,
-        800.0,
-        480.0,
-        10.0,
-        20.0,
-    );
+    let panes = tab.panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
     panes.split(SplitDirection::Vertical).unwrap();
-    tab.pane_manager = Some(panes);
     let mut app = App::new_headless(Config::default()).unwrap();
     app.tabs = Some(tabs);
 
@@ -355,9 +335,7 @@ fn plugin_pane_creation_is_exact_correlated_and_rejects_unsupported_tabs() {
             .unwrap()
             .tab_by_id(tab_id)
             .unwrap()
-            .pane_manager
-            .as_ref()
-            .unwrap()
+            .panes
             .get_pane(PaneId(created_pane_id))
             .is_some()
     );
@@ -456,22 +434,15 @@ fn plugin_pane_movement_preserves_pty_and_returns_exact_destination_state() {
     let mut tabs = TabManager::for_test(shell.clone());
     let source_tab_id = tabs.new_tab().unwrap();
     let source = tabs.tab_mut_by_id(source_tab_id).unwrap();
-    let owner = source.take_terminal_owner().unwrap();
-    let moved_child = owner.pane.pty.child_id();
-    let mut source_panes = PaneManager::from_existing(
-        owner,
-        shell,
-        1_000,
-        8 * 1024 * 1024,
-        800.0,
-        480.0,
-        10.0,
-        20.0,
-    );
+    let moved_child = source.lone_child_id();
+    let source_panes = source.panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
     let surviving_source_pane = source_panes.split(SplitDirection::Vertical).unwrap();
-    source.pane_manager = Some(source_panes);
     let destination_tab_id = tabs.new_tab().unwrap();
-    let destination_anchor = tabs.tab_by_id(destination_tab_id).unwrap().single_pane_id();
+    let destination_anchor = tabs
+        .tab_by_id(destination_tab_id)
+        .unwrap()
+        .panes
+        .focused_id();
     tabs.switch_to(0);
 
     let mut app = App::new_headless(Config::default()).unwrap();
@@ -508,12 +479,9 @@ fn plugin_pane_movement_preserves_pty_and_returns_exact_destination_state() {
     let tabs = app.tabs.as_ref().unwrap();
     assert_eq!(tabs.active_tab_id(), Some(destination_tab_id));
     let source = tabs.tab_by_id(source_tab_id).unwrap();
-    assert_eq!(
-        source.pane_manager.as_ref().unwrap().pane_ids(),
-        vec![surviving_source_pane]
-    );
+    assert_eq!(source.panes.pane_ids(), vec![surviving_source_pane]);
     let destination = tabs.tab_by_id(destination_tab_id).unwrap();
-    let destination_panes = destination.pane_manager.as_ref().unwrap();
+    let destination_panes = &destination.panes;
     assert_eq!(destination_panes.focused_id(), destination_pane_id);
     assert_eq!(
         destination_panes
@@ -534,17 +502,7 @@ fn plugin_pane_layout_controls_background_tab_without_changing_terminal_owners()
     let mut tabs = TabManager::for_test(shell.clone());
     let target_tab_id = tabs.new_tab().unwrap();
     let target = tabs.tab_mut_by_id(target_tab_id).unwrap();
-    let owner = target.take_terminal_owner().unwrap();
-    let mut panes = PaneManager::from_existing(
-        owner,
-        shell,
-        1_000,
-        8 * 1024 * 1024,
-        800.0,
-        480.0,
-        10.0,
-        20.0,
-    );
+    let panes = target.panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
     panes.split(SplitDirection::Vertical).unwrap();
     panes.split(SplitDirection::Horizontal).unwrap();
     let original = panes.pane_ids();
@@ -554,7 +512,6 @@ fn plugin_pane_layout_controls_background_tab_without_changing_terminal_owners()
         .collect();
     panes.focus(original[1]);
     assert!(panes.toggle_zoom());
-    target.pane_manager = Some(panes);
     let active_tab_id = tabs.new_tab().unwrap();
     assert_eq!(tabs.active_tab_id(), Some(active_tab_id));
 
@@ -586,15 +543,13 @@ fn plugin_pane_layout_controls_background_tab_without_changing_terminal_owners()
         Some(active_tab_id)
     );
 
-    let target = app
+    let target = &mut app
         .tabs
         .as_mut()
         .unwrap()
         .tab_mut_by_id(target_tab_id)
         .unwrap()
-        .pane_manager
-        .as_mut()
-        .unwrap();
+        .panes;
     assert!(target.toggle_zoom());
     let crate::panes::DividerTarget::Local(divider_id) = target.get_dividers()[0].target else {
         panic!("ordinary layout unexpectedly used a domain divider")
@@ -634,15 +589,13 @@ fn plugin_pane_layout_controls_background_tab_without_changing_terminal_owners()
         app.tabs.as_ref().unwrap().active_tab_id(),
         Some(active_tab_id)
     );
-    let target = app
+    let target = &app
         .tabs
         .as_ref()
         .unwrap()
         .tab_by_id(target_tab_id)
         .unwrap()
-        .pane_manager
-        .as_ref()
-        .unwrap();
+        .panes;
     assert_eq!(target.focused_id(), original[1]);
     let tall_order = [
         vec![original[1]],
@@ -670,20 +623,9 @@ fn plugin_pane_layout_refuses_unsupported_or_incomplete_tabs_atomically() {
     let mut tabs = TabManager::for_test(shell.clone());
     let tab_id = tabs.new_tab().unwrap();
     let tab = tabs.tab_mut_by_id(tab_id).unwrap();
-    let owner = tab.take_terminal_owner().unwrap();
-    let mut panes = PaneManager::from_existing(
-        owner,
-        shell,
-        1_000,
-        8 * 1024 * 1024,
-        800.0,
-        480.0,
-        10.0,
-        20.0,
-    );
+    let panes = tab.panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
     let sibling = panes.split(SplitDirection::Vertical).unwrap();
     let original = panes.pane_ids();
-    tab.pane_manager = Some(panes);
     let mut app = App::new_headless(Config::default()).unwrap();
     app.tabs = Some(tabs);
 
@@ -691,15 +633,7 @@ fn plugin_pane_layout_refuses_unsupported_or_incomplete_tabs_atomically() {
         .swap_plugin_panes(tab_id as u64, original[0].0, u32::MAX)
         .unwrap_err();
     assert!(error.contains("does not exist"));
-    let panes = app
-        .tabs
-        .as_ref()
-        .unwrap()
-        .tab_by_id(tab_id)
-        .unwrap()
-        .pane_manager
-        .as_ref()
-        .unwrap();
+    let panes = &app.tabs.as_ref().unwrap().tab_by_id(tab_id).unwrap().panes;
     assert_eq!(panes.pane_ids(), original);
 
     app.tabs
@@ -707,9 +641,7 @@ fn plugin_pane_layout_refuses_unsupported_or_incomplete_tabs_atomically() {
         .unwrap()
         .tab_mut_by_id(tab_id)
         .unwrap()
-        .pane_manager
-        .as_mut()
-        .unwrap()
+        .panes
         .get_pane_mut(sibling)
         .unwrap()
         .closed = true;
@@ -723,9 +655,7 @@ fn plugin_pane_layout_refuses_unsupported_or_incomplete_tabs_atomically() {
         .unwrap()
         .tab_mut_by_id(tab_id)
         .unwrap()
-        .pane_manager
-        .as_mut()
-        .unwrap()
+        .panes
         .get_pane_mut(sibling)
         .unwrap()
         .closed = false;
@@ -779,19 +709,8 @@ fn plugin_pane_movement_refuses_unsupported_targets_before_detaching() {
         let mut tabs = TabManager::for_test(shell.clone());
         let source_tab_id = tabs.new_tab().unwrap();
         let source = tabs.tab_mut_by_id(source_tab_id).unwrap();
-        let owner = source.take_terminal_owner().unwrap();
-        let mut panes = PaneManager::from_existing(
-            owner,
-            shell,
-            1_000,
-            8 * 1024 * 1024,
-            800.0,
-            480.0,
-            10.0,
-            20.0,
-        );
+        let panes = source.panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
         let sibling = panes.split(SplitDirection::Vertical).unwrap();
-        source.pane_manager = Some(panes);
         let destination_tab_id = tabs.new_tab().unwrap();
         let mut app = App::new_headless(Config::default()).unwrap();
         app.tabs = Some(tabs);
@@ -828,9 +747,7 @@ fn plugin_pane_movement_refuses_unsupported_targets_before_detaching() {
             .unwrap()
             .tab_by_id(source_tab_id)
             .unwrap()
-            .pane_manager
-            .as_ref()
-            .unwrap()
+            .panes
             .pane_count();
         assert_eq!(pane_count, 2);
     }
@@ -874,9 +791,7 @@ fn plugin_pane_movement_refuses_unsupported_targets_before_detaching() {
         .unwrap()
         .tab_mut_by_id(source)
         .unwrap()
-        .pane_manager
-        .as_mut()
-        .unwrap()
+        .panes
         .get_pane_mut(PaneId(0))
         .unwrap()
         .closed = true;
@@ -893,9 +808,7 @@ fn plugin_pane_movement_refuses_unsupported_targets_before_detaching() {
         .unwrap()
         .tab_mut_by_id(source)
         .unwrap()
-        .pane_manager
-        .as_mut()
-        .unwrap()
+        .panes
         .get_pane_mut(sibling)
         .unwrap()
         .closed = true;
@@ -946,20 +859,9 @@ fn plugin_pane_movement_refuses_unsupported_targets_before_detaching() {
         .unwrap()
         .tab_mut_by_id(destination)
         .unwrap();
-    let owner = destination_tab.take_terminal_owner().unwrap();
-    let mut destination_panes = PaneManager::from_existing(
-        owner,
-        shell,
-        1_000,
-        8 * 1024 * 1024,
-        800.0,
-        480.0,
-        10.0,
-        20.0,
-    );
+    let destination_panes = destination_tab.panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
     destination_panes.split(SplitDirection::Vertical).unwrap();
     destination_panes.get_pane_mut(PaneId(0)).unwrap().closed = true;
-    destination_tab.pane_manager = Some(destination_panes);
     assert_refused(
         &move_result(&mut closed_anchor, source as u64, 0, destination as u64, 0),
         "destination pane 0 is closed",
@@ -973,9 +875,7 @@ fn plugin_pane_movement_refuses_unsupported_targets_before_detaching() {
         .unwrap()
         .tab_mut_by_id(source)
         .unwrap()
-        .pane_manager
-        .as_mut()
-        .unwrap()
+        .panes
         .get_pane_mut(PaneId(0))
         .unwrap()
         .launch = crate::workspace::WorkspaceLaunch::Plugin {
@@ -989,9 +889,7 @@ fn plugin_pane_movement_refuses_unsupported_targets_before_detaching() {
         .unwrap()
         .tab_by_id(source)
         .unwrap()
-        .pane_manager
-        .as_ref()
-        .unwrap()
+        .panes
         .open_pane_count();
     assert_eq!(source_panes, 1);
 
@@ -1009,22 +907,11 @@ fn plugin_pane_closure_is_exact_correlated_and_preserves_last_pane() {
     let mut tabs = TabManager::for_test(shell.clone());
     let target_tab_id = tabs.new_tab().unwrap();
     let tab = tabs.tab_mut_by_id(target_tab_id).unwrap();
-    let owner = tab.take_terminal_owner().unwrap();
-    let mut panes = PaneManager::from_existing(
-        owner,
-        shell,
-        1_000,
-        8 * 1024 * 1024,
-        800.0,
-        480.0,
-        10.0,
-        20.0,
-    );
+    let panes = tab.panes_for_test(shell, 800.0, 480.0, 10.0, 20.0);
     let first_sibling = panes.split(SplitDirection::Vertical).unwrap();
     let second_sibling = panes
         .split_target(first_sibling, SplitDirection::Horizontal)
         .unwrap();
-    tab.pane_manager = Some(panes);
     let active_tab_id = tabs.new_tab().unwrap();
     let mut app = App::new_headless(Config::default()).unwrap();
     app.tabs = Some(tabs);
@@ -1089,9 +976,7 @@ fn plugin_pane_closure_is_exact_correlated_and_preserves_last_pane() {
             .unwrap()
             .tab_by_id(target_tab_id)
             .unwrap()
-            .pane_manager
-            .as_ref()
-            .unwrap()
+            .panes
             .pane_count(),
         2
     );
@@ -1173,8 +1058,8 @@ fn plugin_pane_closure_is_exact_correlated_and_preserves_last_pane() {
         u64::from(second_sibling.0)
     );
     let tab = app.tabs.as_ref().unwrap().tab_by_id(target_tab_id).unwrap();
-    assert!(tab.pane_manager.is_none());
-    assert_eq!(tab.single_pane_id(), second_sibling);
+    assert!(tab.panes.pane_count() == 1);
+    assert_eq!(tab.panes.focused_id(), second_sibling);
 
     let sole = plugin_action_event(
         &mut app,

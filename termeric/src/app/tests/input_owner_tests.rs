@@ -190,14 +190,7 @@ fn closed_guarded_destination_rejects_the_whole_batch_before_any_user_write() {
             ),
         ],
     );
-    app.tabs
-        .as_mut()
-        .unwrap()
-        .active_tab_mut()
-        .unwrap()
-        .pane_manager
-        .as_mut()
-        .unwrap()
+    app.active_panes_mut()
         .get_pane_mut(PaneId(entry.source.pane_id))
         .unwrap()
         .closed = true;
@@ -439,12 +432,7 @@ fn context_picker_targets_the_plugin_owner_not_its_focused_shell_sibling() {
     tab.tab_type = crate::tabs::TabType::Plugin {
         plugin_id: "synthetic-capture".into(),
     };
-    tab.pane_manager
-        .as_mut()
-        .unwrap()
-        .get_pane_mut(PaneId(0))
-        .unwrap()
-        .launch = crate::workspace::WorkspaceLaunch::Plugin {
+    tab.panes.get_pane_mut(PaneId(0)).unwrap().launch = crate::workspace::WorkspaceLaunch::Plugin {
         plugin_id: "synthetic-capture".into(),
         profile: None,
     };
@@ -459,9 +447,7 @@ fn context_picker_targets_the_plugin_owner_not_its_focused_shell_sibling() {
         (PaneId(0), plugin_directory.path()),
         (PaneId(2), sibling_directory.path()),
     ] {
-        tab.pane_manager
-            .as_mut()
-            .unwrap()
+        tab.panes
             .get_pane_mut(pane_id)
             .unwrap()
             .terminal
