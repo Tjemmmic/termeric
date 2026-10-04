@@ -6,17 +6,11 @@ use std::path::Path;
 use termeric_core::Terminal;
 
 /// Get the current working directory of a process by its PID
-#[cfg(target_os = "linux")]
 pub(crate) fn get_process_cwd(pid: u32) -> Option<String> {
     let cwd_path = format!("/proc/{}/cwd", pid);
     std::fs::read_link(&cwd_path)
         .ok()
         .and_then(|p| p.to_str().map(|s| s.to_string()))
-}
-
-#[cfg(not(target_os = "linux"))]
-pub(crate) fn get_process_cwd(_pid: u32) -> Option<String> {
-    None
 }
 
 /// Return a shell-reported directory only when its OSC 7 authority identifies
@@ -35,16 +29,6 @@ fn local_reported_directory(
 ) -> Option<String> {
     if !directory.host().is_none_or(host_is_local) {
         return None;
-    }
-
-    #[cfg(target_os = "windows")]
-    if directory.path().as_bytes().get(0..4).is_some_and(|prefix| {
-        prefix[0] == b'/'
-            && prefix[1].is_ascii_alphabetic()
-            && prefix[2] == b':'
-            && prefix[3] == b'/'
-    }) {
-        return Some(directory.path()[1..].to_string());
     }
 
     Some(directory.path().to_string())
@@ -70,7 +54,6 @@ fn host_is_local(host: &str) -> bool {
         .is_some_and(|local| host.eq_ignore_ascii_case(local))
 }
 
-#[cfg(unix)]
 fn local_hostname() -> Option<String> {
     let mut bytes = [0u8; 256];
     // SAFETY: `bytes` is a writable buffer of the exact length supplied to
@@ -86,18 +69,6 @@ fn local_hostname() -> Option<String> {
         .ok()
         .filter(|hostname| !hostname.is_empty())
         .map(String::from)
-}
-
-#[cfg(target_os = "windows")]
-fn local_hostname() -> Option<String> {
-    std::env::var("COMPUTERNAME")
-        .ok()
-        .filter(|hostname| !hostname.is_empty())
-}
-
-#[cfg(not(any(unix, target_os = "windows")))]
-fn local_hostname() -> Option<String> {
-    None
 }
 
 /// Extract the directory name from a path, showing ~ for home directory
@@ -132,7 +103,6 @@ pub(crate) fn abbreviate_path(path: &str) -> String {
 }
 
 /// Get the name of the foreground process running in the shell
-#[cfg(target_os = "linux")]
 pub(crate) fn get_foreground_process(shell_pid: u32) -> Option<String> {
     // Read child processes from /proc/<pid>/task/<pid>/children
     let children_path = format!("/proc/{}/task/{}/children", shell_pid, shell_pid);
@@ -149,11 +119,6 @@ pub(crate) fn get_foreground_process(shell_pid: u32) -> Option<String> {
         return None;
     }
     Some(name)
-}
-
-#[cfg(not(target_os = "linux"))]
-pub(crate) fn get_foreground_process(_shell_pid: u32) -> Option<String> {
-    None
 }
 
 #[cfg(test)]
