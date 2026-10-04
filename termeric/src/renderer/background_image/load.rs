@@ -1,6 +1,7 @@
 //! Bounded local loading and decoding of the background image file.
 
 use std::io::{Cursor, Read};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -19,7 +20,6 @@ pub(crate) const MAX_BACKGROUND_IMAGE_DIMENSION: u32 = 8192;
 pub(crate) struct BackgroundImageStamp {
     length: u64,
     modified: Option<std::time::SystemTime>,
-    #[cfg(unix)]
     identity: (u64, u64, i64, i64),
 }
 
@@ -28,16 +28,12 @@ impl BackgroundImageStamp {
         Self {
             length: metadata.len(),
             modified: metadata.modified().ok(),
-            #[cfg(unix)]
-            identity: {
-                use std::os::unix::fs::MetadataExt;
-                (
-                    metadata.dev(),
-                    metadata.ino(),
-                    metadata.ctime(),
-                    metadata.ctime_nsec(),
-                )
-            },
+            identity: (
+                metadata.dev(),
+                metadata.ino(),
+                metadata.ctime(),
+                metadata.ctime_nsec(),
+            ),
         }
     }
 
@@ -68,16 +64,11 @@ pub(crate) fn resolve_background_image_path(path: &Path) -> PathBuf {
 
 /// Read and decode one static PNG or JPEG under explicit CPU-memory limits.
 pub(crate) fn load_background_image(path: &Path) -> Result<DecodedBackgroundImage, String> {
-    let mut options = std::fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        // User-configured symlinks are allowed. A FIFO substituted at open
-        // must not occupy the sole decoder worker waiting for a writer.
-        options.custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC);
-    }
-    let file = options
+    // User-configured symlinks are allowed. A FIFO substituted at open must
+    // not occupy the sole decoder worker waiting for a writer.
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
         .open(path)
         .map_err(|error| format!("could not open {}: {error}", path.display()))?;
     load_opened_background_image(file, path)
@@ -287,7 +278,6 @@ mod tests {
         assert!(!png_has_animation_control(&malformed));
     }
 
-    #[cfg(unix)]
     #[test]
     fn opened_background_source_keeps_its_pixels_and_stamp_after_path_replacement() {
         let dir = tempfile::tempdir().unwrap();
@@ -328,7 +318,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn background_symlink_tracks_atomic_replacement_with_preserved_mtime_and_length() {
         let dir = tempfile::tempdir().unwrap();
@@ -353,7 +342,6 @@ mod tests {
         assert_ne!(original.source_stamp, latest.source_stamp);
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn background_fifo_is_rejected_without_waiting_for_a_writer() {
         use std::os::unix::{ffi::OsStrExt, fs::OpenOptionsExt};
