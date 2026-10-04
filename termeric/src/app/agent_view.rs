@@ -490,7 +490,7 @@ impl App {
     pub(super) fn process_agent_view_events(&mut self) {
         if std::mem::take(&mut self.agent_view.looking) {
             // The search for an agent's program may have finished.
-            self.request_redraw(RedrawReason::Action);
+            self.request_redraw(RedrawReason::BackgroundTask);
         }
         let mut changed = false;
         for session in &mut self.agent_view.sessions {
@@ -533,7 +533,7 @@ impl App {
         self.announce_agent_view_attention();
         let events = self.agent_view_supervisor_events();
         self.supervise_agent_view(events);
-        self.request_redraw(RedrawReason::Action);
+        self.request_redraw(RedrawReason::BackgroundTask);
     }
 
     /// What the supervisor has not yet heard: new approval requests and
@@ -785,13 +785,16 @@ impl App {
         }
         self.agent_view.poll_tracking();
         self.reconcile_agent_view_tabs();
-        if self.agent_view.state.is_open()
-            && (self.agent_view_animating()
-                || (self.agent_view.state.has_keyboard()
-                    && self.agent_view.state.next_caret_toggle(now)
-                        <= now + std::time::Duration::from_millis(5)))
+        if !self.agent_view.state.is_open() {
+            return;
+        }
+        if self.agent_view_animating() {
+            self.request_redraw(RedrawReason::Animation);
+        } else if self.agent_view.state.has_keyboard()
+            && self.agent_view.state.next_caret_toggle(now)
+                <= now + std::time::Duration::from_millis(5)
         {
-            self.request_redraw(RedrawReason::Action);
+            self.request_redraw(RedrawReason::CursorBlink);
         }
     }
 
