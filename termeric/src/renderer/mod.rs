@@ -36,8 +36,6 @@ mod icons;
 pub use harvest::sprout_menu_hit_test;
 mod overlays;
 mod palette;
-#[cfg(test)]
-pub(crate) use palette::headless_palette_input_smoke;
 mod panels;
 mod popup_menu;
 mod quick_select;
@@ -74,8 +72,8 @@ use grid::{cursor_cell_geometry, draws_char, draws_grapheme, gliding_cursor_orig
 pub(crate) use headless_tests::{
     headless_color_emoji_render_smoke, headless_glyph_atlas_stress_smoke,
     headless_gui_visual_snapshot, headless_image_render_smoke, headless_ligature_render_smoke,
-    headless_sgr_render_smoke, headless_theme_color_fidelity_smoke, headless_ui_text_smoke,
-    headless_unicode_render_smoke,
+    headless_palette_input_smoke, headless_sgr_render_smoke, headless_theme_color_fidelity_smoke,
+    headless_ui_text_smoke, headless_unicode_render_smoke,
 };
 
 use image::{ImagePipeline, presentation_geometry};
