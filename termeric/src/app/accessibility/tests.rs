@@ -1753,23 +1753,6 @@ fn settings_filter_reports_utf8_cursor_and_empty_results() {
 
 #[test]
 fn command_deletion_unifies_focus_and_retires_stale_duplicate_actions() {
-    // Deleting a command saves the configuration. A child test process
-    // has a configuration directory of its own, so tests running beside
-    // this one never see that file change.
-    const CHILD: &str = "TERMERIC_COMMAND_DELETE_FIXTURE_CHILD";
-    if std::env::var_os(CHILD).is_none() {
-        let result = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "app::accessibility::tests::command_deletion_unifies_focus_and_retires_stale_duplicate_actions", "--nocapture"])
-            .env(CHILD, "1")
-            .output().unwrap();
-        assert!(
-            result.status.success(),
-            "isolated child failed:\n{}\n{}",
-            String::from_utf8_lossy(&result.stdout),
-            String::from_utf8_lossy(&result.stderr)
-        );
-        return;
-    }
     use crate::ui::commands::panel::CommandsPanelAction;
     use winit::keyboard::{Key, NamedKey};
     for (route, editing) in [
@@ -1781,6 +1764,10 @@ fn command_deletion_unifies_focus_and_retires_stale_duplicate_actions() {
         ("pointer-last", false),
     ] {
         let mut app = App::new_headless(Config::default()).unwrap();
+        // Deleting a command saves the configuration, to a file of this
+        // case's own.
+        let directory = tempfile::tempdir().unwrap();
+        app.config_path = directory.path().join("config.toml");
         let duplicate = crate::config::CustomCommand {
             name: "same".into(),
             command: "inert: never run".into(),
@@ -1882,8 +1869,7 @@ fn command_deletion_unifies_focus_and_retires_stale_duplicate_actions() {
                 assert!(app.commands_panel.is_open(), "{route}: stale Run activated");
             }
         }
-        let persisted: Config =
-            toml::from_str(&std::fs::read_to_string(Config::config_path()).unwrap()).unwrap();
+        let persisted = Config::load_from(&app.config_path).unwrap();
         assert_eq!(persisted.commands.len(), remaining);
         if editing {
             assert_eq!(app.commands_panel.form_name.text(), "retained name");
