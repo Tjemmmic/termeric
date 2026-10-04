@@ -39,7 +39,7 @@ winit event loop
   → renderer/frame.rs    (builds render data, submits to wgpu)
 ```
 
-PTY output and terminal-generated replies follow one stricter ownership path: `TabManager::poll_events()` polls every tab/pane, `PtyWrite` is consumed beside the originating `PtyHandle`, and only pane-tagged app events leave that owner. Never route a terminal-generated reply through focused input.
+PTY output and terminal-generated replies stay with the terminal that produced them and never route through focused input; the rules are under "PTY and terminal-event ownership" below.
 
 Outside pane mode a tab owns its one terminal as a `Pane`; entering pane mode detaches that pane (with the tab's pane allocation history, as a `PaneOwner`) and adopts it as the first pane, and no replacement PTY may be spawned. User-facing reads and writes must use `Tab::focused_pane()`, `Tab::focused_terminal()`, `focused_terminal_mut()`, or `Tab::write()`; focus changes must refresh search/URL/Git/cursor surfaces. Lifecycle transitions use the take/restore owner APIs.
 
@@ -82,6 +82,7 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 | `cli.rs` | Command-line parsing into window-local startup plans |
 | `mcp.rs` | `termeric mcp`, an MCP server over stdio backed by the control protocol |
 | `serial.rs` | Serial transport for serial terminal profiles |
+| `test_support/` | Test builds only: shared fixtures (`sleeping_shell`, `poll_until`, …), the release benchmark suite (`benchmarks.rs`), and soaks (`soak.rs`) |
 | `paths.rs` | Configuration and data directories; test builds resolve them under a per-process temporary directory |
 | `safe_fs.rs` | Hardened reads (no symlinks, FIFOs, or unbounded reads) and atomic private-staging writes for Termeric's own files |
 | `line_reader.rs` | Reading newline-delimited input from other processes with bounded memory; callers decide what an oversized or unterminated line means |
@@ -114,7 +115,8 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 | `colors.rs` | `UiPalette` and its high-contrast pass, the terminal palette, surface formats |
 | `frame.rs` | `render()`, `build_render_data()` layer dispatch, image data, pane dividers |
 | `grid.rs` | `build_pane_grid()`: a grid's cached rows, cursor, and scrollbar |
-| `headless_tests.rs`, `benchmark.rs` | GPU smokes run by `gpu_render_smoke` and the headless renderer benchmark (test builds only) |
+| `headless_tests.rs`, `image_crop_smoke.rs`, `benchmark.rs`, `visual_baseline.json` | GPU smokes run by `gpu_render_smoke`, the visual baseline they compare against, and the headless renderer benchmark (test builds only) |
+| `shaders/` | WGSL for the rectangle, text, and image pipelines (the background image draws through the image pipeline) |
 | `types.rs` | `*Info` structs and click/action enums (re-exported via `pub use types::*`) |
 | `draw.rs` | Shared card, shadow, scrollbar, button, and focus-ring drawing for dialogs and menus |
 | `rect.rs`, `buffer.rs` | Rounded-rectangle pipeline and capacity-managed GPU upload buffers |
@@ -122,7 +124,7 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 | `style.rs` | Resolved SGR cell style, decoration geometry, visibility, and color/face ordering |
 | `glyph_cache.rs` | Glyph and shaped-run lookup, shaping, rasterization, and upload; its `glyph_cache/` children hold the paged atlas allocator (`atlas.rs`), run and UI-layout caches (`caches.rs`), family coverage and the coverage report (`coverage.rs`), and font setup and cell metrics (`fonts.rs`) |
 | `row_cache.rs` | Persistent row geometry/GPU buffers and blink-phase invalidation |
-| `cursor.rs`, `ime.rs`, `quick_select.rs` | Cursor painting, IME preedit, copy-mode and quick-select overlays |
+| `cursor.rs`, `ime.rs`, `quick_select.rs` | The main and extra cursors (`draw_cursor_at`, `build_extra_cursors`), IME preedit, copy-mode and quick-select overlays |
 | `image.rs`, `background_image.rs` | Inline-graphics and background-image pipelines |
 | `tab_bar.rs` | Top strip and vertical rail, `tab_bar_hit_test()` |
 | `drag_picture.rs` | The picture of a dragged tab |
@@ -145,8 +147,8 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 
 ### PTY and terminal-event ownership
 
-- Poll inactive tabs and unfocused panes; focus controls input, not progress.
-- Consume `TerminalEvent::PtyWrite` beside its originating PTY.
+- `TabManager::poll_events()` polls inactive tabs and unfocused panes; focus controls input, not progress.
+- Consume `TerminalEvent::PtyWrite` beside its originating `PtyHandle`; only pane-tagged app events leave that owner.
 - Preserve `TerminalEventOrigin` until app-mediated replies complete, then clean up closed panes.
 - Keep PTY and app-facing event queues bounded. If a loss policy changes, document it and test protocol replies under overflow.
 - Use the single `poll_events` path; do not add a second pane event pump.
