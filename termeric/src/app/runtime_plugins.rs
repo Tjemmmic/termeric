@@ -150,7 +150,7 @@ impl App {
         error: Option<&str>,
     ) {
         let mut lines = vec![
-            "Enter the absolute path to a local declarative plugin directory.".into(),
+            "Enter the absolute path of a local plugin directory.".into(),
             format!(
                 "The directory must contain a valid {} file.",
                 crate::plugin::runtime::MANIFEST_NAME
@@ -205,7 +205,7 @@ impl App {
         ];
         push_wrapped_field(
             &mut lines,
-            "Canonical source",
+            "Source directory",
             &preview.source.display().to_string(),
         );
         lines.push(format!(
@@ -225,7 +225,7 @@ impl App {
                 "Requested permissions: {}",
                 preview.permissions.iter().count()
             ),
-            "Select a permission to toggle its grant.".into(),
+            "Select a permission to grant or withhold it.".into(),
         ]);
 
         let mut choices = Vec::new();
@@ -344,7 +344,7 @@ impl App {
         ];
         push_wrapped_field(
             &mut lines,
-            "Canonical source",
+            "Source directory",
             &preview.source.display().to_string(),
         );
         lines.extend([
@@ -381,7 +381,7 @@ impl App {
                 "Permissions the new version requests: {}",
                 preview.candidate_permissions.iter().count()
             ),
-            "Select a permission to toggle its post-update grant.".into(),
+            "Select a permission to grant or withhold it after the update.".into(),
         ]);
 
         let mut choices = Vec::new();
@@ -518,7 +518,7 @@ impl App {
                 profile.name, profile.id
             ));
         } else if status.diagnostic.is_some() {
-            lines.push("Default profile: unavailable while plugin diagnostics are active".into());
+            lines.push("Default profile: unavailable while the plugin has an error".into());
         } else {
             lines.push("Default profile: unavailable (no launch profiles)".into());
         }
@@ -526,7 +526,7 @@ impl App {
             format!("Requested permissions: {requested}"),
             format!("Granted permissions: {granted}"),
             format!(
-                "Settings: {} effective · {} explicitly configured",
+                "Settings: {} · {} changed from the default",
                 status.settings.len(),
                 status.configured_setting_count
             ),
@@ -535,7 +535,7 @@ impl App {
             lines.push(format!("  {key} = {}", display_setting_value(value)));
         }
         if let Some(diagnostic) = &status.diagnostic {
-            lines.push(format!("Diagnostic: {diagnostic}"));
+            lines.push(format!("Error: {diagnostic}"));
         }
         lines.push(String::new());
 
@@ -742,7 +742,7 @@ impl App {
                 settings_page + 1,
                 page_count
             ),
-            "Select a setting to inspect its type, constraints, and effective value.".into(),
+            "Select a setting to see what it accepts and change it.".into(),
             String::new(),
         ];
         let mut choices = Vec::new();
@@ -754,7 +754,7 @@ impl App {
                 .map(display_setting_value)
                 .unwrap_or_else(|| "unavailable".into());
             let origin = if status.configured_settings.contains_key(id) {
-                "override"
+                "changed"
             } else {
                 "default"
             };
@@ -848,16 +848,16 @@ impl App {
         let mut lines = vec![
             format!("{} ({})", setting.name(), setting.id()),
             format!("Type: {}", setting_kind(&setting)),
-            format!("Effective value: {}", display_setting_value(&effective)),
-            format!("Manifest default: {}", display_setting_value(&default)),
             format!(
-                "Source: {}",
+                "Value: {}{}",
+                display_setting_value(&effective),
                 if configured {
-                    "explicit user override"
+                    " (changed)"
                 } else {
-                    "manifest default"
+                    " (default)"
                 }
             ),
+            format!("Default: {}", display_setting_value(&default)),
         ];
         if !setting.description().is_empty() {
             push_wrapped_field(&mut lines, "Description", setting.description());
@@ -1056,11 +1056,11 @@ impl App {
         let (title, explanation) = match operation {
             RuntimePluginOperation::ResetSettings => (
                 "Confirm Settings Reset",
-                "Clear every explicit override for this plugin and restore its manifest defaults.",
+                "Return every setting of this plugin to its default.",
             ),
             RuntimePluginOperation::Remove => (
                 "Confirm Plugin Removal",
-                "Remove the managed installed copy and registry entry. The original source directory is not deleted.",
+                "Remove the installed copy and its registry entry. The source directory is left alone.",
             ),
         };
         let lines = vec![
@@ -2305,7 +2305,7 @@ program = "termeric-test-fixture-must-not-run"
             app.info_overlay
                 .lines()
                 .iter()
-                .any(|line| { line.contains(&format!("Canonical source: {}", source.display())) })
+                .any(|line| { line.contains(&format!("Source directory: {}", source.display())) })
         );
         assert!(
             app.info_overlay
