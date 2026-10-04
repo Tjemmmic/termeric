@@ -1,0 +1,121 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH termeric 1  "termeric 0.1.0" 
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.SH NAME
+termeric \- A GPU\-accelerated terminal emulator themed around roots and rhizomes
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.SH SYNOPSIS
+\fBtermeric\fR [\fB\-h\fR|\fB\-\-help\fR] [\fB\-\-new\-window\fR] [\fB\-\-separate\-process\fR] [\fB\-\-quick\-access\fR] [\fB\-\-tab\fR] [\fB\-\-split\fR] [\fB\-\-working\-directory\fR] [\fB\-\-command\fR] [\fB\-\-terminal\-profile\fR] [\fB\-\-profile\fR] [\fB\-\-workspace\fR] [\fB\-\-title\fR] [\fB\-\-geometry\fR] [\fB\-\-app\-id\fR] [\fB\-\-renderer\fR] [\fB\-V\fR|\fB\-\-version\fR] [\fICOMMAND\fR] [\fIsubcommand\fR]
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.SH DESCRIPTION
+A GPU\-accelerated terminal emulator themed around roots and rhizomes.
+.PP
+Options apply to the current tab or window. The first window and its first tab exist from the start; \-\-tab starts another tab in the current window, and \-\-new\-window starts another window. Everything after \-\- is the command for the current tab.
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print this help
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.SH "WINDOW GROUPING"
+.TP
+\fB\-\-new\-window\fR
+Start another window; first, a fresh one that skips restore
+.TP
+\fB\-\-separate\-process\fR
+Start a process of its own, even when Termeric runs
+.TP
+\fB\-\-quick\-access\fR
+Toggle or launch one top\-edge drop\-down window
+.TP
+\fB\-\-tab\fR
+Start another tab in the current window
+.TP
+\fB\-\-split\fR \fI<DIRECTION>\fR
+Split the current tab after launch
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+horizontal: Add a shell pane below
+.IP \(bu 2
+vertical: Add a shell pane to the right
+.RE
+.SH "LAUNCH SELECTION"
+.TP
+\fB\-\-working\-directory\fR \fI<PATH>\fR
+Start the current tab in PATH
+.TP
+\fB\-\-command\fR \fI<PROGRAM>\fR
+Run PROGRAM directly, without arguments
+.TP
+\fB\-\-terminal\-profile\fR \fI<NAME>\fR
+Launch a configured terminal profile
+.TP
+\fB\-\-profile\fR \fI<AGENT:PROFILE>\fR
+Launch a coding agent with a named profile
+.TP
+\fB\-\-workspace\fR \fI<ID>\fR
+Restore one complete workspace into this window
+.TP
+\fB\-\-title\fR \fI<TITLE>\fR
+Set the current tab title
+.TP
+[\fICOMMAND\fR]
+Run COMMAND in the current tab with every remaining argument exactly
+.SH "NATIVE IDENTITY AND SIZE"
+.TP
+\fB\-\-geometry\fR \fI<WIDTHxHEIGHT>\fR
+Initial physical\-pixel window size
+.TP
+\fB\-\-app\-id\fR \fI<NAME>\fR
+Set the X11 WM_CLASS and Wayland application ID
+.SH RENDERING
+.TP
+\fB\-\-renderer\fR \fI<BACKEND>\fR
+Choose the renderer for every window of this process
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+auto: Try the GPU, then software rendering
+.IP \(bu 2
+gpu: Insist on the GPU
+.IP \(bu 2
+software: Insist on software rendering
+.RE
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.SH SUBCOMMANDS
+.TP
+\fBtermeric domain\fR
+Persistent terminal domains (experimental). Run \fBtermeric domain \-\-help\fR for its commands and options.
+.TP
+\fBtermeric control\fR
+Commands for already\-running local Termeric GUI processes. Run \fBtermeric control \-\-help\fR for its commands and options.
+.TP
+\fBtermeric plugin\fR
+Termeric declarative plugin management. Run \fBtermeric plugin \-\-help\fR for its commands and options.
+.TP
+\fBtermeric workspace\fR
+Termeric saved workspaces. Run \fBtermeric workspace \-\-help\fR for its commands and options.
+.TP
+\fBtermeric mcp\fR
+Serve MCP tools for Termeric\*(Aqs agents on standard I/O. Run \fBtermeric mcp \-\-help\fR for its commands and options.
+.SH "SEE ALSO"
+The user guide: https://github.com/Tjemmmic/termeric/tree/main/docs/src
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.SH VERSION
+v0.1.0

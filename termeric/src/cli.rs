@@ -3,6 +3,7 @@
 mod control_args;
 mod domain_args;
 mod plugin_args;
+mod spec;
 mod workspace_args;
 
 use crate::panes::SplitDirection;
@@ -231,6 +232,9 @@ fn parse_mcp(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
     let mut supervisor = None;
     let mut rest = arguments.iter();
     while let Some(flag) = rest.next() {
+        if matches!(flag.to_str(), Some("-h" | "--help")) {
+            return Ok(ParseOutcome::Print(spec::mcp_help()));
+        }
         let value = rest.next().and_then(|value| value.to_str());
         match (flag.to_str(), value) {
             (Some("--process"), Some(value)) if process_id.is_none() => {
@@ -568,38 +572,11 @@ fn validate_single_line(label: &str, value: &str) -> anyhow::Result<()> {
 }
 
 fn help_text() -> String {
-    format!(
-        "Termeric {}\n\n\
-Usage: termeric [WINDOW/TAB OPTIONS] [-- COMMAND ARG...]\n\n\
-Window grouping:\n  \
-  --new-window                 Start another independent native window\n  \
-  --separate-process           Start a process of its own, even when Termeric runs\n  \
-  --quick-access               Toggle or launch one top-edge drop-down window\n  \
-  --tab                        Start another tab in the current window\n  \
-  --split horizontal|vertical  Split the current shell tab after launch\n\n\
-Launch selection:\n  \
-  --working-directory PATH     Set the current tab's cwd\n  \
-  --command PROGRAM            Run PROGRAM directly without arguments\n  \
-  --                           Preserve all remaining command arguments exactly\n  \
-  --terminal-profile NAME      Launch a configured reusable terminal profile\n  \
-  --profile AGENT:PROFILE      Launch a coding agent with a named profile\n  \
-  --workspace ID               Restore one complete workspace (exclusive)\n  \
-  --title TITLE                Set the current tab title\n\n\
-Native identity and size:\n  \
-  --geometry WIDTHxHEIGHT      Initial physical-pixel window size\n  \
-  --class NAME, --app-id NAME  Set X11 WM_CLASS / Wayland application ID\n\n\
-Rendering:\n  \
-  --renderer auto|gpu|software Override adapter selection for every window\n\n\
-General:\n  \
-  domain SUBCOMMAND            Manage persistent local terminal domains\n  \
-  control SUBCOMMAND           Inspect or explicitly control a running GUI\n  \
-  plugin SUBCOMMAND            Manage declarative third-party plugins\n  \
-  workspace list [--json]      List saved workspaces and their IDs\n  \
-  mcp [--process PID]          Serve MCP tools for Termeric's agents on stdio\n  \
-  -h, --help                   Print this help\n  \
-  -V, --version                Print the version",
-        env!("CARGO_PKG_VERSION")
-    )
+    spec::command_spec()
+        .render_help()
+        .to_string()
+        .trim_end()
+        .to_owned()
 }
 
 /// A split's orientation on the command line; `h` and `v` work too.

@@ -28,6 +28,16 @@ python3 scripts/check_markdown_links.py
 
 Add tests with your change. A bug fix should come with a test that fails without it.
 
+### Manual page and shell completions
+
+`assets/man/termeric.1` and the Bash, Zsh, and Fish completions in `assets/completions/` are generated from the command description in `termeric/src/cli/spec.rs`, which also prints `termeric --help`. When you add or change a command-line option or subcommand, update that description (a test checks that the parser accepts every option it lists), then regenerate the files and commit them:
+
+```bash
+TERMERIC_UPDATE_GENERATED=1 cargo test -p termeric --locked cli::spec
+```
+
+Without the variable, the same test fails while the committed files are out of date.
+
 ## Conventions
 
 - **UI and themes:** read [docs/dev/style-guide.md](docs/dev/style-guide.md) before changing anything a person sees. Root themes are named after real roots, and chrome colors come from the active theme.

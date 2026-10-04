@@ -94,6 +94,12 @@ freedesktop-icons = "0.4"
 async-channel = "2"
 futures-lite = "2"
 
+[dev-dependencies]
+# Generating the committed manual page and shell completions (cli/spec.rs)
+clap_complete = "4.6"
+clap_mangen = "0.2"
+roff = "1"
+
 [package.metadata.deb]
 maintainer = "Termeric Contributors <Tjemmmic@users.noreply.github.com>"
 copyright = "2026, Termeric Contributors"

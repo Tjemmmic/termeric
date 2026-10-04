@@ -1,0 +1,1012 @@
+#compdef termeric
+
+autoload -U is-at-least
+
+_termeric() {
+    typeset -A opt_args
+    typeset -a _arguments_options
+    local ret=1
+
+    if is-at-least 5.2; then
+        _arguments_options=(-s -S -C)
+    else
+        _arguments_options=(-s -C)
+    fi
+
+    local context curcontext="$curcontext" state line
+    _arguments "${_arguments_options[@]}" : \
+'*--split=[Split the current tab after launch]:DIRECTION:((horizontal\:"Add a shell pane below"
+vertical\:"Add a shell pane to the right"))' \
+'*--working-directory=[Start the current tab in PATH]:PATH:_files -/' \
+'*--cwd=[Start the current tab in PATH]:PATH:_files -/' \
+'*--command=[Run PROGRAM directly, without arguments]:PROGRAM:_command_names -e' \
+'*--terminal-profile=[Launch a configured terminal profile]:NAME:_default' \
+'*--profile=[Launch a coding agent with a named profile]:AGENT:PROFILE:_default' \
+'*--workspace=[Restore one complete workspace into this window]:ID:_default' \
+'*--title=[Set the current tab title]:TITLE:_default' \
+'*--geometry=[Initial physical-pixel window size]:WIDTHxHEIGHT:_default' \
+'*--app-id=[Set the X11 WM_CLASS and Wayland application ID]:NAME:_default' \
+'*--class=[Set the X11 WM_CLASS and Wayland application ID]:NAME:_default' \
+'--renderer=[Choose the renderer for every window of this process]:BACKEND:((auto\:"Try the GPU, then software rendering"
+gpu\:"Insist on the GPU"
+software\:"Insist on software rendering"))' \
+'-h[Print this help]' \
+'--help[Print this help]' \
+'--new-window[Start another window; first, a fresh one that skips restore]' \
+'--separate-process[Start a process of its own, even when Termeric runs]' \
+'--quick-access[Toggle or launch one top-edge drop-down window]' \
+'--tab[Start another tab in the current window]' \
+'-V[Print version]' \
+'--version[Print version]' \
+'::argv -- Run COMMAND in the current tab with every remaining argument exactly:_cmdambivalent' \
+":: :_termeric_commands" \
+"*::: :->termeric" \
+&& ret=0
+    case $state in
+    (termeric)
+        words=($line[2] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:termeric-command-$line[2]:"
+        case $line[2] in
+            (domain)
+_arguments "${_arguments_options[@]}" : \
+'--host=[Control the domains on another computer, through SSH]:SSH_DESTINATION:_default' \
+'(--host)--host-profile=[Like --host, with a destination from \[domains.ssh_hosts\]]:NAME:_default' \
+":: :_termeric__subcmd__domain_commands" \
+"*::: :->domain" \
+&& ret=0
+
+    case $state in
+    (domain)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:termeric-domain-command-$line[1]:"
+        case $line[1] in
+            (protocol-version)
+_arguments "${_arguments_options[@]}" : \
+'--json[Print the result as JSON]' \
+&& ret=0
+;;
+(hosts)
+_arguments "${_arguments_options[@]}" : \
+'--json[Print the result as JSON]' \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+'--json[Print the result as JSON]' \
+&& ret=0
+;;
+(show)
+_arguments "${_arguments_options[@]}" : \
+'--json[Print the result as JSON]' \
+':domain -- Domain ID, as listed:_default' \
+&& ret=0
+;;
+(panes)
+_arguments "${_arguments_options[@]}" : \
+'--json[Print the result as JSON]' \
+':domain -- Domain ID, as listed:_default' \
+&& ret=0
+;;
+(create)
+_arguments "${_arguments_options[@]}" : \
+'--working-directory=[Start in this directory on the computer running the domain]:PATH:_default' \
+'--cwd=[Start in this directory on the computer running the domain]:PATH:_default' \
+'--title=[Title for the pane]:TITLE:_default' \
+'--size=[Terminal size in cells]:COLSxROWS:_default' \
+'--json[Print the result as JSON]' \
+':name -- A name for the domain:_default' \
+'*::command -- The program and its arguments, after `--`; the shell by default:_default' \
+&& ret=0
+;;
+(spawn)
+_arguments "${_arguments_options[@]}" : \
+'--working-directory=[Start in this directory on the computer running the domain]:PATH:_default' \
+'--cwd=[Start in this directory on the computer running the domain]:PATH:_default' \
+'--title=[Title for the pane]:TITLE:_default' \
+'--size=[Terminal size in cells]:COLSxROWS:_default' \
+'--json[Print the result as JSON]' \
+':domain -- Domain ID, as listed:_default' \
+'*::command -- The program and its arguments, after `--`; the shell by default:_default' \
+&& ret=0
+;;
+(split)
+_arguments "${_arguments_options[@]}" : \
+'--working-directory=[Start in this directory on the computer running the domain]:PATH:_default' \
+'--cwd=[Start in this directory on the computer running the domain]:PATH:_default' \
+'--title=[Title for the pane]:TITLE:_default' \
+'--size=[Terminal size in cells]:COLSxROWS:_default' \
+'--json[Print the result as JSON]' \
+':domain -- Domain ID, as `list` shows it:_default' \
+':pane -- Pane ID within the domain:_default' \
+':direction:(horizontal vertical)' \
+'*::command -- The program and its arguments, after `--`; the shell by default:_default' \
+&& ret=0
+;;
+(resize-split)
+_arguments "${_arguments_options[@]}" : \
+':domain -- Domain ID, as listed:_default' \
+':split:_default' \
+':ratio_millis:_default' \
+&& ret=0
+;;
+(rename-tab)
+_arguments "${_arguments_options[@]}" : \
+':domain -- Domain ID, as `list` shows it:_default' \
+':tab -- Tab ID within the domain:_default' \
+':title:_default' \
+&& ret=0
+;;
+(pin-tab)
+_arguments "${_arguments_options[@]}" : \
+':domain -- Domain ID, as `list` shows it:_default' \
+':tab -- Tab ID within the domain:_default' \
+&& ret=0
+;;
+(unpin-tab)
+_arguments "${_arguments_options[@]}" : \
+':domain -- Domain ID, as `list` shows it:_default' \
+':tab -- Tab ID within the domain:_default' \
+&& ret=0
+;;
+(move-tab)
+_arguments "${_arguments_options[@]}" : \
+':domain -- Domain ID, as `list` shows it:_default' \
+':tab -- Tab ID within the domain:_default' \
+':index:_default' \
+&& ret=0
+;;
+(swap-pane)
+_arguments "${_arguments_options[@]}" : \
+':domain -- Domain ID, as `list` shows it:_default' \
+':pane -- Pane ID within the domain:_default' \
+&& ret=0
+;;
+(balance-tab)
+_arguments "${_arguments_options[@]}" : \
+':domain -- Domain ID, as `list` shows it:_default' \
+':tab -- Tab ID within the domain:_default' \
+&& ret=0
+;;
+(layout-tab)
+_arguments "${_arguments_options[@]}" : \
+':domain -- Domain ID, as `list` shows it:_default' \
+':tab -- Tab ID within the domain:_default' \
+':preset:(columns rows grid tall fat)' \
+&& ret=0
+;;
+(move-pane)
+_arguments "${_arguments_options[@]}" : \
+':domain -- Domain ID, as `list` shows it:_default' \
+':pane -- Pane ID within the domain:_default' \
+':tab:_default' \
+&& ret=0
+;;
+(focus)
+_arguments "${_arguments_options[@]}" : \
+':domain -- Domain ID, as `list` shows it:_default' \
+':pane -- Pane ID within the domain:_default' \
+&& ret=0
+;;
+(close-pane)
+_arguments "${_arguments_options[@]}" : \
+':domain -- Domain ID, as `list` shows it:_default' \
+':pane -- Pane ID within the domain:_default' \
+&& ret=0
+;;
+(close-tab)
+_arguments "${_arguments_options[@]}" : \
+':domain -- Domain ID, as `list` shows it:_default' \
+':tab -- Tab ID within the domain:_default' \
+&& ret=0
+;;
+(send)
+_arguments "${_arguments_options[@]}" : \
+'--enter[Press Enter after the text]' \
+':domain -- Domain ID, as `list` shows it:_default' \
+':pane -- Pane ID within the domain:_default' \
+':text:_default' \
+&& ret=0
+;;
+(get-text)
+_arguments "${_arguments_options[@]}" : \
+'--bytes=[Most bytes to print]:N:_default' \
+'--json[Print the result as JSON]' \
+':domain -- Domain ID, as `list` shows it:_default' \
+':pane -- Pane ID within the domain:_default' \
+&& ret=0
+;;
+(upload)
+_arguments "${_arguments_options[@]}" : \
+'--name=[Name it this in the pane'\''s directory]:NAME:_default' \
+'--json[Print the result as JSON]' \
+':domain -- Domain ID, as `list` shows it:_default' \
+':pane -- Pane ID within the domain:_default' \
+':source:_files' \
+&& ret=0
+;;
+(attach)
+_arguments "${_arguments_options[@]}" : \
+'--geometry=[Window size in physical pixels]:WIDTHxHEIGHT:_default' \
+'--app-id=[Window application ID]:NAME:_default' \
+':domain -- Domain ID, as listed:_default' \
+&& ret=0
+;;
+(kill)
+_arguments "${_arguments_options[@]}" : \
+':domain -- Domain ID, as listed:_default' \
+&& ret=0
+;;
+(stop-server)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(server)
+_arguments "${_arguments_options[@]}" : \
+'--foreground[]' \
+&& ret=0
+;;
+(proxy-stdio)
+_arguments "${_arguments_options[@]}" : \
+'--no-start[]' \
+&& ret=0
+;;
+(relay)
+_arguments "${_arguments_options[@]}" : \
+':domain -- Domain ID, as `list` shows it:_default' \
+':pane -- Pane ID within the domain:_default' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(control)
+_arguments "${_arguments_options[@]}" : \
+":: :_termeric__subcmd__control_commands" \
+"*::: :->control" \
+&& ret=0
+
+    case $state in
+    (control)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:termeric-control-command-$line[1]:"
+        case $line[1] in
+            (list)
+_arguments "${_arguments_options[@]}" : \
+'--json[Print the result as JSON]' \
+&& ret=0
+;;
+(wait-launch)
+_arguments "${_arguments_options[@]}" : \
+'--timeout=[Give up after SECONDS (1-86400)]:SECONDS:_default' \
+'--json[Print the result as JSON]' \
+':process -- Termeric process ID, as `list` shows it:_default' \
+':request_id -- The request ID the launch printed:_default' \
+&& ret=0
+;;
+(launch-status)
+_arguments "${_arguments_options[@]}" : \
+'--json[Print the result as JSON]' \
+':process -- Termeric process ID, as `list` shows it:_default' \
+':request_id -- The request ID the launch printed:_default' \
+&& ret=0
+;;
+(get-text)
+_arguments "${_arguments_options[@]}" : \
+'--history-lines=[Scrollback lines to include above the screen]:N:_default' \
+'--bytes=[Most bytes of text to return]:N:_default' \
+'--json[Print the result as JSON]' \
+':process -- Termeric process ID, as `list` shows it:_default' \
+':window -- Window ID within that process:_default' \
+':tab -- Tab ID within that window:_default' \
+':pane -- Pane ID within that tab:_default' \
+&& ret=0
+;;
+(send-text)
+_arguments "${_arguments_options[@]}" : \
+'--request-id=[Replay identity\: retrying with the same ID never acts twice]:ID:_default' \
+'--paste[Send it as a bracketed paste]' \
+'--enter[Press Enter after it]' \
+'--json[Print the result as JSON]' \
+':process -- Termeric process ID, as `list` shows it:_default' \
+':window -- Window ID within that process:_default' \
+':tab -- Tab ID within that window:_default' \
+':pane -- Pane ID within that tab:_default' \
+':text:_default' \
+&& ret=0
+;;
+(new-window)
+_arguments "${_arguments_options[@]}" : \
+'--request-id=[Replay identity\: retrying with the same ID never acts twice]:ID:_default' \
+'--json[Print the result as JSON]' \
+':process -- Termeric process ID, as `list` shows it:_default' \
+':source_window -- The window whose configuration and directory to copy:_default' \
+&& ret=0
+;;
+(launch-window)
+_arguments "${_arguments_options[@]}" : \
+'--cwd=[Start in this absolute directory]:ABSOLUTE_DIRECTORY:_default' \
+'--title=[Title for the tab]:TITLE:_default' \
+'*--env=[Set an environment variable; repeat for more]:NAME=VALUE:_default' \
+'*--unset-env=[Remove an inherited variable; repeat for more]:NAME:_default' \
+'--timeout=[With --wait, give up after SECONDS (1-86400)]:SECONDS:_default' \
+'--request-id=[Replay identity\: retrying with the same ID never acts twice]:ID:_default' \
+'--env-stdin[Read more variables from standard input, as one JSON object]' \
+'--clear-env[Start from an empty environment]' \
+'--wait[Wait for the program to exit and return its exit code]' \
+'--json[Print the result as JSON]' \
+':process -- Termeric process ID, as `list` shows it:_default' \
+':source_window -- The window whose configuration and directory to copy:_default' \
+'*::command -- The program and its arguments, after `--`:_default' \
+&& ret=0
+;;
+(new-tab)
+_arguments "${_arguments_options[@]}" : \
+'--request-id=[Replay identity\: retrying with the same ID never acts twice]:ID:_default' \
+'--json[Print the result as JSON]' \
+':process -- Termeric process ID, as `list` shows it:_default' \
+':window -- Window ID within that process:_default' \
+&& ret=0
+;;
+(launch-tab)
+_arguments "${_arguments_options[@]}" : \
+'--cwd=[Start in this absolute directory]:ABSOLUTE_DIRECTORY:_default' \
+'--title=[Title for the tab]:TITLE:_default' \
+'*--env=[Set an environment variable; repeat for more]:NAME=VALUE:_default' \
+'*--unset-env=[Remove an inherited variable; repeat for more]:NAME:_default' \
+'--timeout=[With --wait, give up after SECONDS (1-86400)]:SECONDS:_default' \
+'--request-id=[Replay identity\: retrying with the same ID never acts twice]:ID:_default' \
+'--background[Open the tab without selecting it]' \
+'--env-stdin[Read more variables from standard input, as one JSON object]' \
+'--clear-env[Start from an empty environment]' \
+'--wait[Wait for the program to exit and return its exit code]' \
+'--json[Print the result as JSON]' \
+':process -- Termeric process ID, as `list` shows it:_default' \
+':window -- Window ID within that process:_default' \
+'*::command -- The program and its arguments, after `--`:_default' \
+&& ret=0
+;;
+(split-pane)
+_arguments "${_arguments_options[@]}" : \
+'--request-id=[Replay identity\: retrying with the same ID never acts twice]:ID:_default' \
+'--json[Print the result as JSON]' \
+':process -- Termeric process ID, as `list` shows it:_default' \
+':window -- Window ID within that process:_default' \
+':tab -- Tab ID within that window:_default' \
+':pane -- Pane ID within that tab:_default' \
+':direction:(horizontal vertical)' \
+&& ret=0
+;;
+(focus-window)
+_arguments "${_arguments_options[@]}" : \
+'--request-id=[Replay identity\: retrying with the same ID never acts twice]:ID:_default' \
+'--json[Print the result as JSON]' \
+':process -- Termeric process ID, as `list` shows it:_default' \
+':window -- Window ID within that process:_default' \
+&& ret=0
+;;
+(select-tab)
+_arguments "${_arguments_options[@]}" : \
+'--request-id=[Replay identity\: retrying with the same ID never acts twice]:ID:_default' \
+'--json[Print the result as JSON]' \
+':process -- Termeric process ID, as `list` shows it:_default' \
+':window -- Window ID within that process:_default' \
+':tab -- Tab ID within that window:_default' \
+&& ret=0
+;;
+(focus-pane)
+_arguments "${_arguments_options[@]}" : \
+'--request-id=[Replay identity\: retrying with the same ID never acts twice]:ID:_default' \
+'--json[Print the result as JSON]' \
+':process -- Termeric process ID, as `list` shows it:_default' \
+':window -- Window ID within that process:_default' \
+':tab -- Tab ID within that window:_default' \
+':pane -- Pane ID within that tab:_default' \
+&& ret=0
+;;
+(close-window)
+_arguments "${_arguments_options[@]}" : \
+'--request-id=[Replay identity\: retrying with the same ID never acts twice]:ID:_default' \
+'--json[Print the result as JSON]' \
+':process -- Termeric process ID, as `list` shows it:_default' \
+':window -- Window ID within that process:_default' \
+&& ret=0
+;;
+(close-tab)
+_arguments "${_arguments_options[@]}" : \
+'--request-id=[Replay identity\: retrying with the same ID never acts twice]:ID:_default' \
+'--json[Print the result as JSON]' \
+':process -- Termeric process ID, as `list` shows it:_default' \
+':window -- Window ID within that process:_default' \
+':tab -- Tab ID within that window:_default' \
+&& ret=0
+;;
+(close-pane)
+_arguments "${_arguments_options[@]}" : \
+'--request-id=[Replay identity\: retrying with the same ID never acts twice]:ID:_default' \
+'--json[Print the result as JSON]' \
+':process -- Termeric process ID, as `list` shows it:_default' \
+':window -- Window ID within that process:_default' \
+':tab -- Tab ID within that window:_default' \
+':pane -- Pane ID within that tab:_default' \
+&& ret=0
+;;
+(move-tab)
+_arguments "${_arguments_options[@]}" : \
+'--request-id=[Replay identity\: retrying with the same ID never acts twice]:ID:_default' \
+'--json[Print the result as JSON]' \
+':process -- Termeric process ID, as `list` shows it:_default' \
+':window -- Window ID within that process:_default' \
+':tab -- Tab ID within that window:_default' \
+':destination_window:_default' \
+':destination_index:_default' \
+&& ret=0
+;;
+(move-pane)
+_arguments "${_arguments_options[@]}" : \
+'--request-id=[Replay identity\: retrying with the same ID never acts twice]:ID:_default' \
+'--json[Print the result as JSON]' \
+':process -- Termeric process ID, as `list` shows it:_default' \
+':window -- Window ID within that process:_default' \
+':tab -- Tab ID within that window:_default' \
+':pane -- Pane ID within that tab:_default' \
+':destination_window:_default' \
+':destination_tab:_default' \
+':target_pane:_default' \
+':direction:(horizontal vertical)' \
+&& ret=0
+;;
+(resize-window)
+_arguments "${_arguments_options[@]}" : \
+'--request-id=[Replay identity\: retrying with the same ID never acts twice]:ID:_default' \
+'--json[Print the result as JSON]' \
+':process -- Termeric process ID, as `list` shows it:_default' \
+':window -- Window ID within that process:_default' \
+':width:_default' \
+':height:_default' \
+&& ret=0
+;;
+(resize-divider)
+_arguments "${_arguments_options[@]}" : \
+'--request-id=[Replay identity\: retrying with the same ID never acts twice]:ID:_default' \
+'--json[Print the result as JSON]' \
+':process -- Termeric process ID, as `list` shows it:_default' \
+':window -- Window ID within that process:_default' \
+':tab -- Tab ID within that window:_default' \
+':divider:_default' \
+':ratio:_default' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(plugin)
+_arguments "${_arguments_options[@]}" : \
+":: :_termeric__subcmd__plugin_commands" \
+"*::: :->plugin" \
+&& ret=0
+
+    case $state in
+    (plugin)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:termeric-plugin-command-$line[1]:"
+        case $line[1] in
+            (list)
+_arguments "${_arguments_options[@]}" : \
+'--json[Print the result as JSON]' \
+&& ret=0
+;;
+(show)
+_arguments "${_arguments_options[@]}" : \
+'--json[Print the result as JSON]' \
+':id:_default' \
+&& ret=0
+;;
+(validate)
+_arguments "${_arguments_options[@]}" : \
+':directory:_files' \
+&& ret=0
+;;
+(install)
+_arguments "${_arguments_options[@]}" : \
+'*--allow=[Grant one requested permission; repeat for more]:PERMISSION:_default' \
+'--enable[Enable it once installed]' \
+'--replace[Replace an installed plugin of the same ID]' \
+':directory:_files' \
+&& ret=0
+;;
+(update)
+_arguments "${_arguments_options[@]}" : \
+':id:_default' \
+&& ret=0
+;;
+(enable)
+_arguments "${_arguments_options[@]}" : \
+'*--allow=[Grant one requested permission first; repeat for more]:PERMISSION:_default' \
+':id:_default' \
+&& ret=0
+;;
+(disable)
+_arguments "${_arguments_options[@]}" : \
+':id:_default' \
+&& ret=0
+;;
+(configure)
+_arguments "${_arguments_options[@]}" : \
+'--default-profile=[Use this profile when the plugin opens a tab]:PROFILE:_default' \
+'*--set=[Set one of the plugin'\''s settings]:KEY:_default:KEY:_default' \
+'--unset=[Return one setting to its default]:KEY:_default' \
+'--clear-default-profile[Forget the default profile]' \
+'--reset-settings[Return every setting to its default]' \
+':id:_default' \
+&& ret=0
+;;
+(grant)
+_arguments "${_arguments_options[@]}" : \
+'*--allow=[Grant one requested permission; repeat for more]:PERMISSION:_default' \
+':id:_default' \
+&& ret=0
+;;
+(revoke)
+_arguments "${_arguments_options[@]}" : \
+'*--allow=[Withdraw the grant of one permission; repeat for more]:PERMISSION:_default' \
+':id:_default' \
+&& ret=0
+;;
+(remove)
+_arguments "${_arguments_options[@]}" : \
+':id:_default' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(workspace)
+_arguments "${_arguments_options[@]}" : \
+":: :_termeric__subcmd__workspace_commands" \
+"*::: :->workspace" \
+&& ret=0
+
+    case $state in
+    (workspace)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:termeric-workspace-command-$line[1]:"
+        case $line[1] in
+            (list)
+_arguments "${_arguments_options[@]}" : \
+'--json[Print the result as JSON]' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(mcp)
+_arguments "${_arguments_options[@]}" : \
+'--process=[Serve this Termeric process instead of the one found automatically]:PID:_default' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+}
+
+(( $+functions[_termeric_commands] )) ||
+_termeric_commands() {
+    local commands; commands=(
+'domain:Persistent terminal domains (experimental)' \
+'control:Commands for already-running local Termeric GUI processes' \
+'plugin:Termeric declarative plugin management' \
+'workspace:Termeric saved workspaces' \
+'mcp:Serve MCP tools for Termeric'\''s agents on standard I/O' \
+    )
+    _describe -t commands 'termeric commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__control_commands] )) ||
+_termeric__subcmd__control_commands() {
+    local commands; commands=(
+'list:List bounded window, tab, and pane metadata' \
+'wait-launch:Wait for a retained child and return its exit code; timeout does not cancel it' \
+'launch-status:Observe the initial child of a retained command launch' \
+'get-text:Read bounded presented UTF-8 text from one exact pane' \
+'send-text:Send opt-in bounded UTF-8 text to one exact pane' \
+'new-window:Create a window using the exact source window'\''s configuration and cwd' \
+'launch-window:Launch exact argv and non-secret environment overrides in a new window' \
+'new-tab:Create a local tab in one exact stable window' \
+'launch-tab:Launch exact argv and non-secret environment overrides in a local tab' \
+'split-pane:Split one exact stable local pane and return the new pane ID' \
+'focus-window:Request native focus for one exact stable window' \
+'select-tab:Select one exact stable tab without focusing its native window' \
+'focus-pane:Select the tab and focus one exact stable pane' \
+'close-window:Schedule one exact stable native window to close' \
+'close-tab:Schedule one exact stable local tab to close' \
+'close-pane:Close one exact stable local pane immediately' \
+'move-tab:Move one exact local tab to a zero-based visual index' \
+'move-pane:Move one exact local pane beside an exact destination pane' \
+'resize-window:Request an exact native window inner size in physical pixels' \
+'resize-divider:Set one exact local divider to 100-900 thousandths' \
+    )
+    _describe -t commands 'termeric control commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__control__subcmd__close-pane_commands] )) ||
+_termeric__subcmd__control__subcmd__close-pane_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric control close-pane commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__control__subcmd__close-tab_commands] )) ||
+_termeric__subcmd__control__subcmd__close-tab_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric control close-tab commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__control__subcmd__close-window_commands] )) ||
+_termeric__subcmd__control__subcmd__close-window_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric control close-window commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__control__subcmd__focus-pane_commands] )) ||
+_termeric__subcmd__control__subcmd__focus-pane_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric control focus-pane commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__control__subcmd__focus-window_commands] )) ||
+_termeric__subcmd__control__subcmd__focus-window_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric control focus-window commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__control__subcmd__get-text_commands] )) ||
+_termeric__subcmd__control__subcmd__get-text_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric control get-text commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__control__subcmd__launch-status_commands] )) ||
+_termeric__subcmd__control__subcmd__launch-status_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric control launch-status commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__control__subcmd__launch-tab_commands] )) ||
+_termeric__subcmd__control__subcmd__launch-tab_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric control launch-tab commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__control__subcmd__launch-window_commands] )) ||
+_termeric__subcmd__control__subcmd__launch-window_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric control launch-window commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__control__subcmd__list_commands] )) ||
+_termeric__subcmd__control__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric control list commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__control__subcmd__move-pane_commands] )) ||
+_termeric__subcmd__control__subcmd__move-pane_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric control move-pane commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__control__subcmd__move-tab_commands] )) ||
+_termeric__subcmd__control__subcmd__move-tab_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric control move-tab commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__control__subcmd__new-tab_commands] )) ||
+_termeric__subcmd__control__subcmd__new-tab_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric control new-tab commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__control__subcmd__new-window_commands] )) ||
+_termeric__subcmd__control__subcmd__new-window_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric control new-window commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__control__subcmd__resize-divider_commands] )) ||
+_termeric__subcmd__control__subcmd__resize-divider_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric control resize-divider commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__control__subcmd__resize-window_commands] )) ||
+_termeric__subcmd__control__subcmd__resize-window_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric control resize-window commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__control__subcmd__select-tab_commands] )) ||
+_termeric__subcmd__control__subcmd__select-tab_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric control select-tab commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__control__subcmd__send-text_commands] )) ||
+_termeric__subcmd__control__subcmd__send-text_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric control send-text commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__control__subcmd__split-pane_commands] )) ||
+_termeric__subcmd__control__subcmd__split-pane_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric control split-pane commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__control__subcmd__wait-launch_commands] )) ||
+_termeric__subcmd__control__subcmd__wait-launch_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric control wait-launch commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__domain_commands] )) ||
+_termeric__subcmd__domain_commands() {
+    local commands; commands=(
+'protocol-version:Print the domain protocol version this termeric speaks' \
+'hosts:List configured SSH host profiles' \
+'list:List live domains' \
+'show:Describe a domain'\''s complete live state' \
+'panes:List a domain'\''s panes' \
+'create:Create a persistent domain' \
+'spawn:Add a tab' \
+'split:Split a pane' \
+'resize-split:Resize a stable divider (100-900 thousandths)' \
+'rename-tab:Set a tab'\''s title; an empty title clears it' \
+'pin-tab:Pin a tab' \
+'unpin-tab:Unpin a tab' \
+'move-tab:Move a tab within its pin group (counting from 0)' \
+'swap-pane:Swap a pane with the next one in visual order' \
+'balance-tab:Reset every divider in a tab to 50%' \
+'layout-tab:Arrange a tab'\''s panes in a preset layout' \
+'move-pane:Move a pane to another tab' \
+'focus:Set the persisted focus' \
+'close-pane:End a pane'\''s program and remove the pane' \
+'close-tab:End every program in a tab and remove it' \
+'send:Type bounded UTF-8 text into a pane' \
+'get-text:Print a pane'\''s newest text' \
+'upload:Copy a file or directory into a pane'\''s working directory, never overwriting' \
+'attach:Open the domain in a GUI window' \
+'kill:End every program in a domain' \
+'stop-server:Stop the daemon once no domain remains' \
+'server:Run the daemon in the foreground' \
+'proxy-stdio:The SSH stdio bridge \`--host\` runs on the other computer' \
+'relay:Relay one pane to this terminal (the GUI'\''s pane process)' \
+    )
+    _describe -t commands 'termeric domain commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__domain__subcmd__attach_commands] )) ||
+_termeric__subcmd__domain__subcmd__attach_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric domain attach commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__domain__subcmd__balance-tab_commands] )) ||
+_termeric__subcmd__domain__subcmd__balance-tab_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric domain balance-tab commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__domain__subcmd__close-pane_commands] )) ||
+_termeric__subcmd__domain__subcmd__close-pane_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric domain close-pane commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__domain__subcmd__close-tab_commands] )) ||
+_termeric__subcmd__domain__subcmd__close-tab_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric domain close-tab commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__domain__subcmd__create_commands] )) ||
+_termeric__subcmd__domain__subcmd__create_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric domain create commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__domain__subcmd__focus_commands] )) ||
+_termeric__subcmd__domain__subcmd__focus_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric domain focus commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__domain__subcmd__get-text_commands] )) ||
+_termeric__subcmd__domain__subcmd__get-text_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric domain get-text commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__domain__subcmd__hosts_commands] )) ||
+_termeric__subcmd__domain__subcmd__hosts_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric domain hosts commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__domain__subcmd__kill_commands] )) ||
+_termeric__subcmd__domain__subcmd__kill_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric domain kill commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__domain__subcmd__layout-tab_commands] )) ||
+_termeric__subcmd__domain__subcmd__layout-tab_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric domain layout-tab commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__domain__subcmd__list_commands] )) ||
+_termeric__subcmd__domain__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric domain list commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__domain__subcmd__move-pane_commands] )) ||
+_termeric__subcmd__domain__subcmd__move-pane_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric domain move-pane commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__domain__subcmd__move-tab_commands] )) ||
+_termeric__subcmd__domain__subcmd__move-tab_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric domain move-tab commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__domain__subcmd__panes_commands] )) ||
+_termeric__subcmd__domain__subcmd__panes_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric domain panes commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__domain__subcmd__pin-tab_commands] )) ||
+_termeric__subcmd__domain__subcmd__pin-tab_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric domain pin-tab commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__domain__subcmd__protocol-version_commands] )) ||
+_termeric__subcmd__domain__subcmd__protocol-version_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric domain protocol-version commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__domain__subcmd__proxy-stdio_commands] )) ||
+_termeric__subcmd__domain__subcmd__proxy-stdio_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric domain proxy-stdio commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__domain__subcmd__relay_commands] )) ||
+_termeric__subcmd__domain__subcmd__relay_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric domain relay commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__domain__subcmd__rename-tab_commands] )) ||
+_termeric__subcmd__domain__subcmd__rename-tab_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric domain rename-tab commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__domain__subcmd__resize-split_commands] )) ||
+_termeric__subcmd__domain__subcmd__resize-split_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric domain resize-split commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__domain__subcmd__send_commands] )) ||
+_termeric__subcmd__domain__subcmd__send_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric domain send commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__domain__subcmd__server_commands] )) ||
+_termeric__subcmd__domain__subcmd__server_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric domain server commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__domain__subcmd__show_commands] )) ||
+_termeric__subcmd__domain__subcmd__show_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric domain show commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__domain__subcmd__spawn_commands] )) ||
+_termeric__subcmd__domain__subcmd__spawn_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric domain spawn commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__domain__subcmd__split_commands] )) ||
+_termeric__subcmd__domain__subcmd__split_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric domain split commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__domain__subcmd__stop-server_commands] )) ||
+_termeric__subcmd__domain__subcmd__stop-server_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric domain stop-server commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__domain__subcmd__swap-pane_commands] )) ||
+_termeric__subcmd__domain__subcmd__swap-pane_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric domain swap-pane commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__domain__subcmd__unpin-tab_commands] )) ||
+_termeric__subcmd__domain__subcmd__unpin-tab_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric domain unpin-tab commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__domain__subcmd__upload_commands] )) ||
+_termeric__subcmd__domain__subcmd__upload_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric domain upload commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__mcp_commands] )) ||
+_termeric__subcmd__mcp_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric mcp commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__plugin_commands] )) ||
+_termeric__subcmd__plugin_commands() {
+    local commands; commands=(
+'list:List installed plugins' \
+'show:Show one installed plugin' \
+'validate:Check a plugin directory'\''s manifest without installing it' \
+'install:Install a plugin from a local directory' \
+'update:Reinstall a plugin from its recorded source' \
+'enable:Enable an installed plugin' \
+'disable:Disable an installed plugin' \
+'configure:Change one setting of an installed plugin' \
+'grant:Grant permissions an installed plugin requests' \
+'revoke:Withdraw grants from an installed plugin, disabling it if it was enabled' \
+'remove:Remove an installed plugin' \
+    )
+    _describe -t commands 'termeric plugin commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__plugin__subcmd__configure_commands] )) ||
+_termeric__subcmd__plugin__subcmd__configure_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric plugin configure commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__plugin__subcmd__disable_commands] )) ||
+_termeric__subcmd__plugin__subcmd__disable_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric plugin disable commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__plugin__subcmd__enable_commands] )) ||
+_termeric__subcmd__plugin__subcmd__enable_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric plugin enable commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__plugin__subcmd__grant_commands] )) ||
+_termeric__subcmd__plugin__subcmd__grant_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric plugin grant commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__plugin__subcmd__install_commands] )) ||
+_termeric__subcmd__plugin__subcmd__install_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric plugin install commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__plugin__subcmd__list_commands] )) ||
+_termeric__subcmd__plugin__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric plugin list commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__plugin__subcmd__remove_commands] )) ||
+_termeric__subcmd__plugin__subcmd__remove_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric plugin remove commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__plugin__subcmd__revoke_commands] )) ||
+_termeric__subcmd__plugin__subcmd__revoke_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric plugin revoke commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__plugin__subcmd__show_commands] )) ||
+_termeric__subcmd__plugin__subcmd__show_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric plugin show commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__plugin__subcmd__update_commands] )) ||
+_termeric__subcmd__plugin__subcmd__update_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric plugin update commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__plugin__subcmd__validate_commands] )) ||
+_termeric__subcmd__plugin__subcmd__validate_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric plugin validate commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__workspace_commands] )) ||
+_termeric__subcmd__workspace_commands() {
+    local commands; commands=(
+'list:List saved workspaces, most recently saved first' \
+    )
+    _describe -t commands 'termeric workspace commands' commands "$@"
+}
+(( $+functions[_termeric__subcmd__workspace__subcmd__list_commands] )) ||
+_termeric__subcmd__workspace__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'termeric workspace list commands' commands "$@"
+}
+
+if [ "$funcstack[1]" = "_termeric" ]; then
+    _termeric "$@"
+else
+    compdef _termeric termeric
+fi
