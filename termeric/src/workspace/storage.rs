@@ -126,6 +126,14 @@ fn save_workspace_to_dir_with_backup(
     );
     workspace.validate()?;
     let metadata = toml::to_string_pretty(workspace)?;
+    // Loading refuses larger metadata, so writing it would replace a
+    // loadable archive with one that can't be opened.
+    if metadata.len() > MAX_WORKSPACE_METADATA_BYTES {
+        anyhow::bail!(
+            "workspace metadata would be {} bytes, over its {MAX_WORKSPACE_METADATA_BYTES}-byte limit",
+            metadata.len()
+        );
+    }
     atomic_write(
         &dir.join("workspace.toml"),
         metadata.as_bytes(),
@@ -758,6 +766,28 @@ mod tests {
                 .any(|line| line.contains("outside-secret"));
             assert!(!history, "{hostile:?} read a file outside the archive");
         }
+    }
+
+    #[test]
+    fn oversized_metadata_is_refused_and_the_previous_archive_still_loads() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut workspace = sample_workspace();
+        save_workspace_to_dir(&mut workspace, temp.path()).unwrap();
+
+        let mut oversized = workspace.clone();
+        oversized.name = "oversized".into();
+        oversized.tabs[0].panes[0].working_directory =
+            Some("/".repeat(MAX_WORKSPACE_METADATA_BYTES));
+        let error = save_workspace_to_dir(&mut oversized, temp.path()).unwrap_err();
+        assert!(format!("{error:#}").contains("byte limit"), "{error:#}");
+
+        let loaded = load_workspace_from_dir(temp.path()).unwrap();
+        assert!(!loaded.recovered_from_backup);
+        assert_eq!(loaded.workspace.name, workspace.name);
+        assert_eq!(
+            loaded.workspace.tabs[0].panes[0].scrollback_lines,
+            ["history-0"]
+        );
     }
 
     #[test]
