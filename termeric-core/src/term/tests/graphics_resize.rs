@@ -1,4 +1,4 @@
-use super::*;
+use crate::term::*;
 
 #[test]
 fn atomic_host_resize_updates_live_and_frozen_pixel_coverage_before_eviction() {

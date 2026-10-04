@@ -1,4 +1,4 @@
-use super::*;
+use crate::grid::*;
 
 fn populated(limit: usize) -> Grid {
     let mut grid = Grid::new(8, 4);

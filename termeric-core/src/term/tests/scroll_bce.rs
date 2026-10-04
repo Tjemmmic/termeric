@@ -1,4 +1,4 @@
-use super::*;
+use crate::term::*;
 
 #[test]
 fn vertical_edits_fill_only_exposed_cells_with_the_active_background() {

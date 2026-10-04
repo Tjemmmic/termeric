@@ -1,4 +1,4 @@
-use super::*;
+use crate::term::*;
 
 fn populated() -> Terminal {
     let mut terminal = Terminal::new(8, 4);

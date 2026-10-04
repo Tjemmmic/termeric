@@ -1,4 +1,4 @@
-use super::*;
+use crate::term::*;
 
 fn image(terminal: &mut Terminal, controls: &str) {
     let pixels = STANDARD.encode([255; 6 * 6 * 4]);

@@ -1,4 +1,4 @@
-use super::*;
+use crate::term::*;
 
 fn fixture(alternate: bool, margins: usize, cursor_row: usize) -> Terminal {
     let mut terminal = Terminal::new(12, 6);

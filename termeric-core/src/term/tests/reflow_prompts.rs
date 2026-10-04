@@ -1,4 +1,4 @@
-use super::*;
+use crate::term::*;
 
 thread_local! {
     static SHELL_REFLOW_ROW_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -6,7 +6,7 @@ thread_local! {
 
 /// Counts rows walked by `shell_anchor_rows`, so tests can prove that anchor
 /// mapping stays a single pass over history instead of one scan per command.
-pub(super) fn count_shell_reflow_row_visit() {
+pub(in crate::term) fn count_shell_reflow_row_visit() {
     SHELL_REFLOW_ROW_VISITS.with(|visits| visits.set(visits.get() + 1));
 }
 
