@@ -1,0 +1,173 @@
+# Builds the release files for a v* tag and drafts a GitHub pre-release from them.
+# Run it by hand to rehearse the build: with publish off it stops before the release.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Draft a GitHub release (needs a tag ref); off builds and checks only
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify:
+    name: Check the version, changelog, metadata, and CI
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      publish: ${{ steps.release.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the tag, CHANGELOG.md, and the AppStream release
+        id: release
+        env:
+          PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          arguments=()
+          if [ "$REF_TYPE" = tag ]; then
+            arguments+=(--tag "$REF_NAME")
+          fi
+          if [ "$PUBLISH" = true ]; then
+            arguments+=(--publish)
+          fi
+          version=$(python3 scripts/check_release.py "${arguments[@]}")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "publish=$PUBLISH" >> "$GITHUB_OUTPUT"
+      - name: Validate the AppStream metadata and desktop entries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y appstream desktop-file-utils
+          appstreamcli validate --no-net assets/org.termeric.Termeric.metainfo.xml
+          desktop-file-validate assets/*.desktop
+      - name: Require a successful CI run on this commit
+        if: steps.release.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+        run: |
+          passed=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$SHA" \
+            --status success --limit 1 --json databaseId --jq length)
+          if [ "$passed" != 1 ]; then
+            echo "::error::CI has not passed on $SHA; run it and wait for it before releasing"
+            exit 1
+          fi
+
+  build:
+    name: Build for ${{ matrix.arch }}
+    needs: verify
+    strategy:
+      matrix:
+        include:
+          # The oldest supported Ubuntu sets the glibc the binaries need.
+          - runner: ubuntu-22.04
+            arch: x86_64
+          - runner: ubuntu-22.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      DIST_NAME: termeric-${{ needs.verify.outputs.version }}-${{ matrix.arch }}-linux
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install build and packaging dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libfontconfig1-dev libwayland-dev \
+            libxkbcommon-dev libxcb-shape0-dev libxcb-xfixes0-dev libvulkan-dev \
+            ncurses-bin desktop-file-utils dpkg-dev
+      - run: cargo build --release --locked
+      - name: Stage the install tree
+        run: python3 scripts/stage_install_tree.py --binary target/release/termeric --out target/install-tree
+      - name: Make the tarball
+        run: |
+          mkdir -p target/dist
+          cp -a target/install-tree "target/dist/$DIST_NAME"
+          tar -C target/dist --owner=0 --group=0 --numeric-owner --sort=name \
+            -czf "target/dist/$DIST_NAME.tar.gz" "$DIST_NAME"
+          "target/dist/$DIST_NAME/bin/termeric" --version
+      - name: Make and check the .deb
+        run: |
+          cargo install cargo-deb --locked --version 3.7.0
+          cargo deb -p termeric --no-build
+          python3 scripts/check_debian_package.py target/debian/termeric_*.deb
+          cp target/debian/termeric_*.deb target/dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.arch }}
+          path: |
+            target/dist/*.tar.gz
+            target/dist/*.deb
+          if-no-files-found: error
+
+  srcinfo:
+    name: Check the PKGBUILD's .SRCINFO
+    runs-on: ubuntu-24.04
+    container: archlinux:base-devel
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      # makepkg refuses to run as root.
+      - name: Compare .SRCINFO with makepkg --printsrcinfo
+        run: |
+          useradd --create-home builder
+          install -d -o builder /home/builder/recipe
+          install -o builder packaging/arch/PKGBUILD /home/builder/recipe/PKGBUILD
+          (cd /home/builder/recipe && runuser -u builder -- makepkg --printsrcinfo) > /tmp/SRCINFO
+          diff -u packaging/arch/.SRCINFO /tmp/SRCINFO
+
+  publish:
+    name: Draft the GitHub release
+    needs: [verify, build, srcinfo]
+    if: needs.verify.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
+      - name: Write SHA256SUMS
+        run: |
+          cd dist
+          sha256sum -- *.tar.gz *.deb > SHA256SUMS
+          cat SHA256SUMS
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.deb
+      - name: Create the draft pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          python3 scripts/check_release.py --tag "$TAG" --publish --notes release-notes.md
+          gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --draft --prerelease --title "Termeric $VERSION" --notes-file release-notes.md
