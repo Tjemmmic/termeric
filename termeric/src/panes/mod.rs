@@ -993,7 +993,7 @@ impl PaneManager {
                     .or_else(|| pane.pty.child_id().and_then(crate::tabs::get_process_cwd));
                 crate::workspace::WorkspacePaneSnapshot {
                     id: pane.id.0,
-                    launch: Some(pane.launch.clone()),
+                    launch: pane.launch.clone(),
                     title: pane
                         .title
                         .clone()

@@ -95,7 +95,6 @@ pub struct WorkspaceTabSnapshot {
     pub user_title: Option<String>,
     #[serde(default)]
     pub pinned: bool,
-    pub launch: WorkspaceLaunch,
     /// Pane that is relaunched first and adopts the tab's initial live PTY.
     #[serde(default)]
     pub primary_pane: u32,
@@ -105,6 +104,21 @@ pub struct WorkspaceTabSnapshot {
 }
 
 impl WorkspaceTabSnapshot {
+    /// What the tab relaunches as: its primary pane's launch.
+    pub fn launch(&self) -> anyhow::Result<&WorkspaceLaunch> {
+        self.panes
+            .iter()
+            .find(|pane| pane.id == self.primary_pane)
+            .map(|pane| &pane.launch)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "workspace tab {} primary pane {} is missing",
+                    self.id,
+                    self.primary_pane
+                )
+            })
+    }
+
     pub(crate) fn validate(&self) -> anyhow::Result<()> {
         if self.title.chars().count() > 256 {
             anyhow::bail!("workspace tab {} title is too long", self.id);
@@ -123,33 +137,12 @@ impl WorkspaceTabSnapshot {
                 MAX_WORKSPACE_PANES_PER_TAB
             );
         }
-        self.launch.validate()?;
-
         let mut pane_ids = HashSet::new();
         for pane in &self.panes {
             if !pane_ids.insert(pane.id) {
                 anyhow::bail!("workspace tab {} has duplicate pane {}", self.id, pane.id);
             }
             pane.validate()?;
-            if pane.launch.is_none() {
-                anyhow::bail!(
-                    "workspace tab {} pane {} is missing its launch identity",
-                    self.id,
-                    pane.id
-                );
-            }
-        }
-        if let Some(primary_launch) = self
-            .panes
-            .iter()
-            .find(|pane| pane.id == self.primary_pane)
-            .and_then(|pane| pane.launch.as_ref())
-            && primary_launch != &self.launch
-        {
-            anyhow::bail!(
-                "workspace tab {} primary pane launch does not match the tab launch",
-                self.id
-            );
         }
         if !pane_ids.contains(&self.focused_pane) {
             anyhow::bail!(
@@ -304,10 +297,9 @@ impl From<&WorkspacePaneLayout> for crate::panes::PaneNode {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspacePaneSnapshot {
     pub id: u32,
-    /// Exact relaunch identity for this pane. Schema 0/1 archives omit this
-    /// field and inherit the enclosing tab's historical split policy.
-    #[serde(default)]
-    pub launch: Option<WorkspaceLaunch>,
+    /// Exact relaunch identity for this pane; the primary pane's is the
+    /// tab's.
+    pub launch: WorkspaceLaunch,
     #[serde(default)]
     pub title: Option<String>,
     #[serde(default)]
@@ -331,9 +323,7 @@ pub struct WorkspaceRestoreOutcome {
 
 impl WorkspacePaneSnapshot {
     fn validate(&self) -> anyhow::Result<()> {
-        if let Some(launch) = &self.launch {
-            launch.validate()?;
-        }
+        self.launch.validate()?;
         if self
             .title
             .as_ref()
@@ -412,7 +402,6 @@ pub(crate) mod tests {
                 title: "nested".into(),
                 user_title: Some("My build".into()),
                 pinned: true,
-                launch: WorkspaceLaunch::Shell,
                 primary_pane: 0,
                 focused_pane: 2,
                 layout: WorkspacePaneLayout::Split {
@@ -429,7 +418,7 @@ pub(crate) mod tests {
                 panes: (0..3)
                     .map(|id| WorkspacePaneSnapshot {
                         id,
-                        launch: Some(WorkspaceLaunch::Shell),
+                        launch: WorkspaceLaunch::Shell,
                         title: Some(format!("pane-{id}")),
                         working_directory: Some(format!("/tmp/pane-{id}")),
                         last_command: Some(format!("command-{id}")),
@@ -477,37 +466,34 @@ pub(crate) mod tests {
         let mut workspace = sample_workspace();
         workspace.tabs[0].panes.pop();
         assert!(workspace.validate().is_err());
-
-        let mut workspace = sample_workspace();
-        workspace.tabs[0].panes[0].launch = None;
-        assert!(workspace.validate().is_err());
     }
 
     #[test]
     fn nonprimary_plugin_launch_identity_is_valid() {
         let mut workspace = sample_workspace();
-        workspace.tabs[0].panes[1].launch = Some(WorkspaceLaunch::Plugin {
+        workspace.tabs[0].panes[1].launch = WorkspaceLaunch::Plugin {
             plugin_id: "fake".into(),
             profile: None,
-        });
+        };
         assert!(workspace.validate().is_ok());
     }
 
     #[test]
     fn terminal_profile_workspace_names_match_config_identity_rules() {
         let mut workspace = sample_workspace();
-        workspace.tabs[0].launch = WorkspaceLaunch::Profile {
+        workspace.tabs[0].panes[0].launch = WorkspaceLaunch::Profile {
             name: "dev.rust".into(),
         };
-        workspace.tabs[0].panes[0].launch = Some(WorkspaceLaunch::Profile {
-            name: "dev.rust".into(),
-        });
         workspace.validate().unwrap();
+        assert_eq!(
+            workspace.tabs[0].launch().unwrap(),
+            &WorkspaceLaunch::Profile {
+                name: "dev.rust".into()
+            }
+        );
 
         for name in [".hidden", "two..dots", "bad name"] {
-            workspace.tabs[0].launch = WorkspaceLaunch::Profile { name: name.into() };
-            workspace.tabs[0].panes[0].launch =
-                Some(WorkspaceLaunch::Profile { name: name.into() });
+            workspace.tabs[0].panes[0].launch = WorkspaceLaunch::Profile { name: name.into() };
             assert!(workspace.validate().is_err(), "accepted {name:?}");
         }
     }

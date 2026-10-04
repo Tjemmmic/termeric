@@ -1488,7 +1488,7 @@ impl TabManager {
             }
             if let crate::workspace::WorkspaceLaunch::Plugin { plugin_id, profile } = pane_launches
                 .get(&snapshot.primary_pane)
-                .map_or(&snapshot.launch, |(launch, _)| launch)
+                .map_or(snapshot.launch()?, |(launch, _)| launch)
             {
                 tab.set_plugin_profile_reference(
                     PaneId(snapshot.primary_pane),
@@ -1520,7 +1520,7 @@ impl TabManager {
         tab.pane_manager = Some(panes);
         if let crate::workspace::WorkspaceLaunch::Plugin { plugin_id, profile } = pane_launches
             .get(&snapshot.primary_pane)
-            .map_or(&snapshot.launch, |(launch, _)| launch)
+            .map_or(snapshot.launch()?, |(launch, _)| launch)
         {
             tab.set_plugin_profile_reference(
                 PaneId(snapshot.primary_pane),
@@ -3300,7 +3300,7 @@ mod tests {
                 .panes
                 .iter()
                 .find(|pane| pane.id == attached.0)
-                .and_then(|pane| pane.launch.as_ref()),
+                .map(|pane| &pane.launch),
             Some(&crate::workspace::WorkspaceLaunch::Profile { name: "dev".into() })
         );
 
@@ -3347,8 +3347,8 @@ mod tests {
         tab.restore_terminal_owner(remaining);
         let collapsed = tab.capture_workspace_tab(1, false).unwrap();
         assert_eq!(
-            collapsed.launch,
-            crate::workspace::WorkspaceLaunch::Profile { name: "dev".into() }
+            collapsed.launch().unwrap(),
+            &crate::workspace::WorkspaceLaunch::Profile { name: "dev".into() }
         );
         assert!(matches!(tab.tab_type, TabType::Profile { ref name } if name == "dev"));
 

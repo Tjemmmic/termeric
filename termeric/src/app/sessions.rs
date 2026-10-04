@@ -275,19 +275,15 @@ impl App {
                         title: title.clone(),
                         user_title: spec.title.clone(),
                         pinned: false,
-                        launch: crate::workspace::WorkspaceLaunch::Plugin {
-                            plugin_id: plugin_id.clone(),
-                            profile: Some(profile.clone()),
-                        },
                         primary_pane: 0,
                         focused_pane: 0,
                         layout: crate::workspace::WorkspacePaneLayout::Pane { pane: 0 },
                         panes: vec![crate::workspace::WorkspacePaneSnapshot {
                             id: 0,
-                            launch: Some(crate::workspace::WorkspaceLaunch::Plugin {
+                            launch: crate::workspace::WorkspaceLaunch::Plugin {
                                 plugin_id: plugin_id.clone(),
                                 profile: Some(profile.clone()),
-                            }),
+                            },
                             title: Some(title),
                             working_directory: cwd.clone(),
                             last_command: None,

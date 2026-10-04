@@ -213,7 +213,8 @@ impl App {
                     outcome.skipped_tabs += 1;
                     outcome.warnings.push(format!(
                         "tab {} ({:?}) was skipped: {error:#}",
-                        snapshot.id, snapshot.launch
+                        snapshot.id,
+                        snapshot.launch().ok()
                     ));
                 }
             }
@@ -270,7 +271,7 @@ impl App {
     ) -> anyhow::Result<(usize, Vec<String>)> {
         // Resolve every identity before spawning any PTY for this tab.
         let pane_launches = self.resolve_workspace_pane_launches(snapshot, tabs)?;
-        match &snapshot.launch {
+        match snapshot.launch()? {
             WorkspaceLaunch::Shell => tabs.new_shell_tab_from_workspace(snapshot, &pane_launches),
             WorkspaceLaunch::Profile { name } => {
                 let profile = self.config.launch_profile(name)?.clone();
@@ -342,13 +343,7 @@ impl App {
     {
         let mut launches = std::collections::HashMap::new();
         for pane in &snapshot.panes {
-            let launch = pane.launch.as_ref().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "workspace tab {} pane {} has no launch identity",
-                    snapshot.id,
-                    pane.id
-                )
-            })?;
+            let launch = &pane.launch;
             let (resolved, shell) = match launch {
                 WorkspaceLaunch::Shell => (launch.clone(), self.config.shell.clone()),
                 WorkspaceLaunch::Profile { name } => {

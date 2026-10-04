@@ -1077,20 +1077,13 @@ impl Tab {
         workspace_tab_id: u32,
         save_scrollback: bool,
     ) -> anyhow::Result<crate::workspace::WorkspaceTabSnapshot> {
-        let (primary_pane, focused_pane, layout, panes, launch) =
+        let (primary_pane, focused_pane, layout, panes) =
             if let Some(panes) = &self.pane_manager {
-                let primary_id = panes.primary_id();
-                let launch = panes
-                    .get_pane(primary_id)
-                    .context("workspace primary pane no longer exists")?
-                    .launch
-                    .clone();
                 (
-                    primary_id.0,
+                    panes.primary_id().0,
                     panes.focused_id().0,
                     panes.workspace_layout(),
                     panes.workspace_panes(&self.title, save_scrollback),
-                    launch,
                 )
             } else {
                 let single = self
@@ -1106,7 +1099,7 @@ impl Tab {
                     crate::workspace::WorkspacePaneLayout::Pane { pane: pane_id },
                     vec![crate::workspace::WorkspacePaneSnapshot {
                         id: pane_id,
-                        launch: Some(single.launch.clone()),
+                        launch: single.launch.clone(),
                         title: Some(self.title.clone()),
                         working_directory: terminal_working_directory(terminal)
                             .or_else(|| child_id.and_then(get_process_cwd)),
@@ -1121,7 +1114,6 @@ impl Tab {
                             Vec::new()
                         },
                     }],
-                    single.launch.clone(),
                 )
             };
         Ok(crate::workspace::WorkspaceTabSnapshot {
@@ -1129,7 +1121,6 @@ impl Tab {
             title: self.title.clone(),
             user_title: self.user_title.clone(),
             pinned: self.pinned,
-            launch,
             primary_pane,
             focused_pane,
             layout,

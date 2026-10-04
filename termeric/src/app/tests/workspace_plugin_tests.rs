@@ -92,7 +92,7 @@ pub(super) fn fixture() -> (App, tempfile::TempDir, WorkspaceTabSnapshot) {
         std::fs::create_dir(&cwd).unwrap();
         panes.push(WorkspacePaneSnapshot {
             id,
-            launch: Some(launch),
+            launch,
             title: Some(format!("pane-{id}")),
             working_directory: Some(cwd.display().to_string()),
             last_command: Some("saved command".into()),
@@ -117,7 +117,6 @@ pub(super) fn fixture() -> (App, tempfile::TempDir, WorkspaceTabSnapshot) {
         title: "mixed".into(),
         user_title: Some("saved title".into()),
         pinned: false,
-        launch: WorkspaceLaunch::Shell,
         primary_pane: 0,
         focused_pane: 9,
         layout,
@@ -139,14 +138,6 @@ fn mixed_plugin_workspaces_restore_exact_profiles_cwds_and_terminal_owners() {
     for primary in [0, 7] {
         let (mut app, dir, mut snapshot) = fixture();
         snapshot.primary_pane = primary;
-        snapshot.launch = snapshot
-            .panes
-            .iter()
-            .find(|pane| pane.id == primary)
-            .unwrap()
-            .launch
-            .clone()
-            .unwrap();
         let mut tabs = manager(&app);
         let (_, warnings) = app.restore_workspace_tab(&mut tabs, &snapshot).unwrap();
         assert!(warnings.is_empty());
@@ -256,13 +247,12 @@ fn literal_default_profile_is_not_lost() {
         plugin_id: "codex".into(),
         profile: Some("default".into()),
     };
-    snapshot.launch = named.clone();
     snapshot
         .panes
         .iter_mut()
         .find(|pane| pane.id == 7)
         .unwrap()
-        .launch = Some(named.clone());
+        .launch = named.clone();
     let mut tabs = manager(&app);
     app.restore_workspace_tab(&mut tabs, &snapshot).unwrap();
     wait_for_file_text(&dir.path().join("default"), "--fixture=default");
@@ -271,7 +261,7 @@ fn literal_default_profile_is_not_lost() {
         .unwrap()
         .capture_workspace_tab(0, false)
         .unwrap();
-    assert_eq!(captured.launch, named);
+    assert_eq!(captured.launch().unwrap(), &named);
     assert_eq!(
         captured
             .panes
@@ -279,7 +269,7 @@ fn literal_default_profile_is_not_lost() {
             .find(|pane| pane.id == 7)
             .unwrap()
             .launch,
-        Some(named)
+        named
     );
 }
 
@@ -294,10 +284,10 @@ fn missing_profile_and_spawn_failure_keep_existing_tabs_and_focus() {
                     .iter_mut()
                     .find(|pane| pane.id == 11)
                     .unwrap()
-                    .launch = Some(WorkspaceLaunch::Plugin {
+                    .launch = WorkspaceLaunch::Plugin {
                     plugin_id: "claude-code".into(),
                     profile: Some("removed".into()),
-                });
+                };
             }
             "binary" => {
                 app.config.agents.get_mut("claude-code").unwrap().program =
@@ -315,9 +305,9 @@ fn missing_profile_and_spawn_failure_keep_existing_tabs_and_focus() {
                     .iter_mut()
                     .find(|pane| pane.id == 13)
                     .unwrap()
-                    .launch = Some(WorkspaceLaunch::Profile {
+                    .launch = WorkspaceLaunch::Profile {
                     name: "removed-process".into(),
-                });
+                };
             }
             _ => unreachable!(),
         }
@@ -337,7 +327,6 @@ fn missing_profile_and_spawn_failure_keep_existing_tabs_and_focus() {
         let mut valid = snapshot.clone();
         valid.primary_pane = 0;
         valid.focused_pane = 0;
-        valid.launch = WorkspaceLaunch::Shell;
         valid.panes.retain(|pane| pane.id == 0);
         valid.layout = WorkspacePaneLayout::Pane { pane: 0 };
         let (index, _) = app.restore_workspace_tab(&mut tabs, &valid).unwrap();
@@ -369,16 +358,15 @@ fn resolved_default_profile_is_saved_as_the_actual_owner_reference() {
     app.config.agents.get_mut("codex").unwrap().default_profile = Some("red".into());
     app = App::new_headless(app.config.clone()).unwrap();
     snapshot.primary_pane = 7;
-    snapshot.launch = WorkspaceLaunch::Plugin {
-        plugin_id: "codex".into(),
-        profile: None,
-    };
     snapshot
         .panes
         .iter_mut()
         .find(|pane| pane.id == 7)
         .unwrap()
-        .launch = Some(snapshot.launch.clone());
+        .launch = WorkspaceLaunch::Plugin {
+        plugin_id: "codex".into(),
+        profile: None,
+    };
     let mut tabs = manager(&app);
     app.restore_workspace_tab(&mut tabs, &snapshot).unwrap();
     tabs.refresh_agents(&app.agents);
@@ -388,8 +376,8 @@ fn resolved_default_profile_is_saved_as_the_actual_owner_reference() {
         .capture_workspace_tab(0, false)
         .unwrap();
     assert_eq!(
-        captured.launch,
-        WorkspaceLaunch::Plugin {
+        captured.launch().unwrap(),
+        &WorkspaceLaunch::Plugin {
             plugin_id: "codex".into(),
             profile: Some("red".into())
         }
@@ -486,14 +474,13 @@ fn workspace_plugin_hooks_are_targeted_and_mismatched_or_non_launch_actions_are_
                 .register(Box::new(RestoreResponseFixture { id, mode, calls }))
                 .unwrap();
         }
-        snapshot.launch = WorkspaceLaunch::Plugin {
-            plugin_id: "synthetic-workspace".into(),
-            profile: Some("saved".into()),
-        };
         snapshot.primary_pane = 7;
         snapshot.focused_pane = 7;
         snapshot.panes.retain(|pane| pane.id == 7);
-        snapshot.panes[0].launch = Some(snapshot.launch.clone());
+        snapshot.panes[0].launch = WorkspaceLaunch::Plugin {
+            plugin_id: "synthetic-workspace".into(),
+            profile: Some("saved".into()),
+        };
         snapshot.layout = WorkspacePaneLayout::Pane { pane: 7 };
         let mut tabs = manager(&app);
         tabs.new_tab().unwrap();

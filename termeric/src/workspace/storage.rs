@@ -202,7 +202,7 @@ fn read_workspace_metadata(dir: &Path) -> Result<(WorkspaceSnapshot, bool, Vec<S
         },
     };
 
-    migrate_workspace(&mut workspace)?;
+    check_schema(&workspace)?;
     let mut warnings = Vec::new();
     recover_usable_tabs(&mut workspace, &mut warnings);
     if workspace.tabs.is_empty() {
@@ -316,37 +316,13 @@ fn parse_workspace(path: &Path) -> Result<WorkspaceSnapshot> {
     toml::from_str(&content).with_context(|| format!("parse workspace metadata {}", path.display()))
 }
 
-fn migrate_workspace(workspace: &mut WorkspaceSnapshot) -> Result<()> {
-    match workspace.version {
-        0 | 1 => {
-            for tab in &mut workspace.tabs {
-                for pane in &mut tab.panes {
-                    if pane.launch.is_none() {
-                        pane.launch = Some(if pane.id == tab.primary_pane {
-                            tab.launch.clone()
-                        } else {
-                            match &tab.launch {
-                                super::WorkspaceLaunch::Profile { name } => {
-                                    super::WorkspaceLaunch::Profile { name: name.clone() }
-                                }
-                                super::WorkspaceLaunch::Shell
-                                | super::WorkspaceLaunch::Plugin { .. } => {
-                                    super::WorkspaceLaunch::Shell
-                                }
-                            }
-                        });
-                    }
-                }
-            }
-            workspace.version = WORKSPACE_SCHEMA_VERSION;
-        }
-        // Schema 2 already stored every launch identity. Do not infer or
-        // rewrite any of them when enabling mixed-plugin layouts in schema 3.
-        2 => workspace.version = WORKSPACE_SCHEMA_VERSION,
-        WORKSPACE_SCHEMA_VERSION => {}
-        version => anyhow::bail!(
-            "workspace schema {version} is newer than supported schema {WORKSPACE_SCHEMA_VERSION}"
-        ),
+/// Only this schema loads; older archives are not migrated.
+fn check_schema(workspace: &WorkspaceSnapshot) -> Result<()> {
+    if workspace.version != WORKSPACE_SCHEMA_VERSION {
+        anyhow::bail!(
+            "workspace schema {} is not the supported schema {WORKSPACE_SCHEMA_VERSION}",
+            workspace.version
+        );
     }
     Ok(())
 }
@@ -798,74 +774,17 @@ mod tests {
     }
 
     #[test]
-    fn old_schema_migrates_and_future_schema_is_rejected() {
+    fn only_the_current_schema_loads() {
         let temp = tempfile::tempdir().unwrap();
-        for version in [0, 1] {
+        for version in [WORKSPACE_SCHEMA_VERSION - 1, WORKSPACE_SCHEMA_VERSION + 1] {
             let mut workspace = sample_workspace();
             workspace.version = version;
-            for tab in &mut workspace.tabs {
-                for pane in &mut tab.panes {
-                    pane.launch = None;
-                }
-            }
             fs::write(
                 temp.path().join("workspace.toml"),
                 toml::to_string_pretty(&workspace).unwrap(),
             )
             .unwrap();
-            let migrated = load_workspace_from_dir(temp.path()).unwrap().workspace;
-            assert_eq!(migrated.version, WORKSPACE_SCHEMA_VERSION);
-            assert!(
-                migrated.tabs[0]
-                    .panes
-                    .iter()
-                    .all(|pane| pane.launch.is_some())
-            );
-        }
-
-        let mut workspace = sample_workspace();
-        workspace.version = 999;
-        fs::write(
-            temp.path().join("workspace.toml"),
-            toml::to_string_pretty(&workspace).unwrap(),
-        )
-        .unwrap();
-        assert!(load_workspace_from_dir(temp.path()).is_err());
-    }
-
-    #[test]
-    fn schema_two_keeps_exact_identities_and_legacy_plugin_splits_stay_shells() {
-        for version in [0, 1, 2] {
-            let mut workspace = sample_workspace();
-            workspace.version = version;
-            workspace.tabs[0].launch = super::super::WorkspaceLaunch::Plugin {
-                plugin_id: "codex".into(),
-                profile: Some("saved".into()),
-            };
-            let primary = workspace.tabs[0].primary_pane;
-            let primary_launch = workspace.tabs[0].launch.clone();
-            for pane in &mut workspace.tabs[0].panes {
-                pane.launch = if version < 2 {
-                    None
-                } else if pane.id == primary {
-                    Some(primary_launch.clone())
-                } else {
-                    Some(super::super::WorkspaceLaunch::Profile { name: "dev".into() })
-                };
-            }
-            migrate_workspace(&mut workspace).unwrap();
-            assert_eq!(workspace.version, WORKSPACE_SCHEMA_VERSION);
-            workspace.validate().unwrap();
-            for pane in &workspace.tabs[0].panes {
-                let expected = if pane.id == primary {
-                    workspace.tabs[0].launch.clone()
-                } else if version < 2 {
-                    super::super::WorkspaceLaunch::Shell
-                } else {
-                    super::super::WorkspaceLaunch::Profile { name: "dev".into() }
-                };
-                assert_eq!(pane.launch.as_ref(), Some(&expected));
-            }
+            assert!(load_workspace_from_dir(temp.path()).is_err());
         }
     }
 

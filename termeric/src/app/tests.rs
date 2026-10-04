@@ -12786,7 +12786,7 @@ fn workspace_restore_partially_recovers_missing_cwd_profile_and_cli() {
 
     let pane = |id, cwd: Option<&str>, launch| crate::workspace::WorkspacePaneSnapshot {
         id,
-        launch: Some(launch),
+        launch,
         title: None,
         working_directory: cwd.map(String::from),
         last_command: None,
@@ -12800,7 +12800,6 @@ fn workspace_restore_partially_recovers_missing_cwd_profile_and_cli() {
             title: title.into(),
             user_title: None,
             pinned: false,
-            launch: launch.clone(),
             primary_pane: 0,
             focused_pane: 0,
             layout: crate::workspace::WorkspacePaneLayout::Pane { pane: 0 },
@@ -13347,8 +13346,8 @@ fn terminal_profile_cli_launch_applies_env_cwd_title_and_workspace_identity() {
         )
         .unwrap();
     assert_eq!(
-        workspace.tabs[0].launch,
-        crate::workspace::WorkspaceLaunch::Profile { name: "dev".into() }
+        workspace.tabs[0].launch().unwrap(),
+        &crate::workspace::WorkspaceLaunch::Profile { name: "dev".into() }
     );
     let snapshot = workspace.tabs[0].clone();
     let mut restored = TabManager::new(
@@ -13400,7 +13399,6 @@ fn mixed_shell_and_profile_panes_restore_each_saved_launch() {
         title: "mixed".into(),
         user_title: None,
         pinned: false,
-        launch: crate::workspace::WorkspaceLaunch::Shell,
         primary_pane: 0,
         focused_pane: 7,
         layout: crate::workspace::WorkspacePaneLayout::Split {
@@ -13412,7 +13410,7 @@ fn mixed_shell_and_profile_panes_restore_each_saved_launch() {
         panes: vec![
             crate::workspace::WorkspacePaneSnapshot {
                 id: 0,
-                launch: Some(crate::workspace::WorkspaceLaunch::Shell),
+                launch: crate::workspace::WorkspaceLaunch::Shell,
                 title: None,
                 working_directory: None,
                 last_command: None,
@@ -13422,7 +13420,7 @@ fn mixed_shell_and_profile_panes_restore_each_saved_launch() {
             },
             crate::workspace::WorkspacePaneSnapshot {
                 id: 7,
-                launch: Some(crate::workspace::WorkspaceLaunch::Profile { name: "dev".into() }),
+                launch: crate::workspace::WorkspaceLaunch::Profile { name: "dev".into() },
                 title: None,
                 working_directory: None,
                 last_command: None,

@@ -9,14 +9,6 @@ fn fixture(primary: bool) -> (App, tempfile::TempDir, usize, usize, PaneId) {
     let (mut app, dir, mut snapshot) = super::workspace_plugin_tests::fixture();
     if primary {
         snapshot.primary_pane = 7;
-        snapshot.launch = snapshot
-            .panes
-            .iter()
-            .find(|pane| pane.id == 7)
-            .unwrap()
-            .launch
-            .clone()
-            .unwrap();
     }
     let mut tabs = super::workspace_plugin_tests::manager(&app);
     app.restore_workspace_tab(&mut tabs, &snapshot).unwrap();
@@ -126,8 +118,8 @@ fn moved_agent_restart_and_archive_keep_its_resolved_profile() {
         .unwrap()
         .workspace;
     assert_eq!(
-        loaded.tabs.last().unwrap().launch,
-        WorkspaceLaunch::Plugin {
+        loaded.tabs.last().unwrap().launch().unwrap(),
+        &WorkspaceLaunch::Plugin {
             plugin_id: "codex".into(),
             profile: Some("red".into())
         }

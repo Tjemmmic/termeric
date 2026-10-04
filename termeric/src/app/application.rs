@@ -7635,7 +7635,7 @@ mod tests {
                 .panes
                 .iter()
                 .find(|pane| pane.id == attached.0)
-                .and_then(|pane| pane.launch.as_ref()),
+                .map(|pane| &pane.launch),
             Some(&crate::workspace::WorkspaceLaunch::Profile { name: "dev".into() })
         );
 
