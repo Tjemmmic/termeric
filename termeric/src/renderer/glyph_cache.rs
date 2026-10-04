@@ -1211,15 +1211,7 @@ impl GlyphCache {
             style,
         };
 
-        // Allocate space in atlas
-        let entry = match self.allocate(
-            image.width,
-            image.height,
-            image.bearing_x,
-            image.bearing_y,
-            image.pixels.is_color(),
-            queue,
-        ) {
+        let entry = match self.upload_glyph(&image, queue) {
             Ok(entry) => entry,
             Err(error) => {
                 self.pin_entry(self.fallback_entry);
@@ -1233,37 +1225,6 @@ impl GlyphCache {
                 return Some(self.fallback_entry);
             }
         };
-
-        // Upload to GPU
-        if image.width > 0 && image.height > 0 {
-            queue.write_texture(
-                TexelCopyTextureInfo {
-                    texture: if entry.color {
-                        &self.color_texture
-                    } else {
-                        &self.texture
-                    },
-                    mip_level: 0,
-                    origin: Origin3d {
-                        x: entry.x,
-                        y: entry.y,
-                        z: u32::from(entry.page),
-                    },
-                    aspect: TextureAspect::All,
-                },
-                image.pixels.data(),
-                TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(image.width * image.pixels.bytes_per_pixel()),
-                    rows_per_image: Some(image.height),
-                },
-                Extent3d {
-                    width: image.width,
-                    height: image.height,
-                    depth_or_array_layers: 1,
-                },
-            );
-        }
 
         self.entries.insert(key, entry);
         self.shaped_entries.insert(shaped_key, entry);
@@ -1329,8 +1290,20 @@ impl GlyphCache {
         if self.deferred_shaped_entries.contains(&shaped_key) {
             return Some(ResolvedChar::Deferred);
         }
-        let synthesize_bold = self.needs_synthetic_bold(font_id, cache_key.font_weight, style);
+        self.rasterize_glyph(cache_key, font_id, style)
+            .map(ResolvedChar::Rasterized)
+    }
 
+    /// Rasterize one glyph, emboldening its mask when the selected face is
+    /// too light for a bold request. `None` when the rasterizer produces no
+    /// image or malformed pixels.
+    fn rasterize_glyph(
+        &mut self,
+        cache_key: CacheKey,
+        font_id: cosmic_text::fontdb::ID,
+        style: FontStyle,
+    ) -> Option<RasterizedGlyph> {
+        let synthesize_bold = self.needs_synthetic_bold(font_id, cache_key.font_weight, style);
         let image = self
             .rasterizer
             .rasterize(&mut self.font_system, cache_key)?;
@@ -1349,14 +1322,60 @@ impl GlyphCache {
             // emboldening would smear their RGBA edges and alter the artwork.
             other => (image.placement.width, other),
         };
-        Some(ResolvedChar::Rasterized(RasterizedGlyph {
+        Some(RasterizedGlyph {
             cache_key,
             width,
             height: image.placement.height,
             bearing_x: image.placement.left,
             bearing_y: image.placement.top,
             pixels,
-        }))
+        })
+    }
+
+    /// Place a rasterized glyph in its atlas and upload its pixels.
+    fn upload_glyph(
+        &mut self,
+        glyph: &RasterizedGlyph,
+        queue: &Queue,
+    ) -> Result<GlyphEntry, AtlasAllocationError> {
+        let entry = self.allocate(
+            glyph.width,
+            glyph.height,
+            glyph.bearing_x,
+            glyph.bearing_y,
+            glyph.pixels.is_color(),
+            queue,
+        )?;
+        if glyph.width > 0 && glyph.height > 0 {
+            queue.write_texture(
+                TexelCopyTextureInfo {
+                    texture: if entry.color {
+                        &self.color_texture
+                    } else {
+                        &self.texture
+                    },
+                    mip_level: 0,
+                    origin: Origin3d {
+                        x: entry.x,
+                        y: entry.y,
+                        z: u32::from(entry.page),
+                    },
+                    aspect: TextureAspect::All,
+                },
+                glyph.pixels.data(),
+                TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(glyph.width * glyph.pixels.bytes_per_pixel()),
+                    rows_per_image: Some(glyph.height),
+                },
+                Extent3d {
+                    width: glyph.width,
+                    height: glyph.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        Ok(entry)
     }
 
     /// Allocate space in the atlas
@@ -1940,48 +1959,13 @@ impl GlyphCache {
                 retry_next_frame = true;
                 self.pin_entry(self.fallback_entry);
                 self.fallback_entry
-            } else if let Some(image) = self.rasterizer.rasterize(&mut self.font_system, cache_key)
-            {
+            } else if let Some(glyph) = self.rasterize_glyph(cache_key, font_id, style) {
                 self.atlas_misses += 1;
-                let synthesize_bold =
-                    self.needs_synthetic_bold(font_id, cache_key.font_weight, style);
-                let source_width = image.placement.width;
-                let img_height = image.placement.height;
-                let img_left = image.placement.left;
-                let img_top = image.placement.top;
-                let pixel_count = source_width as usize * img_height as usize;
-                let Some(pixels) = glyph_pixels(image.content, &image.data, pixel_count) else {
-                    // A malformed raster won't improve on retry. Draw it like
-                    // a glyph the rasterizer can't produce, keeping the run.
-                    self.pin_entry(self.fallback_entry);
-                    self.shaped_entries.insert(shaped_key, self.fallback_entry);
-                    glyphs.push(ShapedGlyph {
-                        entry: self.fallback_entry,
-                        cell,
-                        x_offset,
-                    });
-                    continue;
-                };
-                if !pixels.is_color() {
-                    self.report_synthetic_style(font_id, style, synthesize_bold);
-                }
-                let (img_width, pixels) = match pixels {
-                    RasterPixels::Mask(data) if synthesize_bold => {
-                        let (width, data) = embolden_alpha_mask(source_width, img_height, &data);
-                        (width, RasterPixels::Mask(data))
+                match self.upload_glyph(&glyph, queue) {
+                    Ok(entry) => {
+                        self.shaped_entries.insert(shaped_key, entry);
+                        entry
                     }
-                    other => (source_width, other),
-                };
-
-                let entry = match self.allocate(
-                    img_width,
-                    img_height,
-                    img_left,
-                    img_top,
-                    pixels.is_color(),
-                    queue,
-                ) {
-                    Ok(entry) => entry,
                     Err(error) => {
                         self.pin_entry(self.fallback_entry);
                         if error == AtlasAllocationError::TooLarge {
@@ -1990,47 +1974,12 @@ impl GlyphCache {
                             retry_next_frame = true;
                             self.deferred_shaped_entries.insert(shaped_key);
                         }
-                        glyphs.push(ShapedGlyph {
-                            entry: self.fallback_entry,
-                            cell,
-                            x_offset,
-                        });
-                        continue;
+                        self.fallback_entry
                     }
-                };
-
-                if img_width > 0 && img_height > 0 {
-                    queue.write_texture(
-                        TexelCopyTextureInfo {
-                            texture: if entry.color {
-                                &self.color_texture
-                            } else {
-                                &self.texture
-                            },
-                            mip_level: 0,
-                            origin: Origin3d {
-                                x: entry.x,
-                                y: entry.y,
-                                z: u32::from(entry.page),
-                            },
-                            aspect: TextureAspect::All,
-                        },
-                        pixels.data(),
-                        TexelCopyBufferLayout {
-                            offset: 0,
-                            bytes_per_row: Some(img_width * pixels.bytes_per_pixel()),
-                            rows_per_image: Some(img_height),
-                        },
-                        Extent3d {
-                            width: img_width,
-                            height: img_height,
-                            depth_or_array_layers: 1,
-                        },
-                    );
                 }
-                self.shaped_entries.insert(shaped_key, entry);
-                entry
             } else {
+                // No image, or a malformed one that won't improve on retry:
+                // draw the replacement and keep the rest of the run.
                 self.atlas_misses += 1;
                 self.pin_entry(self.fallback_entry);
                 self.shaped_entries.insert(shaped_key, self.fallback_entry);
