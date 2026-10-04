@@ -104,7 +104,7 @@ impl ToastManager {
         self.reduced_motion = reduced_motion;
     }
 
-    fn push_inner(&mut self, severity: ToastSeverity, message: String) -> u64 {
+    fn push_inner(&mut self, severity: ToastSeverity, message: String, persistent: bool) -> u64 {
         let id = self.next_id;
         self.next_id = self.next_id.saturating_add(1);
         let toast = Toast {
@@ -113,10 +113,12 @@ impl ToastManager {
             message: bound_message(message),
             created: Instant::now(),
             duration: severity.default_duration(),
-            persistent: false,
+            persistent,
         };
         self.toasts.push_back(toast);
-        // Evict oldest if we're over the visible cap.
+        // Evict the oldest transient toast, else the oldest persistent one,
+        // while over the visible cap. The new toast is already marked, so a
+        // persistent one never makes room by evicting itself.
         while self.toasts.len() > self.max_visible {
             let evict = self
                 .toasts
@@ -129,16 +131,16 @@ impl ToastManager {
     }
 
     pub fn info(&mut self, message: impl Into<String>) {
-        self.push_inner(ToastSeverity::Info, message.into());
+        self.push_inner(ToastSeverity::Info, message.into(), false);
     }
     pub fn success(&mut self, message: impl Into<String>) {
-        self.push_inner(ToastSeverity::Success, message.into());
+        self.push_inner(ToastSeverity::Success, message.into(), false);
     }
     pub fn warning(&mut self, message: impl Into<String>) {
-        self.push_inner(ToastSeverity::Warning, message.into());
+        self.push_inner(ToastSeverity::Warning, message.into(), false);
     }
     pub fn error(&mut self, message: impl Into<String>) {
-        self.push_inner(ToastSeverity::Error, message.into());
+        self.push_inner(ToastSeverity::Error, message.into(), false);
     }
 
     /// Add an explicitly-dismissed progress/status toast and return its stable
@@ -150,11 +152,7 @@ impl ToastManager {
     /// Add a toast that stays until it is dismissed by ID, such as a problem
     /// that lasts until the person fixes it.
     pub fn persistent(&mut self, severity: ToastSeverity, message: impl Into<String>) -> u64 {
-        let id = self.push_inner(severity, message.into());
-        if let Some(toast) = self.toasts.iter_mut().find(|toast| toast.id == id) {
-            toast.persistent = true;
-        }
-        id
+        self.push_inner(severity, message.into(), true)
     }
 
     pub fn update_persistent(&mut self, id: u64, message: impl Into<String>) -> bool {
@@ -448,6 +446,22 @@ mod tests {
         assert_eq!(toasts.len(), 2);
         assert!(toasts.iter().any(|toast| toast.id == id));
         assert!(toasts.iter().any(|toast| toast.message == "second"));
+    }
+
+    #[test]
+    fn a_new_persistent_toast_is_never_evicted_by_its_own_arrival() {
+        let mut tm = ToastManager::new();
+        tm.max_visible = 2;
+        let oldest = tm.persistent_info("Uploading");
+        let older = tm.persistent_info("Downloading");
+        let mut notice = StandingNotice::default();
+        notice.show(&mut tm, ToastSeverity::Warning, "bad key".into());
+        let messages: Vec<_> = tm.iter().map(|t| t.message.as_str()).collect();
+        assert_eq!(messages, ["Downloading", "bad key"]);
+        assert!(!tm.dismiss(oldest));
+        // The notice holds the toast that is showing, so clearing it works.
+        notice.clear(&mut tm);
+        assert_eq!(tm.iter().map(|t| t.id).collect::<Vec<_>>(), [older]);
     }
 
     #[test]
