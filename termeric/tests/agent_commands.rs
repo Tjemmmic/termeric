@@ -2,7 +2,6 @@
 //! fake GUI endpoint: the `agent-event` hook, which reports to the GUI that
 //! owns its terminal and otherwise stays silent and succeeds, and the `mcp`
 //! server.
-#![cfg(unix)]
 
 use serde_json::{Value, json};
 use std::fs;

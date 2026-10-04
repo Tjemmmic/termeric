@@ -1,5 +1,4 @@
 //! Executable bridge acceptance with a private real daemon, no SSH or providers.
-#![cfg(unix)]
 
 use serde_json::{Value, json};
 use std::fs;

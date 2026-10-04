@@ -146,7 +146,6 @@ fn acknowledgement(verb: &str, id: &str) -> Value {
         "window_id": if verb == "launch-tab" { 7 } else { 8 }, "tab_id": 3})
 }
 
-#[cfg(target_os = "linux")]
 fn input_file(bytes: &[u8]) -> Stdio {
     use std::io::{Seek, SeekFrom};
     let mut file = tempfile::tempfile().unwrap();
@@ -155,7 +154,6 @@ fn input_file(bytes: &[u8]) -> Stdio {
     file.into()
 }
 
-#[cfg(target_os = "linux")]
 fn input_pipe(bytes: &[u8]) -> (std::fs::File, std::fs::File) {
     use std::os::fd::FromRawFd;
     let mut fds = [-1; 2];
@@ -173,7 +171,6 @@ fn input_pipe(bytes: &[u8]) -> (std::fs::File, std::fs::File) {
     (reader, writer)
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn stdin_environment_reaches_both_launch_targets_without_argv_or_output_exposure() {
     use std::os::fd::AsRawFd;
@@ -268,7 +265,6 @@ fn stdin_environment_reaches_both_launch_targets_without_argv_or_output_exposure
     }
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn invalid_stdin_environment_is_redacted_and_never_sent() {
     let marker = "synthetic-private";
@@ -319,7 +315,6 @@ fn invalid_stdin_environment_is_redacted_and_never_sent() {
     }
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn stdin_environment_requires_eof_and_times_out_before_contact() {
     let fixture = Fixture::new();

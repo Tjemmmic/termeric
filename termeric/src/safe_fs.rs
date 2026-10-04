@@ -256,7 +256,6 @@ mod tests {
         assert_eq!(read_text(&path, 1024).unwrap(), "new snapshot");
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn fifo_read_is_rejected_without_waiting_for_a_writer() {
         use std::os::unix::{ffi::OsStrExt, fs::OpenOptionsExt};
