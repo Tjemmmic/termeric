@@ -243,6 +243,47 @@ impl App {
         controls
     }
 
+    /// A primary press at `(local_x, local_y)` in the active tab's pane area.
+    /// On a divider, within its hit margin, it starts a drag of that exact
+    /// divider, or says why it cannot, and returns true. A zoomed tab shows
+    /// no dividers.
+    pub(super) fn press_pane_divider(&mut self, local_x: f32, local_y: f32) -> bool {
+        let Some(tab) = self.tabs.as_ref().and_then(TabManager::active_tab) else {
+            return false;
+        };
+        let Some(divider) = tab.split_panes().and_then(|panes| {
+            panes.divider_at(local_x, local_y, crate::panes::PANE_DIVIDER_HIT_MARGIN)
+        }) else {
+            return false;
+        };
+        let route = tab.live_domain_tab_route();
+        let pending = route.is_some_and(|(domain, _)| {
+            self.pending_live_domain_controls
+                .iter()
+                .any(|pending| pending.domain_id() == domain)
+        });
+        if pending {
+            self.toasts
+                .info("Wait for the pending live-domain change before resizing");
+            return true;
+        }
+        if tab.live_domain.is_some()
+            && !matches!(divider.target, crate::panes::DividerTarget::Domain(_))
+        {
+            self.toasts
+                .error("Live-domain divider is missing its daemon identity");
+        } else {
+            self.divider_dragging = Some(DividerDrag {
+                tab_id: tab.id,
+                domain: route.map(|(domain, remote_tab)| (domain.to_owned(), remote_tab)),
+                target: divider.target,
+                last_ratio_millis: divider.ratio_millis,
+            });
+        }
+        self.request_redraw(RedrawReason::PointerInput);
+        true
+    }
+
     /// Handle mouse input
     pub(super) fn handle_mouse_input(
         &mut self,
@@ -290,57 +331,12 @@ impl App {
                         return;
                     }
 
-                    // Check if click is on a pane divider (for drag-to-resize)
-                    if let Some(tabs) = &self.tabs {
-                        if let Some(tab) = tabs.active_tab() {
-                            if let Some(pm) = tab.split_panes() {
-                                let local_x = position.0 as f32 - content_left - padding;
-                                let local_y = position.1 as f32 - content_top;
-                                if let Some(divider) = pm.divider_at(
-                                    local_x,
-                                    local_y,
-                                    crate::panes::PANE_DIVIDER_HIT_MARGIN,
-                                ) {
-                                    let pending_domain = tab
-                                        .live_domain_tab_route()
-                                        .map(|(domain, _)| domain)
-                                        .filter(|domain| {
-                                            self.pending_live_domain_controls
-                                                .iter()
-                                                .any(|pending| pending.domain_id() == *domain)
-                                        });
-                                    if pending_domain.is_some() {
-                                        self.toasts.info(
-                                            "Wait for the pending live-domain change before resizing",
-                                        );
-                                        return;
-                                    }
-                                    if tab.live_domain.is_some()
-                                        && !matches!(
-                                            divider.target,
-                                            crate::panes::DividerTarget::Domain(_)
-                                        )
-                                    {
-                                        self.toasts.error(
-                                            "Live-domain divider is missing its daemon identity",
-                                        );
-                                    } else {
-                                        self.divider_dragging = Some(DividerDrag {
-                                            tab_id: tab.id,
-                                            domain: tab.live_domain_tab_route().map(
-                                                |(domain, remote_tab)| {
-                                                    (domain.to_owned(), remote_tab)
-                                                },
-                                            ),
-                                            target: divider.target,
-                                            last_ratio_millis: divider.ratio_millis,
-                                        });
-                                    }
-                                    self.request_redraw(RedrawReason::PointerInput);
-                                    return;
-                                }
-                            }
-                        }
+                    // A press on a pane divider starts a drag-to-resize.
+                    if self.press_pane_divider(
+                        position.0 as f32 - content_left - padding,
+                        position.1 as f32 - content_top,
+                    ) {
+                        return;
                     }
                 }
                 if button == MouseButton::Left {

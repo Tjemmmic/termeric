@@ -1054,3 +1054,41 @@ fn finishing_native_drags_extracts_exact_live_domain_controls_once() {
     });
     assert!(app.take_native_drag_controls().is_empty());
 }
+
+#[test]
+fn a_press_within_a_dividers_margin_drags_it_unless_the_tab_is_zoomed() {
+    use crate::panes::PANE_DIVIDER_HIT_MARGIN;
+    let mut app = divider_owner_fixture();
+    app.divider_dragging = None;
+    let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
+    let tab_id = tab.id;
+    let divider = tab.split_panes().unwrap().get_dividers()[0];
+    assert!(divider.vertical);
+    let middle = (divider.start + divider.end) / 2.0;
+
+    // At the margin the press belongs to the pane beside the divider.
+    assert!(!app.press_pane_divider(divider.position + PANE_DIVIDER_HIT_MARGIN, middle));
+    assert!(app.divider_dragging.is_none());
+
+    // Within it, the press drags exactly that divider.
+    let inside = PANE_DIVIDER_HIT_MARGIN - 1.0;
+    assert!(app.press_pane_divider(divider.position - inside, middle));
+    let drag = app.divider_dragging.take().unwrap();
+    assert_eq!(drag.tab_id, tab_id);
+    assert_eq!(drag.target, divider.target);
+    assert_eq!(drag.last_ratio_millis, divider.ratio_millis);
+    assert!(drag.domain.is_none());
+
+    // A zoomed tab shows one pane and no dividers to drag.
+    let panes = app
+        .tabs
+        .as_mut()
+        .unwrap()
+        .active_tab_mut()
+        .unwrap()
+        .split_panes_mut()
+        .unwrap();
+    assert!(panes.toggle_zoom());
+    assert!(!app.press_pane_divider(divider.position, middle));
+    assert!(app.divider_dragging.is_none());
+}

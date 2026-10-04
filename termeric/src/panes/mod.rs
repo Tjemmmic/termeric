@@ -2908,4 +2908,66 @@ mod tests {
             assert!(pane.terminal.drain_events().is_empty());
         }
     }
+
+    #[test]
+    fn divider_hits_reach_the_margin_along_the_divider_and_stop_when_zoomed() {
+        let mut manager = property_manager(3);
+        let dividers = manager.get_dividers();
+        let vertical = dividers.iter().find(|divider| divider.vertical).unwrap();
+        let horizontal = dividers.iter().find(|divider| !divider.vertical).unwrap();
+        let near = PANE_DIVIDER_HIT_MARGIN - 0.5;
+        for divider in [vertical, horizontal] {
+            // A quarter of the way along, clear of where the dividers meet.
+            let along = divider.start + (divider.end - divider.start) / 4.0;
+            let at = |across: f32| {
+                if divider.vertical {
+                    (across, along)
+                } else {
+                    (along, across)
+                }
+            };
+            for across in [divider.position - near, divider.position + near] {
+                let (x, y) = at(across);
+                let hit = manager.divider_at(x, y, PANE_DIVIDER_HIT_MARGIN).unwrap();
+                assert_eq!(hit.target, divider.target);
+                assert_eq!(manager.hit_test_divider(x, y), Some(divider.vertical));
+            }
+            for across in [
+                divider.position - PANE_DIVIDER_HIT_MARGIN,
+                divider.position + PANE_DIVIDER_HIT_MARGIN,
+            ] {
+                let (x, y) = at(across);
+                assert_ne!(
+                    manager
+                        .divider_at(x, y, PANE_DIVIDER_HIT_MARGIN)
+                        .map(|hit| hit.target),
+                    Some(divider.target)
+                );
+            }
+            // Past either end, the divider is not there.
+            let (x, y) = if divider.vertical {
+                (divider.position, divider.end + 1.0)
+            } else {
+                (divider.end + 1.0, divider.position)
+            };
+            assert_ne!(
+                manager
+                    .divider_at(x, y, PANE_DIVIDER_HIT_MARGIN)
+                    .map(|hit| hit.target),
+                Some(divider.target)
+            );
+        }
+
+        assert!(manager.toggle_zoom());
+        for divider in [vertical, horizontal] {
+            let along = divider.start + (divider.end - divider.start) / 4.0;
+            let (x, y) = if divider.vertical {
+                (divider.position, along)
+            } else {
+                (along, divider.position)
+            };
+            assert!(manager.divider_at(x, y, PANE_DIVIDER_HIT_MARGIN).is_none());
+            assert_eq!(manager.hit_test_divider(x, y), None);
+        }
+    }
 }
