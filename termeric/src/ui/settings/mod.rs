@@ -1,6 +1,6 @@
 use crate::config::theme::Theme;
 use crate::config::{
-    AccessibilityPreference, BackgroundImageFit, Config, SplashMode, TabBarPosition,
+    AccessibilityPreference, BackgroundImageFit, Config, CursorStyle, SplashMode, TabBarPosition,
     WindowLevelConfig,
 };
 use crate::input::keybindings::ShortcutRegistry;
@@ -510,7 +510,7 @@ pub enum SettingKind {
 /// How a picked dropdown option becomes an action.
 #[derive(Debug, Clone, Copy)]
 pub enum Choose {
-    /// The option's text is the value: a theme, font family, or cursor style.
+    /// The option's text is the value: a theme or font family.
     Text(fn(String) -> SettingsAction),
     /// The options are On and Off, in that order.
     Toggle(fn(bool) -> SettingsAction),
@@ -678,7 +678,7 @@ pub enum SettingsAction {
     /// Change scroll speed
     SetScrollSpeed(f64),
     /// Change cursor style
-    SetCursorStyle(String),
+    SetCursorStyle(CursorStyle),
     /// Change cursor blink
     SetCursorBlink(bool),
     /// Change cursor blink rate
@@ -1271,7 +1271,6 @@ impl SettingsPanel {
 
         // Cursor
         {
-            use crate::config::CursorStyle;
             let style_options: Vec<String> = CursorStyle::ALL
                 .iter()
                 .map(|s| s.label().to_string())
@@ -1287,7 +1286,9 @@ impl SettingsPanel {
                         label: "Style",
                         value: config.cursor.style.label().into(),
                         kind: SettingKind::Dropdown {
-                            choose: Choose::Text(SettingsAction::SetCursorStyle),
+                            choose: Choose::Index(|index| {
+                                pick(CursorStyle::ALL, index, SettingsAction::SetCursorStyle)
+                            }),
                             options: style_options,
                             selected: style_selected,
                         },
@@ -3248,6 +3249,26 @@ mod tests {
             SettingsPanel::option_action(&level.kind, 2),
             SettingsAction::SetWindowLevel(WindowLevelConfig::AlwaysOnBottom)
         ));
+    }
+
+    #[test]
+    fn cursor_style_setting_maps_typed_style() {
+        let mut panel = SettingsPanel::new();
+        panel.select_page(SettingsPage::Terminal);
+        let mut config = Config::default();
+        config.cursor.style = CursorStyle::Beam;
+        let entries = panel.build_entries(&config, &default_registry());
+        let style = entries
+            .iter()
+            .find(|entry| entry.section == SettingsSection::Cursor && entry.label == "Style")
+            .expect("cursor style row");
+        assert_eq!(style.value, "Beam");
+        for (index, expected) in CursorStyle::ALL.iter().enumerate() {
+            assert!(matches!(
+                SettingsPanel::option_action(&style.kind, index),
+                SettingsAction::SetCursorStyle(chosen) if chosen == *expected
+            ));
+        }
     }
 
     #[test]

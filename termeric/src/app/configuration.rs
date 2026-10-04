@@ -650,14 +650,7 @@ impl App {
             SettingsAction::SetTabBarPosition(position) => {
                 config.window.tab_bar_position = position;
             }
-            SettingsAction::SetCursorStyle(style_name) => {
-                use crate::config::CursorStyle;
-                config.cursor.style = match style_name.as_str() {
-                    "Underline" => CursorStyle::Underline,
-                    "Beam" => CursorStyle::Beam,
-                    _ => CursorStyle::Block,
-                };
-            }
+            SettingsAction::SetCursorStyle(style) => config.cursor.style = style,
             SettingsAction::SetCursorBlink(enabled) => config.cursor.blink = enabled,
             SettingsAction::SetCursorBlinkRate(rate) => config.cursor.blink_rate = rate,
             SettingsAction::SetVisualBell(enabled) => config.bell.visual = enabled,
