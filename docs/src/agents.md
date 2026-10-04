@@ -49,7 +49,7 @@ When the focused terminal runs an agent, the command palette adds commands for i
 | **Toggle Agent Transcript** | Starts or stops recording this terminal's raw output to a transcript. |
 | **Copy Last Agent Response** | Copies the agent's most recent answer, from its status report or else from the end of its own conversation log. Needs agent status. |
 
-**Review Agent Diff** and **Copy Agent Diff** appear only when the agent printed a diff Termeric recognized, and only for agents Termeric started.
+**Review Agent Diff** and **Copy Agent Diff** appear only when the agent printed a diff Termeric recognized. For an agent you start from a shell, Termeric reads diffs once it has recognized the agent, so output from its first second or so can be missed.
 
 Before Termeric types anything into an agent, it checks the terminal again. If the agent has exited, has handed the terminal to another program such as an editor, or the pane is read-only, you get a notice and nothing is typed. Text meant for an agent never lands in a shell.
 
@@ -188,4 +188,4 @@ A saved [workspace](workspaces-and-sessions.md) remembers each agent terminal's 
 
 - Status comes only from Claude Code and Codex. Gemini CLI, OpenCode in a terminal, and custom agents are recognized, but their state is not known.
 - Agents in [live domain](live-domains.md) terminals, or inside tmux or screen, cannot report status.
-- Diff review reads diffs from the terminal output, so an agent that never prints a unified diff has nothing to show there. **Review Agent Changes…** works regardless.
+- Diff review reads diffs from the terminal output, so an agent that never prints a unified diff has nothing to show there, and a diff an agent started from a shell prints before Termeric recognizes it is missed. **Review Agent Changes…** works regardless.

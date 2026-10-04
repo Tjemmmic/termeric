@@ -53,12 +53,15 @@ impl TerminalIntegration {
         }
     }
 
+    /// `plugin` is whether Termeric started this terminal as a plugin or
+    /// agent. An agent started from a shell is captured too, once the agent
+    /// scan has seen it, so its first diff can arrive a scan late.
     pub fn observe_output(&mut self, data: &[u8], plugin: bool) {
         if let Some(recorder) = &mut self.transcript {
             let result = recorder.record_output(data);
             self.handle_write(result);
         }
-        if plugin {
+        if plugin || self.agent.is_some() {
             self.capture_diffs(Some(data));
         }
     }
@@ -382,6 +385,27 @@ mod tests {
         assert_eq!(plugin.drain_notices().len(), 16);
         assert_eq!(shell.diff_detector.unreviewed_count(), 0);
         assert!(shell.drain_notices().is_empty());
+    }
+
+    #[test]
+    fn shell_output_is_captured_only_while_an_agent_runs_in_it() {
+        let patch = b"--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n+new\nfinished\n";
+        let mut shell = TerminalIntegration::default();
+        shell.observe_output(patch, false);
+        assert_eq!(shell.diff_detector.unreviewed_count(), 0);
+
+        shell.agent = Some(AgentSession {
+            agent_id: "claude".into(),
+            launched: false,
+            profile: None,
+            process: None,
+        });
+        shell.observe_output(patch, false);
+        assert_eq!(shell.diff_detector.unreviewed_count(), 1);
+        assert_eq!(
+            shell.diff_detector.latest_unreviewed().unwrap().filename,
+            "file"
+        );
     }
 
     #[test]
