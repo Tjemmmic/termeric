@@ -77,7 +77,7 @@ Termeric supports the 16 ANSI colors (from your [theme](themes.md)), the 256-col
 | --- | --- |
 | Text attributes (SGR) | Bold, dim, italic, underline, slow and rapid blink, inverse, hidden, strikethrough. |
 | Underline styles | Single, double (`4:2` or `21`), curly (`4:3`), dotted (`4:4`), dashed (`4:5`), and underline color (`58`/`59`). |
-| Cursor | Shape and blink with DECSCUSR (`CSI Ps SP q`, Ps 0–6), blink mode 12, visibility mode 25, save and restore. Programs' choices override `[cursor]` until they reset it. |
+| Cursor | Shape and blink with DECSCUSR (`CSI Ps SP q`, Ps 1–6), blink mode 12, visibility mode 25, save and restore. Programs' choices override `[cursor]` until they reset it: Ps 0 (the terminfo entry's `Se`) returns to your `[cursor]` settings, as in foot and kitty, rather than to xterm's blinking block. |
 | Screen and editing | Alternate screen (modes 47, 1047, 1049), cursor save mode 1048, scroll regions, left and right margins (mode 69), insert and delete, erase, repeat (REP), tab stops, and the VT400 rectangle operations. |
 | Character sets | ASCII, UK, and DEC Special Graphics (line drawing) in G0–G3 with shifts. |
 | Bracketed paste | Mode 2004. |

@@ -23,10 +23,10 @@ pub struct TerminalCursorStyle {
 impl TerminalCursorStyle {
     pub(super) fn from_parameter(parameter: u16) -> Option<Self> {
         let style = match parameter {
-            0 | 1 => Self {
+            1 => Self {
                 shape: TerminalCursorShape::Block,
                 blinking: true,
-                parameter: parameter as u8,
+                parameter: 1,
             },
             2 => Self {
                 shape: TerminalCursorShape::Block,

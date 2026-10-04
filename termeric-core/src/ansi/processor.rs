@@ -2606,6 +2606,33 @@ mod tests {
     }
 
     #[test]
+    fn decscusr_zero_returns_the_cursor_to_its_configured_style() {
+        let mut processor = Processor::new();
+        let mut terminal = Terminal::new(10, 2);
+        for reset in [b"\x1b[0 q".as_slice(), b"\x1b[ q"] {
+            processor.process(&mut terminal, b"\x1b[5 q\x1b[?12h");
+            assert!(terminal.cursor_style().is_some());
+            assert_eq!(terminal.cursor_blink_override(), Some(true));
+
+            processor.process(&mut terminal, reset);
+            assert_eq!(terminal.cursor_style(), None);
+            assert_eq!(terminal.cursor_blink_override(), None);
+            assert!(
+                !terminal
+                    .mode()
+                    .contains(crate::term::TerminalMode::CURSOR_BLINKING)
+            );
+            processor.process(&mut terminal, b"\x1bP$q q\x1b\\");
+            assert_eq!(
+                terminal.drain_events(),
+                vec![crate::event::TerminalEvent::PtyWrite(
+                    b"\x1bP1$r0 q\x1b\\".to_vec()
+                )]
+            );
+        }
+    }
+
+    #[test]
     fn unknown_and_oversized_dcs_are_negative_or_discarded_without_leaking_text() {
         let mut processor = Processor::new();
         let mut terminal = Terminal::new(10, 2);

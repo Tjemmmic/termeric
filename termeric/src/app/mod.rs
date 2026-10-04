@@ -4061,7 +4061,20 @@ mod helper_tests {
             terminal.cursor_style().map(|style| style.shape),
             Some(TerminalCursorShape::Underline)
         );
+        // Ps 0 returns to the configured cursor rather than xterm's
+        // blinking block, so a program's terminfo Se restores it.
         terminal.process(b"\x1b[0 q");
+        assert_eq!(terminal.cursor_style(), None);
+        assert_eq!(
+            resolve_cursor_presentation(
+                CursorStyle::Beam,
+                false,
+                terminal.cursor_style(),
+                terminal.cursor_blink_override(),
+            ),
+            (CursorStyle::Beam, false)
+        );
+        terminal.process(b"\x1b[1 q");
         assert_eq!(
             resolve_cursor_presentation(
                 CursorStyle::Beam,

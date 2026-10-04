@@ -1222,9 +1222,16 @@ impl Terminal {
             })
     }
 
-    /// Apply DECSCUSR. Invalid parameters leave the current style unchanged.
+    /// Apply DECSCUSR. Ps 0 hands the cursor back to the user's configured
+    /// shape and blink, as foot and kitty do, so a program's terminfo `Se`
+    /// restores the person's choice rather than xterm's blinking block.
+    /// Invalid parameters leave the current style unchanged.
     pub(crate) fn set_cursor_style(&mut self, parameter: u16) {
-        if let Some(style) = TerminalCursorStyle::from_parameter(parameter) {
+        if parameter == 0 {
+            self.cursor_style = None;
+            self.cursor_blink_override = None;
+            self.set_mode(TerminalMode::CURSOR_BLINKING, false);
+        } else if let Some(style) = TerminalCursorStyle::from_parameter(parameter) {
             self.cursor_style = Some(style);
             self.cursor_blink_override = None;
             self.set_mode(TerminalMode::CURSOR_BLINKING, style.blinking);
