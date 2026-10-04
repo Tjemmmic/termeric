@@ -241,9 +241,11 @@ impl ProcessResources {
                 let task = task.unwrap().path();
                 match std::fs::read_to_string(task.join("children")) {
                     Ok(children) => Some(children.split_whitespace().count()),
-                    // The thread exited after the listing.
+                    // The thread exited after the listing: gone before the
+                    // open, or during the read.
                     Err(error)
-                        if error.kind() == std::io::ErrorKind::NotFound && !task.exists() =>
+                        if error.raw_os_error() == Some(libc::ESRCH)
+                            || (error.kind() == std::io::ErrorKind::NotFound && !task.exists()) =>
                     {
                         None
                     }

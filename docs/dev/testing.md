@@ -39,7 +39,7 @@ Set `TERMERIC_GUI_VISUAL_OUTPUT=path.png` to save the frame, `TERMERIC_GPU_SMOKE
 
 ## Soak
 
-The soak repeats terminal, search, image, pane, tab, session, transcript, and diff work for a while, then fails if the test process's memory, threads, open files, or child processes grew past fixed limits:
+The soak repeats terminal, search, image, pane, tab, session, transcript, and diff work for a while, then fails if the test process's memory, threads, open files, or child processes grew past fixed limits. It measures the whole test process, so run it on its own, as below, not alongside other tests:
 
 ```bash
 TERMERIC_SOAK_DURATION_SECONDS=60 cargo test -p termeric --locked -- --ignored scheduled_resource_soak_scenario
