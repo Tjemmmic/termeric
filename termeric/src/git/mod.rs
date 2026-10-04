@@ -90,16 +90,19 @@ impl GitRepo {
         let mut branches = Vec::new();
         for entry in self.repo.branches(Some(git2::BranchType::Remote))? {
             let (branch, _) = entry?;
+            // Skip each remote's HEAD, the one symbolic remote-tracking ref
+            // git keeps. Matching names instead would also drop a real
+            // branch such as `origin/release/HEAD`.
+            if branch.get().kind() == Some(git2::ReferenceType::Symbolic) {
+                continue;
+            }
             if let Some(name) = branch.name()? {
                 // Strip "origin/" prefix for cleaner display
                 let short = name.strip_prefix("origin/").unwrap_or(name);
-                // Skip every remote's HEAD pointer
-                if !name.ends_with("/HEAD") {
-                    let Some(name) = budget.copy_name(short) else {
-                        return Ok(None);
-                    };
-                    branches.push(name);
-                }
+                let Some(name) = budget.copy_name(short) else {
+                    return Ok(None);
+                };
+                branches.push(name);
             }
         }
         branches.sort();
@@ -288,6 +291,7 @@ mod tests {
             "refs/remotes/origin/upstream/shared",
             "refs/remotes/upstream/shared",
             "refs/remotes/upstream/other",
+            "refs/remotes/origin/release/HEAD",
         ] {
             repo.reference(reference, commit, false, "fixture").unwrap();
         }
@@ -308,11 +312,12 @@ mod tests {
                 "upstream/shared",
                 "z-local",
                 "a-remote",
+                "release/HEAD",
                 "upstream/other"
             ]
         );
-        // Eight collected names, including normalized/cross-list duplicates.
-        // origin/HEAD is excluded before charging. Charge normalized names
+        // Nine collected names, including normalized/cross-list duplicates.
+        // The remotes' HEADs are excluded before charging. Charge normalized names
         // before sorting and deduplication, across both local and remote lists.
         let bytes = [
             "z-local",
@@ -323,16 +328,17 @@ mod tests {
             "upstream/shared",
             "upstream/shared",
             "upstream/other",
+            "release/HEAD",
         ]
         .iter()
         .map(|name| name.len())
         .sum::<usize>();
         for (names_left, bytes_left, accepted) in [
-            (8, bytes, true),
-            (7, bytes, false),
-            (8, bytes - 1, false),
+            (9, bytes, true),
+            (8, bytes, false),
+            (9, bytes - 1, false),
             (0, bytes, false),
-            (8, 0, false),
+            (9, 0, false),
         ] {
             let result = git
                 .branch_names_with_budget(BranchBudget {
