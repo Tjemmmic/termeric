@@ -156,7 +156,7 @@ An optional picture behind the terminal content. See [Themes and backgrounds](th
 | Setting | Default | Description |
 | --- | --- | --- |
 | `visual` | `true` | Flash the terminal when a program rings the bell. |
-| `audio` | `false` | Play a sound when a program rings the bell. |
+| `audio` | `false` | Play a sound when a program rings the bell, through `paplay`. One sound plays at a time. If the player fails, or is still running after 5 seconds and has to be stopped, Termeric shows a warning. |
 | `visual_duration_ms` | `100` | Length of the flash in milliseconds, 10 to 5000. |
 
 ### [shell]

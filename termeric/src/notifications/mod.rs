@@ -8,7 +8,9 @@
 mod icon;
 mod tracked;
 
-use std::process::{Child, Command};
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc;
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::config::BellConfigFile;
@@ -19,6 +21,11 @@ use termeric_core::NotificationSound;
 const MAX_DELIVERY_ERROR_CHARS: usize = 512;
 /// Bells closer together than this are ignored.
 const BELL_RATE_LIMIT: Duration = Duration::from_millis(50);
+/// A bell sound still playing after this long is stopped and reported, so a
+/// hung player cannot silence the bell for good.
+const AUDIO_PLAYER_TIMEOUT: Duration = Duration::from_secs(5);
+/// How often the waiter checks whether the player has exited.
+const AUDIO_PLAYER_POLL: Duration = Duration::from_millis(20);
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum NotificationCompletion {
@@ -37,8 +44,9 @@ pub(crate) enum NotificationCompletion {
 #[cfg(test)]
 pub(crate) type CapturedNotificationCommand = (&'static str, crate::tabs::TerminalIdentity, String);
 
-/// Turns delivery failures into bounded, logged messages for the person,
-/// reporting each one once until a delivery succeeds again.
+/// Turns delivery failures into bounded messages for the person. Every
+/// failure is logged; the person is shown each one once, until a delivery
+/// succeeds again.
 struct FailureReport {
     prefix: &'static str,
     last: Option<String>,
@@ -49,7 +57,8 @@ impl FailureReport {
         Self { prefix, last: None }
     }
 
-    /// The message to show for `detail`, or `None` when it repeats the last.
+    /// Logs `detail`, and returns the message to show for it, or `None` when
+    /// it repeats the last one shown.
     fn report(&mut self, detail: &str) -> Option<String> {
         let message = crate::safe_text::truncate_with_ellipsis(
             &format!("{}: {detail}", self.prefix),
@@ -77,8 +86,10 @@ pub struct Bell {
     /// When the visual bell started, while it is showing
     visual_start: Option<Instant>,
     audio_command: (String, Vec<String>),
-    /// The sound playing now. One at a time: a bell during it stays silent.
-    audio_player: Option<Child>,
+    audio_timeout: Duration,
+    /// The waiter for the sound playing now, which returns how it ended. One
+    /// at a time: a bell during it stays silent.
+    audio_player: Option<JoinHandle<Result<(), String>>>,
     audio_failure: FailureReport,
 }
 
@@ -94,6 +105,7 @@ impl Bell {
                 "paplay".into(),
                 vec!["/usr/share/sounds/freedesktop/stereo/bell.oga".into()],
             ),
+            audio_timeout: AUDIO_PLAYER_TIMEOUT,
             audio_player: None,
             audio_failure: FailureReport::new("Audio bell unavailable"),
         }
@@ -113,11 +125,10 @@ impl Bell {
             self.visual_start = Some(Instant::now());
         }
 
-        if self.config.audio {
-            if let Err(error) = self.play_audio() {
-                return self.audio_failure.report(&error);
-            }
-            self.audio_failure.recovered();
+        if self.config.audio
+            && let Some(report) = self.play_audio()
+        {
+            return Some(report);
         }
 
         log::debug!("Bell triggered");
@@ -136,7 +147,6 @@ impl Bell {
         {
             self.visual_start = None;
         }
-        self.reap_audio_player();
     }
 
     /// Get visual bell intensity (0.0 to 1.0 based on time remaining)
@@ -150,36 +160,31 @@ impl Bell {
         }
     }
 
-    /// Start the bell sound unless one is still playing. The spawn does not
-    /// wait for the sound; `update` and the next bell reap the player.
-    fn play_audio(&mut self) -> Result<(), String> {
-        if self.reap_audio_player() {
-            return Ok(());
+    /// Starts the bell sound unless one is still playing. Returns a failure
+    /// to show: how the last sound ended, or why this one could not start. A
+    /// sound that played through is what clears an earlier failure.
+    fn play_audio(&mut self) -> Option<String> {
+        if self
+            .audio_player
+            .as_ref()
+            .is_some_and(|player| !player.is_finished())
+        {
+            return None;
+        }
+        let mut failure = None;
+        if let Some(player) = self.audio_player.take() {
+            match player.join() {
+                Ok(Ok(())) => self.audio_failure.recovered(),
+                Ok(Err(error)) => failure = Some(error),
+                Err(_) => failure = Some("the audio bell waiter panicked".to_owned()),
+            }
         }
         let (program, args) = &self.audio_command;
-        let player = Command::new(program)
-            .args(args)
-            .spawn()
-            .map_err(|error| format!("could not start {program}: {error}"))?;
-        self.audio_player = Some(player);
-        Ok(())
-    }
-
-    /// Reaps a finished sound player. Returns whether one is still playing.
-    fn reap_audio_player(&mut self) -> bool {
-        let Some(player) = &mut self.audio_player else {
-            return false;
-        };
-        match player.try_wait() {
-            Ok(None) => return true,
-            Ok(Some(status)) if !status.success() => {
-                log::warn!("Audio bell player exited unsuccessfully: {status}");
-            }
-            Ok(Some(_)) => {}
-            Err(error) => log::warn!("Could not reap the audio bell player: {error}"),
+        match start_audio_player(program, args, self.audio_timeout) {
+            Ok(player) => self.audio_player = Some(player),
+            Err(error) => failure = Some(error),
         }
-        self.audio_player = None;
-        false
+        failure.and_then(|error| self.audio_failure.report(&error))
     }
 
     /// Update configuration
@@ -204,6 +209,76 @@ impl Default for Bell {
     fn default() -> Self {
         Self::new(BellConfigFile::default())
     }
+}
+
+/// Plays one bell sound. A waiter thread owns the player: it reaps it, even
+/// after the `Bell` is gone, and stops it if it is still running after
+/// `timeout`. The player's stdio is null, so its messages never reach the
+/// terminal Termeric was started from.
+fn start_audio_player(
+    program: &str,
+    args: &[String],
+    timeout: Duration,
+) -> Result<JoinHandle<Result<(), String>>, String> {
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let name = program.to_owned();
+    let (started, result) = mpsc::sync_channel(1);
+    // Create the waiter before spawning its player, so a thread creation
+    // failure cannot leave a process nobody reaps.
+    let waiter = std::thread::Builder::new()
+        .name("termeric-bell".into())
+        .spawn(move || match command.spawn() {
+            Ok(player) => {
+                let _ = started.send(Ok(()));
+                wait_for_audio_player(player, &name, timeout)
+            }
+            Err(error) => {
+                let _ = started.send(Err(error));
+                Ok(())
+            }
+        })
+        .map_err(|error| format!("could not start the audio bell waiter: {error}"))?;
+    match result.recv() {
+        Ok(Ok(())) => Ok(waiter),
+        Ok(Err(error)) => Err(format!("could not start {program}: {error}")),
+        Err(_) => Err(format!(
+            "the audio bell waiter stopped before starting {program}"
+        )),
+    }
+}
+
+/// Waits for `player` to exit, stopping it once `timeout` has passed, and
+/// returns a failure unless it played through.
+fn wait_for_audio_player(
+    mut player: Child,
+    program: &str,
+    timeout: Duration,
+) -> Result<(), String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match player.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(status)) => return Err(format!("{program} exited unsuccessfully ({status})")),
+            Ok(None) if Instant::now() >= deadline => break,
+            Ok(None) => std::thread::sleep(AUDIO_PLAYER_POLL),
+            Err(error) => {
+                log::warn!("Could not check on the audio bell player {program}: {error}");
+                break;
+            }
+        }
+    }
+    player
+        .kill()
+        .and_then(|()| player.wait())
+        .map_err(|error| format!("could not stop {program}: {error}"))?;
+    Err(format!(
+        "{program} was still playing after {timeout:?} and was stopped"
+    ))
 }
 
 /// Notification manager for system notifications
@@ -261,9 +336,7 @@ impl Notifications {
             Ok(tracked) => tracked.show_untracked(request),
             Err(report) => return report,
         };
-        delivered
-            .err()
-            .and_then(|error| self.report_failure(&error))
+        self.delivered(delivered)
     }
 
     /// Route a terminal-owned notification, using tracked native handles when
@@ -284,9 +357,7 @@ impl Notifications {
             Ok(tracked) => tracked.show(origin, request),
             Err(report) => return report,
         };
-        delivered
-            .err()
-            .and_then(|error| self.report_failure(&error))
+        self.delivered(delivered)
     }
 
     /// Query the exact origin's currently live named OSC 99 notifications.
@@ -300,9 +371,7 @@ impl Notifications {
             Ok(tracked) => tracked.alive(origin, identifier, reply_uses_8bit_controls),
             Err(report) => return report,
         };
-        delivered
-            .err()
-            .and_then(|error| self.report_failure(&error))
+        self.delivered(delivered)
     }
 
     /// Close one exact origin-owned tracked notification.
@@ -312,7 +381,7 @@ impl Notifications {
         identifier: String,
     ) -> Option<String> {
         let closed = self.tracked.as_ref()?.close(origin, identifier);
-        closed.err().and_then(|error| self.report_failure(&error))
+        self.delivered(closed)
     }
 
     /// The desktop notification worker, started on first use. On failure,
@@ -329,6 +398,19 @@ impl Notifications {
 
     fn report_failure(&mut self, error: &str) -> Option<String> {
         self.delivery_failure.report(error)
+    }
+
+    /// The failure to show for handing a request to the worker. A request
+    /// that gets through clears the last failure, so a later one, such as
+    /// another busy queue, is shown again.
+    fn delivered(&mut self, handed_off: Result<(), String>) -> Option<String> {
+        match handed_off {
+            Ok(()) => {
+                self.delivery_failure.recovered();
+                None
+            }
+            Err(error) => self.report_failure(&error),
+        }
     }
 
     /// Drain asynchronous lifecycle failures for visible app reporting.
@@ -446,45 +528,128 @@ mod tests {
         assert!(first.contains("termeric-audio-helper"));
         assert!(bell.ring().is_none());
 
+        // Starting a player is not enough: one that plays through clears
+        // the failure, so the next one is shown again.
         bell.set_audio_command_for_test("/bin/true", &[]);
         assert!(bell.ring().is_none());
-        bell.audio_player.as_mut().unwrap().wait().unwrap();
+        wait_for_player(&bell);
         bell.set_audio_command_for_test("/definitely/missing/termeric-audio-helper", &[]);
         assert!(bell.ring().is_some());
     }
 
-    #[test]
-    fn a_playing_sound_is_not_overlapped_and_a_finished_one_is_reaped() {
-        let mut bell = audio_bell();
-        bell.set_audio_command_for_test("/bin/sh", &["-c", "sleep 30"]);
-        assert!(bell.ring().is_none());
-        let playing = bell.audio_player.as_ref().unwrap().id();
-        assert!(bell.ring().is_none());
-        assert_eq!(bell.audio_player.as_ref().unwrap().id(), playing);
+    /// Waits for the playing sound's waiter to finish, without joining it, so
+    /// the next bell is the one that collects how it ended.
+    fn wait_for_player(bell: &Bell) {
+        let player = bell.audio_player.as_ref().expect("a sound is playing");
+        assert!(
+            crate::test_support::poll_until(Duration::from_secs(10), || player.is_finished()),
+            "the audio bell waiter did not finish"
+        );
+    }
 
-        let player = bell.audio_player.as_mut().unwrap();
-        player.kill().unwrap();
-        // Wait without reaping, so update() is the one that reaps it.
-        let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::uninit();
-        // SAFETY: `info` is writable for waitid, and WNOWAIT leaves the
-        // exited child for try_wait to reap.
-        let waited = unsafe {
-            libc::waitid(
-                libc::P_PID,
-                playing as libc::id_t,
-                info.as_mut_ptr(),
-                libc::WEXITED | libc::WNOWAIT,
-            )
+    /// Lines the fake player appended to `log`, once there are `count`.
+    fn wait_for_lines(log: &std::path::Path, count: usize) -> Vec<String> {
+        let read = || {
+            std::fs::read_to_string(log)
+                .unwrap_or_default()
+                .lines()
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
         };
-        assert_eq!(waited, 0);
-        bell.update();
-        assert!(bell.audio_player.is_none());
+        assert!(
+            crate::test_support::poll_until(Duration::from_secs(10), || read().len() >= count),
+            "the fake player did not start"
+        );
+        read()
+    }
 
+    fn assert_reaped(pid: &str) {
+        let pid: libc::pid_t = pid.parse().unwrap();
+        let mut status = 0;
+        // SAFETY: The PID names a fake player this process started, status
+        // is writable, and WNOHANG never blocks.
+        let result = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        let error = std::io::Error::last_os_error();
+        assert_eq!(result, -1, "the player was not reaped by its waiter");
+        assert_eq!(error.raw_os_error(), Some(libc::ECHILD));
+    }
+
+    /// A fake player: it appends its PID and where its stdin, stdout, and
+    /// stderr lead to the log in `$1`, then plays until `$2` exists.
+    const FAKE_PLAYER: &str = r#"exec 3>>"$1"
+echo "$$" >&3
+for fd in 0 1 2; do readlink "/proc/$$/fd/$fd" >&3; done
+exec 3>&-
+while [ ! -e "$2" ]; do sleep 0.01; done"#;
+
+    #[test]
+    fn one_sound_plays_at_a_time_without_stdio_and_is_reaped() {
+        let directory = tempfile::tempdir().unwrap();
+        let log = directory.path().join("player.log");
+        let release = directory.path().join("release");
+        let mut bell = audio_bell();
+        bell.set_audio_command_for_test(
+            "/bin/sh",
+            &[
+                "-c",
+                FAKE_PLAYER,
+                "player",
+                log.to_str().unwrap(),
+                release.to_str().unwrap(),
+            ],
+        );
         assert!(bell.ring().is_none());
-        let next = bell.audio_player.as_mut().unwrap();
-        assert_ne!(next.id(), playing);
-        next.kill().unwrap();
-        next.wait().unwrap();
+        let lines = wait_for_lines(&log, 4);
+        assert_eq!(lines[1..], ["/dev/null", "/dev/null", "/dev/null"]);
+        let waiter = bell.audio_player.as_ref().unwrap().thread().id();
+
+        // A bell during the sound stays silent instead of starting another.
+        assert!(bell.ring().is_none());
+        assert_eq!(bell.audio_player.as_ref().unwrap().thread().id(), waiter);
+        bell.update();
+        assert!(bell.audio_player.is_some());
+
+        std::fs::write(&release, b"").unwrap();
+        wait_for_player(&bell);
+        assert_reaped(&lines[0]);
+        assert!(bell.ring().is_none());
+        assert_ne!(bell.audio_player.as_ref().unwrap().thread().id(), waiter);
+        let lines = wait_for_lines(&log, 8);
+        assert_ne!(lines[4], lines[0]);
+        wait_for_player(&bell);
+        assert_reaped(&lines[4]);
+    }
+
+    #[test]
+    fn a_hung_player_is_stopped_reaped_and_reported_once() {
+        let directory = tempfile::tempdir().unwrap();
+        let pid = directory.path().join("pid");
+        let mut bell = audio_bell();
+        bell.audio_timeout = Duration::from_secs(1);
+        bell.set_audio_command_for_test(
+            "/bin/sh",
+            &[
+                "-c",
+                r#"echo "$$" > "$1"; exec sleep 30"#,
+                "player",
+                pid.to_str().unwrap(),
+            ],
+        );
+        assert!(bell.ring().is_none());
+        wait_for_player(&bell);
+        let first = std::fs::read_to_string(&pid).unwrap();
+        assert_reaped(first.trim());
+
+        let report = bell.ring().unwrap();
+        assert!(report.contains("Audio bell unavailable"), "{report}");
+        assert!(report.contains("was still playing after 1s"), "{report}");
+        // That bell started another player, which hangs the same way.
+        wait_for_player(&bell);
+        let second = std::fs::read_to_string(&pid).unwrap();
+        assert_ne!(second, first);
+        assert_reaped(second.trim());
+        assert!(bell.ring().is_none(), "the same failure is shown once");
+        wait_for_player(&bell);
     }
 
     /// Delivery runs on the notification worker, so failures arrive later.
@@ -512,6 +677,23 @@ mod tests {
 
         assert!(notifications.notify("title", "body").is_none());
         assert!(next_warning(&mut notifications).is_none());
+    }
+
+    #[test]
+    fn a_busy_queue_is_reported_again_after_a_request_gets_through() {
+        let mut notifications = Notifications::new();
+        let drain = notifications.capture_tracked_commands_for_test();
+        notifications.rate_limit = Duration::ZERO;
+        let fill = |notifications: &mut Notifications| {
+            (0..1_000).find_map(|_| notifications.notify("title", "body"))
+        };
+        let busy = fill(&mut notifications).expect("the queue fills");
+        assert!(busy.contains("queue is busy"), "{busy}");
+        assert!(fill(&mut notifications).is_none(), "shown once while busy");
+
+        drain();
+        assert!(notifications.notify("title", "body").is_none());
+        assert_eq!(fill(&mut notifications), Some(busy));
     }
 
     #[test]
