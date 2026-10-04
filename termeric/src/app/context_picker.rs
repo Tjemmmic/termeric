@@ -138,7 +138,7 @@ impl App {
         let spawn = std::thread::Builder::new()
             .name("termeric-context-gather".into())
             .spawn(move || {
-                let result = crate::ui::context_picker::gather_context(request);
+                let result = crate::agents::context::gather_context(request);
                 let _ = proxy.send_event(super::AppEvent::ContextGathered {
                     window_id,
                     request_id,

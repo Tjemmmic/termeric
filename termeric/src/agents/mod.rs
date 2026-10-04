@@ -9,6 +9,7 @@
 
 pub mod changes;
 pub mod config;
+pub mod context;
 pub mod detect;
 pub mod hook;
 pub mod session;
