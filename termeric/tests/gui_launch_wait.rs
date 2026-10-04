@@ -1,5 +1,5 @@
-//! Provider-free executable acceptance against a private fake GUI endpoint.
-#![cfg(unix)]
+//! `termeric control launch-tab`, `launch-window`, and `wait-launch` against a
+//! fake GUI control socket.
 
 use serde_json::{Value, json};
 use std::fs;
@@ -175,7 +175,7 @@ fn input_pipe(bytes: &[u8]) -> (std::fs::File, std::fs::File) {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn executable_stdin_environment_reaches_both_launch_targets_without_argv_or_output_exposure() {
+fn stdin_environment_reaches_both_launch_targets_without_argv_or_output_exposure() {
     use std::os::fd::AsRawFd;
     for verb in ["launch-tab", "launch-window"] {
         for wait in [false, true] {
@@ -270,7 +270,7 @@ fn executable_stdin_environment_reaches_both_launch_targets_without_argv_or_outp
 
 #[cfg(target_os = "linux")]
 #[test]
-fn executable_invalid_stdin_environment_is_redacted_and_never_sent() {
+fn invalid_stdin_environment_is_redacted_and_never_sent() {
     let marker = "synthetic-private";
     let mut documents = vec![
         br#"{"A":"synthetic-private","A":"second"}"#.to_vec(),
@@ -321,7 +321,7 @@ fn executable_invalid_stdin_environment_is_redacted_and_never_sent() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn executable_stdin_environment_requires_eof_and_times_out_before_contact() {
+fn stdin_environment_requires_eof_and_times_out_before_contact() {
     let fixture = Fixture::new();
     let (reader, _writer) = input_pipe(b"{}");
     let start = Instant::now();
@@ -356,7 +356,7 @@ fn assert_launch(request: &Value, verb: &str) {
 }
 
 #[test]
-fn executable_background_tab_launch_preserves_wire_mode_and_wait_behavior() {
+fn background_tab_launch_preserves_wire_mode_and_wait_behavior() {
     for wait in [false, true] {
         let fixture = Fixture::new();
         let mut options = vec!["--background", "--json", "--request-id", ID];
@@ -400,7 +400,7 @@ fn executable_background_tab_launch_preserves_wire_mode_and_wait_behavior() {
 }
 
 #[test]
-fn executable_combined_launch_wait_preserves_exit_and_final_only_output() {
+fn combined_launch_wait_preserves_exit_and_final_only_output() {
     for verb in ["launch-tab", "launch-window"] {
         for code in [0, 7, 124, 255, 256] {
             let fixture = Fixture::new();
@@ -456,7 +456,7 @@ fn executable_combined_launch_wait_preserves_exit_and_final_only_output() {
 }
 
 #[test]
-fn executable_combined_wait_lost_ack_keeps_generated_recovery_id_without_retry() {
+fn combined_wait_lost_ack_keeps_generated_recovery_id_without_retry() {
     for verb in ["launch-tab", "launch-window"] {
         let fixture = Fixture::new();
         let captured = std::sync::Mutex::new(String::new());
@@ -488,7 +488,7 @@ fn executable_combined_wait_lost_ack_keeps_generated_recovery_id_without_retry()
 }
 
 #[test]
-fn executable_combined_wait_preserves_generated_id_through_success() {
+fn combined_wait_preserves_generated_id_through_success() {
     let fixture = Fixture::new();
     let output = fixture.run(
         "launch-tab",
@@ -522,7 +522,7 @@ fn executable_combined_wait_preserves_generated_id_through_success() {
 }
 
 #[test]
-fn executable_combined_wait_invalid_options_never_contact_endpoint() {
+fn combined_wait_invalid_options_never_contact_endpoint() {
     for verb in ["launch-tab", "launch-window"] {
         for flags in [
             vec!["--wait", "--wait"],
@@ -542,7 +542,7 @@ fn executable_combined_wait_invalid_options_never_contact_endpoint() {
 }
 
 #[test]
-fn executable_combined_wait_refuses_wrong_acknowledgement_before_polling() {
+fn combined_wait_refuses_wrong_acknowledgement_before_polling() {
     for verb in ["launch-tab", "launch-window"] {
         let ack = acknowledgement(verb, ID);
         let mut cases = Vec::new();
@@ -578,7 +578,7 @@ fn executable_combined_wait_refuses_wrong_acknowledgement_before_polling() {
 }
 
 #[test]
-fn executable_combined_deadline_covers_launch_and_observation_without_cancellation() {
+fn combined_deadline_covers_launch_and_observation_without_cancellation() {
     for during_launch in [true, false] {
         let fixture = Fixture::new();
         let started = Instant::now();
@@ -619,7 +619,7 @@ fn executable_combined_deadline_covers_launch_and_observation_without_cancellati
 }
 
 #[test]
-fn executable_combined_wait_pins_endpoint_across_launch_acknowledgement() {
+fn combined_wait_pins_endpoint_across_launch_acknowledgement() {
     for replace_socket in [false, true] {
         let fixture = Fixture::new();
         let output = fixture.run("launch-window", &["--wait", "--json", "--request-id", ID, "--", "/bin/true"], |fixture| {
@@ -650,7 +650,7 @@ fn executable_combined_wait_pins_endpoint_across_launch_acknowledgement() {
 }
 
 #[test]
-fn executable_non_wait_launches_keep_their_original_output() {
+fn non_wait_launches_keep_their_original_output() {
     for verb in ["launch-tab", "launch-window"] {
         let fixture = Fixture::new();
         let output = fixture.run(
@@ -689,7 +689,7 @@ fn send(mut stream: UnixStream, frame: Value) {
 }
 
 #[test]
-fn executable_wait_progresses_and_propagates_portable_child_exit() {
+fn wait_progresses_and_propagates_portable_child_exit() {
     for code in [0, 7, 124, 255, 256] {
         let fixture = Fixture::new();
         let output = fixture.run("wait-launch", &["--json", "--timeout", "3"], |fixture| {
@@ -731,7 +731,7 @@ fn executable_wait_progresses_and_propagates_portable_child_exit() {
 }
 
 #[test]
-fn executable_wait_refuses_invalid_or_unavailable_results() {
+fn wait_refuses_invalid_or_unavailable_results() {
     let exited = response(json!({"status": "exited", "exit_code": 0, "success": true}));
     let mut wrong_id = exited.clone();
     wrong_id["launch_request_id"] = json!("c".repeat(32));
@@ -786,7 +786,7 @@ fn executable_wait_refuses_invalid_or_unavailable_results() {
 }
 
 #[test]
-fn executable_deadline_interrupts_partial_response_without_mutation() {
+fn deadline_interrupts_partial_response_without_mutation() {
     let fixture = Fixture::new();
     let started = Instant::now();
     let output = fixture.run("wait-launch", &["--timeout", "1", "--json"], |fixture| {
@@ -804,7 +804,7 @@ fn executable_deadline_interrupts_partial_response_without_mutation() {
 }
 
 #[test]
-fn executable_wait_pins_credentials_between_polls() {
+fn wait_pins_credentials_between_polls() {
     let fixture = Fixture::new();
     let output = fixture.run("wait-launch", &["--json"], |fixture| {
         let stream = fixture.request();
@@ -820,7 +820,7 @@ fn executable_wait_pins_credentials_between_polls() {
 }
 
 #[test]
-fn executable_wait_refuses_replaced_socket_with_unchanged_credentials() {
+fn wait_refuses_replaced_socket_with_unchanged_credentials() {
     let fixture = Fixture::new();
     let output = fixture.run("wait-launch", &["--json"], |fixture| {
         let stream = fixture.request();
