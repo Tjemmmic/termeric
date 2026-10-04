@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata for software centers; CI validates it with appstreamcli.
+     Each release adds a release entry whose version and date match its CHANGELOG.md
+     heading, which the release workflow checks. -->
+<component type="desktop-application">
+  <id>org.termeric.Termeric</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Termeric</name>
+  <summary>GPU-accelerated terminal emulator</summary>
+  <developer id="org.termeric">
+    <name>Termeric Contributors</name>
+  </developer>
+  <description>
+    <p>Termeric is a GPU-accelerated terminal emulator for Linux desktops on Wayland and X11, themed around roots and rhizomes. It keeps your shells in tabs, panes, and windows, and understands what your shell and tools are doing.</p>
+    <ul>
+      <li>Tabs, split panes, and windows, with layout presets, zoom, and broadcast input</li>
+      <li>Workspaces that save your windows, tabs, panes, folders, and scrollback</li>
+      <li>Root-named and community themes, and your own</li>
+      <li>Ligatures, color emoji, wide characters, and a font fallback chain you control</li>
+      <li>Inline images with the Kitty graphics protocol, Sixel, and iTerm2</li>
+      <li>Shell integration for Bash, Zsh, Fish, Nushell, and Elvish</li>
+      <li>Search, keyboard copy mode, and quick-select hints</li>
+      <li>A command palette, a Settings dialog, rebindable shortcuts, and a quick-access drop-down terminal</li>
+    </ul>
+    <p>This is a developer preview. Coding-agent integration and scripting a running Termeric are experimental.</p>
+  </description>
+  <launchable type="desktop-id">org.termeric.Termeric.desktop</launchable>
+  <provides>
+    <binary>termeric</binary>
+  </provides>
+  <url type="homepage">https://github.com/Tjemmmic/termeric</url>
+  <url type="bugtracker">https://github.com/Tjemmmic/termeric/issues</url>
+  <url type="vcs-browser">https://github.com/Tjemmmic/termeric</url>
+  <url type="help">https://github.com/Tjemmmic/termeric/blob/main/docs/src/introduction.md</url>
+  <categories>
+    <category>System</category>
+    <category>TerminalEmulator</category>
+  </categories>
+  <keywords>
+    <keyword>terminal</keyword>
+    <keyword>shell</keyword>
+    <keyword>console</keyword>
+    <keyword>command line</keyword>
+  </keywords>
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </supports>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-10-04" type="development">
+      <url type="details">https://github.com/Tjemmmic/termeric/releases/tag/v0.1.0</url>
+      <description>
+        <p>The first release: a developer preview for Linux, on Wayland and X11.</p>
+      </description>
+    </release>
+  </releases>
+</component>
