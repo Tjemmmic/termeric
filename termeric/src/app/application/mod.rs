@@ -588,8 +588,6 @@ fn validate_cli_launches(config: &Config, launch: &LaunchPlan) -> Result<()> {
             };
             let profile = config.launch_profile(name)?;
             if profile.serial_config().is_some() {
-                #[cfg(not(target_os = "linux"))]
-                anyhow::bail!("serial terminal profiles are currently supported only on Linux");
                 if tab.working_directory.is_some() {
                     anyhow::bail!(
                         "serial terminal profile {name:?} cannot use --working-directory"

@@ -117,7 +117,7 @@ fn apply_portal_setting(
     true
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 mod tests {
     use super::{SystemAccessibilityPreferences, apply_portal_setting, portal_preference};
 

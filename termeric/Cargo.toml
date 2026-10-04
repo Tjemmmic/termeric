@@ -80,10 +80,7 @@ clap = { version = "4.6", default-features = false, features = ["std", "derive",
 # Error handling
 anyhow.workspace = true
 
-[target.'cfg(unix)'.dependencies]
 libc = "0.2"
-
-[target.'cfg(target_os = "linux")'.dependencies]
 # XDG Desktop Portal accessibility preference monitoring.
 zbus = "5.19"
 freedesktop-icons = "0.4"
