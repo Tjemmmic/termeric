@@ -1258,24 +1258,6 @@ impl App {
         true
     }
 
-    fn pointer_is_over_focused_terminal(&self) -> bool {
-        let Some(position) = self.last_cursor_pos else {
-            return false;
-        };
-        let Some(renderer) = &self.renderer else {
-            return false;
-        };
-        let (cell_width, cell_height) = renderer.cell_size();
-        self.protocol_grid_position(
-            position,
-            cell_width,
-            cell_height,
-            renderer.content_top(),
-            renderer.padding(),
-        )
-        .is_some()
-    }
-
     /// Restore the protocol-selected cursor when no Termeric-owned pointer
     /// interaction currently has precedence.
     pub(super) fn refresh_terminal_pointer_cursor(&self) {
@@ -1290,16 +1272,121 @@ impl App {
         let Some(window) = &self.window else {
             return;
         };
-        let icon = if !self.pointer_is_over_focused_terminal() {
-            winit::window::CursorIcon::Default
-        } else if self.mouse_pressed {
-            winit::window::CursorIcon::Text
-        } else if let Some(terminal) = self.active_terminal() {
-            native_pointer_icon(terminal.effective_pointer_shape())
-        } else {
-            winit::window::CursorIcon::Default
-        };
+        let icon = self.last_cursor_pos.zip(self.renderer.as_ref()).map_or(
+            winit::window::CursorIcon::Default,
+            |(position, renderer)| {
+                let (cell_width, cell_height) = renderer.cell_size();
+                self.terminal_pointer_icon_at(
+                    position,
+                    cell_width,
+                    cell_height,
+                    renderer.content_top(),
+                    renderer.padding(),
+                )
+            },
+        );
         window.set_cursor(icon);
+    }
+
+    /// Ctrl makes the pointer a hand over links, so pressing or releasing it
+    /// reshapes the pointer where it rests over a pane. Over a divider or
+    /// outside the panes the pointer belongs to whatever drew it there.
+    pub(super) fn refresh_pointer_after_modifiers(&self, previous: ModifiersState) {
+        if previous.control_key() == self.modifiers.control_key() {
+            return;
+        }
+        let Some((position, renderer)) = self.last_cursor_pos.zip(self.renderer.as_ref()) else {
+            return;
+        };
+        let (content_top, padding) = (renderer.content_top(), renderer.padding());
+        let on_divider = self
+            .tabs
+            .as_ref()
+            .and_then(TabManager::active_tab)
+            .and_then(|tab| tab.split_panes())
+            .is_some_and(|panes| {
+                panes
+                    .hit_test_divider(
+                        position.0 as f32 - renderer.tab_bar_width() - padding,
+                        position.1 as f32 - content_top,
+                    )
+                    .is_some()
+            });
+        if !on_divider
+            && self
+                .pane_at_pointer(position, content_top, padding)
+                .is_some()
+        {
+            self.refresh_terminal_pointer_cursor();
+        }
+    }
+
+    /// The pointer over the terminal area: an I-beam while selecting, a
+    /// hand over a link while Ctrl is held (Ctrl+click opens it), and
+    /// otherwise the shape the program in the pane under it asked for.
+    fn terminal_pointer_icon_at(
+        &self,
+        position: (f64, f64),
+        cell_width: f32,
+        cell_height: f32,
+        content_top: f32,
+        padding: f32,
+    ) -> winit::window::CursorIcon {
+        let hovered = self
+            .pane_at_pointer(position, content_top, padding)
+            .and_then(|pane| {
+                let terminal = self.pointer_terminal(pane.identity)?;
+                let cell = terminal_protocol_cell(
+                    terminal,
+                    pane.bounds,
+                    pane.lone,
+                    position,
+                    (cell_width, cell_height),
+                )?;
+                Some((pane.identity, terminal, cell))
+            });
+        let Some((identity, terminal, (col, row))) = hovered else {
+            return terminal_pointer_icon(None, self.mouse_pressed, false);
+        };
+        let ctrl_over_link = self.modifiers.control_key()
+            && self.hovered_link_at(identity, terminal, row, col).is_some();
+        terminal_pointer_icon(
+            Some(terminal.effective_pointer_shape()),
+            self.mouse_pressed,
+            ctrl_over_link,
+        )
+    }
+
+    /// The link drawn at visible `row`, `col` of the pane `identity`, from
+    /// the URL caches the last frame left. They are close enough for the
+    /// pointer's shape; a click refreshes them before it opens anything.
+    fn hovered_link_at<'a>(
+        &'a self,
+        identity: crate::tabs::TerminalIdentity,
+        terminal: &'a termeric_core::Terminal,
+        row: usize,
+        col: usize,
+    ) -> Option<&'a str> {
+        let focused = self
+            .tabs
+            .as_ref()
+            .and_then(TabManager::active_tab)
+            .map(crate::tabs::Tab::focused_terminal_identity);
+        if focused == Some(identity) {
+            let rows = terminal.presentation_grid().rows();
+            visible_link_at(
+                terminal,
+                Some(&self.url_cache),
+                self.search.filtered_rows(rows),
+                row,
+                col,
+            )
+        } else {
+            let cache = self
+                .pane_url_caches
+                .get(&(std::ptr::from_ref(terminal) as usize));
+            visible_link_at(terminal, cache, &[], row, col)
+        }
     }
 
     /// Convert a physical cursor position to a visible, zero-based cell in
@@ -1426,24 +1513,10 @@ impl App {
         let terminal = self.active_terminal()?;
         let offset = i32::try_from(terminal.grid().scroll_offset()).ok()?;
         let row = usize::try_from(point.row.checked_add(offset)?).ok()?;
-        let grid = terminal.presentation_grid();
-        if row >= grid.rows() || point.col >= grid.cols() {
-            return None;
-        }
-        let projected = self.search.filtered_rows(grid.rows());
-        let source_row = if projected.is_empty() {
-            (row as i32).saturating_sub(i32::try_from(grid.scroll_offset()).ok()?)
-        } else {
-            *projected.get(row)?
-        };
-        grid.row_at_offset(source_row)
-            .and_then(|row| row.get(point.col).and_then(|cell| cell.hyperlink_id))
-            .and_then(|id| terminal.get_hyperlink_url(id))
-            .or_else(|| {
-                self.url_cache
-                    .url_at(row, point.col)
-                    .map(|url| url.url.as_str())
-            })
+        let projected = self
+            .search
+            .filtered_rows(terminal.presentation_grid().rows());
+        visible_link_at(terminal, Some(&self.url_cache), projected, row, point.col)
     }
 
     pub(super) fn refresh_focused_url_cache(&mut self) {
@@ -1745,6 +1818,49 @@ fn terminal_protocol_cell(
         cell_size,
         (terminal.cols(), terminal.rows()),
     )
+}
+
+/// The link drawn at visible `row`, `col` of `terminal`'s presented grid: an
+/// OSC 8 hyperlink first, then a URL detected in `urls`, which covers the
+/// same visible rows. `projected` maps visible rows to source rows while a
+/// filter hides the others.
+fn visible_link_at<'a>(
+    terminal: &'a termeric_core::Terminal,
+    urls: Option<&'a UrlCache>,
+    projected: &[i32],
+    row: usize,
+    col: usize,
+) -> Option<&'a str> {
+    let grid = terminal.presentation_grid();
+    if row >= grid.rows() || col >= grid.cols() {
+        return None;
+    }
+    let source_row = if projected.is_empty() {
+        (row as i32).saturating_sub(i32::try_from(grid.scroll_offset()).ok()?)
+    } else {
+        *projected.get(row)?
+    };
+    grid.row_at_offset(source_row)
+        .and_then(|cells| cells.get(col).and_then(|cell| cell.hyperlink_id))
+        .and_then(|id| terminal.get_hyperlink_url(id))
+        .or_else(|| urls?.url_at(row, col).map(|url| url.url.as_str()))
+}
+
+/// The pointer over the terminal area given the program's shape for the
+/// pane under it (`None` when over no cell), whether a selection is being
+/// made, and whether Ctrl is held over a link.
+fn terminal_pointer_icon(
+    program: Option<termeric_core::PointerShape>,
+    selecting: bool,
+    ctrl_over_link: bool,
+) -> winit::window::CursorIcon {
+    use winit::window::CursorIcon;
+    match program {
+        None => CursorIcon::Default,
+        Some(_) if selecting => CursorIcon::Text,
+        Some(_) if ctrl_over_link => CursorIcon::Pointer,
+        Some(shape) => native_pointer_icon(shape),
+    }
 }
 
 fn protocol_cell_from_viewport(
@@ -2311,6 +2427,86 @@ mod tests {
         assert!(!app.press_terminal(MouseButton::Middle, position, 10.0, 20.0, 0.0, 0.0));
         let bytes = fenced_harvest_capture(&mut app, &captures);
         assert_only_pane_received(&captures, bytes, target, b"\x1b[<1;2;2M\x1b[<1;2;2mhello");
+    }
+
+    #[test]
+    fn the_pointer_is_a_hand_over_a_link_only_while_ctrl_is_held() {
+        use termeric_core::PointerShape;
+        use winit::window::CursorIcon;
+        let shape = Some(PointerShape::Crosshair);
+        assert_eq!(
+            terminal_pointer_icon(shape, false, false),
+            CursorIcon::Crosshair
+        );
+        assert_eq!(
+            terminal_pointer_icon(shape, false, true),
+            CursorIcon::Pointer
+        );
+        // A selection in progress keeps its I-beam, link or not.
+        assert_eq!(terminal_pointer_icon(shape, true, true), CursorIcon::Text);
+        // Off the cells, nothing applies.
+        assert_eq!(
+            terminal_pointer_icon(None, false, true),
+            CursorIcon::Default
+        );
+    }
+
+    #[test]
+    fn ctrl_over_a_link_in_any_pane_shows_the_hand() {
+        use winit::window::CursorIcon;
+        let mut app = App::new_headless(Config::default()).unwrap();
+        let mut tabs = TabManager::for_test(crate::test_support::sleeping_shell());
+        tabs.new_tab().unwrap();
+        app.tabs = Some(tabs);
+        let panes = app
+            .tabs
+            .as_mut()
+            .and_then(TabManager::active_tab_mut)
+            .unwrap()
+            .panes_for_test(
+                crate::test_support::sleeping_shell(),
+                800.0,
+                480.0,
+                10.0,
+                20.0,
+            );
+        let left = panes.focused_id();
+        let right = panes.split(SplitDirection::Vertical).unwrap();
+        panes.focus(left);
+        // A detected URL in the focused pane and an OSC 8 link in the other,
+        // both starting at the second row's first cell.
+        panes
+            .get_pane_mut(left)
+            .unwrap()
+            .terminal
+            .process(b"\r\nhttps://left.example");
+        panes
+            .get_pane_mut(right)
+            .unwrap()
+            .terminal
+            .process(b"\r\n\x1b]8;;https://right.example\x1b\\link\x1b]8;;\x1b\\ plain");
+        app.refresh_focused_url_cache();
+
+        for pane in [left, right] {
+            let link = pane_position(&app, pane);
+            let plain = (link.0 + 250.0, link.1);
+            app.modifiers = ModifiersState::empty();
+            assert_eq!(
+                app.terminal_pointer_icon_at(link, 10.0, 20.0, 0.0, 0.0),
+                CursorIcon::Text
+            );
+            app.modifiers = ModifiersState::CONTROL;
+            assert_eq!(
+                app.terminal_pointer_icon_at(link, 10.0, 20.0, 0.0, 0.0),
+                CursorIcon::Pointer,
+                "{pane:?}"
+            );
+            assert_eq!(
+                app.terminal_pointer_icon_at(plain, 10.0, 20.0, 0.0, 0.0),
+                CursorIcon::Text,
+                "{pane:?}"
+            );
+        }
     }
 
     #[test]

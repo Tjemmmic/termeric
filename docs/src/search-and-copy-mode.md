@@ -107,7 +107,7 @@ Patterns use [Rust regex syntax](https://docs.rs/regex/latest/regex/#syntax). Yo
 
 ## Links
 
-Hold `Ctrl` and click a link to open it with `xdg-open`. This works for:
+Hold `Ctrl` and click a link to open it with `xdg-open`. While `Ctrl` is held, the pointer turns into a hand over anything it would open, in any pane; otherwise it keeps the shape the program in the terminal chose. This works for:
 
 - **OSC 8 hyperlinks**, which programs such as `ls --hyperlink`, `gcc`, and `systemctl` can print. The link text can differ from its target, as on a web page.
 - **Plain URLs** in the output that start with `http://`, `https://`, `ftp://`, `ftps://`, `file://`, `ssh://`, `git://`, or `mailto:`.

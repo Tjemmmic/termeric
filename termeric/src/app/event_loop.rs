@@ -225,7 +225,8 @@ impl App {
             }
 
             WindowEvent::ModifiersChanged(modifiers) => {
-                self.modifiers = modifiers.state();
+                let previous = std::mem::replace(&mut self.modifiers, modifiers.state());
+                self.refresh_pointer_after_modifiers(previous);
             }
 
             WindowEvent::Ime(event) => {
