@@ -146,6 +146,8 @@ Key names are case-insensitive. Use the character for letter, digit, and symbol 
 
 Shortcuts match the character your keyboard layout produces, not the physical key. For a symbol typed with Shift, use the shifted character, for example `key = "?"` with `shift = true`. `+` and `=` count as the same key, because they share one on most layouts: `key = "+"` with `ctrl = true` and `shift = true` is the same shortcut as `key = "="` with those modifiers.
 
+Giving an action a shortcut that another action already uses takes it from that action, which is left unbound, the same as recording it in Settings.
+
 Termeric reloads the file when you save it, so the change takes effect at once. See [Configuration](configuration.md) for where the file lives.
 
 ## Keys that type text or run commands

@@ -806,26 +806,11 @@ impl ShortcutRegistry {
         }
     }
 
-    /// Apply user overrides from config on top of defaults.
+    /// Apply user overrides from config on top of defaults, in order,
+    /// exactly as if each had been set in Settings.
     pub fn apply_overrides(&mut self, overrides: &[ShortcutOverride]) {
-        for ovr in overrides {
-            if let Some((action, chord)) = ovr.to_binding() {
-                // Remove old chord from reverse map
-                if let Some(Some(old)) = self.bindings.get(&action) {
-                    self.key_map.remove(old);
-                }
-                // If new chord conflicts, clear the conflicting action
-                if let Some(new_chord) = &chord {
-                    if let Some(&conflicting) = self.key_map.get(new_chord) {
-                        if conflicting != action {
-                            self.bindings.insert(conflicting, None);
-                        }
-                    }
-                    self.key_map.insert(new_chord.clone(), action);
-                }
-                self.bindings.insert(action, chord.clone());
-                self.user_overrides.insert(action, chord);
-            }
+        for (action, chord) in overrides.iter().filter_map(ShortcutOverride::to_binding) {
+            self.set_binding(action, chord);
         }
     }
 
@@ -908,7 +893,7 @@ impl Default for ShortcutRegistry {
     }
 }
 
-// ── Plugin / custom bindings (retained from original) ───────────────────────
+// ── Plugin / custom bindings ────────────────────────────────────────────────
 
 /// A key binding definition for plugin/custom actions (SendText, RunCommand, etc.)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1211,6 +1196,29 @@ mod tests {
         let chord = reg.binding_for(BindableAction::Copy).unwrap();
         assert_eq!(chord.key, "k");
         assert!(chord.ctrl);
+    }
+
+    #[test]
+    fn a_conflicting_override_from_config_matches_setting_it_in_settings() {
+        let paste = ShortcutRegistry::new()
+            .binding_for(BindableAction::Paste)
+            .unwrap()
+            .clone();
+        let mut set = ShortcutRegistry::new();
+        set.set_binding(BindableAction::Copy, Some(paste.clone()));
+        let mut loaded = ShortcutRegistry::new();
+        loaded.apply_overrides(&set.user_overrides());
+
+        assert_eq!(loaded.binding_for(BindableAction::Copy), Some(&paste));
+        assert_eq!(loaded.binding_for(BindableAction::Paste), None);
+        let actions = |registry: &ShortcutRegistry| {
+            registry
+                .user_overrides()
+                .into_iter()
+                .map(|ovr| (ovr.action, ovr.key))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(actions(&loaded), actions(&set));
     }
 
     #[test]
