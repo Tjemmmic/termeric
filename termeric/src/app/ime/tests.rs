@@ -258,7 +258,10 @@ fn retained_search_does_not_steal_ime_geometry_from_modal_or_text_owners() {
         |app| app.settings_panel.toggle(),
         |app| app.shortcuts_panel.open(),
         |app| app.commands_panel.toggle(),
-        |app| app.session_panel.open_workspaces(),
+        |app| {
+            app.session_panel
+                .open(crate::session::listing::SessionListing::workspaces())
+        },
         |app| {
             app.info_overlay.show("Notice", vec![]);
         },

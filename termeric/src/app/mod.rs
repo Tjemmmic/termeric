@@ -3570,7 +3570,8 @@ impl App {
             self.settings_panel.close();
             self.commands_panel.close();
             self.agents_panel.close();
-            self.session_panel.open_workspaces();
+            self.session_panel
+                .open(crate::session::listing::SessionListing::workspaces());
         }
         self.request_redraw(RedrawReason::Action);
     }

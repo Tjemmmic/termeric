@@ -883,7 +883,10 @@ impl App {
                         self.toasts.error(format!("Delete failed: {}", error));
                     }
                 }
-                self.session_panel.refresh_sessions();
+                self.session_panel
+                    .refresh(crate::session::listing::SessionListing::load(
+                        self.session_panel.is_workspace_mode(),
+                    ));
             }
             SessionPanelAction::Rename(id) => {
                 self.ime.clear_preedit();
@@ -894,7 +897,11 @@ impl App {
                 if let Some((id, name)) = self.session_panel.take_rename() {
                     match crate::workspace::rename_workspace(&id, &name) {
                         Ok(()) => {
-                            self.session_panel.refresh_sessions();
+                            self.session_panel.refresh(
+                                crate::session::listing::SessionListing::load(
+                                    self.session_panel.is_workspace_mode(),
+                                ),
+                            );
                             self.toasts.success("Workspace renamed");
                         }
                         Err(error) => self.toasts.error(format!("Rename failed: {error:#}")),
@@ -920,11 +927,13 @@ impl App {
             }
             SessionPanelAction::ShowSnapshots => {
                 self.ime.clear_preedit();
-                self.session_panel.open_sessions();
+                self.session_panel
+                    .open(crate::session::listing::SessionListing::closed_tabs());
             }
             SessionPanelAction::ShowWorkspaces => {
                 self.ime.clear_preedit();
-                self.session_panel.open_workspaces();
+                self.session_panel
+                    .open(crate::session::listing::SessionListing::workspaces());
             }
             SessionPanelAction::None => {}
         }

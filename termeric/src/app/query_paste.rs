@@ -591,7 +591,8 @@ mod tests {
     fn settings_paste_retains_lower_fields_and_respects_higher_modal_owners() {
         assert_higher_modals_own_paste(
             |app| {
-                app.session_panel.open_workspaces();
+                app.session_panel
+                    .open(crate::session::listing::SessionListing::workspaces());
                 app.settings_panel.toggle();
                 assert!(app.paste_clipboard_payload("settings only"));
             },
@@ -731,7 +732,10 @@ mod tests {
                 app.shortcuts_panel.open();
                 app.shortcuts_panel.start_recording(BindableAction::Copy);
             },
-            |app| app.session_panel.open_workspaces(),
+            |app| {
+                app.session_panel
+                    .open(crate::session::listing::SessionListing::workspaces())
+            },
             |app| {
                 app.info_overlay.show("Notice", vec![]);
             },
@@ -831,7 +835,10 @@ mod tests {
                 app.shortcuts_panel.start_recording(BindableAction::Copy);
             },
             |app| app.commands_panel.toggle(),
-            |app| app.session_panel.open_workspaces(),
+            |app| {
+                app.session_panel
+                    .open(crate::session::listing::SessionListing::workspaces())
+            },
         ] {
             let mut app = App::new_headless(Config::default()).unwrap();
             app.search.start();

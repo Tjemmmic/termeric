@@ -1,9 +1,11 @@
 //! Terminal sessions: the per-terminal agent, transcript, and diff state
 //! ([`terminal_state`]), transcripts and their export, and the workspace
-//! panel. Closed tabs are kept as one-tab workspaces ([`crate::workspace`]).
+//! panel and what it lists. Closed tabs are kept as one-tab workspaces
+//! ([`crate::workspace`]).
 
 pub mod export;
 pub(crate) mod export_job;
+pub mod listing;
 pub mod panel;
 pub(crate) mod terminal_state;
 pub mod transcript;
