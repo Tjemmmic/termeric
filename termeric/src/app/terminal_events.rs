@@ -5,6 +5,13 @@ use super::desktop_io::{clipboard_text, set_clipboard_text};
 use super::*;
 use base64::Engine as _;
 
+/// The OSC 52 reply carrying `text` from `selection`: standard, padded
+/// base64, as xterm sends and every OSC 52 client decodes.
+fn clipboard_reply(selection: termeric_core::ClipboardRequest, text: &str) -> String {
+    let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+    format!("\x1b]52;{};{}\x1b\\", selection.osc_code(), encoded)
+}
+
 fn dynamic_color_reply(
     target: termeric_core::DynamicColorTarget,
     color: termeric_core::Color,
@@ -124,8 +131,7 @@ impl App {
                     log::debug!("Denied OSC 52 clipboard read from {:?}", origin);
                     String::new()
                 };
-                let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
-                let canonical = format!("\x1b]52;{};{}\x1b\\", which.osc_code(), encoded);
+                let canonical = clipboard_reply(which, &text);
                 if let Some(tabs) = &mut self.tabs {
                     let reply = termeric_core::Terminal::frame_pty_reply_for_mode(
                         canonical.as_bytes(),
@@ -249,6 +255,29 @@ mod tests {
         assert_eq!(
             dynamic_color_reply(termeric_core::DynamicColorTarget::Cursor, color),
             "\x1b]12;rgb:ffff/8080/0000\x1b\\"
+        );
+    }
+
+    #[test]
+    fn clipboard_replies_use_standard_padded_base64() {
+        use termeric_core::ClipboardRequest;
+        for (text, encoded) in [
+            ("", ""),
+            ("f", "Zg=="),
+            ("fo", "Zm8="),
+            ("foo", "Zm9v"),
+            // The standard alphabet's last two digits, not URL-safe - and _.
+            ("~~~???", "fn5+Pz8/"),
+            ("é", "w6k="),
+        ] {
+            assert_eq!(
+                clipboard_reply(ClipboardRequest::Clipboard, text),
+                format!("\x1b]52;c;{encoded}\x1b\\")
+            );
+        }
+        assert_eq!(
+            clipboard_reply(ClipboardRequest::Primary, "hi"),
+            "\x1b]52;p;aGk=\x1b\\"
         );
     }
 
