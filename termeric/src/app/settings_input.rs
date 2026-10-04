@@ -34,7 +34,6 @@ impl App {
             Key::Named(NamedKey::Delete) => Some(SettingsKey::Delete),
             Key::Character(c) if self.modifiers.control_key() => match c.as_str() {
                 "s" | "S" => Some(SettingsKey::Save),
-                "r" | "R" => Some(SettingsKey::Reset),
                 _ => None,
             },
             _ => None,
@@ -94,11 +93,11 @@ impl App {
         }
         let changed = match key {
             Key::Character(text) => {
-                // Preserve explicit Save/Reset actions, but never interpret
+                // Preserve the explicit Save action, but never interpret
                 // AltGraph-generated text as a Control shortcut.
                 if !self.alt_graph_active
                     && self.modifiers == ModifiersState::CONTROL
-                    && matches!(text.as_str(), "s" | "S" | "r" | "R")
+                    && matches!(text.as_str(), "s" | "S")
                 {
                     return false;
                 }
@@ -168,8 +167,12 @@ mod tests {
             }
         }
         app.modifiers = ModifiersState::CONTROL;
-        for text in ["s", "S", "r", "R"] {
+        for text in ["s", "S"] {
             assert!(!app.handle_settings_filter_key(&Key::Character(text.into())));
+        }
+        // Settings has no reset chord: Ctrl+R is swallowed like any other.
+        for text in ["r", "R"] {
+            assert!(app.handle_settings_filter_key(&Key::Character(text.into())));
         }
         app.alt_graph_active = true;
         app.modifiers = ModifiersState::CONTROL | ModifiersState::ALT;

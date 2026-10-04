@@ -769,8 +769,6 @@ pub enum SettingsAction {
     OpenKeyboardShortcuts,
     /// Save current config
     SaveConfig,
-    /// Reset to default config
-    ResetConfig,
     /// No action
     None,
 }
@@ -1884,7 +1882,6 @@ impl SettingsPanel {
                 return SettingsAction::None;
             }
             SettingsKey::Save => SettingsAction::SaveConfig,
-            SettingsKey::Reset => SettingsAction::ResetConfig,
             SettingsKey::Delete => SettingsAction::None,
             SettingsKey::FilterBackspace => unreachable!(),
         };
@@ -2443,7 +2440,6 @@ pub enum SettingsKey {
     /// Previous sidebar page.
     BackTab,
     Save,
-    Reset,
     /// Backspace in filter
     FilterBackspace,
     /// Delete key

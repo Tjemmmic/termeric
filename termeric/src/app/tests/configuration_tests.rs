@@ -668,3 +668,68 @@ fn a_theme_that_does_not_load_stays_configured_until_another_is_chosen() {
     assert_eq!(saved.theme.path, None);
     assert!(lasting_toasts(&app).is_empty());
 }
+
+#[test]
+fn reset_configuration_asks_first_and_keeps_the_old_file() {
+    let original = "# Mine.\n[bell]\nvisual = false\n";
+    let (directory, path, mut app) = app_with_config_file(original);
+    let backups = |directory: &std::path::Path| {
+        std::fs::read_dir(directory)
+            .unwrap()
+            .filter_map(|entry| {
+                let name = entry.unwrap().file_name().into_string().unwrap();
+                name.ends_with(".bak").then_some(name)
+            })
+            .collect::<Vec<_>>()
+    };
+
+    // Cancelling changes nothing.
+    app.handle_action(Action::ResetConfig);
+    let request = app.info_overlay.request_id();
+    assert_eq!(app.info_overlay.title(), "Reset Configuration");
+    app.apply_info_overlay_action(crate::ui::info_overlay::InfoOverlayAction::Choose {
+        request_id: request,
+        choice_id: "config-keep".into(),
+    });
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    assert!(backups(directory.path()).is_empty());
+    assert!(!app.config.bell.visual);
+
+    // Confirming replaces the file, keeps the old one, and applies defaults.
+    app.handle_action(Action::ResetConfig);
+    let request = app.info_overlay.request_id();
+    app.apply_info_overlay_action(crate::ui::info_overlay::InfoOverlayAction::Choose {
+        request_id: request,
+        choice_id: "config-reset".into(),
+    });
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        crate::config::save::RESET_TEXT
+    );
+    let kept = backups(directory.path());
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    assert_eq!(
+        std::fs::read_to_string(directory.path().join(&kept[0])).unwrap(),
+        original
+    );
+    assert!(app.config.bell.visual);
+    assert!(!app.config_has_unsaved_changes());
+    assert!(
+        app.toasts
+            .iter()
+            .any(|toast| toast.message.contains(&kept[0])),
+        "the notice names the copy"
+    );
+}
+
+#[test]
+fn ctrl_r_in_settings_does_not_reset() {
+    let original = "[bell]\nvisual = false\n";
+    let (_directory, path, mut app) = app_with_config_file(original);
+    app.settings_panel.toggle();
+    app.modifiers = ModifiersState::CONTROL;
+    app.handle_settings_panel_key(&winit::keyboard::Key::Character("r".into()));
+    assert!(!app.info_overlay.is_active());
+    assert!(!app.config.bell.visual);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+}

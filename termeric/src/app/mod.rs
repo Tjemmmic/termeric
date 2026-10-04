@@ -888,6 +888,8 @@ enum OverlayFlow {
     FontFeatures(font_feature_editor::PendingFontFeatureManagement),
     /// An exact source and live-domain destination awaiting upload consent.
     FileUpload(PendingFileUpload),
+    /// Reset Configuration awaiting confirmation.
+    ConfigReset { request_id: u64 },
 }
 
 #[derive(Debug, Clone)]
@@ -3260,7 +3262,7 @@ impl App {
             }
             Action::SaveConfig => self.save_config_with_toast(),
             Action::ReloadConfig => self.reload_config_from_disk(),
-            Action::ResetConfig => self.reset_config_to_defaults(),
+            Action::ResetConfig => self.confirm_config_reset(),
             Action::ToggleWorkspaceManager => self.toggle_workspace_manager(),
             Action::SaveWorkspace => self.force_save_workspace(),
             Action::ConfigurePlugins => {
@@ -3415,7 +3417,8 @@ impl App {
     }
 
     /// Replace the configuration file with one that sets nothing, keeping
-    /// the old file beside it, and then use the defaults.
+    /// the old file beside it, and then use the defaults. Only the confirmed
+    /// Reset Configuration does this.
     fn reset_config_to_defaults(&mut self) {
         let backup =
             match crate::config::save::reset(&self.config_path, std::time::SystemTime::now()) {

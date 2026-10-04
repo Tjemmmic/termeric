@@ -3,8 +3,62 @@
 use super::*;
 
 const TAB_BAR_HOVER_FADE_SECONDS: f32 = 0.1;
+const CONFIG_RESET_CHOICE: &str = "config-reset";
+const CONFIG_KEEP_CHOICE: &str = "config-keep";
 
 impl App {
+    /// Ask before Reset Configuration replaces the file. The confirmation has
+    /// no letter shortcut, so a repeated key cannot reset.
+    pub(super) fn confirm_config_reset(&mut self) {
+        let lines = vec![
+            format!(
+                "Replace {} with a file that sets nothing?",
+                self.config_path.display()
+            ),
+            "Every setting returns to its default. The current file is kept".into(),
+            "beside it as a .bak copy.".into(),
+            String::new(),
+            "  Reset".into(),
+            "  Cancel".into(),
+        ];
+        let request_id = self.info_overlay.show_choices(
+            "Reset Configuration",
+            lines,
+            vec![
+                crate::ui::info_overlay::InfoOverlayChoice::new(
+                    CONFIG_RESET_CHOICE,
+                    "Reset",
+                    4,
+                    None,
+                ),
+                crate::ui::info_overlay::InfoOverlayChoice::new(
+                    CONFIG_KEEP_CHOICE,
+                    "Cancel",
+                    5,
+                    None,
+                ),
+            ],
+        );
+        self.overlay_flow = Some(OverlayFlow::ConfigReset { request_id });
+    }
+
+    /// Answer the reset confirmation. Returns whether the choice was its.
+    pub(super) fn handle_config_reset_choice(&mut self, request_id: u64, choice_id: &str) -> bool {
+        let pending = matches!(
+            self.overlay_flow,
+            Some(OverlayFlow::ConfigReset { request_id: pending }) if pending == request_id
+        );
+        if !pending || !matches!(choice_id, CONFIG_RESET_CHOICE | CONFIG_KEEP_CHOICE) {
+            return false;
+        }
+        self.info_overlay.dismiss(request_id);
+        self.overlay_flow = None;
+        if choice_id == CONFIG_RESET_CHOICE {
+            self.reset_config_to_defaults();
+        }
+        true
+    }
+
     pub(super) const CONFIG_POLL_INTERVAL: std::time::Duration =
         std::time::Duration::from_millis(750);
 
@@ -702,19 +756,6 @@ impl App {
                         .toasts
                         .error(format!("Configuration save failed: {error}")),
                 };
-                return;
-            }
-            SettingsAction::ResetConfig => {
-                if let Err(error) = self.apply_config(Config::default()) {
-                    self.toasts.error(format!("Reset failed: {error}"));
-                } else {
-                    match self.save_config() {
-                        Ok(path) => self.toasts.success(format!("Configuration reset: {path}")),
-                        Err(error) => self
-                            .toasts
-                            .error(format!("Reset could not be saved: {error}")),
-                    };
-                }
                 return;
             }
             SettingsAction::SetSessionAutoSave(enabled) => config.session.auto_save = enabled,

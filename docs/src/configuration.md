@@ -40,7 +40,7 @@ Termeric never lets a mistake in `config.toml` stop it from starting, and never 
 - **On reload**, an invalid edit is rejected with a warning notice, and the settings you were already using stay in effect. Fix the file and save it again.
 - These notices stay on screen until the file loads again (or you reset it), and a newer problem replaces an older one.
 - **Saving** from Settings (or anything else that saves) refuses to replace a file that has an error, so your settings are never lost to a typo. The notice tells you to fix the file, or to use **Reset Configuration to Defaults**.
-- **Reset Configuration to Defaults** in the command palette replaces the file with one that sets nothing, so every setting returns to its default. Termeric first keeps the old file, whether or not it had an error, beside it as `config.toml.<seconds>.bak`, where `<seconds>` is the current Unix time, and the notice names the copy.
+- **Reset Configuration to Defaults** in the command palette asks first. When you confirm, Termeric keeps the old file, whether or not it had an error, beside it as `config.toml.<seconds>.bak` (where `<seconds>` is the current Unix time; a second copy in the same second gets `-2`, and so on), then replaces the file with one that sets nothing, so every setting returns to its default. The notice names the copy.
 
 Values are also checked against the ranges in the reference below; a value outside its range is an error, not a silent clamp.
 
@@ -51,7 +51,7 @@ Open Settings with Ctrl+, (Ctrl+comma), the Settings button at the right end of 
 - Changes apply immediately to the window you are in, so you can try a setting before keeping it.
 - The footer shows "Unsaved changes" when the live settings differ from the file. Press Ctrl+S or click **Save** to write them. Saving updates every other open window within a second.
 - If you close Settings without saving, the changes stay in effect in that window until the file is next reloaded, then they are gone.
-- Ctrl+R inside Settings resets every setting to its default and saves immediately.
+- To return every setting to its default, use **Reset Configuration to Defaults** in the command palette (see above).
 
 Saving changes only the settings that differ from the file. Everything else in `config.toml` stays as you wrote it: comments, blank lines, the order and form of keys, and settings you never touched. A changed value keeps the comment after it, a new setting goes into its table (or a new table at the end of the file), and a setting you cleared is removed. An edit you made to the file in another program since Termeric last read it is kept too. The file is replaced in one step, so it is never left half-written; if `config.toml` is a symbolic link, the file it points to is replaced and the link stays.
 
