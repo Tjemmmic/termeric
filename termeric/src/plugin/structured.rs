@@ -1,8 +1,10 @@
 //! Bounded out-of-process execution for declarative plugin event handlers.
 //!
-//! Each plugin's handler is one long-lived process that reads one schema-v1
-//! JSON request per line and answers each with one JSON line echoing the
-//! request's `request_id`. Each response is checked against a
+//! Each plugin's handler is one long-lived process, shared by every window,
+//! that reads one schema-v1 JSON request per line and answers each with one
+//! JSON line echoing the request's `request_id`. [`StructuredPluginHost`]
+//! runs each plugin on its own lane, so one plugin's slow answers never
+//! delay another's. Each response is checked against a
 //! [`HandlerAuthority`]: the plugin's granted capabilities plus where the
 //! response sits in its bounded follow-up chain.
 
@@ -13,17 +15,18 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{RecvTimeoutError, SyncSender, TrySendError, sync_channel};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
-use winit::event_loop::EventLoopProxy;
 use winit::window::WindowId;
 
 use std::os::unix::process::CommandExt;
 
+/// Requests queued on one plugin's lane.
 const QUEUE_CAPACITY: usize = 32;
+/// Plugin lanes, each with at most one handler process, in the whole process.
 const MAX_PERSISTENT_HANDLERS: usize = 8;
 /// One request's envelope before its settings and `request_id`: an event,
 /// or the result of a query or action.
@@ -518,158 +521,249 @@ struct StructuredResponse {
     actions: Vec<StructuredResponseAction>,
 }
 
-#[derive(Debug)]
+/// Where a lane delivers each completed request: the event loop in the app,
+/// a channel in tests.
+pub type CompletionSink = Arc<dyn Fn(StructuredHandlerCompletion) + Send + Sync>;
+
 struct WorkItem {
     window_id: WindowId,
     plugin_generation: u64,
     request_id: u64,
     invocation: StructuredHandlerInvocation,
-    proxy: EventLoopProxy<crate::app::AppEvent>,
+    deliver: CompletionSink,
 }
 
-#[derive(Debug)]
-enum WorkerMessage {
-    Run(Box<WorkItem>),
-    Shutdown,
+/// What the host can see of a lane without blocking on it.
+#[derive(Debug, Default)]
+struct LaneState {
+    /// Requests submitted and not yet finished.
+    pending: AtomicUsize,
+    /// Whether the lane holds a handler process.
+    process: AtomicBool,
 }
 
-#[derive(Debug)]
-pub struct StructuredPluginWorker {
-    sender: SyncSender<WorkerMessage>,
-    shutdown: Arc<AtomicBool>,
-    active_generation: Arc<AtomicU64>,
-    thread: Option<JoinHandle<()>>,
-    next_request_id: u64,
+/// One plugin's handler: a thread, its bounded queue, and at most one
+/// persistent process, so a slow plugin delays only its own requests.
+struct PluginLane {
+    sender: SyncSender<WorkItem>,
+    state: Arc<LaneState>,
+    thread: JoinHandle<()>,
 }
 
-impl StructuredPluginWorker {
-    pub fn new() -> Result<Self, String> {
+impl PluginLane {
+    fn spawn(
+        plugin_id: &str,
+        shutdown: Arc<AtomicBool>,
+        generation: Arc<AtomicU64>,
+    ) -> Result<Self, String> {
         let (sender, receiver) = sync_channel(QUEUE_CAPACITY);
-        let shutdown = Arc::new(AtomicBool::new(false));
-        let worker_shutdown = Arc::clone(&shutdown);
-        let active_generation = Arc::new(AtomicU64::new(1));
-        let worker_generation = Arc::clone(&active_generation);
+        let state = Arc::new(LaneState::default());
+        let lane_state = Arc::clone(&state);
+        let lane_generation = generation.load(Ordering::Acquire);
         let thread = thread::Builder::new()
-            .name("termeric-plugin-runtime".into())
+            .name(format!("termeric-plugin-{plugin_id}"))
             .spawn(move || {
-                let mut persistent_handlers: HashMap<String, PersistentHandler> = HashMap::new();
-                let mut owned_generation = worker_generation.load(Ordering::Acquire);
-                let mut last_persistent_reap = Instant::now();
-                loop {
-                    let current_generation = worker_generation.load(Ordering::Acquire);
-                    if current_generation != owned_generation {
-                        persistent_handlers.clear();
-                        owned_generation = current_generation;
-                    }
-                    if last_persistent_reap.elapsed() >= PERSISTENT_REAP_INTERVAL {
-                        persistent_handlers.retain(|_, handler| handler.is_running());
-                        last_persistent_reap = Instant::now();
-                    }
-                    let message = match receiver.recv_timeout(WORKER_POLL_INTERVAL) {
-                        Ok(message) => message,
-                        Err(RecvTimeoutError::Timeout) => {
-                            if worker_shutdown.load(Ordering::Acquire) {
-                                break;
-                            }
-                            continue;
-                        }
-                        Err(RecvTimeoutError::Disconnected) => break,
-                    };
-                    // The generation may change while recv_timeout is blocked.
-                    // Fence again before dispatch so the first new-generation
-                    // request can never reuse an old-generation process.
-                    let current_generation = worker_generation.load(Ordering::Acquire);
-                    if current_generation != owned_generation {
-                        persistent_handlers.clear();
-                        owned_generation = current_generation;
-                    }
-                    match message {
-                        WorkerMessage::Shutdown => break,
-                        WorkerMessage::Run(item) => {
-                            if worker_shutdown.load(Ordering::Acquire) {
-                                break;
-                            }
-                            if worker_generation.load(Ordering::Acquire) != item.plugin_generation {
-                                continue;
-                            }
-                            let result = run_persistent_handler(
-                                &mut persistent_handlers,
-                                &item.invocation,
-                                item.request_id,
-                                &worker_shutdown,
-                                &worker_generation,
-                                item.plugin_generation,
-                            );
-                            let plugin_id = item.invocation.plugin_id.clone();
-                            let _ = item.proxy.send_event(
-                                crate::app::AppEvent::StructuredPluginCompleted(
-                                    StructuredHandlerCompletion {
-                                        window_id: item.window_id,
-                                        plugin_generation: item.plugin_generation,
-                                        plugin_id,
-                                        request_id: item.request_id,
-                                        continuation: item.invocation,
-                                        result,
-                                    },
-                                ),
-                            );
-                        }
-                    }
-                }
-                persistent_handlers.clear();
+                run_lane(
+                    &receiver,
+                    &lane_state,
+                    &shutdown,
+                    &generation,
+                    lane_generation,
+                );
             })
-            .map_err(|error| format!("structured plugin worker could not start: {error}"))?;
+            .map_err(|error| format!("plugin handler lane could not start: {error}"))?;
         Ok(Self {
             sender,
-            shutdown,
-            active_generation,
-            thread: Some(thread),
-            next_request_id: 1,
+            state,
+            thread,
         })
     }
 
+    /// Nothing queued or running and no process kept: the lane can give
+    /// up its slot.
+    fn is_idle(&self) -> bool {
+        self.state.pending.load(Ordering::Acquire) == 0
+            && !self.state.process.load(Ordering::Acquire)
+    }
+}
+
+/// Serve one lane's queue until the host drops its sender, shuts down, or
+/// moves to another generation. Queued requests of an earlier generation are
+/// dropped unanswered, like the windows that would discard their results.
+fn run_lane(
+    receiver: &Receiver<WorkItem>,
+    state: &LaneState,
+    shutdown: &AtomicBool,
+    generation: &AtomicU64,
+    lane_generation: u64,
+) {
+    let mut handler: Option<PersistentHandler> = None;
+    let mut last_reap = Instant::now();
+    loop {
+        if shutdown.load(Ordering::Acquire) || generation.load(Ordering::Acquire) != lane_generation
+        {
+            break;
+        }
+        if last_reap.elapsed() >= PERSISTENT_REAP_INTERVAL {
+            if handler
+                .as_mut()
+                .is_some_and(|handler| !handler.is_running())
+            {
+                handler = None;
+            }
+            state.process.store(handler.is_some(), Ordering::Release);
+            last_reap = Instant::now();
+        }
+        let item = match receiver.recv_timeout(WORKER_POLL_INTERVAL) {
+            Ok(item) => item,
+            Err(RecvTimeoutError::Timeout) => continue,
+            Err(RecvTimeoutError::Disconnected) => break,
+        };
+        if item.plugin_generation == lane_generation && !shutdown.load(Ordering::Acquire) {
+            let result = run_persistent_handler(
+                &mut handler,
+                &item.invocation,
+                item.request_id,
+                shutdown,
+                generation,
+                item.plugin_generation,
+            );
+            state.process.store(handler.is_some(), Ordering::Release);
+            let plugin_id = item.invocation.plugin_id.clone();
+            (item.deliver)(StructuredHandlerCompletion {
+                window_id: item.window_id,
+                plugin_generation: item.plugin_generation,
+                plugin_id,
+                request_id: item.request_id,
+                continuation: item.invocation,
+                result,
+            });
+        }
+        state.pending.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// The process's one host for plugin event handlers, shared by every
+/// window. Each plugin gets its own lane; request IDs and the plugin
+/// generation are process-wide, so every window's requests and results
+/// agree on them. Closing a window leaves handlers running; a new
+/// generation (a plugin reload) or the host's end stops them.
+pub struct StructuredPluginHost {
+    lanes: Mutex<HashMap<String, PluginLane>>,
+    /// Lanes of earlier generations, joined when the host ends.
+    retired: Mutex<Vec<JoinHandle<()>>>,
+    generation: Arc<AtomicU64>,
+    next_request_id: AtomicU64,
+    shutdown: Arc<AtomicBool>,
+}
+
+impl std::fmt::Debug for StructuredPluginHost {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("StructuredPluginHost")
+            .field("generation", &self.generation())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Default for StructuredPluginHost {
+    fn default() -> Self {
+        Self {
+            lanes: Mutex::new(HashMap::new()),
+            retired: Mutex::new(Vec::new()),
+            generation: Arc::new(AtomicU64::new(1)),
+            next_request_id: AtomicU64::new(1),
+            shutdown: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
+impl StructuredPluginHost {
+    /// The current plugin generation. A window builds its plugins at this
+    /// generation, and only requests of this generation run.
+    pub fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Acquire)
+    }
+
+    /// Start a new generation: every handler process stops, queued requests
+    /// are dropped, and the next request starts a fresh process.
+    pub fn advance_generation(&self) -> u64 {
+        let next = self.generation().wrapping_add(1).max(1);
+        self.generation.store(next, Ordering::Release);
+        let retiring = std::mem::take(&mut *self.lanes.lock().unwrap());
+        let mut retired = self.retired.lock().unwrap();
+        retired.retain(|thread| !thread.is_finished());
+        retired.extend(retiring.into_values().map(|lane| lane.thread));
+        next
+    }
+
+    /// Queue one request on its plugin's lane and return its process-wide
+    /// request ID. `deliver` receives the completion.
     pub fn submit(
-        &mut self,
+        &self,
         window_id: WindowId,
         plugin_generation: u64,
         invocation: StructuredHandlerInvocation,
-        proxy: EventLoopProxy<crate::app::AppEvent>,
+        deliver: CompletionSink,
     ) -> Result<u64, String> {
-        if self.active_generation.load(Ordering::Acquire) != plugin_generation {
+        if self.generation() != plugin_generation {
             return Err("structured plugin generation is no longer active".into());
         }
-        let request_id = self.next_request_id;
-        self.next_request_id = self.next_request_id.wrapping_add(1).max(1);
+        let mut lanes = self.lanes.lock().unwrap();
+        lanes.retain(|_, lane| !lane.thread.is_finished());
+        if !lanes.contains_key(&invocation.plugin_id) {
+            if lanes.len() >= MAX_PERSISTENT_HANDLERS {
+                // A lane with nothing queued and no process gives way.
+                let idle = lanes
+                    .iter()
+                    .find_map(|(plugin_id, lane)| lane.is_idle().then(|| plugin_id.clone()));
+                let Some(idle) = idle else {
+                    return Err(format!(
+                        "plugin handler limit reached ({MAX_PERSISTENT_HANDLERS})"
+                    ));
+                };
+                let lane = lanes.remove(&idle).expect("idle lane was found");
+                self.retired.lock().unwrap().push(lane.thread);
+            }
+            let lane = PluginLane::spawn(
+                &invocation.plugin_id,
+                Arc::clone(&self.shutdown),
+                Arc::clone(&self.generation),
+            )?;
+            lanes.insert(invocation.plugin_id.clone(), lane);
+        }
+        let lane = &lanes[&invocation.plugin_id];
+        let request_id = self.next_request_id.fetch_add(1, Ordering::AcqRel);
+        lane.state.pending.fetch_add(1, Ordering::AcqRel);
         let item = WorkItem {
             window_id,
             plugin_generation,
             request_id,
             invocation,
-            proxy,
+            deliver,
         };
-        match self.sender.try_send(WorkerMessage::Run(Box::new(item))) {
+        match lane.sender.try_send(item) {
             Ok(()) => Ok(request_id),
-            Err(TrySendError::Full(_)) => Err(format!(
-                "structured plugin queue is full ({QUEUE_CAPACITY} pending requests)"
-            )),
-            Err(TrySendError::Disconnected(_)) => {
-                Err("structured plugin worker is unavailable".into())
+            Err(error) => {
+                lane.state.pending.fetch_sub(1, Ordering::AcqRel);
+                Err(match error {
+                    TrySendError::Full(_) => {
+                        format!("plugin handler queue is full ({QUEUE_CAPACITY} pending requests)")
+                    }
+                    TrySendError::Disconnected(_) => "plugin handler lane is unavailable".into(),
+                })
             }
         }
     }
-
-    /// Cancel active and queued work from every earlier plugin registry
-    /// generation. The worker observes this during its 10 ms process poll.
-    pub fn set_generation(&self, generation: u64) {
-        self.active_generation.store(generation, Ordering::Release);
-    }
 }
 
-impl Drop for StructuredPluginWorker {
+impl Drop for StructuredPluginHost {
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::Release);
-        let _ = self.sender.try_send(WorkerMessage::Shutdown);
-        if let Some(thread) = self.thread.take() {
+        let lanes = std::mem::take(&mut *self.lanes.lock().unwrap());
+        let mut threads = std::mem::take(&mut *self.retired.lock().unwrap());
+        threads.extend(lanes.into_values().map(|lane| lane.thread));
+        for thread in threads {
             let _ = thread.join();
         }
     }
@@ -915,8 +1009,11 @@ impl Drop for PersistentHandler {
     }
 }
 
+/// Run one request on a lane's handler process, starting it when the lane
+/// has none or its process has ended. A failed request discards the process;
+/// the next request starts a fresh one.
 fn run_persistent_handler(
-    handlers: &mut HashMap<String, PersistentHandler>,
+    handler: &mut Option<PersistentHandler>,
     invocation: &StructuredHandlerInvocation,
     request_id: u64,
     shutdown: &AtomicBool,
@@ -928,37 +1025,30 @@ fn run_persistent_handler(
         invocation.settings.as_ref(),
         request_id,
     )?;
-    handlers.retain(|_, handler| handler.is_running());
-    if !handlers.contains_key(&invocation.plugin_id) {
-        if handlers.len() >= MAX_PERSISTENT_HANDLERS {
-            return Err(format!(
-                "plugin handler limit reached ({MAX_PERSISTENT_HANDLERS})"
-            ));
-        }
-        handlers.insert(
-            invocation.plugin_id.clone(),
-            PersistentHandler::spawn(invocation)?,
-        );
+    if handler
+        .as_mut()
+        .is_some_and(|handler| !handler.is_running())
+    {
+        *handler = None;
     }
-    let result = {
-        let handler = handlers
-            .get_mut(&invocation.plugin_id)
-            .expect("handler was inserted");
-        if !handler.matches(invocation) {
-            Err("handler descriptor changed within one plugin generation".into())
-        } else {
-            handler.request(
-                event,
-                request_id,
-                &invocation.authority,
-                shutdown,
-                active_generation,
-                expected_generation,
-            )
-        }
+    let running = match handler {
+        Some(running) => running,
+        None => handler.insert(PersistentHandler::spawn(invocation)?),
+    };
+    let result = if running.matches(invocation) {
+        running.request(
+            event,
+            request_id,
+            &invocation.authority,
+            shutdown,
+            active_generation,
+            expected_generation,
+        )
+    } else {
+        Err("handler descriptor changed within one plugin generation".into())
     };
     if result.is_err() {
-        handlers.remove(&invocation.plugin_id);
+        *handler = None;
     }
     result
 }
@@ -1546,12 +1636,11 @@ done"#,
         );
         invocation.authority =
             persistent_authority(&["ui-actions", "workspace-query", "navigate:all-windows"]);
-        let mut handlers = HashMap::new();
+        let mut handler = None;
         let shutdown = AtomicBool::new(false);
         let generation = AtomicU64::new(1);
-        let query =
-            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
-                .unwrap();
+        let query = run_persistent_handler(&mut handler, &invocation, 1, &shutdown, &generation, 1)
+            .unwrap();
         assert!(matches!(
             query[..],
             [StructuredResponseAction::QueryWorkspace { .. }]
@@ -1560,7 +1649,7 @@ done"#,
         invocation.event_json = r#"{"schema_version":1,"origin_window_id":4,"event":{"type":"workspace-query-result","query_id":"inventory","windows":[]}}"#.into();
         invocation.authority = invocation.authority.after(&query[0]);
         let action =
-            run_persistent_handler(&mut handlers, &invocation, 2, &shutdown, &generation, 1)
+            run_persistent_handler(&mut handler, &invocation, 2, &shutdown, &generation, 1)
                 .unwrap();
         assert_eq!(
             action,
@@ -1574,13 +1663,13 @@ done"#,
         invocation.event_json = r#"{"schema_version":1,"origin_window_id":4,"event":{"type":"action-result","action":"select-tab","action_id":"select-active","ok":true}}"#.into();
         invocation.authority = invocation.authority.after(&action[0]);
         assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 3, &shutdown, &generation, 1)
+            run_persistent_handler(&mut handler, &invocation, 3, &shutdown, &generation, 1)
                 .unwrap(),
             vec![StructuredResponseAction::ShowMessage {
                 message: "action-result-received".into(),
             }]
         );
-        assert_eq!(handlers.len(), 1);
+        assert!(handler.is_some());
     }
 
     #[test]
@@ -1594,20 +1683,19 @@ while IFS= read -r event; do
 done"#,
         );
         invocation.authority = persistent_authority(&["pane-create"]);
-        let mut handlers = HashMap::new();
+        let mut handler = None;
         let shutdown = AtomicBool::new(false);
         let generation = AtomicU64::new(1);
         let created =
-            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
+            run_persistent_handler(&mut handler, &invocation, 1, &shutdown, &generation, 1)
                 .unwrap();
         invocation.event_json = r#"{"schema_version":1,"event":{"type":"action-result","action":"create-pane","ok":true}}"#.into();
         invocation.authority = invocation.authority.after(&created[0]);
-        let error =
-            run_persistent_handler(&mut handlers, &invocation, 2, &shutdown, &generation, 1)
-                .unwrap_err();
+        let error = run_persistent_handler(&mut handler, &invocation, 2, &shutdown, &generation, 1)
+            .unwrap_err();
         assert!(error.contains("cannot start host operations"), "{error}");
         // A protocol violation discards the process; the next event restarts it.
-        assert!(handlers.is_empty());
+        assert!(handler.is_none());
     }
 
     #[test]
@@ -1667,14 +1755,13 @@ while IFS= read -r event; do
   printf '{"schema_version":1,"request_id":%s,"actions":[{"type":"show-message","message":"pid=%s count=%s"}]}\n' "$count" "$$" "$count"
 done"#,
         );
-        let mut handlers = HashMap::new();
+        let mut handler = None;
         let shutdown = AtomicBool::new(false);
         let generation = AtomicU64::new(1);
-        let first =
-            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
-                .unwrap();
+        let first = run_persistent_handler(&mut handler, &invocation, 1, &shutdown, &generation, 1)
+            .unwrap();
         let second =
-            run_persistent_handler(&mut handlers, &invocation, 2, &shutdown, &generation, 1)
+            run_persistent_handler(&mut handler, &invocation, 2, &shutdown, &generation, 1)
                 .unwrap();
         let StructuredResponseAction::ShowMessage { message: first } = &first[0] else {
             panic!("fixture returned the wrong action")
@@ -1687,7 +1774,7 @@ done"#,
         assert_eq!(first_pid, second_pid);
         assert!(first.ends_with("count=1"));
         assert!(second.ends_with("count=2"));
-        assert_eq!(handlers.len(), 1);
+        assert!(handler.is_some());
     }
 
     #[test]
@@ -1698,17 +1785,17 @@ done"#,
   printf '{"schema_version":1,"request_id":1,"actions":[]}\n'
 done"#,
         );
-        let mut handlers = HashMap::new();
+        let mut handler = None;
         let shutdown = AtomicBool::new(false);
         let generation = AtomicU64::new(1);
-        run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1).unwrap();
+        run_persistent_handler(&mut handler, &invocation, 1, &shutdown, &generation, 1).unwrap();
         invocation.authority = persistent_authority(&["ui-actions", "navigate"]);
         assert!(
-            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
+            run_persistent_handler(&mut handler, &invocation, 1, &shutdown, &generation, 1)
                 .unwrap_err()
                 .contains("descriptor changed")
         );
-        assert!(handlers.is_empty());
+        assert!(handler.is_none());
     }
 
     #[test]
@@ -1719,14 +1806,13 @@ done"#,
 printf '{"schema_version":1,"request_id":999,"actions":[]}\n'
 sleep 10"#,
         );
-        let mut handlers = HashMap::new();
+        let mut handler = None;
         let shutdown = AtomicBool::new(false);
         let generation = AtomicU64::new(1);
-        let error =
-            run_persistent_handler(&mut handlers, &mismatched, 1, &shutdown, &generation, 1)
-                .unwrap_err();
+        let error = run_persistent_handler(&mut handler, &mismatched, 1, &shutdown, &generation, 1)
+            .unwrap_err();
         assert!(error.contains("did not match"));
-        assert!(handlers.is_empty());
+        assert!(handler.is_none());
 
         let healthy = persistent_fixture(
             "restart-fixture",
@@ -1735,15 +1821,15 @@ sleep 10"#,
 done"#,
         );
         assert!(
-            run_persistent_handler(&mut handlers, &healthy, 2, &shutdown, &generation, 1).is_ok()
+            run_persistent_handler(&mut handler, &healthy, 2, &shutdown, &generation, 1).is_ok()
         );
-        assert_eq!(handlers.len(), 1);
+        assert!(handler.is_some());
     }
 
     #[test]
     fn persistent_timeout_and_generation_change_terminate_handlers() {
         let invocation = persistent_fixture("cancel-fixture", "IFS= read -r event\nsleep 10");
-        let mut handlers = HashMap::new();
+        let mut handler = None;
         let shutdown = AtomicBool::new(false);
         let generation = Arc::new(AtomicU64::new(1));
         let update = Arc::clone(&generation);
@@ -1752,13 +1838,12 @@ done"#,
             update.store(2, Ordering::Release);
         });
         let started = Instant::now();
-        let error =
-            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
-                .unwrap_err();
+        let error = run_persistent_handler(&mut handler, &invocation, 1, &shutdown, &generation, 1)
+            .unwrap_err();
         changer.join().unwrap();
         assert!(error.contains("cancelled"));
         assert!(started.elapsed() < Duration::from_secs(1));
-        assert!(handlers.is_empty());
+        assert!(handler.is_none());
     }
 
     #[test]
@@ -1766,21 +1851,21 @@ done"#,
         let shutdown = AtomicBool::new(false);
         let generation = AtomicU64::new(1);
 
-        let mut handlers = HashMap::new();
+        let mut handler = None;
         let timeout = persistent_fixture("timeout-fixture", "IFS= read -r event\nsleep 10");
         let started = Instant::now();
-        let error = run_persistent_handler(&mut handlers, &timeout, 1, &shutdown, &generation, 1)
+        let error = run_persistent_handler(&mut handler, &timeout, 1, &shutdown, &generation, 1)
             .unwrap_err();
         assert!(error.contains("exceeded 2000 ms"));
         assert!(started.elapsed() < Duration::from_secs(4));
-        assert!(handlers.is_empty());
+        assert!(handler.is_none());
 
         let crash = persistent_fixture("crash-fixture", "printf 'fixture failure\\n' >&2\nexit 7");
-        let error = run_persistent_handler(&mut handlers, &crash, 2, &shutdown, &generation, 1)
-            .unwrap_err();
+        let error =
+            run_persistent_handler(&mut handler, &crash, 2, &shutdown, &generation, 1).unwrap_err();
         assert!(error.contains("exit status: 7"), "{error}");
         assert!(error.contains("fixture failure"), "{error}");
-        assert!(handlers.is_empty());
+        assert!(handler.is_none());
 
         // A handler that reads its event and then dies mid-request reports
         // the same, rather than only that its stdout closed.
@@ -1789,11 +1874,11 @@ done"#,
             "IFS= read -r event\nprintf 'died reading %s\\n' \"${#event}\" >&2\nexit 7",
         );
         let error =
-            run_persistent_handler(&mut handlers, &mid_request, 3, &shutdown, &generation, 1)
+            run_persistent_handler(&mut handler, &mid_request, 3, &shutdown, &generation, 1)
                 .unwrap_err();
         assert!(error.contains("exit status: 7"), "{error}");
         assert!(error.contains("died reading"), "{error}");
-        assert!(handlers.is_empty());
+        assert!(handler.is_none());
     }
 
     #[test]
@@ -1852,66 +1937,217 @@ done"#,
         );
     }
 
-    #[test]
-    fn persistent_handler_count_is_bounded() {
-        let mut handlers = HashMap::new();
-        let shutdown = AtomicBool::new(false);
-        let generation = AtomicU64::new(1);
-        for request_id in 1..=MAX_PERSISTENT_HANDLERS as u64 {
-            let invocation = persistent_fixture(
-                &format!("fixture-{request_id}"),
-                &format!(
-                    "while IFS= read -r event; do printf '{{\"schema_version\":1,\"request_id\":{request_id},\"actions\":[]}}\\n'; done"
-                ),
-            );
-            run_persistent_handler(
-                &mut handlers,
-                &invocation,
-                request_id,
-                &shutdown,
-                &generation,
-                1,
-            )
-            .unwrap();
+    /// A completion sink whose completions arrive on the returned receiver.
+    fn completion_channel() -> (
+        CompletionSink,
+        std::sync::mpsc::Receiver<StructuredHandlerCompletion>,
+    ) {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let deliver: CompletionSink = Arc::new(move |completion| {
+            let _ = sender.send(completion);
+        });
+        (deliver, receiver)
+    }
+
+    /// A handler that answers its `n`th request with request ID
+    /// `first_request_id + n - 1` and a message naming its process.
+    fn counting_handler(plugin_id: &str, first_request_id: u64) -> StructuredHandlerInvocation {
+        persistent_fixture(
+            plugin_id,
+            &format!(
+                r#"n={first_request_id}
+while IFS= read -r event; do
+  printf '{{"schema_version":1,"request_id":%d,"actions":[{{"type":"show-message","message":"pid %d"}}]}}\n' "$n" "$$"
+  n=$((n + 1))
+done"#
+            ),
+        )
+    }
+
+    fn receive(
+        receiver: &std::sync::mpsc::Receiver<StructuredHandlerCompletion>,
+    ) -> StructuredHandlerCompletion {
+        receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("a completion arrives")
+    }
+
+    fn message_of(completion: &StructuredHandlerCompletion) -> String {
+        match completion.result.as_deref() {
+            Ok([StructuredResponseAction::ShowMessage { message }]) => message.clone(),
+            other => panic!("unexpected handler result {other:?}"),
         }
-        assert_eq!(handlers.len(), MAX_PERSISTENT_HANDLERS);
-        let overflow = persistent_fixture("fixture-overflow", "sleep 10");
-        assert!(
-            run_persistent_handler(&mut handlers, &overflow, 99, &shutdown, &generation, 1)
-                .unwrap_err()
-                .contains("limit reached")
-        );
     }
 
     #[test]
-    fn exited_idle_handlers_do_not_consume_process_capacity() {
-        let mut handlers = HashMap::new();
-        for index in 0..MAX_PERSISTENT_HANDLERS {
-            let invocation = persistent_fixture(&format!("exited-{index}"), "exit 0");
-            handlers.insert(
-                invocation.plugin_id.clone(),
-                PersistentHandler::spawn(&invocation).unwrap(),
-            );
-        }
-        thread::sleep(Duration::from_millis(50));
+    fn windows_share_one_handler_process_that_outlives_a_closed_window() {
+        let host = Arc::new(StructuredPluginHost::default());
+        let (deliver, completions) = completion_channel();
+        let first_window = WindowId::from(1_u64);
+        let second_window = WindowId::from(2_u64);
+        let generation = host.generation();
 
-        let replacement = persistent_fixture(
-            "replacement",
-            "while IFS= read -r event; do printf '{\"schema_version\":1,\"request_id\":1,\"actions\":[]}\\n'; done",
-        );
-        assert!(
-            run_persistent_handler(
-                &mut handlers,
-                &replacement,
-                1,
-                &AtomicBool::new(false),
-                &AtomicU64::new(1),
-                1,
+        // Each window holds the host; the first window's handle goes away
+        // when it closes.
+        let first_handle = Arc::clone(&host);
+        let first_request = first_handle
+            .submit(
+                first_window,
+                generation,
+                counting_handler("shared", 1),
+                Arc::clone(&deliver),
             )
-            .is_ok()
+            .unwrap();
+        let first = receive(&completions);
+        assert_eq!(first.window_id, first_window);
+        assert_eq!(first.request_id, first_request);
+        drop(first_handle);
+
+        let second_request = host
+            .submit(
+                second_window,
+                generation,
+                counting_handler("shared", 1),
+                deliver,
+            )
+            .unwrap();
+        assert_eq!(second_request, first_request + 1);
+        let second = receive(&completions);
+        assert_eq!(second.window_id, second_window);
+        assert_eq!(message_of(&second), message_of(&first));
+    }
+
+    #[test]
+    fn a_slow_plugin_does_not_delay_another() {
+        let host = StructuredPluginHost::default();
+        let (deliver, completions) = completion_channel();
+        let generation = host.generation();
+        let slow = persistent_fixture(
+            "slow",
+            r#"while IFS= read -r event; do
+  sleep 1
+  printf '{"schema_version":1,"request_id":1,"actions":[]}\n'
+done"#,
         );
-        assert_eq!(handlers.len(), 1);
-        assert!(handlers.contains_key("replacement"));
+        host.submit(
+            WindowId::from(1_u64),
+            generation,
+            slow,
+            Arc::clone(&deliver),
+        )
+        .unwrap();
+        host.submit(
+            WindowId::from(1_u64),
+            generation,
+            counting_handler("fast", 2),
+            deliver,
+        )
+        .unwrap();
+        let first = receive(&completions);
+        assert_eq!(first.plugin_id, "fast");
+        assert!(first.result.is_ok());
+        let second = receive(&completions);
+        assert_eq!(second.plugin_id, "slow");
+        assert!(second.result.is_ok(), "{:?}", second.result);
+    }
+
+    #[test]
+    fn a_new_generation_stops_handlers_and_refuses_older_requests() {
+        let host = StructuredPluginHost::default();
+        let (deliver, completions) = completion_channel();
+        let old_generation = host.generation();
+        host.submit(
+            WindowId::from(1_u64),
+            old_generation,
+            counting_handler("reloaded", 1),
+            Arc::clone(&deliver),
+        )
+        .unwrap();
+        let before = message_of(&receive(&completions));
+        let old_pid = before.strip_prefix("pid ").unwrap().to_string();
+
+        let new_generation = host.advance_generation();
+        assert_ne!(new_generation, old_generation);
+        assert!(
+            host.submit(
+                WindowId::from(2_u64),
+                old_generation,
+                counting_handler("reloaded", 2),
+                Arc::clone(&deliver),
+            )
+            .unwrap_err()
+            .contains("no longer active")
+        );
+        assert!(crate::test_support::poll_until(
+            Duration::from_secs(3),
+            || !std::path::Path::new(&format!("/proc/{old_pid}")).exists()
+        ));
+        host.submit(
+            WindowId::from(2_u64),
+            new_generation,
+            counting_handler("reloaded", 2),
+            deliver,
+        )
+        .unwrap();
+        assert_ne!(message_of(&receive(&completions)), before);
+    }
+
+    #[test]
+    fn plugin_lanes_are_bounded_and_idle_ones_give_way() {
+        let host = StructuredPluginHost::default();
+        let (deliver, completions) = completion_channel();
+        let generation = host.generation();
+        for index in 1..=MAX_PERSISTENT_HANDLERS as u64 {
+            host.submit(
+                WindowId::from(1_u64),
+                generation,
+                counting_handler(&format!("running-{index}"), index),
+                Arc::clone(&deliver),
+            )
+            .unwrap();
+            assert!(receive(&completions).result.is_ok());
+        }
+        // Every lane keeps a running process, so none gives way.
+        assert!(
+            host.submit(
+                WindowId::from(1_u64),
+                generation,
+                counting_handler("overflow", 99),
+                Arc::clone(&deliver),
+            )
+            .unwrap_err()
+            .contains("limit reached")
+        );
+
+        // Lanes whose processes ended and that have nothing queued do.
+        let host = StructuredPluginHost::default();
+        let generation = host.generation();
+        for index in 1..=MAX_PERSISTENT_HANDLERS {
+            host.submit(
+                WindowId::from(1_u64),
+                generation,
+                persistent_fixture(&format!("exiting-{index}"), "exit 0"),
+                Arc::clone(&deliver),
+            )
+            .unwrap();
+            assert!(receive(&completions).result.is_err());
+        }
+        let mut replacement = None;
+        assert!(crate::test_support::poll_until(
+            Duration::from_secs(3),
+            || {
+                replacement = host
+                    .submit(
+                        WindowId::from(1_u64),
+                        generation,
+                        counting_handler("replacement", 9),
+                        Arc::clone(&deliver),
+                    )
+                    .ok();
+                replacement.is_some()
+            }
+        ));
+        assert_eq!(receive(&completions).plugin_id, "replacement");
     }
 
     #[test]
@@ -1942,7 +2178,7 @@ done"#,
 
     #[test]
     fn rerun_in_sibling_example_sends_the_last_command_to_the_next_pane() {
-        let mut handlers = HashMap::new();
+        let mut handler = None;
         let shutdown = AtomicBool::new(false);
         let generation = AtomicU64::new(1);
 
@@ -1950,16 +2186,25 @@ done"#,
         let mut completed = example_invocation("rerun-in-sibling", false);
         completed.event_json = r#"{"schema_version":1,"plugin_id":"rerun-in-sibling","origin_window_id":3,"event":{"type":"command-completed","region_id":1,"tab_id":5,"pane_id":0,"exit_code":0,"content_available":true,"command":{"text":"cargo test","truncated":false,"sanitized":false},"output":{"text":"ok","truncated":false,"sanitized":false}}}"#.into();
         assert!(
-            run_persistent_handler(&mut handlers, &completed, 1, &shutdown, &generation, 1)
+            run_persistent_handler(&mut handler, &completed, 1, &shutdown, &generation, 1)
+                .unwrap()
+                .is_empty()
+        );
+
+        // The same handler hears other windows, whose tab IDs repeat; their
+        // commands stay theirs.
+        let mut elsewhere = example_invocation("rerun-in-sibling", false);
+        elsewhere.event_json = r#"{"schema_version":1,"plugin_id":"rerun-in-sibling","origin_window_id":4,"event":{"type":"command-completed","region_id":1,"tab_id":5,"pane_id":0,"exit_code":0,"content_available":true,"command":{"text":"make clean","truncated":false,"sanitized":false},"output":{"text":"","truncated":false,"sanitized":false}}}"#.into();
+        assert!(
+            run_persistent_handler(&mut handler, &elsewhere, 10, &shutdown, &generation, 1)
                 .unwrap()
                 .is_empty()
         );
 
         let mut invocation = example_invocation("rerun-in-sibling", true);
         invocation.event_json = r#"{"schema_version":1,"plugin_id":"rerun-in-sibling","origin_window_id":3,"event":{"type":"command-invoked","command_id":"rerun-in-sibling.rerun"}}"#.into();
-        let query =
-            run_persistent_handler(&mut handlers, &invocation, 2, &shutdown, &generation, 1)
-                .unwrap();
+        let query = run_persistent_handler(&mut handler, &invocation, 2, &shutdown, &generation, 1)
+            .unwrap();
         assert_eq!(
             query,
             vec![StructuredResponseAction::QueryWorkspace {
@@ -1969,7 +2214,7 @@ done"#,
 
         invocation.authority = invocation.authority.after(&query[0]);
         invocation.event_json = r#"{"schema_version":1,"plugin_id":"rerun-in-sibling","origin_window_id":3,"event":{"type":"workspace-query-result","query_id":"rerun","truncated":false,"windows":[{"id":3,"tabs":[{"id":4,"title":"other","active":false,"closed":false,"panes":[]},{"id":5,"title":"work","active":true,"closed":false,"panes":[{"id":0,"focused":true,"closed":false},{"id":1,"focused":false,"closed":false}]}]}]}}"#.into();
-        let send = run_persistent_handler(&mut handlers, &invocation, 3, &shutdown, &generation, 1)
+        let send = run_persistent_handler(&mut handler, &invocation, 3, &shutdown, &generation, 1)
             .unwrap();
         assert_eq!(
             send,
@@ -1987,18 +2232,18 @@ done"#,
         invocation.authority = invocation.authority.after(&send[0]);
         invocation.event_json = r#"{"schema_version":1,"plugin_id":"rerun-in-sibling","origin_window_id":3,"event":{"type":"action-result","action":"send-text","action_id":"rerun","ok":false,"error":"External terminal input is disabled"}}"#.into();
         assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 4, &shutdown, &generation, 1)
+            run_persistent_handler(&mut handler, &invocation, 4, &shutdown, &generation, 1)
                 .unwrap(),
             vec![StructuredResponseAction::ShowMessage {
                 message: "Rerun failed: External terminal input is disabled".into(),
             }]
         );
-        assert_eq!(handlers.len(), 1);
+        assert!(handler.is_some());
     }
 
     #[test]
     fn command_notifier_example_reports_only_unexpected_failures() {
-        let mut handlers = HashMap::new();
+        let mut handler = None;
         let shutdown = AtomicBool::new(false);
         let generation = AtomicU64::new(1);
         let mut invocation = example_invocation("command-notifier", false);
@@ -2011,7 +2256,7 @@ done"#,
             invocation.event_json = completed(exit_code);
             assert!(
                 run_persistent_handler(
-                    &mut handlers,
+                    &mut handler,
                     &invocation,
                     request_id,
                     &shutdown,
@@ -2024,7 +2269,7 @@ done"#,
         }
         invocation.event_json = completed(2);
         assert_eq!(
-            run_persistent_handler(&mut handlers, &invocation, 3, &shutdown, &generation, 1)
+            run_persistent_handler(&mut handler, &invocation, 3, &shutdown, &generation, 1)
                 .unwrap(),
             vec![StructuredResponseAction::ShowNotice {
                 title: "Command failed".into(),
@@ -2043,7 +2288,7 @@ done"#,
     /// everything its manifest requests. Like the host, it sends a command's
     /// settings with the command and with every result that follows it.
     struct ExampleConversation {
-        handlers: HashMap<String, PersistentHandler>,
+        handler: Option<PersistentHandler>,
         shutdown: AtomicBool,
         generation: AtomicU64,
         invocation: StructuredHandlerInvocation,
@@ -2054,7 +2299,7 @@ done"#,
     impl ExampleConversation {
         fn new(example: &str, origin_window_id: u64) -> Self {
             Self {
-                handlers: HashMap::new(),
+                handler: None,
                 shutdown: AtomicBool::new(false),
                 generation: AtomicU64::new(1),
                 invocation: example_invocation(example, true),
@@ -2125,7 +2370,7 @@ done"#,
             self.invocation.event_json = envelope.to_string();
             self.request_id += 1;
             let actions = run_persistent_handler(
-                &mut self.handlers,
+                &mut self.handler,
                 &self.invocation,
                 self.request_id,
                 &self.shutdown,
@@ -2133,7 +2378,7 @@ done"#,
                 1,
             )
             .unwrap();
-            assert_eq!(self.handlers.len(), 1, "the handler must stay persistent");
+            assert!(self.handler.is_some(), "the handler must stay persistent");
             actions
         }
     }

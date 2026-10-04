@@ -4638,3 +4638,119 @@ fn whole_tab_transfer_rejects_live_source_atomically() {
     );
     assert_eq!(destination.tabs.as_ref().unwrap().count(), 1);
 }
+
+#[test]
+fn one_plugin_reload_moves_every_window_to_one_generation() {
+    let temp = tempfile::tempdir().unwrap();
+    let registry = temp.path().join("registry.toml");
+    let root = temp.path().join("installed");
+    std::fs::create_dir_all(&root).unwrap();
+    let mut application =
+        Application::from_config(Config::default(), None, LaunchPlan::default()).unwrap();
+    application.pending.clear();
+    application.plugin_paths = crate::plugin::runtime::PluginPaths {
+        registry: registry.clone(),
+        root: root.clone(),
+    };
+    application.last_plugin_registry_mtime = application.plugin_paths.registry_mtime();
+    let natives = [WindowId::from(11_u64), WindowId::from(12_u64)];
+    for native in natives {
+        let mut window = App::new_headless(Config::default()).unwrap();
+        window.plugin_host = Arc::clone(&application.plugin_host);
+        window.set_runtime_plugin_test_paths(registry.clone(), root.clone());
+        application.windows.insert(native, window);
+    }
+    let generation = application.plugin_host.generation();
+    let poll = |application: &mut Application| {
+        application.last_plugin_registry_check = Instant::now()
+            .checked_sub(App::CONFIG_POLL_INTERVAL * 2)
+            .unwrap();
+        application.sync_plugin_generations(Instant::now());
+    };
+    let reload_toasts = |application: &Application| {
+        application
+            .windows
+            .values()
+            .map(|window| {
+                window
+                    .toasts
+                    .iter()
+                    .filter(|toast| toast.message == "Third-party plugins reloaded")
+                    .count()
+            })
+            .collect::<Vec<_>>()
+    };
+    let stale_is_discarded = |application: &mut Application, plugin_generation| {
+        natives.iter().all(|native| {
+            application
+                .windows
+                .get_mut(native)
+                .unwrap()
+                .accept_structured_plugin_completion(
+                    crate::plugin::structured::StructuredHandlerCompletion {
+                        window_id: *native,
+                        plugin_generation,
+                        plugin_id: "absent".into(),
+                        request_id: 1,
+                        continuation: StructuredHandlerInvocation::fixture(
+                            "absent",
+                            Default::default(),
+                        ),
+                        result: Ok(Vec::new()),
+                    },
+                )
+                .is_none()
+        })
+    };
+
+    poll(&mut application);
+    assert_eq!(application.plugin_host.generation(), generation);
+    assert_eq!(reload_toasts(&application), vec![0, 0]);
+
+    // A registry change made outside Termeric is noticed once for the whole
+    // process, and every window follows the one new generation.
+    std::fs::write(
+        &registry,
+        format!(
+            "schema_version = {}\n",
+            crate::plugin::runtime::REGISTRY_SCHEMA_VERSION
+        ),
+    )
+    .unwrap();
+    poll(&mut application);
+    let reloaded = application.plugin_host.generation();
+    assert_ne!(reloaded, generation);
+    assert_eq!(reload_toasts(&application), vec![1, 1]);
+    for window in application.windows.values() {
+        assert_eq!(window.plugin_runtime_generation, reloaded);
+    }
+    assert!(stale_is_discarded(&mut application, generation));
+    poll(&mut application);
+    assert_eq!(application.plugin_host.generation(), reloaded);
+
+    // One window's own reload, as when its plugin manager writes the
+    // registry, brings the other along without a second reload when the
+    // registry poll comes due.
+    std::fs::write(
+        &registry,
+        format!(
+            "schema_version = {}\n\n",
+            crate::plugin::runtime::REGISTRY_SCHEMA_VERSION
+        ),
+    )
+    .unwrap();
+    application
+        .windows
+        .get_mut(&natives[0])
+        .unwrap()
+        .reload_plugins();
+    let after_window_reload = application.plugin_host.generation();
+    application.sync_plugin_generations(Instant::now());
+    for window in application.windows.values() {
+        assert_eq!(window.plugin_runtime_generation, after_window_reload);
+    }
+    assert!(stale_is_discarded(&mut application, reloaded));
+    poll(&mut application);
+    assert_eq!(application.plugin_host.generation(), after_window_reload);
+    assert_eq!(reload_toasts(&application), vec![1, 1]);
+}

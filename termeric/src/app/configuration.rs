@@ -281,15 +281,6 @@ impl App {
             }
         }
 
-        let plugin_registry_mtime = self.runtime_plugin_paths.registry_mtime();
-        if plugin_registry_mtime != self.last_plugin_registry_mtime {
-            changed = true;
-            self.last_plugin_registry_mtime = plugin_registry_mtime;
-            self.sync_plugins_from_config();
-            self.toasts.info("Third-party plugins reloaded");
-            log::info!("Third-party plugin registry hot-reloaded");
-        }
-
         changed |= self.poll_background_image();
 
         let Some(theme_path) = self.active_theme_path.clone() else {
@@ -446,7 +437,7 @@ impl App {
             })
             .collect();
         if agents_changed {
-            self.sync_plugins_from_config();
+            self.reload_plugins();
         }
         self.sync_harvest_from_config();
         self.sync_accessibility_preferences();
@@ -485,10 +476,18 @@ impl App {
         self.settings_panel.set_agents(rows, summary, status);
     }
 
+    /// Reload plugins after this window changed them (in the plugin manager)
+    /// or its agents changed: a new host generation stops every handler, and
+    /// the Application brings the other windows to it.
+    pub(super) fn reload_plugins(&mut self) {
+        self.plugin_host.advance_generation();
+        self.sync_plugins_from_config();
+    }
+
+    /// Rebuild this window's plugins from the registry and its agents at the
+    /// host's current generation.
     pub(super) fn sync_plugins_from_config(&mut self) {
-        self.plugin_runtime_generation = self.plugin_runtime_generation.wrapping_add(1).max(1);
-        self.structured_plugin_worker
-            .set_generation(self.plugin_runtime_generation);
+        self.plugin_runtime_generation = self.plugin_host.generation();
         self.plugin_manager.clear();
         self.agents = crate::agents::AgentCatalog::from_config(&self.config.agents);
         self.sync_agent_settings_rows();

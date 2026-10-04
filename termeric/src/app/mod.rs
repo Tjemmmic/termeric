@@ -1164,8 +1164,6 @@ pub struct App {
     /// The notice that the configured theme does not load, so another one is
     /// on screen: it stays until a configured theme loads.
     theme_problem: crate::ui::toast::StandingNotice,
-    /// Last installed-plugin registry mtime for live enable/update/remove.
-    last_plugin_registry_mtime: Option<std::time::SystemTime>,
     /// File backing the active custom/explicit theme, when applicable.
     active_theme_path: Option<std::path::PathBuf>,
     /// Last observed mtime of the active file-backed theme.
@@ -1292,9 +1290,10 @@ pub struct App {
     tab_bar_hover_since: Instant,
     /// Plugin manager
     plugin_manager: PluginManager,
-    /// Bounded off-UI-thread executor for declarative lifecycle handlers.
-    structured_plugin_worker: crate::plugin::structured::StructuredPluginWorker,
-    /// Invalidates responses queued before a plugin registry/config reload.
+    /// The process's plugin handler host, shared with every other window.
+    plugin_host: Arc<crate::plugin::structured::StructuredPluginHost>,
+    /// The host generation this window's plugins were built at; responses
+    /// from any other generation are discarded.
     plugin_runtime_generation: u64,
     /// Exact plugin result request that must finish before this window closes.
     pending_plugin_window_close: Option<PendingPluginWindowClose>,
@@ -1369,7 +1368,7 @@ impl App {
     #[cfg(test)]
     pub(crate) fn new_headless(config: Config) -> Result<Self> {
         config.validate()?;
-        Self::from_config(config, None, false)
+        Self::from_config(config, None, false, Arc::default())
     }
 
     /// A headless app whose only tab runs `script` under `/bin/sh -c` in an
@@ -1447,6 +1446,7 @@ impl App {
         config: Config,
         startup_config_warning: Option<String>,
         use_system_state: bool,
+        plugin_host: Arc<crate::plugin::structured::StructuredPluginHost>,
     ) -> Result<Self> {
         let config_path = Config::config_path();
         let background_image_path = config.window.background_image.path.clone();
@@ -1544,9 +1544,6 @@ impl App {
                 .and_then(Result::ok)
                 .and_then(|metadata| metadata.modified().ok()),
             config_path,
-            last_plugin_registry_mtime: use_system_state
-                .then(|| runtime_plugin_paths.registry_mtime())
-                .flatten(),
             active_theme_path,
             last_theme_mtime,
             last_cursor_visible: true,
@@ -1612,9 +1609,8 @@ impl App {
             tab_bar_hover: None,
             tab_bar_hover_since: Instant::now(),
             plugin_manager: PluginManager::new(),
-            structured_plugin_worker: crate::plugin::structured::StructuredPluginWorker::new()
-                .map_err(anyhow::Error::msg)?,
-            plugin_runtime_generation: 1,
+            plugin_runtime_generation: plugin_host.generation(),
+            plugin_host,
             pending_plugin_window_close: None,
             reported_active_tab: None,
             command_palette: {
@@ -1661,7 +1657,8 @@ impl App {
             app.config.harvest.enabled,
             &app.shortcut_registry,
         ));
-        app.apply_config_side_effects(true);
+        app.apply_config_side_effects(false);
+        app.sync_plugins_from_config();
         app.mark_config_saved();
         if let Some(warning) = startup_config_warning {
             app.report_config_problem(crate::ui::toast::ToastSeverity::Error, warning);

@@ -4,6 +4,41 @@
 use super::*;
 
 impl Application {
+    /// Keep every window's plugins at the host's one generation, so no
+    /// window discards another's requests as stale. A window that reloaded
+    /// its plugins (a plugin manager change, changed agents) has already
+    /// advanced it; a registry change made elsewhere, such as by
+    /// `termeric plugin`, is noticed here, polled once for the process.
+    pub(super) fn sync_plugin_generations(&mut self, now: Instant) {
+        if self.plugin_host.generation() != self.plugin_generation_seen {
+            // That reload read the registry as it is now.
+            self.last_plugin_registry_mtime = self.plugin_paths.registry_mtime();
+        } else if now.saturating_duration_since(self.last_plugin_registry_check)
+            >= App::CONFIG_POLL_INTERVAL
+        {
+            self.last_plugin_registry_check = now;
+            let mtime = self.plugin_paths.registry_mtime();
+            if mtime != self.last_plugin_registry_mtime {
+                self.last_plugin_registry_mtime = mtime;
+                self.plugin_host.advance_generation();
+                log::info!("Third-party plugin registry hot-reloaded");
+                for window in self.windows.values_mut() {
+                    window.toasts.info("Third-party plugins reloaded");
+                }
+            }
+        }
+        let generation = self.plugin_host.generation();
+        self.plugin_generation_seen = generation;
+        for window in self.windows.values_mut() {
+            if window.plugin_runtime_generation != generation {
+                window.sync_plugins_from_config();
+                window
+                    .redraw_scheduler
+                    .request(crate::app::RedrawReason::ConfigReload);
+            }
+        }
+    }
+
     pub(super) fn plugin_process_inventory(&self) -> crate::control::protocol::ProcessInventory {
         let windows: Vec<_> = self
             .window_order

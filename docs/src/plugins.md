@@ -220,11 +220,11 @@ The `[event_handler]` table names one program that receives every event the plug
 
 Termeric starts the handler with an empty environment except `PATH` and `TERMERIC_PLUGIN_ID` (the plugin's ID), in Termeric's own working directory. Only the manifest is installed, so give a handler script as an absolute path, or put the code in `args` as the examples do.
 
-Each window runs its handlers separately: every window that has sent the plugin an event has its own handler process, with its own memory. A window runs one handler request at a time, across all plugins, and queues up to 32 more.
+A plugin has one handler process for every window of a Termeric process, so whatever it remembers is shared between windows. Requests from all windows reach it one at a time, in the order they happened, with up to 32 more queued; each plugin has its own queue, so a slow plugin never holds up another. Tab and pane IDs are unique only within their window, so a handler that remembers anything about them keys it by `origin_window_id` as well.
 
 Termeric starts the program with the first event and keeps it running. Each request is one line of JSON on standard input, with a `request_id`; the program answers each with one line of JSON on standard output carrying the same `request_id`, within 2 seconds, and must print nothing else there. Flush standard output after each line. Standard error is kept for error messages.
 
-The handler also receives the results of its queries and actions. If it fails a request, Termeric stops it and starts a fresh process for the next event. It is also restarted whenever the plugin registry or your configuration is reloaded, and stopped when the plugin is disabled or the window closes.
+The handler also receives the results of its queries and actions. If it fails a request, Termeric stops it and starts a fresh process for the next event. It is also restarted whenever the plugin registry or your configuration is reloaded, which happens when a plugin is installed, updated, enabled, disabled, or removed, and stopped when Termeric exits. Closing a window leaves it running for the other windows.
 
 ### Requests
 
@@ -333,8 +333,8 @@ The limit applies to one conversation, not across events. An action can cause a 
 | Request size | 16 KiB, plus up to 8 KiB of settings |
 | Response size | 64 KiB |
 | Actions per response | 8, with at most one query or action |
-| Handler processes per window | 8 |
-| Queued requests per window | 32 |
+| Plugins with a handler process at once | 8 |
+| Queued requests per plugin | 32 |
 
 A handler that exits with an error, times out, writes invalid JSON, sends the wrong `schema_version` or `request_id`, or asks for something it may not do produces an error toast, "Plugin ID event handler failed", with the reason and, when the handler exited with an error, the start of its standard error. Control characters, line and paragraph separators, and bidirectional formatting characters are removed, and the whole message is cut to 1 KiB. An action that Termeric accepts but can't carry out, such as selecting a tab that has closed, comes back as an `action-result` with `ok` set to `false`.
 

@@ -50,7 +50,6 @@ impl App {
     #[cfg(test)]
     pub(crate) fn set_runtime_plugin_test_paths(&mut self, registry: PathBuf, root: PathBuf) {
         self.runtime_plugin_paths = crate::plugin::runtime::PluginPaths { registry, root };
-        self.last_plugin_registry_mtime = self.runtime_plugin_paths.registry_mtime();
         self.sync_plugins_from_config();
     }
 
@@ -1731,8 +1730,7 @@ impl App {
         };
         match self.execute_runtime_plugin_admin(command) {
             Ok(message) => {
-                self.last_plugin_registry_mtime = self.runtime_plugin_paths.registry_mtime();
-                self.sync_plugins_from_config();
+                self.reload_plugins();
                 self.toasts.success(message);
                 self.show_runtime_plugin_detail(preview.id, page);
             }
@@ -1755,8 +1753,7 @@ impl App {
         let command = preview.command(grants.clone(), enable);
         match self.execute_runtime_plugin_admin(command) {
             Ok(message) => {
-                self.last_plugin_registry_mtime = self.runtime_plugin_paths.registry_mtime();
-                self.sync_plugins_from_config();
+                self.reload_plugins();
                 self.toasts.success(message);
                 self.show_runtime_plugin_detail(preview.id.clone(), page);
             }
@@ -1778,8 +1775,7 @@ impl App {
         let command = preview.command(grants.clone(), enable);
         match self.execute_runtime_plugin_admin(command) {
             Ok(message) => {
-                self.last_plugin_registry_mtime = self.runtime_plugin_paths.registry_mtime();
-                self.sync_plugins_from_config();
+                self.reload_plugins();
                 self.toasts.success(message);
                 self.show_runtime_plugin_detail(preview.id.clone(), page);
             }
@@ -1804,8 +1800,7 @@ impl App {
         };
         match self.execute_runtime_plugin_admin(command) {
             Ok(message) => {
-                self.last_plugin_registry_mtime = self.runtime_plugin_paths.registry_mtime();
-                self.sync_plugins_from_config();
+                self.reload_plugins();
                 self.toasts.success(message);
                 self.show_runtime_plugin_detail(plugin_id, page);
             }
@@ -1863,8 +1858,7 @@ impl App {
         };
         match self.execute_runtime_plugin_admin(command) {
             Ok(message) => {
-                self.last_plugin_registry_mtime = self.runtime_plugin_paths.registry_mtime();
-                self.sync_plugins_from_config();
+                self.reload_plugins();
                 self.toasts.success(message);
                 self.show_runtime_plugin_settings(plugin_id, page, settings_page);
             }
@@ -1894,8 +1888,7 @@ impl App {
     ) {
         match self.execute_runtime_plugin_admin(command) {
             Ok(message) => {
-                self.last_plugin_registry_mtime = self.runtime_plugin_paths.registry_mtime();
-                self.sync_plugins_from_config();
+                self.reload_plugins();
                 self.toasts.success(message);
                 if removed {
                     self.show_runtime_plugin_list(page);
@@ -2352,42 +2345,6 @@ program = "termeric-test-fixture-must-not-run"
             })
             .collect::<String>();
         assert_eq!(reconstructed, value);
-    }
-
-    #[test]
-    fn hot_reload_watches_the_apps_own_registry() {
-        let temp = tempfile::tempdir().unwrap();
-        let registry = temp.path().join("registry.toml");
-        let root = temp.path().join("installed");
-        std::fs::create_dir_all(&root).unwrap();
-        let mut app = App::new_headless(Config::default()).unwrap();
-        app.set_runtime_plugin_test_paths(registry.clone(), root);
-        let due = |app: &mut App| {
-            app.last_config_check = Instant::now()
-                .checked_sub(App::CONFIG_POLL_INTERVAL * 2)
-                .unwrap();
-        };
-
-        due(&mut app);
-        app.poll_config_for_hot_reload();
-        let reloaded = |app: &App| {
-            app.toasts
-                .iter()
-                .any(|toast| toast.message == "Third-party plugins reloaded")
-        };
-        assert!(!reloaded(&app));
-
-        std::fs::write(
-            &registry,
-            format!(
-                "schema_version = {}\n",
-                crate::plugin::runtime::REGISTRY_SCHEMA_VERSION
-            ),
-        )
-        .unwrap();
-        due(&mut app);
-        assert!(app.poll_config_for_hot_reload());
-        assert!(reloaded(&app));
     }
 
     #[test]

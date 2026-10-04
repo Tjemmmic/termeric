@@ -109,11 +109,14 @@ impl App {
             .get()
             .cloned()
             .ok_or_else(|| "structured plugin event loop is unavailable".to_string())?;
-        self.structured_plugin_worker.submit(
+        let deliver: crate::plugin::structured::CompletionSink = Arc::new(move |completion| {
+            let _ = proxy.send_event(AppEvent::StructuredPluginCompleted(completion));
+        });
+        self.plugin_host.submit(
             window.id(),
             self.plugin_runtime_generation,
             invocation,
-            proxy,
+            deliver,
         )
     }
 
@@ -337,6 +340,13 @@ impl App {
         match action {
             PluginAction::InvokeStructuredHandler { invocation } => {
                 let plugin_id = invocation.plugin_id.clone();
+                if self.plugin_runtime_generation != self.plugin_host.generation() {
+                    // Another window reloaded the plugins and this one has
+                    // yet to follow; the event is dropped like the requests
+                    // the reload cancelled.
+                    log::debug!("Dropping a {plugin_id:?} event from before a plugin reload");
+                    return;
+                }
                 if let Err(error) = self.submit_structured_handler(invocation) {
                     log::debug!(
                         "Skipping structured plugin handler {:?}: {}",

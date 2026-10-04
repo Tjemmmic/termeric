@@ -40,6 +40,8 @@ program = "python3"
 args = ["-u", "-c", """
 import json, sys
 
+# One handler serves every window, and tab IDs are unique only within their
+# window, so commands are remembered by window as well.
 last_by_pane = {}
 last_by_tab = {}
 
@@ -55,7 +57,7 @@ def rerun(windows, origin):
     focused = next((pane for pane in panes if pane["focused"]), None)
     if focused is None or len(panes) < 2:
         return [{"type": "show-message", "message": "Split the tab first; there is no sibling pane"}]
-    command = last_by_pane.get((tab["id"], focused["id"])) or last_by_tab.get(tab["id"])
+    command = last_by_pane.get((origin, tab["id"], focused["id"])) or last_by_tab.get((origin, tab["id"]))
     if not command:
         return [{"type": "show-message", "message": "No finished command recorded for this pane yet"}]
     sibling = panes[(panes.index(focused) + 1) % len(panes)]
@@ -69,9 +71,10 @@ for line in sys.stdin:
     if event["type"] == "command-completed":
         command = event["command"]["text"].strip()
         if command and "\\n" not in command and not event["command"]["truncated"]:
-            last_by_tab[event["tab_id"]] = command
+            window = request["origin_window_id"]
+            last_by_tab[(window, event["tab_id"])] = command
             if event["pane_id"] is not None:
-                last_by_pane[(event["tab_id"], event["pane_id"])] = command
+                last_by_pane[(window, event["tab_id"], event["pane_id"])] = command
     elif event["type"] == "command-invoked":
         actions.append({"type": "query-workspace", "query_id": "rerun"})
     elif event["type"] == "workspace-query-result":

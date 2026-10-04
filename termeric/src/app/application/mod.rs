@@ -11,6 +11,7 @@ use crate::plugin::structured::{StructuredHandlerInvocation, StructuredResponseA
 use anyhow::Result;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 use std::time::Instant;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
@@ -47,6 +48,14 @@ pub struct Application {
     /// Preserved when every requested startup window fails before becoming
     /// visible. Winit's handler API cannot return this error directly.
     fatal_startup_error: Option<String>,
+    /// The one plugin handler host every window shares.
+    plugin_host: Arc<crate::plugin::structured::StructuredPluginHost>,
+    /// The plugin generation every window was last brought to.
+    plugin_generation_seen: u64,
+    /// The plugin registry, polled once for the whole process.
+    plugin_paths: crate::plugin::runtime::PluginPaths,
+    last_plugin_registry_mtime: Option<std::time::SystemTime>,
+    last_plugin_registry_check: Instant,
 }
 
 /// A tab released outside its window. On Wayland no window knows where the
@@ -334,6 +343,8 @@ impl Application {
         validate_cli_launches(&config, &launch)?;
         let sole_default =
             launch.windows.len() == 1 && launch.windows.first() == Some(&WindowLaunch::default());
+        let plugin_host = Arc::new(crate::plugin::structured::StructuredPluginHost::default());
+        let plugin_paths = crate::plugin::runtime::PluginPaths::configured();
         let mut pending = Vec::with_capacity(launch.windows.len());
         for window_launch in launch.windows {
             let quick_access = window_launch.quick_access;
@@ -341,7 +352,12 @@ impl Application {
             if let Some(backend) = window_launch.renderer_backend {
                 window_config.renderer.backend = backend;
             }
-            let mut window = App::from_config(window_config, warning.take(), true)?;
+            let mut window = App::from_config(
+                window_config,
+                warning.take(),
+                true,
+                Arc::clone(&plugin_host),
+            )?;
             window.launch = window_launch;
             window.allow_auto_restore = sole_default;
             if quick_access {
@@ -365,6 +381,11 @@ impl Application {
                 super::system_accessibility::SystemAccessibilityPreferences::default(),
             system_accessibility_monitor_started: false,
             fatal_startup_error: None,
+            plugin_generation_seen: plugin_host.generation(),
+            plugin_host,
+            last_plugin_registry_mtime: plugin_paths.registry_mtime(),
+            last_plugin_registry_check: Instant::now(),
+            plugin_paths,
         })
     }
 
@@ -441,7 +462,7 @@ impl Application {
     }
 
     fn queue_window(&mut self, config: Config, launch: WindowLaunch) -> Result<()> {
-        let mut window = App::from_config(config, None, true)?;
+        let mut window = App::from_config(config, None, true, Arc::clone(&self.plugin_host))?;
         window.set_system_accessibility_preferences(self.system_accessibility);
         window.launch = launch;
         window.allow_auto_restore = false;
@@ -871,6 +892,7 @@ impl ApplicationHandler<AppEvent> for Application {
                 deadline = Some(drop.deadline);
             }
         }
+        self.sync_plugin_generations(now);
         for window in self.windows.values_mut() {
             window.poll_idle_sources(now);
             if window.process_pty_events() {
