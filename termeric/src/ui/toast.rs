@@ -243,17 +243,8 @@ impl ToastManager {
         let now = Instant::now();
         self.toasts
             .iter()
-            .map(|t| ToastInfo {
-                id: t.id,
-                severity: t.severity,
-                message: t.message.clone(),
-                opacity: if self.reduced_motion {
-                    1.0
-                } else {
-                    t.opacity(now)
-                },
-            })
-            .filter(|t| t.opacity > 0.001)
+            .map(|toast| self.snapshot(toast, now))
+            .filter(|toast| toast.opacity > 0.001)
             .collect()
     }
 
@@ -264,17 +255,21 @@ impl ToastManager {
         self.toasts
             .iter()
             .filter(|toast| !toast.is_expired(now))
-            .map(|toast| ToastInfo {
-                id: toast.id,
-                severity: toast.severity,
-                message: toast.message.clone(),
-                opacity: if self.reduced_motion {
-                    1.0
-                } else {
-                    toast.opacity(now)
-                },
-            })
+            .map(|toast| self.snapshot(toast, now))
             .collect()
+    }
+
+    fn snapshot(&self, toast: &Toast, now: Instant) -> ToastInfo {
+        ToastInfo {
+            id: toast.id,
+            severity: toast.severity,
+            message: toast.message.clone(),
+            opacity: if self.reduced_motion {
+                1.0
+            } else {
+                toast.opacity(now)
+            },
+        }
     }
 }
 

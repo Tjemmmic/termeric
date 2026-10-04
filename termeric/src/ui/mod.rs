@@ -1,11 +1,7 @@
-//! UI panels and overlays
-//!
-//! Interactive UI components that overlay the terminal:
-//! - Command palette (Ctrl+Shift+P)
-//! - Settings panel (Ctrl+,)
-//! - Bounded information, error, and choice overlay
-//! - Diff review overlay
-//! - Context picker modal
+//! State for the chrome around the terminals: modals, pickers, panels,
+//! menus, toasts, and the agent view, plus what they share (animation,
+//! text input and layout, geometry, color, icons, and modal stacking).
+//! The renderer draws from snapshots of this state.
 
 pub mod age;
 pub mod agent_view;

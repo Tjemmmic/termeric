@@ -1,7 +1,5 @@
-//! Shared UI visual constants
-//!
-//! Centralizes hardcoded visual values that were scattered across the renderer
-//! and UI modules. All measurements are in pixels unless noted otherwise.
+//! Visual constants shared by the renderer and UI layout. Measurements are
+//! in pixels unless noted otherwise.
 
 /// Corner radius for overlay cards and modal panels.
 pub const CARD_CORNER_RADIUS: f32 = 12.0;
