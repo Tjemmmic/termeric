@@ -101,7 +101,10 @@ license-file = ["../LICENSE", "4"]
 extended-description = """\
 Termeric is a GPU-accelerated terminal emulator for Linux, written in Rust
 and themed around roots and rhizomes."""
-depends = "$auto"
+# $auto sees only the linked libraries (libc, libgcc_s, zlib). winit, wgpu, and
+# xkbcommon load the windowing, keyboard, and graphics libraries at runtime,
+# and fontconfig-config brings the configuration and a font that fontdb reads.
+depends = "$auto, fontconfig-config, libegl1, libvulkan1, libwayland-client0, libwayland-cursor0, libwayland-egl1, libx11-6, libx11-xcb1, libxcb1, libxcursor1, libxi6, libxkbcommon0, libxkbcommon-x11-0"
 recommends = "mesa-vulkan-drivers"
 section = "utils"
 priority = "optional"

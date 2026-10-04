@@ -27,19 +27,31 @@ license=(
   'Unicode-DFS-2016'
   'Zlib'
 )
+# The binary links only glibc, libgcc_s, and zlib. winit, wgpu, and xkbcommon
+# load the windowing, keyboard, and graphics libraries at runtime, so makepkg
+# can't find them and they are listed by hand. ttf-font supplies a monospace
+# font; Termeric bundles none.
 depends=(
   'fontconfig'
-  'gcc-libs'
   'glibc'
+  'hicolor-icon-theme'
+  'libgcc'
+  'libglvnd'
   'libx11'
+  'libxcb'
+  'libxcursor'
+  'libxi'
   'libxkbcommon'
+  'libxkbcommon-x11'
+  'ttf-font'
+  'vulkan-icd-loader'
   'wayland'
   'zlib'
 )
 makedepends=('cargo' 'git' 'ncurses' 'pkgconf')
 optdepends=(
-  'mesa: Mesa Vulkan/OpenGL drivers, including the documented software-renderer fallback'
-  'vulkan-icd-loader: Vulkan renderer backend'
+  'vulkan-driver: Vulkan rendering (vulkan-radeon, vulkan-intel, nvidia-utils, or vulkan-swrast for the CPU fallback)'
+  'mesa: OpenGL backend and llvmpipe software rendering'
 )
 provides=('termeric')
 conflicts=('termeric')

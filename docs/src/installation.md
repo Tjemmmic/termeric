@@ -31,7 +31,7 @@ cd termeric/packaging/arch
 makepkg -si
 ```
 
-`makepkg` fetches the latest source from GitHub, builds and tests it, and installs it as the `termeric-git` package, with the desktop entry, icons, and the `xterm-termeric` terminfo entry. The optional dependencies `mesa` and `vulkan-icd-loader` provide the Vulkan and OpenGL drivers Termeric renders with, including the software fallback. Install them if your system doesn't already have them.
+`makepkg` fetches the latest source from GitHub, builds and tests it, and installs it as the `termeric-git` package, with the desktop entry, icons, and the `xterm-termeric` terminfo entry. It also needs a Vulkan driver for your GPU (`vulkan-radeon`, `vulkan-intel`, or `nvidia-utils`) and `mesa` for the OpenGL backend and the software fallback; these are optional dependencies, so install them if your system doesn't already have them.
 
 To upgrade, run `makepkg -si` in `packaging/arch` again; it builds the newest commit on the main branch. Uninstall with `sudo pacman -R termeric-git`.
 

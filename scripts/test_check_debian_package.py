@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 import stat
 import tempfile
+import tomllib
 import unittest
 from unittest import mock
 
@@ -12,9 +13,11 @@ from scripts.check_debian_package import (
     DESKTOP_ENTRIES,
     EXPECTED_FILES,
     ICON_FILES,
+    RUNTIME_DEPENDENCIES,
     locked_libgit2_version,
     parse_desktop_entry,
     parse_os_release,
+    relation_names,
     validate_package_metadata,
     validate_desktop_entry,
     validate_layout,
@@ -158,7 +161,7 @@ class DebianPackageCheckTests(unittest.TestCase):
             "Package": "termeric",
             "Version": "1.2.3-1",
             "Architecture": "amd64",
-            "Depends": "libc6",
+            "Depends": "libc6 (>= 2.34), " + ", ".join(sorted(RUNTIME_DEPENDENCIES)),
             "Recommends": "mesa-vulkan-drivers",
         }
         package_field.side_effect = lambda _package, field: values[field]
@@ -168,6 +171,28 @@ class DebianPackageCheckTests(unittest.TestCase):
         values["Recommends"] = ""
         with self.assertRaisesRegex(CheckError, "software renderer"):
             validate_package_metadata(Path("termeric.deb"))
+
+    @mock.patch("scripts.check_debian_package.package_field")
+    def test_metadata_requires_the_runtime_loaded_libraries(self, package_field):
+        values = {
+            "Package": "termeric",
+            "Version": "1.2.3-1",
+            "Architecture": "amd64",
+            "Depends": "libc6 (>= 2.34), libgcc-s1 (>= 4.2), libxi6 | libxi7",
+            "Recommends": "mesa-vulkan-drivers",
+        }
+        package_field.side_effect = lambda _package, field: values[field]
+        with self.assertRaisesRegex(CheckError, "loads at runtime: fontconfig-config, libegl1"):
+            validate_package_metadata(Path("termeric.deb"))
+        values["Depends"] = "$auto, " + ", ".join(sorted(RUNTIME_DEPENDENCIES))
+        with self.assertRaisesRegex(CheckError, "not populated by dpkg-shlibdeps"):
+            validate_package_metadata(Path("termeric.deb"))
+
+    def test_cargo_deb_depends_on_the_runtime_loaded_libraries(self):
+        metadata = tomllib.loads((ROOT / "termeric/Cargo.toml").read_text(encoding="utf-8"))
+        depends = metadata["package"]["metadata"]["deb"]["depends"]
+        self.assertEqual(relation_names(depends), {"$auto"} | RUNTIME_DEPENDENCIES)
+        self.assertEqual(relation_names("libc6 (>= 2.34), libfoo:any | libbar"), {"libc6", "libfoo", "libbar"})
 
 
 if __name__ == "__main__":

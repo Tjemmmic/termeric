@@ -118,6 +118,11 @@ class ArchPackageCheckTests(unittest.TestCase):
         fields = parse_pkginfo(srcinfo.read_text(encoding="utf-8"))
         self.assertEqual(sorted(fields["license"]), sorted(REQUIRED_LICENSES))
 
+    def test_srcinfo_declares_the_dependencies_the_checker_requires(self):
+        srcinfo = Path(__file__).resolve().parent.parent / "packaging/arch/.SRCINFO"
+        fields = parse_pkginfo(srcinfo.read_text(encoding="utf-8"))
+        self.assertEqual(sorted(fields["depends"]), sorted(REQUIRED_DEPENDENCIES))
+
     def test_metadata_rejects_pacman_invalid_tilde_version(self):
         fields = valid_metadata()
         fields["pkgver"] = ["0~termeric-lifecycle-1"]

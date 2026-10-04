@@ -23,6 +23,24 @@ CARGO_LOCK = ROOT / "Cargo.lock"
 PACKAGE_NAME = "termeric"
 TERMINFO_NAME = "xterm-termeric"
 SOFTWARE_RENDERER_PACKAGE = "mesa-vulkan-drivers"
+# The depends in termeric/Cargo.toml beside $auto. dpkg-shlibdeps sees only the
+# linked libraries, so a missing one would only show up as a window that fails
+# to open.
+RUNTIME_DEPENDENCIES = {
+    "fontconfig-config",
+    "libegl1",
+    "libvulkan1",
+    "libwayland-client0",
+    "libwayland-cursor0",
+    "libwayland-egl1",
+    "libx11-6",
+    "libx11-xcb1",
+    "libxcb1",
+    "libxcursor1",
+    "libxi6",
+    "libxkbcommon0",
+    "libxkbcommon-x11-0",
+}
 # The window identities in termeric/src/app/mod.rs; desktops match them to the
 # desktop entries and icons of the same name.
 APP_ID = "org.termeric.Termeric"
@@ -216,6 +234,16 @@ def validate_layout(root: Path, *, exercise_native_tools: bool = True) -> None:
         raise CheckError("installed terminfo entry has the wrong identity")
 
 
+def relation_names(field: str) -> set[str]:
+    """The package names in a Depends-style field, alternatives included."""
+    return {
+        re.split(r"[\s(:]", alternative.strip(), maxsplit=1)[0]
+        for relation in field.split(",")
+        for alternative in relation.split("|")
+        if alternative.strip()
+    }
+
+
 def validate_package_metadata(package: Path) -> dict[str, str]:
     name = package_field(package, "Package")
     version = package_field(package, "Version")
@@ -228,14 +256,16 @@ def validate_package_metadata(package: Path) -> dict[str, str]:
         raise CheckError("package Version field is empty")
     if not architecture:
         raise CheckError("package Architecture field is empty")
-    if not dependencies or dependencies == "$auto":
+    depended_packages = relation_names(dependencies)
+    if "$auto" in depended_packages or "libc6" not in depended_packages:
         raise CheckError("package Depends field was not populated by dpkg-shlibdeps")
-    recommended_packages = {
-        dependency.split(" ", 1)[0].strip()
-        for dependency in recommends.split(",")
-        if dependency.strip()
-    }
-    if SOFTWARE_RENDERER_PACKAGE not in recommended_packages:
+    missing = sorted(RUNTIME_DEPENDENCIES - depended_packages)
+    if missing:
+        raise CheckError(
+            "package does not depend on the libraries Termeric loads at runtime: "
+            + ", ".join(missing)
+        )
+    if SOFTWARE_RENDERER_PACKAGE not in relation_names(recommends):
         raise CheckError(
             "package does not recommend the documented software renderer "
             f"{SOFTWARE_RENDERER_PACKAGE}"

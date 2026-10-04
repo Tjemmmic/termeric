@@ -56,12 +56,23 @@ EXPECTED_FILES = {
     "usr/share/doc/termeric/THIRD_PARTY_NOTICES.md": 0o644,
 }
 METADATA_FILES = {".BUILDINFO", ".MTREE", ".PKGINFO"}
+# The depends array of packaging/arch/PKGBUILD. Most are libraries the binary
+# loads at runtime, which makepkg can't detect, so a missing one would only
+# show up as a window that fails to open.
 REQUIRED_DEPENDENCIES = {
     "fontconfig",
-    "gcc-libs",
     "glibc",
+    "hicolor-icon-theme",
+    "libgcc",
+    "libglvnd",
     "libx11",
+    "libxcb",
+    "libxcursor",
+    "libxi",
     "libxkbcommon",
+    "libxkbcommon-x11",
+    "ttf-font",
+    "vulkan-icd-loader",
     "wayland",
     "zlib",
 }
