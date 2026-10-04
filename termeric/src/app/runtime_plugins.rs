@@ -3,8 +3,9 @@
 use super::*;
 use crate::plugin::permission::{PluginPermission, PluginPermissions};
 use crate::plugin::runtime::{
-    DeclarativeSetting, PluginAdminCommand, PluginConfigurationChange, PluginInstallPreview,
-    PluginSettingValue, PluginUpdatePreview, RuntimePluginStatus, preview_install,
+    DeclarativeSetting, PluginAdminCommand, PluginConfigurationChange, PluginGrantsPreview,
+    PluginInstallPreview, PluginSettingValue, PluginUpdatePreview, RuntimePluginStatus,
+    preview_install,
 };
 use crate::ui::info_overlay::{InfoOverlayChoice, OverlayPage, push_key_choice};
 
@@ -229,30 +230,13 @@ impl App {
         ]);
 
         let mut choices = Vec::new();
-        for permission in preview.permissions.iter() {
-            let source_line = lines.len();
-            lines.push(permission_review_line(permission, &grants, ""));
-            choices.push(permission_toggle_choice(permission, source_line));
-        }
-        lines.push(String::new());
-        if grants != preview.permissions {
-            push_key_choice(
-                &mut lines,
-                &mut choices,
-                "grant-all",
-                'g',
-                "Grant all requested permissions",
-            );
-        }
-        if !grants.is_empty() {
-            push_key_choice(
-                &mut lines,
-                &mut choices,
-                "clear-grants",
-                'r',
-                "Clear all grants",
-            );
-        }
+        push_permission_toggles(
+            &mut lines,
+            &mut choices,
+            &preview.permissions,
+            &grants,
+            |_| "",
+        );
         push_key_choice(
             &mut lines,
             &mut choices,
@@ -385,35 +369,19 @@ impl App {
         ]);
 
         let mut choices = Vec::new();
-        for permission in preview.candidate_permissions.iter() {
-            let source_line = lines.len();
-            let delta = if added.contains(&permission) {
-                " · newly requested"
-            } else {
-                ""
-            };
-            lines.push(permission_review_line(permission, &grants, delta));
-            choices.push(permission_toggle_choice(permission, source_line));
-        }
-        lines.push(String::new());
-        if grants != preview.candidate_permissions {
-            push_key_choice(
-                &mut lines,
-                &mut choices,
-                "grant-all",
-                'g',
-                "Grant all requested permissions",
-            );
-        }
-        if !grants.is_empty() {
-            push_key_choice(
-                &mut lines,
-                &mut choices,
-                "clear-grants",
-                'r',
-                "Clear all grants",
-            );
-        }
+        push_permission_toggles(
+            &mut lines,
+            &mut choices,
+            &preview.candidate_permissions,
+            &grants,
+            |permission| {
+                if added.contains(&permission) {
+                    " · newly requested"
+                } else {
+                    ""
+                }
+            },
+        );
         let disabled_label = if preview.enabled {
             "Update and disable"
         } else {
@@ -459,6 +427,108 @@ impl App {
             PendingRuntimePluginManagement {
                 request_id,
                 view: RuntimePluginManagerView::ReviewUpdate {
+                    page,
+                    preview,
+                    grants,
+                },
+            },
+        ));
+    }
+
+    fn open_runtime_plugin_permission_review(&mut self, plugin_id: String, page: usize) {
+        let paths = &self.runtime_plugin_paths;
+        match crate::plugin::runtime::preview_grants_at(&plugin_id, &paths.registry, &paths.root) {
+            Ok(preview) => {
+                // A grant narrower than its request is shown ungranted, and
+                // selecting it grants the requested scope.
+                let grants = preview.current_grants.intersection(&preview.requested);
+                self.show_runtime_plugin_permission_review(page, Box::new(preview), grants, None);
+            }
+            Err(error) => self.show_runtime_plugin_error(
+                RuntimePluginManagerView::Detail { plugin_id, page },
+                "Plugin Permissions Unavailable",
+                &format!("{error:#}"),
+            ),
+        }
+    }
+
+    fn show_runtime_plugin_permission_review(
+        &mut self,
+        page: usize,
+        preview: Box<PluginGrantsPreview>,
+        grants: PluginPermissions,
+        error: Option<&str>,
+    ) {
+        let mut lines = vec![
+            format!("{} ({})", preview.name, preview.id),
+            format!("Version: {}", preview.version),
+            format!(
+                "Status: {}",
+                if preview.enabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
+            ),
+        ];
+        if let Some(error) = error {
+            lines.push(String::new());
+            push_wrapped_field(&mut lines, "Permission error", error);
+        }
+        lines.extend([
+            String::new(),
+            format!(
+                "Requested permissions: {}",
+                preview.requested.iter().count()
+            ),
+            "Select a permission to grant or withhold it.".into(),
+        ]);
+        let mut choices = Vec::new();
+        push_permission_toggles(
+            &mut lines,
+            &mut choices,
+            &preview.requested,
+            &grants,
+            |_| "",
+        );
+        let disabled_label = if preview.enabled {
+            "Save and disable"
+        } else {
+            "Save disabled"
+        };
+        push_key_choice(
+            &mut lines,
+            &mut choices,
+            "save-disabled",
+            'd',
+            disabled_label,
+        );
+        if preview.requested.uncovered_by(&grants).is_empty() {
+            let enabled_label = if preview.enabled {
+                "Save and keep enabled"
+            } else {
+                "Save and enable"
+            };
+            push_key_choice(&mut lines, &mut choices, "save-enabled", 'e', enabled_label);
+        } else {
+            lines.push("Enabling requires every requested permission.".into());
+        }
+        push_key_choice(
+            &mut lines,
+            &mut choices,
+            "back",
+            'b',
+            "Back to plugin details",
+        );
+        let request_id = self.info_overlay.show_choices(
+            format!("Plugin Permissions: {}", preview.name),
+            lines,
+            choices,
+        );
+        self.overlay_flow = Some(OverlayFlow::RuntimePlugins(
+            PendingRuntimePluginManagement {
+                request_id,
+                view: RuntimePluginManagerView::ReviewPermissions {
                     page,
                     preview,
                     grants,
@@ -560,6 +630,15 @@ impl App {
         }
         let toggle_label = if status.enabled { "Disable" } else { "Enable" };
         push_key_choice(&mut lines, &mut choices, "toggle", 'e', toggle_label);
+        if status.diagnostic.is_none() {
+            push_key_choice(
+                &mut lines,
+                &mut choices,
+                "permissions",
+                'g',
+                "Review permissions",
+            );
+        }
         push_key_choice(
             &mut lines,
             &mut choices,
@@ -1100,6 +1179,9 @@ impl App {
             RuntimePluginManagerView::ReviewUpdate { page, preview, .. } => {
                 (Some(preview.id.clone()), *page)
             }
+            RuntimePluginManagerView::ReviewPermissions { page, preview, .. } => {
+                (Some(preview.id.clone()), *page)
+            }
             RuntimePluginManagerView::Detail { plugin_id, page }
             | RuntimePluginManagerView::DefaultProfile {
                 plugin_id, page, ..
@@ -1224,30 +1306,58 @@ impl App {
                 }
                 _ => self.show_runtime_plugin_update_review(page, preview, grants, None),
             },
+            RuntimePluginManagerView::ReviewPermissions {
+                page,
+                preview,
+                mut grants,
+            } => match choice_id {
+                "grant-all" => {
+                    grants = preview.requested.clone();
+                    self.show_runtime_plugin_permission_review(page, preview, grants, None);
+                }
+                "clear-grants" => self.show_runtime_plugin_permission_review(
+                    page,
+                    preview,
+                    PluginPermissions::default(),
+                    None,
+                ),
+                "save-disabled" => self.apply_runtime_plugin_grants(preview, grants, false, page),
+                "save-enabled" if preview.requested.uncovered_by(&grants).is_empty() => {
+                    self.apply_runtime_plugin_grants(preview, grants, true, page)
+                }
+                "back" => self.show_runtime_plugin_detail(preview.id.clone(), page),
+                choice if choice.starts_with("permission:") => {
+                    toggle_requested_grant(&mut grants, &preview.requested, &choice[11..]);
+                    self.show_runtime_plugin_permission_review(page, preview, grants, None);
+                }
+                _ => self.show_runtime_plugin_permission_review(page, preview, grants, None),
+            },
             RuntimePluginManagerView::Detail { plugin_id, page } => match choice_id {
                 "choose-default-profile" => {
                     self.show_runtime_plugin_default_profiles(plugin_id, page, 0)
                 }
                 "configure-settings" => self.show_runtime_plugin_settings(plugin_id, page, 0),
                 "toggle" => {
-                    let enabled = self
-                        .discover_runtime_plugins_for_app()
-                        .ok()
-                        .and_then(|(_, statuses)| {
-                            statuses.into_iter().find(|status| status.id == plugin_id)
-                        })
-                        .is_some_and(|status| status.enabled);
-                    let command = if enabled {
-                        PluginAdminCommand::Disable {
-                            id: plugin_id.clone(),
-                        }
-                    } else {
-                        PluginAdminCommand::Enable {
-                            id: plugin_id.clone(),
-                        }
+                    let Some(status) = self.current_runtime_plugin_status(&plugin_id, page) else {
+                        return true;
                     };
-                    self.apply_runtime_plugin_operation(command, plugin_id, page, false);
+                    if status.enabled {
+                        let command = PluginAdminCommand::Disable {
+                            id: plugin_id.clone(),
+                        };
+                        self.apply_runtime_plugin_operation(command, plugin_id, page, false);
+                    } else if status.requested.uncovered_by(&status.granted).is_empty() {
+                        let command = PluginAdminCommand::Enable {
+                            id: plugin_id.clone(),
+                            grants: PluginPermissions::default(),
+                        };
+                        self.apply_runtime_plugin_operation(command, plugin_id, page, false);
+                    } else {
+                        // Enabling needs every request granted: review them.
+                        self.open_runtime_plugin_permission_review(plugin_id, page);
+                    }
                 }
+                "permissions" => self.open_runtime_plugin_permission_review(plugin_id, page),
                 "update" => self.open_runtime_plugin_update_review(plugin_id, page),
                 "reset-settings" => self.show_runtime_plugin_confirmation(
                     plugin_id,
@@ -1658,6 +1768,30 @@ impl App {
         }
     }
 
+    fn apply_runtime_plugin_grants(
+        &mut self,
+        preview: Box<PluginGrantsPreview>,
+        grants: PluginPermissions,
+        enable: bool,
+        page: usize,
+    ) {
+        let command = preview.command(grants.clone(), enable);
+        match self.execute_runtime_plugin_admin(command) {
+            Ok(message) => {
+                self.last_plugin_registry_mtime = self.runtime_plugin_paths.registry_mtime();
+                self.sync_plugins_from_config();
+                self.toasts.success(message);
+                self.show_runtime_plugin_detail(preview.id.clone(), page);
+            }
+            Err(error) => {
+                let error = format!("{error:#}");
+                self.toasts
+                    .error(format!("Plugin permission change failed: {error}"));
+                self.show_runtime_plugin_permission_review(page, preview, grants, Some(&error));
+            }
+        }
+    }
+
     fn apply_runtime_plugin_default_profile_change(
         &mut self,
         plugin_id: String,
@@ -1832,6 +1966,39 @@ fn permission_review_line(
 ) -> String {
     let marker = if grants.covers(permission) { "x" } else { " " };
     format!("[{marker}] {} · {permission}{suffix}", permission.label())
+}
+
+/// One line and toggle choice per requested permission, then the choices
+/// that grant every request or clear every grant.
+fn push_permission_toggles(
+    lines: &mut Vec<String>,
+    choices: &mut Vec<InfoOverlayChoice>,
+    requested: &PluginPermissions,
+    grants: &PluginPermissions,
+    suffix: impl Fn(PluginPermission) -> &'static str,
+) {
+    for permission in requested.iter() {
+        let source_line = lines.len();
+        lines.push(permission_review_line(
+            permission,
+            grants,
+            suffix(permission),
+        ));
+        choices.push(permission_toggle_choice(permission, source_line));
+    }
+    lines.push(String::new());
+    if grants != requested {
+        push_key_choice(
+            lines,
+            choices,
+            "grant-all",
+            'g',
+            "Grant all requested permissions",
+        );
+    }
+    if !grants.is_empty() {
+        push_key_choice(lines, choices, "clear-grants", 'r', "Clear all grants");
+    }
 }
 
 fn permission_toggle_choice(permission: PluginPermission, source_line: usize) -> InfoOverlayChoice {
@@ -2233,6 +2400,7 @@ program = "termeric-test-fixture-must-not-run"
         crate::plugin::runtime::execute_admin_at(
             PluginAdminCommand::Enable {
                 id: "local-tool".into(),
+                grants: PluginPermissions::default(),
             },
             &registry,
             &root,
@@ -2352,6 +2520,102 @@ program = "termeric-test-fixture-must-not-run"
         let (_, statuses) =
             crate::plugin::runtime::discover_runtime_plugins_at(&registry, &root).unwrap();
         assert_eq!(statuses.len(), 1);
+    }
+
+    #[test]
+    fn manager_reviews_an_installed_plugins_permissions_before_enabling_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let registry = temp.path().join("registry.toml");
+        let root = temp.path().join("installed");
+        let source = temp.path().join("source-local-tool");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(
+            source.join(crate::plugin::runtime::MANIFEST_NAME),
+            fixture_manifest("local-tool", "1.0.0", false),
+        )
+        .unwrap();
+        crate::plugin::runtime::execute_admin_at(
+            PluginAdminCommand::Install {
+                directory: source.clone(),
+                grants: PluginPermissions::default(),
+                enable: false,
+                replace: false,
+            },
+            &registry,
+            &root,
+        )
+        .unwrap();
+        // The review reads the installed manifest, not the source.
+        std::fs::remove_dir_all(&source).unwrap();
+        let status = || {
+            let (_, statuses) =
+                crate::plugin::runtime::discover_runtime_plugins_at(&registry, &root).unwrap();
+            (statuses[0].granted.clone(), statuses[0].enabled)
+        };
+
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.set_runtime_plugin_test_paths(registry.clone(), root.clone());
+        app.open_runtime_plugin_manager();
+        choose(&mut app, "plugin:local-tool");
+        assert_eq!(app.info_overlay.title(), "Plugin: Fixture local-tool");
+
+        // Enabling a plugin that lacks a grant opens its permission review.
+        choose(&mut app, "toggle");
+        assert_eq!(
+            app.info_overlay.title(),
+            "Plugin Permissions: Fixture local-tool"
+        );
+        let request_id = app.info_overlay.request_id();
+        assert!(
+            app.info_overlay
+                .choice(request_id, "save-enabled")
+                .is_none()
+        );
+        assert!(
+            app.info_overlay
+                .choice(request_id, "save-disabled")
+                .is_some()
+        );
+        choose(&mut app, "permission:process-spawn");
+        choose(&mut app, "save-enabled");
+        assert_eq!(status(), (permissions(&["process-spawn"]), true));
+        assert_eq!(app.info_overlay.title(), "Plugin: Fixture local-tool");
+
+        // The same review withdraws grants, which disables the plugin.
+        choose(&mut app, "permissions");
+        choose(&mut app, "clear-grants");
+        assert!(
+            app.info_overlay
+                .choice(app.info_overlay.request_id(), "save-enabled")
+                .is_none()
+        );
+        choose(&mut app, "save-disabled");
+        assert_eq!(status(), (PluginPermissions::default(), false));
+
+        // A review the registry has moved past is refused, not applied.
+        choose(&mut app, "permissions");
+        crate::plugin::runtime::execute_admin_at(
+            PluginAdminCommand::Grant {
+                id: "local-tool".into(),
+                grants: permissions(&["process-spawn"]),
+            },
+            &registry,
+            &root,
+        )
+        .unwrap();
+        choose(&mut app, "save-disabled");
+        assert_eq!(
+            app.info_overlay.title(),
+            "Plugin Permissions: Fixture local-tool"
+        );
+        assert!(
+            app.info_overlay
+                .lines()
+                .iter()
+                .any(|line| line.contains("changed after review"))
+        );
+        assert_eq!(status(), (permissions(&["process-spawn"]), false));
     }
 
     #[test]

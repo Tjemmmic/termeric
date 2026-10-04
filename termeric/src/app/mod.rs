@@ -931,6 +931,11 @@ enum RuntimePluginManagerView {
         preview: Box<crate::plugin::runtime::PluginUpdatePreview>,
         grants: crate::plugin::permission::PluginPermissions,
     },
+    ReviewPermissions {
+        page: usize,
+        preview: Box<crate::plugin::runtime::PluginGrantsPreview>,
+        grants: crate::plugin::permission::PluginPermissions,
+    },
     Detail {
         plugin_id: String,
         page: usize,

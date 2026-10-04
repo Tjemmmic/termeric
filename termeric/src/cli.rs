@@ -1765,6 +1765,61 @@ mod tests {
     }
 
     #[test]
+    fn plugin_grant_commands_name_their_permissions() {
+        use crate::plugin::runtime::PluginAdminCommand;
+        let parse_plugin = |arguments: &[&str]| {
+            parse(
+                ["plugin"]
+                    .iter()
+                    .chain(arguments)
+                    .copied()
+                    .map(OsString::from),
+            )
+        };
+        let ParseOutcome::Plugin(PluginAdminCommand::Enable { id, grants }) =
+            parse_plugin(&["enable", "sample"]).unwrap()
+        else {
+            panic!("expected plugin enable");
+        };
+        assert_eq!(id, "sample");
+        assert!(grants.is_empty());
+        let ParseOutcome::Plugin(PluginAdminCommand::Enable { grants, .. }) = parse_plugin(&[
+            "enable",
+            "sample",
+            "--allow",
+            "process-spawn",
+            "--allow",
+            "navigate:all-windows",
+        ])
+        .unwrap() else {
+            panic!("expected plugin enable");
+        };
+        assert_eq!(grants.to_string(), "process-spawn,navigate:all-windows");
+        let ParseOutcome::Plugin(PluginAdminCommand::Grant { id, grants }) =
+            parse_plugin(&["grant", "sample", "--allow", "workspace-query"]).unwrap()
+        else {
+            panic!("expected plugin grant");
+        };
+        assert_eq!(id, "sample");
+        assert_eq!(grants.to_string(), "workspace-query");
+        let ParseOutcome::Plugin(PluginAdminCommand::Revoke { id, permissions }) =
+            parse_plugin(&["revoke", "sample", "--allow", "pane-create:all-windows"]).unwrap()
+        else {
+            panic!("expected plugin revoke");
+        };
+        assert_eq!(id, "sample");
+        assert_eq!(permissions.to_string(), "pane-create:all-windows");
+        // Grant and revoke need at least one permission, each a known one.
+        for invalid in [
+            &["grant", "sample"][..],
+            &["revoke", "sample"][..],
+            &["grant", "sample", "--allow", "camera"][..],
+        ] {
+            assert!(parse_plugin(invalid).is_err(), "{invalid:?}");
+        }
+    }
+
+    #[test]
     fn domain_commands_preserve_unicode_argv_and_parse_scriptable_controls() {
         let outcome = parse(
             [

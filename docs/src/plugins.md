@@ -45,7 +45,8 @@ Select an installed plugin to see its source, requested and granted permissions,
 
 - **Choose default profile**, the profile used when a launch or restore doesn't name one;
 - **Configure settings**, one setting at a time, or **Reset settings to defaults**;
-- **Enable** or **Disable** it;
+- **Enable** or **Disable** it; enabling a plugin that lacks a permission opens **Review permissions** instead;
+- **Review permissions**, to grant or withdraw each permission it requests, then save it enabled or disabled;
 - **Update from source** (see [Updating](#updating));
 - **Remove installed copy**.
 
@@ -60,8 +61,10 @@ Select an installed plugin to see its source, requested and granted permissions,
 | `validate DIRECTORY` | Check a plugin directory without installing it, and print its ID, version, fingerprint, and permissions. |
 | `install DIRECTORY [--allow PERMISSION]… [--enable] [--replace]` | Install a plugin, granting each permission named with `--allow`. `--enable` turns it on and requires every requested permission. `--replace` reinstalls a plugin that is already installed. |
 | `update ID` | Reinstall from the directory it was installed from, keeping whether it's enabled and its grants for the permissions the update still requests. |
-| `enable ID` | Turn a plugin on. Every requested permission must already be granted. |
+| `enable ID [--allow PERMISSION]…` | Grant each permission named with `--allow`, then turn the plugin on. Every requested permission must then be granted. |
 | `disable ID` | Turn a plugin off without removing it. |
+| `grant ID --allow PERMISSION…` | Grant permissions to an installed plugin, at the scope each `--allow` names. |
+| `revoke ID --allow PERMISSION…` | Withdraw the grant of each named permission. An enabled plugin is disabled until every requested permission is granted again. |
 | `configure ID --default-profile PROFILE` | Set the default profile. |
 | `configure ID --clear-default-profile` | Go back to the first profile in the manifest. |
 | `configure ID --set KEY VALUE` | Set a setting. Booleans take `true` or `false`, integers a base-10 number. |
@@ -71,11 +74,11 @@ Select an installed plugin to see its source, requested and granted permissions,
 
 ### Granting permissions
 
-You grant permissions when you install. The rules are the same everywhere:
+You grant permissions when you install, and can change them at any time afterwards: with **Review permissions** in the manager, or with `termeric plugin grant`, `revoke`, and `enable --allow`. Changing grants reads the installed manifest, so the plugin's source directory doesn't need to exist any more. The rules are the same everywhere:
 
 - You can grant only what the manifest requests, at no wider scope. `--allow pane-create:all-windows` is refused for a plugin that requests `pane-create`.
 - A plugin can be installed with only some of its permissions granted, but it stays disabled until all of them are.
-- To change grants later, use **Update from source** in the manager, or run `termeric plugin install DIRECTORY --replace` with the full set of `--allow` options.
+- If the plugin's registry entry changes while you review its permissions in the manager, for example from the command line, saving is refused and you review it again.
 
 ### Updating
 

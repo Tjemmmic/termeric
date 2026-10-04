@@ -12,10 +12,11 @@ use std::path::PathBuf;
     after_help = "Manifests declare api_version = 1 and request permissions. Each --allow grants \
 one requested permission; window-acting permissions cover the plugin's own window unless \
 requested and granted with an :all-windows suffix, for example --allow pane-create:all-windows. \
-Enabling requires every requested permission.\n\nPermissions: process-spawn, event-subscribe, \
+Enabling requires every requested permission; grant and revoke change an installed plugin's \
+grants.\n\nPermissions: process-spawn, event-subscribe, \
 ui-actions, command-output, window-focus, and (scoped) workspace-query, navigate, terminal-read, \
 terminal-input, tab-create, tab-close, tab-move, pane-create, pane-close, pane-move, \
-pane-layout, window-close. Installation records the canonical local source and a manifest \
+pane-layout, window-close. Installation records the plugin's source directory and a manifest \
 fingerprint; it never downloads code.",
     arg_required_else_help = true,
     disable_version_flag = true
@@ -58,7 +59,12 @@ enum PluginArgs {
     /// Reinstall a plugin from its recorded source
     Update { id: String },
     /// Enable an installed plugin
-    Enable { id: String },
+    Enable {
+        id: String,
+        /// Grant one requested permission first; repeat for more
+        #[arg(long = "allow", value_name = "PERMISSION", value_parser = permission)]
+        grants: Vec<PluginPermission>,
+    },
     /// Disable an installed plugin
     Disable { id: String },
     /// Change one setting of an installed plugin
@@ -66,6 +72,30 @@ enum PluginArgs {
         id: String,
         #[command(flatten)]
         change: Change,
+    },
+    /// Grant permissions an installed plugin requests
+    Grant {
+        id: String,
+        /// Grant one requested permission; repeat for more
+        #[arg(
+            long = "allow",
+            value_name = "PERMISSION",
+            value_parser = permission,
+            required = true
+        )]
+        grants: Vec<PluginPermission>,
+    },
+    /// Withdraw grants from an installed plugin, disabling it if it was enabled
+    Revoke {
+        id: String,
+        /// Withdraw the grant of one permission; repeat for more
+        #[arg(
+            long = "allow",
+            value_name = "PERMISSION",
+            value_parser = permission,
+            required = true
+        )]
+        permissions: Vec<PluginPermission>,
     },
     /// Remove an installed plugin
     Remove { id: String },
@@ -120,7 +150,18 @@ impl PluginCli {
                 replace,
             },
             PluginArgs::Update { id } => PluginAdminCommand::Update { id },
-            PluginArgs::Enable { id } => PluginAdminCommand::Enable { id },
+            PluginArgs::Enable { id, grants } => PluginAdminCommand::Enable {
+                id,
+                grants: PluginPermissions::from_permissions(grants)?,
+            },
+            PluginArgs::Grant { id, grants } => PluginAdminCommand::Grant {
+                id,
+                grants: PluginPermissions::from_permissions(grants)?,
+            },
+            PluginArgs::Revoke { id, permissions } => PluginAdminCommand::Revoke {
+                id,
+                permissions: PluginPermissions::from_permissions(permissions)?,
+            },
             PluginArgs::Disable { id } => PluginAdminCommand::Disable { id },
             PluginArgs::Remove { id } => PluginAdminCommand::Remove { id },
             PluginArgs::Configure { id, change } => PluginAdminCommand::Configure {

@@ -690,6 +690,57 @@ pub(crate) fn preview_update_at(
     })
 }
 
+/// What a review of an installed plugin's permissions shows: its installed
+/// manifest's requests and its current grants.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PluginGrantsPreview {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub requested: PluginPermissions,
+    pub current_grants: PluginPermissions,
+    pub enabled: bool,
+    pub(crate) expected_installed: InstalledPlugin,
+}
+
+impl PluginGrantsPreview {
+    pub(crate) fn command(&self, grants: PluginPermissions, enable: bool) -> PluginAdminCommand {
+        PluginAdminCommand::SetGrants {
+            id: self.id.clone(),
+            grants,
+            enable,
+            expected_installed: self.expected_installed.clone(),
+        }
+    }
+}
+
+/// Review an installed plugin's permissions from its installed manifest;
+/// its source directory isn't read.
+pub(crate) fn preview_grants_at(
+    id: &str,
+    registry_path: &Path,
+    root: &Path,
+) -> Result<PluginGrantsPreview> {
+    validate_identifier("plugin id", id)?;
+    let registry = PluginRegistry::load_from(registry_path)?;
+    let installed = registry
+        .plugins
+        .iter()
+        .find(|plugin| plugin.id == id)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("plugin {id:?} is not installed"))?;
+    let manifest = load_installed(&installed, root)?;
+    Ok(PluginGrantsPreview {
+        id: manifest.id,
+        name: manifest.name,
+        version: manifest.version,
+        requested: manifest.permissions,
+        current_grants: installed.grants.clone(),
+        enabled: installed.enabled,
+        expected_installed: installed,
+    })
+}
+
 pub(crate) fn discover_runtime_plugins_at(
     registry_path: &Path,
     root: &Path,
@@ -1184,11 +1235,33 @@ pub enum PluginAdminCommand {
         grants: PluginPermissions,
         enable: bool,
     },
+    /// Add `grants` to an installed plugin's grants, then enable it.
     Enable {
         id: String,
+        grants: PluginPermissions,
     },
     Disable {
         id: String,
+    },
+    /// Add `grants` to an installed plugin's grants, replacing the scope of a
+    /// capability already granted.
+    Grant {
+        id: String,
+        grants: PluginPermissions,
+    },
+    /// Withdraw the grant of each capability in `permissions`. An enabled
+    /// plugin left without every requested permission is disabled.
+    Revoke {
+        id: String,
+        permissions: PluginPermissions,
+    },
+    /// Replace an installed plugin's grants after a review of its installed
+    /// manifest, refused if its registry entry changed since the review.
+    SetGrants {
+        id: String,
+        grants: PluginPermissions,
+        enable: bool,
+        expected_installed: InstalledPlugin,
     },
     Configure {
         id: String,
@@ -1357,12 +1430,54 @@ pub(crate) fn execute_admin_at(
                 true,
             )
         }
-        PluginAdminCommand::Enable { id } => {
-            set_enabled(&mut registry, registry_path, root, &id, true)
-        }
-        PluginAdminCommand::Disable { id } => {
-            set_enabled(&mut registry, registry_path, root, &id, false)
-        }
+        PluginAdminCommand::Enable { id, grants } => set_grants(
+            &mut registry,
+            registry_path,
+            root,
+            &id,
+            None,
+            |current| with_grants(current, &grants),
+            Some(true),
+        ),
+        PluginAdminCommand::Disable { id } => disable(&mut registry, registry_path, &id),
+        PluginAdminCommand::Grant { id, grants } => set_grants(
+            &mut registry,
+            registry_path,
+            root,
+            &id,
+            None,
+            |current| with_grants(current, &grants),
+            None,
+        ),
+        PluginAdminCommand::Revoke { id, permissions } => set_grants(
+            &mut registry,
+            registry_path,
+            root,
+            &id,
+            None,
+            |current| {
+                let mut remaining = current.clone();
+                for permission in permissions.iter() {
+                    remaining.remove(permission.capability);
+                }
+                remaining
+            },
+            None,
+        ),
+        PluginAdminCommand::SetGrants {
+            id,
+            grants,
+            enable,
+            expected_installed,
+        } => set_grants(
+            &mut registry,
+            registry_path,
+            root,
+            &id,
+            Some(&expected_installed),
+            |_| grants,
+            Some(enable),
+        ),
         PluginAdminCommand::Configure { id, change } => {
             validate_identifier("plugin id", &id)?;
             let installed = registry
@@ -1678,12 +1793,39 @@ fn require_real_directory(path: &Path, label: &str) -> Result<()> {
     Ok(())
 }
 
-fn set_enabled(
+fn disable(registry: &mut PluginRegistry, registry_path: &Path, id: &str) -> Result<String> {
+    validate_identifier("plugin id", id)?;
+    let installed = registry
+        .plugins
+        .iter_mut()
+        .find(|plugin| plugin.id == id)
+        .ok_or_else(|| anyhow::anyhow!("plugin {id:?} is not installed"))?;
+    installed.enabled = false;
+    registry.save_to(registry_path)?;
+    Ok(format!("disabled {id}"))
+}
+
+/// `current` with each of `added` granted, at the scope `added` names.
+fn with_grants(current: &PluginPermissions, added: &PluginPermissions) -> PluginPermissions {
+    let mut grants = current.clone();
+    for permission in added.iter() {
+        grants.set(permission);
+    }
+    grants
+}
+
+/// Change an installed plugin's grants. They are checked against its
+/// installed manifest, so its source directory isn't needed. `enable` turns
+/// it on, which needs every requested permission, or off; without it, an
+/// enabled plugin stays enabled only while its grants cover every request.
+fn set_grants(
     registry: &mut PluginRegistry,
     registry_path: &Path,
     root: &Path,
     id: &str,
-    enabled: bool,
+    expected_installed: Option<&InstalledPlugin>,
+    grants: impl FnOnce(&PluginPermissions) -> PluginPermissions,
+    enable: Option<bool>,
 ) -> Result<String> {
     validate_identifier("plugin id", id)?;
     let installed = registry
@@ -1691,16 +1833,44 @@ fn set_enabled(
         .iter_mut()
         .find(|plugin| plugin.id == id)
         .ok_or_else(|| anyhow::anyhow!("plugin {id:?} is not installed"))?;
-    if enabled {
-        let manifest = load_installed(installed, root)?;
-        validate_grants(&manifest, &installed.grants)?;
+    if expected_installed.is_some_and(|expected| expected != installed) {
+        bail!("plugin {id:?} changed after review; review its permissions again");
     }
+    let manifest = load_installed(installed, root)?;
+    let grants = grants(&installed.grants);
+    let unrequested = grants.uncovered_by(&manifest.permissions);
+    if !unrequested.is_empty() {
+        bail!(
+            "cannot grant unrequested permissions: {}",
+            permission_list(unrequested)
+        );
+    }
+    let denied = manifest.permissions.uncovered_by(&grants);
+    let enabled = match enable {
+        Some(true) if !denied.is_empty() => bail!(
+            "cannot enable until permissions are granted: {}",
+            permission_list(denied)
+        ),
+        Some(enabled) => enabled,
+        None => installed.enabled && denied.is_empty(),
+    };
+    let disabled_by_change = installed.enabled && !enabled && enable.is_none();
+    installed.grants = grants;
     installed.enabled = enabled;
+    let granted = if installed.grants.is_empty() {
+        "none".to_string()
+    } else {
+        installed.grants.to_string()
+    };
     registry.save_to(registry_path)?;
-    Ok(format!(
-        "{} {id}",
-        if enabled { "enabled" } else { "disabled" }
-    ))
+    Ok(if disabled_by_change {
+        format!("granted {id}: {granted}; disabled until every requested permission is granted")
+    } else {
+        format!(
+            "granted {id}: {granted}; {}",
+            if enabled { "enabled" } else { "disabled" }
+        )
+    })
 }
 
 fn validate_grants(manifest: &PluginManifest, grants: &PluginPermissions) -> Result<()> {
@@ -2450,6 +2620,7 @@ events = ["command-invoked"]
         execute_admin_at(
             PluginAdminCommand::Enable {
                 id: "sample-tools".into(),
+                grants: PluginPermissions::default(),
             },
             &registry_path,
             &root,
@@ -2612,12 +2783,16 @@ events = ["command-invoked"]
         let error = execute_admin_at(
             PluginAdminCommand::Enable {
                 id: "sample-tools".into(),
+                grants: PluginPermissions::default(),
             },
             &registry_path,
             &root,
         )
         .unwrap_err();
-        assert!(format!("{error:#}").contains("permissions denied: workspace-query"));
+        assert!(
+            format!("{error:#}")
+                .contains("cannot enable until permissions are granted: workspace-query")
+        );
         let error = install(
             &source,
             permissions(&["process-spawn"]),
@@ -2652,12 +2827,16 @@ events = ["command-invoked"]
         let error = execute_admin_at(
             PluginAdminCommand::Enable {
                 id: "sample-tools".into(),
+                grants: PluginPermissions::default(),
             },
             &registry_path,
             &root,
         )
         .unwrap_err();
-        assert!(format!("{error:#}").contains("grants exceed the manifest's requests"));
+        assert!(
+            format!("{error:#}")
+                .contains("cannot grant unrequested permissions: workspace-query:all-windows")
+        );
 
         install(
             &source,
@@ -2673,6 +2852,114 @@ events = ["command-invoked"]
             statuses[0].granted,
             permissions(&["process-spawn", "workspace-query"])
         );
+    }
+
+    #[test]
+    fn installed_plugin_grants_change_against_the_installed_manifest() {
+        let (_temp, source, root, registry_path) = fixture();
+        fs::write(
+            source.join(MANIFEST_NAME),
+            manifest("1.0.0", ", \"workspace-query\"", "sample"),
+        )
+        .unwrap();
+        install(
+            &source,
+            PluginPermissions::default(),
+            false,
+            &registry_path,
+            &root,
+        )
+        .unwrap();
+        // Grants come from the installed manifest; the source may be gone.
+        fs::remove_dir_all(&source).unwrap();
+        let admin = |command| execute_admin_at(command, &registry_path, &root);
+        let stored = || {
+            let registry = PluginRegistry::load_from(&registry_path).unwrap();
+            (
+                registry.plugins[0].grants.clone(),
+                registry.plugins[0].enabled,
+            )
+        };
+
+        // A partial grant leaves enabling refused, with what is missing.
+        admin(PluginAdminCommand::Grant {
+            id: "sample-tools".into(),
+            grants: permissions(&["process-spawn"]),
+        })
+        .unwrap();
+        assert_eq!(stored(), (permissions(&["process-spawn"]), false));
+        let error = admin(PluginAdminCommand::Enable {
+            id: "sample-tools".into(),
+            grants: PluginPermissions::default(),
+        })
+        .unwrap_err();
+        assert!(
+            format!("{error:#}")
+                .contains("cannot enable until permissions are granted: workspace-query"),
+            "{error:#}"
+        );
+
+        // Nothing beyond the manifest's requests, or wider, can be granted.
+        for grants in [&["navigate"][..], &["workspace-query:all-windows"][..]] {
+            let error = admin(PluginAdminCommand::Grant {
+                id: "sample-tools".into(),
+                grants: permissions(grants),
+            })
+            .unwrap_err();
+            assert!(
+                format!("{error:#}").contains("cannot grant unrequested permissions"),
+                "{error:#}"
+            );
+        }
+        assert_eq!(stored(), (permissions(&["process-spawn"]), false));
+
+        // Enable can grant the rest itself.
+        let message = admin(PluginAdminCommand::Enable {
+            id: "sample-tools".into(),
+            grants: permissions(&["workspace-query"]),
+        })
+        .unwrap();
+        assert!(message.ends_with("enabled"), "{message}");
+        assert_eq!(
+            stored(),
+            (permissions(&["process-spawn", "workspace-query"]), true)
+        );
+
+        // Revoking a requested permission disables the plugin.
+        let message = admin(PluginAdminCommand::Revoke {
+            id: "sample-tools".into(),
+            permissions: permissions(&["workspace-query"]),
+        })
+        .unwrap();
+        assert!(message.contains("disabled until every requested permission"));
+        assert_eq!(stored(), (permissions(&["process-spawn"]), false));
+
+        // A reviewed change applies only to the entry that was reviewed.
+        let preview = preview_grants_at("sample-tools", &registry_path, &root).unwrap();
+        assert_eq!(
+            preview.requested,
+            permissions(&["process-spawn", "workspace-query"])
+        );
+        assert_eq!(preview.current_grants, permissions(&["process-spawn"]));
+        assert!(!preview.enabled);
+        admin(PluginAdminCommand::Configure {
+            id: "sample-tools".into(),
+            change: PluginConfigurationChange::DefaultProfile("quiet".into()),
+        })
+        .unwrap();
+        let error = admin(preview.command(preview.requested.clone(), true)).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("changed after review"),
+            "{error:#}"
+        );
+        assert!(!stored().1);
+        let preview = preview_grants_at("sample-tools", &registry_path, &root).unwrap();
+        let error = admin(preview.command(permissions(&["process-spawn"]), true)).unwrap_err();
+        assert!(format!("{error:#}").contains("cannot enable until permissions are granted"));
+        admin(preview.command(preview.requested.clone(), true)).unwrap();
+        assert_eq!(stored(), (preview.requested.clone(), true));
+        let (loaded, _) = discover_runtime_plugins_at(&registry_path, &root).unwrap();
+        assert_eq!(loaded.len(), 1);
     }
 
     #[test]
