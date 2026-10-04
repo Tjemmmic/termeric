@@ -13,9 +13,9 @@ pub(crate) mod paths;
 pub mod protocol;
 mod server;
 
-pub use client::DomainClient;
 pub use client::request_focus_background;
 use client::run_ssh_stdio_bridge;
+pub use client::{DomainClient, UploadOptions};
 pub use paths::RuntimePaths;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -296,7 +296,7 @@ fn execute_with_client(
         json,
     } = command
     {
-        let response = client.upload_path(domain, pane, &source, name)?;
+        let response = client.upload(domain, pane, &source, UploadOptions::named(name))?;
         return if json {
             Ok(Some(serde_json::to_string_pretty(&response)?))
         } else {

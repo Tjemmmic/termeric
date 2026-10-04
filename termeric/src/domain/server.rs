@@ -3925,11 +3925,11 @@ mod tests {
             .collect::<Vec<_>>();
         fs::write(&upload_source, &upload_bytes).unwrap();
         let response = client
-            .upload_file(
+            .upload(
                 domain_id.clone(),
                 0,
                 &upload_source,
-                Some("artifact.bin".into()),
+                crate::domain::UploadOptions::named(Some("artifact.bin".into())),
             )
             .unwrap();
         assert!(matches!(
@@ -3956,11 +3956,11 @@ mod tests {
         .unwrap();
         let directory_upload_id = "66666666666666666666666666666666";
         let directory_response = client
-            .upload_directory_with_test_id(
+            .upload_with_id(
                 domain_id.clone(),
                 0,
                 &directory_source,
-                "project".into(),
+                crate::domain::UploadOptions::named(Some("project".into())),
                 directory_upload_id.into(),
             )
             .unwrap();
@@ -3995,22 +3995,22 @@ mod tests {
         );
         assert_eq!(
             client
-                .upload_directory_with_test_id(
+                .upload_with_id(
                     domain_id.clone(),
                     0,
                     &directory_source,
-                    "project".into(),
+                    crate::domain::UploadOptions::named(Some("project".into())),
                     directory_upload_id.into(),
                 )
                 .unwrap(),
             directory_response
         );
         let directory_overwrite = client
-            .upload_directory(
+            .upload(
                 domain_id.clone(),
                 0,
                 &directory_source,
-                Some("project".into()),
+                crate::domain::UploadOptions::named(Some("project".into())),
             )
             .unwrap_err();
         assert!(format!("{directory_overwrite:#}").contains("never overwrite"));
@@ -4031,11 +4031,11 @@ mod tests {
             0o600
         );
         let overwrite_error = client
-            .upload_file(
+            .upload(
                 domain_id.clone(),
                 0,
                 &upload_source,
-                Some("artifact.bin".into()),
+                crate::domain::UploadOptions::named(Some("artifact.bin".into())),
             )
             .unwrap_err();
         assert!(format!("{overwrite_error:#}").contains("never overwrite"));
@@ -4047,17 +4047,20 @@ mod tests {
         let cancellation = AtomicBool::new(false);
         let mut progress = Vec::new();
         let cancelled = client
-            .upload_open_file_with_control(
+            .upload(
                 domain_id.clone(),
                 0,
-                fs::File::open(&upload_source).unwrap(),
-                "cancelled.bin".into(),
-                &cancellation,
-                |bytes_sent, total_bytes| {
-                    progress.push((bytes_sent, total_bytes));
-                    if bytes_sent >= protocol::MAX_STREAM_CHUNK_BYTES as u64 {
-                        cancellation.store(true, Ordering::Release);
-                    }
+                &upload_source,
+                crate::domain::UploadOptions {
+                    name: Some("cancelled.bin".into()),
+                    expected_identity: None,
+                    cancelled: &cancellation,
+                    progress: |bytes_sent, total_bytes| {
+                        progress.push((bytes_sent, total_bytes));
+                        if bytes_sent >= protocol::MAX_STREAM_CHUNK_BYTES as u64 {
+                            cancellation.store(true, Ordering::Release);
+                        }
+                    },
                 },
             )
             .unwrap();
@@ -4155,14 +4158,12 @@ mod tests {
         let mut last_error = String::new();
         assert!(
             crate::test_support::poll_until(Duration::from_secs(5), || {
-                let attempt = client.upload_open_file_with_test_id(
+                let attempt = client.upload_with_id(
                     domain_id.clone(),
                     0,
-                    fs::File::open(&wrong_resume_source).unwrap(),
-                    "partial.bin".into(),
+                    &wrong_resume_source,
+                    crate::domain::UploadOptions::named(Some("partial.bin".into())),
                     resumable_id.into(),
-                    &cancellation,
-                    |_, _| {},
                 );
                 last_error = attempt.map_or_else(|error| format!("{error:#}"), |_| "ok".into());
                 last_error.contains("retained prefix")
@@ -4177,14 +4178,17 @@ mod tests {
             || {
                 resume_progress.clear();
                 resumed = client
-                    .upload_open_file_with_test_id(
+                    .upload_with_id(
                         domain_id.clone(),
                         0,
-                        fs::File::open(&resume_source).unwrap(),
-                        "partial.bin".into(),
+                        &resume_source,
+                        crate::domain::UploadOptions {
+                            name: Some("partial.bin".into()),
+                            expected_identity: None,
+                            cancelled: &cancellation,
+                            progress: |sent, total| resume_progress.push((sent, total)),
+                        },
                         resumable_id.into(),
-                        &cancellation,
-                        |sent, total| resume_progress.push((sent, total)),
                     )
                     .ok();
                 resumed.is_some()
@@ -4208,26 +4212,22 @@ mod tests {
         // A lost completion response is idempotently replayed, while the same
         // random identity cannot be rebound to another destination.
         let replayed = client
-            .upload_open_file_with_test_id(
+            .upload_with_id(
                 domain_id.clone(),
                 0,
-                fs::File::open(&resume_source).unwrap(),
-                "partial.bin".into(),
+                &resume_source,
+                crate::domain::UploadOptions::named(Some("partial.bin".into())),
                 resumable_id.into(),
-                &cancellation,
-                |_, _| {},
             )
             .unwrap();
         assert_eq!(replayed, resumed);
         let mismatch = client
-            .upload_open_file_with_test_id(
+            .upload_with_id(
                 domain_id.clone(),
                 0,
-                fs::File::open(&resume_source).unwrap(),
-                "different.bin".into(),
+                &resume_source,
+                crate::domain::UploadOptions::named(Some("different.bin".into())),
                 resumable_id.into(),
-                &cancellation,
-                |_, _| {},
             )
             .unwrap_err();
         assert!(format!("{mismatch:#}").contains("different source or destination"));

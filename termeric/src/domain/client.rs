@@ -48,6 +48,35 @@ pub struct DomainClient {
     endpoint: DomainEndpoint,
 }
 
+/// How [`DomainClient::upload`] runs.
+pub struct UploadOptions<'a, Progress> {
+    /// The name in the pane's directory; the source's own name by default.
+    pub name: Option<String>,
+    /// The source's (device, inode) when the person chose it; a source
+    /// replaced since is refused.
+    pub expected_identity: Option<(u64, u64)>,
+    /// Stops the upload before the daemon publishes it.
+    pub cancelled: &'a AtomicBool,
+    /// Called with (bytes sent, total bytes) as the upload advances.
+    pub progress: Progress,
+}
+
+/// Never set: [`UploadOptions::named`] uploads can't be cancelled.
+static NEVER_CANCELLED: AtomicBool = AtomicBool::new(false);
+
+impl UploadOptions<'static, fn(u64, u64)> {
+    /// An upload under `name` (or the source's name) with no identity check,
+    /// cancellation, or progress reports.
+    pub fn named(name: Option<String>) -> Self {
+        Self {
+            name,
+            expected_identity: None,
+            cancelled: &NEVER_CANCELLED,
+            progress: |_, _| {},
+        }
+    }
+}
+
 enum DomainEndpoint {
     Local(RuntimePaths),
     Ssh {
@@ -433,165 +462,86 @@ impl DomainClient {
         }
     }
 
-    /// Stream one regular local file into the exact daemon-owned pane cwd.
-    /// The server publishes it only after every declared byte arrives and
-    /// never replaces an existing destination.
-    pub fn upload_file(
+    /// Copy one regular file or real directory (never a symbolic link) into
+    /// the pane's working directory. The daemon publishes it only once every
+    /// byte has arrived and never replaces an existing file; a directory
+    /// travels as a bounded archive the daemon extracts after it arrives.
+    pub fn upload(
         &self,
         domain: String,
         pane: u32,
         source: &std::path::Path,
-        name: Option<String>,
+        options: UploadOptions<'_, impl FnMut(u64, u64)>,
     ) -> anyhow::Result<Response> {
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(source)
-            .with_context(|| format!("open upload source {}", source.display()))?;
-        let name = name
-            .or_else(|| {
-                source
-                    .file_name()
-                    .and_then(std::ffi::OsStr::to_str)
-                    .map(String::from)
-            })
-            .context("upload source requires a UTF-8 file name")?;
-        self.upload_open_file(domain, pane, file, name)
+        self.upload_with_id(domain, pane, source, options, generate_upload_id()?)
     }
 
-    /// Upload one real file or directory. Directory trees are converted to a
-    /// deterministic bounded archive locally and extracted by the daemon only
-    /// after the full archive has arrived.
-    pub fn upload_path(
+    /// [`Self::upload`] under a chosen retry identity, which tests replay.
+    pub(super) fn upload_with_id(
         &self,
         domain: String,
         pane: u32,
         source: &std::path::Path,
-        name: Option<String>,
+        options: UploadOptions<'_, impl FnMut(u64, u64)>,
+        upload_id: String,
     ) -> anyhow::Result<Response> {
+        let UploadOptions {
+            name,
+            expected_identity,
+            cancelled,
+            progress,
+        } = options;
+        let name = match name {
+            Some(name) => name,
+            None => source
+                .file_name()
+                .and_then(std::ffi::OsStr::to_str)
+                .map(String::from)
+                .context("upload source requires a UTF-8 name")?,
+        };
         let metadata = std::fs::symlink_metadata(source)
             .with_context(|| format!("inspect upload source {}", source.display()))?;
         if metadata.file_type().is_symlink() {
             anyhow::bail!("upload source must not be a symbolic link");
         }
-        if metadata.is_file() {
-            return self.upload_file(domain, pane, source, name);
-        }
         if metadata.is_dir() {
-            return self.upload_directory(domain, pane, source, name);
+            let archive = match super::archive::build_directory_archive_with_control(
+                source,
+                cancelled,
+                expected_identity,
+            ) {
+                Ok(archive) => archive,
+                Err(_) if cancelled.load(Ordering::Acquire) => {
+                    return Ok(Response::UploadCancelled { bytes_received: 0 });
+                }
+                Err(error) => return Err(error),
+            };
+            let file = archive
+                .file
+                .try_clone()
+                .context("clone directory upload archive handle")?;
+            let kind = UploadKind::Directory {
+                entries: archive.entries,
+            };
+            return self.upload_open_file(
+                domain, pane, file, name, kind, upload_id, cancelled, progress,
+            );
         }
-        anyhow::bail!("upload source must be one regular file or real directory")
-    }
-
-    pub fn upload_directory(
-        &self,
-        domain: String,
-        pane: u32,
-        source: &std::path::Path,
-        name: Option<String>,
-    ) -> anyhow::Result<Response> {
-        let cancelled = AtomicBool::new(false);
-        self.upload_directory_with_control(domain, pane, source, name, None, &cancelled, |_, _| {})
-    }
-
-    pub fn upload_directory_with_control(
-        &self,
-        domain: String,
-        pane: u32,
-        source: &std::path::Path,
-        name: Option<String>,
-        expected_identity: Option<(u64, u64)>,
-        cancelled: &AtomicBool,
-        progress: impl FnMut(u64, u64),
-    ) -> anyhow::Result<Response> {
-        let archive = match super::archive::build_directory_archive_with_control(
-            source,
-            cancelled,
-            expected_identity,
-        ) {
-            Ok(archive) => archive,
-            Err(_) if cancelled.load(Ordering::Acquire) => {
-                return Ok(Response::UploadCancelled { bytes_received: 0 });
+        if !metadata.is_file() {
+            anyhow::bail!("upload source must be one regular file or real directory");
+        }
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(source)
+            .with_context(|| format!("open upload source {}", source.display()))?;
+        if let Some(identity) = expected_identity {
+            let opened = file.metadata().context("inspect opened upload source")?;
+            if (opened.dev(), opened.ino()) != identity {
+                anyhow::bail!("upload source was replaced after it was chosen");
             }
-            Err(error) => return Err(error),
-        };
-        let name = name
-            .or_else(|| {
-                source
-                    .file_name()
-                    .and_then(std::ffi::OsStr::to_str)
-                    .map(String::from)
-            })
-            .context("directory upload source requires a UTF-8 name")?;
-        let file = archive
-            .file
-            .try_clone()
-            .context("clone directory upload archive handle")?;
-        self.upload_open_file_with_kind_and_id(
-            domain,
-            pane,
-            file,
-            name,
-            UploadKind::Directory {
-                entries: archive.entries,
-            },
-            generate_upload_id()?,
-            cancelled,
-            progress,
-        )
-    }
-
-    #[cfg(test)]
-    pub(crate) fn upload_directory_with_test_id(
-        &self,
-        domain: String,
-        pane: u32,
-        source: &std::path::Path,
-        name: String,
-        upload_id: String,
-    ) -> anyhow::Result<Response> {
-        let cancelled = AtomicBool::new(false);
-        let archive =
-            super::archive::build_directory_archive_with_control(source, &cancelled, None)?;
-        let file = archive.file.try_clone()?;
-        self.upload_open_file_with_kind_and_id(
-            domain,
-            pane,
-            file,
-            name,
-            UploadKind::Directory {
-                entries: archive.entries,
-            },
-            upload_id,
-            &cancelled,
-            |_, _| {},
-        )
-    }
-
-    pub fn upload_open_file(
-        &self,
-        domain: String,
-        pane: u32,
-        file: std::fs::File,
-        name: String,
-    ) -> anyhow::Result<Response> {
-        let cancelled = AtomicBool::new(false);
-        self.upload_open_file_with_control(domain, pane, file, name, &cancelled, |_, _| {})
-    }
-
-    /// Stream an already-open file while reporting monotonic sent-byte
-    /// progress and honoring cancellation before the publication commit.
-    pub fn upload_open_file_with_control(
-        &self,
-        domain: String,
-        pane: u32,
-        file: std::fs::File,
-        name: String,
-        cancelled: &AtomicBool,
-        progress: impl FnMut(u64, u64),
-    ) -> anyhow::Result<Response> {
-        let upload_id = generate_upload_id()?;
-        self.upload_open_file_with_kind_and_id(
+        }
+        self.upload_open_file(
             domain,
             pane,
             file,
@@ -603,30 +553,7 @@ impl DomainClient {
         )
     }
 
-    #[cfg(test)]
-    pub(crate) fn upload_open_file_with_test_id(
-        &self,
-        domain: String,
-        pane: u32,
-        file: std::fs::File,
-        name: String,
-        upload_id: String,
-        cancelled: &AtomicBool,
-        progress: impl FnMut(u64, u64),
-    ) -> anyhow::Result<Response> {
-        self.upload_open_file_with_kind_and_id(
-            domain,
-            pane,
-            file,
-            name,
-            UploadKind::File,
-            upload_id,
-            cancelled,
-            progress,
-        )
-    }
-
-    fn upload_open_file_with_kind_and_id(
+    fn upload_open_file(
         &self,
         domain: String,
         pane: u32,
@@ -1435,8 +1362,8 @@ fn stdin_ready(descriptor: libc::c_int, timeout_millis: libc::c_int) -> std::io:
 mod tests {
     use super::{
         ClientFrame, DomainClient, DomainStream, Request, Response, ServerFrame, SshStream,
-        copy_with_flush, generate_upload_id, protocol, read_frame_with_timeout, sha256_prefix,
-        upload_metadata_unchanged, validate_ssh_destination,
+        UploadOptions, copy_with_flush, generate_upload_id, protocol, read_frame_with_timeout,
+        sha256_prefix, upload_metadata_unchanged, validate_ssh_destination,
     };
     use crate::domain::RuntimePaths;
     use sha2::{Digest, Sha256};
@@ -1448,6 +1375,29 @@ mod tests {
     use std::process::{Command, Stdio};
     use std::sync::atomic::AtomicBool;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn a_file_replaced_after_it_was_chosen_is_refused_before_connecting() {
+        let temporary = tempfile::tempdir().unwrap();
+        let paths = RuntimePaths::from_directory(temporary.path().join("runtime")).unwrap();
+        let source = temporary.path().join("chosen.bin");
+        fs::write(&source, b"chosen").unwrap();
+        let cancelled = AtomicBool::new(false);
+        let error = DomainClient::for_paths(paths)
+            .upload(
+                "daily".into(),
+                0,
+                &source,
+                UploadOptions {
+                    name: None,
+                    expected_identity: Some((0, 0)),
+                    cancelled: &cancelled,
+                    progress: |_, _| {},
+                },
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("replaced"), "{error:#}");
+    }
 
     #[test]
     fn a_missing_or_stale_daemon_socket_is_not_a_running_daemon() {
@@ -1711,14 +1661,17 @@ mod tests {
         let cancelled = AtomicBool::new(false);
         let mut progress = Vec::new();
         let response = client
-            .upload_open_file_with_test_id(
+            .upload_with_id(
                 "daily".into(),
                 7,
-                fs::File::open(source).unwrap(),
-                "retried.bin".into(),
+                &source,
+                UploadOptions {
+                    name: Some("retried.bin".into()),
+                    expected_identity: None,
+                    cancelled: &cancelled,
+                    progress: |sent, total| progress.push((sent, total)),
+                },
                 upload_id,
-                &cancelled,
-                |sent, total| progress.push((sent, total)),
             )
             .unwrap();
         assert_eq!(

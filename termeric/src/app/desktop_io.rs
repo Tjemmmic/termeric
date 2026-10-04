@@ -391,34 +391,17 @@ impl App {
                             });
                         }
                     };
-                    let response = match upload.source_kind {
-                        FileUploadSourceKind::File { .. } => {
-                            use std::os::unix::fs::OpenOptionsExt;
-                            let mut options = std::fs::OpenOptions::new();
-                            options.read(true);
-                            options.custom_flags(libc::O_NOFOLLOW);
-                            let file = options.open(&upload.source).with_context(|| {
-                                format!("open confirmed upload source {}", upload.source.display())
-                            })?;
-                            client.upload_open_file_with_control(
-                                upload.domain_id.clone(),
-                                upload.pane_id,
-                                file,
-                                upload.name,
-                                &cancellation,
-                                progress,
-                            )?
-                        }
-                        FileUploadSourceKind::Directory => client.upload_directory_with_control(
-                            upload.domain_id.clone(),
-                            upload.pane_id,
-                            &upload.source,
-                            Some(upload.name),
-                            Some(upload.source_identity),
-                            &cancellation,
+                    let response = client.upload(
+                        upload.domain_id.clone(),
+                        upload.pane_id,
+                        &upload.source,
+                        crate::domain::UploadOptions {
+                            name: Some(upload.name),
+                            expected_identity: Some(upload.source_identity),
+                            cancelled: &cancellation,
                             progress,
-                        )?,
-                    };
+                        },
+                    )?;
                     let (path, bytes, entries) = match response {
                         crate::domain::protocol::Response::FileUploaded { path, bytes } => {
                             (path, bytes, None)
