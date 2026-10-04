@@ -103,7 +103,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     fn shell_app(script: &str) -> App {
         let mut config = Config::default();
         config.shell.program = Some("/bin/sh".into());
@@ -111,12 +110,8 @@ mod tests {
         App::new_headless_with_tabs(config)
     }
 
-    #[cfg(unix)]
     #[test]
     fn selection_writes_the_exact_utf8_bytes_to_the_captured_terminal() {
-        if !std::path::Path::new("/bin/sh").exists() {
-            return;
-        }
         let script = "stty raw -echo; printf '\rREADY\r\n'; \
                       bytes=$(dd bs=1 count=3 2>/dev/null | od -An -tx1); \
                       printf '\runicode=%s\r\n' \"$bytes\"; sleep 1";
@@ -130,12 +125,8 @@ mod tests {
         assert_eq!(app.input_line_buffer, "→");
     }
 
-    #[cfg(unix)]
     #[test]
     fn cldr_sequence_selection_writes_every_qualified_byte_once() {
-        if !std::path::Path::new("/bin/sh").exists() {
-            return;
-        }
         let expected = "👩🏾‍⚖️";
         let expected_hex = expected
             .as_bytes()
@@ -170,12 +161,8 @@ mod tests {
         assert_eq!(app.input_line_buffer, expected);
     }
 
-    #[cfg(unix)]
     #[test]
     fn changed_destination_refuses_insertion_instead_of_rerouting_it() {
-        if !std::path::Path::new("/bin/sh").exists() {
-            return;
-        }
         let mut app = shell_app("sleep 2");
         app.open_unicode_picker();
         let captured = app.pending_unicode_picker.unwrap().terminal;
@@ -191,12 +178,8 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn read_only_and_broadcast_modes_refuse_to_open_or_complete() {
-        if !std::path::Path::new("/bin/sh").exists() {
-            return;
-        }
         let mut app = shell_app("sleep 2");
         app.toggle_focused_pane_read_only();
         app.open_unicode_picker();
@@ -215,12 +198,8 @@ mod tests {
         assert!(app.input_line_buffer.is_empty());
     }
 
-    #[cfg(unix)]
     #[test]
     fn unsafe_selection_payloads_are_rejected_before_terminal_input() {
-        if !std::path::Path::new("/bin/sh").exists() {
-            return;
-        }
         let mut app = shell_app("sleep 2");
         app.open_unicode_picker();
         assert!(!app.apply_unicode_picker_selection(selection("\n")));
@@ -233,12 +212,8 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn ime_commit_edits_the_picker_filter_without_writing_to_the_terminal() {
-        if !std::path::Path::new("/bin/sh").exists() {
-            return;
-        }
         let mut app = shell_app("sleep 2");
         app.open_unicode_picker();
         app.handle_ime_event(winit::event::Ime::Commit("U+03BB".into()));
