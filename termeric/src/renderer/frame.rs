@@ -574,9 +574,7 @@ impl Renderer {
         self.text_pipeline.mark_layer();
         if !self.toasts.is_empty() {
             let toasts = std::mem::take(&mut self.toasts);
-            // Toasts sit in the terminal area's corner, clear of the dock.
-            let toast_width = self.content_right_for(window_width);
-            self.build_toasts(&toasts, toast_width, window_height);
+            self.build_toasts(&toasts, window_width, window_height);
             self.toasts = toasts;
         }
 

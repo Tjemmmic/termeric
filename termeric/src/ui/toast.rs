@@ -258,7 +258,9 @@ impl StandingNotice {
         self.shown = Some((id, message));
     }
 
-    /// The problem is gone: dismiss its toast.
+    /// The problem is gone: dismiss its toast. A toast the person already
+    /// dismissed by hand stays dismissed until the problem changes or, after
+    /// this, happens again.
     pub fn clear(&mut self, toasts: &mut ToastManager) {
         if let Some((id, _)) = self.shown.take() {
             toasts.dismiss(id);
@@ -319,6 +321,20 @@ fn bound_message(message: String) -> String {
 pub struct ToastPlacement {
     pub toast_index: usize,
     pub rect: Bounds,
+}
+
+/// The toast whose card, as `placements` lays it out, contains `(x, y)`.
+pub fn toast_at(
+    toasts: &[ToastInfo],
+    placements: &[ToastPlacement],
+    x: f32,
+    y: f32,
+) -> Option<u64> {
+    placements
+        .iter()
+        .find(|placement| placement.rect.contains(x, y))
+        .and_then(|placement| toasts.get(placement.toast_index))
+        .map(|toast| toast.id)
 }
 
 /// Shared toast placement used by rendering and accessibility bounds.
@@ -432,6 +448,62 @@ mod tests {
         assert_eq!(toasts.len(), 2);
         assert!(toasts.iter().any(|toast| toast.id == id));
         assert!(toasts.iter().any(|toast| toast.message == "second"));
+    }
+
+    #[test]
+    fn a_press_finds_the_toast_drawn_under_it() {
+        let mut tm = ToastManager::new();
+        tm.set_reduced_motion(true);
+        tm.info("older");
+        tm.error("newer");
+        let toasts = tm.build_info();
+        let placements = toast_layout(&toasts, 800.0, 600.0, 10.0, 20.0);
+        for placement in &placements {
+            let rect = placement.rect;
+            assert_eq!(
+                toast_at(&toasts, &placements, rect.x, rect.y),
+                Some(toasts[placement.toast_index].id)
+            );
+            assert_eq!(
+                toast_at(
+                    &toasts,
+                    &placements,
+                    rect.right() - 0.1,
+                    rect.bottom() - 0.1
+                ),
+                Some(toasts[placement.toast_index].id)
+            );
+            assert_eq!(toast_at(&toasts, &placements, rect.x - 0.1, rect.y), None);
+        }
+        // The gap between the cards and the window's corner are no toast.
+        let newest = placements.iter().find(|p| p.toast_index == 1).unwrap().rect;
+        assert_eq!(
+            toast_at(&toasts, &placements, newest.x, newest.y - 1.0),
+            None
+        );
+        assert_eq!(toast_at(&toasts, &placements, 799.0, 599.0), None);
+    }
+
+    #[test]
+    fn a_standing_notice_dismissed_by_hand_returns_only_when_its_problem_changes_or_recurs() {
+        let mut tm = ToastManager::new();
+        let mut notice = StandingNotice::default();
+        let shown = |tm: &ToastManager| tm.iter().map(|t| t.message.clone()).collect::<Vec<_>>();
+        notice.show(&mut tm, ToastSeverity::Error, "bad key".into());
+        let id = tm.iter().next().unwrap().id;
+        assert!(tm.dismiss(id));
+        // The same problem, reported again on the next reload, stays hidden.
+        notice.show(&mut tm, ToastSeverity::Error, "bad key".into());
+        assert!(shown(&tm).is_empty());
+        // A different problem is news.
+        notice.show(&mut tm, ToastSeverity::Error, "bad value".into());
+        assert_eq!(shown(&tm), ["bad value"]);
+        let id = tm.iter().next().unwrap().id;
+        tm.dismiss(id);
+        // Fixed, then broken the same way again: that is a recurrence.
+        notice.clear(&mut tm);
+        notice.show(&mut tm, ToastSeverity::Error, "bad value".into());
+        assert_eq!(shown(&tm), ["bad value"]);
     }
 
     #[test]

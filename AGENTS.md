@@ -177,9 +177,10 @@ When adding a component that blocks input, trace its whole lifecycle — open, i
 ### Mouse Click Dispatch Priority
 
 In `app/event_loop.rs` (MouseInput handler), before anything else:
-1. A press exits copy mode; a release that completes terminal mouse capture goes back to its terminal
-2. The top modal layer above the panels, which swallows clicks while on top
-3. Everything else goes to `handle_mouse_input`
+1. A press on a toast dismisses it and nothing else: toasts draw above every modal layer (`Renderer::toast_hit_test`, the same placement `build_toasts` draws)
+2. A press exits copy mode; a release that completes terminal mouse capture goes back to its terminal
+3. The top modal layer above the panels, which swallows clicks while on top
+4. Everything else goes to `handle_mouse_input`
 
 In `app/mouse.rs` (`handle_mouse_input`): 0. The docked agent view claims presses on its area and divider when `pointer_panel_owns_input()` is false; a press elsewhere returns the keyboard to the terminals
 1. Native scrollbar/divider presses only when `pointer_panel_owns_input()` is false

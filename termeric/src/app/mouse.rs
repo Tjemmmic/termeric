@@ -593,6 +593,20 @@ impl App {
         self.request_redraw(RedrawReason::PointerInput);
     }
 
+    /// A press on a toast dismisses it. Returns whether one was there.
+    pub(super) fn press_toast(&mut self, x: f32, y: f32) -> bool {
+        let Some(id) = self
+            .renderer
+            .as_ref()
+            .and_then(|renderer| renderer.toast_hit_test(x, y))
+        else {
+            return false;
+        };
+        self.toasts.dismiss(id);
+        self.request_redraw(RedrawReason::PointerInput);
+        true
+    }
+
     /// A primary press on tab `idx` selects it and may start dragging it.
     /// The second press of a double-click renames it instead.
     pub(super) fn press_tab(&mut self, idx: usize) {

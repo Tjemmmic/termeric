@@ -228,6 +228,8 @@ When a pane has scrollback, a scrollbar appears along its right edge; drag it to
 
 Click a pane to focus it, and drag the divider between panes to resize them. Drag tabs to reorder them or move them between windows, and double-click a tab to rename it; see [Tabs, panes, and windows](tabs-panes-windows.md).
 
+Click a notice in the corner of the window to dismiss it.
+
 To paste a file's path into the terminal, drag the file from your file manager onto the window; see [Images and file transfer](images-and-files.md).
 
 ## Clipboard

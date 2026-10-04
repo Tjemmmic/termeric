@@ -560,6 +560,14 @@ impl App {
         state: winit::event::ElementState,
         button: winit::event::MouseButton,
     ) {
+        // Toasts are drawn above every modal layer, so a press on one is
+        // theirs alone: nothing beneath sees it, not even copy mode.
+        if state == winit::event::ElementState::Pressed
+            && let Some(pos) = self.last_cursor_pos
+            && self.press_toast(pos.0 as f32, pos.1 as f32)
+        {
+            return;
+        }
         if state == winit::event::ElementState::Pressed && self.copy_mode.is_active() {
             self.leave_copy_mode(true);
         }

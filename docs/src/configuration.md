@@ -38,7 +38,7 @@ Termeric never lets a mistake in `config.toml` stop it from starting, and never 
 
 - **At startup**, an unreadable or invalid file makes Termeric start with the default settings and show an error notice explaining the problem.
 - **On reload**, an invalid edit is rejected with a warning notice, and the settings you were already using stay in effect. Fix the file and save it again.
-- These notices stay on screen until the file loads again (or you reset it), and a newer problem replaces an older one.
+- These notices stay on screen until the file loads again (or you reset it), and a newer problem replaces an older one. Click one to dismiss it; it comes back only if the problem changes, or is fixed and then happens again.
 - **Saving** from Settings (or anything else that saves) refuses to replace a file that has an error, so your settings are never lost to a typo. The notice tells you to fix the file, or to use **Reset Configuration to Defaults**.
 - **Reset Configuration to Defaults** in the command palette asks first. When you confirm, Termeric keeps the old file, whether or not it had an error, beside it as `config.toml.<seconds>.bak` (where `<seconds>` is the current Unix time; a second copy in the same second gets `-2`, and so on), then replaces the file with one that sets nothing, so every setting returns to its default. The notice names the copy.
 

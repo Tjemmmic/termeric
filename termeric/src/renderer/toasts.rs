@@ -3,9 +3,34 @@
 use super::Renderer;
 use crate::ui::color::with_alpha;
 use crate::ui::constants::{BORDER_WIDTH, CARD_CORNER_RADIUS};
-use crate::ui::toast::{ToastInfo, ToastSeverity, toast_layout};
+use crate::ui::toast::{ToastInfo, ToastPlacement, ToastSeverity, toast_at, toast_layout};
 
 impl Renderer {
+    /// Where each toast's card sits: in the terminal area's corner, clear
+    /// of the dock. Drawing and the hit test both place toasts here.
+    fn toast_placements(
+        &self,
+        toasts: &[ToastInfo],
+        window_width: f32,
+        window_height: f32,
+    ) -> Vec<ToastPlacement> {
+        toast_layout(
+            toasts,
+            self.content_right_for(window_width),
+            window_height,
+            self.cell_width(),
+            self.cell_height(),
+        )
+    }
+
+    /// The ID of the toast the last frame drew under `(x, y)`.
+    pub fn toast_hit_test(&self, x: f32, y: f32) -> Option<u64> {
+        let (window_width, window_height) = self.window_size();
+        let placements =
+            self.toast_placements(&self.toasts, window_width as f32, window_height as f32);
+        toast_at(&self.toasts, &placements, x, y)
+    }
+
     /// Draw the active toast stack in the bottom-right corner, newest at
     /// the bottom. Each toast fades in, holds, then fades out.
     pub(super) fn build_toasts(
@@ -19,11 +44,9 @@ impl Renderer {
         }
 
         let cell_width = self.cell_width();
-        let cell_height = self.cell_height();
         let padding = cell_width;
         let label_size = self.ui_label_px();
-        for placement in toast_layout(toasts, window_width, window_height, cell_width, cell_height)
-        {
+        for placement in self.toast_placements(toasts, window_width, window_height) {
             let toast = &toasts[placement.toast_index];
             let x = placement.rect.x;
             let y = placement.rect.y;
