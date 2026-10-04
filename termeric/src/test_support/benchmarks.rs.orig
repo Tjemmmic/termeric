@@ -1,0 +1,562 @@
+//! The release benchmark suite, read by `scripts/run_benchmarks.py`.
+
+use super::*;
+
+#[derive(Serialize)]
+struct BenchmarkMetric<'a> {
+    name: &'a str,
+    unit: &'a str,
+    samples: Vec<f64>,
+    workload: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context: Option<&'a str>,
+}
+
+fn emit_benchmark(
+    name: &'static str,
+    unit: &'static str,
+    samples: Vec<f64>,
+    workload: &'static str,
+    context: Option<&str>,
+) {
+    println!(
+        "TERMERIC_BENCH {}",
+        serde_json::to_string(&BenchmarkMetric {
+            name,
+            unit,
+            samples,
+            workload,
+            context,
+        })
+        .unwrap()
+    );
+}
+
+#[cfg(debug_assertions)]
+fn require_release_profile() {
+    panic!("performance suite requires --release");
+}
+
+#[cfg(not(debug_assertions))]
+fn require_release_profile() {}
+
+#[test]
+#[ignore = "run with scripts/run_benchmarks.py; requires a release build"]
+fn release_benchmark_suite() {
+    use crate::app::App;
+    use crate::config::Config;
+    use crate::panes::{PaneId, PaneTree, SplitDirection};
+    use crate::renderer::benchmark_headless_renderer;
+    use crate::session::transcript::benchmark_slow_transcript_enqueue;
+    use crate::terminal::search::{
+        MAX_RETAINED_SEARCH_MATCHES, MAX_SEARCH_RESULT_INDEX_BYTES, Search,
+    };
+    use crate::ui::unicode_picker::benchmark_unicode_picker;
+    use std::fmt::Write as _;
+
+    require_release_profile();
+
+    let mut startup_samples = Vec::with_capacity(5);
+    for _ in 0..5 {
+        let started = Instant::now();
+        let app = App::new_headless(Config::default()).unwrap();
+        startup_samples.push(started.elapsed().as_secs_f64() * 1_000.0);
+        drop(app);
+    }
+    emit_benchmark(
+        "latency.headless_controller_startup",
+        "ms",
+        startup_samples,
+        "construct application controller without window, PTY, or clipboard",
+        None,
+    );
+
+    let diff = crate::terminal::diff_detector::performance::benchmark_streaming_diff();
+    for (name, unit, samples, workload) in [
+        (
+            "latency.diff_observer.plain_4mib",
+            "ms",
+            diff.plain_ms,
+            "warm observer-only scan of 4 MiB plain 128-byte LF lines in 4096-byte reads; no captures",
+        ),
+        (
+            "latency.diff_observer.patches_bulk",
+            "ms",
+            diff.bulk_ms,
+            "warm observer-only capture of 64 small and 16 200-line Unicode patches with SGR/OSC/CRLF in 4096-byte reads; includes completion and history eviction",
+        ),
+        (
+            "latency.diff_observer.patches_fragmented",
+            "ms",
+            diff.fragmented_ms,
+            "warm observer-only capture of the identical 80-patch SGR/OSC/CRLF stream in 257-byte reads; includes completion and history eviction",
+        ),
+        (
+            "memory.diff_observer.retained_history",
+            "bytes",
+            diff.retained_bytes,
+            "independently recounted final history storage after the 80-patch stream; capacities and conservative inline charges, not allocator traffic or RSS",
+        ),
+    ] {
+        emit_benchmark(name, unit, samples, workload, None);
+    }
+
+    let unicode_picker = benchmark_unicode_picker();
+    emit_benchmark(
+        "latency.unicode_picker_exhaustive_batch",
+        "ms",
+        unicode_picker.exhaustive_batch_ms,
+        "v1; one warm Unicode 17 / CLDR 48 batch: letter, black, arabic letter, mathematical symbol, cjk unified; bounded results and owned-byte checks",
+        None,
+    );
+    emit_benchmark(
+        "latency.unicode_annotation_index_validation",
+        "ms",
+        unicode_picker.annotation_validation_ms,
+        "zero-copy structural and Unicode 17 grapheme validation of the embedded CLDR 48 English annotation index",
+        None,
+    );
+    emit_benchmark(
+        "latency.unicode_picker_keyword_query",
+        "ms",
+        unicode_picker.keyword_query_ms,
+        "warm end-to-end Unicode canonical-name plus CLDR keyword queries with bounded ranking and deduplication",
+        None,
+    );
+    emit_benchmark(
+        "memory.unicode_annotation_static_bytes",
+        "bytes",
+        unicode_picker.annotation_static_bytes,
+        "complete zero-copy embedded CLDR annotation binary including header, offsets, and UTF-8 pool",
+        None,
+    );
+    emit_benchmark(
+        "memory.unicode_picker_keyword_results",
+        "bytes",
+        unicode_picker.result_owned_bytes,
+        "owned candidate/action/command bytes retained for each bounded CLDR keyword result set",
+        None,
+    );
+
+    fn search_samples(lines: usize) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
+        let mut terminal = Terminal::new(100, 40);
+        terminal.grid_mut().set_scrollback_limit(lines);
+        let mut text = String::with_capacity(lines * 36);
+        for line in 0..lines {
+            let marker = if line % 100 == 0 {
+                "needle"
+            } else {
+                "haystack"
+            };
+            writeln!(text, "{line:06} {marker} searchable content\r").unwrap();
+        }
+        terminal.process(text.as_bytes());
+
+        let mut total_samples = Vec::with_capacity(5);
+        let mut dispatch_samples = Vec::with_capacity(5);
+        let mut extension_dispatch_samples = Vec::with_capacity(5);
+        for _ in 0..5 {
+            let mut search = Search::new();
+            search.start();
+            let started = Instant::now();
+            for character in "needle".chars() {
+                search.push_char(character, terminal.grid());
+            }
+            dispatch_samples.push(started.elapsed().as_secs_f64() * 1_000.0);
+            search.finish(terminal.grid());
+            total_samples.push(started.elapsed().as_secs_f64() * 1_000.0);
+            assert_eq!(search.match_count(), lines / 100);
+
+            // Model a paused typist: the broad first character has completed
+            // before the next key arrives. This catches candidate-row copies
+            // or result cleanup that scale badly on the keyboard path.
+            let mut broad_search = Search::new();
+            broad_search.start();
+            broad_search.push_char('n', terminal.grid());
+            broad_search.finish(terminal.grid());
+            assert_eq!(broad_search.matching_line_count(), lines);
+            let extension_started = Instant::now();
+            broad_search.push_char('e', terminal.grid());
+            extension_dispatch_samples.push(extension_started.elapsed().as_secs_f64() * 1_000.0);
+            broad_search.finish(terminal.grid());
+            assert_eq!(broad_search.match_count(), lines / 100);
+        }
+        (total_samples, dispatch_samples, extension_dispatch_samples)
+    }
+
+    let (search_10k, search_dispatch_10k, search_extension_dispatch_10k) = search_samples(10_000);
+    let (search_100k, search_dispatch_100k, search_extension_dispatch_100k) =
+        search_samples(100_000);
+
+    emit_benchmark(
+        "interaction.search.10k",
+        "ms",
+        search_10k,
+        "dispatch and complete a cooperative six-character literal query over 10,000 lines",
+        None,
+    );
+    emit_benchmark(
+        "interaction.search.100k",
+        "ms",
+        search_100k,
+        "dispatch and complete a cooperative six-character literal query over 100,000 lines",
+        None,
+    );
+    emit_benchmark(
+        "interaction.search_dispatch.10k",
+        "ms",
+        search_dispatch_10k,
+        "keyboard-path dispatch for a six-character literal query with 10,000 lines",
+        None,
+    );
+    emit_benchmark(
+        "interaction.search_dispatch.100k",
+        "ms",
+        search_dispatch_100k,
+        "keyboard-path dispatch for a six-character literal query with 100,000 lines",
+        None,
+    );
+    emit_benchmark(
+        "interaction.search_extension_dispatch.10k",
+        "ms",
+        search_extension_dispatch_10k,
+        "keyboard-path literal extension after a completed broad 10,000-line result",
+        None,
+    );
+    emit_benchmark(
+        "interaction.search_extension_dispatch.100k",
+        "ms",
+        search_extension_dispatch_100k,
+        "keyboard-path literal extension after a completed broad 100,000-line result",
+        None,
+    );
+
+    fn dense_search_samples() -> (Vec<f64>, Vec<f64>) {
+        let lines = 10_000;
+        let mut terminal = Terminal::new(100, 40);
+        terminal.grid_mut().set_scrollback_limit(lines);
+        let dense_line = "a".repeat(80);
+        let mut text = String::with_capacity(lines * 82);
+        for _ in 0..lines {
+            writeln!(text, "{dense_line}\r").unwrap();
+        }
+        terminal.process(text.as_bytes());
+
+        let mut time_samples = Vec::with_capacity(5);
+        let mut memory_samples = Vec::with_capacity(5);
+        for _ in 0..5 {
+            let mut search = Search::new();
+            search.start();
+            let started = Instant::now();
+            search.push_char('a', terminal.grid());
+            search.finish(terminal.grid());
+            time_samples.push(started.elapsed().as_secs_f64() * 1_000.0);
+            memory_samples.push(search.result_index_memory_bytes() as f64);
+            assert!(search.results_truncated());
+            assert_eq!(search.retained_match_count(), MAX_RETAINED_SEARCH_MATCHES);
+            assert!(search.match_count() >= lines * 80);
+            assert_eq!(search.matching_line_count(), lines);
+            assert!(search.result_index_memory_bytes() <= MAX_SEARCH_RESULT_INDEX_BYTES);
+        }
+        (time_samples, memory_samples)
+    }
+
+    let (dense_search_time, dense_search_memory) = dense_search_samples();
+    emit_benchmark(
+        "interaction.search.10k_dense",
+        "ms",
+        dense_search_time,
+        "complete a one-character query with 800,000 occurrences across 10,000 lines",
+        None,
+    );
+    emit_benchmark(
+        "memory.search_results.10k_dense_estimated_bytes",
+        "bytes",
+        dense_search_memory,
+        "retained occurrence and complete matching-row index capacity for 800,000 occurrences",
+        None,
+    );
+
+    fn pane_layout_samples(panes: u32) -> Vec<f64> {
+        let mut tree = PaneTree::new(PaneId(0));
+        for pane in 1..panes {
+            assert!(tree.split(
+                PaneId(pane - 1),
+                PaneId(pane),
+                if pane % 2 == 0 {
+                    SplitDirection::Horizontal
+                } else {
+                    SplitDirection::Vertical
+                },
+            ));
+        }
+        let bounds = Bounds::new(0.0, 0.0, 1_920.0, 1_080.0);
+        // Prime layout allocation/code paths before measuring repeatability;
+        // the variation budget compares steady samples, not one cold call
+        // against four warm calls.
+        for _ in 0..1_000 {
+            assert_eq!(tree.calculate_layout(bounds).len(), panes as usize);
+            assert_eq!(
+                tree.get_dividers(bounds).len(),
+                panes.saturating_sub(1) as usize
+            );
+        }
+        let mut samples = Vec::with_capacity(5);
+        for _ in 0..5 {
+            let started = Instant::now();
+            for _ in 0..1_000 {
+                assert_eq!(tree.calculate_layout(bounds).len(), panes as usize);
+                assert_eq!(
+                    tree.get_dividers(bounds).len(),
+                    panes.saturating_sub(1) as usize
+                );
+            }
+            samples.push(started.elapsed().as_secs_f64() * 1_000.0);
+        }
+        samples
+    }
+
+    emit_benchmark(
+        "interaction.pane_layout.8",
+        "ms",
+        pane_layout_samples(8),
+        "1,000 layout and divider calculations for 8 panes",
+        None,
+    );
+    emit_benchmark(
+        "interaction.pane_layout.64",
+        "ms",
+        pane_layout_samples(64),
+        "1,000 layout and divider calculations for 64 panes",
+        None,
+    );
+
+    let transcript = benchmark_slow_transcript_enqueue().unwrap();
+    emit_benchmark(
+        "latency.transcript_enqueue_under_slow_disk",
+        "ms",
+        transcript.samples_ms,
+        "enqueue 1,000 interleaved input/output transcript entries with an injected 2 ms writer",
+        None,
+    );
+    emit_benchmark(
+        "transcript.slow_disk_dropped_entries",
+        "entries",
+        transcript.dropped_entries,
+        "entries explicitly shed by the bounded queue under the slow-writer workload",
+        None,
+    );
+
+    if std::path::Path::new("/bin/true").exists() {
+        let mut samples = Vec::with_capacity(5);
+        for _ in 0..5 {
+            let mut tabs = TabManager::new(
+                100,
+                40,
+                ShellConfig::default(),
+                10_000,
+                termeric_core::DEFAULT_SCROLLBACK_MEMORY_BYTES,
+            );
+            let started = Instant::now();
+            for index in 0..8 {
+                tabs.new_tab_with_command(
+                    "/bin/true",
+                    &[],
+                    None,
+                    Some(&format!("benchmark-{index}")),
+                    None,
+                    HashMap::new(),
+                )
+                .unwrap();
+            }
+            samples.push(started.elapsed().as_secs_f64() * 1_000.0);
+            assert_eq!(tabs.count(), 8);
+        }
+        emit_benchmark(
+            "latency.tabs.create_8",
+            "ms",
+            samples,
+            "create eight real PTY-backed tabs running /bin/true",
+            None,
+        );
+    }
+
+    match benchmark_headless_renderer().unwrap() {
+        Some(result) => {
+            emit_benchmark(
+                "renderer.frame_build_upload_submit",
+                "ms",
+                result.frame_ms,
+                "120x40 text grid plus styled rectangles rendered offscreen",
+                Some(&result.adapter),
+            );
+            emit_benchmark(
+                "renderer.glyph_cache_warm",
+                "ms",
+                result.glyph_warm_ms,
+                "clear and rasterize 80 representative glyphs",
+                Some(&result.adapter),
+            );
+            emit_benchmark(
+                "renderer.glyph_cache_hit_rate",
+                "percent",
+                result.glyph_cache_hit_percent,
+                "atlas hit rate for 100 repeats of the representative warmed glyph set",
+                Some(&result.adapter),
+            );
+            emit_benchmark(
+                "latency.synthetic_key_to_gpu_submit",
+                "ms",
+                result.key_to_submit_ms,
+                "terminal input mutation through an offscreen rendered frame",
+                Some(&result.adapter),
+            );
+            emit_benchmark(
+                "renderer.steady_frame_buffer_allocations",
+                "allocations",
+                vec![result.steady_frame_buffer_allocations as f64; 5],
+                "new text/rectangle GPU buffers after equal-size warmup",
+                Some(&result.adapter),
+            );
+            for (name, samples, workload) in [
+                (
+                    "renderer.row_cache.static",
+                    result.row_cache_static_ms,
+                    "40 unchanged cached terminal rows",
+                ),
+                (
+                    "renderer.row_cache.one_row_update",
+                    result.row_cache_one_row_ms,
+                    "one changed row among 40 cached terminal rows",
+                ),
+                (
+                    "renderer.row_cache.scroll",
+                    result.row_cache_scroll_ms,
+                    "40 remapped rows during a scroll",
+                ),
+                (
+                    "renderer.row_cache.search_heavy",
+                    result.row_cache_search_heavy_ms,
+                    "search-highlight changes on half of 40 rows",
+                ),
+                (
+                    "renderer.row_cache.unicode",
+                    result.row_cache_unicode_ms,
+                    "40 cached rows containing wide and non-ASCII glyphs",
+                ),
+                (
+                    "renderer.row_cache.multi_pane",
+                    result.row_cache_multi_pane_ms,
+                    "unchanged lookup across eight 40-row panes",
+                ),
+            ] {
+                emit_benchmark(name, "ms", samples, workload, Some(&result.adapter));
+            }
+            emit_benchmark(
+                "renderer.row_cache.one_row_rebuilds",
+                "rows",
+                result.row_cache_one_row_rebuilds,
+                "rows rebuilt after a one-row signature change",
+                Some(&result.adapter),
+            );
+            emit_benchmark(
+                "renderer.row_cache.steady_allocations",
+                "allocations",
+                result.row_cache_steady_allocations,
+                "new cached-row GPU buffers on unchanged frames",
+                Some(&result.adapter),
+            );
+            emit_benchmark(
+                "renderer.ligature.code_run_build",
+                "ms",
+                result.ligature_code_ms,
+                "shape and build 1,000 code-heavy row runs after cache warmup",
+                Some(&result.adapter),
+            );
+            emit_benchmark(
+                "renderer.ligature.shaping_cache_hit_rate",
+                "percent",
+                result.ligature_cache_hit_percent,
+                "shaping-cache hit rate for unchanged code-heavy row runs",
+                Some(&result.adapter),
+            );
+            let pressure_context = format!(
+                "{}; fixture=shaping-pressure-v1; font_sha256={}",
+                result.adapter, result.shaping_pressure.font_sha256,
+            );
+            for (name, unit, samples, workload) in [
+                (
+                    "renderer.shaping_pressure.rebuild",
+                    "ms",
+                    result.shaping_pressure.pressure_ms,
+                    "128 unique 2048-glyph Fira Mono runs; warmed atlas; production 8 MiB cache churn",
+                ),
+                (
+                    "renderer.shaping_pressure.retained_reference",
+                    "ms",
+                    result.shaping_pressure.reference_ms,
+                    "identical 128 unique 2048-glyph Fira Mono runs; warmed atlas; test-only 64 MiB retained cache",
+                ),
+                (
+                    "memory.shaping_pressure.retained_bytes",
+                    "bytes",
+                    result.shaping_pressure.pressure_bytes,
+                    "owned run-cache bytes after the production 8 MiB pressure pass; not peak or RSS",
+                ),
+                (
+                    "memory.shaping_pressure.reference_bytes",
+                    "bytes",
+                    result.shaping_pressure.reference_bytes,
+                    "owned run-cache bytes after the test-only 64 MiB retained-reference pass; not peak or RSS",
+                ),
+                (
+                    "renderer.shaping_pressure.evictions",
+                    "entries",
+                    result.shaping_pressure.pressure_evictions,
+                    "capacity-evicted run entries during the production 8 MiB pressure pass",
+                ),
+                (
+                    "renderer.shaping_pressure.rasterizations",
+                    "glyphs",
+                    result.shaping_pressure.pressure_rasterizations,
+                    "physical glyph rasterizations during the production pressure pass with warmed atlas",
+                ),
+            ] {
+                emit_benchmark(name, unit, samples, workload, Some(&pressure_context));
+            }
+        }
+        None => {
+            for (name, unit) in [
+                ("renderer.frame_build_upload_submit", "ms"),
+                ("renderer.glyph_cache_warm", "ms"),
+                ("renderer.glyph_cache_hit_rate", "percent"),
+                ("latency.synthetic_key_to_gpu_submit", "ms"),
+                ("renderer.steady_frame_buffer_allocations", "allocations"),
+                ("renderer.row_cache.static", "ms"),
+                ("renderer.row_cache.one_row_update", "ms"),
+                ("renderer.row_cache.scroll", "ms"),
+                ("renderer.row_cache.search_heavy", "ms"),
+                ("renderer.row_cache.unicode", "ms"),
+                ("renderer.row_cache.multi_pane", "ms"),
+                ("renderer.row_cache.one_row_rebuilds", "rows"),
+                ("renderer.row_cache.steady_allocations", "allocations"),
+                ("renderer.ligature.code_run_build", "ms"),
+                ("renderer.ligature.shaping_cache_hit_rate", "percent"),
+                ("renderer.shaping_pressure.rebuild", "ms"),
+                ("renderer.shaping_pressure.retained_reference", "ms"),
+                ("memory.shaping_pressure.retained_bytes", "bytes"),
+                ("memory.shaping_pressure.reference_bytes", "bytes"),
+                ("renderer.shaping_pressure.evictions", "entries"),
+                ("renderer.shaping_pressure.rasterizations", "glyphs"),
+            ] {
+                emit_benchmark(
+                    name,
+                    unit,
+                    Vec::new(),
+                    "skipped: no headless WGPU adapter",
+                    None,
+                );
+            }
+        }
+    }
+}

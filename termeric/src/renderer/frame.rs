@@ -2,6 +2,60 @@
 
 use super::*;
 
+/// Everything one frame draws, borrowed from the window's state.
+#[derive(Clone, Copy)]
+pub struct Frame<'a> {
+    /// The tab's terminal when it has no panes.
+    pub terminal: TerminalFrame<'a>,
+    /// The tab's panes; empty draws `terminal` instead.
+    pub panes: &'a [PaneRenderData<'a>],
+    pub pane_dividers: &'a [crate::panes::Divider],
+    /// Search state, for match highlighting in whichever terminal has focus.
+    pub search: &'a Search,
+    pub text_blink: TextBlinkPhases,
+    pub chrome: ChromeFrame<'a>,
+}
+
+/// The single terminal a tab without panes draws.
+#[derive(Clone, Copy)]
+pub struct TerminalFrame<'a> {
+    /// Identifies the terminal across frames, for its row and image caches.
+    pub key: usize,
+    pub grid: &'a Grid,
+    pub selection: Option<&'a Selection>,
+    pub dynamic_colors: &'a termeric_core::DynamicColors,
+    pub extra_cursors: &'a termeric_core::ExtraCursorState,
+    /// 0.0 is invisible and 1.0 fully visible, for a smooth blink.
+    pub cursor_opacity: f32,
+    /// The animated cursor position as fractional (column, row).
+    pub cursor_pos: (f32, f32),
+    pub cursor_style: CursorStyle,
+    pub images: Option<&'a [termeric_core::PresentationImage]>,
+    pub url_cache: &'a UrlCache,
+    pub copy_mode: Option<&'a CopyModeRenderInfo>,
+}
+
+/// The chrome drawn around and above the terminals; `None` surfaces are
+/// closed.
+#[derive(Clone, Copy)]
+pub struct ChromeFrame<'a> {
+    pub tabs: &'a [TabInfo],
+    /// 0.0 is no flash and 1.0 a full copy-confirmation flash.
+    pub copy_flash: f32,
+    /// 0.0 is fully bright (focused); higher dims an unfocused window.
+    pub focus_dim: f32,
+    pub settings_panel: Option<&'a SettingsPanelInfo>,
+    pub search_bar: Option<&'a SearchBarInfo>,
+    pub ime_preedit: Option<&'a ImePreeditRenderInfo>,
+    pub workspace_menu: Option<&'a PopupMenuInfo>,
+    pub session_panel: Option<&'a crate::session::panel::SessionPanelInfo>,
+    pub commands_panel: Option<&'a crate::ui::commands::panel::CommandsPanelInfo>,
+    pub agents_panel: Option<&'a crate::ui::agents_panel::AgentsPanelInfo>,
+    pub command_palette: Option<&'a PaletteInfo>,
+    pub shortcuts_panel: Option<&'a ShortcutsPanelInfo>,
+    pub harvest: Option<&'a HarvestRenderInfo>,
+}
+
 impl Renderer {
     /// Draw pane dividers from the same current layout used by hit testing.
     fn draw_pane_dividers(
@@ -43,47 +97,8 @@ impl Renderer {
         }
     }
 
-    /// Render the terminal grid with tab bar
-    /// cursor_opacity: 0.0 = invisible, 1.0 = fully visible (for smooth blink animation)
-    /// cursor_pos: animated cursor position (col, row) as floats for smooth movement
-    /// copy_flash: 0.0 = no flash, 1.0 = full flash (for copy confirmation)
-    /// focus_dim: 0.0 = fully bright (focused), higher = dimmed (unfocused)
-    /// search_bar: optional search bar info when searching
-    /// search: search state for match highlighting
-    /// images: optional list of image placements and their data for Kitty graphics
-    /// panes: multi-pane render data (empty = single-grid mode)
-    /// harvest: optional harvest mode render info
-    pub fn render(
-        &mut self,
-        terminal_key: usize,
-        grid: &Grid,
-        selection: Option<&Selection>,
-        dynamic_colors: &termeric_core::DynamicColors,
-        extra_cursors: &termeric_core::ExtraCursorState,
-        cursor_opacity: f32,
-        cursor_pos: (f32, f32),
-        tabs: &[TabInfo],
-        copy_flash: f32,
-        focus_dim: f32,
-        settings_panel: Option<&SettingsPanelInfo>,
-        search_bar: Option<&SearchBarInfo>,
-        ime_preedit: Option<&ImePreeditRenderInfo>,
-        search: &Search,
-        url_cache: &UrlCache,
-        copy_mode: Option<&CopyModeRenderInfo>,
-        images: Option<&[termeric_core::PresentationImage]>,
-        workspace_menu: Option<&PopupMenuInfo>,
-        session_panel: Option<&crate::session::panel::SessionPanelInfo>,
-        commands_panel: Option<&crate::ui::commands::panel::CommandsPanelInfo>,
-        agents_panel: Option<&crate::ui::agents_panel::AgentsPanelInfo>,
-        command_palette: Option<&PaletteInfo>,
-        shortcuts_panel: Option<&ShortcutsPanelInfo>,
-        cursor_style: CursorStyle,
-        text_blink: TextBlinkPhases,
-        panes: &[PaneRenderData],
-        pane_dividers: &[crate::panes::Divider],
-        harvest: Option<&HarvestRenderInfo>,
-    ) -> Result<(), SurfaceError> {
+    /// Draw and present one frame.
+    pub fn render(&mut self, frame: &Frame<'_>) -> Result<(), SurfaceError> {
         let output = self.surface.get_current_texture()?;
         let view = output.texture.create_view(&TextureViewDescriptor {
             format: Some(self.render_format),
@@ -100,38 +115,16 @@ impl Renderer {
         self.terminal_row_cache.begin_frame();
         self.dragged_tab_surface = None;
         // Build render data from grid and tabs (inserts layer boundaries)
-        self.build_render_data(
-            grid,
-            selection,
-            dynamic_colors,
-            extra_cursors,
-            cursor_opacity,
-            cursor_pos,
-            tabs,
-            copy_flash,
-            focus_dim,
-            settings_panel,
-            search_bar,
-            ime_preedit,
-            search,
-            url_cache,
-            copy_mode,
-            workspace_menu,
-            session_panel,
-            commands_panel,
-            agents_panel,
-            command_palette,
-            shortcuts_panel,
-            cursor_style,
-            text_blink,
-            panes,
-            pane_dividers,
-            harvest,
-        );
+        self.build_render_data(frame);
 
         // Build image render data if any
         self.build_background_image_data();
-        self.build_image_data(terminal_key, grid, images, panes);
+        self.build_image_data(
+            frame.terminal.key,
+            frame.terminal.grid,
+            frame.terminal.images,
+            frame.panes,
+        );
 
         // Upload vertex data
         self.rect_pipeline.upload(&self.device, &self.queue);
@@ -314,35 +307,43 @@ impl Renderer {
     }
 
     /// Build render data from the grid and tabs
-    fn build_render_data(
-        &mut self,
-        grid: &Grid,
-        selection: Option<&Selection>,
-        dynamic_colors: &termeric_core::DynamicColors,
-        extra_cursors: &termeric_core::ExtraCursorState,
-        cursor_opacity: f32,
-        cursor_pos: (f32, f32),
-        tabs: &[TabInfo],
-        copy_flash: f32,
-        focus_dim: f32,
-        settings_panel: Option<&SettingsPanelInfo>,
-        search_bar: Option<&SearchBarInfo>,
-        ime_preedit: Option<&ImePreeditRenderInfo>,
-        search: &Search,
-        url_cache: &UrlCache,
-        copy_mode: Option<&CopyModeRenderInfo>,
-        workspace_menu: Option<&PopupMenuInfo>,
-        session_panel: Option<&crate::session::panel::SessionPanelInfo>,
-        commands_panel: Option<&crate::ui::commands::panel::CommandsPanelInfo>,
-        agents_panel: Option<&crate::ui::agents_panel::AgentsPanelInfo>,
-        command_palette: Option<&PaletteInfo>,
-        shortcuts_panel: Option<&ShortcutsPanelInfo>,
-        cursor_style: CursorStyle,
-        text_blink: TextBlinkPhases,
-        panes: &[PaneRenderData],
-        pane_dividers: &[crate::panes::Divider],
-        harvest: Option<&HarvestRenderInfo>,
-    ) {
+    fn build_render_data(&mut self, frame: &Frame<'_>) {
+        let Frame {
+            terminal:
+                TerminalFrame {
+                    key: _,
+                    grid,
+                    selection,
+                    dynamic_colors,
+                    extra_cursors,
+                    cursor_opacity,
+                    cursor_pos,
+                    cursor_style,
+                    images: _,
+                    url_cache,
+                    copy_mode,
+                },
+            panes,
+            pane_dividers,
+            search,
+            text_blink,
+            chrome:
+                ChromeFrame {
+                    tabs,
+                    copy_flash,
+                    focus_dim,
+                    settings_panel,
+                    search_bar,
+                    ime_preedit,
+                    workspace_menu,
+                    session_panel,
+                    commands_panel,
+                    agents_panel,
+                    command_palette,
+                    shortcuts_panel,
+                    harvest,
+                },
+        } = *frame;
         self.rect_pipeline.clear();
         self.text_pipeline.clear();
         self.visible_text_blink = VisibleTextBlink::default();

@@ -27,6 +27,7 @@ mod device;
 mod drag_picture;
 pub(crate) mod draw;
 mod frame;
+pub use frame::{ChromeFrame, Frame, TerminalFrame};
 mod git;
 mod grid;
 mod harvest;

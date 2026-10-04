@@ -1,0 +1,438 @@
+//! Assembling one frame's chrome: each surface's render info, built and its
+//! animation stepped before the frame borrows the renderer.
+
+use super::*;
+use crate::renderer::{
+    ContextPickerInfo, DiffReviewInfo, GuardrailInfo, InfoOverlayInfo, PopupMenuInfo,
+};
+use crate::ui::agents_panel::AgentsPanelInfo;
+use crate::ui::command_palette::PaletteInfo;
+use crate::ui::commands::panel::CommandsPanelInfo;
+use crate::ui::search_bar::SearchBarInfo;
+use crate::ui::settings::SettingsPanelInfo;
+use crate::ui::shortcuts_panel::ShortcutsPanelInfo;
+
+/// The chrome surfaces one frame draws, owned until the renderer borrows or
+/// takes them. `None` surfaces are closed.
+pub(super) struct ChromeInfo {
+    pub(super) settings: Option<SettingsPanelInfo>,
+    pub(super) search_bar: Option<SearchBarInfo>,
+    pub(super) workspace_menu: Option<PopupMenuInfo>,
+    pub(super) session_panel: Option<crate::session::panel::SessionPanelInfo>,
+    pub(super) commands_panel: Option<CommandsPanelInfo>,
+    pub(super) agents_panel: Option<AgentsPanelInfo>,
+    pub(super) palette: Option<PaletteInfo>,
+    pub(super) shortcuts: Option<ShortcutsPanelInfo>,
+    pub(super) info_overlay: Option<InfoOverlayInfo>,
+    pub(super) toasts: Vec<crate::ui::toast::ToastInfo>,
+    pub(super) diff_review: Option<DiffReviewInfo>,
+    pub(super) context_picker: Option<ContextPickerInfo>,
+    pub(super) guardrail: Option<GuardrailInfo>,
+}
+
+impl App {
+    /// Build every chrome surface for this frame. Each surface steps its
+    /// animation in the same place relative to its own build as it always
+    /// has; the result says whether any of them needs another frame.
+    pub(super) fn build_chrome(
+        &mut self,
+        metrics: &UiMetrics,
+        reduced_motion: bool,
+    ) -> (ChromeInfo, bool) {
+        let mut animating = false;
+        let workspace_menu = self.workspace_menu_render_info();
+        let agents_panel = (!self.agents_panel.is_closed()).then(|| self.agents_panel_info());
+        let settings = self.settings_frame_info(metrics);
+        let search_bar =
+            (self.search.is_active() || self.search.has_results() || self.search.is_searching())
+                .then(|| self.search.build_info(self.search_cursor_pos));
+        animating |= self.settings_panel.needs_redraw();
+        animating |= self.session_panel.needs_redraw();
+        let session_panel = self.session_panel_frame_info(metrics);
+        animating |= self.commands_panel.needs_redraw() || self.agents_panel.needs_redraw();
+        self.bell.update();
+        animating |= self.bell.is_visual_active();
+        animating |= self.update_harvest_animations(reduced_motion);
+        let commands_panel = (!self.commands_panel.is_closed())
+            .then(|| self.commands_panel.build_info(&self.config.commands));
+        animating |= self.command_palette.update_animation();
+        animating |= self.domain_picker.palette_mut().update_animation();
+        animating |= self.unicode_picker.palette_mut().update_animation();
+        let palette = self.palette_frame_info(metrics);
+        animating |= self.shortcuts_panel.update_animation();
+        // Auto-cancel shortcut recording after 15s of no input so users
+        // can't get stuck in recording mode.
+        animating |= self
+            .shortcuts_panel
+            .tick_recording_timeout(std::time::Duration::from_secs(15));
+        let shortcuts = self.shortcuts_frame_info(metrics);
+        let info_overlay = self.info_overlay_frame_info(metrics);
+        animating |= self.info_overlay.update_animation();
+        // Toast lifecycle: prune expired, then snapshot.
+        animating |= self.toasts.update();
+        let toasts = self.toasts.build_info();
+        let diff_review = self.diff_review_frame_info(metrics);
+        animating |= self.diff_review.update_animation();
+        let context_picker = self.context_picker_frame_info(metrics);
+        animating |= self.context_picker.update_animation();
+        let guardrail = self.guardrail_frame_info();
+        animating |= self.guardrail.update_animation();
+        (
+            ChromeInfo {
+                settings,
+                search_bar,
+                workspace_menu,
+                session_panel,
+                commands_panel,
+                agents_panel,
+                palette,
+                shortcuts,
+                info_overlay,
+                toasts,
+                diff_review,
+                context_picker,
+                guardrail,
+            },
+            animating,
+        )
+    }
+
+    fn settings_frame_info(&mut self, metrics: &UiMetrics) -> Option<SettingsPanelInfo> {
+        if !self.settings_panel.is_visible() {
+            return None;
+        }
+        // Tell the panel how many rows it can scroll through so its
+        // scroll/selection logic stays in sync with the rendered viewport.
+        let layout = crate::ui::settings::SettingsModalLayout::calculate(
+            metrics.width,
+            metrics.height,
+            metrics.cell_width,
+            metrics.cell_height,
+            self.settings_panel.animation_progress(),
+            0,
+        );
+        self.settings_panel.set_max_visible(layout.rows_that_fit);
+        let unsaved = self.config_has_unsaved_changes();
+        let mut info = self
+            .settings_panel
+            .build_info(&self.config, &self.shortcut_registry);
+        info.unsaved = unsaved;
+        Some(info)
+    }
+
+    fn session_panel_frame_info(
+        &mut self,
+        metrics: &UiMetrics,
+    ) -> Option<crate::session::panel::SessionPanelInfo> {
+        if self.session_panel.is_closed() {
+            return None;
+        }
+        let preview = self.session_panel.build_info();
+        let layout = crate::session::panel::SessionPanelLayout::calculate(
+            metrics.width,
+            metrics.height,
+            metrics.tab_bar_height,
+            metrics.cell_width,
+            metrics.cell_height,
+            preview.animation,
+            preview.rename_text.is_some(),
+            preview.workspaces,
+            preview.sessions.len(),
+        );
+        self.session_panel.set_max_visible(layout.rows_that_fit);
+        Some(self.session_panel.build_info())
+    }
+
+    /// The palette-style modals share the palette's renderer and geometry;
+    /// only the one that owns input is drawn.
+    fn palette_frame_info(&mut self, metrics: &UiMetrics) -> Option<PaletteInfo> {
+        let rows = crate::ui::command_palette::PaletteLayout::calculate(
+            metrics.width,
+            metrics.height,
+            metrics.cell_width,
+            metrics.cell_height,
+            1.0,
+            0,
+        )
+        .rows_that_fit;
+        palette_input::open_palette_owner(
+            &mut self.domain_picker,
+            &mut self.unicode_picker,
+            &mut self.command_palette,
+        )
+        .map(|owner| {
+            owner.palette_mut().set_max_visible(rows);
+            owner.build_info()
+        })
+    }
+
+    fn shortcuts_frame_info(&mut self, metrics: &UiMetrics) -> Option<ShortcutsPanelInfo> {
+        if !self.shortcuts_panel.is_visible() {
+            return None;
+        }
+        let layout = crate::ui::shortcuts_panel::ShortcutsPanelLayout::calculate(
+            metrics.width,
+            metrics.height,
+            metrics.cell_width,
+            metrics.cell_height,
+            1.0,
+            0,
+        );
+        self.shortcuts_panel.set_max_visible(layout.rows_that_fit);
+        Some(self.shortcuts_panel.build_info(&self.shortcut_registry))
+    }
+
+    fn info_overlay_frame_info(&mut self, metrics: &UiMetrics) -> Option<InfoOverlayInfo> {
+        if !self.info_overlay.is_visible() {
+            return None;
+        }
+        let layout = crate::ui::info_overlay::InfoOverlayLayout::calculate(
+            metrics.width,
+            metrics.height,
+            metrics.cell_width,
+            metrics.cell_height,
+            self.info_overlay.animation(),
+            self.info_overlay.title(),
+            self.info_overlay.lines().len(),
+            self.info_overlay.max_line_chars(),
+        );
+        self.info_overlay
+            .set_viewport(layout.rows_that_fit, layout.columns_that_fit);
+        let scroll_offset = self.info_overlay.scroll_offset();
+        let horizontal_offset = self.info_overlay.horizontal_offset();
+        let visible_lines = self
+            .info_overlay
+            .visible_lines()
+            .map(|(source_line, line)| {
+                (
+                    source_line,
+                    line.chars()
+                        .skip(horizontal_offset)
+                        .take(layout.columns_that_fit)
+                        .collect(),
+                )
+            })
+            .collect();
+        let choices = self
+            .info_overlay
+            .choices()
+            .iter()
+            .filter(|choice| {
+                choice.source_line >= scroll_offset
+                    && choice.source_line < scroll_offset.saturating_add(layout.rows_that_fit)
+            })
+            .cloned()
+            .collect();
+        Some(InfoOverlayInfo {
+            title: self.info_overlay.title().to_string(),
+            visible_lines,
+            choices,
+            input: self.info_overlay.input_info(self.info_overlay.request_id()),
+            focus: self.info_overlay.focus().cloned(),
+            total_lines: self.info_overlay.lines().len(),
+            scroll_offset,
+            horizontal_offset,
+            awaiting: self.info_overlay.is_awaiting_current(),
+            animation: self.info_overlay.animation(),
+            layout,
+            mouse_pos: self.last_cursor_pos.map(|(x, y)| (x as f32, y as f32)),
+            mouse_pressed: self.mouse_pressed,
+        })
+    }
+
+    fn diff_review_frame_info(&mut self, metrics: &UiMetrics) -> Option<DiffReviewInfo> {
+        if !self.diff_review.is_visible() {
+            return None;
+        }
+        let layout = crate::ui::diff_review::DiffReviewLayout::calculate(
+            metrics.width,
+            metrics.height,
+            metrics.cell_width,
+            metrics.cell_height,
+            self.diff_review.animation(),
+            self.diff_review.filename(),
+            self.diff_review.rows().len(),
+            self.diff_review.max_line_chars(),
+            self.diff_review.has_change_actions(),
+        );
+        self.diff_review
+            .set_viewport(layout.rows_that_fit, layout.columns_that_fit);
+        Some(DiffReviewInfo {
+            filename: self.diff_review.filename().to_string(),
+            visible_rows: self
+                .diff_review
+                .visible_rows()
+                .map(|(source_row, row)| (source_row, row.clone()))
+                .collect(),
+            total_rows: self.diff_review.rows().len(),
+            scroll_offset: self.diff_review.scroll_offset(),
+            horizontal_offset: self.diff_review.horizontal_offset(),
+            awaiting: self.diff_review.is_awaiting_current(),
+            animation: self.diff_review.animation(),
+            layout,
+            mouse_pos: self.last_cursor_pos.map(|(x, y)| (x as f32, y as f32)),
+            mouse_pressed: self.mouse_pressed,
+        })
+    }
+
+    fn context_picker_frame_info(&mut self, metrics: &UiMetrics) -> Option<ContextPickerInfo> {
+        if !self.context_picker.is_visible() {
+            return None;
+        }
+        let layout = crate::ui::context_picker::ContextPickerLayout::calculate(
+            metrics.width,
+            metrics.height,
+            metrics.cell_width,
+            metrics.cell_height,
+            self.context_picker.animation(),
+            self.context_picker.phase(),
+            self.context_picker.sources().len(),
+        );
+        self.context_picker.set_viewport(layout.visible_count);
+        Some(ContextPickerInfo {
+            snapshot: self.context_picker.snapshot(),
+            layout,
+            mouse_pos: self.last_cursor_pos.map(|(x, y)| (x as f32, y as f32)),
+            mouse_pressed: self.mouse_pressed,
+        })
+    }
+
+    fn guardrail_frame_info(&self) -> Option<GuardrailInfo> {
+        if !self.guardrail.is_visible() {
+            return None;
+        }
+        self.guardrail.matched.as_ref().map(|m| GuardrailInfo {
+            command: m.command.clone(),
+            reason: m.reason.clone(),
+            is_critical: m.severity == crate::terminal::guardrails::Severity::Critical,
+            animation: self.guardrail.animation(),
+            target: m.target.clone(),
+            user: m.user.clone(),
+        })
+    }
+
+    /// The focused pane's Harvest growth indicators.
+    fn harvest_indicators(&self) -> &[crate::harvest::GrowthIndicator] {
+        self.tabs
+            .as_ref()
+            .and_then(TabManager::active_tab)
+            .and_then(|tab| tab.focused_pane())
+            .map(|pane| pane.harvest.indicators.as_slice())
+            .unwrap_or_default()
+    }
+
+    /// Step the Harvest cellar's animation; true while Harvest chrome still
+    /// moves.
+    fn update_harvest_animations(&mut self, reduced_motion: bool) -> bool {
+        let has_active_indicator = !self.harvest_indicators().is_empty();
+        let Some(harvest) = self.harvest.as_mut() else {
+            return false;
+        };
+        let cellar_changed = harvest.cellar.update();
+        if reduced_motion {
+            cellar_changed
+        } else {
+            cellar_changed
+                || harvest.cellar.is_visible()
+                || harvest.sprout_menu.is_some()
+                || has_active_indicator
+        }
+    }
+
+    /// Build Harvest geometry once, then share it with painting, pointer
+    /// hit-testing, and accessibility.
+    pub(super) fn harvest_frame_info(
+        &mut self,
+        metrics: &UiMetrics,
+        reduced_motion: bool,
+    ) -> Option<HarvestRenderInfo> {
+        let cellar_layout = self.harvest.as_mut().and_then(|harvest| {
+            if !harvest.cellar.is_visible() {
+                return None;
+            }
+            let preview = crate::harvest::CellarLayout::calculate(
+                metrics.width,
+                metrics.height,
+                metrics.cell_width,
+                metrics.cell_height,
+                harvest.cellar.animation.progress(),
+                std::iter::empty(),
+            );
+            harvest.cellar.set_viewport_rows(preview.max_visible);
+            let visible_ids = harvest
+                .cellar
+                .visible_entries()
+                .map(|entry| entry.id)
+                .collect::<Vec<_>>();
+            Some(crate::harvest::CellarLayout::calculate(
+                metrics.width,
+                metrics.height,
+                metrics.cell_width,
+                metrics.cell_height,
+                harvest.cellar.animation.progress(),
+                visible_ids,
+            ))
+        });
+        let renderer = self.renderer.as_ref()?;
+        let harvest = self.harvest.as_ref()?;
+        // Growth indicators (respect the config toggle)
+        let indicators: Vec<IndicatorRenderInfo> = if self.config.harvest.show_indicators {
+            self.harvest_indicators()
+                .iter()
+                .filter(|ind| !ind.is_finished())
+                .map(|ind| IndicatorRenderInfo {
+                    row: ind.prompt_row,
+                    character: ind.phase.character(),
+                    color: if reduced_motion {
+                        ind.phase.color()
+                    } else {
+                        ind.color()
+                    },
+                    scale: if reduced_motion { 1.0 } else { ind.scale() },
+                    opacity: if ind.is_finished() { 0.0 } else { 1.0 },
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        // Cellar panel (visible while open or animating out)
+        let cellar = cellar_layout.map(|layout| CellarRenderInfo {
+            entries: harvest
+                .cellar
+                .visible_entries()
+                .map(|e| CellarEntryInfo {
+                    id: e.id,
+                    command: e.command.clone(),
+                    exit_code: e.exit_code,
+                    output_truncated: e.output_truncated,
+                    health: e.health(),
+                    health_color: e.health_color(),
+                })
+                .collect(),
+            total_entries: harvest.cellar.len(),
+            evicted_entries: harvest.cellar.evicted_commands(),
+            animation_progress: harvest.cellar.animation.progress(),
+            success_rate: harvest.cellar.success_rate(),
+            scroll: harvest.cellar.scroll,
+            selected_id: harvest.cellar.selected_id(),
+            layout,
+        });
+        let sprout_menu = harvest.sprout_menu.as_ref().map(|menu| {
+            sprout_menu_render_info(
+                menu,
+                renderer.padding(),
+                metrics.cell_width,
+                metrics.cell_height,
+                renderer.tab_bar_width(),
+                renderer.content_top(),
+                renderer.content_right(),
+                metrics.height,
+            )
+        });
+        Some(HarvestRenderInfo {
+            indicators,
+            cellar,
+            sprout_menu,
+        })
+    }
+}

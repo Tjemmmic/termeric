@@ -19,6 +19,7 @@ mod domain_picker;
 mod event_loop;
 mod font_feature_editor;
 mod font_range_editor;
+mod frame;
 mod git_completion;
 mod ime;
 mod info_overlay;
@@ -2324,10 +2325,12 @@ impl App {
         // Before the frame borrows the renderer: a picker preview may change
         // the theme it draws with.
         self.sync_theme_preview();
-        let workspace_menu_info = self.workspace_menu_render_info();
-        let settings_unsaved =
-            self.settings_panel.is_visible() && self.config_has_unsaved_changes();
-        let agents_panel_info = (!self.agents_panel.is_closed()).then(|| self.agents_panel_info());
+        if self.renderer.is_none() || self.active_terminal().is_none() {
+            return;
+        }
+        let metrics = self.ui_metrics();
+        let (chrome, animating) = self.build_chrome(&metrics, reduced_motion);
+        let harvest_render_info = self.harvest_frame_info(&metrics, reduced_motion);
 
         let tab_drag = self.tab_drag_visual(Instant::now());
         let Some(renderer) = &mut self.renderer else {
@@ -2339,17 +2342,9 @@ impl App {
         let Some(tab) = tabs.active_tab() else {
             return;
         };
-        let harvest_indicators: &[crate::harvest::GrowthIndicator] = tab
-            .focused_pane()
-            .map(|pane| pane.harvest.indicators.as_slice())
-            .unwrap_or_default();
-
         let Some(terminal) = tab.focused_terminal() else {
             return;
         };
-        // Animations ask for the next frame once rendering lets go of the
-        // renderer.
-        let mut animating = false;
         let mut tab_info = tabs.tab_info();
         if let Some((tab_id, _, state)) = &broadcast_render
             && tab.id == *tab_id
@@ -2359,47 +2354,6 @@ impl App {
                 crate::renderer::BroadcastTargetState::Armed => active.broadcast_armed = true,
                 crate::renderer::BroadcastTargetState::Active => active.broadcast_active = true,
             }
-        }
-
-        // Build settings panel info if visible
-        let settings_info = if self.settings_panel.is_visible() {
-            // Tell the panel how many rows it can scroll through so its
-            // scroll/selection logic stays in sync with the rendered viewport.
-            let (sw, sh) = renderer.window_size();
-            let layout = crate::ui::settings::SettingsModalLayout::calculate(
-                sw as f32,
-                sh as f32,
-                renderer.cell_width(),
-                renderer.cell_height(),
-                self.settings_panel.animation_progress(),
-                0,
-            );
-            self.settings_panel.set_max_visible(layout.rows_that_fit);
-            let mut info = self
-                .settings_panel
-                .build_info(&self.config, &self.shortcut_registry);
-            info.unsaved = settings_unsaved;
-            Some(info)
-        } else {
-            None
-        };
-
-        // Build search bar info if search is active or has results
-        let search_info =
-            if self.search.is_active() || self.search.has_results() || self.search.is_searching() {
-                Some(self.search.build_info(self.search_cursor_pos))
-            } else {
-                None
-            };
-
-        // Update settings panel animation
-        if self.settings_panel.needs_redraw() {
-            animating = true;
-        }
-
-        // Update session panel animation
-        if self.session_panel.needs_redraw() {
-            animating = true;
         }
 
         // Collect image placements for rendering
@@ -2414,288 +2368,11 @@ impl App {
             Some(image_data.as_slice())
         };
 
-        // Build session panel info if panel is open or animating
-        let session_panel_info = if !self.session_panel.is_closed() {
-            let preview = self.session_panel.build_info();
-            let (window_width, window_height) = renderer.window_size();
-            let layout = crate::session::panel::SessionPanelLayout::calculate(
-                window_width as f32,
-                window_height as f32,
-                renderer.tab_bar_height(),
-                renderer.cell_width(),
-                renderer.cell_height(),
-                preview.animation,
-                preview.rename_text.is_some(),
-                preview.workspaces,
-                preview.sessions.len(),
-            );
-            self.session_panel.set_max_visible(layout.rows_that_fit);
-            Some(self.session_panel.build_info())
-        } else {
-            None
-        };
-        // Update commands and agents panel animation
-        if self.commands_panel.needs_redraw() || self.agents_panel.needs_redraw() {
-            animating = true;
-        }
-        // Update visual bell animation
-        self.bell.update();
-        if self.bell.is_visual_active() {
-            animating = true;
-        }
-
-        // Update harvest mode animations
-        let has_active_harvest_indicator = !harvest_indicators.is_empty();
-        if let Some(ref mut harvest) = self.harvest {
-            let cellar_changed = harvest.cellar.update();
-            let animation_active = if reduced_motion {
-                cellar_changed
-            } else {
-                cellar_changed
-                    || harvest.cellar.is_visible()
-                    || harvest.sprout_menu.is_some()
-                    || has_active_harvest_indicator
-            };
-            if animation_active {
-                animating = true;
-            }
-        }
-
-        // Build commands panel info if panel is open or animating
-        let commands_panel_info = if !self.commands_panel.is_closed() {
-            Some(self.commands_panel.build_info(&self.config.commands))
-        } else {
-            None
-        };
-
-        // Update command palette animation
-        if self.command_palette.update_animation() {
-            animating = true;
-        }
-        if self.domain_picker.palette_mut().update_animation() {
-            animating = true;
-        }
-        if self.unicode_picker.palette_mut().update_animation() {
-            animating = true;
-        }
-        // The palette-style modals share the palette's renderer and geometry;
-        // only the one that owns input is drawn.
-        let palette_info = {
-            let (window_width, window_height) = renderer.window_size();
-            let rows = crate::ui::command_palette::PaletteLayout::calculate(
-                window_width as f32,
-                window_height as f32,
-                renderer.cell_width(),
-                renderer.cell_height(),
-                1.0,
-                0,
-            )
-            .rows_that_fit;
-            palette_input::open_palette_owner(
-                &mut self.domain_picker,
-                &mut self.unicode_picker,
-                &mut self.command_palette,
-            )
-            .map(|owner| {
-                owner.palette_mut().set_max_visible(rows);
-                owner.build_info()
-            })
-        };
-
-        // Update shortcuts panel animation
-        if self.shortcuts_panel.update_animation() {
-            animating = true;
-        }
-        // Auto-cancel shortcut recording after 15s of no input so users
-        // can't get stuck in recording mode.
-        if self
-            .shortcuts_panel
-            .tick_recording_timeout(std::time::Duration::from_secs(15))
-        {
-            animating = true;
-        }
-        // Build shortcuts panel info if visible
-        let shortcuts_info = if self.shortcuts_panel.is_visible() {
-            let (window_width, window_height) = renderer.window_size();
-            let layout = crate::ui::shortcuts_panel::ShortcutsPanelLayout::calculate(
-                window_width as f32,
-                window_height as f32,
-                renderer.cell_width(),
-                renderer.cell_height(),
-                1.0,
-                0,
-            );
-            self.shortcuts_panel.set_max_visible(layout.rows_that_fit);
-            Some(self.shortcuts_panel.build_info(&self.shortcut_registry))
-        } else {
-            None
-        };
-
-        // Build info overlay if visible
-        let info_overlay_data = if self.info_overlay.is_visible() {
-            let (window_width, window_height) = renderer.window_size();
-            let layout = crate::ui::info_overlay::InfoOverlayLayout::calculate(
-                window_width as f32,
-                window_height as f32,
-                renderer.cell_width(),
-                renderer.cell_height(),
-                self.info_overlay.animation(),
-                self.info_overlay.title(),
-                self.info_overlay.lines().len(),
-                self.info_overlay.max_line_chars(),
-            );
-            self.info_overlay
-                .set_viewport(layout.rows_that_fit, layout.columns_that_fit);
-            let scroll_offset = self.info_overlay.scroll_offset();
-            let horizontal_offset = self.info_overlay.horizontal_offset();
-            let visible_lines = self
-                .info_overlay
-                .visible_lines()
-                .map(|(source_line, line)| {
-                    (
-                        source_line,
-                        line.chars()
-                            .skip(horizontal_offset)
-                            .take(layout.columns_that_fit)
-                            .collect(),
-                    )
-                })
-                .collect();
-            let choices = self
-                .info_overlay
-                .choices()
-                .iter()
-                .filter(|choice| {
-                    choice.source_line >= scroll_offset
-                        && choice.source_line < scroll_offset.saturating_add(layout.rows_that_fit)
-                })
-                .cloned()
-                .collect();
-            Some(crate::renderer::InfoOverlayInfo {
-                title: self.info_overlay.title().to_string(),
-                visible_lines,
-                choices,
-                input: self.info_overlay.input_info(self.info_overlay.request_id()),
-                focus: self.info_overlay.focus().cloned(),
-                total_lines: self.info_overlay.lines().len(),
-                scroll_offset,
-                horizontal_offset,
-                awaiting: self.info_overlay.is_awaiting_current(),
-                animation: self.info_overlay.animation(),
-                layout,
-                mouse_pos: self.last_cursor_pos.map(|(x, y)| (x as f32, y as f32)),
-                mouse_pressed: self.mouse_pressed,
-            })
-        } else {
-            None
-        };
-        renderer.set_info_overlay(info_overlay_data);
-
-        // Update info overlay animation
-        if self.info_overlay.update_animation() {
-            animating = true;
-        }
-
-        // Toast lifecycle: prune expired, push snapshot into renderer.
-        if self.toasts.update() {
-            animating = true;
-        }
-        renderer.set_toasts(self.toasts.build_info());
-
-        // Build diff review overlay if visible
-        let diff_review_data = if self.diff_review.is_visible() {
-            let (window_width, window_height) = renderer.window_size();
-            let layout = crate::ui::diff_review::DiffReviewLayout::calculate(
-                window_width as f32,
-                window_height as f32,
-                renderer.cell_width(),
-                renderer.cell_height(),
-                self.diff_review.animation(),
-                self.diff_review.filename(),
-                self.diff_review.rows().len(),
-                self.diff_review.max_line_chars(),
-                self.diff_review.has_change_actions(),
-            );
-            self.diff_review
-                .set_viewport(layout.rows_that_fit, layout.columns_that_fit);
-            Some(crate::renderer::DiffReviewInfo {
-                filename: self.diff_review.filename().to_string(),
-                visible_rows: self
-                    .diff_review
-                    .visible_rows()
-                    .map(|(source_row, row)| (source_row, row.clone()))
-                    .collect(),
-                total_rows: self.diff_review.rows().len(),
-                scroll_offset: self.diff_review.scroll_offset(),
-                horizontal_offset: self.diff_review.horizontal_offset(),
-                awaiting: self.diff_review.is_awaiting_current(),
-                animation: self.diff_review.animation(),
-                layout,
-                mouse_pos: self.last_cursor_pos.map(|(x, y)| (x as f32, y as f32)),
-                mouse_pressed: self.mouse_pressed,
-            })
-        } else {
-            None
-        };
-        renderer.set_diff_review(diff_review_data);
-
-        // Update diff review animation
-        if self.diff_review.update_animation() {
-            animating = true;
-        }
-
-        // Build context picker overlay if visible
-        let context_picker_data = if self.context_picker.is_visible() {
-            let (window_width, window_height) = renderer.window_size();
-            let layout = crate::ui::context_picker::ContextPickerLayout::calculate(
-                window_width as f32,
-                window_height as f32,
-                renderer.cell_width(),
-                renderer.cell_height(),
-                self.context_picker.animation(),
-                self.context_picker.phase(),
-                self.context_picker.sources().len(),
-            );
-            self.context_picker.set_viewport(layout.visible_count);
-            Some(crate::renderer::ContextPickerInfo {
-                snapshot: self.context_picker.snapshot(),
-                layout,
-                mouse_pos: self.last_cursor_pos.map(|(x, y)| (x as f32, y as f32)),
-                mouse_pressed: self.mouse_pressed,
-            })
-        } else {
-            None
-        };
-        renderer.set_context_picker(context_picker_data);
-
-        // Update context picker animation
-        if self.context_picker.update_animation() {
-            animating = true;
-        }
-
-        // Build guardrail overlay if visible
-        let guardrail_data = if self.guardrail.is_visible() {
-            self.guardrail
-                .matched
-                .as_ref()
-                .map(|m| crate::renderer::GuardrailInfo {
-                    command: m.command.clone(),
-                    reason: m.reason.clone(),
-                    is_critical: m.severity == crate::terminal::guardrails::Severity::Critical,
-                    animation: self.guardrail.animation(),
-                    target: m.target.clone(),
-                    user: m.user.clone(),
-                })
-        } else {
-            None
-        };
-        renderer.set_guardrail(guardrail_data);
-
-        // Update guardrail animation
-        if self.guardrail.update_animation() {
-            animating = true;
-        }
-
+        renderer.set_info_overlay(chrome.info_overlay);
+        renderer.set_toasts(chrome.toasts);
+        renderer.set_diff_review(chrome.diff_review);
+        renderer.set_context_picker(chrome.context_picker);
+        renderer.set_guardrail(chrome.guardrail);
         renderer.set_tab_bar_hover(self.tab_bar_hover, tab_bar_hover_progress);
         if !renderer.git_completion_fits() {
             self.git_completions_visible = false;
@@ -2810,136 +2487,45 @@ impl App {
             .map(crate::panes::PaneManager::get_dividers)
             .unwrap_or_default();
 
-        // Build Harvest geometry once, then share it with painting, pointer
-        // hit-testing, and accessibility.
-        let show_indicators = self.config.harvest.show_indicators;
-        let (harvest_window_width, harvest_window_height) = renderer.window_size();
-        let cellar_layout = self.harvest.as_mut().and_then(|harvest| {
-            if !harvest.cellar.is_visible() {
-                return None;
-            }
-            let preview = crate::harvest::CellarLayout::calculate(
-                harvest_window_width as f32,
-                harvest_window_height as f32,
-                renderer.cell_width(),
-                renderer.cell_height(),
-                harvest.cellar.animation.progress(),
-                std::iter::empty(),
-            );
-            harvest.cellar.set_viewport_rows(preview.max_visible);
-            let visible_ids = harvest
-                .cellar
-                .visible_entries()
-                .map(|entry| entry.id)
-                .collect::<Vec<_>>();
-            Some(crate::harvest::CellarLayout::calculate(
-                harvest_window_width as f32,
-                harvest_window_height as f32,
-                renderer.cell_width(),
-                renderer.cell_height(),
-                harvest.cellar.animation.progress(),
-                visible_ids,
-            ))
-        });
-        let harvest_render_info = self.harvest.as_ref().map(|harvest| {
-            // Growth indicators (respect the config toggle)
-            let indicators: Vec<IndicatorRenderInfo> = if show_indicators {
-                harvest_indicators
-                    .iter()
-                    .filter(|ind| !ind.is_finished())
-                    .map(|ind| IndicatorRenderInfo {
-                        row: ind.prompt_row,
-                        character: ind.phase.character(),
-                        color: if reduced_motion {
-                            ind.phase.color()
-                        } else {
-                            ind.color()
-                        },
-                        scale: if reduced_motion { 1.0 } else { ind.scale() },
-                        opacity: if ind.is_finished() { 0.0 } else { 1.0 },
-                    })
-                    .collect()
-            } else {
-                Vec::new()
-            };
-            // Cellar panel (visible while open or animating out)
-            let cellar = cellar_layout.clone().map(|layout| CellarRenderInfo {
-                entries: harvest
-                    .cellar
-                    .visible_entries()
-                    .map(|e| CellarEntryInfo {
-                        id: e.id,
-                        command: e.command.clone(),
-                        exit_code: e.exit_code,
-                        output_truncated: e.output_truncated,
-                        health: e.health(),
-                        health_color: e.health_color(),
-                    })
-                    .collect(),
-                total_entries: harvest.cellar.len(),
-                evicted_entries: harvest.cellar.evicted_commands(),
-                animation_progress: harvest.cellar.animation.progress(),
-                success_rate: harvest.cellar.success_rate(),
-                scroll: harvest.cellar.scroll,
-                selected_id: harvest.cellar.selected_id(),
-                layout,
-            });
-
-            // Sprout menu (if visible)
-            let sprout_menu = harvest.sprout_menu.as_ref().map(|menu| {
-                sprout_menu_render_info(
-                    menu,
-                    renderer.padding(),
-                    renderer.cell_width(),
-                    renderer.cell_height(),
-                    renderer.tab_bar_width(),
-                    renderer.content_top(),
-                    renderer.content_right(),
-                    harvest_window_height as f32,
-                )
-            });
-
-            HarvestRenderInfo {
-                indicators,
-                cellar,
-                sprout_menu,
-            }
-        });
-
-        let presented = match renderer.render(
-            terminal as *const _ as usize,
-            terminal.presentation_grid(),
-            if frozen_copy_selection {
-                copy_mode_selection.as_ref()
-            } else {
-                terminal.selection()
+        let frame = crate::renderer::Frame {
+            terminal: crate::renderer::TerminalFrame {
+                key: terminal as *const _ as usize,
+                grid: terminal.presentation_grid(),
+                selection: if frozen_copy_selection {
+                    copy_mode_selection.as_ref()
+                } else {
+                    terminal.selection()
+                },
+                dynamic_colors: terminal.presentation_dynamic_colors(),
+                extra_cursors: terminal.presentation_extra_cursors(),
+                cursor_opacity,
+                cursor_pos: cursor_display_pos,
+                cursor_style,
+                images,
+                url_cache: &self.url_cache,
+                copy_mode: copy_mode_info.as_ref(),
             },
-            terminal.presentation_dynamic_colors(),
-            terminal.presentation_extra_cursors(),
-            cursor_opacity,
-            cursor_display_pos,
-            &tab_info,
-            copy_flash,
-            focus_dim,
-            settings_info.as_ref(),
-            search_info.as_ref(),
-            ime_preedit_info.as_ref(),
-            &self.search,
-            &self.url_cache,
-            copy_mode_info.as_ref(),
-            images,
-            workspace_menu_info.as_ref(),
-            session_panel_info.as_ref(),
-            commands_panel_info.as_ref(),
-            agents_panel_info.as_ref(),
-            palette_info.as_ref(),
-            shortcuts_info.as_ref(),
-            cursor_style,
+            panes: &pane_render_data,
+            pane_dividers: &pane_dividers,
+            search: &self.search,
             text_blink,
-            &pane_render_data,
-            &pane_dividers,
-            harvest_render_info.as_ref(),
-        ) {
+            chrome: crate::renderer::ChromeFrame {
+                tabs: &tab_info,
+                copy_flash,
+                focus_dim,
+                settings_panel: chrome.settings.as_ref(),
+                search_bar: chrome.search_bar.as_ref(),
+                ime_preedit: ime_preedit_info.as_ref(),
+                workspace_menu: chrome.workspace_menu.as_ref(),
+                session_panel: chrome.session_panel.as_ref(),
+                commands_panel: chrome.commands_panel.as_ref(),
+                agents_panel: chrome.agents_panel.as_ref(),
+                command_palette: chrome.palette.as_ref(),
+                shortcuts_panel: chrome.shortcuts.as_ref(),
+                harvest: harvest_render_info.as_ref(),
+            },
+        };
+        let presented = match renderer.render(&frame) {
             Ok(()) => {
                 self.last_text_blink_phases = text_blink;
                 true
