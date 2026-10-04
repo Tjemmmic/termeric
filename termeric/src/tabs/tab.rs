@@ -52,6 +52,20 @@ pub(crate) struct TabTerminalOwner {
     pub integration: TerminalSession,
 }
 
+/// A program a tab runs directly, without a shell or its prompt marks.
+#[derive(Clone, Debug, Default)]
+pub struct CommandLaunch {
+    pub program: String,
+    pub args: Vec<String>,
+    pub working_dir: Option<String>,
+    /// The tab title; the program name when absent.
+    pub title: Option<String>,
+    /// The tab's kind; a shell tab when absent.
+    pub tab_type: Option<TabType>,
+    pub env: HashMap<String, String>,
+    pub environment_policy: termeric_core::pty::EnvironmentPolicy,
+}
+
 /// What kind of tab this is
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TabType {
@@ -249,102 +263,63 @@ impl Tab {
         id: usize,
         cols: usize,
         rows: usize,
-        program: &str,
-        args: &[String],
-        working_dir: Option<&str>,
-        title: Option<&str>,
+        launch: &CommandLaunch,
         scrollback_lines: usize,
         scrollback_bytes: usize,
-        tab_type: Option<TabType>,
-        extra_env: HashMap<String, String>,
     ) -> anyhow::Result<Self> {
-        Self::new_with_command_geometry(
+        Self::new_command(
             id,
             TerminalGeometry::from_cells(cols, rows, 1.0, 1.0),
-            program,
-            args,
-            working_dir,
-            title,
+            launch,
             scrollback_lines,
             scrollback_bytes,
-            tab_type,
-            extra_env,
         )
     }
 
-    pub(crate) fn new_with_command_geometry(
+    pub(crate) fn new_command(
         id: usize,
         geometry: TerminalGeometry,
-        program: &str,
-        args: &[String],
-        working_dir: Option<&str>,
-        title: Option<&str>,
+        launch: &CommandLaunch,
         scrollback_lines: usize,
         scrollback_bytes: usize,
-        tab_type: Option<TabType>,
-        extra_env: HashMap<String, String>,
-    ) -> anyhow::Result<Self> {
-        Self::new_with_command_environment_policy(
-            id,
-            geometry,
-            program,
-            args,
-            working_dir,
-            title,
-            scrollback_lines,
-            scrollback_bytes,
-            tab_type,
-            extra_env,
-            &termeric_core::pty::EnvironmentPolicy::default(),
-        )
-    }
-
-    pub(crate) fn new_with_command_environment_policy(
-        id: usize,
-        geometry: TerminalGeometry,
-        program: &str,
-        args: &[String],
-        working_dir: Option<&str>,
-        title: Option<&str>,
-        scrollback_lines: usize,
-        scrollback_bytes: usize,
-        tab_type: Option<TabType>,
-        extra_env: HashMap<String, String>,
-        policy: &termeric_core::pty::EnvironmentPolicy,
     ) -> anyhow::Result<Self> {
         let mut terminal = Terminal::new(geometry.cols, geometry.rows);
         terminal.set_pixel_geometry(geometry.pixel_width.into(), geometry.pixel_height.into());
         terminal.set_scrollback_limits(scrollback_lines, scrollback_bytes);
 
-        // Build environment: start with PWD if a working directory was specified,
-        // then merge any additional environment variables from the plugin
-        let mut env: Vec<(String, String)> = working_dir
-            .map(|pwd| vec![("PWD".to_string(), pwd.to_string())])
-            .unwrap_or_default();
-        for (key, value) in extra_env {
-            env.push((key, value));
-        }
+        // PWD names the working directory when one was given; the launch's
+        // own variables follow, so they may override it.
+        let env: Vec<(String, String)> = launch
+            .working_dir
+            .iter()
+            .map(|pwd| ("PWD".to_string(), pwd.clone()))
+            .chain(
+                launch
+                    .env
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone())),
+            )
+            .collect();
 
         let pty = Pty::spawn(
             geometry.pty_size(),
             PtyCommand {
-                program: Some(program),
-                args,
+                program: Some(&launch.program),
+                args: &launch.args,
                 env: &env,
-                policy: Some(policy),
+                policy: Some(&launch.environment_policy),
             },
         )?;
         terminal.set_term_name(pty.term_name());
         let (handle, reader) = pty.take_reader();
         let rx = spawn_reader_thread_with_waker(reader, crate::app::pty_event_waker());
 
-        let tab_title = title
-            .map(|t| t.to_string())
-            .unwrap_or_else(|| program.to_string());
-
         Ok(Self {
             id,
-            title: tab_title,
+            title: launch
+                .title
+                .clone()
+                .unwrap_or_else(|| launch.program.clone()),
             user_title: None,
             pinned: false,
             osc_title: None,
@@ -357,8 +332,8 @@ impl Tab {
             created_at: Instant::now(),
             closing_at: None,
             session_id: None,
-            last_command: Some(program.to_string()),
-            tab_type: tab_type.clone().unwrap_or(TabType::Shell),
+            last_command: Some(launch.program.clone()),
+            tab_type: launch.tab_type.clone().unwrap_or(TabType::Shell),
             live_domain: None,
             integration: TerminalSession::default(),
             pane_manager: None,
@@ -371,7 +346,7 @@ impl Tab {
                 "Direct command tabs do not provide shell prompt marks".into(),
             ),
             split_shell: ShellConfig::default(),
-            terminal_launch: match &tab_type {
+            terminal_launch: match &launch.tab_type {
                 Some(TabType::Plugin { plugin_id }) => crate::workspace::WorkspaceLaunch::Plugin {
                     plugin_id: plugin_id.clone(),
                     profile: None,

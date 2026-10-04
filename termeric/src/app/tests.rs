@@ -9636,17 +9636,17 @@ fn split_adopts_one_owner_and_dissolve_preserves_output_without_orphans() {
         0,
         80,
         24,
-        "/bin/sh",
-        &[
-            "-c".into(),
-            "printf 'before\\n'; sleep 0.05; printf 'after\\n'; sleep 5".into(),
-        ],
-        None,
-        Some("owner"),
+        &crate::tabs::CommandLaunch {
+            program: "/bin/sh".into(),
+            args: vec![
+                "-c".into(),
+                "printf 'before\\n'; sleep 0.05; printf 'after\\n'; sleep 5".into(),
+            ],
+            title: Some("owner".into()),
+            ..crate::tabs::CommandLaunch::default()
+        },
         1_000,
         8 * 1024 * 1024,
-        None,
-        HashMap::new(),
     )
     .unwrap();
     let original_pid = tab.single_child_id().unwrap();
@@ -9771,14 +9771,14 @@ fn pane_identity_survives_collapse_and_the_next_split() {
         0,
         80,
         24,
-        "/bin/sh",
-        &crate::test_support::sleeping_args(),
-        None,
-        Some("stable-pane"),
+        &crate::tabs::CommandLaunch {
+            program: "/bin/sh".into(),
+            args: crate::test_support::sleeping_args(),
+            title: Some("stable-pane".into()),
+            ..crate::tabs::CommandLaunch::default()
+        },
         1_000,
         8 * 1024 * 1024,
-        None,
-        HashMap::new(),
     )
     .unwrap();
     let owner = tab.take_terminal_owner().unwrap();
@@ -10087,14 +10087,14 @@ fn pane_read_only_blocks_user_routes_but_not_protocol_replies_and_follows_owners
         0,
         80,
         24,
-        "/bin/sh",
-        &shell.args,
-        None,
-        Some("read-only-pane"),
+        &crate::tabs::CommandLaunch {
+            program: "/bin/sh".into(),
+            args: shell.args.clone(),
+            title: Some("read-only-pane".into()),
+            ..crate::tabs::CommandLaunch::default()
+        },
         1_000,
         8 * 1024 * 1024,
-        None,
-        HashMap::new(),
     )
     .unwrap();
     assert!(tab.toggle_focused_pane_read_only());
@@ -10217,14 +10217,14 @@ fn split_session_capture_follows_focus_for_all_persisted_terminal_fields() {
         0,
         80,
         8,
-        "/bin/sh",
-        &[],
-        None,
-        Some("session-source"),
+        &crate::tabs::CommandLaunch {
+            program: "/bin/sh".into(),
+            args: vec![],
+            title: Some("session-source".into()),
+            ..crate::tabs::CommandLaunch::default()
+        },
         1_000,
         8 * 1024 * 1024,
-        None,
-        HashMap::new(),
     )
     .unwrap();
     let owner = tab.take_terminal_owner().unwrap();
@@ -10352,14 +10352,14 @@ fn real_pty_unicode_clusters_preserve_width_and_content() {
         0,
         20,
         3,
-        "/bin/sh",
-        &["-c".into(), format!("printf '%s' '{expected}'")],
-        None,
-        Some("unicode-pty"),
+        &crate::tabs::CommandLaunch {
+            program: "/bin/sh".into(),
+            args: vec!["-c".into(), format!("printf '%s' '{expected}'")],
+            title: Some("unicode-pty".into()),
+            ..crate::tabs::CommandLaunch::default()
+        },
         100,
         1024 * 1024,
-        None,
-        HashMap::new(),
     )
     .unwrap();
     let deadline = Instant::now() + Duration::from_secs(2);
@@ -10399,14 +10399,14 @@ fn real_pty_sgr_attributes_reach_the_terminal_grid_without_leaking() {
         0,
         20,
         3,
-        "/bin/sh",
-        &["-c".into(), command.into()],
-        None,
-        Some("sgr-pty"),
+        &crate::tabs::CommandLaunch {
+            program: "/bin/sh".into(),
+            args: vec!["-c".into(), command.into()],
+            title: Some("sgr-pty".into()),
+            ..crate::tabs::CommandLaunch::default()
+        },
         100,
         1024 * 1024,
-        None,
-        HashMap::new(),
     )
     .unwrap();
     let deadline = Instant::now() + Duration::from_secs(2);

@@ -3085,20 +3085,15 @@ mod tests {
         let mut environment = std::collections::HashMap::new();
         environment.insert("TERM".into(), "xterm-256color".into());
         environment.insert("PS1".into(), "termeric-readline> ".into());
-        let mut tab = crate::tabs::Tab::new_with_command(
-            0,
-            80,
-            24,
-            "/bin/bash",
-            &["--noprofile".into(), "--norc".into(), "-i".into()],
-            None,
-            Some("readline"),
-            1_000,
-            8 * 1024 * 1024,
-            None,
-            environment,
-        )
-        .unwrap();
+        let launch = crate::tabs::CommandLaunch {
+            program: "/bin/bash".into(),
+            args: vec!["--noprofile".into(), "--norc".into(), "-i".into()],
+            title: Some("readline".into()),
+            env: environment,
+            ..crate::tabs::CommandLaunch::default()
+        };
+        let mut tab =
+            crate::tabs::Tab::new_with_command(0, 80, 24, &launch, 1_000, 8 * 1024 * 1024).unwrap();
         let home = |mode| {
             encode_legacy_xterm(
                 &Key::Named(NamedKey::Home),

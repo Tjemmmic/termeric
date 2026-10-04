@@ -8,8 +8,8 @@ mod title;
 
 #[cfg(test)]
 pub(crate) use tab::SessionCapture;
+pub use tab::{CommandLaunch, Tab, TabType};
 pub(crate) use tab::{LiveDomainTab, TabAgentView, TabTerminalOwner};
-pub use tab::{Tab, TabType};
 pub(crate) use title::{
     get_foreground_process, get_process_cwd, presentation_working_directory,
     terminal_working_directory,
@@ -236,19 +236,21 @@ impl TabManager {
         self.next_id += 1;
         let (program, args) = crate::serial::bridge_command(serial)?;
         let title = title.unwrap_or(name);
-        let mut tab = Tab::new_with_command_geometry(
-            id,
-            self.geometry,
-            &program,
-            &args,
-            None,
-            Some(title),
-            self.scrollback_lines,
-            self.scrollback_bytes,
-            Some(TabType::Serial {
+        let launch = CommandLaunch {
+            program,
+            args,
+            title: Some(title.to_string()),
+            tab_type: Some(TabType::Serial {
                 name: name.to_string(),
             }),
-            HashMap::new(),
+            ..CommandLaunch::default()
+        };
+        let mut tab = Tab::new_command(
+            id,
+            self.geometry,
+            &launch,
+            self.scrollback_lines,
+            self.scrollback_bytes,
         )?;
         tab.set_serial_profile_launch(name, title.to_string());
         tab.set_screen_checksum_reporting(self.screen_checksum_reporting);
@@ -272,67 +274,36 @@ impl TabManager {
         tab_type: Option<TabType>,
         env: HashMap<String, String>,
     ) -> anyhow::Result<usize> {
-        self.new_tab_with_command_environment_policy(
-            program,
-            args,
-            working_dir,
-            title,
-            tab_type,
-            env,
-            &termeric_core::pty::EnvironmentPolicy::default(),
-        )
-    }
-
-    pub(crate) fn new_tab_with_command_environment_policy(
-        &mut self,
-        program: &str,
-        args: &[String],
-        working_dir: Option<&str>,
-        title: Option<&str>,
-        tab_type: Option<TabType>,
-        env: HashMap<String, String>,
-        policy: &termeric_core::pty::EnvironmentPolicy,
-    ) -> anyhow::Result<usize> {
-        self.new_tab_with_command_placement(
-            program,
-            args,
-            working_dir,
-            title,
-            tab_type,
-            env,
-            policy,
+        self.launch_command_tab(
+            CommandLaunch {
+                program: program.to_string(),
+                args: args.to_vec(),
+                working_dir: working_dir.map(str::to_string),
+                title: title.map(str::to_string),
+                tab_type,
+                env,
+                ..CommandLaunch::default()
+            },
             false,
         )
     }
 
-    /// Background insertion never transiently changes the active owner. An
-    /// empty manager necessarily selects its first tab in either mode.
-    pub(crate) fn new_tab_with_command_placement(
+    /// Open a command tab. A `background` tab never transiently changes the
+    /// active owner, though an empty manager necessarily selects its first.
+    pub(crate) fn launch_command_tab(
         &mut self,
-        program: &str,
-        args: &[String],
-        working_dir: Option<&str>,
-        title: Option<&str>,
-        tab_type: Option<TabType>,
-        env: HashMap<String, String>,
-        policy: &termeric_core::pty::EnvironmentPolicy,
+        launch: CommandLaunch,
         background: bool,
     ) -> anyhow::Result<usize> {
         let id = self.next_id;
         self.next_id += 1;
 
-        let mut tab = Tab::new_with_command_environment_policy(
+        let mut tab = Tab::new_command(
             id,
             self.geometry,
-            program,
-            args,
-            working_dir,
-            title,
+            &launch,
             self.scrollback_lines,
             self.scrollback_bytes,
-            tab_type,
-            env,
-            policy,
         )?;
         tab.set_split_shell_config(self.shell.clone());
         tab.set_screen_checksum_reporting(self.screen_checksum_reporting);

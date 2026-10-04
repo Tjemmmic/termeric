@@ -2885,17 +2885,19 @@ impl App {
             .as_mut()
             .ok_or_else(|| "Target window has no initialized tab manager".to_string())?;
         let id = tabs
-            .new_tab_with_command_placement(
-                program,
-                args,
-                working_directory,
-                title,
-                None,
-                environment
-                    .iter()
-                    .map(|entry| (entry.name.clone(), entry.value.clone()))
-                    .collect(),
-                environment_policy,
+            .launch_command_tab(
+                crate::tabs::CommandLaunch {
+                    program: program.to_string(),
+                    args: args.to_vec(),
+                    working_dir: working_directory.map(str::to_string),
+                    title: title.map(str::to_string),
+                    tab_type: None,
+                    env: environment
+                        .iter()
+                        .map(|entry| (entry.name.clone(), entry.value.clone()))
+                        .collect(),
+                    environment_policy: environment_policy.clone(),
+                },
                 background,
             )
             .map_err(|error| format!("Could not launch command tab: {error:#}"))?;
