@@ -117,28 +117,20 @@ impl App {
         }
     }
 
-    /// A second click on the same workspace row within the desktop's usual
-    /// double-click interval opens it; a single click only selects.
+    /// A double-click on a workspace row opens it; a single click only
+    /// selects.
     fn promote_session_double_click(
         &mut self,
         action: crate::ui::session_panel::SessionPanelAction,
     ) -> crate::ui::session_panel::SessionPanelAction {
         use crate::ui::session_panel::SessionPanelAction;
-        const DOUBLE_CLICK: std::time::Duration = std::time::Duration::from_millis(400);
         let SessionPanelAction::Select(id) = action else {
-            self.session_row_click = None;
+            self.session_row_click.reset();
             return action;
         };
-        let now = std::time::Instant::now();
-        let repeated = self
-            .session_row_click
-            .as_ref()
-            .is_some_and(|(last, at)| *last == id && now.duration_since(*at) <= DOUBLE_CLICK);
-        if repeated {
-            self.session_row_click = None;
+        if self.session_row_click.press(id.clone(), Instant::now()) {
             SessionPanelAction::Load(id)
         } else {
-            self.session_row_click = Some((id.clone(), now));
             SessionPanelAction::Select(id)
         }
     }
@@ -472,60 +464,7 @@ impl App {
                                     TabBarClick::CloseTab(idx) => {
                                         self.request_close_tab(idx);
                                     }
-                                    TabBarClick::Tab(idx) => {
-                                        let from = self
-                                            .tabs
-                                            .as_ref()
-                                            .map(|t| t.active_index())
-                                            .unwrap_or(0);
-                                        if let Some(tabs) = &mut self.tabs {
-                                            tabs.switch_to(idx);
-                                            self.tab_dragging = tabs.active_tab().and_then(|tab| {
-                                                let live = match tab.live_domain_tab_route() {
-                                                    Some((domain_id, remote_tab_id)) => {
-                                                        Some(LiveDomainTabDrag {
-                                                            domain_id: domain_id.to_string(),
-                                                            remote_tab_id,
-                                                            // A live tab with no index of its
-                                                            // own is not dragged at all.
-                                                            initial_index: u16::try_from(
-                                                                tabs.live_domain_tab_index(
-                                                                    domain_id,
-                                                                    remote_tab_id,
-                                                                )?,
-                                                            )
-                                                            .ok()?,
-                                                        })
-                                                    }
-                                                    None => None,
-                                                };
-                                                Some(TabDrag {
-                                                    tab_id: tab.id,
-                                                    live,
-                                                    grab: None,
-                                                })
-                                            });
-                                        }
-                                        self.begin_tab_grab();
-                                        let live_drag_blocked = self
-                                            .tab_dragging
-                                            .as_ref()
-                                            .and_then(|drag| drag.live.as_ref())
-                                            .is_some_and(|live| {
-                                                self.pending_live_domain_controls.iter().any(
-                                                    |pending| pending.domain_id() == live.domain_id,
-                                                )
-                                            });
-                                        if live_drag_blocked {
-                                            self.tab_dragging = None;
-                                            self.toasts.info(
-                                                "Wait for the pending live-domain change before reordering",
-                                            );
-                                        }
-                                        if from != idx {
-                                            self.refresh_focused_terminal_surfaces();
-                                        }
-                                    }
+                                    TabBarClick::Tab(idx) => self.press_tab(idx),
                                     TabBarClick::SessionDropdown => {
                                         self.toggle_workspace_menu(false);
                                     }
@@ -652,6 +591,68 @@ impl App {
 
         // Request redraw to show selection changes
         self.request_redraw(RedrawReason::PointerInput);
+    }
+
+    /// A primary press on tab `idx` selects it and may start dragging it.
+    /// The second press of a double-click renames it instead.
+    pub(super) fn press_tab(&mut self, idx: usize) {
+        let from = self.tabs.as_ref().map(|t| t.active_index()).unwrap_or(0);
+        if let Some(tabs) = &mut self.tabs {
+            tabs.switch_to(idx);
+            self.tab_dragging = tabs.active_tab().and_then(|tab| {
+                let live = match tab.live_domain_tab_route() {
+                    Some((domain_id, remote_tab_id)) => {
+                        Some(LiveDomainTabDrag {
+                            domain_id: domain_id.to_string(),
+                            remote_tab_id,
+                            // A live tab with no index of its
+                            // own is not dragged at all.
+                            initial_index: u16::try_from(
+                                tabs.live_domain_tab_index(domain_id, remote_tab_id)?,
+                            )
+                            .ok()?,
+                        })
+                    }
+                    None => None,
+                };
+                Some(TabDrag {
+                    tab_id: tab.id,
+                    live,
+                    grab: None,
+                })
+            });
+        }
+        self.begin_tab_grab();
+        let live_drag_blocked = self
+            .tab_dragging
+            .as_ref()
+            .and_then(|drag| drag.live.as_ref())
+            .is_some_and(|live| {
+                self.pending_live_domain_controls
+                    .iter()
+                    .any(|pending| pending.domain_id() == live.domain_id)
+            });
+        if live_drag_blocked {
+            self.tab_dragging = None;
+            self.toasts
+                .info("Wait for the pending live-domain change before reordering");
+        }
+        if from != idx {
+            self.refresh_focused_terminal_surfaces();
+        }
+        let Some(tab_id) = self.tabs.as_ref().and_then(TabManager::active_tab_id) else {
+            return;
+        };
+        if self.tab_click.press(tab_id, Instant::now()) {
+            self.tab_dragging = None;
+            if self
+                .tab_rename
+                .as_ref()
+                .is_none_or(|rename| rename.tab_id != tab_id)
+            {
+                self.begin_tab_rename();
+            }
+        }
     }
 
     /// A press over the terminal area, once no chrome or panel took it: it

@@ -14,7 +14,7 @@ Closing a tab closes every pane in it and ends its programs; there is no confirm
 
 ### Rename a tab
 
-Run **Rename Tab** from the command palette. Type the new title, then press `Enter` to save or `Escape` to keep the old one. Saving an empty title removes your name and lets the tab show its automatic title again.
+Double-click the tab, press `Ctrl+Alt+Shift+T`, or run **Rename Tab** from the command palette. Type the new title, then press `Enter` to save or `Escape` to keep the old one. Saving an empty title removes your name and lets the tab show its automatic title again.
 
 A title you set always wins. Otherwise the tab shows the title the running program sets, or else the current directory or program.
 

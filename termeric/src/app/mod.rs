@@ -1283,7 +1283,9 @@ pub struct App {
     /// Application runtime state (for first boot tracking, etc.)
     app_state: AppState,
     /// Last workspace-manager row click, for double-click opening.
-    session_row_click: Option<(String, std::time::Instant)>,
+    session_row_click: crate::input::DoubleClick<String>,
+    /// Presses on tabs, by tab ID, for double-click renaming.
+    tab_click: crate::input::DoubleClick<usize>,
     /// The theme in effect while "Change Theme…" previews others.
     theme_preview: Option<theme_picker::ThemePreview>,
     /// The toolbar Workspaces menu while it is open.
@@ -1621,7 +1623,8 @@ impl App {
                 AppState::default()
             },
             workspace_menu: None,
-            session_row_click: None,
+            session_row_click: Default::default(),
+            tab_click: Default::default(),
             theme_preview: None,
             session_panel: crate::ui::session_panel::SessionPanel::new(),
             commands_panel: crate::ui::commands::panel::CommandsPanel::new(),

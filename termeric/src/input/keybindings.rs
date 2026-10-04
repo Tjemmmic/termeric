@@ -141,7 +141,8 @@ bindable_actions! {
     NavigatePaneRight => "navigate_pane_right", "Navigate Pane Right", Panes,
         chord("right", ALT), Action::NavigatePane(PaneDir::Right);
     ClosePane => "close_pane", "Close Pane", Panes, chord("w", ALT | SHIFT), Action::ClosePane;
-    RenameTab => "rename_tab", "Rename Tab", Tabs, None, Action::RenameTab;
+    RenameTab => "rename_tab", "Rename Tab", Tabs,
+        chord("t", CTRL | ALT | SHIFT), Action::RenameTab;
     MoveTabLeft => "move_tab_left", "Move Tab Left", Tabs, None, Action::MoveTabLeft;
     MoveTabRight => "move_tab_right", "Move Tab Right", Tabs, None, Action::MoveTabRight;
     MoveTabToNextWindow => "move_tab_to_next_window", "Move Tab to Next Window", Tabs,

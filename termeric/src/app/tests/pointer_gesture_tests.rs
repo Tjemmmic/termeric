@@ -1092,3 +1092,44 @@ fn a_press_within_a_dividers_margin_drags_it_unless_the_tab_is_zoomed() {
     assert!(!app.press_pane_divider(divider.position, middle));
     assert!(app.divider_dragging.is_none());
 }
+
+#[test]
+fn a_double_click_on_a_tab_renames_it_and_a_single_press_still_drags_it() {
+    let mut app = scrollbar_owner_fixture();
+    let second = app.tabs.as_ref().unwrap().all_tabs()[1].id;
+
+    // Presses on two different tabs are no double-click.
+    app.press_tab(0);
+    app.finish_native_pointer_gesture();
+    app.press_tab(1);
+    assert!(app.tab_rename.is_none());
+    assert_eq!(
+        app.tab_dragging.as_ref().map(|drag| drag.tab_id),
+        Some(second)
+    );
+    app.finish_native_pointer_gesture();
+
+    app.press_tab(1);
+    assert!(app.tab_dragging.is_none());
+    assert_eq!(
+        app.tab_rename.as_ref().map(|rename| rename.tab_id),
+        Some(second)
+    );
+
+    // A third press starts a new pair and leaves the rename alone.
+    app.press_tab(1);
+    assert!(app.tab_dragging.is_some());
+    assert_eq!(
+        app.tab_rename.as_ref().map(|rename| rename.tab_id),
+        Some(second)
+    );
+}
+
+#[test]
+fn ctrl_alt_shift_t_renames_the_active_tab() {
+    let mut app = scrollbar_owner_fixture();
+    app.modifiers = ModifiersState::CONTROL | ModifiersState::ALT | ModifiersState::SHIFT;
+    assert!(app.handle_bound_key(&winit::keyboard::Key::Character("T".into())));
+    let active = app.tabs.as_ref().unwrap().active_tab_id();
+    assert_eq!(app.tab_rename.as_ref().map(|rename| rename.tab_id), active);
+}

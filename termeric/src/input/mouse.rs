@@ -1,8 +1,44 @@
 //! Mouse input handling and coordinate conversion
 
+use std::time::{Duration, Instant};
+
 use termeric_core::{Point, Selection, SelectionType};
 use winit::event::MouseButton;
 use winit::keyboard::ModifiersState;
+
+/// The longest gap between two presses that still makes them a
+/// double-click, everywhere Termeric counts clicks.
+pub const DOUBLE_CLICK_INTERVAL: Duration = Duration::from_millis(400);
+
+/// Recognizes a second press on the same target within
+/// [`DOUBLE_CLICK_INTERVAL`]. A third press starts a new pair.
+#[derive(Debug)]
+pub struct DoubleClick<T> {
+    last: Option<(T, Instant)>,
+}
+
+impl<T> Default for DoubleClick<T> {
+    fn default() -> Self {
+        Self { last: None }
+    }
+}
+
+impl<T: PartialEq> DoubleClick<T> {
+    /// Record a press on `target` at `now`; true when it completes a
+    /// double-click.
+    pub fn press(&mut self, target: T, now: Instant) -> bool {
+        let repeated = self.last.as_ref().is_some_and(|(last, at)| {
+            *last == target && now.saturating_duration_since(*at) <= DOUBLE_CLICK_INTERVAL
+        });
+        self.last = (!repeated).then_some((target, now));
+        repeated
+    }
+
+    /// Forget the last press, so the next one starts a new pair.
+    pub fn reset(&mut self) {
+        self.last = None;
+    }
+}
 
 /// Mouse input state tracker
 pub struct MouseState {
@@ -11,7 +47,7 @@ pub struct MouseState {
     /// Number of rapid clicks (for double/triple click detection)
     pub click_count: u32,
     /// Time of last click (for double/triple click detection)
-    pub last_click_time: std::time::Instant,
+    pub last_click_time: Instant,
     /// Position of last click
     pub last_click_pos: Option<Point>,
 }
@@ -27,7 +63,7 @@ impl MouseState {
         Self {
             selection: None,
             click_count: 0,
-            last_click_time: std::time::Instant::now(),
+            last_click_time: Instant::now(),
             last_click_pos: None,
         }
     }
@@ -46,14 +82,14 @@ impl MouseState {
         // Check for multi-click (double/triple).
         // Proximity is tight — same row, same column (no fuzz) — so rapid
         // clicks on adjacent words don't get merged into false triple-clicks.
-        let now = std::time::Instant::now();
+        let now = Instant::now();
         let elapsed = now.duration_since(self.last_click_time);
         let same_position = self
             .last_click_pos
             .map(|p| p.row == position.row && p.col == position.col)
             .unwrap_or(false);
 
-        if elapsed.as_millis() < 400 && same_position {
+        if elapsed < DOUBLE_CLICK_INTERVAL && same_position {
             self.click_count = (self.click_count % 3) + 1;
         } else {
             self.click_count = 1;
@@ -121,5 +157,25 @@ impl MouseState {
     /// Get current selection
     pub fn current_selection(&self) -> Option<&Selection> {
         self.selection.as_ref()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_double_click_is_two_presses_on_one_target_within_the_interval() {
+        let start = Instant::now();
+        let mut clicks = DoubleClick::default();
+        assert!(!clicks.press("a", start));
+        assert!(clicks.press("a", start + DOUBLE_CLICK_INTERVAL));
+        // The pair is spent; another press starts over.
+        assert!(!clicks.press("a", start + DOUBLE_CLICK_INTERVAL));
+        let late = start + DOUBLE_CLICK_INTERVAL * 2 + Duration::from_millis(1);
+        assert!(!clicks.press("a", late));
+        assert!(!clicks.press("b", late));
+        clicks.reset();
+        assert!(!clicks.press("b", late));
     }
 }

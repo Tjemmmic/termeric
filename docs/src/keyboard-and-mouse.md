@@ -32,7 +32,7 @@ The **ID** column is the name to use in your configuration file; see [Change key
 | `Ctrl+Tab` | Next tab | `next_tab` |
 | `Ctrl+Shift+Tab` | Previous tab | `prev_tab` |
 | `Ctrl+1` … `Ctrl+9` | Go to tab 1–9 | `switch_to_tab_1` … `switch_to_tab_9` |
-| none | Rename tab | `rename_tab` |
+| `Ctrl+Alt+Shift+T` | Rename tab (or double-click the tab) | `rename_tab` |
 | none | Move tab left / right | `move_tab_left`, `move_tab_right` |
 | none | Move tab to next window | `move_tab_to_next_window` |
 | none | Pin or unpin tab | `toggle_pin_tab` |
@@ -226,7 +226,7 @@ When a pane has scrollback, a scrollbar appears along its right edge; drag it to
 
 ### Panes and tabs
 
-Click a pane to focus it, and drag the divider between panes to resize them. Drag tabs to reorder them or move them between windows; see [Tabs, panes, and windows](tabs-panes-windows.md).
+Click a pane to focus it, and drag the divider between panes to resize them. Drag tabs to reorder them or move them between windows, and double-click a tab to rename it; see [Tabs, panes, and windows](tabs-panes-windows.md).
 
 To paste a file's path into the terminal, drag the file from your file manager onto the window; see [Images and file transfer](images-and-files.md).
 
