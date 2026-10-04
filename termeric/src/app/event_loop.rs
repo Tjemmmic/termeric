@@ -462,26 +462,22 @@ impl App {
         // focus. Global shortcuts still apply, except the chords its
         // composer edits with.
         if self.agent_view_has_keyboard() {
-            if event.state == winit::event::ElementState::Pressed {
-                if !super::agent_view_input::composer_chord(&event.logical_key, self.modifiers)
-                    && let Some(bindable) = self
-                        .shortcut_registry
-                        .check(&event.logical_key, self.modifiers)
-                    && self.handle_action(bindable.to_action())
-                {
-                    return;
-                }
+            if event.state == winit::event::ElementState::Pressed
+                && (super::agent_view_input::composer_chord(&event.logical_key, self.modifiers)
+                    || !self.run_app_shortcut(&event.logical_key))
+            {
                 self.handle_agent_view_key(&event.logical_key, event.text.as_deref());
             }
             return;
         }
 
-        // Handle search mode input
-        if self.handle_search_mode_input(&event) {
+        // The find box, then copy mode and quick select: each takes its own
+        // chords, runs application shortcuts, and swallows everything else.
+        if self.handle_search_mode_input(&event.logical_key, event.state) {
             return;
         }
 
-        if self.handle_copy_mode_input(&event) {
+        if self.handle_copy_mode_input(&event.logical_key, event.state) {
             return;
         }
 
@@ -533,15 +529,27 @@ impl App {
     /// Returns true when one handled the key, which then never reaches the
     /// terminal.
     pub(super) fn handle_bound_key(&mut self, key: &winit::keyboard::Key) -> bool {
-        if let Some(bindable) = self.shortcut_registry.check(key, self.modifiers)
-            && self.handle_action(bindable.to_action())
-        {
+        if self.run_app_shortcut(key) {
             return true;
         }
         if let Some(key_action) = self.keybinding_manager.check(key, self.modifiers).cloned() {
             return self.handle_key_action(key_action);
         }
         false
+    }
+
+    /// Runs the built-in application shortcut bound to a pressed key.
+    /// Returns true when it ran and took the key.
+    ///
+    /// A surface holding the keyboard (the agent view, the find box, copy
+    /// mode, quick select) checks its own chords first and calls this for any
+    /// other key, then swallows the key if this returns false. Custom
+    /// keybindings never run there: they type into, or run commands in, the
+    /// terminal the surface is covering.
+    pub(super) fn run_app_shortcut(&mut self, key: &winit::keyboard::Key) -> bool {
+        self.shortcut_registry
+            .check(key, self.modifiers)
+            .is_some_and(|bindable| self.handle_action(bindable.to_action()))
     }
 
     /// One mouse button press or release: copy-mode exit and terminal

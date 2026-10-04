@@ -928,3 +928,100 @@ fn quick_select_pins_presented_targets_and_cwd_and_expires_without_activation() 
         assert!(!app.reconcile_quick_select_presentation());
     }
 }
+
+/// One pressed key in copy mode under `modifiers`.
+fn press_in_copy_mode(app: &mut App, key: winit::keyboard::Key, modifiers: ModifiersState) -> bool {
+    app.modifiers = modifiers;
+    let handled = app.handle_copy_mode_input(&key, winit::event::ElementState::Pressed);
+    app.modifiers = ModifiersState::empty();
+    handled
+}
+
+fn character(text: &str) -> winit::keyboard::Key {
+    winit::keyboard::Key::Character(text.into())
+}
+
+#[test]
+fn copy_mode_runs_app_shortcuts_for_keys_it_does_not_use() {
+    use winit::keyboard::{Key, NamedKey};
+    let ctrl = ModifiersState::CONTROL;
+    let ctrl_shift = ModifiersState::CONTROL | ModifiersState::SHIFT;
+
+    // Its own toggle leaves it.
+    let mut app = scrollbar_owner_fixture();
+    app.enter_copy_mode();
+    assert!(press_in_copy_mode(&mut app, character("X"), ctrl_shift));
+    assert!(!app.copy_mode.is_active());
+
+    // Switching tabs leaves it too: copy mode belongs to its pane.
+    app.enter_copy_mode();
+    assert!(press_in_copy_mode(
+        &mut app,
+        Key::Named(NamedKey::Tab),
+        ctrl
+    ));
+    assert_eq!(app.tabs.as_ref().unwrap().active_index(), 1);
+    assert!(!app.copy_mode.is_active());
+
+    // vi: Ctrl+Shift+V is Paste, which copy mode swallows, not a block
+    // selection; Ctrl+V alone still starts one.
+    app.enter_copy_mode();
+    assert!(press_in_copy_mode(&mut app, character("V"), ctrl_shift));
+    assert!(app.copy_mode.is_active());
+    assert!(app.copy_mode.selection().is_none());
+    assert!(press_in_copy_mode(&mut app, character("v"), ctrl));
+    assert!(app.copy_mode.selection().is_some());
+    app.leave_copy_mode(true);
+
+    // Emacs: Ctrl+F moves, but Ctrl+Shift+F opens the find box and leaves
+    // the cursor where it was.
+    app.config.copy_mode.bindings = crate::config::CopyModeBindings::Emacs;
+    app.enter_copy_mode();
+    let start = app.copy_mode.cursor();
+    assert!(press_in_copy_mode(
+        &mut app,
+        Key::Named(NamedKey::Home),
+        ctrl
+    ));
+    let top = app.copy_mode.cursor();
+    assert_ne!(top, start);
+    assert!(press_in_copy_mode(&mut app, character("f"), ctrl));
+    let moved = app.copy_mode.cursor();
+    assert_eq!(moved.col, top.col + 1);
+    assert!(press_in_copy_mode(&mut app, character("F"), ctrl_shift));
+    assert!(app.search.is_active());
+    assert_eq!(app.copy_mode.cursor(), moved);
+    assert!(app.copy_mode.is_active());
+}
+
+#[test]
+fn copy_mode_keys_never_reach_the_terminal() {
+    use winit::keyboard::{Key, NamedKey};
+    let mut app = App::new_headless_running(
+        "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1; sleep 0.1",
+        "copy-mode-reader",
+    );
+    app.wait_for_screen_text("READY");
+    app.enter_copy_mode();
+    for (key, modifiers) in [
+        (character("q"), ModifiersState::empty()),
+        (character("Z"), ModifiersState::SHIFT),
+        (character("q"), ModifiersState::CONTROL),
+        (character("c"), ModifiersState::CONTROL),
+        (Key::Named(NamedKey::Tab), ModifiersState::empty()),
+        (Key::Named(NamedKey::F12), ModifiersState::empty()),
+        (Key::Named(NamedKey::Enter), ModifiersState::SHIFT),
+    ] {
+        assert!(press_in_copy_mode(&mut app, key, modifiers));
+        assert!(app.copy_mode.is_active());
+    }
+    assert!(press_in_copy_mode(
+        &mut app,
+        Key::Named(NamedKey::Escape),
+        ModifiersState::empty()
+    ));
+    assert!(!app.copy_mode.is_active());
+    // The reader's first byte is the one written now.
+    app.write_to_pty(b"Z");
+    app.wait_for_screen_text("5a");
+}

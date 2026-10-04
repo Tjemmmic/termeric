@@ -101,7 +101,7 @@ A few keys aren't part of the shortcut list and can't be changed:
 | `F6` / `Shift+F6` | Move keyboard focus to the tab bar and toolbar; see [Accessibility](accessibility.md#use-termeric-without-a-mouse) |
 | `Escape` | Cancel broadcast input while it's armed or active |
 
-Search, copy mode, the command palette, Settings, and other panels have their own keys while they're open; each is described with its feature.
+Search, copy mode, the command palette, Settings, and other panels have their own keys while they're open; each is described with its feature. In the find box, copy mode, quick select, and the agent view, a key that isn't one of their own still runs its application shortcut, and any other key is ignored. Custom `[[keybindings]]` don't run there, because they would type into the terminal underneath.
 
 ## Change key bindings
 

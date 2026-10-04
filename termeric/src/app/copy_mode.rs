@@ -1,10 +1,11 @@
 //! App routing for keyboard copy mode and quick-select hints.
 
 use termeric_core::{Point, SelectionType};
-use winit::event::{ElementState, KeyEvent};
-use winit::keyboard::{Key, NamedKey};
+use winit::event::ElementState;
+use winit::keyboard::{Key, ModifiersState, NamedKey};
 
 use crate::config::CopyModeBindings;
+use crate::input::keybindings::BindableAction;
 use crate::terminal::copy_mode::{CopyMotion, HintAction};
 
 use super::App;
@@ -306,19 +307,22 @@ impl App {
         }
     }
 
-    fn handle_quick_select_input(&mut self, event: &KeyEvent) -> bool {
+    /// Quick select's own keys: Escape, Tab, Backspace, and hint
+    /// characters. Any other key goes to `run_copy_mode_shortcut`.
+    fn handle_quick_select_input(&mut self, key: &Key, state: ElementState) -> bool {
         if self.reconcile_quick_select_presentation() {
             return true;
         }
         if self.copy_mode.quick_select().is_none() {
             return false;
         }
-        if event.state != ElementState::Pressed {
+        if state != ElementState::Pressed {
             return true;
         }
-        match &event.logical_key {
-            Key::Named(NamedKey::Escape) => self.copy_mode.cancel_quick_select(),
-            Key::Named(NamedKey::Tab) => {
+        let plain = self.modifiers.is_empty() && !self.alt_graph_active;
+        match key {
+            Key::Named(NamedKey::Escape) if plain => self.copy_mode.cancel_quick_select(),
+            Key::Named(NamedKey::Tab) if plain => {
                 self.copy_mode.toggle_hint_action();
                 let action = self
                     .copy_mode
@@ -326,14 +330,14 @@ impl App {
                     .map_or("open", |quick| quick.action.label());
                 self.toasts.info(format!("Quick-select action: {action}"));
             }
-            Key::Named(NamedKey::Backspace) => self.copy_mode.backspace_hint(),
-            Key::Character(text) if text.chars().count() == 1 => {
+            Key::Named(NamedKey::Backspace) if plain => self.copy_mode.backspace_hint(),
+            Key::Character(text) if self.key_types_text() && text.chars().count() == 1 => {
                 let character = text.chars().next().unwrap_or_default();
                 if let Some((selected, action)) = self.copy_mode.push_hint_key(character) {
                     self.activate_hint(selected.value, action);
                 }
             }
-            _ => {}
+            _ => self.run_copy_mode_shortcut(key),
         }
         true
     }
@@ -370,9 +374,9 @@ impl App {
         true
     }
 
-    /// Modal input has priority over application shortcuts and PTY encoding,
-    /// but search input remains one level above it while `/` or Ctrl+S is open.
-    pub(super) fn handle_copy_mode_input(&mut self, event: &KeyEvent) -> bool {
+    /// Copy mode owns the keyboard below the find box: its own keys first,
+    /// then application shortcuts, and nothing ever reaches the terminal.
+    pub(super) fn handle_copy_mode_input(&mut self, key: &Key, state: ElementState) -> bool {
         if !self.copy_mode.is_active() {
             return false;
         }
@@ -383,137 +387,249 @@ impl App {
         if self.reconcile_copy_mode_presentation() {
             return true;
         }
-        if self.handle_quick_select_input(event) {
+        if self.handle_quick_select_input(key, state) {
             return true;
         }
-        if event.state != ElementState::Pressed {
+        if state != ElementState::Pressed {
             return true;
         }
-
-        let ctrl = self.modifiers.control_key();
-        let alt = self.modifiers.alt_key();
-        let shift = self.modifiers.shift_key();
-        let character = match &event.logical_key {
-            Key::Character(text) if text.chars().count() == 1 => {
-                text.chars().next().map(|ch| ch.to_ascii_lowercase())
-            }
-            _ => None,
-        };
-
-        if matches!(event.logical_key, Key::Named(NamedKey::Escape))
-            || (self.config.copy_mode.bindings == CopyModeBindings::Emacs
-                && ctrl
-                && character == Some('g'))
-        {
-            self.leave_copy_mode(true);
-            return true;
+        let pending_g = self.copy_mode.take_pending_g();
+        match copy_mode_command(
+            key,
+            self.modifiers,
+            self.alt_graph_active,
+            self.config.copy_mode.bindings,
+        ) {
+            Some(command) => self.run_copy_mode_command(command, pending_g),
+            None => self.run_copy_mode_shortcut(key),
         }
-
-        let common_motion = match &event.logical_key {
-            Key::Named(NamedKey::Home) if ctrl => Some(CopyMotion::Top),
-            Key::Named(NamedKey::End) if ctrl => Some(CopyMotion::Bottom),
-            Key::Named(NamedKey::ArrowLeft) => Some(CopyMotion::Left),
-            Key::Named(NamedKey::ArrowRight) => Some(CopyMotion::Right),
-            Key::Named(NamedKey::ArrowUp) => Some(CopyMotion::Up),
-            Key::Named(NamedKey::ArrowDown) => Some(CopyMotion::Down),
-            Key::Named(NamedKey::Home) => Some(CopyMotion::LineStart),
-            Key::Named(NamedKey::End) => Some(CopyMotion::LineEnd),
-            Key::Named(NamedKey::PageUp) => Some(CopyMotion::PageUp),
-            Key::Named(NamedKey::PageDown) => Some(CopyMotion::PageDown),
-            _ => None,
-        };
-        let style_motion = match self.config.copy_mode.bindings {
-            CopyModeBindings::Vi => match character {
-                Some('g') if shift => Some(CopyMotion::Bottom),
-                Some('h') => Some(CopyMotion::Left),
-                Some('j') => Some(CopyMotion::Down),
-                Some('k') => Some(CopyMotion::Up),
-                Some('l') => Some(CopyMotion::Right),
-                Some('0') => Some(CopyMotion::LineStart),
-                Some('$') => Some(CopyMotion::LineEnd),
-                Some('w') => Some(CopyMotion::WordForward),
-                Some('b') => Some(CopyMotion::WordBackward),
-                Some('g') if self.copy_mode.take_pending_g() => Some(CopyMotion::Top),
-                Some('g') => {
-                    self.copy_mode.set_pending_g(true);
-                    return true;
-                }
-                _ => None,
-            },
-            CopyModeBindings::Emacs => match (ctrl, alt, character) {
-                (true, _, Some('b')) => Some(CopyMotion::Left),
-                (true, _, Some('f')) => Some(CopyMotion::Right),
-                (true, _, Some('p')) => Some(CopyMotion::Up),
-                (true, _, Some('n')) => Some(CopyMotion::Down),
-                (true, _, Some('a')) => Some(CopyMotion::LineStart),
-                (true, _, Some('e')) => Some(CopyMotion::LineEnd),
-                (_, true, Some('f')) => Some(CopyMotion::WordForward),
-                (_, true, Some('b')) => Some(CopyMotion::WordBackward),
-                (true, _, Some('v')) => Some(CopyMotion::PageDown),
-                (_, true, Some('v')) => Some(CopyMotion::PageUp),
-                _ => None,
-            },
-        };
-        if let Some(motion) = common_motion.or(style_motion) {
-            self.copy_mode.set_pending_g(false);
-            self.move_copy_cursor(motion);
-            return true;
-        }
-
-        let search_key = (self.config.copy_mode.bindings == CopyModeBindings::Vi
-            && character == Some('/'))
-            || (self.config.copy_mode.bindings == CopyModeBindings::Emacs
-                && ctrl
-                && character == Some('s'));
-        if search_key {
-            self.search.start();
-            self.search_cursor_pos = 0;
-            return true;
-        }
-        if character == Some('n') && self.search.has_results() {
-            if shift {
-                self.search.prev();
-            } else {
-                self.search.next();
-            }
-            self.jump_copy_cursor_to_search();
-            return true;
-        }
-
-        let selection_type = match self.config.copy_mode.bindings {
-            CopyModeBindings::Vi if character == Some('v') && ctrl => Some(SelectionType::Block),
-            CopyModeBindings::Vi if character == Some('v') && shift => Some(SelectionType::Lines),
-            CopyModeBindings::Vi if character == Some('v') => Some(SelectionType::Simple),
-            CopyModeBindings::Emacs
-                if matches!(event.logical_key, Key::Named(NamedKey::Space))
-                    || character == Some(' ') =>
-            {
-                Some(SelectionType::Simple)
-            }
-            _ => None,
-        };
-        if let Some(selection_type) = selection_type {
-            self.copy_mode.toggle_selection(selection_type);
-            self.sync_copy_mode_selection();
-            return true;
-        }
-
-        let yank = (self.config.copy_mode.bindings == CopyModeBindings::Vi
-            && character == Some('y'))
-            || (self.config.copy_mode.bindings == CopyModeBindings::Emacs
-                && alt
-                && character == Some('w'))
-            || matches!(event.logical_key, Key::Named(NamedKey::Enter));
-        if yank {
-            if self.copy_selection() {
-                self.toasts.success("Copied selection");
-                self.leave_copy_mode(false);
-            } else {
-                self.toasts.warning("Start a selection before copying");
-            }
-            return true;
-        }
-
         true
+    }
+
+    fn run_copy_mode_command(&mut self, command: CopyModeCommand, pending_g: bool) {
+        match command {
+            CopyModeCommand::Leave => self.leave_copy_mode(true),
+            CopyModeCommand::Move(motion) => self.move_copy_cursor(motion),
+            CopyModeCommand::G if pending_g => self.move_copy_cursor(CopyMotion::Top),
+            CopyModeCommand::G => self.copy_mode.set_pending_g(true),
+            CopyModeCommand::Search => {
+                self.search.start();
+                self.search_cursor_pos = 0;
+            }
+            CopyModeCommand::NextMatch | CopyModeCommand::PreviousMatch => {
+                if !self.search.has_results() {
+                    return;
+                }
+                if command == CopyModeCommand::NextMatch {
+                    self.search.next();
+                } else {
+                    self.search.prev();
+                }
+                self.jump_copy_cursor_to_search();
+            }
+            CopyModeCommand::Select(selection_type) => {
+                self.copy_mode.toggle_selection(selection_type);
+                self.sync_copy_mode_selection();
+            }
+            CopyModeCommand::Yank => {
+                if self.copy_selection() {
+                    self.toasts.success("Copied selection");
+                    self.leave_copy_mode(false);
+                } else {
+                    self.toasts.warning("Start a selection before copying");
+                }
+            }
+        }
+    }
+
+    /// A key copy mode and quick select don't use themselves runs its
+    /// application shortcut, except Paste: copy mode reads the screen and
+    /// never types into the terminal. A shortcut that moved to another tab or
+    /// pane leaves copy mode through the usual target check.
+    fn run_copy_mode_shortcut(&mut self, key: &Key) {
+        if self.shortcut_registry.check(key, self.modifiers) == Some(BindableAction::Paste) {
+            return;
+        }
+        if self.run_app_shortcut(key) {
+            self.reconcile_copy_mode_presentation();
+        }
+    }
+}
+
+/// What a key does in copy mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CopyModeCommand {
+    Leave,
+    Move(CopyMotion),
+    /// vi `g`: the first half of `gg`, or `gg` itself.
+    G,
+    Search,
+    NextMatch,
+    PreviousMatch,
+    Select(SelectionType),
+    /// Copy the selection and leave.
+    Yank,
+}
+
+/// Copy mode's own chords. Modifiers must match exactly, so a chord such as
+/// Ctrl+Shift+F is an application shortcut rather than Emacs Ctrl+F.
+/// Characters typed alone, with Shift, or through AltGr match by the
+/// character they type, such as vi `G`, `$`, and `V`.
+fn copy_mode_command(
+    key: &Key,
+    modifiers: ModifiersState,
+    alt_graph: bool,
+    bindings: CopyModeBindings,
+) -> Option<CopyModeCommand> {
+    use CopyModeCommand::{G, Leave, Move, NextMatch, PreviousMatch, Search, Select, Yank};
+    let plain = modifiers.is_empty() && !alt_graph;
+    let ctrl = modifiers == ModifiersState::CONTROL && !alt_graph;
+    let alt = modifiers == ModifiersState::ALT && !alt_graph;
+    let typed = alt_graph
+        || !modifiers
+            .intersects(ModifiersState::CONTROL | ModifiersState::ALT | ModifiersState::SUPER);
+    let command = match key {
+        Key::Named(named) => match named {
+            NamedKey::Escape if plain => Leave,
+            NamedKey::Enter if plain => Yank,
+            NamedKey::ArrowLeft if plain => Move(CopyMotion::Left),
+            NamedKey::ArrowRight if plain => Move(CopyMotion::Right),
+            NamedKey::ArrowUp if plain => Move(CopyMotion::Up),
+            NamedKey::ArrowDown if plain => Move(CopyMotion::Down),
+            NamedKey::Home if plain => Move(CopyMotion::LineStart),
+            NamedKey::End if plain => Move(CopyMotion::LineEnd),
+            NamedKey::Home if ctrl => Move(CopyMotion::Top),
+            NamedKey::End if ctrl => Move(CopyMotion::Bottom),
+            NamedKey::PageUp if plain => Move(CopyMotion::PageUp),
+            NamedKey::PageDown if plain => Move(CopyMotion::PageDown),
+            NamedKey::Space if plain && bindings == CopyModeBindings::Emacs => {
+                Select(SelectionType::Simple)
+            }
+            _ => return None,
+        },
+        Key::Character(text) => {
+            let mut chars = text.chars();
+            let (Some(character), None) = (chars.next(), chars.next()) else {
+                return None;
+            };
+            // Ctrl and Alt chords ignore Caps Lock; typed vi keys don't,
+            // since `G` and `V` differ from `g` and `v`.
+            let chord = character.to_ascii_lowercase();
+            match bindings {
+                CopyModeBindings::Vi if ctrl && chord == 'v' => Select(SelectionType::Block),
+                CopyModeBindings::Vi if typed => match character {
+                    'h' => Move(CopyMotion::Left),
+                    'j' => Move(CopyMotion::Down),
+                    'k' => Move(CopyMotion::Up),
+                    'l' => Move(CopyMotion::Right),
+                    '0' => Move(CopyMotion::LineStart),
+                    '$' => Move(CopyMotion::LineEnd),
+                    'w' => Move(CopyMotion::WordForward),
+                    'b' => Move(CopyMotion::WordBackward),
+                    'g' => G,
+                    'G' => Move(CopyMotion::Bottom),
+                    '/' => Search,
+                    'n' => NextMatch,
+                    'N' => PreviousMatch,
+                    'v' => Select(SelectionType::Simple),
+                    'V' => Select(SelectionType::Lines),
+                    'y' => Yank,
+                    _ => return None,
+                },
+                CopyModeBindings::Emacs if ctrl => match chord {
+                    'g' => Leave,
+                    'b' => Move(CopyMotion::Left),
+                    'f' => Move(CopyMotion::Right),
+                    'p' => Move(CopyMotion::Up),
+                    'n' => Move(CopyMotion::Down),
+                    'a' => Move(CopyMotion::LineStart),
+                    'e' => Move(CopyMotion::LineEnd),
+                    'v' => Move(CopyMotion::PageDown),
+                    's' => Search,
+                    _ => return None,
+                },
+                CopyModeBindings::Emacs if alt => match chord {
+                    'f' => Move(CopyMotion::WordForward),
+                    'b' => Move(CopyMotion::WordBackward),
+                    'v' => Move(CopyMotion::PageUp),
+                    'w' => Yank,
+                    _ => return None,
+                },
+                CopyModeBindings::Emacs if typed => match character {
+                    'n' => NextMatch,
+                    'N' => PreviousMatch,
+                    ' ' => Select(SelectionType::Simple),
+                    _ => return None,
+                },
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+    Some(command)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn copy_mode_chords_match_modifiers_exactly_and_typed_keys_by_character() {
+        use CopyModeBindings::{Emacs, Vi};
+        let command = |key: &str, modifiers, bindings| {
+            copy_mode_command(&Key::Character(key.into()), modifiers, false, bindings)
+        };
+        let shift = ModifiersState::SHIFT;
+        let ctrl = ModifiersState::CONTROL;
+        let alt = ModifiersState::ALT;
+        let none = ModifiersState::empty();
+
+        // Shifted vi keys match by the character typed.
+        assert_eq!(
+            command("G", shift, Vi),
+            Some(CopyModeCommand::Move(CopyMotion::Bottom))
+        );
+        assert_eq!(
+            command("$", shift, Vi),
+            Some(CopyModeCommand::Move(CopyMotion::LineEnd))
+        );
+        assert_eq!(
+            command("V", shift, Vi),
+            Some(CopyModeCommand::Select(SelectionType::Lines))
+        );
+        assert_eq!(command("g", none, Vi), Some(CopyModeCommand::G));
+        // A Ctrl chord is never a typed vi key, and Shift is never ignored.
+        assert_eq!(command("h", ctrl, Vi), None);
+        assert_eq!(
+            command("v", ctrl, Vi),
+            Some(CopyModeCommand::Select(SelectionType::Block))
+        );
+        assert_eq!(command("V", ctrl | shift, Vi), None);
+        // Emacs chords: exact Ctrl or Alt.
+        assert_eq!(
+            command("f", ctrl, Emacs),
+            Some(CopyModeCommand::Move(CopyMotion::Right))
+        );
+        assert_eq!(command("F", ctrl | shift, Emacs), None);
+        assert_eq!(command("w", alt, Emacs), Some(CopyModeCommand::Yank));
+        assert_eq!(command("f", none, Emacs), None);
+        // AltGr types characters even where it reports as Ctrl+Alt.
+        assert_eq!(
+            copy_mode_command(&Key::Character("$".into()), ctrl | alt, true, Vi),
+            Some(CopyModeCommand::Move(CopyMotion::LineEnd))
+        );
+        // Named keys: plain, or Ctrl only on Home and End.
+        let named = |key, modifiers| copy_mode_command(&Key::Named(key), modifiers, false, Vi);
+        assert_eq!(
+            named(NamedKey::PageUp, none),
+            Some(CopyModeCommand::Move(CopyMotion::PageUp))
+        );
+        assert_eq!(named(NamedKey::PageUp, shift), None);
+        assert_eq!(
+            named(NamedKey::Home, ctrl),
+            Some(CopyModeCommand::Move(CopyMotion::Top))
+        );
+        assert_eq!(named(NamedKey::Home, ctrl | shift), None);
+        assert_eq!(named(NamedKey::Escape, none), Some(CopyModeCommand::Leave));
     }
 }

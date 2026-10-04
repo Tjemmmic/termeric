@@ -20,6 +20,16 @@ impl App {
     pub(super) fn text_edit_for_key(&self, key: &Key) -> Option<FieldKey> {
         text_edit_for_key(key, self.modifiers, self.alt_graph_active)
     }
+
+    /// Whether a character key types its character under the held
+    /// modifiers: alone, with Shift, or through AltGr. Ctrl, Alt, or Super
+    /// make it a chord instead.
+    pub(super) fn key_types_text(&self) -> bool {
+        self.alt_graph_active
+            || !self
+                .modifiers
+                .intersects(ModifiersState::CONTROL | ModifiersState::ALT | ModifiersState::SUPER)
+    }
 }
 
 /// Plain arrows, Home, End, Backspace, and Delete edit by grapheme; Ctrl turns

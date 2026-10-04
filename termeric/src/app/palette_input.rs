@@ -181,8 +181,16 @@ impl App {
         let Some(modal) = self.open_palette_modal() else {
             return false;
         };
+        let toggles_palette = self.shortcut_registry.check(key, self.modifiers)
+            == Some(crate::input::keybindings::BindableAction::ToggleCommandPalette);
         let typing = !self.modifiers.control_key() && !self.modifiers.alt_key();
         let choice = match key {
+            // The shortcut that opens the command palette closes any of
+            // them, checked before a character key becomes query input.
+            _ if toggles_palette => {
+                self.close_palette_modal(modal);
+                None
+            }
             Key::Named(NamedKey::Escape) => {
                 self.back_out_of_palette_modal(modal);
                 None
@@ -198,15 +206,6 @@ impl App {
             Key::Named(NamedKey::Enter) => self.activate_palette_modal(modal),
             Key::Named(NamedKey::Space) => {
                 self.palette_owner_mut(modal).insert_query_text(" ");
-                None
-            }
-            // Ctrl+Shift+P toggles the palette, so it closes any of them.
-            Key::Character(text)
-                if self.modifiers.control_key()
-                    && self.modifiers.shift_key()
-                    && text.eq_ignore_ascii_case("p") =>
-            {
-                self.close_palette_modal(modal);
                 None
             }
             Key::Character(text) if typing => {
@@ -285,6 +284,33 @@ mod tests {
             assert!(app.handle_palette_modal_key(&Key::Character("P".into())));
             assert_eq!(app.open_palette_modal(), None, "{modal:?}");
             assert!(!app.handle_palette_modal_key(&Key::Character("x".into())));
+        }
+    }
+
+    #[test]
+    fn a_rebound_palette_shortcut_closes_every_palette_modal() {
+        use crate::input::keybindings::{BindableAction, KeyChord};
+        for modal in [
+            PaletteModal::Commands,
+            PaletteModal::Unicode,
+            PaletteModal::Domains,
+        ] {
+            let mut app = App::new_headless(Config::default()).unwrap();
+            app.shortcut_registry.set_binding(
+                BindableAction::ToggleCommandPalette,
+                Some(KeyChord::new("k", true, true, false, false)),
+            );
+            open(&mut app, modal);
+
+            // The old default is now just a chord the palette ignores.
+            app.modifiers = ModifiersState::CONTROL | ModifiersState::SHIFT;
+            assert!(app.handle_palette_modal_key(&Key::Character("P".into())));
+            assert_eq!(app.open_palette_modal(), Some(modal), "{modal:?}");
+            assert_eq!(app.palette_owner(modal).build_info().input, "");
+
+            app.modifiers = ModifiersState::CONTROL | ModifiersState::ALT;
+            assert!(app.handle_palette_modal_key(&Key::Character("k".into())));
+            assert_eq!(app.open_palette_modal(), None, "{modal:?}");
         }
     }
 

@@ -16,6 +16,9 @@ Press `Ctrl+Shift+F` to open the find box, then type. Matches are highlighted as
 | `Alt+F` | Toggle filter mode |
 | `Left`, `Right`, `Home`, `End`, `Backspace`, `Delete` | Edit the query; add `Ctrl` to `Left`, `Right`, `Backspace`, or `Delete` to move or delete by word |
 | `Ctrl+Shift+V` | Paste into the query |
+| `Ctrl+Shift+F` | Close the box and clear the highlights |
+
+Application shortcuts such as `Ctrl+Tab` or `Ctrl+Shift+Up` still work while the find box is open. Any other key held with `Ctrl`, `Alt`, or `Super` does nothing, so it never types into the query or reaches the program; characters typed alone, with `Shift`, or with `AltGr` go into the query.
 
 The same toggles, previous and next buttons, and a close button are on the find bar, so you can also use them with the mouse. After you press `Enter`, the bar stays visible with its buttons while the highlights remain; click its close button to clear them, or click the query to edit it again.
 
@@ -27,9 +30,9 @@ Filter mode hides every line that doesn't match, so you see only the matching li
 
 ## Keyboard copy mode
 
-Copy mode puts a cursor in the terminal that you move with the keyboard, so you can select and copy anything on screen or in the scrollback without the mouse. Keys you press in copy mode never reach the program.
+Copy mode puts a cursor in the terminal that you move with the keyboard, so you can select and copy anything on screen or in the scrollback without the mouse. Keys you press in copy mode never reach the program. Application shortcuts still work, except Paste, which does nothing in copy mode; Copy (`Ctrl+Shift+C`) copies the copy-mode selection. A copy-mode key matches only with exactly the modifiers listed below, so `Ctrl+Shift+F` opens the find box even with Emacs keys, where `Ctrl+F` moves right.
 
-Press `Ctrl+Shift+X` to start. The cursor starts at the terminal's cursor, or at the bottom-left of the view if you've scrolled back, and a status line lists the main keys. Press `Escape` to leave copy mode; clicking anywhere in the window also leaves it.
+Press `Ctrl+Shift+X` to start. The cursor starts at the terminal's cursor, or at the bottom-left of the view if you've scrolled back, and a status line lists the main keys. Press `Escape` or `Ctrl+Shift+X` to leave copy mode; clicking anywhere in the window also leaves it.
 
 ### Choose vi or Emacs keys
 
