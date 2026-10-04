@@ -208,7 +208,7 @@ Snapshot DECCKM/DECKPAM from `active_terminal()` immediately before encoding, th
 
 Copy mode is bound to the focused tab/pane identity at entry. Mouse focus changes cancel it, resize tracks its cursor/anchor through a grid-bound resize transaction, and its selection is synchronized only through `focused_terminal_mut()`. Quick select scans the visible focused grid and must not create a second text model.
 
-Mouse, focus, alternate-scroll, and paste reports snapshot mode from the same focused terminal that receives the bytes. Protocol writes bypass editable-line alias/completion handling. Shift is the explicit native mouse bypass.
+Mouse, focus, alternate-scroll, and paste reports snapshot mode from the terminal that receives the bytes (the focused one, or the hovered pane for the wheel). Protocol writes bypass editable-line alias/completion handling. Shift is the explicit native mouse bypass.
 
 ### Rendering vs Input Visibility
 
