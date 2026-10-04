@@ -48,7 +48,7 @@ depends=(
   'wayland'
   'zlib'
 )
-makedepends=('cargo' 'git' 'ncurses' 'pkgconf')
+makedepends=('cargo' 'git' 'ncurses' 'pkgconf' 'python')
 optdepends=(
   'vulkan-driver: Vulkan rendering (vulkan-radeon, vulkan-intel, nvidia-utils, or vulkan-swrast for the CPU fallback)'
   'mesa: OpenGL backend and llvmpipe software rendering'
@@ -85,24 +85,14 @@ check() {
     --workspace --locked
 }
 
+# The same install tree the tarball and .deb ship, staged by the repository's
+# script and installed with its install.sh.
 package() {
   cd "${srcdir}/${_pkgname}"
 
-  install -Dm755 "${srcdir}/target/release/termeric" \
-    "${pkgdir}/usr/bin/termeric"
-  install -Dm644 -t "${pkgdir}/usr/share/applications" \
-    assets/org.termeric.Termeric.desktop \
-    assets/org.termeric.Termeric.QuickAccess.desktop
-  local icon
-  for icon in assets/icons/hicolor/*/apps/org.termeric.Termeric.png; do
-    install -Dm644 "${icon}" "${pkgdir}/usr/share/icons/${icon#assets/icons/}"
-  done
-  install -Dm644 LICENSE \
-    "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
-  install -Dm644 termeric/THIRD_PARTY_NOTICES.md -t \
-    "${pkgdir}/usr/share/doc/termeric"
-
-  install -d "${pkgdir}/usr/share/terminfo"
-  tic -x -o "${pkgdir}/usr/share/terminfo" \
-    assets/terminfo/xterm-termeric.terminfo
+  rm -rf "${srcdir}/install-tree"
+  python scripts/stage_install_tree.py \
+    --binary "${srcdir}/target/release/termeric" --out "${srcdir}/install-tree"
+  sh "${srcdir}/install-tree/install.sh" --prefix /usr --destdir "${pkgdir}"
+  install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
 }

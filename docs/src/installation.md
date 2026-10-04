@@ -12,7 +12,7 @@ Each release on the [GitHub releases page](https://github.com/Tjemmmic/termeric/
 sudo apt install ./termeric_*_amd64.deb
 ```
 
-The package installs the `termeric` command, the desktop entry and icons (so Termeric appears in your application menu), and the `xterm-termeric` terminfo entry. It recommends `mesa-vulkan-drivers`, which provides the software renderer used when no GPU is available.
+The package installs the `termeric` command, the desktop entry and icons (so Termeric appears in your application menu), the `xterm-termeric` terminfo entry, the `termeric(1)` manual page, and Bash, Zsh, and Fish completions. It recommends `mesa-vulkan-drivers`, which provides the software renderer used when no GPU is available.
 
 To upgrade, download the newer `.deb` and install it with the same command. To uninstall:
 
@@ -31,7 +31,7 @@ cd termeric/packaging/arch
 makepkg -si
 ```
 
-`makepkg` fetches the latest source from GitHub, builds and tests it, and installs it as the `termeric-git` package, with the desktop entry, icons, and the `xterm-termeric` terminfo entry. It also needs a Vulkan driver for your GPU (`vulkan-radeon`, `vulkan-intel`, or `nvidia-utils`) and `mesa` for the OpenGL backend and the software fallback; these are optional dependencies, so install them if your system doesn't already have them.
+`makepkg` fetches the latest source from GitHub, builds and tests it, and installs it as the `termeric-git` package, with the desktop entry, icons, the `xterm-termeric` terminfo entry, the manual page, and shell completions. It also needs a Vulkan driver for your GPU (`vulkan-radeon`, `vulkan-intel`, or `nvidia-utils`) and `mesa` for the OpenGL backend and the software fallback; these are optional dependencies, so install them if your system doesn't already have them.
 
 To upgrade, run `makepkg -si` in `packaging/arch` again; it builds the newest commit on the main branch. Uninstall with `sudo pacman -R termeric-git`.
 
@@ -64,35 +64,22 @@ cargo build --release --locked
 
 The finished program is `target/release/termeric`. You can run it straight from there, but installing it as described below gives you a menu entry, the right icon, and full terminal capabilities.
 
-### Install system-wide
+### Install
 
-From the `termeric` checkout, install the program, desktop entry, icons, and terminfo entry under `/usr/local`:
-
-```bash
-sudo install -Dm755 target/release/termeric /usr/local/bin/termeric
-sudo install -Dm644 -t /usr/local/share/applications assets/org.termeric.Termeric*.desktop
-for icon in assets/icons/hicolor/*/apps/org.termeric.Termeric.png; do
-  sudo install -Dm644 "$icon" "/usr/local/share/icons/${icon#assets/icons/}"
-done
-sudo tic -x -o /usr/local/share/terminfo assets/terminfo/xterm-termeric.terminfo
-```
-
-### Install for your user only
-
-To install without root, put everything under your home directory. The desktop entry is rewritten to point at the program's full path, because desktop launchers don't always search `~/.local/bin`:
+From the `termeric` checkout, stage the install tree (the program, desktop entries, icons, AppStream metadata, terminfo entry, manual page, shell completions, and documentation), then install it with the `install.sh` it contains. For your user only, under `~/.local`:
 
 ```bash
-install -Dm755 target/release/termeric "$HOME/.local/bin/termeric"
-for icon in assets/icons/hicolor/*/apps/org.termeric.Termeric.png; do
-  install -Dm644 "$icon" "$HOME/.local/share/icons/${icon#assets/icons/}"
-done
-mkdir -p "$HOME/.local/share/applications"
-for entry in assets/org.termeric.Termeric*.desktop; do
-  sed "s|^Exec=termeric|Exec=$HOME/.local/bin/termeric|" "$entry" \
-    > "$HOME/.local/share/applications/${entry#assets/}"
-done
-tic -x -o "$HOME/.terminfo" assets/terminfo/xterm-termeric.terminfo
+python3 scripts/stage_install_tree.py --binary target/release/termeric --out target/install-tree
+target/install-tree/install.sh
 ```
+
+Or system-wide, under `/usr/local`:
+
+```bash
+sudo target/install-tree/install.sh --prefix /usr/local
+```
+
+Outside `/usr`, `install.sh` writes the program's full path into the desktop entries, because desktop launchers don't always search `~/.local/bin`. It records what it installed in `PREFIX/lib/termeric/installed-files`, and tells you if the program's folder isn't on your `PATH` or Zsh needs to be told where the completions are.
 
 ### Why the desktop entry and terminfo matter
 
@@ -101,28 +88,23 @@ tic -x -o "$HOME/.terminfo" assets/terminfo/xterm-termeric.terminfo
 
 ### Upgrade a source build
 
-Pull the latest changes, rebuild, and repeat the install commands you used:
+Pull the latest changes, rebuild, and stage and install again with the same `--prefix`. `install.sh` removes the previous installation's files first:
 
 ```bash
 git pull
 cargo build --release --locked
+rm -rf target/install-tree
+python3 scripts/stage_install_tree.py --binary target/release/termeric --out target/install-tree
+target/install-tree/install.sh
 ```
 
 ### Uninstall a source build
 
-For a system-wide install:
+Run `install.sh` with `--uninstall` and the prefix you installed to. It removes exactly the files it recorded:
 
 ```bash
-sudo rm /usr/local/bin/termeric /usr/local/share/applications/org.termeric.Termeric*.desktop
-sudo rm /usr/local/share/icons/hicolor/*/apps/org.termeric.Termeric.png
-sudo rm /usr/local/share/terminfo/x/xterm-termeric
-```
-
-For a per-user install:
-
-```bash
-rm ~/.local/bin/termeric ~/.local/share/applications/org.termeric.Termeric*.desktop
-rm ~/.local/share/icons/hicolor/*/apps/org.termeric.Termeric.png ~/.terminfo/x/xterm-termeric
+target/install-tree/install.sh --uninstall
+sudo target/install-tree/install.sh --uninstall --prefix /usr/local
 ```
 
 ## After an upgrade

@@ -114,18 +114,11 @@ depends = "$auto, fontconfig-config, libegl1, libvulkan1, libwayland-client0, li
 recommends = "mesa-vulkan-drivers"
 section = "utils"
 priority = "optional"
+# The install tree from scripts/stage_install_tree.py, staged before
+# `cargo deb --no-build` (see PACKAGING.md), so the .deb ships what every other
+# package ships. Paths are relative to termeric/, so the tree is staged in the
+# workspace's target/install-tree whatever CARGO_TARGET_DIR says.
 assets = [
-    ["target/release/termeric", "usr/bin/", "755"],
-    ["../assets/org.termeric.Termeric.desktop", "usr/share/applications/", "644"],
-    ["../assets/org.termeric.Termeric.QuickAccess.desktop", "usr/share/applications/", "644"],
-    ["../assets/icons/hicolor/16x16/apps/org.termeric.Termeric.png", "usr/share/icons/hicolor/16x16/apps/", "644"],
-    ["../assets/icons/hicolor/24x24/apps/org.termeric.Termeric.png", "usr/share/icons/hicolor/24x24/apps/", "644"],
-    ["../assets/icons/hicolor/32x32/apps/org.termeric.Termeric.png", "usr/share/icons/hicolor/32x32/apps/", "644"],
-    ["../assets/icons/hicolor/48x48/apps/org.termeric.Termeric.png", "usr/share/icons/hicolor/48x48/apps/", "644"],
-    ["../assets/icons/hicolor/64x64/apps/org.termeric.Termeric.png", "usr/share/icons/hicolor/64x64/apps/", "644"],
-    ["../assets/icons/hicolor/128x128/apps/org.termeric.Termeric.png", "usr/share/icons/hicolor/128x128/apps/", "644"],
-    ["../assets/icons/hicolor/256x256/apps/org.termeric.Termeric.png", "usr/share/icons/hicolor/256x256/apps/", "644"],
-    ["../assets/icons/hicolor/512x512/apps/org.termeric.Termeric.png", "usr/share/icons/hicolor/512x512/apps/", "644"],
-    ["../assets/terminfo/x/xterm-termeric", "usr/share/terminfo/x/", "644"],
-    ["THIRD_PARTY_NOTICES.md", "usr/share/doc/termeric/", "644"],
+    ["../target/install-tree/bin/termeric", "usr/bin/", "755"],
+    ["../target/install-tree/share/**/*", "usr/share/", "644"],
 ]

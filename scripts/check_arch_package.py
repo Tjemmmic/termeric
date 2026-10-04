@@ -19,8 +19,6 @@ import tempfile
 if __package__:
     from scripts.check_debian_package import (
         CARGO_LOCK,
-        DESKTOP_ENTRIES,
-        ICON_FILES,
         CheckError,
         parse_os_release,
         require_tool,
@@ -29,11 +27,10 @@ if __package__:
         validate_icons,
         validate_notice,
     )
+    from scripts.stage_install_tree import manifest
 else:
     from check_debian_package import (
         CARGO_LOCK,
-        DESKTOP_ENTRIES,
-        ICON_FILES,
         CheckError,
         parse_os_release,
         require_tool,
@@ -42,18 +39,16 @@ else:
         validate_icons,
         validate_notice,
     )
+    from stage_install_tree import manifest
 
 
 PACKAGE_NAME = "termeric-git"
 CONFLICTING_PACKAGE_NAME = "termeric"
 TERMINFO_NAME = "xterm-termeric"
+# The staged install tree under /usr, and the license where Arch keeps it.
 EXPECTED_FILES = {
-    "usr/bin/termeric": 0o755,
-    **{path: 0o644 for path in DESKTOP_ENTRIES},
-    **{path: 0o644 for path in ICON_FILES},
-    "usr/share/terminfo/x/xterm-termeric": 0o644,
+    **{f"usr/{path}": mode for path, mode in manifest().items()},
     "usr/share/licenses/termeric-git/LICENSE": 0o644,
-    "usr/share/doc/termeric/THIRD_PARTY_NOTICES.md": 0o644,
 }
 METADATA_FILES = {".BUILDINFO", ".MTREE", ".PKGINFO"}
 # The depends array of packaging/arch/PKGBUILD. Most are libraries the binary

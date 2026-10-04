@@ -14,6 +14,7 @@ from scripts.check_debian_package import (
     EXPECTED_FILES,
     ICON_FILES,
     RUNTIME_DEPENDENCIES,
+    debian_path,
     locked_libgit2_version,
     parse_desktop_entry,
     parse_os_release,
@@ -187,6 +188,12 @@ class DebianPackageCheckTests(unittest.TestCase):
         values["Depends"] = "$auto, " + ", ".join(sorted(RUNTIME_DEPENDENCIES))
         with self.assertRaisesRegex(CheckError, "not populated by dpkg-shlibdeps"):
             validate_package_metadata(Path("termeric.deb"))
+
+    def test_expected_files_are_the_staged_tree_with_compressed_manual_pages(self):
+        self.assertEqual(debian_path("bin/termeric"), "usr/bin/termeric")
+        self.assertEqual(debian_path("share/man/man1/termeric.1"), "usr/share/man/man1/termeric.1.gz")
+        self.assertIn("usr/share/man/man1/termeric.1.gz", EXPECTED_FILES)
+        self.assertIn("usr/share/metainfo/org.termeric.Termeric.metainfo.xml", EXPECTED_FILES)
 
     def test_cargo_deb_depends_on_the_runtime_loaded_libraries(self):
         metadata = tomllib.loads((ROOT / "termeric/Cargo.toml").read_text(encoding="utf-8"))

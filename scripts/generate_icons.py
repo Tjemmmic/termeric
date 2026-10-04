@@ -19,7 +19,7 @@ MASTER = ROOT / "assets" / "icons" / "termeric.png"
 HICOLOR = ROOT / "assets" / "icons" / "hicolor"
 # Icons are named after the app ID so the desktop entry and windows find them.
 APP_ID = "org.termeric.Termeric"
-# Keep in sync with ICON_SIZES in check_debian_package.py.
+# Keep in sync with ICON_SIZES in stage_install_tree.py.
 SIZES = (16, 24, 32, 48, 64, 128, 256, 512)
 
 
