@@ -1097,8 +1097,7 @@ fn create_staged_directory(target: &std::path::Path) -> anyhow::Result<StagedDir
 }
 
 fn sync_directory(path: &std::path::Path) -> anyhow::Result<()> {
-    File::open(path)
-        .and_then(|directory| directory.sync_all())
+    crate::safe_fs::sync_directory(path)
         .with_context(|| format!("sync staged upload directory {}", path.display()))
 }
 
@@ -1106,28 +1105,8 @@ fn publish_staged_directory(
     staging: &mut StagedDirectory,
     target: &std::path::Path,
 ) -> anyhow::Result<()> {
-    use std::ffi::CString;
-    use std::os::unix::ffi::OsStrExt;
-
-    let source = CString::new(staging.path.as_os_str().as_bytes())
-        .context("staged upload path contains NUL")?;
-    let destination =
-        CString::new(target.as_os_str().as_bytes()).context("upload destination contains NUL")?;
-    // SAFETY: both arguments are NUL-terminated C strings. RENAME_NOREPLACE
-    // provides the required atomic publish-without-overwrite operation.
-    let result = unsafe {
-        libc::renameat2(
-            libc::AT_FDCWD,
-            source.as_ptr(),
-            libc::AT_FDCWD,
-            destination.as_ptr(),
-            libc::RENAME_NOREPLACE,
-        )
-    };
-    if result != 0 {
-        return Err(std::io::Error::last_os_error())
-            .context("publish directory upload without overwrite");
-    }
+    crate::safe_fs::rename_no_replace(&staging.path, target)
+        .context("publish directory upload without overwrite")?;
     staging.remove_on_drop = false;
     if let Some(parent) = target.parent() {
         // Publication has already succeeded and cannot be rolled back safely.

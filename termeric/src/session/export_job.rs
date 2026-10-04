@@ -14,6 +14,12 @@ use super::transcript::PendingTranscriptFlush;
 pub(crate) const MAX_SCROLLBACK_BYTES: usize = 32 * 1024 * 1024;
 /// How long the transcript writer may take to flush what it holds.
 const FLUSH_TIMEOUT: Duration = Duration::from_secs(5);
+/// Every export is staged in a hidden folder named this plus random
+/// letters and digits, and published without the leading dot.
+const STAGING_PREFIX: &str = ".transcript-export-";
+/// A staging folder this old was left by an export that never finished
+/// (Termeric stopped mid-export); a live one lasts seconds.
+const STALE_STAGING_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 
 pub(crate) enum ExportSource {
     Transcript(PendingTranscriptFlush),
@@ -62,10 +68,11 @@ impl ExportJob {
 
 fn export(source: ExportSource, base: &Path) -> io::Result<CompletedExport> {
     fs::create_dir_all(base)?;
+    remove_stale_staging(base);
     // A hidden private directory until the export is complete; publishing
     // renames it, so a visible export folder is always whole.
     let mut builder = tempfile::Builder::new();
-    builder.prefix(".transcript-export-");
+    builder.prefix(STAGING_PREFIX);
     {
         use std::os::unix::fs::PermissionsExt;
         builder.permissions(fs::Permissions::from_mode(0o700));
@@ -107,14 +114,63 @@ fn export(source: ExportSource, base: &Path) -> io::Result<CompletedExport> {
         .ok_or_else(|| io::Error::other("export staging directory has no name"))?
         .to_owned();
     let directory = base.join(name);
-    // A rename onto an existing directory with files in it fails, so an
-    // export never replaces another.
-    fs::rename(staging.path(), &directory)?;
+    // Never replaces anything already there, so an export never replaces
+    // another.
+    crate::safe_fs::rename_no_replace(staging.path(), &directory)?;
     let _ = staging.keep();
+    // The export is already published, so failing here would wrongly say it
+    // was not. Directory durability is reported, not returned.
+    if let Err(error) = crate::safe_fs::sync_directory(base) {
+        log::warn!(
+            "{} was exported, but its directory could not be synced: {error}",
+            directory.display()
+        );
+    }
     Ok(CompletedExport {
         markdown: directory.join("transcript.md"),
         includes_jsonl,
     })
+}
+
+/// Remove the staging folders that exports cut short left in `base`: only
+/// our own real directories named like a staging folder, and only once they
+/// are too old to belong to an export still running in another window.
+fn remove_stale_staging(base: &Path) {
+    let Ok(entries) = fs::read_dir(base) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if !is_staging_name(&entry.file_name()) {
+            continue;
+        }
+        let path = entry.path();
+        // The entry itself, never what a symlink points to.
+        let Ok(metadata) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        use std::os::unix::fs::MetadataExt;
+        let stale = metadata.file_type().is_dir()
+            && metadata.uid() == crate::domain::paths::effective_uid()
+            && metadata
+                .modified()
+                .ok()
+                .and_then(|modified| modified.elapsed().ok())
+                .is_some_and(|age| age >= STALE_STAGING_AGE);
+        if stale && let Err(error) = fs::remove_dir_all(&path) {
+            log::warn!(
+                "could not remove an unfinished export at {}: {error}",
+                path.display()
+            );
+        }
+    }
+}
+
+fn is_staging_name(name: &std::ffi::OsStr) -> bool {
+    name.to_str()
+        .and_then(|name| name.strip_prefix(STAGING_PREFIX))
+        .is_some_and(|suffix| {
+            !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        })
 }
 
 fn create_private(path: &Path) -> io::Result<File> {
@@ -280,6 +336,46 @@ mod tests {
                 .unwrap()
                 .contains("first 界")
         );
+    }
+
+    #[test]
+    fn exports_clean_up_only_old_staging_folders_of_their_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        let age = |path: &Path, age: Duration| {
+            let modified = std::time::SystemTime::now() - age;
+            File::open(path).unwrap().set_modified(modified).unwrap();
+        };
+        let stale = base.join(".transcript-export-Ab12cD");
+        fs::create_dir(&stale).unwrap();
+        fs::write(stale.join("transcript.md"), "cut short").unwrap();
+        age(&stale, STALE_STAGING_AGE + Duration::from_secs(60));
+        let running = base.join(".transcript-export-Zz9Yy8");
+        fs::create_dir(&running).unwrap();
+        let unrelated = base.join(".transcript-export-not.ours");
+        fs::create_dir(&unrelated).unwrap();
+        age(&unrelated, STALE_STAGING_AGE * 2);
+        let published = base.join("transcript-export-Qq1Ww2");
+        fs::create_dir(&published).unwrap();
+        age(&published, STALE_STAGING_AGE * 2);
+        let target = dir.path().join("elsewhere");
+        fs::create_dir(&target).unwrap();
+        fs::write(target.join("kept"), "kept").unwrap();
+        age(&target, STALE_STAGING_AGE * 2);
+        let link = base.join(".transcript-export-L1nk00");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let file = base.join(".transcript-export-F1le00");
+        fs::write(&file, "kept").unwrap();
+        age(&file, STALE_STAGING_AGE * 2);
+
+        let exported = export(ExportSource::Scrollback("new".into()), base).unwrap();
+
+        assert!(!stale.exists());
+        for kept in [&running, &unrelated, &published, &link, &file] {
+            assert!(fs::symlink_metadata(kept).is_ok(), "{}", kept.display());
+        }
+        assert_eq!(fs::read_to_string(target.join("kept")).unwrap(), "kept");
+        assert!(exported.markdown.exists());
     }
 
     #[test]

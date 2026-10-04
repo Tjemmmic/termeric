@@ -1,6 +1,7 @@
 //! Hardened access to Termeric's own files: reads never follow a symlink,
-//! block on a FIFO, or read past a limit, and writes replace a file
-//! atomically through a private staging file beside it.
+//! block on a FIFO, or read past a limit, writes replace a file atomically
+//! through a private staging file beside it, and publishing a staged entry
+//! never replaces another.
 
 use std::fs::{self, OpenOptions};
 use std::io::{self, BufWriter, Read, Write};
@@ -87,13 +88,43 @@ pub(crate) fn atomic_replace<T>(
     staging.persist(path).map_err(|error| error.error)?;
     // The new file is already in place, so failing here would wrongly say
     // the old one survived. Directory durability is reported, not returned.
-    if let Err(error) = fs::File::open(directory).and_then(|file| file.sync_all()) {
+    if let Err(error) = sync_directory(directory) {
         log::warn!(
             "{} was replaced, but its directory could not be synced: {error}",
             path.display()
         );
     }
     Ok(result)
+}
+
+/// Rename `from` to `to` unless something, even an empty directory, is
+/// already at `to`; that fails with [`io::ErrorKind::AlreadyExists`].
+pub(crate) fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let from = CString::new(from.as_os_str().as_bytes())?;
+    let to = CString::new(to.as_os_str().as_bytes())?;
+    // SAFETY: both arguments are NUL-terminated C strings that outlive the
+    // call. RENAME_NOREPLACE makes the no-overwrite check part of the rename.
+    let result = unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            from.as_ptr(),
+            libc::AT_FDCWD,
+            to.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if result != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Sync `directory` itself, so the entries created, renamed, or removed in
+/// it survive a crash.
+pub(crate) fn sync_directory(directory: &Path) -> io::Result<()> {
+    fs::File::open(directory)?.sync_all()
 }
 
 #[cfg(test)]
@@ -260,5 +291,31 @@ mod tests {
         assert!(!rescued, "the read waited for a FIFO writer");
         assert!(result.unwrap_err().to_string().contains("regular file"));
         assert!(path.exists());
+    }
+
+    #[test]
+    fn rename_no_replace_never_replaces_even_an_empty_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let staged = dir.path().join("staged");
+        fs::create_dir(&staged).unwrap();
+        fs::write(staged.join("file"), "staged").unwrap();
+        let empty = dir.path().join("empty");
+        fs::create_dir(&empty).unwrap();
+        let file = dir.path().join("file");
+        fs::write(&file, "existing").unwrap();
+        for occupied in [&empty, &file] {
+            let error = rename_no_replace(&staged, occupied).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        }
+        assert!(staged.join("file").exists());
+        assert_eq!(fs::read_dir(&empty).unwrap().count(), 0);
+        assert_eq!(fs::read_to_string(&file).unwrap(), "existing");
+        let published = dir.path().join("published");
+        rename_no_replace(&staged, &published).unwrap();
+        assert_eq!(
+            fs::read_to_string(published.join("file")).unwrap(),
+            "staged"
+        );
+        assert!(!staged.exists());
     }
 }
