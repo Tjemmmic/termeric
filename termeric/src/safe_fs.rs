@@ -8,6 +8,10 @@ use std::io::{self, BufWriter, Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
+/// How [`atomic_replace`]'s staging files are named: this prefix and a
+/// random suffix. One left behind was interrupted before it was published.
+pub(crate) const STAGING_PREFIX: &str = ".termeric-";
+
 /// The whole of `path` as UTF-8, opened through [`open_regular`] and capped at
 /// `limit` bytes even if the file grows while it is read.
 pub(crate) fn read_text(path: &Path, limit: usize) -> io::Result<String> {
@@ -76,7 +80,7 @@ pub(crate) fn atomic_replace<T>(
         .parent()
         .ok_or_else(|| io::Error::other("replaced file has no parent directory"))?;
     let mut staging = tempfile::Builder::new()
-        .prefix(".termeric-")
+        .prefix(STAGING_PREFIX)
         .tempfile_in(directory)?;
     let result = {
         let mut writer = BufWriter::new(staging.as_file_mut());

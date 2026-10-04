@@ -4,6 +4,7 @@ use super::{
 use anyhow::{Context, Result};
 use std::collections::HashSet;
 use std::fs;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 pub const MAX_WORKSPACE_SCROLLBACK_BYTES_PER_PANE: usize = 5 * 1024 * 1024;
@@ -82,6 +83,8 @@ fn save_workspace_to_dir_with_backup(
 ) -> Result<WorkspaceSaveReport> {
     workspace.validate()?;
     ensure_real_directory(dir, true, "workspace")?;
+    let _writing = lock_archive(dir, ArchiveLock::Write)?;
+    remove_interrupted_staging(dir)?;
     let scrollback_dir = dir.join("scrollback");
     ensure_real_directory(&scrollback_dir, true, "workspace scrollback")?;
 
@@ -150,6 +153,8 @@ fn save_workspace_to_dir_with_backup(
 
 pub fn load_workspace(id: &str) -> Result<WorkspaceLoadReport> {
     let dir = workspace_dir(id)?;
+    ensure_real_directory(&dir, false, "workspace")?;
+    let _reading = lock_archive(&dir, ArchiveLock::Read)?;
     load_scrollback(&dir, read_named_workspace_metadata(&dir)?)
 }
 
@@ -374,8 +379,55 @@ pub fn delete_workspace(id: &str) -> Result<()> {
         }
         Err(error) => return Err(error.into()),
     }
+    let _deleting = lock_archive(&dir, ArchiveLock::Write)?;
     fs::remove_dir_all(&dir)
         .with_context(|| format!("delete workspace directory {}", dir.display()))
+}
+
+#[derive(Clone, Copy)]
+enum ArchiveLock {
+    Read,
+    Write,
+}
+
+/// Lock the archive in `dir` until the returned handle drops: shared to read
+/// it, exclusive to write or delete it. Termeric processes share the data
+/// directory, and two can save one archive (a closed tab or workspace both
+/// reopened), so without it one save's cleanup could delete scrollback or a
+/// staging file another is about to publish, and a load could read
+/// metadata whose scrollback a save is replacing.
+fn lock_archive(dir: &Path, lock: ArchiveLock) -> Result<fs::File> {
+    let directory = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+        .open(dir)
+        .with_context(|| format!("open workspace directory {}", dir.display()))?;
+    match lock {
+        ArchiveLock::Read => directory.lock_shared(),
+        ArchiveLock::Write => directory.lock(),
+    }
+    .with_context(|| format!("lock workspace directory {}", dir.display()))?;
+    Ok(directory)
+}
+
+/// Delete the staging files an interrupted metadata write left in `dir`.
+/// Every writer holds the archive's write lock, which the caller holds, so
+/// none of them is still being written.
+fn remove_interrupted_staging(dir: &Path) -> Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let staging = entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.starts_with(crate::safe_fs::STAGING_PREFIX));
+        // A link is removed itself, never followed.
+        if staging && !entry.file_type()?.is_dir() {
+            fs::remove_file(entry.path()).with_context(|| {
+                format!("remove interrupted staging file {}", entry.path().display())
+            })?;
+        }
+    }
+    Ok(())
 }
 
 fn parse_workspace(path: &Path) -> Result<WorkspaceSnapshot> {
@@ -537,6 +589,9 @@ fn read_bounded_scrollback(path: &Path, limit: usize) -> Result<String> {
     Ok(crate::safe_fs::read_text(path, limit)?)
 }
 
+/// Delete every file in the scrollback folder that `workspace` does not name,
+/// including staging files left by an interrupted write. The caller holds
+/// the archive's write lock, so no other save is publishing one.
 fn cleanup_unreferenced_scrollback(workspace: &WorkspaceSnapshot, directory: &Path) -> Result<()> {
     let referenced: HashSet<&str> = workspace
         .tabs
@@ -788,6 +843,73 @@ mod tests {
             loaded.workspace.tabs[0].panes[0].scrollback_lines,
             ["history-0"]
         );
+    }
+
+    #[test]
+    fn a_save_cleans_staging_files_an_interrupted_write_left() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut workspace = sample_workspace();
+        save_workspace_to_dir(&mut workspace, temp.path()).unwrap();
+        let outside = temp.path().join("outside");
+        fs::write(&outside, "keep").unwrap();
+        let leftovers = [
+            temp.path().join(".termeric-interrupted"),
+            temp.path().join("scrollback/.termeric-interrupted"),
+        ];
+        for leftover in &leftovers {
+            fs::write(leftover, "partial").unwrap();
+        }
+        std::os::unix::fs::symlink(&outside, temp.path().join(".termeric-linked")).unwrap();
+
+        save_workspace_to_dir(&mut workspace, temp.path()).unwrap();
+        for leftover in leftovers
+            .iter()
+            .chain([&temp.path().join(".termeric-linked")])
+        {
+            assert!(
+                fs::symlink_metadata(leftover).is_err(),
+                "{}",
+                leftover.display()
+            );
+        }
+        assert_eq!(fs::read_to_string(&outside).unwrap(), "keep");
+        assert!(
+            load_workspace_from_dir(temp.path())
+                .unwrap()
+                .warnings
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_save_waits_while_another_holds_the_archive() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("workspace-locked");
+        let mut workspace = sample_workspace();
+        save_workspace_to_dir(&mut workspace, &dir).unwrap();
+
+        // Another process's save or load holds the archive.
+        let held = lock_archive(&dir, ArchiveLock::Read).unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let saving = {
+            let dir = dir.clone();
+            std::thread::spawn(move || {
+                let result = save_workspace_to_dir(&mut workspace, &dir);
+                sender.send(()).unwrap();
+                result
+            })
+        };
+        assert!(
+            receiver
+                .recv_timeout(std::time::Duration::from_millis(200))
+                .is_err(),
+            "the save wrote the archive while it was locked"
+        );
+        drop(held);
+        receiver
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap();
+        saving.join().unwrap().unwrap();
     }
 
     #[test]
