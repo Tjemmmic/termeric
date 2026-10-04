@@ -2,9 +2,11 @@
 //! workspaces. They preserve organization and relaunch metadata, but never
 //! file descriptors or live processes.
 
+mod command;
 mod model;
 mod storage;
 
+pub use command::*;
 pub use model::*;
 pub use storage::*;
 

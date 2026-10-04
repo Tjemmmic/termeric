@@ -112,6 +112,10 @@ fn main() -> Result<std::process::ExitCode> {
             }
             return Ok(std::process::ExitCode::SUCCESS);
         }
+        cli::ParseOutcome::Workspace(command) => {
+            println!("{}", workspace::execute(command)?);
+            return Ok(std::process::ExitCode::SUCCESS);
+        }
         cli::ParseOutcome::SerialBridge(options) => {
             serial::run_bridge(options)?;
             return Ok(std::process::ExitCode::SUCCESS);

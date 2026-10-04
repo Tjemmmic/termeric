@@ -40,7 +40,7 @@ termeric --profile claude-code:review
 | `-- PROGRAM ARG...` | Run `PROGRAM` with every remaining argument passed exactly, even ones starting with `-`. Nothing is interpreted by a shell. |
 | `--terminal-profile NAME` | Start the current tab from the terminal profile `NAME` (see [Profiles](profiles.md)). |
 | `--profile AGENT:PROFILE` | Start a [coding agent](agents.md) with one of its profiles, such as `codex:review`. |
-| `--workspace ID` | Restore one saved [workspace](workspaces-and-sessions.md), by its ID (`workspace-…`), into this window. It can't be combined with tab, directory, title, command, profile, or split options in the same window. |
+| `--workspace ID` | Restore one saved [workspace](workspaces-and-sessions.md), by its ID (`workspace-…`), into this window; [`termeric workspace list`](#termeric-workspace-list) prints the IDs. It can't be combined with tab, directory, title, command, profile, or split options in the same window. |
 | `--geometry WIDTHxHEIGHT` | Set the window's initial size in physical pixels, from 160x120 to 16384x16384. |
 | `--class NAME`, `--app-id NAME` | Set the window's X11 class and Wayland application ID, for window manager rules. |
 | `--renderer auto\|gpu\|software` | Choose the renderer for the whole process, including windows opened later: `auto` tries the GPU and falls back to software rendering; `gpu` and `software` insist on one. |
@@ -79,10 +79,19 @@ Tabs can't move between separate processes.
 | `termeric control …` | Inspect and control running Termeric windows from scripts. | [Controlling a running Termeric](control.md) |
 | `termeric domain …` | Manage live domains, shells that keep running after Termeric closes. Experimental. | [Live domains](live-domains.md#command-reference) |
 | `termeric plugin …` | Install and manage plugins. | [Plugins](plugins.md#from-the-command-line) |
+| `termeric workspace list` | List saved workspaces and their IDs. | [Below](#termeric-workspace-list) |
 | `termeric mcp` | Serve Termeric's agent tools to a coding agent over MCP. | [Below](#termeric-mcp) |
 | `termeric agent-event` | Report an agent's status. Run by agent hooks, not by hand. | [Below](#termeric-agent-event) |
 
 `termeric control --help`, `termeric domain --help`, and `termeric plugin --help` list each set's commands in your terminal. Apart from `termeric domain attach`, subcommands never start a Termeric window of their own; `termeric control` acts on a Termeric that is already running.
+
+### `termeric workspace list`
+
+```text
+termeric workspace list [--json]
+```
+
+Lists your saved workspaces, most recently saved first: each one's ID, tab count, when it was last saved, and name. Open one with `termeric --workspace ID`. It reads the saved files directly, so it works whether or not Termeric is running. An archive that can't be read is listed with the reason, so you can find and delete it. `--json` prints an array of objects with `id`, `name`, `tabs`, `panes`, `updated_at`, and `warning` (`null` unless the archive can't be read).
 
 ### `termeric mcp`
 

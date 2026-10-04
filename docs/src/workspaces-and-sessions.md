@@ -35,7 +35,7 @@ Saving a window restored from an automatic "Last workspace" makes it yours: it t
 
 - The **Workspaces** menu lists your six most recently saved workspaces with their tab counts. The one this window last opened or saved has a check mark. Click one to open it.
 - **Manage Workspaces…** (in the same menu or the command palette) lists every workspace, newest first.
-- From a shell, `termeric --workspace ID` opens a window with that workspace. It can't be combined with tab options such as `--tab`, `--command`, or `--working-directory` for the same window. See [Command line](command-line.md).
+- From a shell, `termeric --workspace ID` opens a window with that workspace, and `termeric workspace list` prints every workspace's ID. `--workspace` can't be combined with tab options such as `--tab`, `--command`, or `--working-directory` for the same window. See [Command line](command-line.md#termeric-workspace-list).
 
 Opening a workspace replaces the tabs in the current window, and the programs in those tabs end. What happens to the window first:
 

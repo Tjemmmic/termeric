@@ -3,6 +3,7 @@
 mod control_args;
 mod domain_args;
 mod plugin_args;
+mod workspace_args;
 
 use crate::panes::SplitDirection;
 use anyhow::Context;
@@ -67,6 +68,7 @@ pub enum ParseOutcome {
     Control(crate::control::ControlCommand),
     Domain(crate::domain::DomainCommand),
     Plugin(crate::plugin::runtime::PluginAdminCommand),
+    Workspace(crate::workspace::WorkspaceCommand),
     SerialBridge(crate::serial::BridgeOptions),
     /// Serve MCP on standard I/O for the named (or discovered) process, as
     /// a supervisor's server when it carries that supervisor's token.
@@ -293,6 +295,9 @@ fn parse_collected(
     }
     if arguments.first().and_then(|argument| argument.to_str()) == Some("mcp") {
         return parse_mcp(&arguments[1..]);
+    }
+    if arguments.first().and_then(|argument| argument.to_str()) == Some("workspace") {
+        return parse_workspace(&arguments[1..]);
     }
     let mut plan = LaunchPlan::default();
     let mut index = 0usize;
@@ -589,6 +594,7 @@ General:\n  \
   domain SUBCOMMAND            Manage persistent local terminal domains\n  \
   control SUBCOMMAND           Inspect or explicitly control a running GUI\n  \
   plugin SUBCOMMAND            Manage declarative third-party plugins\n  \
+  workspace list [--json]      List saved workspaces and their IDs\n  \
   mcp [--process PID]          Serve MCP tools for Termeric's agents on stdio\n  \
   -h, --help                   Print this help\n  \
   -V, --version                Print the version",
@@ -651,6 +657,15 @@ fn parse_plugin(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
     Ok(
         match parse_subcommand::<plugin_args::PluginCli>(arguments)? {
             Ok(plugin) => ParseOutcome::Plugin(plugin.into_command()?),
+            Err(help) => ParseOutcome::Print(help),
+        },
+    )
+}
+
+fn parse_workspace(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
+    Ok(
+        match parse_subcommand::<workspace_args::WorkspaceCli>(arguments)? {
+            Ok(workspace) => ParseOutcome::Workspace(workspace.into_command()),
             Err(help) => ParseOutcome::Print(help),
         },
     )
@@ -1670,6 +1685,26 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn workspace_list_parses_offline_and_rejects_strays() {
+        let parsed = |arguments: &[&str]| parse(arguments.iter().map(OsString::from));
+        use crate::workspace::WorkspaceCommand;
+        assert_eq!(
+            parsed(&["workspace", "list"]).unwrap(),
+            ParseOutcome::Workspace(WorkspaceCommand::List { json: false })
+        );
+        assert_eq!(
+            parsed(&["workspace", "list", "--json"]).unwrap(),
+            ParseOutcome::Workspace(WorkspaceCommand::List { json: true })
+        );
+        assert!(matches!(
+            parsed(&["workspace"]).unwrap(),
+            ParseOutcome::Print(help) if help.contains("list")
+        ));
+        assert!(parsed(&["workspace", "list", "extra"]).is_err());
+        assert!(parsed(&["workspace", "open", "id"]).is_err());
     }
 
     #[test]
