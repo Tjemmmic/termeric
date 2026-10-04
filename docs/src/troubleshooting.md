@@ -95,7 +95,7 @@ To make every program in Termeric use `xterm-256color`, start it with `TERMERIC_
 
 If `config.toml` has a mistake, including a misspelled or unknown key, Termeric still starts, using default settings, and shows a notification with the error and its line. The notification stays until the file loads again. It won't save over the broken file (for example when you pick a theme) until you fix it, so your edits aren't lost. Fix the file and save it; Termeric reloads it automatically.
 
-If you save an invalid change while Termeric is running, it keeps the previous settings and shows why the reload failed. If a custom theme file can't be loaded at startup, Termeric uses the Turmeric theme; if it breaks while Termeric runs, the current theme stays.
+If you save an invalid change while Termeric is running, it keeps the previous settings and shows why the reload failed. If the configured theme can't be loaded at startup, Termeric uses the Turmeric theme; if it breaks while Termeric runs, the current theme stays. Either way your other settings apply, a notice stays until the theme loads, and saving doesn't replace the theme you configured.
 
 To start over, run **Reset Configuration to Defaults** from the command palette. Termeric keeps a copy of your old file beside the new one, named `config.toml.<number>.bak`, and the notice says where it is.
 

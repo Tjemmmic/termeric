@@ -621,3 +621,50 @@ fn a_reload_with_a_typo_keeps_the_settings_and_says_so_until_fixed() {
     assert_eq!(app.config.window.padding, 6);
     assert!(lasting_toasts(&app).is_empty());
 }
+
+#[test]
+fn a_theme_that_does_not_load_stays_configured_until_another_is_chosen() {
+    let original = "[theme]\nname = \"arrowroot\"\npath = \"/nonexistent/arrowroot.toml\"\n";
+    let (_directory, path, mut app) = app_with_config_file(original);
+    assert_eq!(app.theme.meta.name, "Turmeric");
+    assert_eq!(app.config.theme.name, "arrowroot");
+    let problems = lasting_toasts(&app);
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(
+        problems[0].starts_with("Theme could not be loaded"),
+        "{problems:?}"
+    );
+    assert!(!app.config_has_unsaved_changes());
+
+    // Other settings still apply and save; the theme stays as written.
+    app.apply_settings_action(SettingsAction::SetVisualBell(false));
+    assert!(!app.config.bell.visual);
+    app.config.commands.push(crate::config::CustomCommand {
+        name: "logs".into(),
+        command: "journalctl -f".into(),
+        alias: None,
+    });
+    app.save_config().unwrap();
+    let saved = std::fs::read_to_string(&path).unwrap();
+    assert!(saved.starts_with(original), "{saved}");
+    assert_eq!(
+        lasting_toasts(&app).len(),
+        1,
+        "the notice stays, deduplicated"
+    );
+
+    // A cancelled picker puts back the theme that was on screen.
+    app.open_theme_picker();
+    app.command_palette.select_command("dracula");
+    app.sync_theme_preview();
+    app.command_palette.close();
+    app.sync_theme_preview();
+    assert_eq!(app.theme.meta.name, "Turmeric");
+
+    // Choosing a theme, even the one on screen, replaces the configured one.
+    app.commit_theme("turmeric");
+    let saved = Config::load_from(&path).unwrap();
+    assert_eq!(saved.theme.name, "turmeric");
+    assert_eq!(saved.theme.path, None);
+    assert!(lasting_toasts(&app).is_empty());
+}

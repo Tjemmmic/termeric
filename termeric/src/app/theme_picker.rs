@@ -9,10 +9,11 @@ use crate::ui::command_palette::palette::{
     CommandSource, PickKind, RegisteredCommand, theme_display_name,
 };
 
-/// The theme in effect before the picker opened and the one on screen now.
+/// The theme on screen before the picker opened, to restore on cancel, and
+/// the one previewed now.
 pub(super) struct ThemePreview {
-    original_name: String,
-    original_path: Option<PathBuf>,
+    original: Theme,
+    original_source: Option<PathBuf>,
     shown: String,
 }
 
@@ -54,8 +55,8 @@ impl App {
             Some(&current),
         );
         self.theme_preview = Some(ThemePreview {
-            original_name: current.clone(),
-            original_path: self.config.theme.path.clone(),
+            original: self.theme.clone(),
+            original_source: self.active_theme_path.clone(),
             shown: current,
         });
     }
@@ -85,12 +86,7 @@ impl App {
         let Some(preview) = self.theme_preview.take() else {
             return;
         };
-        if preview.shown != preview.original_name
-            && let Ok((theme, source)) =
-                Theme::resolve(&preview.original_name, preview.original_path.as_deref())
-        {
-            self.apply_theme(theme, source);
-        }
+        self.apply_theme(preview.original, preview.original_source);
     }
 
     /// Keep the picked theme and save it to the configuration.
@@ -120,6 +116,7 @@ impl App {
         self.config.theme.name = name.to_string();
         self.config.theme.path = None;
         self.apply_theme(theme, source);
+        self.theme_problem.clear(&mut self.toasts);
         Ok(())
     }
 }

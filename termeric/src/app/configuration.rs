@@ -268,10 +268,10 @@ impl App {
 
     /// Validate and atomically select a new configuration before applying it
     /// to all live subsystems. Invalid reloads leave the previous config live.
+    /// A theme that does not load is not invalid: the theme on screen stays,
+    /// and a notice says why until a configured theme loads.
     pub(super) fn apply_config(&mut self, config: Config) -> std::result::Result<(), String> {
         config.validate().map_err(|error| format!("{error:#}"))?;
-        Theme::resolve(&config.theme.name, config.theme.path.as_deref())
-            .map_err(|error| format!("theme rejected: {error:#}"))?;
         let keyboard_type_changed = config.keyboard.xterm_type != self.config.keyboard.xterm_type;
         if config.commands != self.config.commands {
             // Revoke ambiguous row authority before replacing the inventory or
@@ -348,12 +348,21 @@ impl App {
         self.reset_cursor_blink();
         self.bell.set_config(self.config.bell.clone());
         match Theme::resolve(&self.config.theme.name, self.config.theme.path.as_deref()) {
-            Ok((theme, source)) => self.apply_theme(theme, source),
+            Ok((theme, source)) => {
+                self.apply_theme(theme, source);
+                self.theme_problem.clear(&mut self.toasts);
+            }
             Err(error) => {
-                log::warn!("Theme changed while applying config: {error:#}");
-                self.toasts.warning(format!(
-                    "Theme reload failed; keeping current theme: {error:#}"
-                ));
+                let message = format!(
+                    "Theme could not be loaded; showing {}: {error:#}",
+                    self.theme.meta.name
+                );
+                log::warn!("{message}");
+                self.theme_problem.show(
+                    &mut self.toasts,
+                    crate::ui::toast::ToastSeverity::Warning,
+                    message,
+                );
             }
         }
         if let Some(tabs) = &mut self.tabs {

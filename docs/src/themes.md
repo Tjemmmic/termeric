@@ -60,7 +60,7 @@ Or point at a theme file anywhere on disk:
 path = "/home/me/themes/my-theme.toml"
 ```
 
-When `path` is set it wins over `name`. If a theme cannot be loaded at startup, Termeric uses `turmeric` and shows a notice.
+When `path` is set it wins over `name`. If the configured theme cannot be loaded, Termeric shows `turmeric` (or, when it is already running, keeps the theme on screen) with a notice that stays until a configured theme loads. Your other settings still apply, and saving keeps your theme setting as you wrote it until you choose another theme, so a theme file that is only missing for a while comes back once it is there again.
 
 A program running in the terminal can still change colors for its own terminal with OSC 4, 10, 11, and 12 (see [Terminal compatibility](compatibility.md)). Those changes last until the program resets them and do not affect other tabs.
 

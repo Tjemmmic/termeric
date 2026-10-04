@@ -1152,8 +1152,11 @@ pub struct App {
     /// differs from it.
     saved_config: Option<toml::Table>,
     /// The notice about the configuration file's current problem: it stays
-    /// until the file next loads, or a newer problem replaces it.
-    config_problem_toast: Option<u64>,
+    /// until the file next loads.
+    config_problem: crate::ui::toast::StandingNotice,
+    /// The notice that the configured theme does not load, so another one is
+    /// on screen: it stays until a configured theme loads.
+    theme_problem: crate::ui::toast::StandingNotice,
     /// Last installed-plugin registry mtime for live enable/update/remove.
     last_plugin_registry_mtime: Option<std::time::SystemTime>,
     /// File backing the active custom/explicit theme, when applicable.
@@ -1431,8 +1434,8 @@ impl App {
     }
 
     fn from_config(
-        mut config: Config,
-        mut startup_config_warning: Option<String>,
+        config: Config,
+        startup_config_warning: Option<String>,
         use_system_state: bool,
     ) -> Result<Self> {
         let config_path = Config::config_path();
@@ -1443,19 +1446,12 @@ impl App {
             )
         });
         let cursor_blink_period = (config.cursor.blink_rate as f32 / 1000.0) * 2.0;
+        // A configured theme that does not load stays configured, so a save
+        // never replaces it; turmeric is shown meanwhile, and applying the
+        // configuration below says why.
         let (theme, active_theme_path) =
-            match Theme::resolve(&config.theme.name, config.theme.path.as_deref()) {
-                Ok(resolved) => resolved,
-                Err(error) => {
-                    let warning = format!("Theme could not be loaded; using turmeric: {error:#}");
-                    startup_config_warning = Some(match startup_config_warning {
-                        Some(existing) => format!("{existing}\n{warning}"),
-                        None => warning,
-                    });
-                    config.theme = crate::config::ThemeConfig::default();
-                    (Theme::default(), None)
-                }
-            };
+            Theme::resolve(&config.theme.name, config.theme.path.as_deref())
+                .unwrap_or_else(|_| (Theme::default(), None));
         let runtime_plugin_paths = crate::plugin::runtime::PluginPaths::configured();
         let last_theme_mtime = active_theme_path.as_ref().and_then(|path| {
             std::fs::metadata(path)
@@ -1530,7 +1526,8 @@ impl App {
             last_agent_scan: Instant::now(),
             pending_agent_submits: Vec::new(),
             saved_config: None,
-            config_problem_toast: None,
+            config_problem: Default::default(),
+            theme_problem: Default::default(),
             agents: crate::agents::AgentCatalog::default(),
             last_config_mtime: use_system_state
                 .then(|| std::fs::metadata(&config_path))
@@ -3785,15 +3782,13 @@ impl App {
         message: String,
     ) {
         log::error!("{message}");
-        self.clear_config_problem();
-        self.config_problem_toast = Some(self.toasts.persistent(severity, message));
+        self.config_problem
+            .show(&mut self.toasts, severity, message);
     }
 
     /// The configuration file loaded: its problem notice is out of date.
     fn clear_config_problem(&mut self) {
-        if let Some(toast) = self.config_problem_toast.take() {
-            self.toasts.dismiss(toast);
-        }
+        self.config_problem.clear(&mut self.toasts);
     }
 
     /// The live configuration as `config::save::config_table` gives it.

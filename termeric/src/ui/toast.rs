@@ -234,6 +234,38 @@ impl ToastManager {
     }
 }
 
+/// One persistent toast about a standing problem, such as a configuration
+/// file that does not load: shown until the problem is gone, and replaced,
+/// never stacked, when the problem changes.
+#[derive(Debug, Default)]
+pub struct StandingNotice {
+    shown: Option<(u64, String)>,
+}
+
+impl StandingNotice {
+    /// Show `message` in place of the current one; the same message again
+    /// leaves the toast as it is.
+    pub fn show(&mut self, toasts: &mut ToastManager, severity: ToastSeverity, message: String) {
+        if self
+            .shown
+            .as_ref()
+            .is_some_and(|(_, shown)| *shown == message)
+        {
+            return;
+        }
+        self.clear(toasts);
+        let id = toasts.persistent(severity, message.clone());
+        self.shown = Some((id, message));
+    }
+
+    /// The problem is gone: dismiss its toast.
+    pub fn clear(&mut self, toasts: &mut ToastManager) {
+        if let Some((id, _)) = self.shown.take() {
+            toasts.dismiss(id);
+        }
+    }
+}
+
 /// Render snapshot for the renderer.
 #[derive(Debug, Clone)]
 pub struct ToastInfo {
