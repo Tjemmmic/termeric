@@ -91,7 +91,7 @@ impl App {
     pub(super) fn focused_agent(&self) -> Option<FocusedAgent> {
         let tab = self.tabs.as_ref()?.active_tab()?;
         let identity = tab.focused_terminal_identity();
-        let state = tab.pane_session(identity.pane_id)?;
+        let state = tab.pane_integration(identity.pane_id)?;
         let session = state.agent.clone()?;
         let definition = self.agents.get(&session.agent_id)?.clone();
         Some(FocusedAgent {
@@ -111,7 +111,7 @@ impl App {
             .filter(|(_, tab)| !tab.closed && !tab.is_closing())
             .flat_map(|(_, tab)| {
                 tab.owned_pane_ids().into_iter().filter_map(move |pane_id| {
-                    let state = tab.pane_session(pane_id)?;
+                    let state = tab.pane_integration(pane_id)?;
                     let agent = state.agent.as_ref()?;
                     Some(AgentTerminal {
                         identity: TerminalIdentity {
@@ -146,7 +146,7 @@ impl App {
             .tabs
             .as_ref()
             .and_then(TabManager::active_tab)
-            .and_then(|tab| tab.pane_session(tab.focused_terminal_identity().pane_id))
+            .and_then(|tab| tab.pane_integration(tab.focused_terminal_identity().pane_id))
             .is_some_and(|session| session.transcript.is_some());
         let mut hidden: Vec<&str> = FOCUSED_AGENT_COMMANDS
             .iter()
@@ -309,7 +309,7 @@ impl App {
             .tabs
             .as_ref()
             .and_then(|tabs| tabs.tab_by_id(target.identity.tab_id))
-            .and_then(|tab| tab.pane_session(target.identity.pane_id))
+            .and_then(|tab| tab.pane_integration(target.identity.pane_id))
             .and_then(|session| session.last_person_input)
             .is_some_and(|typed| typed.elapsed() < PERSON_TYPING_GRACE);
         if typing {
@@ -619,7 +619,7 @@ impl App {
         let Some(tab) = tabs.tab_mut_by_id(identity.tab_id) else {
             return false;
         };
-        let Some(session) = tab.pane_session_mut(identity.pane_id) else {
+        let Some(session) = tab.pane_integration_mut(identity.pane_id) else {
             return false;
         };
         let before = session.agent_status.as_ref().map(|status| status.activity);
@@ -629,7 +629,7 @@ impl App {
         // agent. Its identity holds only while that process stays in front.
         let reporter = tab.pane_foreground_group(identity.pane_id);
         if let Some(status) = tab
-            .pane_session_mut(identity.pane_id)
+            .pane_integration_mut(identity.pane_id)
             .and_then(|session| session.agent_status.as_mut())
         {
             status.process_group = reporter;
@@ -639,7 +639,7 @@ impl App {
         // one from a program that inherited its identity but runs elsewhere.
         tab.refresh_agents(&self.agents);
         let after = tab
-            .pane_session(identity.pane_id)
+            .pane_integration(identity.pane_id)
             .and_then(|session| session.agent_status.clone());
         self.acknowledge_focused_agent();
         self.supervise_status_change(identity, before, after.as_ref());
@@ -674,7 +674,7 @@ impl App {
             .tabs
             .as_mut()
             .and_then(|tabs| tabs.tab_mut_by_id(identity.tab_id))
-            .and_then(|tab| tab.pane_session_mut(identity.pane_id))
+            .and_then(|tab| tab.pane_integration_mut(identity.pane_id))
         else {
             return;
         };
@@ -700,7 +700,7 @@ impl App {
         };
         let pane_id = tab.focused_terminal_identity().pane_id;
         let Some(status) = tab
-            .pane_session_mut(pane_id)
+            .pane_integration_mut(pane_id)
             .and_then(|session| session.agent_status.as_mut())
             .filter(|status| status.needs_attention())
         else {
@@ -802,7 +802,7 @@ impl App {
             .filter(|(_, tab)| !tab.closed && !tab.is_closing())
             .flat_map(|(_, tab)| {
                 tab.owned_pane_ids().into_iter().filter_map(move |pane_id| {
-                    let session = tab.pane_session(pane_id)?.agent.as_ref()?;
+                    let session = tab.pane_integration(pane_id)?.agent.as_ref()?;
                     Some(target(
                         TerminalIdentity {
                             tab_id: tab.id,
@@ -923,7 +923,7 @@ impl App {
         self.tabs
             .as_ref()?
             .tab_by_id(identity.tab_id)?
-            .pane_session(identity.pane_id)?
+            .pane_integration(identity.pane_id)?
             .last_person_input
     }
 
@@ -1028,7 +1028,7 @@ impl App {
             .and_then(|tabs| tabs.tab_by_id(target.identity.tab_id))
             .ok_or_else(|| Self::gone_message(target))?;
         let still_agent = tab
-            .pane_session(target.identity.pane_id)
+            .pane_integration(target.identity.pane_id)
             .and_then(|state| state.agent.as_ref())
             .is_some_and(|agent| agent.agent_id == target.agent_id);
         if !still_agent {
@@ -1063,7 +1063,7 @@ impl App {
             .as_ref()
             .and_then(|tabs| tabs.tab_by_id(target.identity.tab_id));
         let process = tab
-            .and_then(|tab| tab.pane_session(target.identity.pane_id))
+            .and_then(|tab| tab.pane_integration(target.identity.pane_id))
             .and_then(|session| session.agent.as_ref())
             .and_then(|agent| agent.process);
         let foreground = tab

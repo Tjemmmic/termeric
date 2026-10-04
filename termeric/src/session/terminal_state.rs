@@ -1,9 +1,11 @@
-//! Integration state owned by one terminal, transferred with its PTY.
+//! Agent, transcript, and diff state owned by one terminal, transferred
+//! with its PTY.
+
 use super::transcript::{TranscriptNotice, TranscriptRecorder, TranscriptWrite};
 use crate::agents::{AgentSession, AgentStatus};
 use crate::terminal::diff_detector::DiffDetector;
 
-pub(crate) struct TerminalSession {
+pub(crate) struct TerminalIntegration {
     /// The coding agent in this terminal's foreground, if any.
     pub agent: Option<AgentSession>,
     /// What that agent last reported through its hooks.
@@ -18,7 +20,7 @@ pub(crate) struct TerminalSession {
     notices: Vec<String>,
 }
 
-impl Default for TerminalSession {
+impl Default for TerminalIntegration {
     fn default() -> Self {
         Self {
             agent: None,
@@ -33,7 +35,7 @@ impl Default for TerminalSession {
     }
 }
 
-impl TerminalSession {
+impl TerminalIntegration {
     fn notice(&mut self, text: String) {
         if self.notices.len() < 16 {
             self.notices.push(text);
@@ -173,7 +175,7 @@ mod tests {
     #[test]
     fn terminal_eof_finalizes_pending_text_once_without_stopping_a_healthy_recorder() {
         let directory = tempfile::tempdir().unwrap();
-        let mut session = TerminalSession::default();
+        let mut session = TerminalIntegration::default();
         session.start_transcript(
             TranscriptRecorder::new(directory.path(), None, None, "Local", "fixture").unwrap(),
         );
@@ -202,7 +204,7 @@ mod tests {
     fn recording_epochs_never_share_pending_input_or_output() {
         let directory = tempfile::tempdir().unwrap();
         for replace in [false, true] {
-            let mut session = TerminalSession::default();
+            let mut session = TerminalIntegration::default();
             let first =
                 TranscriptRecorder::new(directory.path(), None, None, "Local", "first").unwrap();
             let first_path = first.path().to_owned();
@@ -240,7 +242,7 @@ mod tests {
     #[test]
     fn input_and_output_decoders_are_separate_and_replacement_notices_stay_bounded() {
         let directory = tempfile::tempdir().unwrap();
-        let mut session = TerminalSession::default();
+        let mut session = TerminalIntegration::default();
         session.start_transcript(
             TranscriptRecorder::new(directory.path(), None, None, "Local", "fixture").unwrap(),
         );
@@ -267,7 +269,7 @@ mod tests {
     fn diff_entries_use_completion_epoch_without_replaying_pre_recording_raw_output() {
         use super::super::transcript::{EntryKind, TranscriptEntry};
         let directory = tempfile::tempdir().unwrap();
-        let mut session = TerminalSession::default();
+        let mut session = TerminalIntegration::default();
         let patch = b"--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n+new\n";
         session.observe_output(patch, true);
         session.start_transcript(
@@ -291,7 +293,7 @@ mod tests {
     fn raw_transcript_preserves_split_utf8_in_both_directions() {
         use super::super::transcript::{EntryKind, TranscriptEntry};
         let directory = tempfile::tempdir().unwrap();
-        let mut session = TerminalSession::default();
+        let mut session = TerminalIntegration::default();
         session.start_transcript(
             TranscriptRecorder::new(directory.path(), None, None, "Local", "fixture").unwrap(),
         );
@@ -326,7 +328,7 @@ mod tests {
     fn completed_diffs_are_recorded_once_at_boundaries_and_eof_even_after_eviction() {
         use super::super::transcript::{EntryKind, TranscriptEntry};
         let directory = tempfile::tempdir().unwrap();
-        let mut session = TerminalSession::default();
+        let mut session = TerminalIntegration::default();
         session.start_transcript(
             TranscriptRecorder::new(directory.path(), None, None, "Local", "fixture").unwrap(),
         );
@@ -370,8 +372,8 @@ mod tests {
     #[test]
     fn rejected_capture_notices_are_bounded_and_shell_output_is_not_captured() {
         let patch = b"--- a/file\n+++ b/file\n@@ -1,2 +1,2 @@\n-old\n+new\nfinished\n";
-        let mut plugin = TerminalSession::default();
-        let mut shell = TerminalSession::default();
+        let mut plugin = TerminalIntegration::default();
+        let mut shell = TerminalIntegration::default();
         for _ in 0..100 {
             plugin.observe_output(patch, true);
             shell.observe_output(patch, false);
@@ -385,8 +387,8 @@ mod tests {
     #[test]
     fn recorder_flags_and_bounded_failure_notices_belong_to_one_owner() {
         let directory = tempfile::tempdir().unwrap();
-        let mut first = TerminalSession::default();
-        let second = TerminalSession::default();
+        let mut first = TerminalIntegration::default();
+        let second = TerminalIntegration::default();
         first.start_transcript(
             TranscriptRecorder::new(directory.path(), None, None, "Local", "fixture").unwrap(),
         );

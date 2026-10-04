@@ -1937,8 +1937,12 @@ impl TabManager {
             let removing =
                 tab.closed || tab.is_close_complete() || (self.reduced_motion && tab.is_closing());
             if auto_save && removing && !handled_before_topology_cleanup.contains(&tab.id) {
-                saved_closed_tab |=
-                    auto_save_closing_tab(tab, "tab", save_scrollback, &mut self.persistence_notices);
+                saved_closed_tab |= auto_save_closing_tab(
+                    tab,
+                    "tab",
+                    save_scrollback,
+                    &mut self.persistence_notices,
+                );
             }
         }
 

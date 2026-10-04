@@ -134,7 +134,7 @@ fn single_and_split_diff_capture_waits_for_real_eof_not_poll_boundaries() {
                 sender.send(PtyEvent::Output(byte.to_vec())).unwrap();
                 poll(tab);
                 assert_eq!(
-                    tab.pane_session(owner)
+                    tab.pane_integration(owner)
                         .unwrap()
                         .diff_detector
                         .unreviewed_count(),
@@ -150,7 +150,7 @@ fn single_and_split_diff_capture_waits_for_real_eof_not_poll_boundaries() {
                 .unwrap();
             poll(tab);
             assert_eq!(
-                tab.pane_session(owner)
+                tab.pane_integration(owner)
                     .unwrap()
                     .diff_detector
                     .unreviewed_count(),
@@ -166,7 +166,7 @@ fn single_and_split_diff_capture_waits_for_real_eof_not_poll_boundaries() {
             drop(sender);
             poll(tab);
             poll(tab);
-            let detector = &tab.pane_session(owner).unwrap().diff_detector;
+            let detector = &tab.pane_integration(owner).unwrap().diff_detector;
             assert_eq!(detector.unreviewed_count(), 1);
             let diff = detector.latest_unreviewed().unwrap();
             assert_eq!(diff.hunks.len(), 2);
@@ -195,7 +195,7 @@ fn evicted_diff_review_cannot_copy_or_dismiss_a_newer_patch() {
         .unwrap()
         .active_tab_mut()
         .unwrap()
-        .pane_session_mut(owner)
+        .pane_integration_mut(owner)
         .unwrap()
         .observe_output(patch, true);
     app.open_agent_diff_review(crate::tabs::TerminalIdentity {
@@ -211,7 +211,7 @@ fn evicted_diff_review_cannot_copy_or_dismiss_a_newer_patch() {
             .unwrap()
             .active_tab_mut()
             .unwrap()
-            .pane_session_mut(owner)
+            .pane_integration_mut(owner)
             .unwrap();
         for _ in 0..80 {
             state.observe_output(patch, true);
@@ -230,7 +230,7 @@ fn evicted_diff_review_cannot_copy_or_dismiss_a_newer_patch() {
         .unwrap()
         .active_tab()
         .unwrap()
-        .pane_session(owner)
+        .pane_integration(owner)
         .unwrap()
         .diff_detector;
     assert_eq!(detector.unreviewed_count(), 64);
@@ -265,7 +265,7 @@ fn plugin_export_uses_its_own_transcript_or_scrollback_not_focused_sibling() {
                     recorder.record_output(text).unwrap();
                     tabs.active_tab_mut()
                         .unwrap()
-                        .pane_session_mut(id)
+                        .pane_integration_mut(id)
                         .unwrap()
                         .start_transcript(recorder);
                 }
@@ -422,7 +422,7 @@ fn transcript_controls_and_close_keep_independent_owner_state() {
         }
         let tab = tabs.active_tab().unwrap();
         [PaneId(0), PaneId(2)].map(|id| {
-            let state = tab.pane_session(id).unwrap();
+            let state = tab.pane_integration(id).unwrap();
             state.transcript.as_ref().unwrap().path().to_path_buf()
         })
     };
@@ -448,7 +448,7 @@ fn transcript_controls_and_close_keep_independent_owner_state() {
                 .unwrap()
                 .active_tab()
                 .unwrap()
-                .pane_session(id)
+                .pane_integration(id)
                 .unwrap()
                 .transcript
                 .is_some()
@@ -462,13 +462,13 @@ fn transcript_controls_and_close_keep_independent_owner_state() {
         .unwrap();
     let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
     assert!(tab.pane_manager.is_none());
-    let state = tab.focused_session().unwrap();
+    let state = tab.focused_integration().unwrap();
     assert_eq!(state.agent.as_ref().unwrap().agent_id, "claude-code");
     assert_eq!(state.transcript.as_ref().unwrap().path(), paths[1]);
     let survivor = tab.focused_terminal_identity();
     app.toggle_terminal_transcript(survivor);
     let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
-    assert!(tab.focused_session().unwrap().transcript.is_none());
+    assert!(tab.focused_integration().unwrap().transcript.is_none());
     for (index, expected, absent) in [
         (0, "ZERO_INPUT", "TWO_INPUT"),
         (1, "TWO_INPUT", "ZERO_INPUT"),
@@ -505,7 +505,7 @@ fn diff_observation_and_delayed_review_are_terminal_local() {
     let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
     assert_eq!(tab.unreviewed_diff_count(), 2);
     assert_eq!(
-        tab.pane_session(PaneId(2))
+        tab.pane_integration(PaneId(2))
             .unwrap()
             .diff_detector
             .unreviewed_count(),
@@ -525,14 +525,14 @@ fn diff_observation_and_delayed_review_are_terminal_local() {
     app.apply_diff_review_action(crate::ui::diff_review::DiffReviewAction::Dismiss { request_id });
     let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
     assert_eq!(
-        tab.pane_session(PaneId(0))
+        tab.pane_integration(PaneId(0))
             .unwrap()
             .diff_detector
             .unreviewed_count(),
         0
     );
     assert_eq!(
-        tab.pane_session(PaneId(1))
+        tab.pane_integration(PaneId(1))
             .unwrap()
             .diff_detector
             .unreviewed_count(),
@@ -550,11 +550,15 @@ fn diff_observation_and_delayed_review_are_terminal_local() {
     let replacement = split_harvest_capture_owner(&mut app, directory.path());
     mark_capture_plugin_owner(&mut app, replacement, "claude-code");
     let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
-    tab.pane_session_mut(replacement).unwrap().observe_output(
-        b"--- a/replacement\n+++ b/replacement\n@@ -1 +1 @@\n-old\n+new\nfinished\n",
-        true,
-    );
-    tab.pane_session_mut(replacement).unwrap().finish_stream();
+    tab.pane_integration_mut(replacement)
+        .unwrap()
+        .observe_output(
+            b"--- a/replacement\n+++ b/replacement\n@@ -1 +1 @@\n-old\n+new\nfinished\n",
+            true,
+        );
+    tab.pane_integration_mut(replacement)
+        .unwrap()
+        .finish_stream();
     app.apply_diff_review_action(crate::ui::diff_review::DiffReviewAction::Dismiss { request_id });
     assert_eq!(
         app.tabs
@@ -562,7 +566,7 @@ fn diff_observation_and_delayed_review_are_terminal_local() {
             .unwrap()
             .active_tab()
             .unwrap()
-            .pane_session(replacement)
+            .pane_integration(replacement)
             .unwrap()
             .diff_detector
             .unreviewed_count(),

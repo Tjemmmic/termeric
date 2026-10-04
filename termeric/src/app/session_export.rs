@@ -21,7 +21,7 @@ impl App {
             return;
         };
         let source = if let Some(recorder) = tab
-            .pane_session(identity.pane_id)
+            .pane_integration(identity.pane_id)
             .and_then(|state| state.transcript.as_ref())
         {
             match recorder.flush() {

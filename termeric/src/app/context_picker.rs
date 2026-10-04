@@ -185,7 +185,7 @@ impl App {
         // A shell tab can host an agent started by hand; its screen is the
         // agent's conversation, not the user's work.
         let not_an_agent = |tab: &crate::tabs::Tab, id| {
-            tab.pane_session(id)
+            tab.pane_integration(id)
                 .is_some_and(|state| state.agent.is_none())
         };
         let tab = tabs.tab_by_id(agent.tab_id)?;

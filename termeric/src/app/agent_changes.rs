@@ -74,7 +74,7 @@ impl App {
         let tab = self.tabs.as_ref()?.active_tab()?;
         let identity = tab.focused_terminal_identity();
         let baseline = tab
-            .pane_session(identity.pane_id)?
+            .pane_integration(identity.pane_id)?
             .agent_changes
             .baseline()?
             .clone();
@@ -87,7 +87,7 @@ impl App {
                 .tabs
                 .as_ref()
                 .and_then(|tabs| tabs.tab_by_id(identity.tab_id))
-                .and_then(|tab| tab.pane_session(identity.pane_id))
+                .and_then(|tab| tab.pane_integration(identity.pane_id))
                 .and_then(|session| session.agent_changes.baseline())
                 .is_some_and(|current| current == baseline),
             ChangeOwner::AgentView(id) => self
@@ -129,7 +129,7 @@ impl App {
                 .tabs
                 .as_ref()
                 .and_then(TabManager::active_tab)
-                .and_then(|tab| tab.pane_session(tab.focused_terminal_identity().pane_id))
+                .and_then(|tab| tab.pane_integration(tab.focused_terminal_identity().pane_id))
                 .and_then(|session| session.agent_changes.unavailable_reason())
                 .map(str::to_owned);
             self.toasts.info(match reason {

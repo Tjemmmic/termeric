@@ -107,7 +107,7 @@ pub struct Pane {
     /// owner when a pane is reparented.
     pub(crate) launch: crate::workspace::WorkspaceLaunch,
     pub(crate) launch_shell: ShellConfig,
-    pub(crate) integration: crate::session::terminal_state::TerminalSession,
+    pub(crate) integration: crate::session::terminal_state::TerminalIntegration,
     event_overflow_reported: bool,
     /// Daemon-owned terminals consume protocol replies at the real PTY; their
     /// GUI replicas must not send a duplicate reply through the relay.
@@ -207,7 +207,7 @@ impl Pane {
             harvest: crate::harvest::HarvestTerminalState::default(),
             shell_integration: launch.integration,
             last_command: None,
-            integration: crate::session::terminal_state::TerminalSession::default(),
+            integration: crate::session::terminal_state::TerminalIntegration::default(),
             launch: crate::workspace::WorkspaceLaunch::Shell,
             launch_shell: shell.clone(),
             event_overflow_reported: false,
@@ -265,7 +265,7 @@ impl Pane {
                 "Direct command tabs do not provide shell prompt marks".into(),
             ),
             last_command: Some(launch.program.clone()),
-            integration: crate::session::terminal_state::TerminalSession::default(),
+            integration: crate::session::terminal_state::TerminalIntegration::default(),
             launch: match &launch.tab_type {
                 Some(crate::tabs::TabType::Plugin { plugin_id }) => {
                     crate::workspace::WorkspaceLaunch::Plugin {

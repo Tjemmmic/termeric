@@ -302,7 +302,7 @@ fn plugin_transfer_keeps_streaming_transcript_diff_and_read_only_state_with_one_
         let state = tabs
             .active_tab_mut()
             .unwrap()
-            .pane_session_mut(moved)
+            .pane_integration_mut(moved)
             .unwrap();
         assert_eq!(state.diff_detector.unreviewed_count(), 1);
         let mut recorder = state.stop_transcript().unwrap();
@@ -342,7 +342,7 @@ fn plugin_transfer_keeps_streaming_transcript_diff_and_read_only_state_with_one_
             assert!(
                 tabs.tab_by_id(destination)
                     .unwrap()
-                    .pane_session(anchor)
+                    .pane_integration(anchor)
                     .unwrap()
                     .transcript
                     .is_none()

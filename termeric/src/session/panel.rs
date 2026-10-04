@@ -793,7 +793,7 @@ mod tests {
     }
 
     #[test]
-    fn workspace_rename_is_inline_and_never_activates_for_legacy_sessions() {
+    fn workspace_rename_is_inline_and_never_activates_for_tab_snapshots() {
         let mut panel = SessionPanel::new();
         panel.sessions.push(SessionEntry {
             id: "workspace-1".into(),

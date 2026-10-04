@@ -80,7 +80,7 @@ impl App {
                     let tabs = self.tabs.as_ref()?;
                     tabs.origin_for_pane(target.tab_id, target.pane_id)?;
                     tabs.tab_by_id(target.tab_id)?
-                        .pane_session(target.pane_id)?
+                        .pane_integration(target.pane_id)?
                         .diff_detector
                         .detected_by_id(target.diff_id)
                         .map(|diff| diff.raw.clone())
@@ -100,7 +100,7 @@ impl App {
                         .origin_for_pane(target.tab_id, target.pane_id)
                         .is_some()
                     && let Some(tab) = tabs.tab_mut_by_id(target.tab_id)
-                    && let Some(state) = tab.pane_session_mut(target.pane_id)
+                    && let Some(state) = tab.pane_integration_mut(target.pane_id)
                 {
                     state.diff_detector.mark_reviewed(target.diff_id);
                 }
@@ -135,7 +135,7 @@ impl App {
         tabs.origin_for_pane(identity.tab_id, identity.pane_id)?;
         Some(
             tabs.tab_by_id(identity.tab_id)?
-                .pane_session(identity.pane_id)?
+                .pane_integration(identity.pane_id)?
                 .diff_detector
                 .latest_unreviewed()?
                 .clone(),

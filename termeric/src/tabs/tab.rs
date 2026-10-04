@@ -3,7 +3,7 @@
 
 use crate::config::ShellConfig;
 use crate::panes::{Pane, PaneId, PaneOwner};
-use crate::session::terminal_state::TerminalSession;
+use crate::session::terminal_state::TerminalIntegration;
 #[cfg(test)]
 use crate::session::transcript::TranscriptRecorder;
 use crate::terminal::geometry::TerminalGeometry;
@@ -735,7 +735,7 @@ impl Tab {
         self.single.as_ref()?.pty.size().ok()
     }
 
-    pub(crate) fn pane_session(&self, id: PaneId) -> Option<&TerminalSession> {
+    pub(crate) fn pane_integration(&self, id: PaneId) -> Option<&TerminalIntegration> {
         self.pane(id).map(|pane| &pane.integration)
     }
 
@@ -743,18 +743,18 @@ impl Tab {
         self.pane(id).map(|pane| &pane.terminal)
     }
 
-    pub(crate) fn pane_session_mut(&mut self, id: PaneId) -> Option<&mut TerminalSession> {
+    pub(crate) fn pane_integration_mut(&mut self, id: PaneId) -> Option<&mut TerminalIntegration> {
         self.pane_mut(id).map(|pane| &mut pane.integration)
     }
 
     #[cfg(test)]
-    pub(crate) fn focused_session(&self) -> Option<&TerminalSession> {
-        self.pane_session(self.focused_terminal_identity().pane_id)
+    pub(crate) fn focused_integration(&self) -> Option<&TerminalIntegration> {
+        self.pane_integration(self.focused_terminal_identity().pane_id)
     }
 
     #[cfg(test)]
-    pub(crate) fn focused_session_mut(&mut self) -> Option<&mut TerminalSession> {
-        self.pane_session_mut(self.focused_terminal_identity().pane_id)
+    pub(crate) fn focused_integration_mut(&mut self) -> Option<&mut TerminalIntegration> {
+        self.pane_integration_mut(self.focused_terminal_identity().pane_id)
     }
 
     /// Re-identify the coding agent in each of this tab's terminals from its
@@ -766,7 +766,7 @@ impl Tab {
             catalog: &crate::agents::AgentCatalog,
             pty: Option<&PtyHandle>,
             launch: &crate::workspace::WorkspaceLaunch,
-            session: &mut crate::session::terminal_state::TerminalSession,
+            session: &mut crate::session::terminal_state::TerminalIntegration,
         ) -> bool {
             let (launched_id, profile) = match launch {
                 crate::workspace::WorkspaceLaunch::Plugin { plugin_id, profile } => (
@@ -852,7 +852,7 @@ impl Tab {
     /// collect finished ones.
     fn track_agent_changes(&mut self) {
         for id in self.owned_pane_ids() {
-            let Some(session) = self.pane_session(id) else {
+            let Some(session) = self.pane_integration(id) else {
                 continue;
             };
             let agent = session
@@ -866,7 +866,7 @@ impl Tab {
                     self.pane_working_directory(id)
                         .map(std::path::PathBuf::from)
                 });
-            let Some(session) = self.pane_session_mut(id) else {
+            let Some(session) = self.pane_integration_mut(id) else {
                 continue;
             };
             if let (Some(directory), Some((agent_id, process))) = (directory, &agent) {
@@ -882,7 +882,7 @@ impl Tab {
     pub(crate) fn agent_badge(&self) -> Option<crate::agents::AgentBadge> {
         self.owned_pane_ids()
             .into_iter()
-            .filter_map(|id| self.pane_session(id)?.agent_status.as_ref()?.badge())
+            .filter_map(|id| self.pane_integration(id)?.agent_status.as_ref()?.badge())
             .chain(self.agent_view.badge)
             .max()
     }
@@ -932,7 +932,7 @@ impl Tab {
     pub(crate) fn unreviewed_diff_count(&self) -> usize {
         self.owned_pane_ids()
             .into_iter()
-            .filter_map(|id| self.pane_session(id))
+            .filter_map(|id| self.pane_integration(id))
             .map(|state| state.diff_detector.unreviewed_count())
             .sum()
     }
@@ -940,14 +940,14 @@ impl Tab {
     /// Attach a recorder to the focused owner only.
     #[cfg(test)]
     pub fn start_transcript(&mut self, recorder: TranscriptRecorder) {
-        if let Some(state) = self.focused_session_mut() {
+        if let Some(state) = self.focused_integration_mut() {
             state.start_transcript(recorder);
         }
     }
 
     #[cfg(test)]
     pub fn stop_transcript(&mut self) -> Option<TranscriptRecorder> {
-        self.focused_session_mut()?.stop_transcript()
+        self.focused_integration_mut()?.stop_transcript()
     }
 
     pub fn drain_user_notices(&mut self) -> Vec<String> {
@@ -1042,45 +1042,44 @@ impl Tab {
         workspace_tab_id: u32,
         save_scrollback: bool,
     ) -> anyhow::Result<crate::workspace::WorkspaceTabSnapshot> {
-        let (primary_pane, focused_pane, layout, panes) =
-            if let Some(panes) = &self.pane_manager {
-                (
-                    panes.primary_id().0,
-                    panes.focused_id().0,
-                    panes.workspace_layout(),
-                    panes.workspace_panes(&self.title, save_scrollback),
-                )
-            } else {
-                let single = self
-                    .single
-                    .as_ref()
-                    .context("single terminal owner is detached while saving workspace")?;
-                let terminal = &single.terminal;
-                let child_id = single.pty.child_id();
-                let pane_id = single.id.0;
-                (
-                    pane_id,
-                    pane_id,
-                    crate::workspace::WorkspacePaneLayout::Pane { pane: pane_id },
-                    vec![crate::workspace::WorkspacePaneSnapshot {
-                        id: pane_id,
-                        launch: single.launch.clone(),
-                        title: Some(self.title.clone()),
-                        working_directory: terminal_working_directory(terminal)
-                            .or_else(|| child_id.and_then(get_process_cwd)),
-                        last_command: child_id
-                            .and_then(get_foreground_process)
-                            .or_else(|| single.last_command.clone()),
-                        scrollback_file: None,
-                        scrollback_truncated: false,
-                        scrollback_lines: if save_scrollback {
-                            crate::workspace::restorable_scrollback(terminal.grid())
-                        } else {
-                            Vec::new()
-                        },
-                    }],
-                )
-            };
+        let (primary_pane, focused_pane, layout, panes) = if let Some(panes) = &self.pane_manager {
+            (
+                panes.primary_id().0,
+                panes.focused_id().0,
+                panes.workspace_layout(),
+                panes.workspace_panes(&self.title, save_scrollback),
+            )
+        } else {
+            let single = self
+                .single
+                .as_ref()
+                .context("single terminal owner is detached while saving workspace")?;
+            let terminal = &single.terminal;
+            let child_id = single.pty.child_id();
+            let pane_id = single.id.0;
+            (
+                pane_id,
+                pane_id,
+                crate::workspace::WorkspacePaneLayout::Pane { pane: pane_id },
+                vec![crate::workspace::WorkspacePaneSnapshot {
+                    id: pane_id,
+                    launch: single.launch.clone(),
+                    title: Some(self.title.clone()),
+                    working_directory: terminal_working_directory(terminal)
+                        .or_else(|| child_id.and_then(get_process_cwd)),
+                    last_command: child_id
+                        .and_then(get_foreground_process)
+                        .or_else(|| single.last_command.clone()),
+                    scrollback_file: None,
+                    scrollback_truncated: false,
+                    scrollback_lines: if save_scrollback {
+                        crate::workspace::restorable_scrollback(terminal.grid())
+                    } else {
+                        Vec::new()
+                    },
+                }],
+            )
+        };
         Ok(crate::workspace::WorkspaceTabSnapshot {
             id: workspace_tab_id,
             title: self.title.clone(),

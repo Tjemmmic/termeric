@@ -5962,7 +5962,7 @@ fn diff_review_done_marks_only_its_original_tab_and_exact_diff() {
             "+new".into(),
             "finished".into(),
         ] {
-            tab.focused_session_mut()
+            tab.focused_integration_mut()
                 .unwrap()
                 .diff_detector
                 .feed_line(&line);
@@ -5974,7 +5974,7 @@ fn diff_review_done_marks_only_its_original_tab_and_exact_diff() {
         .next()
         .unwrap()
         .1
-        .focused_session()
+        .focused_integration()
         .unwrap()
         .diff_detector
         .latest_unreviewed()
@@ -6771,7 +6771,7 @@ fn harvest_rerun_records_exact_user_input_once_but_not_protocol_fences_or_refusa
             .unwrap()
             .active_tab_mut()
             .unwrap()
-            .pane_session_mut(pane_id)
+            .pane_integration_mut(pane_id)
             .unwrap()
             .start_transcript(recorder);
         app.execute_sprout_action(
@@ -6793,7 +6793,7 @@ fn harvest_rerun_records_exact_user_input_once_but_not_protocol_fences_or_refusa
             .unwrap()
             .active_tab_mut()
             .unwrap()
-            .pane_session_mut(pane_id)
+            .pane_integration_mut(pane_id)
             .unwrap()
             .stop_transcript()
             .unwrap();
@@ -7494,7 +7494,7 @@ fn mark_capture_plugin_owner(app: &mut App, pane_id: PaneId, plugin_id: &str) {
         tab.restore_terminal_owner(panes.take_remaining_pane().unwrap());
     }
     // What an agent scan records for a terminal Termeric launched.
-    tab.pane_session_mut(pane_id).unwrap().agent = Some(crate::agents::AgentSession {
+    tab.pane_integration_mut(pane_id).unwrap().agent = Some(crate::agents::AgentSession {
         agent_id: plugin_id.into(),
         launched: true,
         profile: None,
@@ -7722,7 +7722,7 @@ fn typed_agent_input_is_submitted_separately_and_only_to_the_same_agent() {
         .unwrap();
     let tab = tabs.active_tab_mut().unwrap();
     let pane_id = tab.focused_terminal_identity().pane_id;
-    tab.pane_session_mut(pane_id).unwrap().agent = Some(crate::agents::AgentSession {
+    tab.pane_integration_mut(pane_id).unwrap().agent = Some(crate::agents::AgentSession {
         agent_id: "codex".into(),
         launched: false,
         profile: None,
@@ -7807,7 +7807,7 @@ fn typed_agent_input_is_submitted_separately_and_only_to_the_same_agent() {
         .unwrap()
         .active_tab_mut()
         .unwrap()
-        .pane_session_mut(pane_id)
+        .pane_integration_mut(pane_id)
         .unwrap()
         .last_person_input = Some(Instant::now());
     assert!(
@@ -7820,7 +7820,7 @@ fn typed_agent_input_is_submitted_separately_and_only_to_the_same_agent() {
         .unwrap()
         .active_tab_mut()
         .unwrap()
-        .pane_session_mut(pane_id)
+        .pane_integration_mut(pane_id)
         .unwrap()
         .last_person_input = None;
     app.config.security.allow_gui_control_input = false;
@@ -7832,7 +7832,7 @@ fn typed_agent_input_is_submitted_separately_and_only_to_the_same_agent() {
         .unwrap()
         .active_tab_mut()
         .unwrap()
-        .pane_session_mut(pane_id)
+        .pane_integration_mut(pane_id)
         .unwrap()
         .agent = Some(crate::agents::AgentSession {
         agent_id: "codex".into(),
@@ -7874,7 +7874,7 @@ fn typed_agent_input_is_submitted_separately_and_only_to_the_same_agent() {
             .unwrap()
             .active_tab_mut()
             .unwrap()
-            .pane_session_mut(pane_id)
+            .pane_integration_mut(pane_id)
             .unwrap()
             .last_person_input = at;
     };
@@ -8002,7 +8002,7 @@ fn hook_reports_track_an_agent_started_from_a_shell_until_it_exits() {
             .unwrap()
             .tab_by_id(tab_id)
             .unwrap()
-            .focused_session()
+            .focused_integration()
             .unwrap()
             .agent_status
             .is_none()
@@ -8019,7 +8019,7 @@ fn hook_reports_track_an_agent_started_from_a_shell_until_it_exits() {
             .unwrap()
             .tab_by_id(tab_id)
             .unwrap()
-            .focused_session()
+            .focused_integration()
             .map(|session| (session.agent.clone(), session.agent_status.clone()))
             .unwrap()
     };
@@ -8116,7 +8116,7 @@ fn agent_list_puts_waiting_agents_first_and_answers_come_from_reports_or_logs() 
             .unwrap();
         let tab = tabs.active_tab_mut().unwrap();
         let pane_id = tab.focused_terminal_identity().pane_id;
-        let session = tab.pane_session_mut(pane_id).unwrap();
+        let session = tab.pane_integration_mut(pane_id).unwrap();
         session.agent = Some(crate::agents::AgentSession {
             agent_id: agent.into(),
             launched: false,
@@ -8186,7 +8186,7 @@ fn agent_list_puts_waiting_agents_first_and_answers_come_from_reports_or_logs() 
     let set_status = |app: &mut App, message: Option<&str>| {
         let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
         let status = tab
-            .pane_session_mut(working.pane_id)
+            .pane_integration_mut(working.pane_id)
             .unwrap()
             .agent_status
             .as_mut()
@@ -8247,7 +8247,7 @@ fn agent_changes_are_listed_reviewed_staged_and_reverted_for_their_terminal() {
         // What noticing an agent in this terminal does.
         let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
         let pane = tab.focused_terminal_identity().pane_id;
-        let changes = &mut tab.pane_session_mut(pane).unwrap().agent_changes;
+        let changes = &mut tab.pane_integration_mut(pane).unwrap().agent_changes;
         changes.start_capture(("codex", Some(1)), Some(root.to_path_buf()));
         let deadline = Instant::now() + Duration::from_secs(5);
         while !changes.poll() {
@@ -8356,7 +8356,7 @@ fn agent_changes_are_listed_reviewed_staged_and_reverted_for_their_terminal() {
     {
         let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
         let pane = tab.focused_terminal_identity().pane_id;
-        let changes = &mut tab.pane_session_mut(pane).unwrap().agent_changes;
+        let changes = &mut tab.pane_integration_mut(pane).unwrap().agent_changes;
         changes.start_capture(("codex", Some(2)), Some(root.to_path_buf()));
         let deadline = Instant::now() + Duration::from_secs(5);
         while !changes.poll() {
@@ -8402,7 +8402,7 @@ pub(super) fn two_agent_tabs() -> (App, usize, usize) {
             .unwrap();
         let tab = tabs.tab_mut_by_id(id).unwrap();
         let pane_id = tab.focused_terminal_identity().pane_id;
-        let session = tab.pane_session_mut(pane_id).unwrap();
+        let session = tab.pane_integration_mut(pane_id).unwrap();
         session.agent = Some(crate::agents::AgentSession {
             agent_id: agent.into(),
             launched: false,
@@ -8509,7 +8509,7 @@ fn a_transcript_can_be_stopped_after_its_agent_exits() {
     let set_agent = |app: &mut App, agent: Option<crate::agents::AgentSession>| {
         let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
         let pane_id = tab.focused_terminal_identity().pane_id;
-        tab.pane_session_mut(pane_id).unwrap().agent = agent;
+        tab.pane_integration_mut(pane_id).unwrap().agent = agent;
     };
     let mut app = App::new_headless(Config::default()).unwrap();
     app.tabs = Some(tabs);
@@ -8571,7 +8571,7 @@ fn a_read_only_agent_refuses_context_with_its_own_reason() {
         .unwrap();
     let tab = tabs.active_tab_mut().unwrap();
     let pane_id = tab.focused_terminal_identity().pane_id;
-    tab.pane_session_mut(pane_id).unwrap().agent = Some(crate::agents::AgentSession {
+    tab.pane_integration_mut(pane_id).unwrap().agent = Some(crate::agents::AgentSession {
         agent_id: "codex".into(),
         launched: false,
         profile: None,
@@ -11339,7 +11339,7 @@ fn context_output_comes_from_a_shell_never_from_another_agent() {
         let tab = tabs.active_tab_mut().unwrap();
         tab.focused_terminal_mut().unwrap().process(text.as_bytes());
         let pane_id = tab.focused_terminal_identity().pane_id;
-        tab.pane_session_mut(pane_id).unwrap().agent =
+        tab.pane_integration_mut(pane_id).unwrap().agent =
             agent.map(|agent_id| crate::agents::AgentSession {
                 agent_id: agent_id.into(),
                 launched: false,
@@ -11584,7 +11584,7 @@ done
                 app.tabs
                     .as_ref()
                     .and_then(TabManager::active_tab)
-                    .is_some_and(|tab| tab.focused_session().unwrap().transcript.is_some()),
+                    .is_some_and(|tab| tab.focused_integration().unwrap().transcript.is_some()),
                 "{agent_id} transcript did not start"
             );
             app.run_agent_command("agent.export");

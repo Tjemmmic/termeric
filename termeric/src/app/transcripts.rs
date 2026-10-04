@@ -10,7 +10,7 @@ impl App {
             if tab.live_domain.is_some() || tabs.origin_read_only(origin) != Some(false) {
                 return None;
             }
-            let state = tab.pane_session(identity.pane_id)?;
+            let state = tab.pane_integration(identity.pane_id)?;
             // A recording can be stopped after its agent has exited; only a
             // new one needs an agent to record.
             let recording = state.transcript.is_some();
@@ -34,7 +34,7 @@ impl App {
                 .unwrap()
                 .tab_mut_by_id(identity.tab_id)
                 .unwrap()
-                .pane_session_mut(identity.pane_id)
+                .pane_integration_mut(identity.pane_id)
                 .unwrap()
                 .stop_transcript()
                 .unwrap();
@@ -88,7 +88,7 @@ impl App {
                         .unwrap()
                         .tab_mut_by_id(identity.tab_id)
                         .unwrap()
-                        .pane_session_mut(identity.pane_id)
+                        .pane_integration_mut(identity.pane_id)
                         .unwrap()
                         .start_transcript(recorder);
                     self.info_overlay.show(

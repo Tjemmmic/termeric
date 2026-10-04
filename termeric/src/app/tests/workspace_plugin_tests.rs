@@ -150,7 +150,7 @@ fn mixed_plugin_workspaces_restore_exact_profiles_cwds_and_terminal_owners() {
                 recorded.starts_with(&dir.path().join(format!("cwd-{id}")).display().to_string())
             );
             let tab = tabs.active_tab().unwrap();
-            let state = tab.pane_session(PaneId(id)).unwrap();
+            let state = tab.pane_integration(PaneId(id)).unwrap();
             let agent = state.agent.as_ref().unwrap();
             assert!(agent.launched);
             assert_eq!(agent.profile.as_deref(), Some(tag));
@@ -163,8 +163,8 @@ fn mixed_plugin_workspaces_restore_exact_profiles_cwds_and_terminal_owners() {
             );
         }
         let tab = tabs.active_tab().unwrap();
-        assert!(tab.pane_session(PaneId(0)).unwrap().agent.is_none());
-        assert!(tab.pane_session(PaneId(13)).unwrap().agent.is_none());
+        assert!(tab.pane_integration(PaneId(0)).unwrap().agent.is_none());
+        assert!(tab.pane_integration(PaneId(13)).unwrap().agent.is_none());
         assert_eq!(tab.pane_manager.as_ref().unwrap().focused_id(), PaneId(9));
         let mut captured = tabs
             .capture_workspace("roundtrip".into(), true, Default::default())
@@ -385,7 +385,7 @@ fn resolved_default_profile_is_saved_as_the_actual_owner_reference() {
     assert_eq!(
         tabs.active_tab()
             .unwrap()
-            .pane_session(PaneId(7))
+            .pane_integration(PaneId(7))
             .unwrap()
             .agent
             .as_ref()
