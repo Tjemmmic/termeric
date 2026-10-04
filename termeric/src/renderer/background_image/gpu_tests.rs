@@ -178,10 +178,17 @@ fn snapshot(
         b: f64::from(CLEAR[2]),
         a: 1.0,
     };
-    crate::renderer::render_offscreen(device, queue, FORMAT, case.size, clear, |pass| {
-        images.draw_below_text(pass);
-        rects.draw_layer(pass, 0);
-    })
+    crate::renderer::headless_tests::render_offscreen(
+        device,
+        queue,
+        FORMAT,
+        case.size,
+        clear,
+        |pass| {
+            images.draw_below_text(pass);
+            rects.draw_layer(pass, 0);
+        },
+    )
 }
 
 pub(crate) fn headless_background_render_smoke(device: &Device, queue: &Queue) -> Result<()> {

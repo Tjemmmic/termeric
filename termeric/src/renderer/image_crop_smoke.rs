@@ -1,8 +1,9 @@
 //! Parser-to-GPU coverage for destructive image crops at partial cell edges.
 //! The expected framebuffer uses pixel copies, never placement/crop helpers.
 
-use super::{
-    HEADLESS_IMAGE_HEIGHT, HEADLESS_IMAGE_WIDTH, ImagePipeline, render_headless_image_state,
+use super::ImagePipeline;
+use super::headless_tests::{
+    HEADLESS_IMAGE_HEIGHT, HEADLESS_IMAGE_WIDTH, render_headless_image_state,
 };
 use anyhow::{Result, ensure};
 use base64::{Engine as _, engine::general_purpose::STANDARD};

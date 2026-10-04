@@ -36,7 +36,7 @@ winit event loop
   → app/event_loop.rs    (per-window App event handlers: keyboard, mouse, resize, redraw)
   → app/mod.rs           (App — window state, input routing, action handling)
   → termeric-core        (ANSI parsing, grid updates, PTY I/O)
-  → renderer/mod.rs      (builds render data, submits to wgpu)
+  → renderer/frame.rs    (builds render data, submits to wgpu)
 ```
 
 PTY output and terminal-generated replies follow one stricter ownership path: `TabManager::poll_events()` polls every tab/pane, `PtyWrite` is consumed beside the originating `PtyHandle`, and only pane-tagged app events leave that owner. Never route a terminal-generated reply through focused input.
@@ -109,7 +109,12 @@ Experimental live domains are a third, intentionally separate lifecycle. The `do
 
 | File | Contains |
 |------|----------|
-| `mod.rs` | `Renderer` struct, `new()`, `render()`, `build_render_data()` dispatch, pane grid and image data, `UiPalette`, color helpers |
+| `mod.rs` | `Renderer` struct, `new()`, setters, font-size conversion |
+| `device.rs` | Adapter and device selection, renderer diagnostics |
+| `colors.rs` | `UiPalette` and its high-contrast pass, the terminal palette, surface formats |
+| `frame.rs` | `render()`, `build_render_data()` layer dispatch, image data, pane dividers |
+| `grid.rs` | `build_pane_grid()`: a grid's cached rows, cursor, and scrollbar |
+| `headless_tests.rs`, `benchmark.rs` | GPU smokes run by `gpu_render_smoke` and the headless renderer benchmark (test builds only) |
 | `types.rs` | `*Info` structs and click/action enums (re-exported via `pub use types::*`) |
 | `draw.rs` | Shared card, shadow, scrollbar, button, and focus-ring drawing for dialogs and menus |
 | `rect.rs`, `buffer.rs` | Rounded-rectangle pipeline and capacity-managed GPU upload buffers |

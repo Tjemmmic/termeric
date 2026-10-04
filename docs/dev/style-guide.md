@@ -67,7 +67,7 @@ People can add their own themes as `.toml` files in `~/.config/termeric/themes/`
 
 The terminal content comes first; the chrome around it stays quiet.
 
-- **Color:** every chrome color comes from the active theme through `UiPalette` (`termeric/src/renderer/mod.rs`), so light themes and custom themes work. Don't hardcode colors. Shadows are black at low alpha.
+- **Color:** every chrome color comes from the active theme through `UiPalette` (`termeric/src/renderer/colors.rs`), so light themes and custom themes work. Don't hardcode colors. Shadows are black at low alpha.
 - **Tab bar:** compact and "quiet native". The strip uses the theme's `tab_inactive` color; the active tab is a slightly raised surface with a 2px `tab_active` accent line (a left bar in the vertical rail); inactive titles are dimmed; × appears on the active or hovered tab, and background activity shows as a small dot in its place. Never fill a whole tab with a saturated color.
 - **Settings:** one centered dialog with a sidebar of pages and one search across every page. Values sit in one column with steppers, dropdown chevrons, or a trailing chevron for actions. The footer only says whether changes are saved (with a Save button when they aren't); no key-hint strips.
 - **Dialogs and menus:** start from the shared pieces — `build_modal_frame` (`renderer/palette.rs`) for centered dialogs, `build_side_panel_frame` (`renderer/panels.rs`) for side panels, and `build_popup_menu` (`renderer/popup_menu.rs`) for anchored menus; a menu with its own rows, such as the Settings dropdown, still sits on the shared `push_menu_surface`.
@@ -107,5 +107,5 @@ Chrome geometry lands on whole physical pixels. Rendering, hit testing, keyboard
 
 ## 5. Accessibility
 
-- High-contrast mode raises built-in chrome text to at least 4.5:1 (`enforce_high_contrast` in `renderer/mod.rs`); new chrome colors must go through `UiPalette` so they get the same treatment.
+- High-contrast mode raises built-in chrome text to at least 4.5:1 (`enforce_high_contrast` in `renderer/colors.rs`); new chrome colors must go through `UiPalette` so they get the same treatment.
 - Every interactive control needs keyboard access and an AccessKit node whose bounds come from the same geometry used to draw it. See [Accessibility](../src/accessibility.md).
