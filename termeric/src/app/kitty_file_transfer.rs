@@ -4,7 +4,7 @@
 //! download transaction live in `download` and `upload`.
 
 use super::{App, AppEvent, EVENT_LOOP_PROXY};
-use crate::tabs::{TabType, TerminalEventOrigin, TerminalIdentity};
+use crate::tabs::{TerminalEventOrigin, TerminalIdentity};
 use crate::ui::info_overlay::InfoOverlayChoice;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -387,7 +387,7 @@ impl App {
             );
             return;
         }
-        if !self.kitty_download_origin_allowed(origin) {
+        if !self.kitty_origin_accepts_host_paths(origin) {
             self.write_kitty_status(
                 origin,
                 command.reply_uses_8bit_controls,
@@ -620,7 +620,7 @@ impl App {
             );
             return;
         }
-        if !self.kitty_download_origin_allowed(origin) {
+        if !self.kitty_origin_accepts_host_paths(origin) {
             self.write_kitty_status(
                 origin,
                 command.reply_uses_8bit_controls,
@@ -692,17 +692,13 @@ impl App {
             .origin_for_pane(identity.tab_id, identity.pane_id)
     }
 
-    fn kitty_download_origin_allowed(&self, origin: TerminalIdentity) -> bool {
-        if self.kitty_transfer_origin(origin).is_none() {
-            return false;
-        }
-        self.tabs
-            .as_ref()
-            .and_then(|tabs| tabs.tab_by_id(origin.tab_id))
-            .is_some_and(|tab| {
-                tab.live_domain.is_some()
-                    || matches!(tab.tab_type, TabType::Shell | TabType::Profile { .. })
-            })
+    fn kitty_origin_accepts_host_paths(&self, origin: TerminalIdentity) -> bool {
+        self.kitty_transfer_origin(origin).is_some()
+            && self
+                .tabs
+                .as_ref()
+                .and_then(|tabs| tabs.tab_by_id(origin.tab_id))
+                .is_some_and(|tab| tab.pane_accepts_host_paths(origin.pane_id))
     }
 
     pub(super) fn handle_kitty_download_choice(
@@ -731,7 +727,7 @@ impl App {
             .pending
             .take()
             .expect("checked pending transfer");
-        if !self.kitty_download_origin_allowed(pending.key.origin) {
+        if !self.kitty_origin_accepts_host_paths(pending.key.origin) {
             self.write_kitty_status(
                 pending.key.origin,
                 pending.reply_uses_8bit_controls,
@@ -848,7 +844,7 @@ impl App {
             .pending_upload
             .take()
             .expect("checked pending upload");
-        if !self.kitty_download_origin_allowed(pending.key.origin) {
+        if !self.kitty_origin_accepts_host_paths(pending.key.origin) {
             self.write_kitty_status(
                 pending.key.origin,
                 pending.reply_uses_8bit_controls,

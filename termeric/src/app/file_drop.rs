@@ -173,17 +173,11 @@ impl App {
                 source_identity: source.identity,
             });
         }
-        match &tab.tab_type {
-            crate::tabs::TabType::Plugin { .. } => {
-                return Err(
-                    "File drops are disabled for plugin tabs to prevent accidental data disclosure"
-                        .into(),
-                );
-            }
-            crate::tabs::TabType::Serial { .. } => {
-                return Err("File paths cannot be dropped into a serial terminal".into());
-            }
-            crate::tabs::TabType::Shell | crate::tabs::TabType::Profile { .. } => {}
+        if !tab.pane_accepts_host_paths(tab.focused_terminal_identity().pane_id) {
+            return Err(
+                "File paths are not dropped into plugin, agent, or serial terminals, to prevent accidental data disclosure"
+                    .into(),
+            );
         }
         quote_local_drop_path(path).map(DroppedPathAction::InsertLocal)
     }

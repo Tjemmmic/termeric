@@ -84,7 +84,7 @@ Limits:
 - files leaving your computer: up to 16 files per transfer, without recursing into directories;
 - `kitten transfer`'s delta mode (`--transmit-deltas`) and its permission-bypass password are not supported.
 
-File transfer works in local tabs and in tabs attached to a [live domain](live-domains.md).
+File transfer works in local shell and profile panes and in tabs attached to a [live domain](live-domains.md). It is refused in a pane Termeric opened for a coding agent or plugin, wherever that pane sits, and in a [serial](profiles.md#serial-profiles) tab; a shell pane split into an agent's tab can transfer files.
 
 ## Drag and drop files
 
@@ -92,7 +92,7 @@ Drag a file or folder from your file manager onto the Termeric window to type it
 
 Nothing is read or uploaded; only the path is typed. The pointer shows whether the focused pane accepts the drop, and Termeric shows a toast when it doesn't. A drop is refused:
 
-- in a tab Termeric opened for a coding agent or plugin, so a local path isn't sent to it by accident;
+- in a pane Termeric opened for a coding agent or plugin, even one split into a shell tab, so a local path isn't sent to it by accident (a shell pane split into an agent's tab accepts drops);
 - in a [serial](profiles.md#serial-profiles) tab;
 - in a read-only pane, or while broadcast input is on;
 - while a panel, search, copy mode, or another input mode is open.

@@ -16,16 +16,6 @@ fn local_file_drop_is_quoted_and_refuses_unsafe_terminal_routes() {
         "'/tmp/project file'\\''s.txt' "
     );
 
-    let active_tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
-    active_tab.tab_type = crate::tabs::TabType::Plugin {
-        plugin_id: "hermetic-fixture".into(),
-    };
-    assert!(
-        app.dropped_path_payload(path)
-            .unwrap_err()
-            .contains("data disclosure")
-    );
-
     app.tabs
         .as_mut()
         .unwrap()
@@ -208,6 +198,106 @@ fn live_domain_drop_requires_request_scoped_confirmation_without_reading_content
     assert!(app.pending_file_upload().is_none());
 }
 
+fn kitty_send_request(id: &str) -> termeric_core::KittyFileTransferCommand {
+    termeric_core::KittyFileTransferCommand {
+        action: termeric_core::KittyFileTransferAction::Send,
+        compression: termeric_core::KittyFileTransferCompression::None,
+        file_type: termeric_core::KittyFileTransferType::Regular,
+        transmission_type: termeric_core::KittyFileTransmissionType::Simple,
+        id: id.into(),
+        file_id: String::new(),
+        quiet: 0,
+        mtime_ns: None,
+        permissions: None,
+        size: None,
+        name: None,
+        status: None,
+        parent: None,
+        data: Box::default(),
+        bypass_present: false,
+        reply_uses_8bit_controls: true,
+    }
+}
+
+#[test]
+fn host_paths_follow_each_panes_launch_not_its_tab() {
+    let config = Config {
+        shell: crate::test_support::sleeping_shell(),
+        ..Config::default()
+    };
+    let mut app = App::new_headless_with_tabs(config);
+    let path = std::path::Path::new("/tmp/project.txt");
+    let kitty_request_awaits_consent = |app: &mut App, tab_id, pane_id, id: &str| {
+        app.handle_terminal_event(RoutedTerminalEvent {
+            origin: TerminalEventOrigin { tab_id, pane_id },
+            event: TerminalEvent::KittyFileTransfer(kitty_send_request(id)),
+        });
+        app.kitty_file_transfers.pending.is_some()
+    };
+    let agent_launch = crate::panes::LocalPaneLaunch {
+        identity: crate::workspace::WorkspaceLaunch::Plugin {
+            plugin_id: "agent-fixture".into(),
+            profile: None,
+        },
+        shell: crate::test_support::sleeping_shell(),
+        cwd: None,
+    };
+
+    // An agent split into a shell tab is refused, though its tab is a shell.
+    let tabs = app.tabs.as_mut().unwrap();
+    let shell_tab = tabs.active_tab_id().unwrap();
+    let agent_pane = tabs
+        .create_plugin_pane(
+            tabs.active_tab().unwrap().focused_terminal_identity(),
+            SplitDirection::Vertical,
+            &agent_launch,
+        )
+        .unwrap();
+    tabs.active_tab_mut().unwrap().panes.focus(agent_pane);
+    assert!(
+        app.dropped_path_payload(path)
+            .unwrap_err()
+            .contains("data disclosure")
+    );
+    assert!(!kitty_request_awaits_consent(
+        &mut app,
+        shell_tab,
+        agent_pane,
+        "agent-in-shell-tab"
+    ));
+    assert!(!app.info_overlay.is_active());
+
+    // A shell split into an agent tab is accepted, though its tab is not.
+    let tabs = app.tabs.as_mut().unwrap();
+    tabs.new_tab_with_command(
+        "/bin/sh",
+        &crate::test_support::sleeping_args(),
+        None,
+        Some("agent-tab"),
+        Some(crate::tabs::TabType::Plugin {
+            plugin_id: "agent-fixture".into(),
+        }),
+        HashMap::new(),
+    )
+    .unwrap();
+    let agent_tab = tabs.active_tab_id().unwrap();
+    assert!(app.dropped_path_payload(path).is_err());
+    let panes = &mut app.tabs.as_mut().unwrap().active_tab_mut().unwrap().panes;
+    panes.adopt_primary_shell(crate::test_support::sleeping_shell());
+    let shell_pane = panes.split(SplitDirection::Vertical).unwrap();
+    panes.focus(shell_pane);
+    assert_eq!(
+        app.dropped_path_payload(path).unwrap(),
+        "'/tmp/project.txt' "
+    );
+    assert!(kitty_request_awaits_consent(
+        &mut app,
+        agent_tab,
+        shell_pane,
+        "shell-in-agent-tab"
+    ));
+}
+
 #[test]
 fn kitty_download_consent_is_request_scoped_and_terminal_type_gated() {
     let config = Config {
@@ -220,24 +310,7 @@ fn kitty_download_consent_is_request_scoped_and_terminal_type_gated() {
         tab_id,
         pane_id: PaneId(0),
     };
-    let request = termeric_core::KittyFileTransferCommand {
-        action: termeric_core::KittyFileTransferAction::Send,
-        compression: termeric_core::KittyFileTransferCompression::None,
-        file_type: termeric_core::KittyFileTransferType::Regular,
-        transmission_type: termeric_core::KittyFileTransmissionType::Simple,
-        id: "download-1".into(),
-        file_id: String::new(),
-        quiet: 0,
-        mtime_ns: None,
-        permissions: None,
-        size: None,
-        name: None,
-        status: None,
-        parent: None,
-        data: Box::default(),
-        bypass_present: false,
-        reply_uses_8bit_controls: true,
-    };
+    let request = kitty_send_request("download-1");
 
     app.handle_terminal_event(RoutedTerminalEvent {
         origin,
@@ -297,14 +370,14 @@ fn kitty_download_consent_is_request_scoped_and_terminal_type_gated() {
         .unwrap()
         .active_tab_mut()
         .unwrap()
-        .tab_type = crate::tabs::TabType::Plugin {
-        plugin_id: "untrusted".into(),
+        .tab_type = crate::tabs::TabType::Serial {
+        name: "fixture".into(),
     };
-    let mut plugin_request = request;
-    plugin_request.id = "plugin-download".into();
+    let mut serial_request = request;
+    serial_request.id = "serial-download".into();
     app.handle_terminal_event(RoutedTerminalEvent {
         origin,
-        event: TerminalEvent::KittyFileTransfer(plugin_request),
+        event: TerminalEvent::KittyFileTransfer(serial_request),
     });
     assert!(!app.info_overlay.is_active());
     assert!(app.kitty_file_transfers.pending.is_none());

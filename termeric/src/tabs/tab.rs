@@ -544,6 +544,26 @@ impl Tab {
         !matches!(self.tab_type, TabType::Serial { .. })
     }
 
+    /// Whether the program in `pane_id` may be handed this computer's files:
+    /// Kitty file transfers and dropped paths. Plugin and agent programs are
+    /// refused wherever the pane sits, since a split or a move puts them in
+    /// any tab; a serial device is not a program on this computer at all.
+    /// Live-domain panes are accepted; a path dropped on one becomes an
+    /// upload the person confirms.
+    pub(crate) fn pane_accepts_host_paths(&self, pane_id: PaneId) -> bool {
+        let Some(pane) = self.pane(pane_id) else {
+            return false;
+        };
+        if self.live_domain.is_some() {
+            return true;
+        }
+        !matches!(self.tab_type, TabType::Serial { .. })
+            && !matches!(
+                pane.launch,
+                crate::workspace::WorkspaceLaunch::Plugin { .. }
+            )
+    }
+
     /// Change one owner's next-launch reference, never sibling launch metadata.
     /// None means automatic; every Some name (including "default") is explicit.
     pub(crate) fn set_plugin_profile_reference(
