@@ -297,7 +297,16 @@ impl App {
             }
             WorkspaceLaunch::Plugin { plugin_id, .. } => {
                 let mut warnings = Vec::new();
-                let cwd = usable_workspace_cwd(snapshot, &mut warnings);
+                let primary = snapshot
+                    .panes
+                    .iter()
+                    .find(|pane| pane.id == snapshot.primary_pane);
+                let cwd = crate::panes::usable_workspace_cwd(
+                    primary.and_then(|pane| pane.working_directory.as_deref()),
+                    snapshot.id,
+                    snapshot.primary_pane,
+                    &mut warnings,
+                );
                 let (_, shell) = &pane_launches[&snapshot.primary_pane];
                 tabs.new_tab_with_command(
                     shell.program.as_deref().expect("validated plugin program"),
@@ -388,25 +397,5 @@ impl App {
             launches.insert(pane.id, (resolved, shell));
         }
         Ok(launches)
-    }
-}
-
-fn usable_workspace_cwd(
-    snapshot: &WorkspaceTabSnapshot,
-    warnings: &mut Vec<String>,
-) -> Option<String> {
-    let cwd = snapshot
-        .panes
-        .iter()
-        .find(|pane| pane.id == snapshot.primary_pane)
-        .and_then(|pane| pane.working_directory.as_deref())?;
-    if std::path::Path::new(cwd).is_dir() {
-        Some(cwd.to_string())
-    } else {
-        warnings.push(format!(
-            "tab {} cwd {cwd:?} is unavailable; used the process default",
-            snapshot.id
-        ));
-        None
     }
 }

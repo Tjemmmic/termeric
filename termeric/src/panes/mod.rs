@@ -409,13 +409,16 @@ impl Pane {
     }
 }
 
-fn replay_workspace_scrollback(terminal: &mut Terminal, lines: &[String]) {
+/// Replays a saved pane's scrollback into its freshly launched terminal.
+pub(crate) fn replay_workspace_scrollback(terminal: &mut Terminal, lines: &[String]) {
     if !lines.is_empty() {
         terminal.process((lines.join("\r\n") + "\r\n").as_bytes());
     }
 }
 
-fn usable_workspace_cwd(
+/// A saved pane's working directory if it still exists; otherwise a warning
+/// and `None`, so the relaunch starts in the process default.
+pub(crate) fn usable_workspace_cwd(
     cwd: Option<&str>,
     tab_id: u32,
     pane_id: u32,

@@ -16,7 +16,7 @@ pub(crate) use title::{
 };
 
 use crate::config::ShellConfig;
-use crate::panes::PaneId;
+use crate::panes::{PaneId, replay_workspace_scrollback, usable_workspace_cwd};
 use crate::session::Session;
 use anyhow::Context;
 use std::collections::HashMap;
@@ -2582,29 +2582,6 @@ impl TabManager {
             .iter_mut()
             .flat_map(Tab::drain_user_notices)
             .collect()
-    }
-}
-
-fn replay_workspace_scrollback(terminal: &mut Terminal, lines: &[String]) {
-    if !lines.is_empty() {
-        terminal.process((lines.join("\r\n") + "\r\n").as_bytes());
-    }
-}
-
-fn usable_workspace_cwd(
-    cwd: Option<&str>,
-    tab_id: u32,
-    pane_id: u32,
-    warnings: &mut Vec<String>,
-) -> Option<String> {
-    let cwd = cwd?;
-    if std::path::Path::new(cwd).is_dir() {
-        Some(cwd.to_string())
-    } else {
-        warnings.push(format!(
-            "tab {tab_id} pane {pane_id} cwd {cwd:?} is unavailable; used the process default"
-        ));
-        None
     }
 }
 
