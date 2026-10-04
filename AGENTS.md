@@ -215,7 +215,7 @@ Mouse, focus, alternate-scroll, and paste reports snapshot mode from the same fo
 
 - Child modules access the parent's private fields via `&mut self` on `impl Renderer` blocks
 - Types in `types.rs` are re-exported via `pub use types::*` in mod.rs; a type defined in another sub-module needs its own `pub use` there (e.g. `PopupMenuInfo`)
-- A hit test must use the same geometry as the `build_*` function that drew the element. The tab bar shares one geometry source (`TabChrome`); the panel and search-bar hit tests still recompute theirs, so change both sides together
+- A hit test must use the same geometry as the `build_*` function that drew the element: the tab bar shares one geometry source (`TabChrome`), the side panels and the find box each compute one `*Layout` that their builder and hit test both use (`commands_panel_layout`, `session_panel_layout`, `SearchBarLayout::calculate`)
 
 ### Animation Timing
 

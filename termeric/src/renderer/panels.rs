@@ -7,6 +7,47 @@ use crate::ui::geometry::Bounds;
 use crate::ui::icon::Icon;
 
 impl Renderer {
+    /// The Commands panel's geometry, shared by its drawing and hit test.
+    fn commands_panel_layout(
+        &self,
+        info: &crate::ui::commands::panel::CommandsPanelInfo,
+        window_width: f32,
+        window_height: f32,
+    ) -> crate::ui::commands::panel::CommandsPanelLayout {
+        use crate::ui::commands::panel::{CommandsPanelLayout, EditMode};
+        CommandsPanelLayout::calculate(
+            window_width,
+            window_height,
+            self.tab_bar_height(),
+            self.cell_width(),
+            self.cell_height(),
+            info.animation,
+            info.edit_mode != EditMode::Browse,
+            info.commands.len(),
+        )
+        .scrolled(info.scroll_offset)
+    }
+
+    /// The session panel's geometry, shared by its drawing and hit test.
+    fn session_panel_layout(
+        &self,
+        info: &crate::session::panel::SessionPanelInfo,
+        window_width: f32,
+        window_height: f32,
+    ) -> crate::session::panel::SessionPanelLayout {
+        crate::session::panel::SessionPanelLayout::calculate(
+            window_width,
+            window_height,
+            self.tab_bar_height(),
+            self.cell_width(),
+            self.cell_height(),
+            info.animation,
+            info.rename_text.is_some(),
+            info.workspaces,
+            info.sessions.len(),
+        )
+    }
+
     pub(super) fn build_commands_panel(
         &mut self,
         info: &crate::ui::commands::panel::CommandsPanelInfo,
@@ -14,9 +55,7 @@ impl Renderer {
         window_height: f32,
     ) {
         use crate::ui::commands::navigation::CommandControl;
-        use crate::ui::commands::panel::{
-            COMMAND_PLACEHOLDER, CommandsPanelLayout, EditMode, NAME_PLACEHOLDER,
-        };
+        use crate::ui::commands::panel::{COMMAND_PLACEHOLDER, EditMode, NAME_PLACEHOLDER};
 
         let anim = info.animation;
         if anim <= 0.0 {
@@ -24,17 +63,7 @@ impl Renderer {
         }
         let cell_width = self.cell_width();
         let cell_height = self.cell_height();
-        let layout = CommandsPanelLayout::calculate(
-            window_width,
-            window_height,
-            self.tab_bar_height(),
-            cell_width,
-            cell_height,
-            anim,
-            info.edit_mode != EditMode::Browse,
-            info.commands.len(),
-        )
-        .scrolled(info.scroll_offset);
+        let layout = self.commands_panel_layout(info, window_width, window_height);
         let scale = self.scale_factor;
         let px = |logical: f32| (logical * scale).round().max(1.0);
         let panel = layout.panel;
@@ -599,22 +628,9 @@ impl Renderer {
         window_width: f32,
         window_height: f32,
     ) -> crate::ui::commands::panel::CommandsPanelAction {
-        use crate::ui::commands::panel::{CommandsPanelAction, CommandsPanelLayout, EditMode};
+        use crate::ui::commands::panel::CommandsPanelAction;
 
-        let ui_cw = self.cell_width();
-        let cell_height = self.cell_height();
-
-        let layout = CommandsPanelLayout::calculate(
-            window_width,
-            window_height,
-            self.tab_bar_height(),
-            ui_cw,
-            cell_height,
-            info.animation,
-            info.edit_mode != EditMode::Browse,
-            info.commands.len(),
-        )
-        .scrolled(info.scroll_offset);
+        let layout = self.commands_panel_layout(info, window_width, window_height);
 
         // A click beside or above the panel (the toolbar) dismisses it.
         if x < layout.panel.x || y < layout.panel.y {
@@ -658,24 +674,14 @@ impl Renderer {
         window_width: f32,
         window_height: f32,
     ) {
-        use crate::session::panel::{SessionPanelControl, SessionPanelLayout};
+        use crate::session::panel::SessionPanelControl;
 
         let anim = info.animation;
         if anim <= 0.0 {
             return;
         }
         let cell_height = self.cell_height();
-        let layout = SessionPanelLayout::calculate(
-            window_width,
-            window_height,
-            self.tab_bar_height(),
-            self.cell_width(),
-            cell_height,
-            anim,
-            info.rename_text.is_some(),
-            info.workspaces,
-            info.sessions.len(),
-        );
+        let layout = self.session_panel_layout(info, window_width, window_height);
         let scale = self.scale_factor;
         let px = |logical: f32| (logical * scale).round().max(1.0);
         let panel = layout.panel;
@@ -939,22 +945,9 @@ impl Renderer {
         window_width: f32,
         window_height: f32,
     ) -> crate::session::panel::SessionPanelAction {
-        use crate::session::panel::{SessionPanelAction, SessionPanelControl, SessionPanelLayout};
+        use crate::session::panel::{SessionPanelAction, SessionPanelControl};
 
-        let ui_cw = self.cell_width();
-        let cell_height = self.cell_height();
-
-        let layout = SessionPanelLayout::calculate(
-            window_width,
-            window_height,
-            self.tab_bar_height(),
-            ui_cw,
-            cell_height,
-            info.animation,
-            info.rename_text.is_some(),
-            info.workspaces,
-            info.sessions.len(),
-        );
+        let layout = self.session_panel_layout(info, window_width, window_height);
 
         // A click beside or above the panel (the toolbar) dismisses it.
         if x < layout.panel.x || y < layout.panel.y {
