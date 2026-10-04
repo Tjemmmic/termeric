@@ -290,7 +290,7 @@ impl SettingsModalLayout {
         entry_abs_idx: usize,
         scroll_offset: usize,
         option_count: usize,
-        max_option_len: usize,
+        max_option_chars: usize,
         highlighted_option: usize,
     ) -> Option<DropdownRect> {
         if option_count == 0 || entry_abs_idx < scroll_offset {
@@ -314,7 +314,7 @@ impl SettingsModalLayout {
         };
         let dd_height = visible_options as f32 * option_h + 8.0;
 
-        let min_dd_width = (max_option_len as f32 + 4.0) * self.cell_width;
+        let min_dd_width = (max_option_chars as f32 + 4.0) * self.cell_width;
         let remaining = self.content_x + self.content_width - self.value_x;
         let dd_width = min_dd_width.max(remaining).min(self.content_width * 0.7);
 
@@ -2317,13 +2317,17 @@ impl SettingsPanel {
         let (option_count, max_len) = match &entry.kind {
             SettingKind::Dropdown { options, .. } => (
                 options.len(),
-                options.iter().map(|s| s.len()).max().unwrap_or(10),
+                options
+                    .iter()
+                    .map(|s| s.chars().count())
+                    .max()
+                    .unwrap_or(10),
             ),
             SettingKind::SteppedList { values, .. } => (
                 values.len(),
                 values
                     .iter()
-                    .map(|v| v.to_string().len())
+                    .map(|v| v.to_string().chars().count())
                     .max()
                     .unwrap_or(10),
             ),

@@ -449,12 +449,16 @@ impl Renderer {
             return;
         }
 
-        let max_option_len = options_text.iter().map(|s| s.len()).max().unwrap_or(10);
+        let max_option_chars = options_text
+            .iter()
+            .map(|s| s.chars().count())
+            .max()
+            .unwrap_or(10);
         let Some(rect) = layout.dropdown_rect(
             abs_idx,
             info.scroll_offset,
             option_count,
-            max_option_len,
+            max_option_chars,
             info.dropdown_highlight,
         ) else {
             return;
