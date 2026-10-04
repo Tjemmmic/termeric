@@ -96,13 +96,21 @@ pub(super) fn assert_every_byte_encoded(bytes: &[u8], path: &[u8], suffix: &[u8]
     assert!(terminal.drain_events().is_empty());
 }
 
-/// Checks one [`bound_cases`] entry: a fitting path is reported whole, and
-/// any other emits nothing but `suffix`, never a truncated report.
+/// Checks one [`bound_cases`] entry: a fitting path is reported whole, as
+/// one terminated report right before `suffix`, and any other emits nothing
+/// but `suffix`, never a truncated report.
 pub(super) fn assert_bounded(bytes: &[u8], path: &str, accepted: bool, suffix: &[u8]) {
-    assert!(bytes.ends_with(suffix), "{path:?}: {bytes:?}");
+    let report = bytes
+        .strip_suffix(suffix)
+        .unwrap_or_else(|| panic!("{path:?}: {bytes:?} does not end with {suffix:?}"));
     let mut terminal = Terminal::new(80, 24);
     terminal.process(bytes);
     if accepted {
+        assert!(report.starts_with(b"\x1b]7;file://"), "{path:?}: {bytes:?}");
+        assert!(
+            report.ends_with(b"\x07") || report.ends_with(b"\x1b\\"),
+            "{path:?}: {bytes:?}"
+        );
         assert_eq!(terminal.reported_working_directory().unwrap().path(), path);
     } else {
         assert_eq!(bytes, suffix, "{path:?}");

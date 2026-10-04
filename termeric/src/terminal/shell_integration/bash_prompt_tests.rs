@@ -16,8 +16,14 @@ fn probe(prompt_command: &str, integrated: bool) -> Option<(String, Vec<u8>)> {
         ])
         .env_clear()
         .status()
-        .ok()?;
+        .unwrap();
     if !modern.success() {
+        assert_ne!(
+            std::env::var("TERMERIC_REQUIRE_SHELL_ACCEPTANCE").as_deref(),
+            Ok("1"),
+            "Bash 5.1 or later is required by TERMERIC_REQUIRE_SHELL_ACCEPTANCE=1"
+        );
+        eprintln!("skipping: {program} is older than Bash 5.1");
         return None;
     }
     let temp = tempfile::tempdir().unwrap();

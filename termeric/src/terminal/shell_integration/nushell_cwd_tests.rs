@@ -85,5 +85,7 @@ fn nushell_initial_cwd_bounds_complete_reports() {
             return;
         };
         assert_bounded(&bytes, &path, accepted, b"");
+        // The Nushell report ends with ST, not BEL.
+        assert_eq!(bytes.ends_with(b"\x1b\\"), accepted, "{path:?}");
     }
 }
