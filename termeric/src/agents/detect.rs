@@ -1,7 +1,7 @@
 //! Recognizing an agent from the process in the foreground of a terminal.
 
 /// Script interpreters whose first script argument names the real program.
-const INTERPRETERS: &[&str] = &[
+pub(super) const INTERPRETERS: &[&str] = &[
     "node", "nodejs", "bun", "deno", "python", "python3", "sh", "bash", "dash", "zsh",
 ];
 /// Shells, whose `-c` argument is a command line rather than a script.

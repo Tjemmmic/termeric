@@ -172,20 +172,21 @@ impl AgentConfig {
     }
 }
 
-/// Programs that start other programs. Launched through one of these, an
-/// agent is recognized by its `detect` names; the launcher's own name would
-/// claim every other program it starts.
-const LAUNCHERS: &[&str] = &[
-    "npx", "pnpx", "bunx", "uvx", "pipx", "docker", "podman", "node", "nodejs", "bun", "deno",
-    "python", "python3", "env", "sh", "bash", "dash", "zsh", "fish",
+/// Programs other than script interpreters that start other programs:
+/// package runners, container tools, `env`, and fish.
+const RUNNERS: &[&str] = &[
+    "npx", "pnpx", "bunx", "uvx", "pipx", "docker", "podman", "env", "fish",
 ];
 
-/// The name `program` is recognized by, unless it is a launcher.
+/// The name `program` is recognized by, unless it is a launcher (a script
+/// interpreter or a runner). Launched through one of these, an agent is
+/// recognized by its `detect` names; the launcher's own name would claim
+/// every other program it starts.
 fn program_file_name(program: &str) -> Option<String> {
     std::path::Path::new(program)
         .file_name()
         .and_then(|name| name.to_str())
-        .filter(|name| !LAUNCHERS.contains(name))
+        .filter(|name| !super::detect::INTERPRETERS.contains(name) && !RUNNERS.contains(name))
         .map(str::to_owned)
 }
 
