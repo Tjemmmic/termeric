@@ -781,12 +781,17 @@ impl PersistentHandler {
         active_generation: &AtomicU64,
         expected_generation: u64,
     ) -> Result<Vec<StructuredResponseAction>, String> {
+        let deadline = Instant::now() + HANDLER_TIMEOUT;
+        let cancelled = || {
+            shutdown.load(Ordering::Acquire)
+                || active_generation.load(Ordering::Acquire) != expected_generation
+        };
         if let Some(status) = self
             .child
             .try_wait()
             .map_err(|error| bounded_error(&format!("handler wait failed: {error}")))?
         {
-            return Err(self.exit_error(status));
+            return Err(self.exit_error(status, deadline));
         }
         let (response_sender, response_receiver) = sync_channel(1);
         self.requests
@@ -802,16 +807,14 @@ impl PersistentHandler {
                 }
                 TrySendError::Disconnected(_) => String::from("persistent handler input is closed"),
             })?;
-        let started = Instant::now();
         let (bytes, truncated) = loop {
-            if shutdown.load(Ordering::Acquire)
-                || active_generation.load(Ordering::Acquire) != expected_generation
-            {
+            if cancelled() {
                 return Err("structured plugin handler was cancelled".into());
             }
             match response_receiver.recv_timeout(WORKER_POLL_INTERVAL) {
-                Ok(result) => break result?,
-                Err(RecvTimeoutError::Timeout) if started.elapsed() < HANDLER_TIMEOUT => {}
+                Ok(Ok(response)) => break response,
+                Ok(Err(error)) => return Err(self.failure_error(error, deadline, &cancelled)),
+                Err(RecvTimeoutError::Timeout) if Instant::now() < deadline => {}
                 Err(RecvTimeoutError::Timeout) => {
                     return Err(format!(
                         "structured plugin handler exceeded {} ms",
@@ -819,10 +822,10 @@ impl PersistentHandler {
                     ));
                 }
                 Err(RecvTimeoutError::Disconnected) => {
-                    let status = self.child.try_wait().ok().flatten();
-                    return Err(status.map_or_else(
-                        || "persistent handler response channel closed".into(),
-                        |status| self.exit_error(status),
+                    return Err(self.failure_error(
+                        "persistent handler response channel closed".into(),
+                        deadline,
+                        &cancelled,
                     ));
                 }
             }
@@ -838,12 +841,50 @@ impl PersistentHandler {
             .try_wait()
             .map_err(|error| bounded_error(&format!("handler wait failed: {error}")))?
         {
-            return Err(self.exit_error(status));
+            return Err(self.exit_error(status, deadline));
         }
         Ok(actions)
     }
 
-    fn exit_error(&self, status: std::process::ExitStatus) -> String {
+    /// Explain a request whose I/O failed. A closed stdout or broken pipe
+    /// usually means the handler is exiting, so wait for it, until `deadline`
+    /// or cancellation, and report its exit status and standard error rather
+    /// than only the broken pipe.
+    fn failure_error(
+        &mut self,
+        error: String,
+        deadline: Instant,
+        cancelled: &dyn Fn() -> bool,
+    ) -> String {
+        loop {
+            match self.child.try_wait() {
+                Ok(Some(status)) => return self.exit_error(status, deadline),
+                Ok(None) if Instant::now() < deadline && !cancelled() => {
+                    thread::sleep(WORKER_POLL_INTERVAL);
+                }
+                Ok(None) | Err(_) => return error,
+            }
+        }
+    }
+
+    /// The handler's exit status and the start of its standard error. The
+    /// stderr reader gets until `deadline` to reach end of file, so what the
+    /// handler wrote just before exiting is included. The handler is being
+    /// discarded, so its process group is killed first: a descendant still
+    /// holding the pipe would otherwise keep the reader from finishing.
+    fn exit_error(&mut self, status: std::process::ExitStatus, deadline: Instant) -> String {
+        terminate_handler_group(self.child.id());
+        while self
+            .stderr_thread
+            .as_ref()
+            .is_some_and(|reader| !reader.is_finished())
+            && Instant::now() < deadline
+        {
+            thread::sleep(WORKER_POLL_INTERVAL);
+        }
+        if let Some(reader) = self.stderr_thread.take_if(|reader| reader.is_finished()) {
+            let _ = reader.join();
+        }
         let stderr = self.stderr.lock().unwrap();
         let mut detail = String::from_utf8_lossy(&stderr.bytes).into_owned();
         if stderr.truncated {
@@ -1698,10 +1739,61 @@ done"#,
         assert!(handlers.is_empty());
 
         let crash = persistent_fixture("crash-fixture", "printf 'fixture failure\\n' >&2\nexit 7");
-        assert!(
-            run_persistent_handler(&mut handlers, &crash, 2, &shutdown, &generation, 1).is_err()
-        );
+        let error = run_persistent_handler(&mut handlers, &crash, 2, &shutdown, &generation, 1)
+            .unwrap_err();
+        assert!(error.contains("exit status: 7"), "{error}");
+        assert!(error.contains("fixture failure"), "{error}");
         assert!(handlers.is_empty());
+
+        // A handler that reads its event and then dies mid-request reports
+        // the same, rather than only that its stdout closed.
+        let mid_request = persistent_fixture(
+            "mid-request-crash-fixture",
+            "IFS= read -r event\nprintf 'died reading %s\\n' \"${#event}\" >&2\nexit 7",
+        );
+        let error =
+            run_persistent_handler(&mut handlers, &mid_request, 3, &shutdown, &generation, 1)
+                .unwrap_err();
+        assert!(error.contains("exit status: 7"), "{error}");
+        assert!(error.contains("died reading"), "{error}");
+        assert!(handlers.is_empty());
+    }
+
+    #[test]
+    fn handler_stderr_keeps_only_its_first_four_kib() {
+        let stderr = Mutex::new(BoundedStderr::default());
+        let written = vec![b'e'; MAX_ERROR_BYTES as usize + 1_500];
+        drain_persistent_stderr(Cursor::new(written), &stderr);
+        let stderr = stderr.into_inner().unwrap();
+        assert_eq!(stderr.bytes.len(), MAX_ERROR_BYTES as usize);
+        assert!(stderr.truncated);
+
+        let stderr = Mutex::new(BoundedStderr::default());
+        drain_persistent_stderr(Cursor::new(vec![b'e'; MAX_ERROR_BYTES as usize]), &stderr);
+        let stderr = stderr.into_inner().unwrap();
+        assert_eq!(stderr.bytes.len(), MAX_ERROR_BYTES as usize);
+        assert!(!stderr.truncated);
+    }
+
+    #[test]
+    fn handler_events_are_refused_past_sixteen_kib() {
+        // The request ID the worker adds counts toward the bound.
+        let event_of = |padding: usize| {
+            format!(
+                r#"{{"schema_version":1,"event":{{"type":"app-ready","pad":"{}"}}}}"#,
+                "x".repeat(padding)
+            )
+        };
+        let request_id = u64::MAX;
+        let added = r#","request_id":18446744073709551615"#.len();
+        let fits = MAX_STRUCTURED_EVENT_BYTES - added - event_of(0).len();
+        let encoded = persistent_request_json(&event_of(fits), request_id).unwrap();
+        assert_eq!(encoded.len(), MAX_STRUCTURED_EVENT_BYTES);
+        let error = persistent_request_json(&event_of(fits + 1), request_id).unwrap_err();
+        assert!(
+            error.contains(&format!("exceeds {MAX_STRUCTURED_EVENT_BYTES} bytes")),
+            "{error}"
+        );
     }
 
     #[test]
