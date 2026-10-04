@@ -55,9 +55,9 @@ When you give no window or tab options at all and [automatic restore](workspaces
 
 ### Joining the running Termeric
 
-When Termeric is already running on your display, a plain launch opens its window in that process instead of starting another, so every window shares one process and you can move tabs between them. The new window uses the running process's settings and environment. A tab without `--working-directory` opens in the directory you launched from.
+When Termeric is already running on your display, a plain launch opens its window in that process instead of starting another, so every window shares one process and you can move tabs between them. The new window uses the running process's settings, and its programs inherit the running process's environment rather than your launch's. A tab without `--working-directory` opens in the directory you launched from.
 
-Only a launch of one window of shell or command tabs, with at most a directory and a title each, joins. Anything else, such as a workspace, a profile, splits, `--geometry`, `--app-id`, `--renderer`, several windows, or `--quick-access`, starts a process of its own. So does a different or rebuilt `termeric` executable.
+Only a launch of one window of shell or command tabs, with at most a directory and a title each, joins. Anything else, such as a workspace, a profile, splits, `--geometry`, `--app-id`, `--renderer`, several windows, or `--quick-access`, starts a process of its own. So does a different or rebuilt `termeric` executable, and a launch whose environment differs from the running process's in any variable that shapes Termeric itself: `RUST_LOG`, `WGPU_BACKEND`, `WGPU_ADAPTER_NAME`, `WGPU_POWER_PREF`, `LIBGL_ALWAYS_SOFTWARE`, `TERMERIC_TERM`, `TERMERIC_TERMINFO_DIR`, `TERMINFO`, `TERMINFO_DIRS`, `XDG_CONFIG_HOME`, or `XDG_DATA_HOME`. For example, `RUST_LOG=debug termeric` starts a process that logs at that level when the running one doesn't.
 
 `--separate-process` always starts a new process, and this setting turns joining off:
 

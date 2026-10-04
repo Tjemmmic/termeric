@@ -59,8 +59,10 @@ fn main() -> Result<std::process::ExitCode> {
 
     let mut _quick_access_guard = None;
     // Recorded before anything can rebuild the executable, so a launch of a
-    // newer build never joins this process.
+    // newer build never joins this process; the environment is recorded
+    // before anything in this process could change it.
     let _ = control::build_identity();
+    let _ = control::environment_identity();
     let launch = match outcome {
         cli::ParseOutcome::Run(launch) => {
             if let Some((process_id, window_id)) = control::join_running_launch(&launch) {

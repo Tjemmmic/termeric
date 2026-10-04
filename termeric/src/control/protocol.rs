@@ -98,6 +98,11 @@ pub enum Request {
         /// changed); a process running any other build refuses it, so a
         /// rebuilt or different Termeric runs its own code.
         build: String,
+        /// The launcher's environment identity, a fingerprint of the
+        /// variables that shape the Termeric process itself
+        /// (`control::JOIN_ENVIRONMENT_VARIABLES`); a process started with
+        /// other values refuses it, so the launch runs with its own.
+        environment: String,
         tabs: Vec<JoinTab>,
     },
     LaunchWindow {
@@ -1078,6 +1083,7 @@ impl Request {
                 display,
                 activation_token,
                 build,
+                environment,
                 tabs,
             } => {
                 if !valid_request_id(request_id) {
@@ -1098,6 +1104,15 @@ impl Request {
                 {
                     return Err(format!(
                         "A joining launch's display, build, and activation token must be printable UTF-8 of at most {MAX_JOIN_IDENTITY_BYTES} bytes"
+                    ));
+                }
+                if !termeric_core::hex::is_lower(
+                    environment,
+                    crate::control::ENVIRONMENT_IDENTITY_DIGITS,
+                ) {
+                    return Err(format!(
+                        "A joining launch's environment identity must be exactly {} lowercase hex digits",
+                        crate::control::ENVIRONMENT_IDENTITY_DIGITS
                     ));
                 }
                 if tabs.is_empty() || tabs.len() > MAX_JOIN_TABS {
@@ -3033,6 +3048,7 @@ mod tests {
             display: display.into(),
             activation_token: token.map(str::to_owned),
             build: "/usr/bin/termeric@1790000000.5".into(),
+            environment: "0123456789abcdef".into(),
             tabs,
         };
         assert!(
@@ -3054,6 +3070,22 @@ mod tests {
             build.clear();
         }
         assert!(no_build.validate().is_err());
+        for environment in [
+            "",
+            "0123456789ABCDEF",
+            "0123456789abcde",
+            "0123456789abcdef0",
+        ] {
+            let mut refused = join("wayland:w", None, vec![tab(None, None, &[])]);
+            if let Request::JoinLaunch {
+                environment: identity,
+                ..
+            } = &mut refused
+            {
+                *identity = environment.into();
+            }
+            assert!(refused.validate().is_err(), "{environment:?}");
+        }
         for refused in [
             join("", None, vec![tab(None, None, &[])]),
             join("wayland:\u{202e}", None, vec![tab(None, None, &[])]),

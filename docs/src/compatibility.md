@@ -38,6 +38,8 @@ To choose the terminal type yourself, set `TERMERIC_TERM` in the environment Ter
 TERMERIC_TERM=xterm-256color termeric
 ```
 
+The terminal type belongs to the whole Termeric process. When Termeric is already running with another value, this launch starts a process of its own rather than [joining](command-line.md#joining-the-running-termeric) the running one.
+
 ### Installing the terminfo entry
 
 If you built Termeric from source, compile the entry from the source tree into your home directory:

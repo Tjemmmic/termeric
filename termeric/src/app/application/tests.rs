@@ -264,10 +264,11 @@ fn a_joining_launch_opens_its_tabs_in_a_new_window_on_this_display() {
             args: vec!["-d".into(), "10".into()],
         },
     ];
+    const OWN: &str = "00000000000000aa";
     // Nothing to join yet.
     assert!(
         application
-            .prepare_join_launch(Some("wayland:w-1"), "wayland:w-1", None, &tabs)
+            .prepare_join_launch(Some("wayland:w-1"), OWN, "wayland:w-1", OWN, None, &tabs)
             .unwrap_err()
             .contains("no open window")
     );
@@ -278,13 +279,32 @@ fn a_joining_launch_opens_its_tabs_in_a_new_window_on_this_display() {
     application.window_order.push(native_id);
 
     assert_eq!(
-        application.prepare_join_launch(Some("wayland:w-1"), "wayland:w-0", None, &tabs),
+        application.prepare_join_launch(Some("wayland:w-1"), OWN, "wayland:w-0", OWN, None, &tabs),
         Err("This Termeric runs on another display".into())
+    );
+    // A launch with, say, another RUST_LOG or XDG_CONFIG_HOME runs its own
+    // process rather than silently taking this one's.
+    assert_eq!(
+        application.prepare_join_launch(
+            Some("wayland:w-1"),
+            OWN,
+            "wayland:w-1",
+            "00000000000000bb",
+            None,
+            &tabs
+        ),
+        Err("This Termeric runs with another environment".into())
+    );
+    assert!(
+        application.pending.is_empty(),
+        "a refused launch queues nothing"
     );
     let index = application
         .prepare_join_launch(
             Some("wayland:w-1"),
+            OWN,
             "wayland:w-1",
+            OWN,
             Some("token".into()),
             &tabs,
         )

@@ -954,11 +954,12 @@ pub fn report_agent_event(process_id: u32, report: Request) -> anyhow::Result<()
 
 /// Asks a running Termeric on `display` to open a window of `tabs`, so the
 /// new window shares its process. Processes are asked in turn; one that
-/// refuses (another display, too many windows, an older protocol) passes to
-/// the next. Returns the process and window that opened it, or `None`.
+/// refuses (another display, build, or environment, too many windows, an
+/// older protocol) passes to the next. Returns the process and window that opened it, or `None`.
 pub fn join_running(
     display: &str,
     build: &str,
+    environment: &str,
     activation_token: Option<String>,
     tabs: Vec<protocol::JoinTab>,
 ) -> anyhow::Result<Option<(u32, u64)>> {
@@ -973,6 +974,7 @@ pub fn join_running(
             display: display.to_owned(),
             activation_token: activation_token.clone(),
             build: build.to_owned(),
+            environment: environment.to_owned(),
             tabs: tabs.clone(),
         };
         let outcome = request(&endpoint, &join)

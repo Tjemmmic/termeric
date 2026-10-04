@@ -2,7 +2,7 @@
 
 This page covers the problems you're most likely to hit and how to fix them. If yours isn't here, [collect a log](#collect-logs) first: Termeric usually says exactly what went wrong.
 
-> **Tip.** If Termeric is already running, launching it again usually opens a new window in the running copy, and environment variables you set for that launch (such as `RUST_LOG`, `WGPU_BACKEND`, or `TERMERIC_TERM`) have no effect there. When a fix below asks you to start Termeric with one of them, add `--separate-process` so it starts a copy of its own.
+> **Tip.** If Termeric is already running, launching it again usually opens a new window in the running copy. A launch that sets a variable Termeric itself reads, such as `RUST_LOG`, `WGPU_BACKEND`, or `TERMERIC_TERM`, to a new value starts a copy of its own instead, so the fixes below work while Termeric is running.
 
 ## Termeric won't start or shows nothing: renderer problems
 
@@ -89,7 +89,7 @@ TERM=xterm-256color ssh host
 
 The same applies to containers (install the entry in the image, or pass `TERM=xterm-256color`). `sudo` sometimes can't see a per-user entry in `~/.terminfo`; install the entry system-wide or run `sudo env TERM=xterm-256color command`.
 
-To make every program in Termeric use `xterm-256color`, start it with `TERMERIC_TERM=xterm-256color termeric --separate-process`. Termeric also does this by itself when the `xterm-termeric` entry isn't installed locally.
+To make every program in Termeric use `xterm-256color`, start it with `TERMERIC_TERM=xterm-256color termeric`. Termeric also does this by itself when the `xterm-termeric` entry isn't installed locally.
 
 ## Configuration errors
 

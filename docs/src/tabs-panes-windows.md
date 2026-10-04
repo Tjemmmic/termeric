@@ -128,7 +128,8 @@ A launch starts a process of its own instead when:
 - you pass `--separate-process`;
 - you set `[window].share_process = false`;
 - it asks for something a running process can't provide for one window, such as `--workspace`, a terminal or agent profile, `--split`, `--class`/`--app-id`, `--geometry`, `--renderer`, several windows, or `--quick-access`;
-- the running Termeric is a different build, for example an installed release beside a development build.
+- the running Termeric is a different build, for example an installed release beside a development build;
+- the launch sets a variable that shapes Termeric itself to a different value than the running process has, such as `RUST_LOG`, `WGPU_BACKEND`, `TERMERIC_TERM`, or `XDG_CONFIG_HOME` (see [Command line](command-line.md#joining-the-running-termeric) for the full list).
 
 Windows in separate processes can't exchange tabs. See [Command line](command-line.md) for every launch option.
 

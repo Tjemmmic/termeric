@@ -6,6 +6,8 @@
 //! overlays. Environment values stay out of inventory, responses, and logs;
 //! clipboard data and plugin/provider credentials stay hidden.
 
+use std::os::unix::ffi::OsStringExt as _;
+
 mod environment_input;
 pub(crate) mod launches;
 pub mod protocol;
@@ -99,6 +101,62 @@ pub fn build_identity() -> Option<String> {
         .clone()
 }
 
+/// The variables that shape the Termeric process itself: its logging,
+/// renderer, terminal identity, and where it reads configuration and keeps
+/// data. A launch whose values differ starts a process of its own, since a
+/// running process cannot take them on; the rest of the launcher's
+/// environment is never carried to a running process.
+pub const JOIN_ENVIRONMENT_VARIABLES: [&str; 11] = [
+    "RUST_LOG",
+    "WGPU_BACKEND",
+    "WGPU_ADAPTER_NAME",
+    "WGPU_POWER_PREF",
+    "LIBGL_ALWAYS_SOFTWARE",
+    "TERMERIC_TERM",
+    "TERMERIC_TERMINFO_DIR",
+    "TERMINFO",
+    "TERMINFO_DIRS",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+];
+
+/// Digits in an environment identity.
+pub const ENVIRONMENT_IDENTITY_DIGITS: usize = 16;
+
+/// A fingerprint of this process's `JOIN_ENVIRONMENT_VARIABLES`, as first
+/// asked. A process asks at startup, so what it reports is what it runs
+/// with.
+pub fn environment_identity() -> &'static str {
+    static IDENTITY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    IDENTITY.get_or_init(|| {
+        fingerprint_environment(|name| std::env::var_os(name).map(std::ffi::OsString::into_vec))
+    })
+}
+
+/// The fingerprint of the values `lookup` gives each of
+/// `JOIN_ENVIRONMENT_VARIABLES`. An unset variable differs from an empty
+/// one, and every value is length-prefixed, so no two environments share an
+/// encoding.
+fn fingerprint_environment(lookup: impl Fn(&str) -> Option<Vec<u8>>) -> String {
+    let mut encoded = Vec::new();
+    for name in JOIN_ENVIRONMENT_VARIABLES {
+        encoded.extend_from_slice(name.as_bytes());
+        match lookup(name) {
+            Some(value) => {
+                encoded.push(1);
+                encoded.extend_from_slice(&(value.len() as u64).to_le_bytes());
+                encoded.extend_from_slice(&value);
+            }
+            None => encoded.push(0),
+        }
+    }
+    format!(
+        "{:0width$x}",
+        termeric_core::checksum::fnv1a64(&encoded),
+        width = ENVIRONMENT_IDENTITY_DIGITS
+    )
+}
+
 /// Opens `plan`'s window in a running Termeric on this display, when the
 /// plan and settings allow: every window then shares one process, so tabs
 /// can move between them. Returns the process and window, or `None` when
@@ -114,9 +172,10 @@ pub fn join_running_launch(plan: &crate::cli::LaunchPlan) -> Option<(u32, u64)> 
     }
     let display = display_identity()?;
     let build = build_identity()?;
+    let environment = environment_identity();
     let variable = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
     let token = variable("XDG_ACTIVATION_TOKEN").or_else(|| variable("DESKTOP_STARTUP_ID"));
-    match client::join_running(&display, &build, token, tabs) {
+    match client::join_running(&display, &build, environment, token, tabs) {
         Ok(joined) => joined,
         Err(error) => {
             log::debug!("Could not look for a running Termeric: {error:#}");
@@ -192,4 +251,38 @@ pub fn execute(command: ControlCommand) -> anyhow::Result<ControlOutput> {
         }
     };
     Ok(ControlOutput { text, exit_code: 0 })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ENVIRONMENT_IDENTITY_DIGITS, JOIN_ENVIRONMENT_VARIABLES, fingerprint_environment};
+
+    #[test]
+    fn environment_identity_depends_only_on_the_listed_variables() {
+        let unset = fingerprint_environment(|_| None);
+        assert!(termeric_core::hex::is_lower(
+            &unset,
+            ENVIRONMENT_IDENTITY_DIGITS
+        ));
+        assert_eq!(unset, fingerprint_environment(|_| None), "deterministic");
+        assert_eq!(
+            super::environment_identity(),
+            super::environment_identity(),
+            "asked once"
+        );
+
+        let with = |set: &'static str, value: &'static str| {
+            fingerprint_environment(move |name| (name == set).then(|| value.as_bytes().to_vec()))
+        };
+        // An empty value is not an unset one, and each listed variable counts.
+        assert_ne!(with("RUST_LOG", ""), unset);
+        let mut seen = std::collections::HashSet::from([unset.clone()]);
+        for name in JOIN_ENVIRONMENT_VARIABLES {
+            assert!(seen.insert(with(name, "x")), "{name}");
+        }
+        assert_ne!(with("RUST_LOG", "debug"), with("RUST_LOG", "info"));
+        // Other variables, such as the launcher's working environment, never do.
+        assert_eq!(with("PATH", "/opt/bin"), unset);
+        assert_eq!(with("EDITOR", "vim"), unset);
+    }
 }

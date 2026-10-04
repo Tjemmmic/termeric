@@ -132,11 +132,13 @@ impl Application {
                 display,
                 activation_token,
                 build,
+                environment,
                 tabs,
             } => self.join_launch(
                 event_loop,
                 request_id,
                 display,
+                environment,
                 build,
                 activation_token.clone(),
                 tabs,
@@ -403,6 +405,7 @@ impl Application {
         event_loop: &ActiveEventLoop,
         request_id: &str,
         display: &str,
+        environment: &str,
         build: &str,
         activation_token: Option<String>,
         tabs: &[crate::control::protocol::JoinTab],
@@ -414,7 +417,9 @@ impl Application {
         }
         let result_index = self.prepare_join_launch(
             crate::control::display_identity().as_deref(),
+            crate::control::environment_identity(),
             display,
+            environment,
             activation_token,
             tabs,
         )?;
@@ -432,18 +437,26 @@ impl Application {
     }
 
     /// Queues the window a joining launch asked for, when it runs on this
-    /// process's display (`own_display`). Returns its place among the
-    /// windows waiting to be created.
+    /// process's display (`own_display`) with its environment identity
+    /// (`own_environment`). Returns its place among the windows waiting to
+    /// be created.
     pub(super) fn prepare_join_launch(
         &mut self,
         own_display: Option<&str>,
+        own_environment: &str,
         display: &str,
+        environment: &str,
         activation_token: Option<String>,
         tabs: &[crate::control::protocol::JoinTab],
     ) -> std::result::Result<usize, String> {
         // Windows of one process share its display connection.
         if own_display != Some(display) {
             return Err("This Termeric runs on another display".into());
+        }
+        // ...and the environment it started with: its logging, renderer,
+        // terminal identity, and configuration and data directories.
+        if own_environment != environment {
+            return Err("This Termeric runs with another environment".into());
         }
         let total_tabs = process_tab_count(&self.windows);
         validate_control_window_creation_capacity(
