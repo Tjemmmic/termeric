@@ -142,11 +142,21 @@ fn save_workspace_to_dir_with_backup(
 
 pub fn load_workspace(id: &str) -> Result<WorkspaceLoadReport> {
     let dir = workspace_dir(id)?;
-    load_workspace_from_dir(&dir)
+    load_scrollback(&dir, read_named_workspace_metadata(&dir)?)
 }
 
+/// The archive in any directory, whatever it is named: for tests.
+#[cfg(test)]
 pub fn load_workspace_from_dir(dir: &Path) -> Result<WorkspaceLoadReport> {
-    let (mut workspace, recovered_from_backup, mut warnings) = read_workspace_metadata(dir)?;
+    load_scrollback(dir, read_workspace_metadata(dir)?)
+}
+
+/// The archive in `dir` whose metadata was just read, with each pane's saved
+/// scrollback.
+fn load_scrollback(
+    dir: &Path,
+    (mut workspace, recovered_from_backup, mut warnings): (WorkspaceSnapshot, bool, Vec<String>),
+) -> Result<WorkspaceLoadReport> {
     let mut loaded_scrollback_bytes = 0usize;
     for tab in &mut workspace.tabs {
         for pane in &mut tab.panes {
@@ -212,6 +222,22 @@ fn read_workspace_metadata(dir: &Path) -> Result<(WorkspaceSnapshot, bool, Vec<S
     Ok((workspace, recovered_from_backup, warnings))
 }
 
+/// [`read_workspace_metadata`] for the archive in a directory named for its
+/// ID. A directory whose metadata names another archive, such as a copy of
+/// one, is not that archive: listing, pruning, or deleting by the ID inside
+/// it would reach the original.
+fn read_named_workspace_metadata(dir: &Path) -> Result<(WorkspaceSnapshot, bool, Vec<String>)> {
+    let read = read_workspace_metadata(dir)?;
+    let id = &read.0.id;
+    if dir.file_name().and_then(|name| name.to_str()) != Some(id.as_str()) {
+        anyhow::bail!(
+            "workspace directory {} holds archive {id:?}, not its own",
+            dir.display()
+        );
+    }
+    Ok(read)
+}
+
 /// Saved workspaces, newest first. Closed-tab snapshots are listed apart, by
 /// [`list_closed_tabs`]; an archive that can't be read is listed here, so it
 /// can be inspected and deleted.
@@ -236,7 +262,7 @@ fn list_archives(closed_tabs: bool) -> Vec<WorkspaceListEntry> {
         .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
         .filter_map(|entry| {
             let path = entry.path();
-            match read_workspace_metadata(&path) {
+            match read_named_workspace_metadata(&path) {
                 Ok((workspace, ..)) => {
                     (workspace.closed_tab == closed_tabs).then(|| WorkspaceListEntry {
                         pane_count: workspace.tabs.iter().map(|tab| tab.panes.len()).sum(),
@@ -298,7 +324,7 @@ pub fn prune_automatic_workspaces(keep: &[String]) -> usize {
     };
     entries
         .filter_map(Result::ok)
-        .filter_map(|entry| read_workspace_metadata(&entry.path()).ok())
+        .filter_map(|entry| read_named_workspace_metadata(&entry.path()).ok())
         .filter(|(workspace, ..)| workspace.automatic && !keep.contains(&workspace.id))
         .filter(|(workspace, ..)| match delete_workspace(&workspace.id) {
             Ok(()) => true,
@@ -316,7 +342,7 @@ pub fn prune_automatic_workspaces(keep: &[String]) -> usize {
 pub fn rename_workspace(id: &str, new_name: &str) -> Result<()> {
     validate_workspace_name(new_name)?;
     let dir = workspace_dir(id)?;
-    let mut report = load_workspace_from_dir(&dir)?;
+    let mut report = load_workspace(id)?;
     report.workspace.name = new_name.trim().to_string();
     // Naming a workspace makes it the person's; it is never pruned.
     report.workspace.automatic = false;
@@ -831,6 +857,72 @@ mod tests {
         assert_eq!(closed.last().unwrap().id, "workspace-0003");
         assert_eq!(workspaces.len(), 1);
         assert_eq!(workspaces[0].id, "workspace-0000");
+    }
+
+    #[test]
+    fn a_copied_archive_is_never_taken_for_its_original() {
+        let temp = tempfile::tempdir().unwrap();
+        set_test_workspaces_base_dir(Some(temp.path().to_path_buf()));
+        let result = std::panic::catch_unwind(|| {
+            for index in 0..MAX_CLOSED_TABS {
+                let mut workspace = sample_workspace();
+                workspace.id = format!("workspace-{index:04}");
+                workspace.closed_tab = true;
+                workspace.updated_at =
+                    format!("2026-01-01T00:{:02}:{:02}Z", index / 60, index % 60);
+                save_workspace(&mut workspace).unwrap();
+            }
+            // Copy the oldest snapshot, which pruning would reach first.
+            let original = temp.path().join("workspace-0000");
+            let copy = temp.path().join("workspace-0000copy");
+            fs::create_dir(&copy).unwrap();
+            for name in ["workspace.toml", "workspace.toml.bak"] {
+                if original.join(name).exists() {
+                    fs::copy(original.join(name), copy.join(name)).unwrap();
+                }
+            }
+
+            assert_eq!(list_closed_tabs().len(), MAX_CLOSED_TABS);
+            assert_eq!(prune_closed_tabs(), 0);
+            assert!(original.join("workspace.toml").exists());
+            assert!(load_workspace("workspace-0000").is_ok());
+            let error = load_workspace("workspace-0000copy").unwrap_err();
+            assert!(format!("{error:#}").contains("not its own"), "{error:#}");
+            // It stays visible, under its own name, so it can be deleted.
+            let listed = list_workspaces();
+            assert_eq!(listed.len(), 1);
+            assert_eq!(listed[0].id, "workspace-0000copy");
+            assert!(listed[0].warning.is_some());
+            delete_workspace("workspace-0000copy").unwrap();
+            assert!(original.join("workspace.toml").exists());
+        });
+        set_test_workspaces_base_dir(None);
+        result.unwrap();
+    }
+
+    #[test]
+    fn a_stale_copy_of_an_automatic_archive_never_prunes_the_kept_original() {
+        let temp = tempfile::tempdir().unwrap();
+        set_test_workspaces_base_dir(Some(temp.path().to_path_buf()));
+        let result = std::panic::catch_unwind(|| {
+            let mut workspace = sample_workspace();
+            workspace.id = "workspace-automatic".into();
+            workspace.automatic = true;
+            save_workspace(&mut workspace).unwrap();
+            let original = temp.path().join("workspace-automatic");
+            let copy = temp.path().join("workspace-automaticcopy");
+            fs::create_dir(&copy).unwrap();
+            fs::copy(original.join("workspace.toml"), copy.join("workspace.toml")).unwrap();
+            // Renaming makes the original the person's; the copy still
+            // says it is automatic.
+            rename_workspace("workspace-automatic", "Mine now").unwrap();
+
+            assert_eq!(prune_automatic_workspaces(&[]), 0);
+            assert!(original.join("workspace.toml").exists());
+            assert!(copy.join("workspace.toml").exists());
+        });
+        set_test_workspaces_base_dir(None);
+        result.unwrap();
     }
 
     #[test]

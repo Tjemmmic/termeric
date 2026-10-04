@@ -78,7 +78,7 @@ Workspaces store profile and agent names rather than copies of their settings. I
 
 ## Where workspaces are stored
 
-Each workspace is a folder under `~/.local/share/termeric/workspaces/`, named with its ID. The folder holds `workspace.toml` (the layout), a backup of the previous version that Termeric falls back to if the main file is damaged, and a `scrollback/` folder with the saved text.
+Each workspace is a folder under `~/.local/share/termeric/workspaces/`, named with its ID. The folder holds `workspace.toml` (the layout), a backup of the previous version that Termeric falls back to if the main file is damaged, and a `scrollback/` folder with the saved text. A folder whose name isn't the ID in its `workspace.toml`, such as a copy of one, is treated as an unreadable workspace and never mistaken for the original.
 
 Saved scrollback is ordinary text on disk and can contain anything that was printed in your terminals. Turn **Save Scrollback** off if you don't want terminal output kept in these files.
 
