@@ -2174,7 +2174,7 @@ impl App {
         )
     }
 
-    fn search_is_visible(&self) -> bool {
+    pub(super) fn search_is_visible(&self) -> bool {
         self.search.is_active() || self.search.has_results() || self.search.is_searching()
     }
 

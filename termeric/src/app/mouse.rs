@@ -2,7 +2,7 @@
 
 use super::modal_layer::ModalLayer;
 use super::*;
-use crate::renderer::PanePlacement;
+use crate::renderer::{PanePlacement, SearchBarClick};
 use crate::ui::geometry::Bounds;
 
 impl DividerDrag {
@@ -480,80 +480,9 @@ impl App {
                             }
                         }
                     }
-
-                    // Intercept clicks for search bar
-                    if self.search.is_active()
-                        || self.search.has_results()
-                        || self.search.is_searching()
-                    {
-                        if let Some(renderer) = &self.renderer {
-                            let window_size = self.window.as_ref().map(|w| w.inner_size());
-                            if let Some(size) = window_size {
-                                use crate::renderer::SearchBarClick;
-                                let info = self.search.build_info(self.search_cursor_pos);
-                                let click = renderer.search_bar_hit_test(
-                                    position.0 as f32,
-                                    position.1 as f32,
-                                    size.width as f32,
-                                    &info,
-                                );
-                                match click {
-                                    SearchBarClick::Query(cursor) => {
-                                        self.focus_search_query_at(
-                                            cursor,
-                                            redraw_scheduler::RedrawReason::PointerInput,
-                                        );
-                                        return;
-                                    }
-                                    SearchBarClick::Background => return,
-                                    SearchBarClick::ToggleCaseSensitive => {
-                                        self.with_search_and_active_grid(|search, grid| {
-                                            search.toggle_case_sensitive(grid);
-                                        });
-                                        self.request_redraw(RedrawReason::PointerInput);
-                                        return;
-                                    }
-                                    SearchBarClick::ToggleRegex => {
-                                        self.with_search_and_active_grid(|search, grid| {
-                                            search.toggle_regex(grid);
-                                        });
-                                        self.request_redraw(RedrawReason::PointerInput);
-                                        return;
-                                    }
-                                    SearchBarClick::ToggleFilter => {
-                                        if self.copy_mode.is_active() {
-                                            self.toasts.warning(
-                                                "Filter mode is unavailable inside copy mode; matches remain highlighted",
-                                            );
-                                        } else {
-                                            self.search.toggle_filter();
-                                        }
-                                        self.request_redraw(RedrawReason::PointerInput);
-                                        return;
-                                    }
-                                    SearchBarClick::PrevMatch => {
-                                        self.search.prev();
-                                        self.scroll_to_current_match();
-                                        self.request_redraw(RedrawReason::PointerInput);
-                                        return;
-                                    }
-                                    SearchBarClick::NextMatch => {
-                                        self.search.next();
-                                        self.scroll_to_current_match();
-                                        self.request_redraw(RedrawReason::PointerInput);
-                                        return;
-                                    }
-                                    SearchBarClick::Close => {
-                                        self.search.cancel();
-                                        self.search_cursor_pos = 0;
-                                        self.request_redraw(RedrawReason::PointerInput);
-                                        return;
-                                    }
-                                    SearchBarClick::None => {}
-                                }
-                            }
-                        }
-                    }
+                }
+                if self.press_search_bar(button, self.search_bar_click_at(position)) {
+                    return;
                 }
                 if self.press_terminal(
                     button,
@@ -590,6 +519,83 @@ impl App {
         self.refresh_terminal_pointer_cursor();
 
         // Request redraw to show selection changes
+        self.request_redraw(RedrawReason::PointerInput);
+    }
+
+    /// What of the find box lies at `position`: `None` when it is hidden or
+    /// the position is beside it.
+    fn search_bar_click_at(&self, position: (f64, f64)) -> SearchBarClick {
+        if !self.search_is_visible() {
+            return SearchBarClick::None;
+        }
+        let (Some(renderer), Some(window)) = (&self.renderer, &self.window) else {
+            return SearchBarClick::None;
+        };
+        let info = self.search.build_info(self.search_cursor_pos);
+        renderer.search_bar_hit_test(
+            position.0 as f32,
+            position.1 as f32,
+            window.inner_size().width as f32,
+            &info,
+        )
+    }
+
+    /// A press of any button on the find box (`click`) is the find box's,
+    /// never the pane's beneath it: the primary button works its controls,
+    /// the middle button pastes the primary selection into its query, and
+    /// anything else does nothing. Returns false when the press missed it.
+    fn press_search_bar(&mut self, button: MouseButton, click: SearchBarClick) -> bool {
+        match (button, click) {
+            (_, SearchBarClick::None) => return false,
+            (MouseButton::Left, click) => self.apply_search_bar_click(click),
+            (MouseButton::Middle, SearchBarClick::Query(cursor)) => {
+                self.paste_primary_into_search(cursor);
+            }
+            _ => {}
+        }
+        true
+    }
+
+    /// A primary press on the find box's control `click`.
+    fn apply_search_bar_click(&mut self, click: SearchBarClick) {
+        match click {
+            SearchBarClick::Query(cursor) => {
+                self.focus_search_query_at(cursor, RedrawReason::PointerInput);
+                return;
+            }
+            SearchBarClick::None | SearchBarClick::Background => return,
+            SearchBarClick::ToggleCaseSensitive => {
+                self.with_search_and_active_grid(|search, grid| {
+                    search.toggle_case_sensitive(grid);
+                });
+            }
+            SearchBarClick::ToggleRegex => {
+                self.with_search_and_active_grid(|search, grid| {
+                    search.toggle_regex(grid);
+                });
+            }
+            SearchBarClick::ToggleFilter => {
+                if self.copy_mode.is_active() {
+                    self.toasts.warning(
+                        "Filter mode is unavailable inside copy mode; matches remain highlighted",
+                    );
+                } else {
+                    self.search.toggle_filter();
+                }
+            }
+            SearchBarClick::PrevMatch => {
+                self.search.prev();
+                self.scroll_to_current_match();
+            }
+            SearchBarClick::NextMatch => {
+                self.search.next();
+                self.scroll_to_current_match();
+            }
+            SearchBarClick::Close => {
+                self.search.cancel();
+                self.search_cursor_pos = 0;
+            }
+        }
         self.request_redraw(RedrawReason::PointerInput);
     }
 
@@ -2442,6 +2448,55 @@ mod tests {
         assert!(!app.press_terminal(MouseButton::Middle, position, 10.0, 20.0, 0.0, 0.0));
         let bytes = fenced_harvest_capture(&mut app, &captures);
         assert_only_pane_received(&captures, bytes, target, b"\x1b[<1;2;2M\x1b[<1;2;2mhello");
+    }
+
+    #[test]
+    fn the_find_box_takes_every_press_on_it_and_a_middle_click_pastes_into_its_query() {
+        use crate::app::tests::fenced_harvest_capture;
+        use winit::keyboard::Key;
+        let (mut app, _directory, captures, target) = middle_click_fixture();
+        let (clipboard, memory) = super::super::clipboard::Clipboard::in_memory();
+        memory.lock().unwrap().primary = Some("hello".into());
+        app.clipboard = clipboard;
+        app.search.start();
+        assert!(app.handle_search_key(&Key::Character("ab".into())));
+        app.search.confirm();
+
+        // The middle button on the query resumes it and pastes where it
+        // landed, even after the query was confirmed.
+        assert!(app.press_search_bar(MouseButton::Middle, SearchBarClick::Query(1)));
+        assert!(app.search.is_active());
+        assert_eq!(app.search.query(), "ahellob");
+        assert_eq!(app.search_cursor_pos, "ahello".len());
+
+        // The same limits as a keyboard paste: nothing that breaks the line.
+        memory.lock().unwrap().primary = Some("one\ntwo".into());
+        assert!(app.press_search_bar(MouseButton::Middle, SearchBarClick::Query(0)));
+        assert_eq!(app.search.query(), "ahellob");
+
+        // Anywhere else on the box, a press other than the primary one does
+        // nothing at all; beside the box it is not the box's.
+        for (button, click) in [
+            (MouseButton::Middle, SearchBarClick::Background),
+            (MouseButton::Middle, SearchBarClick::Close),
+            (MouseButton::Middle, SearchBarClick::NextMatch),
+            (MouseButton::Right, SearchBarClick::Query(0)),
+            (MouseButton::Right, SearchBarClick::Close),
+        ] {
+            assert!(app.press_search_bar(button, click), "{button:?} {click:?}");
+        }
+        assert!(!app.press_search_bar(MouseButton::Middle, SearchBarClick::None));
+        assert!(app.search.is_active());
+        assert_eq!(app.search.query(), "ahellob");
+
+        // While the find box holds the keyboard, a middle click on a pane
+        // pastes nowhere.
+        memory.lock().unwrap().primary = Some("hello".into());
+        let position = pane_position(&app, target);
+        assert!(!app.press_terminal(MouseButton::Middle, position, 10.0, 20.0, 0.0, 0.0));
+        assert_eq!(app.search.query(), "ahellob");
+        let bytes = fenced_harvest_capture(&mut app, &captures);
+        assert!(bytes.iter().all(Vec::is_empty), "{bytes:?}");
     }
 
     #[test]

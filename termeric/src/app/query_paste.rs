@@ -95,6 +95,26 @@ impl App {
             PasteTarget::AgentView => return self.paste_into_agent_view(text),
             _ => {}
         }
+        self.paste_into_field(target, text)
+    }
+
+    /// A middle click on the find box's query pastes the primary selection
+    /// where it landed, under the same limits as a keyboard paste into it.
+    pub(super) fn paste_primary_into_search(&mut self, cursor: usize) -> bool {
+        if !self.focus_search_query_at(cursor, RedrawReason::PointerInput)
+            || self.clipboard_paste_target() != PasteTarget::Search
+        {
+            return false;
+        }
+        let Some(text) = self.primary_selection_text() else {
+            return false;
+        };
+        self.paste_into_field(PasteTarget::Search, &text)
+    }
+
+    /// A paste into one of the single-line fields: all of `text`, or none of
+    /// it when it is empty, too long, or breaks the line.
+    fn paste_into_field(&mut self, target: PasteTarget, text: &str) -> bool {
         if text.is_empty() {
             return false;
         }

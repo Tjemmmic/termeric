@@ -3670,31 +3670,39 @@ impl App {
     /// focused, through the same checks and framing as a keyboard paste.
     fn paste_primary_selection(&mut self) {
         // A field that holds the keyboard does not take a paste aimed at the
-        // terminal beneath the pointer.
+        // terminal beneath the pointer, nor does that terminal (the find box
+        // and copy mode are among `file_drop_input_blocked`'s surfaces).
         if self.tab_rename.is_some()
             || self.agent_view_has_keyboard()
             || self.file_drop_input_blocked()
         {
             return;
         }
-        let text = match self.clipboard.text(
+        if let Some(text) = self.primary_selection_text()
+            && !text.is_empty()
+        {
+            self.write_paste_text(&text);
+        }
+    }
+
+    /// The primary selection's text for a middle-click paste, or `None`
+    /// once any failure other than an empty selection has been reported.
+    fn primary_selection_text(&mut self) -> Option<String> {
+        match self.clipboard.text(
             termeric_core::ClipboardRequest::Primary,
             clipboard::ClipboardAccess::Explicit,
         ) {
-            Ok(text) => text,
+            Ok(text) => Some(text),
             // Usually nothing is selected anywhere, which pastes nothing.
             Err(error @ clipboard::ClipboardError::Failed(_)) => {
                 log::debug!("Primary selection not pasted: {error}");
-                return;
+                None
             }
             Err(error) => {
                 log::warn!("Paste failed: {error}");
                 self.toasts.error(format!("Paste failed: {error}"));
-                return;
+                None
             }
-        };
-        if !text.is_empty() {
-            self.write_paste_text(&text);
         }
     }
 

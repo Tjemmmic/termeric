@@ -204,7 +204,7 @@ Finishing a selection (releasing the drag, or a double- or triple-click) puts it
 
 `Ctrl+Shift+V` pastes the clipboard into the focused pane. If the program has turned on bracketed paste, the pasted text is marked as a paste, so shells and editors don't run it line by line as it arrives.
 
-Middle-click pastes the primary selection into the pane under the pointer, which it focuses. The paste works like `Ctrl+Shift+V`: bracketed paste, read-only panes, and broadcast input apply the same way.
+Middle-click pastes the primary selection into the pane under the pointer, which it focuses. The paste works like `Ctrl+Shift+V`: bracketed paste, read-only panes, and broadcast input apply the same way. Middle-clicking the find box's query pastes into the query instead, and while the find box is being typed in, middle-clicking a pane pastes nothing.
 
 ### Links
 
