@@ -56,8 +56,8 @@ impl TabManager {
             anyhow::bail!("expected a resolved plugin launch");
         }
         let geometry = self.geometry;
-        let lines = self.scrollback_lines;
-        let bytes = self.scrollback_bytes;
+        let lines = self.policy.scrollback_lines;
+        let bytes = self.policy.scrollback_bytes;
         let tab = self.tab_mut_by_id(target.tab_id).expect("validated target");
         if let Some(panes) = &mut tab.pane_manager {
             return panes.split_target_with_launch(target.pane_id, direction, launch);

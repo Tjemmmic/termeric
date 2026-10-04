@@ -49,6 +49,8 @@ use std::sync::mpsc::Receiver;
 use termeric_core::pty::{PtyCommand, PtyEvent, PtyHandle, spawn_reader_thread_with_waker};
 use termeric_core::{Pty, Terminal, TerminalEvent};
 
+use crate::terminal::policy::TerminalPolicy;
+
 /// Four-way direction for pane navigation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PaneDir {
@@ -142,7 +144,7 @@ impl Pane {
             id,
             geometry,
             shell,
-            (scrollback_lines, scrollback_bytes),
+            &TerminalPolicy::with_scrollback(scrollback_lines, scrollback_bytes),
             working_dir,
             false,
         )
@@ -152,13 +154,13 @@ impl Pane {
         id: PaneId,
         geometry: TerminalGeometry,
         shell: &ShellConfig,
-        scrollback: (usize, usize),
+        policy: &TerminalPolicy,
         working_dir: Option<&str>,
         plugin: bool,
     ) -> anyhow::Result<Self> {
         let mut terminal = Terminal::new(geometry.cols, geometry.rows);
         terminal.set_pixel_geometry(geometry.pixel_width.into(), geometry.pixel_height.into());
-        terminal.set_scrollback_limits(scrollback.0, scrollback.1);
+        policy.apply(&mut terminal, true);
         let mut launch = if plugin {
             ShellLaunch {
                 program: shell.program.clone(),
@@ -220,13 +222,12 @@ impl Pane {
         geometry: TerminalGeometry,
         program: &str,
         args: &[String],
-        scrollback_lines: usize,
-        scrollback_bytes: usize,
+        policy: &TerminalPolicy,
         title: Option<String>,
     ) -> anyhow::Result<Self> {
         let mut terminal = Terminal::new(geometry.cols, geometry.rows);
         terminal.set_pixel_geometry(geometry.pixel_width.into(), geometry.pixel_height.into());
-        terminal.set_scrollback_limits(scrollback_lines, scrollback_bytes);
+        policy.apply(&mut terminal, true);
         terminal.set_graphics_relay_snapshot_allowed(true);
         let pty = Pty::spawn(
             geometry.pty_size(),
@@ -481,16 +482,8 @@ pub struct PaneManager {
     shell: ShellConfig,
     /// Persisted identity paired with `shell` for future panes.
     split_launch: crate::workspace::WorkspaceLaunch,
-    /// Scrollback limit for new panes
-    scrollback_lines: usize,
-    /// Scrollback byte budget for new panes
-    scrollback_bytes: usize,
-    /// Host policy inherited by panes created after a split or restore.
-    screen_checksum_reporting: bool,
-    /// Host policy for Kitty persistent-file reads inherited by future panes.
-    kitty_file_transmission: bool,
-    /// Configured xterm keyboard profile inherited by future panes.
-    xterm_keyboard_type: termeric_core::term::XtermKeyboardType,
+    /// Host settings of every pane, inherited by panes created later.
+    policy: TerminalPolicy,
     /// Next pane ID
     next_id: u32,
     /// Total available width in pixels (for layout calculations)
@@ -544,11 +537,7 @@ impl PaneManager {
             navigation_memory: HashMap::new(),
             shell,
             split_launch: crate::workspace::WorkspaceLaunch::Shell,
-            scrollback_lines,
-            scrollback_bytes,
-            screen_checksum_reporting: false,
-            kitty_file_transmission: false,
-            xterm_keyboard_type: termeric_core::term::XtermKeyboardType::Normal,
+            policy: TerminalPolicy::with_scrollback(scrollback_lines, scrollback_bytes),
             next_id: id.0.saturating_add(1),
             total_width,
             total_height,
@@ -580,9 +569,8 @@ impl PaneManager {
             }
             _ => crate::workspace::WorkspaceLaunch::Shell,
         };
-        let screen_checksum_reporting = owner.terminal.screen_checksum_reporting();
-        let kitty_file_transmission = owner.terminal.kitty_file_transmission();
-        let xterm_keyboard_type = owner.terminal.initial_xterm_keyboard_type();
+        let policy =
+            TerminalPolicy::inherited_from(&owner.terminal, scrollback_lines, scrollback_bytes);
         let geometry = TerminalGeometry::from_cells(
             owner.terminal.grid().cols(),
             owner.terminal.grid().rows(),
@@ -618,11 +606,7 @@ impl PaneManager {
             navigation_memory: HashMap::new(),
             shell,
             split_launch,
-            scrollback_lines,
-            scrollback_bytes,
-            screen_checksum_reporting,
-            kitty_file_transmission,
-            xterm_keyboard_type,
+            policy,
             next_id: allocation.next_pane.max(id.0.saturating_add(1)),
             total_width,
             total_height,
@@ -722,18 +706,12 @@ impl PaneManager {
                 id,
                 geometry,
                 shell,
-                (scrollback_lines, scrollback_bytes),
+                &manager.policy,
                 cwd.as_deref(),
                 matches!(launch, crate::workspace::WorkspaceLaunch::Plugin { .. }),
             )?;
             pane.launch.clone_from(launch);
             pane.launch_shell.clone_from(shell);
-            pane.terminal
-                .set_screen_checksum_reporting(manager.screen_checksum_reporting);
-            pane.terminal
-                .set_kitty_file_transmission(manager.kitty_file_transmission);
-            pane.terminal
-                .configure_xterm_keyboard_type(manager.xterm_keyboard_type, true);
             pane.title.clone_from(&pane_snapshot.title);
             pane.last_command.clone_from(&pane_snapshot.last_command);
             replay_workspace_scrollback(&mut pane.terminal, &pane_snapshot.scrollback_lines);
@@ -800,21 +778,14 @@ impl PaneManager {
                 cell_height,
             );
             let arguments = relay_command.pane_arguments(domain_id, remote.id);
-            let mut pane = Pane::new_with_command(
+            let pane = Pane::new_with_command(
                 local_id,
                 geometry,
                 relay_command.program(),
                 &arguments,
-                scrollback_lines,
-                scrollback_bytes,
+                &manager.policy,
                 Some(remote.title.clone()),
             )?;
-            pane.terminal
-                .set_screen_checksum_reporting(manager.screen_checksum_reporting);
-            pane.terminal
-                .set_kitty_file_transmission(manager.kitty_file_transmission);
-            pane.terminal
-                .configure_xterm_keyboard_type(manager.xterm_keyboard_type, true);
             manager.panes.insert(local_id, pane);
             manager.spawned_shells += 1;
         }
@@ -862,21 +833,14 @@ impl PaneManager {
                 self.cell_height,
             );
             let arguments = relay_command.pane_arguments(domain_id, remote.id);
-            let mut pane = Pane::new_with_command(
+            let pane = Pane::new_with_command(
                 local_id,
                 geometry,
                 relay_command.program(),
                 &arguments,
-                self.scrollback_lines,
-                self.scrollback_bytes,
+                &self.policy,
                 Some(remote.title.clone()),
             )?;
-            pane.terminal
-                .set_screen_checksum_reporting(self.screen_checksum_reporting);
-            pane.terminal
-                .set_kitty_file_transmission(self.kitty_file_transmission);
-            pane.terminal
-                .configure_xterm_keyboard_type(self.xterm_keyboard_type, true);
             additions.push((local_id, pane));
             planned_ids.insert(local_id, remote.id);
         }
@@ -1021,42 +985,16 @@ impl PaneManager {
         self.panes.get_mut(&id)
     }
 
-    /// Apply updated scrollback budgets to every pane and future splits.
-    pub fn set_scrollback_limits(&mut self, lines: usize, bytes: usize) {
-        self.scrollback_lines = lines;
-        self.scrollback_bytes = bytes;
-        for pane in self.panes.values_mut() {
-            pane.terminal.set_scrollback_limits(lines, bytes);
-        }
-    }
-
-    /// Update every pane and the policy inherited by future splits.
-    pub fn set_screen_checksum_reporting(&mut self, allowed: bool) {
-        self.screen_checksum_reporting = allowed;
-        for pane in self.panes.values_mut() {
-            pane.terminal.set_screen_checksum_reporting(allowed);
-        }
-    }
-
-    /// Update every pane and the Kitty persistent-file policy inherited by
-    /// future splits.
-    pub fn set_kitty_file_transmission(&mut self, allowed: bool) {
-        self.kitty_file_transmission = allowed;
-        for pane in self.panes.values_mut() {
-            pane.terminal.set_kitty_file_transmission(allowed);
-        }
-    }
-
-    /// Update every pane and the profile inherited by future splits.
-    pub fn set_xterm_keyboard_type(
+    /// Apply host settings to every pane and to panes created later.
+    /// `apply_keyboard_type` is as in [`TerminalPolicy::apply`].
+    pub(crate) fn apply_terminal_policy(
         &mut self,
-        keyboard_type: termeric_core::term::XtermKeyboardType,
-        apply_current: bool,
+        policy: TerminalPolicy,
+        apply_keyboard_type: bool,
     ) {
-        self.xterm_keyboard_type = keyboard_type;
+        self.policy = policy;
         for pane in self.panes.values_mut() {
-            pane.terminal
-                .configure_xterm_keyboard_type(keyboard_type, apply_current);
+            policy.apply(&mut pane.terminal, apply_keyboard_type);
         }
     }
 
@@ -1131,7 +1069,7 @@ impl PaneManager {
             new_id,
             geometry,
             shell,
-            (self.scrollback_lines, self.scrollback_bytes),
+            &self.policy,
             cwd,
             launch.is_some_and(|launch| {
                 matches!(
@@ -1149,12 +1087,6 @@ impl PaneManager {
         };
         pane.launch
             .clone_from(launch.map_or(&self.split_launch, |launch| &launch.identity));
-        pane.terminal
-            .set_screen_checksum_reporting(self.screen_checksum_reporting);
-        pane.terminal
-            .set_kitty_file_transmission(self.kitty_file_transmission);
-        pane.terminal
-            .configure_xterm_keyboard_type(self.xterm_keyboard_type, true);
         self.spawned_shells += 1;
         self.panes.insert(new_id, pane);
 
@@ -2452,8 +2384,12 @@ mod tests {
         assert!(panes.focused_pane().is_some_and(|pane| {
             !pane.terminal.screen_checksum_reporting() && !pane.terminal.kitty_file_transmission()
         }));
-        panes.set_screen_checksum_reporting(true);
-        panes.set_kitty_file_transmission(true);
+        let allowed = TerminalPolicy {
+            screen_checksum_reporting: true,
+            kitty_file_transmission: true,
+            ..TerminalPolicy::with_scrollback(1_000, 8 * 1024 * 1024)
+        };
+        panes.apply_terminal_policy(allowed, false);
         let split = panes.split(SplitDirection::Vertical).unwrap();
         assert!(
             panes
@@ -2469,8 +2405,10 @@ mod tests {
             pane.terminal.screen_checksum_reporting() && pane.terminal.kitty_file_transmission()
         }));
 
-        panes.set_screen_checksum_reporting(false);
-        panes.set_kitty_file_transmission(false);
+        panes.apply_terminal_policy(
+            TerminalPolicy::with_scrollback(1_000, 8 * 1024 * 1024),
+            false,
+        );
         assert!(panes.panes.values().all(|pane| {
             !pane.terminal.screen_checksum_reporting() && !pane.terminal.kitty_file_transmission()
         }));
@@ -2496,13 +2434,17 @@ mod tests {
         )
         .unwrap();
 
-        panes.set_xterm_keyboard_type(termeric_core::term::XtermKeyboardType::Legacy, true);
+        let legacy = TerminalPolicy {
+            xterm_keyboard_type: termeric_core::term::XtermKeyboardType::Legacy,
+            ..TerminalPolicy::with_scrollback(1_000, 8 * 1024 * 1024)
+        };
+        panes.apply_terminal_policy(legacy, true);
         panes
             .focused_pane_mut()
             .unwrap()
             .terminal
             .process(b"\x1b[?1061h");
-        panes.set_xterm_keyboard_type(termeric_core::term::XtermKeyboardType::Legacy, false);
+        panes.apply_terminal_policy(legacy, false);
         assert_eq!(
             panes.focused_pane().unwrap().terminal.xterm_keyboard_type(),
             termeric_core::term::XtermKeyboardType::Vt220

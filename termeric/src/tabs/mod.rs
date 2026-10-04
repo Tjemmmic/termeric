@@ -21,10 +21,11 @@ use crate::session::Session;
 use anyhow::Context;
 use std::collections::HashMap;
 use std::io;
-use termeric_core::{Terminal, TerminalEvent, term::XtermKeyboardType};
+use termeric_core::{Terminal, TerminalEvent};
 
 use crate::terminal::events::MAX_FORWARDED_TERMINAL_EVENTS_PER_POLL;
 use crate::terminal::geometry::TerminalGeometry;
+use crate::terminal::policy::TerminalPolicy;
 
 /// Stable origin for an app-facing terminal event. Tab IDs are monotonic and
 /// pane IDs are stable for the lifetime of a pane, so replies never depend on
@@ -67,16 +68,8 @@ pub struct TabManager {
     geometry: TerminalGeometry,
     /// Shell configuration for new tabs
     shell: ShellConfig,
-    /// Scrollback limit for new tabs
-    scrollback_lines: usize,
-    /// Scrollback byte budget for new tabs and panes
-    scrollback_bytes: usize,
-    /// Host policy for DECRQCRA replies in existing and future terminals.
-    screen_checksum_reporting: bool,
-    /// Host policy for Kitty persistent-file reads in existing and future terminals.
-    kitty_file_transmission: bool,
-    /// Configured xterm keyboard profile for existing and future terminals.
-    xterm_keyboard_type: XtermKeyboardType,
+    /// Host settings of every terminal, inherited by terminals created later.
+    policy: TerminalPolicy,
     persistence_notices: Vec<PersistenceNotice>,
     event_overflow_reported: bool,
     reduced_motion: bool,
@@ -102,16 +95,14 @@ impl TabManager {
         Self::new_with_geometry(
             TerminalGeometry::from_cells(cols, rows, 1.0, 1.0),
             shell,
-            scrollback_lines,
-            scrollback_bytes,
+            TerminalPolicy::with_scrollback(scrollback_lines, scrollback_bytes),
         )
     }
 
     pub(crate) fn new_with_geometry(
         geometry: TerminalGeometry,
         shell: ShellConfig,
-        scrollback_lines: usize,
-        scrollback_bytes: usize,
+        policy: TerminalPolicy,
     ) -> Self {
         Self {
             tabs: Vec::new(),
@@ -119,11 +110,7 @@ impl TabManager {
             next_id: 0,
             geometry,
             shell,
-            scrollback_lines,
-            scrollback_bytes,
-            screen_checksum_reporting: false,
-            kitty_file_transmission: false,
-            xterm_keyboard_type: XtermKeyboardType::Normal,
+            policy,
             persistence_notices: Vec::new(),
             event_overflow_reported: false,
             reduced_motion: false,
@@ -131,15 +118,7 @@ impl TabManager {
     }
 
     pub(crate) fn empty_like(&self) -> Self {
-        let mut manager = Self::new_with_geometry(
-            self.geometry,
-            self.shell.clone(),
-            self.scrollback_lines,
-            self.scrollback_bytes,
-        );
-        manager.screen_checksum_reporting = self.screen_checksum_reporting;
-        manager.kitty_file_transmission = self.kitty_file_transmission;
-        manager.xterm_keyboard_type = self.xterm_keyboard_type;
+        let mut manager = Self::new_with_geometry(self.geometry, self.shell.clone(), self.policy);
         manager.reduced_motion = self.reduced_motion;
         manager
     }
@@ -162,28 +141,18 @@ impl TabManager {
         let id = self.next_id;
         self.next_id += 1;
 
-        let mut tab = if working_dir.is_none() && title.is_none() {
-            Tab::new_with_geometry(
-                id,
-                self.geometry,
-                &self.shell,
-                self.scrollback_lines,
-                self.scrollback_bytes,
-            )?
+        let tab = if working_dir.is_none() && title.is_none() {
+            Tab::new_with_geometry(id, self.geometry, &self.shell, &self.policy)?
         } else {
             Tab::new_with_cwd_geometry(
                 id,
                 self.geometry,
                 &self.shell,
-                self.scrollback_lines,
-                self.scrollback_bytes,
+                &self.policy,
                 working_dir,
                 title,
             )?
         };
-        tab.set_screen_checksum_reporting(self.screen_checksum_reporting);
-        tab.set_kitty_file_transmission(self.kitty_file_transmission);
-        tab.set_xterm_keyboard_type(self.xterm_keyboard_type, true);
         self.tabs.push(tab);
         self.active = self.tabs.len() - 1;
 
@@ -206,8 +175,7 @@ impl TabManager {
             id,
             self.geometry,
             &shell,
-            self.scrollback_lines,
-            self.scrollback_bytes,
+            &self.policy,
             working_dir,
             title,
         )?;
@@ -215,9 +183,6 @@ impl TabManager {
             name: name.to_string(),
         };
         tab.set_terminal_profile_launch(name, shell);
-        tab.set_screen_checksum_reporting(self.screen_checksum_reporting);
-        tab.set_kitty_file_transmission(self.kitty_file_transmission);
-        tab.set_xterm_keyboard_type(self.xterm_keyboard_type, true);
         self.tabs.push(tab);
         self.active = self.tabs.len() - 1;
         log::info!("Created terminal profile tab {} from {:?}", id, name);
@@ -245,17 +210,8 @@ impl TabManager {
             }),
             ..CommandLaunch::default()
         };
-        let mut tab = Tab::new_command(
-            id,
-            self.geometry,
-            &launch,
-            self.scrollback_lines,
-            self.scrollback_bytes,
-        )?;
+        let mut tab = Tab::new_command(id, self.geometry, &launch, &self.policy)?;
         tab.set_serial_profile_launch(name, title.to_string());
-        tab.set_screen_checksum_reporting(self.screen_checksum_reporting);
-        tab.set_kitty_file_transmission(self.kitty_file_transmission);
-        tab.set_xterm_keyboard_type(self.xterm_keyboard_type, true);
         self.tabs.push(tab);
         self.active = self.tabs.len() - 1;
         log::info!("Opened serial terminal profile {} from {:?}", id, name);
@@ -298,17 +254,8 @@ impl TabManager {
         let id = self.next_id;
         self.next_id += 1;
 
-        let mut tab = Tab::new_command(
-            id,
-            self.geometry,
-            &launch,
-            self.scrollback_lines,
-            self.scrollback_bytes,
-        )?;
+        let mut tab = Tab::new_command(id, self.geometry, &launch, &self.policy)?;
         tab.set_split_shell_config(self.shell.clone());
-        tab.set_screen_checksum_reporting(self.screen_checksum_reporting);
-        tab.set_kitty_file_transmission(self.kitty_file_transmission);
-        tab.set_xterm_keyboard_type(self.xterm_keyboard_type, true);
         self.tabs.push(tab);
         if !background || self.tabs.len() == 1 {
             self.active = self.tabs.len() - 1;
@@ -375,7 +322,7 @@ impl TabManager {
                 .map(|(index, pane)| (PaneId(index as u32), pane.id))
                 .collect(),
         });
-        tab.set_kitty_file_transmission(false);
+        tab.apply_terminal_policy(&self.policy, false);
         tab.set_live_domain_metadata(
             &remote_tab.title,
             remote_tab.user_title.as_deref(),
@@ -390,8 +337,8 @@ impl TabManager {
             tab.pane_manager = Some(crate::panes::PaneManager::from_domain(
                 owner,
                 self.shell.clone(),
-                self.scrollback_lines,
-                self.scrollback_bytes,
+                self.policy.scrollback_lines,
+                self.policy.scrollback_bytes,
                 f32::from(self.geometry.pixel_width),
                 f32::from(self.geometry.pixel_height),
                 cell_width,
@@ -430,7 +377,7 @@ impl TabManager {
             tab_id: remote_tab.id,
             pane_ids: HashMap::from([(PaneId(0), primary.id)]),
         });
-        self.tabs[index].set_kitty_file_transmission(false);
+        self.tabs[index].apply_terminal_policy(&self.policy, false);
         self.tabs[index].set_live_domain_metadata(
             &remote_tab.title,
             remote_tab.user_title.as_deref(),
@@ -545,8 +492,8 @@ impl TabManager {
         }
 
         let shell = self.shell.clone();
-        let scrollback_lines = self.scrollback_lines;
-        let scrollback_bytes = self.scrollback_bytes;
+        let scrollback_lines = self.policy.scrollback_lines;
+        let scrollback_bytes = self.policy.scrollback_bytes;
         let total_width = f32::from(self.geometry.pixel_width);
         let total_height = f32::from(self.geometry.pixel_height);
         let cell_width = total_width / self.geometry.cols as f32;
@@ -727,8 +674,8 @@ impl TabManager {
                 tab.pane_manager = Some(crate::panes::PaneManager::from_existing(
                     owner,
                     self.shell.clone(),
-                    self.scrollback_lines,
-                    self.scrollback_bytes,
+                    self.policy.scrollback_lines,
+                    self.policy.scrollback_bytes,
                     f32::from(self.geometry.pixel_width),
                     f32::from(self.geometry.pixel_height),
                     cell_width,
@@ -1244,8 +1191,8 @@ impl TabManager {
             let mut manager = crate::panes::PaneManager::from_existing(
                 owner,
                 split_shell,
-                self.scrollback_lines,
-                self.scrollback_bytes,
+                self.policy.scrollback_lines,
+                self.policy.scrollback_bytes,
                 f32::from(self.geometry.pixel_width),
                 f32::from(self.geometry.pixel_height),
                 cell_width,
@@ -1457,15 +1404,11 @@ impl TabManager {
             id,
             self.geometry,
             &self.shell,
-            self.scrollback_lines,
-            self.scrollback_bytes,
+            &self.policy,
             cwd.as_deref(),
             Some(&snapshot.title),
         )?;
         let mut tab = tab;
-        tab.set_screen_checksum_reporting(self.screen_checksum_reporting);
-        tab.set_kitty_file_transmission(self.kitty_file_transmission);
-        tab.set_xterm_keyboard_type(self.xterm_keyboard_type, true);
         tab.user_title.clone_from(&snapshot.user_title);
         tab.pinned = snapshot.pinned;
         if let Some(title) = &tab.user_title {
@@ -1565,8 +1508,8 @@ impl TabManager {
         let (panes, warnings) = crate::panes::PaneManager::from_workspace(
             owner,
             split_shell,
-            self.scrollback_lines,
-            self.scrollback_bytes,
+            self.policy.scrollback_lines,
+            self.policy.scrollback_bytes,
             f32::from(self.geometry.pixel_width),
             f32::from(self.geometry.pixel_height),
             cell_width,
@@ -2370,47 +2313,16 @@ impl TabManager {
             .collect()
     }
 
-    /// Update scrollback line and byte budgets for existing and future terminals.
-    pub fn set_scrollback_limits(&mut self, lines: usize, bytes: usize) {
-        self.scrollback_lines = lines;
-        self.scrollback_bytes = bytes;
-        for tab in &mut self.tabs {
-            if let Some(panes) = &mut tab.pane_manager {
-                panes.set_scrollback_limits(lines, bytes);
-            } else if let Some(terminal) = tab.focused_terminal_mut() {
-                terminal.set_scrollback_limits(lines, bytes);
-            }
-        }
-    }
-
-    /// Update the screen-report policy for all terminals and future tabs/panes.
-    pub fn set_screen_checksum_reporting(&mut self, allowed: bool) {
-        self.screen_checksum_reporting = allowed;
-        for tab in &mut self.tabs {
-            tab.set_screen_checksum_reporting(allowed);
-        }
-    }
-
-    /// Update the Kitty persistent-file policy for all terminals and future
-    /// tabs/panes.
-    pub fn set_kitty_file_transmission(&mut self, allowed: bool) {
-        self.kitty_file_transmission = allowed;
-        for tab in &mut self.tabs {
-            tab.set_kitty_file_transmission(allowed);
-        }
-    }
-
-    /// Update the configured xterm keyboard profile for every terminal and
-    /// for future tabs and pane splits. `apply_current` distinguishes an
-    /// explicit profile change from reapplying unrelated configuration.
-    pub fn set_xterm_keyboard_type(
+    /// Apply host settings to every terminal and to terminals created later.
+    /// `apply_keyboard_type` is as in [`TerminalPolicy::apply`].
+    pub(crate) fn set_terminal_policy(
         &mut self,
-        keyboard_type: XtermKeyboardType,
-        apply_current: bool,
+        policy: TerminalPolicy,
+        apply_keyboard_type: bool,
     ) {
-        self.xterm_keyboard_type = keyboard_type;
+        self.policy = policy;
         for tab in &mut self.tabs {
-            tab.set_xterm_keyboard_type(keyboard_type, apply_current);
+            tab.apply_terminal_policy(&policy, apply_keyboard_type);
         }
     }
 
@@ -2434,14 +2346,10 @@ impl TabManager {
             id,
             self.geometry,
             &self.shell,
-            self.scrollback_lines,
-            self.scrollback_bytes,
+            &self.policy,
             session.working_directory.as_deref(),
             Some(&session.title),
         )?;
-        tab.set_screen_checksum_reporting(self.screen_checksum_reporting);
-        tab.set_kitty_file_transmission(self.kitty_file_transmission);
-        tab.set_xterm_keyboard_type(self.xterm_keyboard_type, true);
 
         // Link this tab to its session
         tab.session_id = Some(session.id.clone());
@@ -2628,7 +2536,10 @@ mod tests {
 
         const LINE_LIMIT: usize = 32;
         const BYTE_LIMIT: usize = 4 * 1024;
-        manager.set_scrollback_limits(LINE_LIMIT, BYTE_LIMIT);
+        manager.set_terminal_policy(
+            TerminalPolicy::with_scrollback(LINE_LIMIT, BYTE_LIMIT),
+            false,
+        );
         manager
             .active_tab_mut()
             .unwrap()
@@ -2812,8 +2723,12 @@ mod tests {
     #[test]
     fn screen_checksum_policy_updates_existing_and_future_tabs() {
         let mut manager = TabManager::for_test(ShellConfig::default());
-        manager.set_screen_checksum_reporting(true);
-        manager.set_kitty_file_transmission(true);
+        let allowed = TerminalPolicy {
+            screen_checksum_reporting: true,
+            kitty_file_transmission: true,
+            ..TerminalPolicy::with_scrollback(1_000, 8 * 1024 * 1024)
+        };
+        manager.set_terminal_policy(allowed, false);
         manager
             .new_tab_with_command(
                 "/bin/sh",
@@ -2837,8 +2752,10 @@ mod tests {
                 .is_some_and(Terminal::kitty_file_transmission)
         );
 
-        manager.set_screen_checksum_reporting(false);
-        manager.set_kitty_file_transmission(false);
+        manager.set_terminal_policy(
+            TerminalPolicy::with_scrollback(1_000, 8 * 1024 * 1024),
+            false,
+        );
         assert!(manager.tabs.iter().all(|tab| {
             tab.focused_terminal().is_some_and(|terminal| {
                 !terminal.screen_checksum_reporting() && !terminal.kitty_file_transmission()
@@ -2848,8 +2765,13 @@ mod tests {
 
     #[test]
     fn xterm_keyboard_profile_updates_existing_and_future_tabs() {
+        use termeric_core::term::XtermKeyboardType;
+        let keyboard = |xterm_keyboard_type| TerminalPolicy {
+            xterm_keyboard_type,
+            ..TerminalPolicy::with_scrollback(1_000, 8 * 1024 * 1024)
+        };
         let mut manager = TabManager::for_test(ShellConfig::default());
-        manager.set_xterm_keyboard_type(XtermKeyboardType::Legacy, true);
+        manager.set_terminal_policy(keyboard(XtermKeyboardType::Legacy), true);
         manager
             .new_tab_with_command(
                 "/bin/sh",
@@ -2873,7 +2795,7 @@ mod tests {
             .focused_terminal_mut()
             .unwrap()
             .process(b"\x1b[?1061h");
-        manager.set_xterm_keyboard_type(XtermKeyboardType::Legacy, false);
+        manager.set_terminal_policy(keyboard(XtermKeyboardType::Legacy), false);
         assert_eq!(
             manager
                 .active_tab()
@@ -2884,7 +2806,7 @@ mod tests {
             XtermKeyboardType::Vt220
         );
 
-        manager.set_xterm_keyboard_type(XtermKeyboardType::Normal, true);
+        manager.set_terminal_policy(keyboard(XtermKeyboardType::Normal), true);
         let terminal = manager.active_tab().unwrap().focused_terminal().unwrap();
         assert_eq!(terminal.xterm_keyboard_type(), XtermKeyboardType::Normal);
         assert_eq!(
@@ -3526,8 +3448,11 @@ mod tests {
     #[test]
     fn tab_spawn_and_pixel_only_resize_reach_kernel_winsize() {
         let initial = TerminalGeometry::from_cells(80, 24, 9.25, 18.5);
-        let mut manager =
-            TabManager::new_with_geometry(initial, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+        let mut manager = TabManager::new_with_geometry(
+            initial,
+            ShellConfig::default(),
+            TerminalPolicy::with_scrollback(1_000, 8 * 1024 * 1024),
+        );
         manager
             .new_tab_with_command(
                 "/bin/sh",
@@ -3737,7 +3662,11 @@ mod tests {
             },
         };
         let mut manager = TabManager::new(80, 24, ShellConfig::default(), 1_000, 1024 * 1024);
-        manager.set_kitty_file_transmission(true);
+        let kitty_files = TerminalPolicy {
+            kitty_file_transmission: true,
+            ..TerminalPolicy::with_scrollback(1_000, 1024 * 1024)
+        };
+        manager.set_terminal_policy(kitty_files, false);
         manager
             .attach_domain(
                 &snapshot,
@@ -3794,7 +3723,7 @@ mod tests {
             pane.terminal.process(b"\x1b_TG;end\x1b\\");
             assert!(!pane.terminal.has_images());
         }
-        manager.set_kitty_file_transmission(true);
+        manager.set_terminal_policy(kitty_files, false);
         let domain_panes = manager.active_tab().unwrap().pane_manager.as_ref().unwrap();
         assert!(domain_panes.pane_ids().into_iter().all(|id| {
             domain_panes

@@ -130,8 +130,7 @@ pub(super) fn manager(app: &App) -> TabManager {
     TabManager::new_with_geometry(
         crate::terminal::geometry::TerminalGeometry::from_cells(120, 40, 10.0, 20.0),
         app.config.shell.clone(),
-        1_000,
-        8 * 1024 * 1024,
+        crate::terminal::policy::TerminalPolicy::with_scrollback(1_000, 8 * 1024 * 1024),
     )
 }
 

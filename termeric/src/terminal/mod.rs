@@ -5,6 +5,7 @@
 //! - `events`: draining terminal events beside their PTY owner
 //! - `geometry`: the physical grid size shared by renderer and PTY
 //! - `guardrails`: confirmation for destructive automated input
+//! - `policy`: the host settings every terminal runs under
 //! - `search`: incremental literal and regex search
 //! - `shell_integration`: shell launch preparation for OSC 7 and OSC 133
 //! - `splash`: the startup splash art
@@ -15,6 +16,7 @@ pub mod diff_detector;
 pub(crate) mod events;
 pub(crate) mod geometry;
 pub mod guardrails;
+pub(crate) mod policy;
 pub mod search;
 pub mod shell_integration;
 pub mod splash;

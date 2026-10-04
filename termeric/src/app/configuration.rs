@@ -267,7 +267,10 @@ impl App {
         self.config = config;
         self.apply_config_side_effects(agents_changed);
         if keyboard_type_changed && let Some(tabs) = &mut self.tabs {
-            tabs.set_xterm_keyboard_type(self.config.keyboard.xterm_type.terminal_type(), true);
+            tabs.set_terminal_policy(
+                crate::terminal::policy::TerminalPolicy::from_config(&self.config),
+                true,
+            );
         }
         Ok(())
     }
@@ -329,15 +332,12 @@ impl App {
             }
         }
         if let Some(tabs) = &mut self.tabs {
-            tabs.set_scrollback_limits(
-                self.config.scrollback.lines,
-                self.config.scrollback.max_memory_bytes(),
+            // Reapplying unrelated settings must not undo a keyboard type
+            // selected by the foreground application through DECSET 1060/1061.
+            tabs.set_terminal_policy(
+                crate::terminal::policy::TerminalPolicy::from_config(&self.config),
+                false,
             );
-            tabs.set_screen_checksum_reporting(self.config.security.allow_screen_checksum_reports);
-            tabs.set_kitty_file_transmission(self.config.security.allow_kitty_file_transfers);
-            // Reapplying unrelated settings must not undo a profile selected
-            // by the foreground application through DECSET 1060/1061.
-            tabs.set_xterm_keyboard_type(self.config.keyboard.xterm_type.terminal_type(), false);
             tabs.set_shell_config(self.config.shell.clone());
             for tab in tabs.all_tabs_mut() {
                 if let Some(manager) = &mut tab.pane_manager {

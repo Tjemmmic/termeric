@@ -11335,7 +11335,13 @@ fn config_reload_only_overrides_application_keyboard_type_when_profile_changes()
     config.keyboard.xterm_type = crate::config::XtermKeyboardTypeConfig::Legacy;
     let mut app = App::new_headless(config).unwrap();
     let mut tabs = TabManager::for_test(ShellConfig::default());
-    tabs.set_xterm_keyboard_type(termeric_core::term::XtermKeyboardType::Legacy, true);
+    tabs.set_terminal_policy(
+        crate::terminal::policy::TerminalPolicy {
+            xterm_keyboard_type: termeric_core::term::XtermKeyboardType::Legacy,
+            ..crate::terminal::policy::TerminalPolicy::with_scrollback(1_000, 8 * 1024 * 1024)
+        },
+        true,
+    );
     tabs.new_tab_with_command(
         "/bin/sh",
         &["-c".into(), "sleep 1".into()],

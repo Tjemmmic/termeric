@@ -20,15 +20,11 @@ impl App {
                     self.cols, self.rows, 1.0, 1.0,
                 )
             });
-        let mut tabs = TabManager::new_with_geometry(
+        let tabs = TabManager::new_with_geometry(
             geometry,
             self.config.shell.clone(),
-            self.config.scrollback.lines,
-            self.config.scrollback.max_memory_bytes(),
+            crate::terminal::policy::TerminalPolicy::from_config(&self.config),
         );
-        tabs.set_screen_checksum_reporting(self.config.security.allow_screen_checksum_reports);
-        tabs.set_kitty_file_transmission(self.config.security.allow_kitty_file_transfers);
-        tabs.set_xterm_keyboard_type(self.config.keyboard.xterm_type.terminal_type(), true);
         self.tabs = Some(tabs);
         if self.launch.adopts_tab {
             // The torn-off tab moves in once the window exists.

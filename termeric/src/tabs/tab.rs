@@ -9,6 +9,7 @@ use crate::session::terminal_state::TerminalSession;
 use crate::session::transcript::TranscriptRecorder;
 use crate::terminal::events::{MAX_FORWARDED_TERMINAL_EVENTS_PER_POLL, drain_terminal_events};
 use crate::terminal::geometry::TerminalGeometry;
+use crate::terminal::policy::TerminalPolicy;
 use crate::terminal::shell_integration::{ShellIntegrationSupport, prepare_shell_launch};
 use anyhow::Context;
 use std::collections::HashMap;
@@ -193,12 +194,11 @@ impl Tab {
         id: usize,
         geometry: TerminalGeometry,
         shell: &ShellConfig,
-        scrollback_lines: usize,
-        scrollback_bytes: usize,
+        policy: &TerminalPolicy,
     ) -> anyhow::Result<Self> {
         let mut terminal = Terminal::new(geometry.cols, geometry.rows);
         terminal.set_pixel_geometry(geometry.pixel_width.into(), geometry.pixel_height.into());
-        terminal.set_scrollback_limits(scrollback_lines, scrollback_bytes);
+        policy.apply(&mut terminal, true);
         let launch = prepare_shell_launch(shell);
         let pty = Pty::spawn(
             geometry.pty_size(),
@@ -271,8 +271,7 @@ impl Tab {
             id,
             TerminalGeometry::from_cells(cols, rows, 1.0, 1.0),
             launch,
-            scrollback_lines,
-            scrollback_bytes,
+            &TerminalPolicy::with_scrollback(scrollback_lines, scrollback_bytes),
         )
     }
 
@@ -280,12 +279,11 @@ impl Tab {
         id: usize,
         geometry: TerminalGeometry,
         launch: &CommandLaunch,
-        scrollback_lines: usize,
-        scrollback_bytes: usize,
+        policy: &TerminalPolicy,
     ) -> anyhow::Result<Self> {
         let mut terminal = Terminal::new(geometry.cols, geometry.rows);
         terminal.set_pixel_geometry(geometry.pixel_width.into(), geometry.pixel_height.into());
-        terminal.set_scrollback_limits(scrollback_lines, scrollback_bytes);
+        policy.apply(&mut terminal, true);
 
         // PWD names the working directory when one was given; the launch's
         // own variables follow, so they may override it.
@@ -487,27 +485,23 @@ impl Tab {
         }
     }
 
-    /// Apply the host's screen-report policy to every terminal owned by this
-    /// tab and to terminals created by future pane splits.
-    pub(crate) fn set_screen_checksum_reporting(&mut self, allowed: bool) {
+    /// Apply host settings to every terminal this tab owns and to those its
+    /// future splits create. `apply_keyboard_type` is as in
+    /// [`TerminalPolicy::apply`].
+    pub(crate) fn apply_terminal_policy(
+        &mut self,
+        policy: &TerminalPolicy,
+        apply_keyboard_type: bool,
+    ) {
+        let policy = if self.live_domain.is_some() {
+            policy.for_relay()
+        } else {
+            *policy
+        };
         if let Some(panes) = &mut self.pane_manager {
-            panes.set_screen_checksum_reporting(allowed);
+            panes.apply_terminal_policy(policy, apply_keyboard_type);
         } else if let Some(terminal) = &mut self.terminal {
-            terminal.set_screen_checksum_reporting(allowed);
-        }
-    }
-
-    /// Apply the Kitty persistent-file policy to this tab and terminals
-    /// created by future pane splits.
-    pub(crate) fn set_kitty_file_transmission(&mut self, allowed: bool) {
-        // A live-domain replica receives raw terminal bytes from another PTY
-        // owner. It must never interpret a daemon's `t=f` path as permission
-        // to read a same-named file on the GUI host.
-        let allowed = allowed && self.live_domain.is_none();
-        if let Some(panes) = &mut self.pane_manager {
-            panes.set_kitty_file_transmission(allowed);
-        } else if let Some(terminal) = &mut self.terminal {
-            terminal.set_kitty_file_transmission(allowed);
+            policy.apply(terminal, apply_keyboard_type);
         }
     }
 
@@ -518,21 +512,6 @@ impl Tab {
             }
         } else if let Some(terminal) = &mut self.terminal {
             terminal.set_graphics_relay_snapshot_allowed(allowed);
-        }
-    }
-
-    /// Apply the configured xterm keyboard type to this tab and any panes it
-    /// owns. Existing application-selected state is preserved unless the
-    /// configuration value itself changed.
-    pub(crate) fn set_xterm_keyboard_type(
-        &mut self,
-        keyboard_type: termeric_core::term::XtermKeyboardType,
-        apply_current: bool,
-    ) {
-        if let Some(panes) = &mut self.pane_manager {
-            panes.set_xterm_keyboard_type(keyboard_type, apply_current);
-        } else if let Some(terminal) = &mut self.terminal {
-            terminal.configure_xterm_keyboard_type(keyboard_type, apply_current);
         }
     }
 
@@ -825,14 +804,13 @@ impl Tab {
         id: usize,
         geometry: TerminalGeometry,
         shell: &ShellConfig,
-        scrollback_lines: usize,
-        scrollback_bytes: usize,
+        policy: &TerminalPolicy,
         working_dir: Option<&str>,
         title: Option<&str>,
     ) -> anyhow::Result<Self> {
         let mut terminal = Terminal::new(geometry.cols, geometry.rows);
         terminal.set_pixel_geometry(geometry.pixel_width.into(), geometry.pixel_height.into());
-        terminal.set_scrollback_limits(scrollback_lines, scrollback_bytes);
+        policy.apply(&mut terminal, true);
 
         let mut launch = prepare_shell_launch(shell);
         // Build environment variables for session restore
