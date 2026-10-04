@@ -6923,18 +6923,75 @@ mod tests {
         );
     }
 
-    #[test]
-    fn modal_palette_consumes_stale_background_accessibility_actions() {
-        let mut app = App::new_headless(Config::default()).unwrap();
-        app.command_palette.open();
-        app.handle_accessibility_action(ActionRequest {
+    fn click(node: NodeId) -> ActionRequest {
+        ActionRequest {
             action: Action::Click,
             target_tree: TreeId::ROOT,
-            target_node: SETTINGS,
+            target_node: node,
             data: None,
-        });
-        assert!(app.command_palette.is_active());
-        assert!(!app.settings_panel.is_active());
+        }
+    }
+
+    #[test]
+    fn modals_consume_stale_background_accessibility_actions() {
+        type Open = fn(&mut App);
+        type IsOpen = fn(&App) -> bool;
+        // (modal, open it, whether it is still open, a background control)
+        let cases: [(&str, Open, IsOpen, NodeId); 6] = [
+            (
+                "palette",
+                |app| app.command_palette.open(),
+                |app| app.command_palette.is_active(),
+                SETTINGS,
+            ),
+            (
+                "settings",
+                |app| app.settings_panel.toggle(),
+                |app| app.settings_panel.is_active(),
+                COMMANDS,
+            ),
+            (
+                "custom commands",
+                |app| app.commands_panel.toggle(),
+                |app| app.commands_panel.is_open(),
+                SETTINGS,
+            ),
+            (
+                "workspace manager",
+                |app| {
+                    app.session_panel
+                        .set_test_entries(test_session_entries(1), true)
+                },
+                |app| app.session_panel.is_open(),
+                SETTINGS,
+            ),
+            (
+                "shortcuts editor",
+                |app| app.shortcuts_panel.open(),
+                |app| app.shortcuts_panel.is_active(),
+                SETTINGS,
+            ),
+            (
+                "guardrail",
+                |app| {
+                    show_guardrail_fixture(app);
+                },
+                |app| app.guardrail.is_awaiting_current(),
+                SETTINGS,
+            ),
+        ];
+        for (modal, open, still_open, background) in cases {
+            let mut app = App::new_headless(Config::default()).unwrap();
+            open(&mut app);
+            app.handle_accessibility_action(click(background));
+            assert!(still_open(&app), "{modal} closed");
+            let background_opened = match background {
+                SETTINGS => app.settings_panel.is_active(),
+                COMMANDS => app.commands_panel.is_open(),
+                _ => unreachable!(),
+            };
+            assert!(!background_opened, "{modal} let {background:?} through");
+        }
     }
 
     #[test]
@@ -7618,20 +7675,6 @@ mod tests {
         assert!(snapshot.nodes.iter().any(
             |(id, node)| *id == SETTINGS_EMPTY && node.label() == Some("No matching settings")
         ));
-    }
-
-    #[test]
-    fn modal_settings_consumes_stale_background_accessibility_actions() {
-        let mut app = App::new_headless(Config::default()).unwrap();
-        app.settings_panel.toggle();
-        app.handle_accessibility_action(ActionRequest {
-            action: Action::Click,
-            target_tree: TreeId::ROOT,
-            target_node: COMMANDS,
-            data: None,
-        });
-        assert!(app.settings_panel.is_active());
-        assert!(!app.command_palette.is_active());
     }
 
     #[test]
@@ -8398,20 +8441,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn modal_custom_commands_consumes_stale_background_accessibility_actions() {
-        let mut app = App::new_headless(Config::default()).unwrap();
-        app.commands_panel.toggle();
-        app.handle_accessibility_action(ActionRequest {
-            action: Action::Click,
-            target_tree: TreeId::ROOT,
-            target_node: SETTINGS,
-            data: None,
-        });
-        assert!(app.commands_panel.is_open());
-        assert!(!app.settings_panel.is_active());
-    }
-
     fn test_session_entries(count: usize) -> Vec<crate::session::panel::SessionEntry> {
         (0..count)
             .map(|index| crate::session::panel::SessionEntry {
@@ -8688,21 +8717,6 @@ mod tests {
                     Some(SessionSemanticTarget::Rename(_))
                 ))
         );
-    }
-
-    #[test]
-    fn modal_workspace_manager_consumes_stale_background_actions() {
-        let mut app = App::new_headless(Config::default()).unwrap();
-        app.session_panel
-            .set_test_entries(test_session_entries(1), true);
-        app.handle_accessibility_action(ActionRequest {
-            action: Action::Click,
-            target_tree: TreeId::ROOT,
-            target_node: SETTINGS,
-            data: None,
-        });
-        assert!(app.session_panel.is_open());
-        assert!(!app.settings_panel.is_active());
     }
 
     #[test]
@@ -9001,20 +9015,6 @@ mod tests {
             data: None,
         });
         assert!(!app.shortcuts_panel.is_recording());
-    }
-
-    #[test]
-    fn modal_shortcuts_editor_consumes_stale_background_actions() {
-        let mut app = App::new_headless(Config::default()).unwrap();
-        app.shortcuts_panel.open();
-        app.handle_accessibility_action(ActionRequest {
-            action: Action::Click,
-            target_tree: TreeId::ROOT,
-            target_node: SETTINGS,
-            data: None,
-        });
-        assert!(app.shortcuts_panel.is_active());
-        assert!(!app.settings_panel.is_active());
     }
 
     fn domain_picker_config(hosts: usize) -> Config {
@@ -10171,19 +10171,5 @@ mod tests {
         });
         assert!(!app.guardrail.is_awaiting(request));
         assert!(app.tabs.is_none(), "no fallback terminal was created");
-    }
-
-    #[test]
-    fn modal_guardrail_consumes_background_actions() {
-        let mut app = App::new_headless(Config::default()).unwrap();
-        show_guardrail_fixture(&mut app);
-        app.handle_accessibility_action(ActionRequest {
-            action: Action::Click,
-            target_tree: TreeId::ROOT,
-            target_node: SETTINGS,
-            data: None,
-        });
-        assert!(app.guardrail.is_awaiting_current());
-        assert!(!app.settings_panel.is_active());
     }
 }
