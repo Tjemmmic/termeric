@@ -412,60 +412,90 @@ fn encode_hex(bytes: &[u8], output: &mut Vec<u8>) {
     }
 }
 
-/// Return only capabilities whose byte strings are part of Termeric's own
-/// version-controlled terminal contract. Keeping this table independent of
-/// the host terminfo database makes XTGETTCAP deterministic over SSH and in
-/// containers while avoiding claims for keys the input encoder cannot emit.
+/// A terminfo name, xterm's termcap alias where one exists, and the value
+/// exactly as the entry declares it: numbers in decimal, strings unexpanded.
+type TerminfoCapability = (&'static [u8], Option<&'static [u8]>, &'static [u8]);
+
+/// Capabilities XTGETTCAP answers from Termeric's own version-controlled
+/// terminfo entry (`assets/terminfo/xterm-termeric.terminfo`). Keeping this
+/// table independent of the host terminfo database makes XTGETTCAP
+/// deterministic over SSH and in containers, and a test holds every row to
+/// the entry so the two cannot drift apart.
+const TERMINFO_CAPABILITIES: &[TerminfoCapability] = &[
+    (b"colors", Some(b"Co"), b"256"),
+    (b"RGB", None, b"8"),
+    (b"indn", None, b"\x1b[%p1%dS"),
+    // Extensions programs such as Neovim and tmux look up before using
+    // styled underlines, cursor shapes, the clipboard, synchronized output,
+    // bracketed paste, and focus reports.
+    (b"Smulx", None, b"\x1b[4:%p1%dm"),
+    (
+        b"Setulc",
+        None,
+        b"\x1b[58:2::%p1%{65536}%/%d:%p1%{256}%/%{255}%&%d:%p1%{255}%&%d%;m",
+    ),
+    (b"Ss", None, b"\x1b[%p1%d q"),
+    (b"Se", None, b"\x1b[ q"),
+    (b"Ms", None, b"\x1b]52;%p1%s;%p2%s\x1b\\"),
+    (b"Sync", None, b"\x1b[?2026%?%p1%{1}%-%tl%eh%;"),
+    (b"BE", None, b"\x1b[?2004h"),
+    (b"BD", None, b"\x1b[?2004l"),
+    (b"PS", None, b"\x1b[200~"),
+    (b"PE", None, b"\x1b[201~"),
+    (b"fe", None, b"\x1b[?1004h"),
+    (b"fd", None, b"\x1b[?1004l"),
+    (b"kxIN", None, b"\x1b[I"),
+    (b"kxOUT", None, b"\x1b[O"),
+    // Unmodified and shifted special keys, limited to what the input
+    // encoder can emit.
+    (b"kbs", Some(b"kb"), b"\x7f"),
+    (b"kcbt", Some(b"kB"), b"\x1b[Z"),
+    (b"kcub1", Some(b"kl"), b"\x1bOD"),
+    (b"kcud1", Some(b"kd"), b"\x1bOB"),
+    (b"kcuf1", Some(b"kr"), b"\x1bOC"),
+    (b"kcuu1", Some(b"ku"), b"\x1bOA"),
+    (b"kLFT", Some(b"#4"), b"\x1b[1;2D"),
+    (b"kRIT", Some(b"%i"), b"\x1b[1;2C"),
+    (b"kind", Some(b"kF"), b"\x1b[1;2B"),
+    (b"kri", Some(b"kR"), b"\x1b[1;2A"),
+    (b"kdch1", Some(b"kD"), b"\x1b[3~"),
+    (b"kend", Some(b"@7"), b"\x1bOF"),
+    (b"kent", Some(b"@8"), b"\x1bOM"),
+    (b"kich1", Some(b"kI"), b"\x1b[2~"),
+    (b"khome", Some(b"kh"), b"\x1bOH"),
+    (b"knp", Some(b"kN"), b"\x1b[6~"),
+    (b"kpp", Some(b"kP"), b"\x1b[5~"),
+    (b"kDC", None, b"\x1b[3;2~"),
+    (b"kEND", None, b"\x1b[1;2F"),
+    (b"kHOM", None, b"\x1b[1;2H"),
+    (b"kIC", None, b"\x1b[2;2~"),
+    (b"kNXT", None, b"\x1b[6;2~"),
+    (b"kPRV", None, b"\x1b[5;2~"),
+    (b"kf1", Some(b"k1"), b"\x1bOP"),
+    (b"kf2", Some(b"k2"), b"\x1bOQ"),
+    (b"kf3", Some(b"k3"), b"\x1bOR"),
+    (b"kf4", Some(b"k4"), b"\x1bOS"),
+    (b"kf5", Some(b"k5"), b"\x1b[15~"),
+    (b"kf6", Some(b"k6"), b"\x1b[17~"),
+    (b"kf7", Some(b"k7"), b"\x1b[18~"),
+    (b"kf8", Some(b"k8"), b"\x1b[19~"),
+    (b"kf9", Some(b"k9"), b"\x1b[20~"),
+    (b"kf10", Some(b"k;"), b"\x1b[21~"),
+    (b"kf11", Some(b"F1"), b"\x1b[23~"),
+    (b"kf12", Some(b"F2"), b"\x1b[24~"),
+];
+
+/// Return only capabilities that are part of Termeric's own terminal
+/// contract, plus the terminal's name and the operating-system query Fish 4
+/// uses.
 fn xtgettcap_value<'a>(name: &[u8], term_name: &'a [u8]) -> Option<&'a [u8]> {
     match name {
-        // Non-key capabilities explicitly admitted by xterm's XTGETTCAP
-        // contract, plus the two extensions used by Fish 4.
-        b"Co" | b"colors" => Some(b"256"),
         b"TN" | b"name" => Some(term_name),
-        b"RGB" => Some(b"8"),
-        b"indn" => Some(b"\x1b[%p1%dS"),
         b"query-os-name" => Some(b"Linux"),
-
-        // Unmodified and shifted special keys advertised by
-        // assets/terminfo/xterm-termeric.terminfo. Termcap aliases are
-        // accepted alongside terminfo names where xterm defines one.
-        b"kb" | b"kbs" => Some(b"\x7f"),
-        b"kB" | b"kcbt" => Some(b"\x1b[Z"),
-        b"kl" | b"kcub1" => Some(b"\x1bOD"),
-        b"kd" | b"kcud1" => Some(b"\x1bOB"),
-        b"kr" | b"kcuf1" => Some(b"\x1bOC"),
-        b"ku" | b"kcuu1" => Some(b"\x1bOA"),
-        b"#4" | b"kLFT" => Some(b"\x1b[1;2D"),
-        b"%i" | b"kRIT" => Some(b"\x1b[1;2C"),
-        b"kF" | b"kind" => Some(b"\x1b[1;2B"),
-        b"kR" | b"kri" => Some(b"\x1b[1;2A"),
-        b"kD" | b"kdch1" => Some(b"\x1b[3~"),
-        b"@7" | b"kend" => Some(b"\x1bOF"),
-        b"@8" | b"kent" => Some(b"\x1bOM"),
-        b"kI" | b"kich1" => Some(b"\x1b[2~"),
-        b"kh" | b"khome" => Some(b"\x1bOH"),
-        b"kN" | b"knp" => Some(b"\x1b[6~"),
-        b"kP" | b"kpp" => Some(b"\x1b[5~"),
-        b"kDC" => Some(b"\x1b[3;2~"),
-        b"kEND" => Some(b"\x1b[1;2F"),
-        b"kHOM" => Some(b"\x1b[1;2H"),
-        b"kIC" => Some(b"\x1b[2;2~"),
-        b"kNXT" => Some(b"\x1b[6;2~"),
-        b"kPRV" => Some(b"\x1b[5;2~"),
-
-        b"k1" | b"kf1" => Some(b"\x1bOP"),
-        b"k2" | b"kf2" => Some(b"\x1bOQ"),
-        b"k3" | b"kf3" => Some(b"\x1bOR"),
-        b"k4" | b"kf4" => Some(b"\x1bOS"),
-        b"k5" | b"kf5" => Some(b"\x1b[15~"),
-        b"k6" | b"kf6" => Some(b"\x1b[17~"),
-        b"k7" | b"kf7" => Some(b"\x1b[18~"),
-        b"k8" | b"kf8" => Some(b"\x1b[19~"),
-        b"k9" | b"kf9" => Some(b"\x1b[20~"),
-        b"k;" | b"kf10" => Some(b"\x1b[21~"),
-        b"F1" | b"kf11" => Some(b"\x1b[23~"),
-        b"F2" | b"kf12" => Some(b"\x1b[24~"),
-        _ => None,
+        _ => TERMINFO_CAPABILITIES
+            .iter()
+            .find(|(terminfo, termcap, _)| *terminfo == name || *termcap == Some(name))
+            .map(|(_, _, value)| *value),
     }
 }
 
@@ -2270,5 +2300,141 @@ mod osc_tests {
         );
         assert_eq!(parse_xterm_color(b"rgb:12/34"), None);
         assert_eq!(parse_xterm_color(b"not-a-color"), None);
+    }
+}
+
+#[cfg(test)]
+mod terminfo_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    const TERMINFO_SOURCE: &str = include_str!("../../../assets/terminfo/xterm-termeric.terminfo");
+
+    /// Undo terminfo source escaping, so a string compares byte for byte
+    /// with what XTGETTCAP sends.
+    fn decode_terminfo_string(text: &str) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        let mut characters = text.bytes();
+        while let Some(byte) = characters.next() {
+            match byte {
+                b'\\' => match characters.next().expect("escape is complete") {
+                    b'E' | b'e' => bytes.push(0x1b),
+                    b'n' => bytes.push(b'\n'),
+                    b'r' => bytes.push(b'\r'),
+                    b't' => bytes.push(b'\t'),
+                    b'b' => bytes.push(0x08),
+                    b'f' => bytes.push(0x0c),
+                    b's' => bytes.push(b' '),
+                    digit @ b'0'..=b'7' => {
+                        let mut value = u32::from(digit - b'0');
+                        for _ in 0..2 {
+                            let digit = characters.next().expect("octal escapes have 3 digits");
+                            value = value * 8 + u32::from(digit - b'0');
+                        }
+                        bytes.push(value as u8);
+                    }
+                    literal => bytes.push(literal),
+                },
+                b'^' => {
+                    let control = characters.next().expect("control escape is complete");
+                    bytes.push(if control == b'?' {
+                        0x7f
+                    } else {
+                        control & 0x1f
+                    });
+                }
+                byte => bytes.push(byte),
+            }
+        }
+        bytes
+    }
+
+    /// Every numeric and string capability in the source entry, by name.
+    fn terminfo_source_values() -> HashMap<String, Vec<u8>> {
+        let mut lines = TERMINFO_SOURCE
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'));
+        let names = lines.next().expect("the entry starts with its names");
+        assert!(names.starts_with("xterm-termeric|"), "{names}");
+        let mut values = HashMap::new();
+        for line in lines {
+            let field = line.strip_suffix(',').expect("fields end with a comma");
+            let (name, value) = if let Some((name, value)) = field.split_once('=') {
+                (name, decode_terminfo_string(value))
+            } else if let Some((name, value)) = field.split_once('#') {
+                (name, value.as_bytes().to_vec())
+            } else {
+                continue;
+            };
+            assert!(
+                values.insert(name.to_string(), value).is_none(),
+                "{name} is declared twice"
+            );
+        }
+        values
+    }
+
+    #[test]
+    fn every_xtgettcap_answer_matches_the_terminfo_entry() {
+        let declared = terminfo_source_values();
+        assert_eq!(
+            declared.get("kbs").map(Vec::as_slice),
+            Some(b"\x7f".as_slice())
+        );
+        for (name, termcap, value) in TERMINFO_CAPABILITIES {
+            let name = std::str::from_utf8(name).unwrap();
+            assert_eq!(
+                declared.get(name).map(Vec::as_slice),
+                Some(*value),
+                "XTGETTCAP {name} differs from the terminfo entry"
+            );
+            assert_eq!(
+                xtgettcap_value(name.as_bytes(), b"xterm-termeric"),
+                Some(*value)
+            );
+            if let Some(termcap) = termcap {
+                assert_eq!(xtgettcap_value(termcap, b"xterm-termeric"), Some(*value));
+            }
+        }
+    }
+
+    #[test]
+    fn terminfo_extensions_drive_the_features_they_declare() {
+        // The bytes `tput` expands each extension to, as
+        // scripts/check_terminfo.py checks them.
+        let mut terminal = Terminal::new(20, 2);
+        terminal.process(b"\x1b[4:3m\x1b[58:2::18:52:86mA\x1b[4:0mB");
+        let styled = terminal.grid().cell(0, 0).unwrap();
+        assert_eq!(styled.attrs, CellAttrs::CURLY_UNDERLINE);
+        assert_eq!(styled.underline_color, Some(Color::rgb(18, 52, 86)));
+        assert!(!terminal.grid().cell(0, 1).unwrap().attrs.has_underline());
+
+        terminal.process(b"\x1b[5 q");
+        assert!(terminal.cursor_style().is_some());
+        terminal.process(b"\x1b[ q");
+        assert_eq!(terminal.cursor_style(), None);
+
+        terminal.process(b"\x1b[?2026h");
+        assert!(terminal.is_synchronized_output());
+        terminal.process(b"\x1b[?2026l");
+        assert!(!terminal.is_synchronized_output());
+
+        terminal.process(b"\x1b[?2004h\x1b[?1004h");
+        assert!(terminal.mode().contains(TerminalMode::BRACKETED_PASTE));
+        assert!(terminal.mode().contains(TerminalMode::FOCUS_EVENTS));
+        terminal.process(b"\x1b[?2004l\x1b[?1004l");
+        assert!(!terminal.mode().contains(TerminalMode::BRACKETED_PASTE));
+        assert!(!terminal.mode().contains(TerminalMode::FOCUS_EVENTS));
+
+        terminal.drain_events();
+        terminal.process(b"\x1b]52;c;aGk=\x1b\\");
+        assert_eq!(
+            terminal.drain_events(),
+            vec![TerminalEvent::ClipboardWrite {
+                selection: ClipboardRequest::Clipboard,
+                text: "hi".into(),
+            }]
+        );
     }
 }

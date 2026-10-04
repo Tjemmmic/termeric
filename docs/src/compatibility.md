@@ -26,6 +26,8 @@ Termeric has its own terminfo entry, `xterm-termeric`, which describes exactly w
 3. `share/terminfo` next to the Termeric executable's install prefix
 4. `/usr/local/share/terminfo`, `/usr/share/terminfo`, `/lib/terminfo`, `/etc/terminfo`
 
+Beyond the standard capabilities, the `xterm-termeric` entry lists the extensions programs such as Neovim and tmux look for: styled and colored underlines (`Smulx`, `Setulc`), cursor shapes (`Ss`, `Se`), clipboard copy (`Ms`), synchronized output (`Sync`), bracketed paste (`BE`, `BD`, `PS`, `PE`), and focus reporting (`fe`, `fd`, `kxIN`, `kxOUT`). XTGETTCAP answers the same names with the same values.
+
 To choose the terminal type yourself, set `TERMERIC_TERM` in the environment Termeric starts from:
 
 | Value | Effect |
@@ -107,7 +109,7 @@ Programs can ask Termeric about itself. Replies go only to the program that aske
 | Primary device attributes (`CSI c`) | `CSI ? 1 ; 2 ; 4 ; 8 c`: VT100 with advanced video, Sixel graphics, and user-defined keys. |
 | Secondary device attributes (`CSI > c`) | `CSI > 0 ; 1 ; 0 c` |
 | XTVERSION (`CSI > q`) | `DCS >\|Termeric(1) ST` |
-| XTGETTCAP (`DCS + q`) | Values from the `xterm-termeric` entry, including `TN`, `Co`, and `RGB`. |
+| XTGETTCAP (`DCS + q`) | Values from the `xterm-termeric` entry, including `TN`, `Co`, `RGB`, and the extensions listed under [Terminal type](#terminal-type). |
 | Mode state (DECRQM) | Current state of the modes listed above. |
 | Settings (DECRQSS) | Current SGR attributes, margins, cursor style, and related settings. |
 | Cursor position and status (DSR) | Standard replies. |
@@ -123,5 +125,4 @@ Screen checksum reports (DECRQCRA) are off by default because they can be used t
 - SGR-pixel mouse coordinates (mode 1016) and color-scheme change notifications (mode 2031) are not supported.
 - XTWINOPS only reports sizes and titles; programs cannot move, resize, or raise the window.
 - iTerm2 file downloads, non-PNG iTerm2 images, and animated iTerm2 images are not supported. (Kitty graphics animation works.)
-- The `xterm-termeric` terminfo entry does not list styled underlines (`Smulx`, `Setulc`), cursor shapes (`Ss`, `Se`), clipboard access (`Ms`), or synchronized output. Termeric supports all four, but a program that only checks terminfo will not use them until you enable them in its own settings.
 - `xterm-256color` is a compatible name, not a promise of every xterm feature. Prefer `xterm-termeric` wherever you can install it.

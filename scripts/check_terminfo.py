@@ -125,8 +125,22 @@ def check_database(compiled: Path, env: dict[str, str]) -> None:
         "is2=\\E[!p",
         "rs2=\\E[!p",
         "u8=\\E[?1;2;4;8c",
+        "Smulx=\\E[4:%p1%dm",
+        "Setulc=\\E[58:2::%p1%{65536}%/%d:%p1%{256}%/%{255}%&%d:%p1%{255}%&%d%;m",
+        "Ss=\\E[%p1%d q",
+        "Se=\\E[ q",
+        "Ms=\\E]52;%p1%s;%p2%s\\E\\\\",
+        "Sync=\\E[?2026%?%p1%{1}%-%tl%eh%;",
+        "BE=\\E[?2004h",
+        "BD=\\E[?2004l",
+        "PS=\\E[200~",
+        "PE=\\E[201~",
+        "fe=\\E[?1004h",
+        "fd=\\E[?1004l",
+        "kxIN=\\E[I",
+        "kxOUT=\\E[O",
     ]
-    forbidden = ["mc0=", "mc4=", "mc5=", "Sync="]
+    forbidden = ["mc0=", "mc4=", "mc5="]
     for capability in required:
         if capability not in listing:
             raise CheckError(f"compiled entry is missing {capability}")
@@ -152,6 +166,21 @@ def check_database(compiled: Path, env: dict[str, str]) -> None:
         ("is2",): b"\x1b[!p",
         ("rs2",): b"\x1b[!p",
         ("tbc",): b"\x1b[3g",
+        ("Smulx", "3"): b"\x1b[4:3m",
+        ("Setulc", str(0x123456)): b"\x1b[58:2::18:52:86m",
+        ("Ss", "5"): b"\x1b[5 q",
+        ("Se",): b"\x1b[ q",
+        ("Ms", "c", "aGk="): b"\x1b]52;c;aGk=\x1b\\",
+        ("Sync", "1"): b"\x1b[?2026h",
+        ("Sync", "2"): b"\x1b[?2026l",
+        ("BE",): b"\x1b[?2004h",
+        ("BD",): b"\x1b[?2004l",
+        ("PS",): b"\x1b[200~",
+        ("PE",): b"\x1b[201~",
+        ("fe",): b"\x1b[?1004h",
+        ("fd",): b"\x1b[?1004l",
+        ("kxIN",): b"\x1b[I",
+        ("kxOUT",): b"\x1b[O",
     }
     for arguments, expected in expansions.items():
         actual = run([require_tool("tput"), *arguments], env).stdout
