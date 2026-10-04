@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
 use std::path::PathBuf;
 
-use crate::input::keybindings::{KeyBinding, ShortcutOverride};
+use crate::input::keybindings::{BindableAction, KeyBinding, ShortcutOverride};
 
 /// Application configuration
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -377,6 +377,14 @@ impl Config {
             None,
         )?;
         validate_launch_profiles(&self.profiles)?;
+        for (index, shortcut) in self.shortcuts.iter().enumerate() {
+            if BindableAction::from_id(&shortcut.action).is_none() {
+                bail!(
+                    "shortcuts[{index}] names the unknown action {:?}; the Keyboard and Mouse page of the user guide lists the action IDs",
+                    shortcut.action
+                );
+            }
+        }
         if self.copy_mode.patterns.len() > 32 {
             bail!("copy_mode.patterns must contain at most 32 entries");
         }
@@ -2107,6 +2115,26 @@ mod tests {
             assert!(error.contains("unknown field"), "{source}: {error}");
             assert!(error.contains(&format!("line {line}")), "{source}: {error}");
         }
+    }
+
+    #[test]
+    fn an_unknown_shortcut_action_is_refused_naming_its_entry() {
+        let path = std::path::Path::new("config.toml");
+        let source = "\
+[[shortcuts]]
+action = \"copy\"
+key = \"k\"
+ctrl = true
+
+[[shortcuts]]
+action = \"toggle_pane_zom\"
+key = \"z\"
+";
+        let error = format!("{:#}", Config::from_toml(source, path).unwrap_err());
+        assert!(error.contains("shortcuts[1]"), "{error}");
+        assert!(error.contains("\"toggle_pane_zom\""), "{error}");
+        let fixed = source.replace("toggle_pane_zom", "toggle_pane_zoom");
+        Config::from_toml(&fixed, path).unwrap();
     }
 
     #[test]

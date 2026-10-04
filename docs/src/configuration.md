@@ -309,7 +309,7 @@ Changes to built-in keyboard shortcuts. The shortcut editor in Settings (Keyboar
 
 | Setting | Default | Description |
 | --- | --- | --- |
-| `action` | required | Action ID, such as `new_tab` or `toggle_settings`. |
+| `action` | required | Action ID, such as `new_tab` or `toggle_settings`. An ID Termeric doesn't know keeps the file from loading, and the error names the entry. |
 | `key` | unset | Key name. Leave it out to unbind the action. |
 | `ctrl`, `alt`, `shift`, `super` | `false` | Modifiers that must be held. |
 

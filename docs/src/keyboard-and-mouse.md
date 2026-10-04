@@ -138,7 +138,7 @@ action = "navigate_pane_left"
 
 | Field | Meaning |
 | --- | --- |
-| `action` | The action's ID from the tables above |
+| `action` | The action's ID from the tables above; an ID Termeric doesn't know keeps the file from loading, and the error names the entry |
 | `key` | The key name; leave it out to unbind the action |
 | `ctrl`, `alt`, `shift`, `super` | Modifiers that must be held; each defaults to `false` |
 
