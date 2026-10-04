@@ -72,6 +72,9 @@ pub struct PromptTracker {
     /// Current incomplete region being built
     current_region: Option<CommandRegion>,
     next_region_id: u64,
+    /// Whether a prompt-start mark ever arrived. It outlives `clear()` so a
+    /// shell the user integrated by hand is still recognized after a reset.
+    prompt_marks_seen: bool,
 }
 
 impl Default for PromptTracker {
@@ -81,6 +84,7 @@ impl Default for PromptTracker {
             regions: VecDeque::new(),
             current_region: None,
             next_region_id: 1,
+            prompt_marks_seen: false,
         }
     }
 }
@@ -152,6 +156,7 @@ impl PromptTracker {
 
     /// Mark the start of a prompt (OSC 133;A)
     pub fn mark_prompt_start(&mut self, row: usize) {
+        self.prompt_marks_seen = true;
         // A new prompt is also a recovery boundary. Only a region that reached
         // output is a real command; prompt-only/empty cycles are discarded.
         self.finish_or_discard_current(bounded_row(row));
@@ -427,7 +432,13 @@ impl PromptTracker {
         self.regions.get(index)
     }
 
-    /// Clear all tracking data
+    /// Whether the program in this terminal has ever marked a prompt, so its
+    /// shell integration is running whatever installed it.
+    pub fn prompt_marks_seen(&self) -> bool {
+        self.prompt_marks_seen
+    }
+
+    /// Clear every tracked mark and region
     pub fn clear(&mut self) {
         self.marks.clear();
         self.regions.clear();
@@ -634,6 +645,19 @@ mod tests {
         complete(&mut tracker, b"9", 2);
         assert_eq!(tracker.completed_count(), 1);
         assert_eq!(tracker.completed_region(0).unwrap().exit_code, Some(9));
+    }
+
+    #[test]
+    fn prompt_marks_seen_starts_at_the_first_prompt_and_survives_clear() {
+        let mut tracker = PromptTracker::new();
+        tracker.handle_osc_133(&[b"B"], 0);
+        tracker.handle_osc_133(&[b"D", b"0"], 0);
+        assert!(!tracker.prompt_marks_seen());
+
+        tracker.handle_osc_133(&[b"A"], 1);
+        assert!(tracker.prompt_marks_seen());
+        tracker.clear();
+        assert!(tracker.prompt_marks_seen());
     }
 
     #[test]

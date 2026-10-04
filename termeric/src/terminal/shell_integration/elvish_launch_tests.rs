@@ -46,11 +46,7 @@ fn elvish_non_repl_and_invalid_launches_have_no_integration_side_effects() {
             .env
             .insert("XDG_DATA_DIRS".into(), "/user/data".into());
         let launch = prepare_shell_launch_in(&config, &base).unwrap();
-        assert_ne!(
-            launch.integration,
-            ShellIntegrationSupport::Unavailable(ELVISH_MANUAL_INSTRUCTIONS.into()),
-            "{args:?}"
-        );
+        assert_ne!(launch.integration, ELVISH_MANUAL, "{args:?}");
         assert_eq!(launch.program, config.program);
         assert_eq!(launch.args, config.args);
         assert_eq!(
@@ -100,11 +96,7 @@ fn elvish_repl_options_follow_boolean_order_and_opaque_value_boundaries() {
         let temp = tempfile::tempdir().unwrap();
         let config = super::tests::shell("elvish", args);
         let launch = prepare_shell_launch_in(&config, temp.path()).unwrap();
-        assert_eq!(
-            launch.integration,
-            ShellIntegrationSupport::Unavailable(ELVISH_MANUAL_INSTRUCTIONS.into()),
-            "{args:?}"
-        );
+        assert_eq!(launch.integration, ELVISH_MANUAL, "{args:?}");
         assert_eq!(launch.args, config.args);
         assert_eq!(
             std::fs::read_to_string(temp.path().join("elvish/lib/termeric-integration.elv"))

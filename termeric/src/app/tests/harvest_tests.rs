@@ -621,3 +621,48 @@ fn harvest_rerun_records_exact_user_input_once_but_not_protocol_fences_or_refusa
         assert_eq!(input[0]["content"], "\x15echo harvest\r");
     }
 }
+
+#[test]
+fn manual_shell_integration_counts_once_the_shell_marks_a_prompt() {
+    use crate::terminal::shell_integration::{SUPPORTED_SHELLS, ShellIntegrationSupport};
+    let mut tabs = TabManager::for_test(ShellConfig::default());
+    tabs.new_tab_with_command(
+        "/bin/sh",
+        &crate::test_support::sleeping_args(),
+        None,
+        Some("manual-integration"),
+        None,
+        HashMap::new(),
+    )
+    .unwrap();
+    tabs.active_tab_mut()
+        .unwrap()
+        .focused_pane_mut()
+        .unwrap()
+        .shell_integration = ShellIntegrationSupport::Manual {
+        shell: "elvish",
+        instructions: "add the module",
+    };
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.tabs = Some(tabs);
+    let toasted =
+        |app: &App, message: &str| app.toasts.iter().any(|toast| toast.message == message);
+
+    assert_eq!(app.active_shell_integration_message(), "add the module");
+    app.jump_to_failed_command(true);
+    assert!(toasted(
+        &app,
+        "Failed-command jumps need shell integration (Bash, Zsh, Fish, Nushell, or Elvish)"
+    ));
+    assert_eq!(SUPPORTED_SHELLS, "Bash, Zsh, Fish, Nushell, or Elvish");
+
+    app.active_terminal_mut()
+        .unwrap()
+        .process(b"\x1b]133;A\x07");
+    assert_eq!(
+        app.active_shell_integration_message(),
+        "No completed command yet; elvish integration is active"
+    );
+    app.jump_to_failed_command(true);
+    assert!(toasted(&app, "No earlier failed command"));
+}

@@ -3030,13 +3030,7 @@ impl App {
             .as_ref()
             .and_then(TabManager::active_tab)
             .and_then(|tab| tab.focused_pane())
-            .map(|pane| &pane.shell_integration)
-            .is_some_and(|integration| {
-                matches!(
-                    integration,
-                    crate::terminal::shell_integration::ShellIntegrationSupport::Enabled(_)
-                )
-            });
+            .is_some_and(crate::panes::Pane::shell_integration_active);
         let Some(terminal) = self.active_terminal_mut() else {
             return;
         };
@@ -3048,8 +3042,10 @@ impl App {
         if found.is_some() {
             self.request_redraw(RedrawReason::Action);
         } else if !integrated {
-            self.toasts
-                .info("Failed-command jumps need shell integration (bash, zsh, or fish)");
+            self.toasts.info(format!(
+                "Failed-command jumps need shell integration ({})",
+                crate::terminal::shell_integration::SUPPORTED_SHELLS
+            ));
         } else if previous {
             self.toasts.info("No earlier failed command");
         } else {

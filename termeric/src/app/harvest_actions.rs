@@ -626,16 +626,16 @@ impl App {
         let Some(tab) = self.tabs.as_ref().and_then(|tabs| tabs.active_tab()) else {
             return "Open a shell tab before using Harvest".into();
         };
-        let support = tab.focused_pane().map(|pane| &pane.shell_integration);
-        match support {
-            Some(crate::terminal::shell_integration::ShellIntegrationSupport::Enabled(shell)) => {
-                format!("No completed command yet; {shell} integration is active")
-            }
-            Some(crate::terminal::shell_integration::ShellIntegrationSupport::Unavailable(
-                reason,
-            )) => reason.clone(),
-            None => "The focused terminal is unavailable".into(),
+        let Some(pane) = tab.focused_pane() else {
+            return "The focused terminal is unavailable".into();
+        };
+        if !pane.shell_integration_active()
+            && let Some(hint) = pane.shell_integration.setup_hint()
+        {
+            return hint.into();
         }
+        let shell = pane.shell_integration.shell_name().unwrap_or("shell");
+        format!("No completed command yet; {shell} integration is active")
     }
 
     /// Extract just the command line entered by the user (between command

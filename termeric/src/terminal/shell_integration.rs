@@ -57,6 +57,14 @@ const ELVISH_MODULE: &str = include_str!("shell_integration/scripts/termeric-int
 
 const ELVISH_MANUAL_INSTRUCTIONS: &str = "Elvish integration is available; add `use termeric-integration` to your configured rc file (normally ~/.config/elvish/rc.elv) and open a new tab";
 
+const ELVISH_MANUAL: ShellIntegrationSupport = ShellIntegrationSupport::Manual {
+    shell: "elvish",
+    instructions: ELVISH_MANUAL_INSTRUCTIONS,
+};
+
+/// The shells Termeric can integrate with, for messages that name them.
+pub const SUPPORTED_SHELLS: &str = "Bash, Zsh, Fish, Nushell, or Elvish";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShellLaunch {
     pub program: Option<String>,
@@ -67,7 +75,14 @@ pub struct ShellLaunch {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShellIntegrationSupport {
+    /// Termeric installed the hooks at launch.
     Enabled(&'static str),
+    /// The hooks are ready, but the user turns them on in their own startup
+    /// file; prompt marks are the only sign that they did.
+    Manual {
+        shell: &'static str,
+        instructions: &'static str,
+    },
     Unavailable(String),
 }
 
@@ -75,6 +90,24 @@ impl ShellIntegrationSupport {
     #[cfg(test)]
     pub fn is_enabled(&self) -> bool {
         matches!(self, Self::Enabled(_))
+    }
+
+    /// The integrated shell's name, when Termeric knows which shell it is.
+    pub fn shell_name(&self) -> Option<&'static str> {
+        match self {
+            Self::Enabled(shell) | Self::Manual { shell, .. } => Some(shell),
+            Self::Unavailable(_) => None,
+        }
+    }
+
+    /// What a person can do to turn integration on; `None` once Termeric
+    /// installed it.
+    pub fn setup_hint(&self) -> Option<&str> {
+        match self {
+            Self::Enabled(_) => None,
+            Self::Manual { instructions, .. } => Some(instructions),
+            Self::Unavailable(reason) => Some(reason),
+        }
     }
 }
 
@@ -121,10 +154,9 @@ fn prepare_shell_launch_in(shell: &ShellConfig, base: &Path) -> Result<ShellLaun
             .iter()
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect(),
-        integration: ShellIntegrationSupport::Unavailable(
-            "Shell integration is unavailable; configure Bash, Zsh, Fish, Nushell, or Elvish"
-                .into(),
-        ),
+        integration: ShellIntegrationSupport::Unavailable(format!(
+            "Shell integration is unavailable; configure {SUPPORTED_SHELLS}"
+        )),
     };
 
     let Some(program) = launch.program.as_deref() else {
@@ -214,8 +246,7 @@ fn prepare_shell_launch_in(shell: &ShellConfig, base: &Path) -> Result<ShellLaun
                 ELVISH_MODULE,
             )?;
             elvish_environment::configure(base, &mut launch.env)?;
-            launch.integration =
-                ShellIntegrationSupport::Unavailable(ELVISH_MANUAL_INSTRUCTIONS.into());
+            launch.integration = ELVISH_MANUAL;
         }
         _ => {}
     }
@@ -517,10 +548,7 @@ mod tests {
 
         let launch = prepare_shell_launch_in(&configured, temp.path()).unwrap();
         assert!(launch.args.is_empty());
-        assert_eq!(
-            launch.integration,
-            ShellIntegrationSupport::Unavailable(ELVISH_MANUAL_INSTRUCTIONS.into())
-        );
+        assert_eq!(launch.integration, ELVISH_MANUAL);
         assert!(
             launch
                 .env
@@ -639,7 +667,7 @@ mod tests {
             "elvish",
             ".config/elvish/rc.elv",
             "echo CUSTOM_RC_ELVISH\nuse termeric-integration\n",
-            ShellIntegrationSupport::Unavailable(ELVISH_MANUAL_INSTRUCTIONS.into()),
+            ELVISH_MANUAL,
         );
     }
 
@@ -695,7 +723,7 @@ mod tests {
                 "elvish",
                 path,
                 "echo CUSTOM_RC_ELVISH\nuse termeric-integration\n",
-                ShellIntegrationSupport::Unavailable(ELVISH_MANUAL_INSTRUCTIONS.into()),
+                ELVISH_MANUAL,
                 ShellProbeOptions {
                     home_component: "home",
                     args: &args,
@@ -728,7 +756,7 @@ mod tests {
                 "elvish",
                 ".config/elvish/rc.elv",
                 &rc,
-                ShellIntegrationSupport::Unavailable(ELVISH_MANUAL_INSTRUCTIONS.into()),
+                ELVISH_MANUAL,
             );
         }
     }

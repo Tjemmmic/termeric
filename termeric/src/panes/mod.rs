@@ -95,6 +95,14 @@ pub(crate) struct LocalPaneLaunch {
 }
 
 impl Pane {
+    /// Whether this terminal's shell reports prompts: Termeric installed the
+    /// hooks, or the program marked a prompt itself (a manually enabled
+    /// Elvish module, or the user's own integration).
+    pub(crate) fn shell_integration_active(&self) -> bool {
+        matches!(self.shell_integration, ShellIntegrationSupport::Enabled(_))
+            || self.terminal.prompt_tracker().prompt_marks_seen()
+    }
+
     /// The profile of a pane launched from a plugin or agent profile.
     #[cfg(test)]
     pub(crate) fn launch_profile(&self) -> Option<&str> {

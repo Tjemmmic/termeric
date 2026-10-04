@@ -54,7 +54,7 @@ Integration covers shells Termeric starts on your own computer. A shell on anoth
 
 ## Check whether integration is on
 
-With Harvest (below) turned on, open a new tab and, before running anything, run **Show Sprout Menu** from the command palette. Termeric replies with either "No completed command yet; bash integration is active" (naming your shell) or the reason integration is off, such as "Zsh integration is disabled for command/script, startup-disabled, or unrecognized arguments". For Elvish the reply always repeats the setup instructions; run a command and open **Show Harvest Cellar** instead, and if the command is listed, integration is working.
+With Harvest (below) turned on, open a new tab and, before running anything, run **Show Sprout Menu** from the command palette. Termeric replies with either "No completed command yet; bash integration is active" (naming your shell) or the reason integration is off, such as "Zsh integration is disabled for command/script, startup-disabled, or unrecognized arguments". For Elvish, which you turn on yourself, the reply repeats the setup instructions until the shell marks its first prompt, then names Elvish like the others.
 
 ## Harvest
 
