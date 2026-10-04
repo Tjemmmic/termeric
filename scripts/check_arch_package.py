@@ -19,24 +19,26 @@ import tempfile
 if __package__:
     from scripts.check_debian_package import (
         CARGO_LOCK,
+        DESKTOP_ENTRIES,
         ICON_FILES,
         CheckError,
         parse_os_release,
         require_tool,
         run,
-        validate_desktop_entry,
+        validate_desktop_entries,
         validate_icons,
         validate_notice,
     )
 else:
     from check_debian_package import (
         CARGO_LOCK,
+        DESKTOP_ENTRIES,
         ICON_FILES,
         CheckError,
         parse_os_release,
         require_tool,
         run,
-        validate_desktop_entry,
+        validate_desktop_entries,
         validate_icons,
         validate_notice,
     )
@@ -47,7 +49,7 @@ CONFLICTING_PACKAGE_NAME = "termeric"
 TERMINFO_NAME = "xterm-termeric"
 EXPECTED_FILES = {
     "usr/bin/termeric": 0o755,
-    "usr/share/applications/termeric.desktop": 0o644,
+    **{path: 0o644 for path in DESKTOP_ENTRIES},
     **{path: 0o644 for path in ICON_FILES},
     "usr/share/terminfo/x/xterm-termeric": 0o644,
     "usr/share/licenses/termeric-git/LICENSE": 0o644,
@@ -223,13 +225,11 @@ def validate_layout(root: Path, *, exercise_native_tools: bool = True) -> None:
     if binary.read_bytes()[:4] != b"\x7fELF":
         raise CheckError("/usr/bin/termeric is not an ELF executable")
     validate_icons(root)
-    desktop = root / "usr/share/applications/termeric.desktop"
-    validate_desktop_entry(desktop)
+    validate_desktop_entries(root, exercise_native_tools=exercise_native_tools)
     notice = root / "usr/share/doc/termeric/THIRD_PARTY_NOTICES.md"
     validate_notice(notice.read_text(encoding="utf-8"), CARGO_LOCK.read_text(encoding="utf-8"))
     if not exercise_native_tools:
         return
-    run([require_tool("desktop-file-validate"), str(desktop)])
     listing = run(
         [
             require_tool("infocmp"),

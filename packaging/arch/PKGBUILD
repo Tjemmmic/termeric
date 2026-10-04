@@ -78,10 +78,11 @@ package() {
 
   install -Dm755 "${srcdir}/target/release/termeric" \
     "${pkgdir}/usr/bin/termeric"
-  install -Dm644 assets/termeric.desktop \
-    "${pkgdir}/usr/share/applications/termeric.desktop"
+  install -Dm644 -t "${pkgdir}/usr/share/applications" \
+    assets/org.termeric.Termeric.desktop \
+    assets/org.termeric.Termeric.QuickAccess.desktop
   local icon
-  for icon in assets/icons/hicolor/*/apps/termeric.png; do
+  for icon in assets/icons/hicolor/*/apps/org.termeric.Termeric.png; do
     install -Dm644 "${icon}" "${pkgdir}/usr/share/icons/${icon#assets/icons/}"
   done
   install -Dm644 LICENSE \

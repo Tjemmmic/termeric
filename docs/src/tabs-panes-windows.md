@@ -164,7 +164,7 @@ termeric --quick-access --geometry 1400x620
 
 There is only one quick-access window. `--quick-access` can't be combined with `--new-window`. The quick-access window isn't included in automatic workspace saves; use **Save Workspace** if you want to keep its layout.
 
-The window's application ID (X11 `WM_CLASS`) is `termeric-quick-access`. Wayland compositors may ignore its requested position or refuse to focus it; if so, add a window rule for that application ID in your compositor's configuration.
+The window's application ID (X11 `WM_CLASS`) is `org.termeric.Termeric.QuickAccess`; ordinary windows use `org.termeric.Termeric`. Wayland compositors may ignore its requested position or refuse to focus it; if so, add a window rule for that application ID in your compositor's configuration.
 
 ## Related pages
 

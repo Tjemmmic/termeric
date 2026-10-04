@@ -42,7 +42,7 @@ termeric --profile claude-code:review
 | `--profile AGENT:PROFILE` | Start a [coding agent](agents.md) with one of its profiles, such as `codex:review`. |
 | `--workspace ID` | Restore one saved [workspace](workspaces-and-sessions.md), by its ID (`workspace-…`), into this window; [`termeric workspace list`](#termeric-workspace-list) prints the IDs. It can't be combined with tab, directory, title, command, profile, or split options in the same window. |
 | `--geometry WIDTHxHEIGHT` | Set the window's initial size in physical pixels, from 160x120 to 16384x16384. |
-| `--class NAME`, `--app-id NAME` | Set the window's X11 class and Wayland application ID, for window manager rules. |
+| `--class NAME`, `--app-id NAME` | Set the window's X11 class and Wayland application ID, for window manager rules. The default is `org.termeric.Termeric`. A window with another ID doesn't match Termeric's desktop entry, so on Wayland it may show a generic icon. |
 | `--renderer auto\|gpu\|software` | Choose the renderer for the whole process, including windows opened later: `auto` tries the GPU and falls back to software rendering; `gpu` and `software` insist on one. |
 | `--quick-access` | Show or hide the quick-access drop-down terminal, starting it if needed. |
 | `--separate-process` | Start a Termeric process of its own, even when one is already running. |
@@ -70,7 +70,7 @@ Tabs can't move between separate processes.
 
 ### Quick access
 
-`termeric --quick-access` is meant for a desktop keyboard shortcut. The first time, it opens a frameless, always-on-top window along the top of your screen; after that, each run hides or shows that same window, and its shells keep running while hidden. Launch options such as `--working-directory`, `--terminal-profile`, or `--geometry` apply only when the window is first created. On Wayland, the compositor decides placement and focus; match the application ID `termeric-quick-access` in a compositor rule if you need to.
+`termeric --quick-access` is meant for a desktop keyboard shortcut. The first time, it opens a frameless, always-on-top window along the top of your screen; after that, each run hides or shows that same window, and its shells keep running while hidden. Launch options such as `--working-directory`, `--terminal-profile`, or `--geometry` apply only when the window is first created. On Wayland, the compositor decides placement and focus; match the application ID `org.termeric.Termeric.QuickAccess` in a compositor rule if you need to.
 
 ## Subcommands
 

@@ -70,8 +70,8 @@ From the `termeric` checkout, install the program, desktop entry, icons, and ter
 
 ```bash
 sudo install -Dm755 target/release/termeric /usr/local/bin/termeric
-sudo install -Dm644 assets/termeric.desktop /usr/local/share/applications/termeric.desktop
-for icon in assets/icons/hicolor/*/apps/termeric.png; do
+sudo install -Dm644 -t /usr/local/share/applications assets/org.termeric.Termeric*.desktop
+for icon in assets/icons/hicolor/*/apps/org.termeric.Termeric.png; do
   sudo install -Dm644 "$icon" "/usr/local/share/icons/${icon#assets/icons/}"
 done
 sudo tic -x -o /usr/local/share/terminfo assets/terminfo/xterm-termeric.terminfo
@@ -83,18 +83,20 @@ To install without root, put everything under your home directory. The desktop e
 
 ```bash
 install -Dm755 target/release/termeric "$HOME/.local/bin/termeric"
-for icon in assets/icons/hicolor/*/apps/termeric.png; do
+for icon in assets/icons/hicolor/*/apps/org.termeric.Termeric.png; do
   install -Dm644 "$icon" "$HOME/.local/share/icons/${icon#assets/icons/}"
 done
 mkdir -p "$HOME/.local/share/applications"
-sed "s|^Exec=termeric|Exec=$HOME/.local/bin/termeric|" assets/termeric.desktop \
-  > "$HOME/.local/share/applications/termeric.desktop"
+for entry in assets/org.termeric.Termeric*.desktop; do
+  sed "s|^Exec=termeric|Exec=$HOME/.local/bin/termeric|" "$entry" \
+    > "$HOME/.local/share/applications/${entry#assets/}"
+done
 tic -x -o "$HOME/.terminfo" assets/terminfo/xterm-termeric.terminfo
 ```
 
 ### Why the desktop entry and terminfo matter
 
-- **Desktop entry and icons.** On Wayland, desktops such as GNOME and KDE Plasma take a window's icon and taskbar grouping from the installed desktop entry that matches its app ID, `termeric`. Without the entry you get a generic icon. The entry also adds a **New Window** action to the launcher's menu.
+- **Desktop entry and icons.** On Wayland, desktops such as GNOME and KDE Plasma take a window's icon and taskbar grouping from the installed desktop entry that matches its app ID, `org.termeric.Termeric`. Without the entry you get a generic icon. A second, hidden entry does the same for the quick-access window. The entry also adds a **New Window** action to the launcher's menu.
 - **Terminfo.** With the `xterm-termeric` entry installed, programs in Termeric see `TERM=xterm-termeric` and can use everything Termeric supports. Without it, Termeric sets `TERM=xterm-256color` instead, which works but describes fewer capabilities. If you log in to other machines from Termeric, see [Troubleshooting](troubleshooting.md#unknown-terminal-type-xterm-termeric).
 
 ### Upgrade a source build
@@ -111,16 +113,16 @@ cargo build --release --locked
 For a system-wide install:
 
 ```bash
-sudo rm /usr/local/bin/termeric /usr/local/share/applications/termeric.desktop
-sudo rm /usr/local/share/icons/hicolor/*/apps/termeric.png
+sudo rm /usr/local/bin/termeric /usr/local/share/applications/org.termeric.Termeric*.desktop
+sudo rm /usr/local/share/icons/hicolor/*/apps/org.termeric.Termeric.png
 sudo rm /usr/local/share/terminfo/x/xterm-termeric
 ```
 
 For a per-user install:
 
 ```bash
-rm ~/.local/bin/termeric ~/.local/share/applications/termeric.desktop
-rm ~/.local/share/icons/hicolor/*/apps/termeric.png ~/.terminfo/x/xterm-termeric
+rm ~/.local/bin/termeric ~/.local/share/applications/org.termeric.Termeric*.desktop
+rm ~/.local/share/icons/hicolor/*/apps/org.termeric.Termeric.png ~/.terminfo/x/xterm-termeric
 ```
 
 ## After an upgrade

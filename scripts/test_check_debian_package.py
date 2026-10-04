@@ -9,6 +9,7 @@ from scripts.check_debian_package import (
     CARGO_LOCK,
     ROOT,
     CheckError,
+    DESKTOP_ENTRIES,
     EXPECTED_FILES,
     ICON_FILES,
     locked_libgit2_version,
@@ -19,22 +20,6 @@ from scripts.check_debian_package import (
     validate_layout,
     validate_notice,
 )
-
-
-DESKTOP_ENTRY = """\
-[Desktop Entry]
-Type=Application
-Name=Termeric
-Exec=termeric
-Icon=termeric
-Terminal=false
-StartupWMClass=termeric
-Actions=NewWindow;
-
-[Desktop Action NewWindow]
-Name=New Window
-Exec=termeric --new-window
-"""
 
 
 LOCK_FIXTURE = """\
@@ -56,25 +41,33 @@ def png_fixture(relative: str) -> bytes:
     return b"\x89PNG\r\n\x1a\n" + (13).to_bytes(4, "big") + b"IHDR" + size + size
 
 
+def write_package_tree(root: Path, expected_files: dict[str, int]) -> None:
+    """Write every expected file with contents that pass the layout checks.
+
+    Desktop entries are the repository's own, so the checks cover them too.
+    """
+    for relative, mode in expected_files.items():
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if relative == "usr/bin/termeric":
+            contents = b"\x7fELFfixture"
+        elif relative.endswith(".png"):
+            contents = png_fixture(relative)
+        elif relative.endswith(".desktop"):
+            contents = (ROOT / "assets" / Path(relative).name).read_bytes()
+        elif relative.endswith("THIRD_PARTY_NOTICES.md"):
+            contents = NOTICE_FIXTURE
+        else:
+            contents = b"fixture"
+        path.write_bytes(contents)
+        path.chmod(mode)
+
+
 class DebianPackageCheckTests(unittest.TestCase):
     def test_layout_contract_accepts_expected_files_and_modes(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for relative, mode in EXPECTED_FILES.items():
-                path = root / relative
-                path.parent.mkdir(parents=True, exist_ok=True)
-                if relative == "usr/bin/termeric":
-                    contents = b"\x7fELFfixture"
-                elif relative.endswith(".png"):
-                    contents = png_fixture(relative)
-                elif relative.endswith(".desktop"):
-                    contents = DESKTOP_ENTRY.encode()
-                elif relative.endswith("THIRD_PARTY_NOTICES.md"):
-                    contents = NOTICE_FIXTURE
-                else:
-                    contents = b"fixture"
-                path.write_bytes(contents)
-                path.chmod(mode)
+            write_package_tree(root, EXPECTED_FILES)
 
             validate_layout(root, exercise_native_tools=False)
 
@@ -112,25 +105,11 @@ class DebianPackageCheckTests(unittest.TestCase):
     def test_layout_contract_rejects_an_icon_in_the_wrong_size_directory(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for relative, mode in EXPECTED_FILES.items():
-                path = root / relative
-                path.parent.mkdir(parents=True, exist_ok=True)
-                if relative == "usr/bin/termeric":
-                    contents = b"\x7fELFfixture"
-                elif relative.endswith(".png"):
-                    contents = png_fixture(relative)
-                elif relative.endswith(".desktop"):
-                    contents = DESKTOP_ENTRY.encode()
-                elif relative.endswith("THIRD_PARTY_NOTICES.md"):
-                    contents = NOTICE_FIXTURE
-                else:
-                    contents = b"fixture"
-                path.write_bytes(contents)
-                path.chmod(mode)
+            write_package_tree(root, EXPECTED_FILES)
 
-            misplaced = "usr/share/icons/hicolor/48x48/apps/termeric.png"
+            misplaced = "usr/share/icons/hicolor/48x48/apps/org.termeric.Termeric.png"
             (root / misplaced).write_bytes(
-                png_fixture("usr/share/icons/hicolor/512x512/apps/termeric.png")
+                png_fixture("usr/share/icons/hicolor/512x512/apps/org.termeric.Termeric.png")
             )
             with self.assertRaisesRegex(CheckError, "is 512x512, expected 48x48"):
                 validate_layout(root, exercise_native_tools=False)
@@ -138,28 +117,26 @@ class DebianPackageCheckTests(unittest.TestCase):
     def test_layout_contract_rejects_an_executable_mode_regression(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for relative, mode in EXPECTED_FILES.items():
-                path = root / relative
-                path.parent.mkdir(parents=True, exist_ok=True)
-                contents = DESKTOP_ENTRY.encode() if relative.endswith(".desktop") else b"fixture"
-                if relative == "usr/bin/termeric":
-                    contents = b"\x7fELFfixture"
-                elif relative.endswith(".png"):
-                    contents = png_fixture(relative)
-                elif relative.endswith("THIRD_PARTY_NOTICES.md"):
-                    contents = NOTICE_FIXTURE
-                path.write_bytes(contents)
-                path.chmod(0o644 if relative == "usr/bin/termeric" else mode)
+            write_package_tree(root, EXPECTED_FILES)
+            (root / "usr/bin/termeric").chmod(0o644)
 
             with self.assertRaisesRegex(CheckError, "mode 644, expected 755"):
                 validate_layout(root, exercise_native_tools=False)
 
-    def test_desktop_contract_rejects_a_gui_launch_mismatch(self):
+    def test_desktop_contract_rejects_a_launch_or_identity_mismatch(self):
+        required = DESKTOP_ENTRIES["usr/share/applications/org.termeric.Termeric.desktop"]
+        entry = (ROOT / "assets/org.termeric.Termeric.desktop").read_text()
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "termeric.desktop"
-            path.write_text(DESKTOP_ENTRY.replace("Exec=termeric\n", "Exec=wrong\n", 1))
+            path = Path(directory) / "org.termeric.Termeric.desktop"
+            path.write_text(entry.replace("Exec=termeric\n", "Exec=wrong\n", 1))
             with self.assertRaisesRegex(CheckError, "expected 'termeric'"):
-                validate_desktop_entry(path)
+                validate_desktop_entry(path, required)
+            path.write_text(entry.replace("Actions=NewWindow;", "Actions=", 1))
+            with self.assertRaisesRegex(CheckError, "NewWindow action"):
+                validate_desktop_entry(path, required)
+            path.write_text(entry.replace("StartupWMClass=org.termeric.Termeric", "StartupWMClass=termeric"))
+            with self.assertRaisesRegex(CheckError, "StartupWMClass is 'termeric'"):
+                validate_desktop_entry(path, required)
 
     def test_desktop_parser_rejects_key_value_before_a_section(self):
         with self.assertRaisesRegex(CheckError, "malformed desktop entry"):

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Termeric Quick Access
+Comment=Show or hide Termeric's drop-down terminal
+Exec=termeric --quick-access
+Icon=org.termeric.Termeric
+Terminal=false
+NoDisplay=true
+StartupNotify=false
+StartupWMClass=org.termeric.Termeric.QuickAccess

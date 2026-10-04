@@ -3,12 +3,12 @@ Type=Application
 Name=Termeric
 Comment=GPU-accelerated terminal emulator themed around roots and rhizomes
 Exec=termeric
-Icon=termeric
+Icon=org.termeric.Termeric
 Terminal=false
 Categories=System;TerminalEmulator;
 Keywords=terminal;shell;command;developer;
 StartupNotify=true
-StartupWMClass=termeric
+StartupWMClass=org.termeric.Termeric
 Actions=NewWindow;
 
 [Desktop Action NewWindow]

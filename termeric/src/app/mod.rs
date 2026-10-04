@@ -117,6 +117,15 @@ use crate::ui::unicode_picker::UnicodePicker;
 
 pub use application::Application;
 
+/// The Wayland app ID and X11 `WM_CLASS` of ordinary windows. Desktops match
+/// it to the installed desktop entry of the same name for the window's icon
+/// and taskbar grouping, so it never changes once released.
+pub const APP_ID: &str = "org.termeric.Termeric";
+/// The quick-access window's identity, separate so compositor rules can treat
+/// it apart from ordinary windows. A hidden desktop entry of the same name
+/// gives it the icon.
+pub const QUICK_ACCESS_APP_ID: &str = "org.termeric.Termeric.QuickAccess";
+
 /// Window and cell sizes for laying out UI outside a frame. Before a
 /// renderer exists (headless tests) a nominal 800×600 window with 8×16
 /// cells and no tab bar stands in.
@@ -1705,7 +1714,8 @@ impl App {
     fn load_icon() -> Option<Icon> {
         // The pre-rendered 256px theme icon avoids embedding the 1 MiB master
         // artwork and resampling it on every launch.
-        let icon_bytes = include_bytes!("../../../assets/icons/hicolor/256x256/apps/termeric.png");
+        let icon_bytes =
+            include_bytes!("../../../assets/icons/hicolor/256x256/apps/org.termeric.Termeric.png");
 
         match image::load_from_memory(icon_bytes) {
             Ok(img) => {

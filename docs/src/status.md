@@ -72,7 +72,7 @@ This page sums up what Termeric supports today. Use it to check whether somethin
 | Read-only panes | Locking a pane against input while its output continues. | Restoring a workspace unlocks every pane. |
 | Transcripts | Recording and exporting a terminal's output. | Removing secrets from exports is best effort. |
 | Window stacking | Asking for always-on-top or always-on-bottom windows. | Your desktop decides the final order. |
-| Quick-access terminal | A drop-down terminal toggled with `termeric --quick-access`. | On Wayland, exact placement and focus may need a compositor rule for its `termeric-quick-access` app ID. |
+| Quick-access terminal | A drop-down terminal toggled with `termeric --quick-access`. | On Wayland, exact placement and focus may need a compositor rule for its `org.termeric.Termeric.QuickAccess` app ID. |
 | Drag and drop | Dropping a file or folder inserts its quoted path. On an experimental live-domain pane, it uploads the file or folder after you confirm. | Live-domain uploads are limited to 64 MiB. |
 | Fullscreen | F11 makes the current window fullscreen. | Fullscreen isn't remembered between launches. |
 | Git | Branch-name completion for Git commands, and the branch recorded with an agent transcript. | Termeric isn't a Git client: staging and reverting are limited to reviewing an agent's changes. |

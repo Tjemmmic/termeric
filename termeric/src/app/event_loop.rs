@@ -70,9 +70,9 @@ impl App {
                 .app_id
                 .as_deref()
                 .unwrap_or(if self.launch.quick_access {
-                    "termeric-quick-access"
+                    super::QUICK_ACCESS_APP_ID
                 } else {
-                    "termeric"
+                    super::APP_ID
                 });
             window_attrs = winit::platform::x11::WindowAttributesExtX11::with_name(
                 window_attrs,
@@ -1051,6 +1051,31 @@ mod quick_access_tests {
         );
         assert_eq!(position, PhysicalPosition::new(-1_920, 24));
         assert_eq!(size, PhysicalSize::new(1_920, 1_080));
+    }
+}
+
+#[cfg(test)]
+mod app_id_tests {
+    use crate::app::{APP_ID, QUICK_ACCESS_APP_ID};
+
+    /// Desktops give a window the icon of the installed entry whose
+    /// `StartupWMClass` (and, on Wayland, file name) is the window's app ID.
+    #[test]
+    fn desktop_entries_name_the_window_identities() {
+        for (app_id, entry) in [
+            (
+                APP_ID,
+                include_str!("../../../assets/org.termeric.Termeric.desktop"),
+            ),
+            (
+                QUICK_ACCESS_APP_ID,
+                include_str!("../../../assets/org.termeric.Termeric.QuickAccess.desktop"),
+            ),
+        ] {
+            let lines: Vec<&str> = entry.lines().collect();
+            assert!(lines.contains(&format!("StartupWMClass={app_id}").as_str()));
+            assert!(lines.contains(&format!("Icon={APP_ID}").as_str()));
+        }
     }
 }
 

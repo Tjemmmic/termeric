@@ -4,7 +4,7 @@ import stat
 import tempfile
 import unittest
 
-from scripts.test_check_debian_package import NOTICE_FIXTURE, png_fixture
+from scripts.test_check_debian_package import write_package_tree
 from scripts.check_arch_package import (
     CheckError,
     EXPECTED_FILES,
@@ -20,22 +20,6 @@ from scripts.check_arch_package import (
     validate_layout,
     validate_package_metadata,
 )
-
-
-DESKTOP_ENTRY = """\
-[Desktop Entry]
-Type=Application
-Name=Termeric
-Exec=termeric
-Icon=termeric
-Terminal=false
-StartupWMClass=termeric
-Actions=NewWindow;
-
-[Desktop Action NewWindow]
-Name=New Window
-Exec=termeric --new-window
-"""
 
 
 def valid_inventory() -> tuple[list[str], list[str]]:
@@ -149,21 +133,7 @@ class ArchPackageCheckTests(unittest.TestCase):
     def test_layout_accepts_expected_files_and_modes_without_native_tools(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for relative, mode in EXPECTED_FILES.items():
-                path = root / relative
-                path.parent.mkdir(parents=True, exist_ok=True)
-                if relative == "usr/bin/termeric":
-                    contents = b"\x7fELFfixture"
-                elif relative.endswith(".png"):
-                    contents = png_fixture(relative)
-                elif relative.endswith(".desktop"):
-                    contents = DESKTOP_ENTRY.encode()
-                elif relative.endswith("THIRD_PARTY_NOTICES.md"):
-                    contents = NOTICE_FIXTURE
-                else:
-                    contents = b"fixture"
-                path.write_bytes(contents)
-                path.chmod(mode)
+            write_package_tree(root, EXPECTED_FILES)
             validate_layout(root, exercise_native_tools=False)
 
             notice = root / "usr/share/doc/termeric/THIRD_PARTY_NOTICES.md"
@@ -174,18 +144,8 @@ class ArchPackageCheckTests(unittest.TestCase):
     def test_layout_rejects_mode_and_file_type_regressions(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for relative, mode in EXPECTED_FILES.items():
-                path = root / relative
-                path.parent.mkdir(parents=True, exist_ok=True)
-                contents = DESKTOP_ENTRY.encode() if relative.endswith(".desktop") else b"fixture"
-                if relative == "usr/bin/termeric":
-                    contents = b"\x7fELFfixture"
-                elif relative.endswith(".png"):
-                    contents = png_fixture(relative)
-                elif relative.endswith("THIRD_PARTY_NOTICES.md"):
-                    contents = NOTICE_FIXTURE
-                path.write_bytes(contents)
-                path.chmod(0o777 if relative == "usr/bin/termeric" else mode)
+            write_package_tree(root, EXPECTED_FILES)
+            (root / "usr/bin/termeric").chmod(0o777)
             with self.assertRaisesRegex(CheckError, "mode 777, expected 755"):
                 validate_layout(root, exercise_native_tools=False)
 
