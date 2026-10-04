@@ -7,7 +7,7 @@
 //! for the server Termeric starts for its supervisor, that supervisor's mode
 //! and limits; the GUI enforces both.
 
-use std::io::{BufRead, Read, Write};
+use std::io::{BufRead, Write};
 
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
@@ -173,21 +173,12 @@ pub fn serve(backend: impl Backend) -> Result<()> {
 fn serve_on(backend: impl Backend, mut reader: impl BufRead, mut writer: impl Write) -> Result<()> {
     let mut server = Server::new(backend);
     let mut line = Vec::new();
-    loop {
-        line.clear();
-        let read = (&mut reader)
-            .take(MAX_MESSAGE_BYTES as u64 + 1)
-            .read_until(b'\n', &mut line)
-            .context("read from standard input")?;
-        if read == 0 {
-            return Ok(());
-        }
-        let complete = line.last() == Some(&b'\n');
-        if complete {
-            line.pop();
-        }
-        let reply = if !complete && line.len() > MAX_MESSAGE_BYTES {
-            skip_line(&mut reader)?;
+    // A last message without a newline is still a message.
+    while let Some(read) =
+        crate::line_reader::read_bounded_line(&mut reader, MAX_MESSAGE_BYTES, &mut line)
+            .context("read from standard input")?
+    {
+        let reply = if read.oversized {
             Some(error_reply(Value::Null, -32600, "Message too large"))
         } else if line.trim_ascii().is_empty() {
             None
@@ -203,26 +194,7 @@ fn serve_on(backend: impl Backend, mut reader: impl BufRead, mut writer: impl Wr
             writer.flush()?;
         }
     }
-}
-
-/// Discard input through the next newline without holding it.
-fn skip_line(reader: &mut impl BufRead) -> Result<()> {
-    loop {
-        let available = reader.fill_buf().context("read from standard input")?;
-        if available.is_empty() {
-            return Ok(());
-        }
-        match available.iter().position(|byte| *byte == b'\n') {
-            Some(end) => {
-                reader.consume(end + 1);
-                return Ok(());
-            }
-            None => {
-                let length = available.len();
-                reader.consume(length);
-            }
-        }
-    }
+    Ok(())
 }
 
 pub struct Server<B> {
