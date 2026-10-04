@@ -60,7 +60,7 @@ pub(crate) fn measure(device: &Device, queue: &Queue) -> Result<PressureBenchmar
     cache.install_test_font(font, "Fira Mono", queue);
     cache.begin_frame();
     let inputs = fixture();
-    cache.set_shaping_byte_limits_for_test(REFERENCE_BYTES, MAX_DEFERRED_RUN_BYTES);
+    cache.set_shaping_byte_limit_for_test(REFERENCE_BYTES);
     let expected = shape_pass(&mut cache, queue, &inputs);
     // Warm all physical glyphs and wait for uploads before CPU-only timings.
     queue.submit([]);
@@ -80,7 +80,7 @@ pub(crate) fn measure(device: &Device, queue: &Queue) -> Result<PressureBenchmar
             [REFERENCE_BYTES, MAX_SHAPED_RUN_BYTES]
         };
         for budget in budgets {
-            cache.set_shaping_byte_limits_for_test(budget, MAX_DEFERRED_RUN_BYTES);
+            cache.set_shaping_byte_limit_for_test(budget);
             let warmup = shape_pass(&mut cache, queue, &inputs);
             assert_same_runs(&expected, &warmup);
             drop(warmup);

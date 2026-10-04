@@ -2974,9 +2974,6 @@ pub(crate) fn headless_glyph_atlas_stress_smoke(device: &Device, queue: &Queue) 
     // A pressure miss is temporary: repeated content in the same frame must
     // reuse the visible replacement without rerasterizing, then retry after
     // frame pins are released. Exercise both the shaped-run and scalar paths.
-    // Force retry runs to bypass their byte budget. Per-glyph deferral must
-    // still suppress rerasterization and allow next-frame recovery.
-    glyph_cache.set_shaping_byte_limits_for_test(8 * 1024 * 1024, 1);
     let failures_before_probe = metrics.allocation_failures;
     let pressure_run = glyph_cache
         .shape_run_styled("é", glyph_cache::FontStyle::default(), queue)
@@ -2994,9 +2991,7 @@ pub(crate) fn headless_glyph_atlas_stress_smoke(device: &Device, queue: &Queue) 
         "same-frame shaped pressure rerasterized a known deferred glyph"
     );
     anyhow::ensure!(glyph_cache.rasterizations() == shaped_rasterizations);
-    anyhow::ensure!(glyph_cache.shaping_cache_metrics().deferred_entries == 0);
-    anyhow::ensure!(glyph_cache.shaping_cache_metrics().deferred_bytes == 0);
-    anyhow::ensure!(glyph_cache.shaping_cache_metrics().skipped_runs >= 2);
+    anyhow::ensure!(glyph_cache.shaping_cache_metrics().deferred_entries == 1);
 
     let _ = glyph_cache
         .get_or_insert_styled('ñ', glyph_cache::FontStyle::default(), queue)
@@ -3071,7 +3066,7 @@ pub(crate) fn headless_glyph_atlas_stress_smoke(device: &Device, queue: &Queue) 
         glyph_cache.rasterizations() == before_cross_path,
         "scalar alias rerasterized an existing shaped atlas entry"
     );
-    glyph_cache.set_shaping_byte_limits_for_test(1, 1);
+    glyph_cache.set_shaping_byte_limit_for_test(1);
     let uncached = glyph_cache
         .shape_run_styled("WWW", glyph_cache::FontStyle::default(), queue)
         .ok_or_else(|| anyhow::anyhow!("over-budget run must still render"))?;

@@ -32,7 +32,6 @@ const MAX_COLOR_ATLAS_PAGES: u32 = 4;
 const COLOR_PAGE_FLAG: u16 = 1 << 15;
 const MAX_SHAPED_RUNS: usize = 4_096;
 const MAX_SHAPED_RUN_BYTES: usize = 8 * 1024 * 1024;
-const MAX_DEFERRED_RUN_BYTES: usize = 1024 * 1024;
 const ATLAS_PADDING: u32 = 1;
 pub(crate) const MAX_FONT_COVERAGE_INPUT_BYTES: usize = 256;
 pub(crate) const MAX_FONT_COVERAGE_GRAPHEMES: usize = 16;
@@ -233,7 +232,6 @@ pub(crate) struct ShapingCacheMetrics {
     pub entries: usize,
     pub retained_bytes: usize,
     pub deferred_entries: usize,
-    pub deferred_bytes: usize,
     pub skipped_runs: u64,
 }
 
@@ -686,7 +684,9 @@ pub struct GlyphCache {
     /// next `begin_frame` releases the pins.
     deferred_entries: HashSet<GlyphKey>,
     deferred_shaped_entries: HashSet<ShapedGlyphKey>,
-    deferred_ligature_cache: ShapedRunCache,
+    /// Runs that drew a deferred glyph this frame, so repeats reuse the
+    /// replacement; the frame's own text bounds them.
+    deferred_runs: HashMap<LigatureKey, LigatureRun>,
     shaping_cache_metrics: ShapingCacheMetrics,
     atlas: PagedAtlasAllocator,
     color_atlas: PagedAtlasAllocator,
@@ -1056,7 +1056,7 @@ impl GlyphCache {
             shaped_entries: HashMap::new(),
             deferred_entries: HashSet::new(),
             deferred_shaped_entries: HashSet::new(),
-            deferred_ligature_cache: ShapedRunCache::new(MAX_DEFERRED_RUN_BYTES),
+            deferred_runs: HashMap::new(),
             shaping_cache_metrics: ShapingCacheMetrics::default(),
             atlas,
             color_atlas: PagedAtlasAllocator::recyclable(ATLAS_SIZE, MAX_COLOR_ATLAS_PAGES),
@@ -1111,7 +1111,7 @@ impl GlyphCache {
         self.color_atlas.begin_frame();
         self.deferred_entries.clear();
         self.deferred_shaped_entries.clear();
-        self.deferred_ligature_cache.clear();
+        self.deferred_runs.clear();
     }
 
     /// Keep atlas pages referenced by persistent row geometry alive until the
@@ -1487,7 +1487,7 @@ impl GlyphCache {
         if self.ligatures_enabled != enabled {
             self.ligatures_enabled = enabled;
             self.ligature_cache.clear();
-            self.deferred_ligature_cache.clear();
+            self.deferred_runs.clear();
             self.shaping_cache_metrics.entries = 0;
         }
     }
@@ -1501,7 +1501,7 @@ impl GlyphCache {
         }
         self.font_feature_overrides = overrides;
         self.ligature_cache.clear();
-        self.deferred_ligature_cache.clear();
+        self.deferred_runs.clear();
         self.shaping_cache_metrics.entries = 0;
         true
     }
@@ -1775,7 +1775,7 @@ impl GlyphCache {
             }
             return run;
         }
-        if let Some(run) = self.deferred_ligature_cache.get(&key).cloned() {
+        if let Some(run) = self.deferred_runs.get(&key).cloned() {
             self.shaping_cache_metrics.hits += 1;
             self.atlas_hits += run.glyphs.len() as u64;
             for glyph in &run.glyphs {
@@ -1787,8 +1787,7 @@ impl GlyphCache {
         let (run, retry_next_frame) =
             self.shape_text_internal(text, style, metrics, key.placement, key.face, queue);
         if retry_next_frame {
-            self.shaping_cache_metrics.evictions +=
-                self.deferred_ligature_cache.insert(key, &run) as u64;
+            self.deferred_runs.insert(key, run.clone());
         } else {
             self.shaping_cache_metrics.evictions += self.ligature_cache.insert(key, &run) as u64;
             self.shaping_cache_metrics.entries = self.ligature_cache.len();
@@ -1800,22 +1799,16 @@ impl GlyphCache {
         ShapingCacheMetrics {
             entries: self.ligature_cache.len(),
             retained_bytes: self.ligature_cache.bytes,
-            deferred_entries: self.deferred_ligature_cache.len(),
-            deferred_bytes: self.deferred_ligature_cache.bytes,
-            skipped_runs: self
-                .ligature_cache
-                .skipped
-                .saturating_add(self.deferred_ligature_cache.skipped),
+            deferred_entries: self.deferred_runs.len(),
+            skipped_runs: self.ligature_cache.skipped,
             ..self.shaping_cache_metrics
         }
     }
 
     #[cfg(test)]
-    pub(crate) fn set_shaping_byte_limits_for_test(&mut self, persistent: usize, deferred: usize) {
+    pub(crate) fn set_shaping_byte_limit_for_test(&mut self, limit: usize) {
         self.ligature_cache.clear();
-        self.ligature_cache.byte_limit = persistent;
-        self.deferred_ligature_cache.clear();
-        self.deferred_ligature_cache.byte_limit = deferred;
+        self.ligature_cache.byte_limit = limit;
     }
 
     /// A cache on the system's default monospace face at `size` pixels,
@@ -2269,7 +2262,7 @@ impl GlyphCache {
         self.shaped_entries.clear();
         self.deferred_entries.clear();
         self.deferred_shaped_entries.clear();
-        self.deferred_ligature_cache.clear();
+        self.deferred_runs.clear();
         self.shaping_cache_metrics.entries = 0;
         self.reported_synthetic_styles.clear();
 
