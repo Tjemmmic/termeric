@@ -35,6 +35,29 @@ makepkg -si
 
 To upgrade, run `makepkg -si` in `packaging/arch` again; it builds the newest commit on the main branch. Uninstall with `sudo pacman -R termeric-git`.
 
+## Any other distribution: the release tarball
+
+Each release also includes a tarball for x86_64 and one for arm64 (`aarch64`), for distributions without a package. It needs glibc 2.35 or newer (Ubuntu 22.04 and later, or any current distribution), the Wayland, X11, xkbcommon, and Vulkan or EGL libraries your desktop already uses, and a monospace font.
+
+Download the tarball for your machine and `SHA256SUMS` from the [releases page](https://github.com/Tjemmmic/termeric/releases), then check them. `sha256sum` confirms the download is intact, and `gh attestation verify` (from the [GitHub CLI](https://cli.github.com)) confirms it was built by Termeric's release workflow from the tagged source:
+
+```bash
+sha256sum --check --ignore-missing SHA256SUMS
+gh attestation verify termeric-*-x86_64-linux.tar.gz --repo Tjemmmic/termeric
+```
+
+Unpack it and run its `install.sh`. By default it installs for your user only, under `~/.local`, with the program, desktop entries, icons, AppStream metadata, the `xterm-termeric` terminfo entry, the manual page, shell completions, and documentation:
+
+```bash
+tar -xzf termeric-*-x86_64-linux.tar.gz
+cd termeric-*-x86_64-linux
+./install.sh
+```
+
+To install for everyone instead, run `sudo ./install.sh --prefix /usr/local`. Outside `/usr`, `install.sh` writes the program's full path into the desktop entries, because desktop launchers don't always search `~/.local/bin`, and it tells you if that folder isn't on your `PATH` or Zsh needs to be told where the completions are. Termeric finds its terminfo entry next to the program wherever you install it.
+
+To upgrade, unpack the newer tarball and run its `install.sh` with the same `--prefix`; it removes the previous version's files first. To uninstall, run `install.sh --uninstall` (with the same `--prefix`, and `sudo` for a system-wide install) from any release's tarball. It removes exactly the files recorded in `PREFIX/lib/termeric/installed-files`.
+
 ## Build from source
 
 You need Rust 1.89 or newer, a C compiler, and the development files for fontconfig, Wayland, xkbcommon, XCB, and Vulkan.
