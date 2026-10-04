@@ -39,17 +39,19 @@ use anyhow::Result;
 use winit::event_loop::EventLoop;
 
 fn main() -> Result<std::process::ExitCode> {
-    let outcome = cli::parse_env()?;
-    // Hooks run inside an agent's turn: no logging setup, no output, and
-    // success whatever happens.
-    if let cli::ParseOutcome::AgentEvent(invocation) = &outcome {
-        match invocation {
-            Some(invocation) => agents::hook::run(invocation),
-            // A hook from a newer setup, still owed a read of its input.
-            None => agents::hook::discard_input(),
+    let outcome = match cli::parse_env()? {
+        // Hooks run inside an agent's turn: no logging setup, no output, and
+        // success whatever happens.
+        cli::Invocation::AgentEvent(invocation) => {
+            match invocation {
+                Some(invocation) => agents::hook::run(&invocation),
+                // A hook from a newer setup, still owed a read of its input.
+                None => agents::hook::discard_input(),
+            }
+            return Ok(std::process::ExitCode::SUCCESS);
         }
-        return Ok(std::process::ExitCode::SUCCESS);
-    }
+        cli::Invocation::Command(outcome) => *outcome,
+    };
 
     // Initialize logging after deterministic parsing but before either GUI or
     // local-domain execution.
@@ -66,9 +68,6 @@ fn main() -> Result<std::process::ExitCode> {
                 return Ok(std::process::ExitCode::SUCCESS);
             }
             launch
-        }
-        cli::ParseOutcome::AgentEvent(_) => {
-            unreachable!("agent hooks return before logging starts")
         }
         cli::ParseOutcome::Mcp {
             process_id,
