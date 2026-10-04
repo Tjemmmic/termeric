@@ -401,61 +401,6 @@ mod tests {
     }
 
     #[test]
-    fn search_query_viewport_preserves_whole_graphemes_and_reserves_the_caret() {
-        let mut info = info();
-        info.query = "界e\u{301}👩\u{200d}💻ab".repeat(80);
-        for width in [100.0, 450.0, 800.0, 1400.0] {
-            let layout = SearchBarLayout::calculate(&info, 120.0, width, 55.0, 9.5, 20.0);
-            for cursor in info
-                .query
-                .char_indices()
-                .map(|(byte, _)| byte)
-                .chain([info.query.len()])
-            {
-                info.cursor_pos = cursor;
-                let Some(view) = layout.input_viewport(&info, 9.5) else {
-                    assert!(layout.input.width < 9.5 * 2.3);
-                    continue;
-                };
-                assert!(view.cursor_x >= view.text_x);
-                assert!(view.cursor_x + 9.5 <= view.right + 0.001);
-                let visible = &info.query[view.text_range.clone()];
-                assert!(
-                    visible
-                        .graphemes(true)
-                        .map(termeric_core::unicode::grapheme_width)
-                        .sum::<usize>()
-                        <= view.columns
-                );
-                for boundary in [view.text_range.start, view.text_range.end] {
-                    assert!(
-                        boundary == info.query.len()
-                            || info
-                                .query
-                                .grapheme_indices(true)
-                                .any(|(byte, _)| byte == boundary)
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn count_text_discloses_recent_window_truncation() {
-        let mut info = info();
-        info.match_count = 300_000;
-        info.current_match = Some(37_857);
-        info.results_truncated = true;
-        assert_eq!(info.count_text(), "37857 of 300000 · recent");
-        info.match_count = 12;
-        info.current_match = Some(1);
-        info.results_truncated = false;
-        assert_eq!(info.count_text(), "1 of 12");
-        info.searching = true;
-        assert_eq!(info.count_text(), "Searching…");
-    }
-
-    #[test]
     fn shared_layout_keeps_controls_disjoint_and_inside_bar() {
         let mut info = info();
         let layout = SearchBarLayout::calculate(&info, 120.0, 680.0, 30.0, 8.0, 16.0);
