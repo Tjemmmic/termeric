@@ -1448,6 +1448,7 @@ impl App {
                     (Theme::default(), None)
                 }
             };
+        let runtime_plugin_paths = crate::plugin::runtime::PluginPaths::configured();
         let last_theme_mtime = active_theme_path.as_ref().and_then(|path| {
             std::fs::metadata(path)
                 .and_then(|metadata| metadata.modified())
@@ -1527,9 +1528,8 @@ impl App {
                 .and_then(Result::ok)
                 .and_then(|metadata| metadata.modified().ok()),
             last_plugin_registry_mtime: use_system_state
-                .then(|| std::fs::metadata(crate::plugin::runtime::registry_path()))
-                .and_then(Result::ok)
-                .and_then(|metadata| metadata.modified().ok()),
+                .then(|| runtime_plugin_paths.registry_mtime())
+                .flatten(),
             active_theme_path,
             last_theme_mtime,
             last_cursor_visible: true,
@@ -1615,7 +1615,7 @@ impl App {
             guardrail: GuardrailOverlay::new(),
 
             overlay_flow: None,
-            runtime_plugin_paths: crate::plugin::runtime::PluginPaths::configured(),
+            runtime_plugin_paths,
             pending_hook_change: None,
             agent_change_job: None,
             agent_change_list: None,

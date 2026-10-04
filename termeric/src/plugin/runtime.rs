@@ -630,6 +630,14 @@ impl PluginPaths {
             root: plugins_dir(),
         }
     }
+
+    /// When the registry was last written, which the running app polls to
+    /// pick up changes made outside it; `None` while there is no registry.
+    pub fn registry_mtime(&self) -> Option<std::time::SystemTime> {
+        fs::metadata(&self.registry)
+            .and_then(|metadata| metadata.modified())
+            .ok()
+    }
 }
 
 pub(crate) fn preview_update_at(

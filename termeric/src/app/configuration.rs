@@ -208,9 +208,7 @@ impl App {
             }
         }
 
-        let plugin_registry_mtime = std::fs::metadata(crate::plugin::runtime::registry_path())
-            .and_then(|metadata| metadata.modified())
-            .ok();
+        let plugin_registry_mtime = self.runtime_plugin_paths.registry_mtime();
         if plugin_registry_mtime != self.last_plugin_registry_mtime {
             changed = true;
             self.last_plugin_registry_mtime = plugin_registry_mtime;
