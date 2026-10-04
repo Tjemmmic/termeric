@@ -2244,6 +2244,38 @@ mod tests {
     }
 
     #[test]
+    fn output_in_any_pane_makes_a_closing_tab_worth_saving() {
+        let root = tempfile::tempdir().unwrap();
+        crate::workspace::set_test_workspaces_base_dir(Some(root.path().to_path_buf()));
+        let shell = crate::test_support::sleeping_shell();
+        let mut manager = TabManager::for_test(shell.clone());
+        manager.new_tab().unwrap();
+        let tab = manager.active_tab_mut().unwrap();
+        let panes = tab.panes_for_test(shell, 800.0, 160.0, 10.0, 20.0);
+        let right = panes.split(SplitDirection::Vertical).unwrap();
+        // The unfocused pane scrolled output away; the focused one is idle.
+        let left = panes.get_pane_mut(PaneId(0)).unwrap();
+        for index in 0..40 {
+            left.terminal
+                .process(format!("line {index}\r\n").as_bytes());
+        }
+        panes.focus(right);
+        assert!(tab.has_content());
+
+        assert!(manager.close_tab(0));
+        manager.set_reduced_motion(true);
+        manager.cleanup_closed(true, false);
+        let notices = manager.drain_persistence_notices();
+        let listed = crate::workspace::list_closed_tabs();
+        crate::workspace::set_test_workspaces_base_dir(None);
+        assert!(
+            matches!(notices.as_slice(), [PersistenceNotice::Saved { .. }]),
+            "{notices:?}"
+        );
+        assert_eq!(listed.len(), 1);
+    }
+
+    #[test]
     fn a_failed_first_save_leaves_the_tab_without_a_snapshot() {
         let root = tempfile::tempdir().unwrap();
         let blocked = root.path().join("not-a-directory");

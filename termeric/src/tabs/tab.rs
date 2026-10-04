@@ -843,23 +843,20 @@ impl Tab {
         notices
     }
 
-    /// Check if this tab has meaningful content worth saving
-    ///
-    /// Returns true when the tab has command history, a snapshot it was reopened from,
-    /// or scrolled-off output. Short commands that fit on screen still count.
-    /// This avoids false positives from splash art or a pristine prompt while
-    /// keeping useful working-directory/command state eligible for auto-save.
+    /// Whether the tab is worth keeping as a closed-tab snapshot: it was
+    /// reopened from one, or any of its panes ran a command or scrolled
+    /// output off screen. Short commands that fit on screen still count;
+    /// splash art or a pristine prompt does not.
     pub fn has_content(&self) -> bool {
-        self.focused_last_command().is_some()
-            || self.snapshot_id.is_some()
-            || self
-                .focused_terminal()
-                .is_some_and(|terminal| terminal.grid().scrollback_len() > 0)
+        self.snapshot_id.is_some()
+            || self.panes.iter_panes().any(|pane| {
+                pane.last_command.is_some() || pane.terminal.grid().scrollback_len() > 0
+            })
     }
 
     /// This tab as the one-tab workspace kept after it closes: every pane,
-    /// named for the focused pane's directory and last command. A tab
-    /// reopened from such a snapshot keeps that snapshot's ID.
+    /// named for the focused pane's directory (else the tab's title) and last
+    /// command. A tab reopened from such a snapshot keeps that snapshot's ID.
     pub(crate) fn closed_tab_snapshot(
         &self,
         save_scrollback: bool,
@@ -870,20 +867,11 @@ impl Tab {
             .iter()
             .find(|pane| pane.id == tab.focused_pane)
             .context("focused pane no longer exists while saving the closed tab")?;
-        let place = focused
-            .working_directory
-            .as_deref()
-            .map(abbreviate_path)
-            .unwrap_or_else(|| self.title.clone());
-        let name = match &focused.last_command {
-            Some(command) => format!("{place} | {command}"),
-            None => place,
-        };
-        let name = name
-            .chars()
-            .filter(|character| !character.is_control())
-            .take(128)
-            .collect::<String>();
+        let name = closed_tab_name(
+            focused.working_directory.as_deref(),
+            &self.title,
+            focused.last_command.as_deref(),
+        );
         let id = self
             .snapshot_id
             .clone()
@@ -905,10 +893,6 @@ impl Tab {
             scrollback_truncated: !report.truncated_panes.is_empty(),
             id: report.id,
         })
-    }
-
-    fn focused_last_command(&self) -> Option<&String> {
-        self.focused_pane()?.last_command.as_ref()
     }
 
     pub(crate) fn capture_workspace_tab(
@@ -963,5 +947,60 @@ impl Tab {
     /// Check if close animation is complete and tab should be removed
     pub fn is_close_complete(&self) -> bool {
         self.close_progress() >= 1.0
+    }
+}
+
+/// A closed tab's snapshot name: its focused pane's directory, else the
+/// tab's title, and the pane's last command, as one valid workspace name.
+fn closed_tab_name(directory: Option<&str>, title: &str, last_command: Option<&str>) -> String {
+    let place = directory.map_or_else(|| title.to_string(), abbreviate_path);
+    let name = match last_command {
+        Some(command) => format!("{place} | {command}"),
+        None => place,
+    };
+    let name: String = name
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(crate::workspace::MAX_WORKSPACE_NAME_CHARS)
+        .collect();
+    // A title can be blank, such as an OSC title of only spaces.
+    if name.trim().is_empty() {
+        "Closed tab".into()
+    } else {
+        name
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn closed_tab_names_are_always_valid_workspace_names() {
+        assert_eq!(
+            closed_tab_name(Some("/srv/project"), "ignored", Some("make")),
+            "/srv/project | make"
+        );
+        assert_eq!(closed_tab_name(None, "build", None), "build");
+        for blank in ["   ", "", "\u{7}\t"] {
+            assert_eq!(
+                closed_tab_name(None, blank, None),
+                "Closed tab",
+                "{blank:?}"
+            );
+        }
+        assert_eq!(closed_tab_name(None, "  ", Some("make")), "   | make");
+        let long = closed_tab_name(None, &"x".repeat(300), Some("make"));
+        assert_eq!(
+            long.chars().count(),
+            crate::workspace::MAX_WORKSPACE_NAME_CHARS
+        );
+        for name in [
+            closed_tab_name(None, "   ", None),
+            closed_tab_name(None, "a\nb", None),
+            long,
+        ] {
+            crate::workspace::validate_workspace_name(&name).unwrap();
+        }
     }
 }

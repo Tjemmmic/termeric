@@ -102,7 +102,7 @@ save_scrollback = true
 
 ## Tab snapshots
 
-When **Auto Save Workspace** is on and you close a tab that has output in it, Termeric saves a snapshot of that tab, the way it saves a workspace: every pane with its working directory, last command, and scrollback, and the split layout. It is named for the focused pane's directory and last command.
+When **Auto Save Workspace** is on and you close a tab where any pane has output or ran a command, Termeric saves a snapshot of that tab, the way it saves a workspace: every pane with its working directory, last command, and scrollback, and the split layout. It is named for the focused pane's directory (or the tab's title) and last command.
 
 To reopen one, open **Manage Workspaces…** and click **Tab snapshots** at the bottom of the panel (it appears once there are snapshots). Opening a snapshot reopens the tab in the current window, as restoring a workspace does: fresh shells (or the tab's profile or agent) in the saved directories and splits, with the saved text above each prompt. A tab that was pinned reopens pinned, after your other pinned tabs. It doesn't rerun the last command, and closing the reopened tab updates the same snapshot. Press Escape or the back button to return to the workspace list, and Delete to remove a snapshot you don't need. Termeric keeps the 100 newest snapshots and deletes older ones.
 
