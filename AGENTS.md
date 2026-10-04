@@ -43,7 +43,7 @@ PTY output and terminal-generated replies follow one stricter ownership path: `T
 
 Outside pane mode a tab owns its one terminal as a `Pane`; entering pane mode detaches that pane (with the tab's pane allocation history, as a `PaneOwner`) and adopts it as the first pane, and no replacement PTY may be spawned. User-facing reads and writes must use `Tab::focused_pane()`, `Tab::focused_terminal()`, `focused_terminal_mut()`, or `Tab::write()`; focus changes must refresh search/URL/Git/cursor surfaces. Lifecycle transitions use the take/restore owner APIs.
 
-Session persistence takes one stable focused-terminal snapshot. Pane-local last-command state must move with terminal ownership, and close-time tab snapshot saves must continue through `Tab::save_as_session()`. Complete startup/exit persistence uses the separate versioned workspace archive and reconstructs tabs/panes by relaunching fresh processes. See [`docs/src/workspaces-and-sessions.md`](docs/src/workspaces-and-sessions.md).
+Closed tabs are kept as one-tab workspaces (`Tab::save_closed_tab()`, marked `closed_tab`, newest 100 kept). Pane-local last-command state must move with terminal ownership. Complete startup/exit persistence uses the same versioned workspace archive and reconstructs tabs/panes by relaunching fresh processes. See [`docs/src/workspaces-and-sessions.md`](docs/src/workspaces-and-sessions.md).
 
 Agent hooks report through `termeric agent-event` over the control socket. Each report names its terminal by the `TERMERIC_TERMINAL_ID` its processes inherited from `PtyHandle`, never by focus. Status lives on the terminal's `TerminalSession` and moves with it. See [`docs/src/agents.md`](docs/src/agents.md).
 

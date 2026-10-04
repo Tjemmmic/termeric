@@ -1007,7 +1007,7 @@ impl PaneManager {
                     scrollback_file: None,
                     scrollback_truncated: false,
                     scrollback_lines: if save_scrollback {
-                        crate::session::save::restorable_scrollback(pane.terminal.grid())
+                        crate::workspace::restorable_scrollback(pane.terminal.grid())
                     } else {
                         Vec::new()
                     },

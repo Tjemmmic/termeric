@@ -6,8 +6,6 @@ mod plugin_panes;
 mod tab;
 mod title;
 
-#[cfg(test)]
-pub(crate) use tab::SessionCapture;
 pub use tab::{CommandLaunch, Tab, TabType};
 pub(crate) use tab::{LiveDomainTab, TabAgentView};
 pub(crate) use title::{
@@ -17,7 +15,6 @@ pub(crate) use title::{
 
 use crate::config::ShellConfig;
 use crate::panes::{PaneId, replay_workspace_scrollback, usable_workspace_cwd};
-use crate::session::Session;
 use anyhow::Context;
 use std::collections::HashMap;
 use std::io;
@@ -1907,6 +1904,7 @@ impl TabManager {
     /// Before removing, saves each non-empty tab when auto-save is enabled.
     /// Returns true if tab or pane topology changed.
     pub fn cleanup_closed(&mut self, auto_save: bool, save_scrollback: bool) -> bool {
+        let mut saved_closed_tab = false;
         // If every pane exited in the same poll, topology cleanup has no live
         // owner to collapse back into the tab and must drop the pane manager.
         // Capture its still-addressable focused pane before that destructive
@@ -1923,7 +1921,7 @@ impl TabManager {
                     continue;
                 }
                 handled_before_topology_cleanup.push(tab.id);
-                auto_save_closing_tab(
+                saved_closed_tab |= auto_save_closing_tab(
                     tab,
                     "split tab",
                     save_scrollback,
@@ -1939,8 +1937,13 @@ impl TabManager {
             let removing =
                 tab.closed || tab.is_close_complete() || (self.reduced_motion && tab.is_closing());
             if auto_save && removing && !handled_before_topology_cleanup.contains(&tab.id) {
-                auto_save_closing_tab(tab, "tab", save_scrollback, &mut self.persistence_notices);
+                saved_closed_tab |=
+                    auto_save_closing_tab(tab, "tab", save_scrollback, &mut self.persistence_notices);
             }
+        }
+
+        if saved_closed_tab {
+            crate::workspace::prune_closed_tabs();
         }
 
         // Now remove them, keeping the same tab active: removing tabs before
@@ -2329,54 +2332,6 @@ impl TabManager {
         self.shell = shell;
     }
 
-    /// Create a tab from a saved session (single-tab) and add it
-    ///
-    /// The new tab inherits the session's ID so subsequent saves update
-    /// the same session entry.
-    pub fn new_tab_from_session(&mut self, session: &Session) -> anyhow::Result<usize> {
-        let lines = crate::session::restore::load_snapshot_scrollback(session)
-            .map_err(|error| anyhow::anyhow!("Snapshot could not be recovered: {error:#}"))?;
-        let id = self.next_id;
-        self.next_id += 1;
-
-        let mut tab = Tab::new_with_cwd_geometry(
-            id,
-            self.geometry,
-            &self.shell,
-            &self.policy,
-            session.working_directory.as_deref(),
-            Some(&session.title),
-        )?;
-
-        // Link this tab to its session
-        tab.session_id = Some(session.id.clone());
-
-        // Restore last_command so the session title is preserved across open/close cycles
-        tab.set_single_last_command(session.last_command.clone());
-
-        // Replay scrollback
-        if !lines.is_empty() {
-            // Join lines with \r\n and add a trailing \r\n so the shell's
-            // new prompt appears on a fresh line below the scrollback. Saved
-            // lines stop before the old final prompt (`restorable_scrollback`).
-            let text = lines.join("\r\n") + "\r\n";
-            if let Some(terminal) = tab.focused_terminal_mut() {
-                terminal.process(text.as_bytes());
-            }
-            log::info!(
-                "Replayed {} scrollback lines into restored tab",
-                lines.len()
-            );
-        }
-
-        self.tabs.push(tab);
-        // Switch to the newly restored tab
-        self.active = self.tabs.len() - 1;
-
-        log::info!("Restored tab {} from session '{}'", id, session.id);
-        Ok(id)
-    }
-
     pub fn drain_persistence_notices(&mut self) -> Vec<PersistenceNotice> {
         std::mem::take(&mut self.persistence_notices)
     }
@@ -2389,30 +2344,30 @@ impl TabManager {
     }
 }
 
-/// Saves a closing tab as a snapshot when it has content and is not a
+/// Saves a closing tab as a closed-tab snapshot when it has content and is not a
 /// live-domain relay, recording the outcome for the person. `kind` names the
-/// tab in the log.
+/// tab in the log. Returns whether a snapshot was saved.
 fn auto_save_closing_tab(
     tab: &mut Tab,
     kind: &str,
     save_scrollback: bool,
     notices: &mut Vec<PersistenceNotice>,
-) {
+) -> bool {
     if tab.live_domain.is_some() {
         log::debug!(
-            "Skipping legacy snapshot for closing live-domain relay tab {}",
+            "Skipping closed-tab snapshot for live-domain relay tab {}",
             tab.id
         );
-        return;
+        return false;
     }
     if !tab.has_content() {
         log::debug!("Skipping empty closing {kind} {} (no content)", tab.id);
-        return;
+        return false;
     }
-    match tab.save_as_session(save_scrollback) {
+    match tab.save_closed_tab(save_scrollback) {
         Ok(outcome) => {
             log::info!(
-                "Auto-saved closing {kind} {} as session '{}'",
+                "Auto-saved closing {kind} {} as closed tab '{}'",
                 tab.id,
                 outcome.id
             );
@@ -2420,6 +2375,7 @@ fn auto_save_closing_tab(
                 id: outcome.id,
                 truncated: outcome.scrollback_truncated,
             });
+            true
         }
         Err(error) => {
             log::error!("Failed to auto-save closing {kind} {}: {error:#}", tab.id);
@@ -2427,6 +2383,7 @@ fn auto_save_closing_tab(
                 tab_id: tab.id,
                 error: format!("{error:#}"),
             });
+            false
         }
     }
 }
@@ -2598,9 +2555,9 @@ mod tests {
     }
 
     #[test]
-    fn simultaneous_pane_exit_autosaves_the_focused_source_before_cleanup() {
-        let session_root = tempfile::tempdir().unwrap();
-        crate::session::set_test_sessions_base_dir(Some(session_root.path().to_path_buf()));
+    fn simultaneous_pane_exit_saves_the_whole_closed_tab_before_cleanup() {
+        let root = tempfile::tempdir().unwrap();
+        crate::workspace::set_test_workspaces_base_dir(Some(root.path().to_path_buf()));
         let mut manager = TabManager::new(80, 8, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
         manager
             .new_tab_with_command(
@@ -2645,31 +2602,31 @@ mod tests {
         assert!(manager.is_empty());
         let notices = manager.drain_persistence_notices();
         let [PersistenceNotice::Saved { id, truncated }] = notices.as_slice() else {
-            panic!("close-time focused pane was not saved: {notices:?}");
+            panic!("the closing split tab was not saved: {notices:?}");
         };
         assert!(!truncated);
-        let restored = crate::session::restore::restore_named_session(id)
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            restored.capture_scope,
-            crate::session::SessionCaptureScope::FocusedPane
-        );
-        assert_eq!(restored.last_command.as_deref(), Some("right-command"));
-        let history = crate::session::restore::load_snapshot_scrollback(&restored)
-            .unwrap()
-            .join("\n");
-        assert!(history.contains("right-history"));
-        assert!(!history.contains("left-history"));
-        crate::session::set_test_sessions_base_dir(None);
+        let saved = crate::workspace::load_workspace(id).unwrap().workspace;
+        let listed = crate::workspace::list_closed_tabs();
+        crate::workspace::set_test_workspaces_base_dir(None);
+        assert!(saved.closed_tab);
+        assert_eq!(listed.len(), 1);
+        assert!(saved.name.ends_with("| right-command"), "{}", saved.name);
+        let [tab] = saved.tabs.as_slice() else {
+            panic!("a closed tab is one tab");
+        };
+        assert_eq!(tab.focused_pane, right.0);
+        for (pane, history) in [(0, "left-history"), (right.0, "right-history")] {
+            let pane = tab.panes.iter().find(|saved| saved.id == pane).unwrap();
+            assert!(pane.scrollback_lines.join("\n").contains(history));
+        }
     }
 
     #[test]
-    fn first_snapshot_failure_does_not_assign_session_identity() {
+    fn a_failed_first_save_leaves_the_tab_without_a_snapshot() {
         let root = tempfile::tempdir().unwrap();
         let blocked = root.path().join("not-a-directory");
         std::fs::write(&blocked, "sentinel").unwrap();
-        crate::session::set_test_sessions_base_dir(Some(blocked));
+        crate::workspace::set_test_workspaces_base_dir(Some(blocked));
         let mut manager = TabManager::for_test(ShellConfig::default());
         manager
             .new_tab_with_command(
@@ -2682,39 +2639,10 @@ mod tests {
             )
             .unwrap();
         let tab = manager.active_tab_mut().unwrap();
-        let result = tab.save_as_session(false);
-        crate::session::set_test_sessions_base_dir(None);
+        let result = tab.save_closed_tab(false);
+        crate::workspace::set_test_workspaces_base_dir(None);
         assert!(result.is_err());
-        assert!(tab.session_id.is_none());
-    }
-
-    #[test]
-    fn stale_snapshot_restore_does_not_allocate_or_spawn_a_tab() {
-        let root = tempfile::tempdir().unwrap();
-        crate::session::set_test_sessions_base_dir(Some(root.path().to_owned()));
-        let mut saved = Session::with_id("stale".into(), "old".into(), None);
-        crate::session::save::save_snapshot(&saved, &["old text".into()]).unwrap();
-        let selected = crate::session::restore::restore_named_session("stale")
-            .unwrap()
-            .unwrap();
-        saved.title = "new".into();
-        crate::session::save::save_snapshot(&saved, &["new text".into()]).unwrap();
-        let shell = ShellConfig {
-            program: Some("/bin/cat".into()),
-            ..Default::default()
-        };
-        let mut manager = TabManager::for_test(shell);
-        let next_id = manager.next_id;
-        let result = manager.new_tab_from_session(&selected);
-        crate::session::set_test_sessions_base_dir(None);
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("changed since selection")
-        );
-        assert!(manager.is_empty());
-        assert_eq!(manager.next_id, next_id);
+        assert!(tab.snapshot_id.is_none());
     }
 
     #[test]
@@ -3924,7 +3852,7 @@ mod tests {
                 .filter_map(Result::ok)
                 .count(),
             0,
-            "relay output must never become a legacy session snapshot"
+            "relay output must never become a closed-tab snapshot"
         );
         crate::session::set_test_sessions_base_dir(None);
     }

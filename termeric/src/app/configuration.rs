@@ -852,22 +852,18 @@ impl App {
                 if workspace_mode {
                     self.restore_saved_workspace(&id);
                 } else {
-                    self.restore_saved_session(&id);
+                    self.restore_closed_tab(&id);
                 }
                 self.session_panel.close();
             }
             SessionPanelAction::Delete(id) => {
-                let result = if workspace_mode {
-                    crate::workspace::delete_workspace(&id)
-                } else {
-                    crate::session::delete_session(&id)
-                };
-                match result {
+                // A closed-tab snapshot is a one-tab workspace.
+                match crate::workspace::delete_workspace(&id) {
                     Ok(()) => {
                         let noun = if workspace_mode {
                             "workspace"
                         } else {
-                            "session"
+                            "closed tab"
                         };
                         log::info!("Deleted {noun} '{}'", id);
                         self.toasts.success(format!("Deleted {noun} '{}'", id));

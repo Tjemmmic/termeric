@@ -9,8 +9,6 @@ use super::*;
 #[ignore = "a resource soak: cargo test -p termeric -- --ignored scheduled_resource_soak_scenario"]
 fn scheduled_resource_soak_scenario() {
     use crate::panes::{PaneManager, SplitDirection};
-    use crate::session::Session;
-    use crate::session::save::save_session_to_dir;
     use crate::session::transcript::{TranscriptRecorder, TranscriptWrite};
     use crate::terminal::search::Search;
     use std::fmt::Write as _;
@@ -24,7 +22,7 @@ fn scheduled_resource_soak_scenario() {
         .max(1);
     let deadline = Instant::now() + Duration::from_secs(duration);
     let workspace = tempfile::tempdir().unwrap();
-    let session_dir = workspace.path().join("session");
+    let closed_tab_dir = workspace.path().join("closed-tab");
     let transcript_dir = workspace.path().join("transcripts");
 
     let mut terminal = Terminal::new(120, 40);
@@ -116,10 +114,31 @@ fn scheduled_resource_soak_scenario() {
         }
         assert!(tabs.is_empty(), "tab child did not exit during soak");
 
-        let mut session = Session::new("soak".into(), Some("/tmp".into()));
-        session.id = "resource-soak".into();
-        session.updated_at = format!("iteration-{iteration}");
-        save_session_to_dir(&session, &session_dir).unwrap();
+        let mut closed_tab = crate::workspace::WorkspaceSnapshot::new(
+            "workspace-resource-soak".into(),
+            format!("soak {iteration}"),
+            vec![crate::workspace::WorkspaceTabSnapshot {
+                id: 0,
+                title: "soak".into(),
+                user_title: None,
+                pinned: false,
+                primary_pane: 0,
+                focused_pane: 0,
+                layout: crate::workspace::WorkspacePaneLayout::Pane { pane: 0 },
+                panes: vec![crate::workspace::WorkspacePaneSnapshot {
+                    id: 0,
+                    launch: crate::workspace::WorkspaceLaunch::Shell,
+                    title: None,
+                    working_directory: Some("/tmp".into()),
+                    last_command: None,
+                    scrollback_file: None,
+                    scrollback_truncated: false,
+                    scrollback_lines: crate::workspace::restorable_scrollback(terminal.grid()),
+                }],
+            }],
+        );
+        closed_tab.closed_tab = true;
+        crate::workspace::save_workspace_to_dir(&mut closed_tab, &closed_tab_dir).unwrap();
 
         let mut transcript =
             TranscriptRecorder::new(&transcript_dir, Some("soak"), Some("main"), "local", "soak")

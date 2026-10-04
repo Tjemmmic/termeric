@@ -21,6 +21,10 @@ pub struct WorkspaceSnapshot {
     /// one makes it the person's.
     #[serde(default)]
     pub automatic: bool,
+    /// A tab kept when it closed, listed under tab snapshots rather than
+    /// with workspaces, and reopened as one tab in the current window.
+    #[serde(default)]
+    pub closed_tab: bool,
     pub tabs: Vec<WorkspaceTabSnapshot>,
 }
 
@@ -42,6 +46,7 @@ impl WorkspaceSnapshot {
             active_tab: 0,
             config: WorkspaceConfigReference::default(),
             automatic: false,
+            closed_tab: false,
             tabs,
         }
     }
@@ -397,6 +402,7 @@ pub(crate) mod tests {
                 shell_program: Some("/bin/bash".into()),
             },
             automatic: false,
+            closed_tab: false,
             tabs: vec![WorkspaceTabSnapshot {
                 id: 7,
                 title: "nested".into(),

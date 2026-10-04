@@ -3,7 +3,6 @@
 
 use crate::config::ShellConfig;
 use crate::panes::{Pane, PaneId, PaneOwner};
-use crate::session::Session;
 use crate::session::terminal_state::TerminalSession;
 #[cfg(test)]
 use crate::session::transcript::TranscriptRecorder;
@@ -25,17 +24,11 @@ use super::title::{
     terminal_reported_directory_path, terminal_working_directory,
 };
 
+/// A closed tab's saved snapshot.
 #[derive(Debug, Clone)]
-pub struct SessionSaveOutcome {
+pub struct ClosedTabSave {
     pub id: String,
     pub scrollback_truncated: bool,
-}
-
-pub(crate) struct SessionCapture {
-    pub(crate) working_directory: Option<String>,
-    pub(crate) last_command: Option<String>,
-    pub(crate) scrollback: Vec<String>,
-    pub(crate) scope: crate::session::SessionCaptureScope,
 }
 
 /// A program a tab runs directly, without a shell or its prompt marks.
@@ -112,8 +105,8 @@ pub struct Tab {
     pub created_at: Instant,
     /// When this tab started closing (for shrink animation), None if not closing
     pub closing_at: Option<Instant>,
-    /// Session ID this tab belongs to (None = fresh unsaved tab)
-    pub session_id: Option<String>,
+    /// The closed-tab snapshot this tab was reopened from or last saved as.
+    pub snapshot_id: Option<String>,
     /// What kind of tab this is (shell, plugin, etc.)
     pub tab_type: TabType,
     /// Live domain backing this tab, when its PTYs are authenticated relay
@@ -177,7 +170,7 @@ impl Tab {
             closed: false,
             created_at: Instant::now(),
             closing_at: None,
-            session_id: None,
+            snapshot_id: None,
             tab_type,
             live_domain: None,
             pane_manager: None,
@@ -978,98 +971,70 @@ impl Tab {
 
     /// Check if this tab has meaningful content worth saving
     ///
-    /// Returns true when the tab has command history, prior session identity,
+    /// Returns true when the tab has command history, a snapshot it was reopened from,
     /// or scrolled-off output. Short commands that fit on screen still count.
     /// This avoids false positives from splash art or a pristine prompt while
     /// keeping useful working-directory/command state eligible for auto-save.
     pub fn has_content(&self) -> bool {
         self.focused_last_command().is_some()
-            || self.session_id.is_some()
+            || self.snapshot_id.is_some()
             || self
                 .focused_terminal()
                 .is_some_and(|terminal| terminal.grid().scrollback_len() > 0)
     }
 
-    /// Save this tab as a session
-    ///
-    /// If the tab already has a session_id, updates that session.
-    /// Otherwise, creates a new session with a generated ID.
-    /// Returns a report that includes any scrollback truncation.
-    pub fn save_as_session(&mut self, save_scrollback: bool) -> anyhow::Result<SessionSaveOutcome> {
-        let capture = self.capture_focused_session(save_scrollback)?;
-        let working_dir = capture.working_directory;
-
-        // Build session title: "~/path | last_command" or "~/path"
-        let path = working_dir
+    /// This tab as the one-tab workspace kept after it closes: every pane,
+    /// named for the focused pane's directory and last command. A tab
+    /// reopened from such a snapshot keeps that snapshot's ID.
+    pub(crate) fn closed_tab_snapshot(
+        &self,
+        save_scrollback: bool,
+    ) -> anyhow::Result<crate::workspace::WorkspaceSnapshot> {
+        let tab = self.capture_workspace_tab(0, save_scrollback)?;
+        let focused = tab
+            .panes
+            .iter()
+            .find(|pane| pane.id == tab.focused_pane)
+            .context("focused pane no longer exists while saving the closed tab")?;
+        let place = focused
+            .working_directory
             .as_deref()
             .map(abbreviate_path)
             .unwrap_or_else(|| self.title.clone());
-        let session_title = match &capture.last_command {
-            Some(cmd) => format!("{} | {}", path, cmd),
-            None => path,
+        let name = match &focused.last_command {
+            Some(command) => format!("{place} | {command}"),
+            None => place,
         };
+        let name = name
+            .chars()
+            .filter(|character| !character.is_control())
+            .take(128)
+            .collect::<String>();
+        let id = self
+            .snapshot_id
+            .clone()
+            .unwrap_or_else(|| format!("workspace-{}", crate::session::generate_session_id()));
+        let mut workspace = crate::workspace::WorkspaceSnapshot::new(id, name, vec![tab]);
+        workspace.closed_tab = true;
+        Ok(workspace)
+    }
 
-        let mut session = if let Some(ref id) = self.session_id {
-            // Update existing session
-            Session::with_id(id.clone(), session_title, working_dir)
-        } else {
-            // Create new session
-            Session::new(session_title, working_dir)
-        };
-
-        // Preserve last_command in the session metadata
-        session.last_command = capture.last_command;
-        session.capture_scope = capture.scope;
-
-        let session_id = session.id.clone();
-        let scrollback_truncated =
-            crate::session::save::save_snapshot(&session, &capture.scrollback)
-                .context(format!("save snapshot for session '{session_id}'"))?;
+    /// Save [`Self::closed_tab_snapshot`], replacing the snapshot this tab
+    /// was reopened from, if any.
+    pub fn save_closed_tab(&mut self, save_scrollback: bool) -> anyhow::Result<ClosedTabSave> {
+        let mut workspace = self.closed_tab_snapshot(save_scrollback)?;
+        let report = crate::workspace::save_workspace(&mut workspace)
+            .with_context(|| format!("save closed tab '{}'", workspace.id))?;
         // Identity denotes a published snapshot, never a failed first attempt.
-        self.session_id = Some(session_id.clone());
-        Ok(SessionSaveOutcome {
-            id: session_id,
-            scrollback_truncated,
+        self.snapshot_id = Some(report.id.clone());
+        Ok(ClosedTabSave {
+            scrollback_truncated: !report.truncated_panes.is_empty(),
+            id: report.id,
         })
     }
 
     fn focused_last_command(&self) -> Option<&String> {
         self.focused_pane()?.last_command.as_ref()
-    }
-
-    /// Capture every persisted field from one stable focused-terminal source.
-    /// This is the sole policy boundary used by every close-time save.
-    pub(crate) fn capture_focused_session(
-        &self,
-        save_scrollback: bool,
-    ) -> anyhow::Result<SessionCapture> {
-        let pane = self
-            .focused_pane()
-            .context("focused pane no longer exists while saving session")?;
-        let (terminal, child_id, remembered_command) = (
-            &pane.terminal,
-            pane.pty.child_id(),
-            pane.last_command.clone(),
-        );
-        let scope = if self.pane_manager.is_some() {
-            crate::session::SessionCaptureScope::FocusedPane
-        } else {
-            crate::session::SessionCaptureScope::SingleTerminal
-        };
-
-        Ok(SessionCapture {
-            working_directory: terminal_working_directory(terminal)
-                .or_else(|| child_id.and_then(get_process_cwd)),
-            last_command: child_id
-                .and_then(get_foreground_process)
-                .or(remembered_command),
-            scrollback: if save_scrollback {
-                crate::session::save::restorable_scrollback(terminal.grid())
-            } else {
-                Vec::new()
-            },
-            scope,
-        })
     }
 
     pub(crate) fn capture_workspace_tab(
@@ -1109,7 +1074,7 @@ impl Tab {
                         scrollback_file: None,
                         scrollback_truncated: false,
                         scrollback_lines: if save_scrollback {
-                            crate::session::save::restorable_scrollback(terminal.grid())
+                            crate::workspace::restorable_scrollback(terminal.grid())
                         } else {
                             Vec::new()
                         },

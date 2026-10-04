@@ -421,7 +421,7 @@ impl App {
                 crate::tabs::PersistenceNotice::Saved { id, truncated } => {
                     if truncated {
                         self.toasts.warning(format!(
-                            "Session {id} saved, but scrollback exceeded 5 MB and was truncated"
+                            "Closed tab {id} saved, but a pane's scrollback exceeded 5 MB and was truncated"
                         ));
                     }
                 }
@@ -433,47 +433,46 @@ impl App {
         }
     }
 
-    /// Restore every interactive session entry point through the same loader,
-    /// compatibility checks, tab construction, and user-facing semantics.
-    pub(super) fn restore_saved_session(&mut self, name: &str) {
-        let result = self
-            .tabs
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("tab manager is unavailable"))
-            .and_then(|tabs| restore_session_into(tabs, name));
+    /// Reopen a closed tab's snapshot as a new tab in this window, keeping
+    /// the snapshot's ID so closing the tab again updates it.
+    pub(super) fn restore_closed_tab(&mut self, id: &str) {
+        let result = self.reopen_closed_tab(id);
         match result {
-            Ok(Some(scope)) => {
-                log::info!("Loaded session '{}'", name);
-                self.toasts.success(restored_session_message(name, scope));
-            }
-            Ok(None) => {
-                log::warn!("Session '{}' not found", name);
-                self.toasts.warning(format!("Session '{}' not found", name));
+            Ok((name, warnings)) => {
+                log::info!("Reopened closed tab '{id}'");
+                self.toasts.success(format!("Reopened closed tab '{name}'"));
+                for warning in warnings {
+                    self.toasts.warning(warning);
+                }
             }
             Err(error) => {
-                log::error!("Failed to load session: {error:#}");
-                self.toasts.error(format!("Load failed: {error:#}"));
+                log::error!("Failed to reopen closed tab '{id}': {error:#}");
+                self.toasts.error(format!("Reopen failed: {error:#}"));
             }
         }
+        self.refresh_focused_terminal_surfaces();
     }
-}
 
-fn restore_session_into(
-    tabs: &mut TabManager,
-    name: &str,
-) -> anyhow::Result<Option<crate::session::SessionCaptureScope>> {
-    let Some(session) = crate::session::restore::restore_named_session(name)? else {
-        return Ok(None);
-    };
-    let scope = session.capture_scope;
-    tabs.new_tab_from_session(&session)?;
-    Ok(Some(scope))
-}
-
-fn restored_session_message(name: &str, scope: crate::session::SessionCaptureScope) -> String {
-    let source = match scope {
-        crate::session::SessionCaptureScope::SingleTerminal => "session snapshot",
-        crate::session::SessionCaptureScope::FocusedPane => "focused-pane snapshot",
-    };
-    format!("Opened new shell from {source} '{name}' (metadata and text history only)")
+    fn reopen_closed_tab(&mut self, id: &str) -> anyhow::Result<(String, Vec<String>)> {
+        let report = crate::workspace::load_workspace(id)?;
+        let workspace = report.workspace;
+        let [tab] = workspace.tabs.as_slice() else {
+            anyhow::bail!("closed-tab snapshot {id:?} does not hold exactly one tab");
+        };
+        let mut tabs = self
+            .tabs
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("tab manager is unavailable"))?;
+        let restored = self.restore_workspace_tab(&mut tabs, tab);
+        if let Ok((index, _)) = &restored {
+            tabs.set_active_workspace_tab(*index);
+            if let Some(tab) = tabs.active_tab_mut() {
+                tab.snapshot_id = Some(workspace.id.clone());
+            }
+        }
+        self.tabs = Some(tabs);
+        let (_, mut warnings) = restored?;
+        warnings.extend(report.warnings);
+        Ok((workspace.name, warnings))
+    }
 }

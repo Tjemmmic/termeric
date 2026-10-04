@@ -10199,7 +10199,7 @@ fn read_only_focused_pane_rejects_keyboard_and_running_gui_control_input() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn split_session_capture_follows_focus_for_all_persisted_terminal_fields() {
+fn a_closed_split_tab_keeps_every_pane_and_is_named_for_the_focused_one() {
     if !std::path::Path::new("/bin/sh").exists() {
         return;
     }
@@ -10283,58 +10283,33 @@ fn split_session_capture_follows_focus_for_all_persisted_terminal_fields() {
     }
     tab.pane_manager = Some(panes);
 
-    let assert_capture = |capture: crate::tabs::SessionCapture,
-                          directory: &std::path::Path,
-                          marker: &str,
-                          other_marker: &str,
-                          command: &str| {
-        assert_eq!(
-            capture.scope,
-            crate::session::SessionCaptureScope::FocusedPane
+    for (focused, directory, command) in [
+        (PaneId(0), &left_dir, "left-command"),
+        (right_id, &right_dir, "right-command"),
+    ] {
+        tab.pane_manager.as_mut().unwrap().focus(focused);
+        let snapshot = tab.closed_tab_snapshot(true).unwrap();
+        assert!(snapshot.closed_tab);
+        let name = directory.file_name().unwrap().to_str().unwrap();
+        assert!(
+            snapshot.name.contains(name) && snapshot.name.ends_with(command),
+            "{}",
+            snapshot.name
         );
-        assert_eq!(capture.working_directory.as_deref(), directory.to_str());
-        assert_eq!(capture.last_command.as_deref(), Some(command));
-        let text = capture.scrollback.join("\n");
-        assert!(text.contains(marker));
-        assert!(!text.contains(other_marker));
-    };
-
-    tab.pane_manager.as_mut().unwrap().focus(PaneId(0));
-    let left_capture = tab.capture_focused_session(true).unwrap();
-    assert_capture(
-        left_capture,
-        &left_dir,
-        "left-history",
-        "right-history",
-        "left-command",
-    );
-
-    tab.pane_manager.as_mut().unwrap().focus(right_id);
-    let right_capture = tab.capture_focused_session(true).unwrap();
-    assert_capture(
-        right_capture,
-        &right_dir,
-        "right-history",
-        "left-history",
-        "right-command",
-    );
-
-    let right_capture = tab.capture_focused_session(true).unwrap();
-    let mut persisted =
-        crate::session::Session::new("right snapshot".into(), right_capture.working_directory);
-    persisted.last_command = right_capture.last_command;
-    persisted.capture_scope = right_capture.scope;
-    let snapshot_dir = workspace.path().join("snapshot");
-    crate::session::save::save_session_to_dir(&persisted, &snapshot_dir).unwrap();
-    let restored =
-        crate::session::restore::restore_session_from_path(&snapshot_dir.join("session.toml"))
-            .unwrap();
-    assert_eq!(restored.working_directory.as_deref(), right_dir.to_str());
-    assert_eq!(restored.last_command.as_deref(), Some("right-command"));
-    assert_eq!(
-        restored.capture_scope,
-        crate::session::SessionCaptureScope::FocusedPane
-    );
+        let [saved] = snapshot.tabs.as_slice() else {
+            panic!("a closed tab is one tab");
+        };
+        assert_eq!(saved.focused_pane, focused.0);
+        for (pane, pane_dir, marker, pane_command) in [
+            (PaneId(0), &left_dir, "left-history", "left-command"),
+            (right_id, &right_dir, "right-history", "right-command"),
+        ] {
+            let pane = saved.panes.iter().find(|saved| saved.id == pane.0).unwrap();
+            assert_eq!(pane.working_directory.as_deref(), pane_dir.to_str());
+            assert_eq!(pane.last_command.as_deref(), Some(pane_command));
+            assert!(pane.scrollback_lines.join("\n").contains(marker));
+        }
+    }
 }
 
 #[cfg(unix)]

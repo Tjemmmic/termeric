@@ -1,8 +1,0 @@
-version = 3
-id = "legacy-v3"
-title = "legacy shell with history"
-working_directory = "/tmp"
-scrollback_file = "scrollback.txt"
-last_command = "cargo"
-created_at = "2025-01-01T00:00:00Z"
-updated_at = "2025-01-01T00:00:00Z"

@@ -1267,7 +1267,7 @@ pub struct SessionConfig {
     pub auto_restore: bool,
     /// Automatically save the complete workspace on exit
     pub auto_save: bool,
-    /// Save bounded scrollback content with workspaces and tab snapshots
+    /// Save bounded scrollback content with workspaces and closed-tab snapshots
     pub save_scrollback: bool,
 }
 

@@ -212,7 +212,19 @@ fn read_workspace_metadata(dir: &Path) -> Result<(WorkspaceSnapshot, bool, Vec<S
     Ok((workspace, recovered_from_backup, warnings))
 }
 
+/// Saved workspaces, newest first. Closed-tab snapshots are listed apart, by
+/// [`list_closed_tabs`]; an archive that can't be read is listed here, so it
+/// can be inspected and deleted.
 pub fn list_workspaces() -> Vec<WorkspaceListEntry> {
+    list_archives(false)
+}
+
+/// Closed-tab snapshots, newest first.
+pub fn list_closed_tabs() -> Vec<WorkspaceListEntry> {
+    list_archives(true)
+}
+
+fn list_archives(closed_tabs: bool) -> Vec<WorkspaceListEntry> {
     let Some(base) = workspaces_base_dir() else {
         return Vec::new();
     };
@@ -225,14 +237,17 @@ pub fn list_workspaces() -> Vec<WorkspaceListEntry> {
         .filter_map(|entry| {
             let path = entry.path();
             match read_workspace_metadata(&path) {
-                Ok((workspace, ..)) => Some(WorkspaceListEntry {
-                    pane_count: workspace.tabs.iter().map(|tab| tab.panes.len()).sum(),
-                    tab_count: workspace.tabs.len(),
-                    id: workspace.id,
-                    name: workspace.name,
-                    updated_at: workspace.updated_at,
-                    warning: None,
-                }),
+                Ok((workspace, ..)) => {
+                    (workspace.closed_tab == closed_tabs).then(|| WorkspaceListEntry {
+                        pane_count: workspace.tabs.iter().map(|tab| tab.panes.len()).sum(),
+                        tab_count: workspace.tabs.len(),
+                        id: workspace.id,
+                        name: workspace.name,
+                        updated_at: workspace.updated_at,
+                        warning: None,
+                    })
+                }
+                Err(_) if closed_tabs => None,
                 Err(error) => {
                     let id = entry.file_name().to_string_lossy().to_string();
                     validate_workspace_id(&id).ok()?;
@@ -250,6 +265,25 @@ pub fn list_workspaces() -> Vec<WorkspaceListEntry> {
         .collect();
     workspaces.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
     workspaces
+}
+
+/// How many closed-tab snapshots are kept; older ones are deleted.
+pub const MAX_CLOSED_TABS: usize = 100;
+
+/// Delete all but the newest [`MAX_CLOSED_TABS`] closed-tab snapshots.
+/// Returns how many went.
+pub fn prune_closed_tabs() -> usize {
+    list_closed_tabs()
+        .into_iter()
+        .skip(MAX_CLOSED_TABS)
+        .filter(|snapshot| match delete_workspace(&snapshot.id) {
+            Ok(()) => true,
+            Err(error) => {
+                log::warn!("Could not prune closed tab {}: {error:#}", snapshot.id);
+                false
+            }
+        })
+        .count()
 }
 
 /// Delete the automatic archives (each saved when a window closed) that
@@ -771,6 +805,32 @@ mod tests {
                 .iter()
                 .all(|warning| !warning.contains("active tab"))
         );
+    }
+
+    #[test]
+    fn only_the_newest_closed_tabs_are_kept_and_workspaces_never_pruned() {
+        let temp = tempfile::tempdir().unwrap();
+        set_test_workspaces_base_dir(Some(temp.path().to_path_buf()));
+        let save = |index: usize, closed_tab: bool| {
+            let mut workspace = sample_workspace();
+            workspace.id = format!("workspace-{index:04}");
+            workspace.closed_tab = closed_tab;
+            workspace.updated_at = format!("2026-01-01T00:{:02}:{:02}Z", index / 60, index % 60);
+            save_workspace(&mut workspace).unwrap();
+        };
+        save(0, false);
+        for index in 1..=MAX_CLOSED_TABS + 2 {
+            save(index, true);
+        }
+        let pruned = prune_closed_tabs();
+        let closed = list_closed_tabs();
+        let workspaces = list_workspaces();
+        set_test_workspaces_base_dir(None);
+        assert_eq!(pruned, 2);
+        assert_eq!(closed.len(), MAX_CLOSED_TABS);
+        assert_eq!(closed.last().unwrap().id, "workspace-0003");
+        assert_eq!(workspaces.len(), 1);
+        assert_eq!(workspaces[0].id, "workspace-0000");
     }
 
     #[test]

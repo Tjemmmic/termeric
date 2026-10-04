@@ -1,4 +1,4 @@
-//! Workspace and legacy-session management panel
+//! Workspace and closed-tab snapshot management panel
 //!
 //! A slide-in panel for listing, loading, and deleting saved sessions.
 
@@ -71,7 +71,7 @@ pub struct SessionPanelInfo {
     pub rename_text: Option<String>,
     /// UTF-8 byte cursor within the rename input.
     pub rename_cursor: usize,
-    /// Whether entries are complete workspaces rather than legacy sessions.
+    /// Whether entries are workspaces rather than closed-tab snapshots.
     pub workspaces: bool,
     /// Keyboard-selected absolute entry index.
     pub selected_index: usize,
@@ -442,39 +442,24 @@ impl SessionPanel {
         self.animation.set_reduced_motion(reduced_motion);
     }
 
-    /// Refresh the session list from disk
+    /// Refresh the list from disk: workspaces, or closed-tab snapshots.
     pub fn refresh_sessions(&mut self) {
         let now = super::unix_now();
         self.snapshot_count = if self.workspaces {
-            super::list_sessions().len()
+            crate::workspace::list_closed_tabs().len()
         } else {
             0
         };
-        self.sessions = if self.workspaces {
+        let archives = if self.workspaces {
             crate::workspace::list_workspaces()
-                .into_iter()
-                .map(|workspace| {
-                    let subtitle = workspace.warning.unwrap_or_else(|| {
-                        format!(
-                            "{} tab{} · {} pane{}",
-                            workspace.tab_count,
-                            if workspace.tab_count == 1 { "" } else { "s" },
-                            workspace.pane_count,
-                            if workspace.pane_count == 1 { "" } else { "s" },
-                        )
-                    });
-                    SessionEntry {
-                        id: workspace.id,
-                        display_name: workspace.name,
-                        subtitle,
-                        last_modified: super::describe_age(&workspace.updated_at, now)
-                            .unwrap_or_default(),
-                    }
-                })
-                .collect()
         } else {
-            legacy_session_entries(now)
+            crate::workspace::list_closed_tabs()
         };
+        let workspaces = self.workspaces;
+        self.sessions = archives
+            .into_iter()
+            .map(|archive| panel_entry(archive, workspaces, now))
+            .collect();
         self.selected_index = self
             .selected_index
             .min(self.sessions.len().saturating_sub(1));
@@ -706,54 +691,35 @@ pub enum SessionPanelKey {
     Escape,
 }
 
-fn legacy_session_entries(now: u64) -> Vec<SessionEntry> {
-    super::list_sessions()
-        .into_iter()
-        .map(|name| {
-            let session = super::session_file_path(&name)
-                .and_then(|path| super::snapshot::read_metadata(&path).ok());
-            let field = |key: &str| -> Option<String> {
-                session
-                    .as_ref()
-                    .and_then(|session| match key {
-                        "title" => Some(session.title.clone()),
-                        "last_command" => session.last_command.clone(),
-                        "working_directory" => session.working_directory.clone(),
-                        _ => None,
-                    })
-                    .filter(|value| !value.is_empty())
-            };
-            let display_name = field("title").unwrap_or_else(|| name.clone());
-            let detail = field("last_command")
-                .or_else(|| {
-                    field("working_directory").map(|cwd| {
-                        std::path::Path::new(&cwd)
-                            .file_name()
-                            .map(|part| part.to_string_lossy().to_string())
-                            .unwrap_or(cwd)
-                    })
-                })
-                .unwrap_or_default();
-            let focused = session.as_ref().is_some_and(|session| {
-                session.capture_scope == super::SessionCaptureScope::FocusedPane
-            });
-            let subtitle = match (focused, detail.is_empty()) {
-                (true, true) => "focused pane".into(),
-                (true, false) => format!("focused pane · {detail}"),
-                (false, _) => detail,
-            };
-            let last_modified = session
-                .as_ref()
-                .and_then(|session| super::describe_age(&session.updated_at, now))
-                .unwrap_or_default();
-            SessionEntry {
-                id: name,
-                display_name,
-                subtitle,
-                last_modified,
-            }
-        })
-        .collect()
+/// One listed archive. A workspace counts its tabs and panes; a closed tab,
+/// already named for its directory and command, counts only extra panes.
+fn panel_entry(
+    archive: crate::workspace::WorkspaceListEntry,
+    workspace: bool,
+    now: u64,
+) -> SessionEntry {
+    let plural = |count: usize| if count == 1 { "" } else { "s" };
+    let subtitle = archive.warning.unwrap_or_else(|| {
+        if workspace {
+            format!(
+                "{} tab{} · {} pane{}",
+                archive.tab_count,
+                plural(archive.tab_count),
+                archive.pane_count,
+                plural(archive.pane_count),
+            )
+        } else if archive.pane_count > 1 {
+            format!("{} panes", archive.pane_count)
+        } else {
+            String::new()
+        }
+    });
+    SessionEntry {
+        id: archive.id,
+        display_name: archive.name,
+        subtitle,
+        last_modified: super::describe_age(&archive.updated_at, now).unwrap_or_default(),
+    }
 }
 
 #[cfg(test)]
@@ -762,39 +728,68 @@ mod tests {
     use unicode_segmentation::UnicodeSegmentation;
 
     #[test]
-    fn legacy_metadata_limits_apply_to_restore_title_list_and_panel() {
-        use std::io::Write;
+    fn closed_tabs_list_apart_from_workspaces_newest_first() {
         let root = tempfile::tempdir().unwrap();
-        let dir = root.path().join("oversized-fixture");
-        std::fs::create_dir(&dir).unwrap();
-        let mut file = std::fs::File::create(dir.join("session.toml")).unwrap();
-        file.write_all(b"title = \"must not be parsed\"\n").unwrap();
-        file.set_len(super::super::MAX_SESSION_METADATA_BYTES as u64 + 1)
-            .unwrap();
-        super::super::set_test_sessions_base_dir(Some(root.path().to_owned()));
-        let restored = super::super::restore::restore_named_session("oversized-fixture");
-        let entries = legacy_session_entries(0);
-        super::super::set_test_sessions_base_dir(None);
-        assert!(restored.unwrap_err().to_string().contains("limit"));
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].display_name, "oversized-fixture");
-        assert!(entries[0].subtitle.is_empty());
-    }
-
-    #[test]
-    fn a_resaved_snapshot_shows_when_it_was_last_saved() {
-        let root = tempfile::tempdir().unwrap();
-        let mut first = super::super::Session::new("first".into(), None);
-        first.created_at = "2020-01-01T00:00:00.000Z".into();
-        let dir = root.path().join(&first.id);
-        super::super::snapshot::save(&first, &dir, &[]).unwrap();
-        let update = super::super::Session::with_id(first.id.clone(), "second".into(), None);
-        super::super::snapshot::save(&update, &dir, &[]).unwrap();
-        super::super::set_test_sessions_base_dir(Some(root.path().to_owned()));
-        let entries = legacy_session_entries(super::super::unix_now());
-        super::super::set_test_sessions_base_dir(None);
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].last_modified, "Just now");
+        crate::workspace::set_test_workspaces_base_dir(Some(root.path().to_owned()));
+        let tab = |id: &str, closed_tab: bool, panes: u32| {
+            let mut workspace = crate::workspace::WorkspaceSnapshot::new(
+                id.into(),
+                format!("~/src | {id}"),
+                vec![crate::workspace::WorkspaceTabSnapshot {
+                    id: 0,
+                    title: "tab".into(),
+                    user_title: None,
+                    pinned: false,
+                    primary_pane: 0,
+                    focused_pane: 0,
+                    layout: (1..panes).fold(
+                        crate::workspace::WorkspacePaneLayout::Pane { pane: 0 },
+                        |first, pane| crate::workspace::WorkspacePaneLayout::Split {
+                            direction: crate::panes::SplitDirection::Vertical,
+                            ratio: 0.5,
+                            first: Box::new(first),
+                            second: Box::new(crate::workspace::WorkspacePaneLayout::Pane { pane }),
+                        },
+                    ),
+                    panes: (0..panes)
+                        .map(|pane| crate::workspace::WorkspacePaneSnapshot {
+                            id: pane,
+                            launch: crate::workspace::WorkspaceLaunch::Shell,
+                            title: None,
+                            working_directory: None,
+                            last_command: None,
+                            scrollback_file: None,
+                            scrollback_truncated: false,
+                            scrollback_lines: Vec::new(),
+                        })
+                        .collect(),
+                }],
+            );
+            workspace.closed_tab = closed_tab;
+            workspace.updated_at = format!("2026-01-0{}T00:00:00Z", panes + 1);
+            crate::workspace::save_workspace(&mut workspace).unwrap();
+        };
+        tab("workspace-a", true, 1);
+        tab("workspace-b", true, 2);
+        tab("workspace-c", false, 1);
+        let mut panel = SessionPanel::new();
+        panel.refresh_sessions();
+        let workspaces = panel.sessions.clone();
+        let snapshot_count = panel.snapshot_count;
+        panel.open_sessions();
+        crate::workspace::set_test_workspaces_base_dir(None);
+        assert_eq!(snapshot_count, 2);
+        assert_eq!(workspaces.len(), 1);
+        assert_eq!(workspaces[0].id, "workspace-c");
+        let ids: Vec<_> = panel
+            .sessions
+            .iter()
+            .map(|entry| entry.id.as_str())
+            .collect();
+        assert_eq!(ids, ["workspace-b", "workspace-a"]);
+        assert_eq!(panel.sessions[0].subtitle, "2 panes");
+        assert_eq!(panel.sessions[1].subtitle, "");
+        assert_eq!(panel.sessions[1].display_name, "~/src | workspace-a");
     }
 
     #[test]
