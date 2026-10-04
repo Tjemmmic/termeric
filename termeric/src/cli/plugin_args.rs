@@ -75,13 +75,24 @@ enum PluginArgs {
 #[command(group(ArgGroup::new("change").required(true).multiple(false)))]
 struct Change {
     /// Use this profile when the plugin opens a tab
-    #[arg(long, value_name = "PROFILE", group = "change")]
+    #[arg(
+        long,
+        value_name = "PROFILE",
+        group = "change",
+        allow_hyphen_values = true
+    )]
     default_profile: Option<String>,
     /// Forget the default profile
     #[arg(long, group = "change")]
     clear_default_profile: bool,
     /// Set one of the plugin's settings
-    #[arg(long, num_args = 2, value_names = ["KEY", "VALUE"], group = "change")]
+    #[arg(
+        long,
+        num_args = 2,
+        value_names = ["KEY", "VALUE"],
+        group = "change",
+        allow_hyphen_values = true
+    )]
     set: Option<Vec<String>>,
     /// Return one setting to its default
     #[arg(long, value_name = "KEY", group = "change")]

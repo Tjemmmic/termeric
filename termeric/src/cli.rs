@@ -2234,6 +2234,76 @@ mod tests {
     }
 
     #[test]
+    fn free_text_values_may_start_with_a_hyphen() {
+        use crate::domain::DomainCommand;
+        use crate::domain::protocol::Request;
+        use crate::plugin::runtime::{PluginAdminCommand, PluginConfigurationChange};
+        let parse_args = |arguments: &[&str]| parse(arguments.iter().map(OsString::from)).unwrap();
+
+        let ParseOutcome::Plugin(PluginAdminCommand::Configure { change, .. }) =
+            parse_args(&["plugin", "configure", "sample", "--set", "offset", "-5"])
+        else {
+            panic!("expected plugin configure");
+        };
+        assert_eq!(
+            change,
+            PluginConfigurationChange::Set {
+                key: "offset".into(),
+                value: "-5".into(),
+            }
+        );
+        let ParseOutcome::Plugin(PluginAdminCommand::Configure { change, .. }) =
+            parse_args(&["plugin", "configure", "sample", "--default-profile", "-dev"])
+        else {
+            panic!("expected plugin configure");
+        };
+        assert_eq!(
+            change,
+            PluginConfigurationChange::DefaultProfile("-dev".into())
+        );
+
+        let ParseOutcome::Domain(DomainCommand::Request {
+            request: Request::CreateDomain { name, spawn },
+            json: true,
+        }) = parse_args(&[
+            "domain", "create", "-named", "--title", "-foo", "--cwd", "-dir", "--json",
+        ])
+        else {
+            panic!("expected domain create");
+        };
+        assert_eq!(name, "-named");
+        assert_eq!(spawn.title.as_deref(), Some("-foo"));
+        assert_eq!(spawn.working_directory.as_deref(), Some("-dir"));
+        let ParseOutcome::Domain(DomainCommand::Upload {
+            name, json: false, ..
+        }) = parse_args(&[
+            "domain", "upload", "domain-1", "0", "source", "--name", "-file",
+        ])
+        else {
+            panic!("expected domain upload");
+        };
+        assert_eq!(name.as_deref(), Some("-file"));
+
+        let ParseOutcome::Control(crate::control::ControlCommand::Launch {
+            request: crate::control::protocol::Request::LaunchTab { title, .. },
+            ..
+        }) = parse_args(&[
+            "control",
+            "launch-tab",
+            "42",
+            "7",
+            "--title",
+            "-foo",
+            "--",
+            "/bin/true",
+        ])
+        else {
+            panic!("expected control launch-tab");
+        };
+        assert_eq!(title.as_deref(), Some("-foo"));
+    }
+
+    #[test]
     fn a_remote_working_directory_is_left_for_the_remote_daemon_to_check() {
         let outcome = parse(
             [

@@ -68,6 +68,7 @@ enum DomainArgs {
     /// Create a persistent domain
     Create {
         /// A name for the domain
+        #[arg(allow_hyphen_values = true)]
         name: String,
         #[command(flatten)]
         spawn: SpawnArgs,
@@ -188,7 +189,7 @@ enum DomainArgs {
         pane: PaneTarget,
         source: PathBuf,
         /// Name it this in the pane's directory
-        #[arg(long, value_parser = upload_name)]
+        #[arg(long, value_parser = upload_name, allow_hyphen_values = true)]
         name: Option<String>,
         #[command(flatten)]
         output: Output,
@@ -262,10 +263,15 @@ struct PaneTarget {
 #[derive(Args)]
 struct SpawnArgs {
     /// Start in this directory on the computer running the domain
-    #[arg(long, visible_alias = "cwd", value_name = "PATH")]
+    #[arg(
+        long,
+        visible_alias = "cwd",
+        value_name = "PATH",
+        allow_hyphen_values = true
+    )]
     working_directory: Option<String>,
     /// Title for the pane
-    #[arg(long)]
+    #[arg(long, allow_hyphen_values = true)]
     title: Option<String>,
     /// Terminal size in cells
     #[arg(long, value_name = "COLSxROWS", value_parser = cell_geometry)]

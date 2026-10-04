@@ -262,7 +262,7 @@ struct Launch {
     #[arg(long, value_name = "ABSOLUTE_DIRECTORY")]
     cwd: Option<String>,
     /// Title for the tab
-    #[arg(long)]
+    #[arg(long, allow_hyphen_values = true)]
     title: Option<String>,
     /// Set an environment variable; repeat for more
     #[arg(long = "env", value_name = "NAME=VALUE", value_parser = environment_variable)]
