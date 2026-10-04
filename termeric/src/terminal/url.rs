@@ -9,6 +9,8 @@ use std::sync::Arc;
 #[path = "url/opener.rs"]
 mod opener;
 
+use super::row_text::push_row_text;
+
 /// A detected URL in the terminal
 #[derive(Clone, Debug)]
 pub struct DetectedUrl {
@@ -305,43 +307,32 @@ fn append_url_row(
     text: &mut String,
     spans: &mut Vec<UrlCellSpan>,
 ) {
-    for col in row.reflow_columns() {
-        let Some(cell) = row.get(col) else { continue };
-        if cell.multicell.is_present() && !cell.multicell.is_leader() {
-            continue;
-        }
-        let byte_start = text.len();
-        match &cell.content {
-            termeric_core::CellContent::Empty => text.push(' '),
-            termeric_core::CellContent::Char(character) => text.push(*character),
-            termeric_core::CellContent::Grapheme(grapheme) => text.push_str(grapheme),
-        }
-        let end_col = col
-            .saturating_add(cell.width().saturating_sub(1))
-            .min(row.len().saturating_sub(1));
+    let last_col = row.len().saturating_sub(1);
+    push_row_text(row, text, |col, width, bytes| {
+        let end_col = col.saturating_add(width.saturating_sub(1)).min(last_col);
         // Exactly one UTF-8 byte and one display cell is an affine mapping.
         // Never merge across rows, skipped cells, or variable-width graphemes.
-        let linear = text.len() == byte_start + 1 && cell.width() == 1;
+        let linear = bytes.len() == 1 && width == 1;
         if linear
             && let Some(previous) = spans.last_mut()
             && previous.linear
             && previous.row == visual_row
-            && previous.byte_end == byte_start
+            && previous.byte_end == bytes.start
             && previous.end_col.checked_add(1) == Some(col)
         {
-            previous.byte_end = text.len();
+            previous.byte_end = bytes.end;
             previous.end_col = end_col;
         } else {
             spans.push(UrlCellSpan {
-                byte_start,
-                byte_end: text.len(),
+                byte_start: bytes.start,
+                byte_end: bytes.end,
                 row: visual_row,
                 start_col: col,
                 end_col,
                 linear,
             });
         }
-    }
+    });
 }
 
 fn sort_disjoint_urls(urls: &mut Vec<DetectedUrl>) {

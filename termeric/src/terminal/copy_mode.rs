@@ -2,6 +2,8 @@
 
 use regex::Regex;
 use std::collections::HashMap;
+
+use super::row_text::push_row_text;
 use termeric_core::{CellContent, CellFlags, Grid, Point, Selection, SelectionType, Terminal};
 
 const HINT_ALPHABET: &[u8] = b"asdfghjklqwertyuiopzxcvbnm";
@@ -565,29 +567,15 @@ fn append_row_text(grid: &Grid, row_index: i32, text: &mut String, spans: &mut V
     let Some(row) = grid.row_at_offset(row_index) else {
         return;
     };
-    for col in row.reflow_columns() {
-        let Some(cell) = row.get(col) else { break };
-        if cell.multicell.is_present() && !cell.multicell.is_leader() {
-            continue;
-        }
-        let byte_start = text.len();
-        match &cell.content {
-            CellContent::Empty => text.push(' '),
-            CellContent::Char(character) => text.push(*character),
-            CellContent::Grapheme(grapheme) => text.push_str(grapheme),
-        }
-        let display_width = cell.width();
+    let last_col = grid.cols().saturating_sub(1);
+    push_row_text(&row, text, |col, width, bytes| {
         spans.push(TextCellSpan {
-            byte_start,
-            byte_end: text.len(),
+            byte_start: bytes.start,
+            byte_end: bytes.end,
             start: Point::new(row_index, col),
-            end: Point::new(
-                row_index,
-                col.saturating_add(display_width - 1)
-                    .min(grid.cols().saturating_sub(1)),
-            ),
+            end: Point::new(row_index, col.saturating_add(width - 1).min(last_col)),
         });
-    }
+    });
 }
 
 fn append_pattern_matches(

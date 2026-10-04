@@ -4,6 +4,9 @@
 #[path = "../src/terminal/url.rs"]
 mod url;
 
+#[path = "../src/terminal/row_text.rs"]
+mod row_text;
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::hint::black_box;

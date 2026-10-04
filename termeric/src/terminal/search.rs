@@ -3,11 +3,12 @@
 //! Provides incremental search through terminal history and visible content.
 //! Supports both literal and regex search modes.
 
+use super::row_text::push_row_text;
 use crate::ui::search_bar::SearchBarInfo;
 use regex::{Regex, RegexBuilder};
 use std::ops::RangeInclusive;
 use std::time::{Duration, Instant};
-use termeric_core::{CellContent, Grid};
+use termeric_core::Grid;
 use unicode_segmentation::UnicodeSegmentation;
 
 /// Navigation/highlight occurrences retain a fixed recent window. Complete
@@ -161,43 +162,32 @@ impl SearchLine {
     }
 
     fn push_row(&mut self, row_index: i32, row: &termeric_core::RowView<'_>) {
-        for col in row.reflow_columns() {
-            let Some(cell) = row.get(col) else { continue };
-            if cell.multicell.is_present() && !cell.multicell.is_leader() {
-                continue;
-            }
-            let start = self.text.len();
-            match &cell.content {
-                CellContent::Empty => self.text.push(' '),
-                CellContent::Char(character) => self.text.push(*character),
-                CellContent::Grapheme(grapheme) => self.text.push_str(grapheme),
-            }
-            let width = cell.width();
-            let linear = row_index == self.first_row
-                && start == col
-                && self.text.len() == start + 1
-                && width == 1;
-            if !linear && self.cells.is_none() {
-                self.cells = Some(
-                    (0..start)
+        let first_row = self.first_row;
+        let cells = &mut self.cells;
+        push_row_text(row, &mut self.text, |col, width, bytes| {
+            let linear =
+                row_index == first_row && bytes.start == col && bytes.len() == 1 && width == 1;
+            if !linear && cells.is_none() {
+                *cells = Some(
+                    (0..bytes.start)
                         .map(|byte| LineCell {
                             byte,
-                            row: self.first_row,
+                            row: first_row,
                             start_col: byte,
                             end_col: byte + 1,
                         })
                         .collect(),
                 );
             }
-            if let Some(cells) = &mut self.cells {
+            if let Some(cells) = cells {
                 cells.push(LineCell {
-                    byte: start,
+                    byte: bytes.start,
                     row: row_index,
                     start_col: col,
                     end_col: col + width,
                 });
             }
-        }
+        });
     }
 
     /// The cells under bytes `start..end` of the text.
