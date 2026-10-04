@@ -1000,13 +1000,8 @@ impl App {
             .tabs
             .as_ref()
             .and_then(TabManager::active_tab)
-            .and_then(|tab| {
-                if let Some(panes) = &tab.pane_manager {
-                    panes.focused_pane().map(|pane| &pane.shell_integration)
-                } else {
-                    Some(&tab.shell_integration)
-                }
-            });
+            .and_then(|tab| tab.focused_pane())
+            .map(|pane| &pane.shell_integration);
         use crate::terminal::shell_integration::ShellIntegrationSupport;
         let quoting = match integration {
             Some(ShellIntegrationSupport::Enabled("bash" | "zsh")) => {
@@ -1523,6 +1518,8 @@ mod desktop_io_tests {
             .unwrap()
             .active_tab_mut()
             .unwrap()
+            .focused_pane_mut()
+            .unwrap()
             .shell_integration =
             crate::terminal::shell_integration::ShellIntegrationSupport::Enabled("bash");
         app.write_to_pty(b"git checkout to");
@@ -1542,6 +1539,8 @@ mod desktop_io_tests {
             .as_mut()
             .unwrap()
             .active_tab_mut()
+            .unwrap()
+            .focused_pane_mut()
             .unwrap()
             .shell_integration =
             crate::terminal::shell_integration::ShellIntegrationSupport::Enabled("bash");
@@ -1691,7 +1690,8 @@ mod desktop_io_tests {
             env: Default::default(),
         };
         let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
-        tab.shell_integration = ShellIntegrationSupport::Enabled("bash");
+        tab.focused_pane_mut().unwrap().shell_integration =
+            ShellIntegrationSupport::Enabled("bash");
         let owner = tab.take_terminal_owner().unwrap();
         let mut panes =
             PaneManager::from_existing(owner, shell, 100, 1024 * 1024, 1600.0, 480.0, 8.0, 16.0);
@@ -1706,7 +1706,6 @@ mod desktop_io_tests {
         tab.pane_manager = Some(panes);
         wait_command_output(&mut app, "READY");
         let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
-        tab.shell_integration = ShellIntegrationSupport::Enabled("bash");
         tab.pane_manager
             .as_mut()
             .unwrap()

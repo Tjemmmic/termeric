@@ -28,9 +28,10 @@ impl Default for PaneAllocationState {
     }
 }
 
-/// Dissolving pane mode must transfer its allocation history as well as its
-/// final live owner. Keeping these together makes every collapse path explicit.
-pub(crate) struct CollapsedPaneOwner {
+/// A tab's one live terminal with the tab's pane allocation history. It moves
+/// as a unit between the tab's direct ownership and pane mode, so splitting
+/// and collapsing never lose either.
+pub(crate) struct PaneOwner {
     pub pane: Pane,
     pub allocation: PaneAllocationState,
 }
@@ -110,7 +111,7 @@ pub struct Pane {
     event_overflow_reported: bool,
     /// Daemon-owned terminals consume protocol replies at the real PTY; their
     /// GUI replicas must not send a duplicate reply through the relay.
-    suppress_protocol_replies: bool,
+    pub(crate) suppress_protocol_replies: bool,
 }
 
 /// One resolved local launch; process arguments are never inferred from focus.
@@ -150,7 +151,7 @@ impl Pane {
         )
     }
 
-    fn new_local(
+    pub(crate) fn new_local(
         id: PaneId,
         geometry: TerminalGeometry,
         shell: &ShellConfig,
@@ -209,6 +210,72 @@ impl Pane {
             integration: crate::session::terminal_state::TerminalSession::default(),
             launch: crate::workspace::WorkspaceLaunch::Shell,
             launch_shell: shell.clone(),
+            event_overflow_reported: false,
+            suppress_protocol_replies: false,
+        })
+    }
+
+    /// Create a pane running a program directly, without a shell or its
+    /// prompt marks: a command tab's terminal.
+    pub(crate) fn new_command(
+        id: PaneId,
+        geometry: TerminalGeometry,
+        launch: &crate::tabs::CommandLaunch,
+        policy: &TerminalPolicy,
+    ) -> anyhow::Result<Self> {
+        let mut terminal = Terminal::new(geometry.cols, geometry.rows);
+        terminal.set_pixel_geometry(geometry.pixel_width.into(), geometry.pixel_height.into());
+        policy.apply(&mut terminal, true);
+        // PWD names the working directory when one was given; the launch's
+        // own variables follow, so they may override it.
+        let env: Vec<(String, String)> = launch
+            .working_dir
+            .iter()
+            .map(|pwd| ("PWD".to_string(), pwd.clone()))
+            .chain(
+                launch
+                    .env
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone())),
+            )
+            .collect();
+        let pty = Pty::spawn(
+            geometry.pty_size(),
+            PtyCommand {
+                program: Some(&launch.program),
+                args: &launch.args,
+                env: &env,
+                policy: Some(&launch.environment_policy),
+            },
+        )?;
+        terminal.set_term_name(pty.term_name());
+        let (handle, reader) = pty.take_reader();
+        let rx = spawn_reader_thread_with_waker(reader, crate::app::pty_event_waker());
+        Ok(Self {
+            id,
+            title: None,
+            terminal,
+            pty: handle,
+            pty_rx: rx,
+            closed: false,
+            read_only: false,
+            geometry,
+            harvest: crate::harvest::HarvestTerminalState::default(),
+            shell_integration: ShellIntegrationSupport::Unavailable(
+                "Direct command tabs do not provide shell prompt marks".into(),
+            ),
+            last_command: Some(launch.program.clone()),
+            integration: crate::session::terminal_state::TerminalSession::default(),
+            launch: match &launch.tab_type {
+                Some(crate::tabs::TabType::Plugin { plugin_id }) => {
+                    crate::workspace::WorkspaceLaunch::Plugin {
+                        plugin_id: plugin_id.clone(),
+                        profile: None,
+                    }
+                }
+                _ => crate::workspace::WorkspaceLaunch::Shell,
+            },
+            launch_shell: ShellConfig::default(),
             event_overflow_reported: false,
             suppress_protocol_replies: false,
         })
@@ -552,7 +619,7 @@ impl PaneManager {
     /// Enter pane mode by adopting a tab's existing live owner. This performs
     /// no PTY or reader-thread creation; only subsequent splits spawn shells.
     pub(crate) fn from_existing(
-        owner: crate::tabs::TabTerminalOwner,
+        owner: PaneOwner,
         shell: ShellConfig,
         scrollback_lines: usize,
         scrollback_bytes: usize,
@@ -561,40 +628,27 @@ impl PaneManager {
         cell_width: f32,
         cell_height: f32,
     ) -> Self {
-        let id = owner.pane_id;
-        let allocation = owner.pane_allocation;
-        let split_launch = match &owner.launch {
+        let PaneOwner {
+            mut pane,
+            allocation,
+        } = owner;
+        let id = pane.id;
+        let split_launch = match &pane.launch {
             crate::workspace::WorkspaceLaunch::Profile { name } => {
                 crate::workspace::WorkspaceLaunch::Profile { name: name.clone() }
             }
             _ => crate::workspace::WorkspaceLaunch::Shell,
         };
         let policy =
-            TerminalPolicy::inherited_from(&owner.terminal, scrollback_lines, scrollback_bytes);
-        let geometry = TerminalGeometry::from_cells(
-            owner.terminal.grid().cols(),
-            owner.terminal.grid().rows(),
+            TerminalPolicy::inherited_from(&pane.terminal, scrollback_lines, scrollback_bytes);
+        pane.geometry = TerminalGeometry::from_cells(
+            pane.terminal.grid().cols(),
+            pane.terminal.grid().rows(),
             cell_width,
             cell_height,
         );
-        let pane = Pane {
-            id,
-            title: None,
-            terminal: owner.terminal,
-            pty: owner.pty,
-            pty_rx: owner.pty_rx,
-            closed: false,
-            read_only: owner.read_only,
-            geometry,
-            harvest: owner.harvest,
-            shell_integration: owner.shell_integration,
-            last_command: owner.last_command,
-            launch: owner.launch,
-            launch_shell: owner.launch_shell,
-            integration: owner.integration,
-            event_overflow_reported: false,
-            suppress_protocol_replies: owner.suppress_protocol_replies,
-        };
+        pane.title = None;
+        pane.event_overflow_reported = false;
         let mut panes = HashMap::new();
         panes.insert(id, pane);
         Self {
@@ -619,7 +673,7 @@ impl PaneManager {
     }
 
     pub(crate) fn from_workspace(
-        owner: crate::tabs::TabTerminalOwner,
+        owner: PaneOwner,
         shell: ShellConfig,
         scrollback_lines: usize,
         scrollback_bytes: usize,
@@ -723,7 +777,7 @@ impl PaneManager {
     }
 
     pub(crate) fn from_domain(
-        owner: crate::tabs::TabTerminalOwner,
+        owner: PaneOwner,
         shell: ShellConfig,
         scrollback_lines: usize,
         scrollback_bytes: usize,
@@ -1668,12 +1722,12 @@ impl PaneManager {
     /// Returns the sole pane and both allocation high-water marks, consuming
     /// the pane from the internal map. Used when dissolving pane mode back to a
     /// single-terminal tab; retired IDs must remain retired on the next split.
-    pub(crate) fn take_remaining_pane(&mut self) -> Option<CollapsedPaneOwner> {
+    pub(crate) fn take_remaining_pane(&mut self) -> Option<PaneOwner> {
         if self.panes.len() != 1 {
             return None;
         }
         let id = *self.panes.keys().next()?;
-        Some(CollapsedPaneOwner {
+        Some(PaneOwner {
             pane: self.panes.remove(&id)?,
             allocation: PaneAllocationState {
                 next_pane: self.next_id,

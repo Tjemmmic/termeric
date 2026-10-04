@@ -41,7 +41,7 @@ winit event loop
 
 PTY output and terminal-generated replies follow one stricter ownership path: `TabManager::poll_events()` polls every tab/pane, `PtyWrite` is consumed beside the originating `PtyHandle`, and only pane-tagged app events leave that owner. Never route a terminal-generated reply through focused input.
 
-In pane mode, the tab's single-terminal owner is detached and adopted by pane zero; no replacement PTY may be spawned. User-facing reads and writes must use `Tab::focused_terminal()`, `focused_terminal_mut()`, or `Tab::write()`; focus changes must refresh search/URL/Git/cursor surfaces. Lifecycle transitions use the take/restore owner APIs.
+Outside pane mode a tab owns its one terminal as a `Pane`; entering pane mode detaches that pane (with the tab's pane allocation history, as a `PaneOwner`) and adopts it as the first pane, and no replacement PTY may be spawned. User-facing reads and writes must use `Tab::focused_pane()`, `Tab::focused_terminal()`, `focused_terminal_mut()`, or `Tab::write()`; focus changes must refresh search/URL/Git/cursor surfaces. Lifecycle transitions use the take/restore owner APIs.
 
 Session persistence takes one stable focused-terminal snapshot. Pane-local last-command state must move with terminal ownership, and close-time tab snapshot saves must continue through `Tab::save_as_session()`. Complete startup/exit persistence uses the separate versioned workspace archive and reconstructs tabs/panes by relaunching fresh processes. See [`docs/src/workspaces-and-sessions.md`](docs/src/workspaces-and-sessions.md).
 

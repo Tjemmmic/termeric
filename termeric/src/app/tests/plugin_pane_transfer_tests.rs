@@ -431,11 +431,11 @@ fn focused_moves_reject_exhausted_collapsed_destinations_before_detaching() {
         let tab = tabs.tab_mut_by_id(destination).unwrap();
         let mut terminal = tab.take_terminal_owner().unwrap();
         if divider {
-            terminal.pane_allocation.next_divider = u64::MAX;
+            terminal.allocation.next_divider = u64::MAX;
         } else {
-            terminal.pane_allocation.next_pane = u32::MAX;
+            terminal.allocation.next_pane = u32::MAX;
         }
-        let observer = terminal.pty.child_observer();
+        let observer = terminal.pane.pty.child_observer();
         let mut panes = PaneManager::from_existing(
             terminal,
             app.config.shell.clone(),

@@ -126,7 +126,7 @@ fn single_and_split_diff_capture_waits_for_real_eof_not_poll_boundaries() {
                 if let Some(panes) = &mut tab.pane_manager {
                     panes.get_pane_mut(owner).unwrap().poll_events(|_, _| {});
                 } else {
-                    tab.poll_events();
+                    tab.poll_single(|_, _| {});
                 }
             };
             let first = "--- a/根\n+++ b/根\n@@ -1 +1 @@\n-old\n+🌱\n";

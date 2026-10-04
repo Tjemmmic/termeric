@@ -4639,7 +4639,7 @@ fn plugin_pane_movement_preserves_pty_and_returns_exact_destination_state() {
     let source_tab_id = tabs.new_tab().unwrap();
     let source = tabs.tab_mut_by_id(source_tab_id).unwrap();
     let owner = source.take_terminal_owner().unwrap();
-    let moved_child = owner.pty.child_id();
+    let moved_child = owner.pane.pty.child_id();
     let mut source_panes = PaneManager::from_existing(
         owner,
         shell,
@@ -7504,8 +7504,8 @@ fn mark_capture_plugin_owner(app: &mut App, pane_id: PaneId, plugin_id: &str) {
         panes.get_pane_mut(pane_id).unwrap().launch = launch;
     } else {
         let mut owner = tab.take_terminal_owner().unwrap();
-        assert_eq!(owner.pane_id, pane_id);
-        owner.launch = launch;
+        assert_eq!(owner.pane.id, pane_id);
+        owner.pane.launch = launch;
         let mut panes = PaneManager::from_existing(
             owner,
             ShellConfig::default(),
@@ -9660,7 +9660,7 @@ fn split_adopts_one_owner_and_dissolve_preserves_output_without_orphans() {
             .rows_text(0, 23)
             .contains("before")
     {
-        tab.poll_events();
+        tab.poll_single(|_, _| {});
         std::thread::sleep(Duration::from_millis(2));
     }
 
@@ -10007,7 +10007,7 @@ fn pane_allocation_history_survives_failed_split_and_exhaustion() {
         let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
         let original_pid = tab.single_child_id();
         let mut owner = tab.take_terminal_owner().unwrap();
-        owner.pane_allocation = crate::panes::PaneAllocationState {
+        owner.allocation = crate::panes::PaneAllocationState {
             next_pane,
             next_divider,
         };
@@ -10030,8 +10030,8 @@ fn pane_allocation_history_survives_failed_split_and_exhaustion() {
         assert_eq!(panes.spawned_shell_count(), 0);
         tab.restore_terminal_owner(panes.take_remaining_pane().unwrap());
         let owner = tab.take_terminal_owner().unwrap();
-        assert_eq!(owner.pane_allocation.next_pane, next_pane);
-        assert_eq!(owner.pane_allocation.next_divider, next_divider);
+        assert_eq!(owner.allocation.next_pane, next_pane);
+        assert_eq!(owner.allocation.next_divider, next_divider);
         shell.program = Some("/bin/sh".into());
         let mut panes = PaneManager::from_existing(
             owner,
@@ -10105,8 +10105,8 @@ fn pane_read_only_blocks_user_routes_but_not_protocol_replies_and_follows_owners
     assert!(tab.write_protocol_reply(b"").is_ok());
 
     let owner = tab.take_terminal_owner().unwrap();
-    assert!(owner.read_only);
-    let primary = owner.pane_id;
+    assert!(owner.pane.read_only);
+    let primary = owner.pane.id;
     let mut panes = PaneManager::from_existing(
         owner,
         shell,
@@ -10364,7 +10364,7 @@ fn real_pty_unicode_clusters_preserve_width_and_content() {
     .unwrap();
     let deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < deadline {
-        tab.poll_events();
+        tab.poll_single(|_, _| {});
         if tab
             .focused_terminal()
             .unwrap()
@@ -10411,7 +10411,7 @@ fn real_pty_sgr_attributes_reach_the_terminal_grid_without_leaking() {
     .unwrap();
     let deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < deadline {
-        tab.poll_events();
+        tab.poll_single(|_, _| {});
         if tab
             .focused_terminal()
             .unwrap()

@@ -1824,11 +1824,7 @@ impl App {
         let Some(tab) = self.tabs.as_ref().and_then(|tabs| tabs.active_tab()) else {
             return "Open a shell tab before using Harvest".into();
         };
-        let support = if let Some(panes) = &tab.pane_manager {
-            panes.focused_pane().map(|pane| &pane.shell_integration)
-        } else {
-            Some(&tab.shell_integration)
-        };
+        let support = tab.focused_pane().map(|pane| &pane.shell_integration);
         match support {
             Some(crate::terminal::shell_integration::ShellIntegrationSupport::Enabled(shell)) => {
                 format!("No completed command yet; {shell} integration is active")

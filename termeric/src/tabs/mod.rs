@@ -9,7 +9,7 @@ mod title;
 #[cfg(test)]
 pub(crate) use tab::SessionCapture;
 pub use tab::{CommandLaunch, Tab, TabType};
-pub(crate) use tab::{LiveDomainTab, TabAgentView, TabTerminalOwner};
+pub(crate) use tab::{LiveDomainTab, TabAgentView};
 pub(crate) use title::{
     get_foreground_process, get_process_cwd, presentation_working_directory,
     terminal_working_directory,
@@ -1479,7 +1479,7 @@ impl TabManager {
             .iter()
             .find(|pane| pane.id == snapshot.primary_pane)
             .ok_or_else(|| anyhow::anyhow!("workspace tab {} has no primary pane", snapshot.id))?;
-        tab.last_command.clone_from(&primary.last_command);
+        tab.set_single_last_command(primary.last_command.clone());
 
         if snapshot.panes.len() == 1 {
             tab.set_single_pane_id(PaneId(snapshot.primary_pane));
@@ -1681,48 +1681,45 @@ impl TabManager {
 
         for (i, tab) in self.tabs.iter_mut().enumerate() {
             let tab_id = tab.id;
-            if let Some(panes) = &mut tab.pane_manager {
-                let mut saw_output = false;
-                let (pane_changed, pane_events) = panes.poll_events(|_, data| {
-                    saw_output |= !data.is_empty();
-                });
-                if saw_output {
-                    tab.update_title();
-                }
-                if pane_changed {
-                    if i != self.active {
-                        tab.has_activity = true;
-                    }
-                    changed = true;
-                }
-                for pane_event in pane_events {
-                    if all_events.len() < MAX_FORWARDED_TERMINAL_EVENTS_PER_POLL {
-                        all_events.push(RoutedTerminalEvent {
+            let mut saw_output = false;
+            let on_output = |_: PaneId, data: &[u8]| saw_output |= !data.is_empty();
+            let (tab_changed, events): (bool, Vec<RoutedTerminalEvent>) =
+                if let Some(panes) = &mut tab.pane_manager {
+                    let (pane_changed, pane_events) = panes.poll_events(on_output);
+                    let events = pane_events
+                        .into_iter()
+                        .map(|pane_event| RoutedTerminalEvent {
                             origin: TerminalEventOrigin::Pane {
                                 tab_id,
                                 pane_id: pane_event.pane_id,
                             },
                             event: pane_event.event,
-                        });
-                    } else {
-                        dropped_events += 1;
-                    }
-                }
-            } else {
-                let (tab_changed, events) = tab.poll_events();
-                if tab_changed && i != self.active {
-                    tab.has_activity = true;
-                }
-                changed |= tab_changed;
-                for event in events {
-                    if all_events.len() < MAX_FORWARDED_TERMINAL_EVENTS_PER_POLL {
-                        all_events.push(RoutedTerminalEvent {
+                        })
+                        .collect();
+                    (pane_changed, events)
+                } else {
+                    let (single_changed, single_events) = tab.poll_single(on_output);
+                    let events = single_events
+                        .into_iter()
+                        .map(|event| RoutedTerminalEvent {
                             origin: TerminalEventOrigin::Tab { tab_id },
                             event,
-                        });
-                    } else {
-                        dropped_events += 1;
-                    }
+                        })
+                        .collect();
+                    (single_changed, events)
+                };
+            if saw_output {
+                tab.update_title();
+            }
+            if tab_changed && i != self.active {
+                tab.has_activity = true;
+            }
+            changed |= tab_changed;
+            for event in events {
+                if all_events.len() < MAX_FORWARDED_TERMINAL_EVENTS_PER_POLL {
+                    all_events.push(event);
+                } else {
+                    dropped_events += 1;
                 }
             }
         }
@@ -2355,7 +2352,7 @@ impl TabManager {
         tab.session_id = Some(session.id.clone());
 
         // Restore last_command so the session title is preserved across open/close cycles
-        tab.last_command = session.last_command.clone();
+        tab.set_single_last_command(session.last_command.clone());
 
         // Replay scrollback
         if !lines.is_empty() {

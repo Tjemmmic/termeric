@@ -1,22 +1,24 @@
-//! Single terminal tab
-//!
-//! A `Tab` wraps a terminal + PTY pair and provides session save/restore support.
+//! A tab: one terminal it owns directly as a `Pane`, or panes split from
+//! it, plus its title, lifecycle, and session save/restore.
 
 use crate::config::ShellConfig;
+use crate::panes::{Pane, PaneId, PaneOwner};
 use crate::session::Session;
 use crate::session::terminal_state::TerminalSession;
 #[cfg(test)]
 use crate::session::transcript::TranscriptRecorder;
-use crate::terminal::events::{MAX_FORWARDED_TERMINAL_EVENTS_PER_POLL, drain_terminal_events};
 use crate::terminal::geometry::TerminalGeometry;
 use crate::terminal::policy::TerminalPolicy;
-use crate::terminal::shell_integration::{ShellIntegrationSupport, prepare_shell_launch};
+use crate::terminal::shell_integration::ShellIntegrationSupport;
 use anyhow::Context;
 use std::collections::HashMap;
+#[cfg(test)]
 use std::sync::mpsc::Receiver;
 use std::time::Instant;
-use termeric_core::pty::{PtyCommand, PtyEvent, PtyHandle, spawn_reader_thread_with_waker};
-use termeric_core::{Pty, Terminal, TerminalEvent};
+#[cfg(test)]
+use termeric_core::pty::PtyEvent;
+use termeric_core::pty::PtyHandle;
+use termeric_core::{Terminal, TerminalEvent};
 
 use super::title::{
     abbreviate_path, dir_name_from_path, get_foreground_process, get_process_cwd,
@@ -34,23 +36,6 @@ pub(crate) struct SessionCapture {
     pub(crate) last_command: Option<String>,
     pub(crate) scrollback: Vec<String>,
     pub(crate) scope: crate::session::SessionCaptureScope,
-}
-
-/// Complete ownership bundle for a tab that has not entered pane mode.
-pub(crate) struct TabTerminalOwner {
-    pub pane_id: crate::panes::PaneId,
-    pub pane_allocation: crate::panes::PaneAllocationState,
-    pub terminal: Terminal,
-    pub pty: PtyHandle,
-    pub pty_rx: Receiver<PtyEvent>,
-    pub harvest: crate::harvest::HarvestTerminalState,
-    pub shell_integration: ShellIntegrationSupport,
-    pub last_command: Option<String>,
-    pub suppress_protocol_replies: bool,
-    pub read_only: bool,
-    pub launch: crate::workspace::WorkspaceLaunch,
-    pub launch_shell: ShellConfig,
-    pub integration: TerminalSession,
 }
 
 /// A program a tab runs directly, without a shell or its prompt marks.
@@ -85,7 +70,7 @@ pub enum TabType {
 pub(crate) struct LiveDomainTab {
     pub(crate) domain_id: String,
     pub(crate) tab_id: u32,
-    pub(crate) pane_ids: HashMap<crate::panes::PaneId, u32>,
+    pub(crate) pane_ids: HashMap<PaneId, u32>,
 }
 
 /// Duration of tab slide-in animation in seconds
@@ -115,12 +100,9 @@ pub struct Tab {
     /// Explicit OSC 0/2 title. While present it takes precedence over process
     /// and working-directory title discovery.
     osc_title: Option<String>,
-    /// Terminal state
-    terminal: Option<Terminal>,
-    /// PTY handle for writing
-    pty: Option<PtyHandle>,
-    /// PTY output receiver
-    pty_rx: Option<Receiver<PtyEvent>>,
+    /// The terminal the tab owns directly outside pane mode. Splitting moves
+    /// it into the pane manager as its first pane; collapsing moves it back.
+    single: Option<Pane>,
     geometry: TerminalGeometry,
     /// Whether the tab has unread output
     pub has_activity: bool,
@@ -132,49 +114,31 @@ pub struct Tab {
     pub closing_at: Option<Instant>,
     /// Session ID this tab belongs to (None = fresh unsaved tab)
     pub session_id: Option<String>,
-    /// Last known foreground command (e.g. "cargo"), preserved after command finishes
-    pub(crate) last_command: Option<String>,
     /// What kind of tab this is (shell, plugin, etc.)
     pub tab_type: TabType,
     /// Live domain backing this tab, when its PTYs are authenticated relay
     /// processes rather than locally owned terminal children.
     pub(crate) live_domain: Option<LiveDomainTab>,
-    /// Single-owner state; moved into the adopted pane when splitting.
-    integration: TerminalSession,
     /// Pane manager for split panes (None = single terminal, no splits)
     pub pane_manager: Option<crate::panes::PaneManager>,
-    /// Stable tab-local identity retained when pane mode collapses back to one
-    /// terminal owner.
-    single_pane_id: crate::panes::PaneId,
     /// Allocation history while the tab directly owns its surviving terminal.
     pane_allocation: crate::panes::PaneAllocationState,
-    /// Transient user-input lock while the tab owns one terminal directly.
-    single_read_only: bool,
-    /// Harvest cursor/indicator state owned by this terminal.
-    pub harvest: crate::harvest::HarvestTerminalState,
-    /// Whether Termeric installed semantic prompt hooks for this shell.
-    pub shell_integration: ShellIntegrationSupport,
     /// The tab's agent view conversation, as the tab bar shows it.
     pub(crate) agent_view: TabAgentView,
     /// Frozen shell/command profile inherited by future panes in this tab.
     split_shell: ShellConfig,
-    /// Launch identity/configuration for the single owner. Pane mode transfers
-    /// these fields into the adopted primary pane.
-    terminal_launch: crate::workspace::WorkspaceLaunch,
-    terminal_launch_shell: ShellConfig,
     user_notices: Vec<String>,
-    event_overflow_reported: bool,
 }
 
 impl Tab {
     pub(crate) fn validate_single_pane_attachment(&self) -> anyhow::Result<()> {
-        if self.terminal.is_none() || self.pty.is_none() || self.pty_rx.is_none() {
+        let Some(single) = &self.single else {
             anyhow::bail!("Destination tab does not own a terminal");
-        }
+        };
         if self
             .pane_allocation
             .next_pane
-            .max(self.single_pane_id.0.saturating_add(1))
+            .max(single.id.0.saturating_add(1))
             .checked_add(1)
             .is_none()
         {
@@ -187,7 +151,41 @@ impl Tab {
     }
 
     pub(crate) fn child_observer(&self) -> Option<termeric_core::pty::ChildObserver> {
-        self.pty.as_ref().map(PtyHandle::child_observer)
+        self.single
+            .as_ref()
+            .map(|single| single.pty.child_observer())
+    }
+
+    /// A tab around its first terminal, owned directly.
+    fn with_single(
+        id: usize,
+        title: String,
+        single: Pane,
+        geometry: TerminalGeometry,
+        tab_type: TabType,
+        split_shell: ShellConfig,
+    ) -> Self {
+        Self {
+            id,
+            title,
+            user_title: None,
+            pinned: false,
+            osc_title: None,
+            single: Some(single),
+            geometry,
+            has_activity: false,
+            closed: false,
+            created_at: Instant::now(),
+            closing_at: None,
+            session_id: None,
+            tab_type,
+            live_domain: None,
+            pane_manager: None,
+            pane_allocation: Default::default(),
+            agent_view: TabAgentView::default(),
+            split_shell,
+            user_notices: Vec::new(),
+        }
     }
 
     pub(crate) fn new_with_geometry(
@@ -196,62 +194,7 @@ impl Tab {
         shell: &ShellConfig,
         policy: &TerminalPolicy,
     ) -> anyhow::Result<Self> {
-        let mut terminal = Terminal::new(geometry.cols, geometry.rows);
-        terminal.set_pixel_geometry(geometry.pixel_width.into(), geometry.pixel_height.into());
-        policy.apply(&mut terminal, true);
-        let launch = prepare_shell_launch(shell);
-        let pty = Pty::spawn(
-            geometry.pty_size(),
-            PtyCommand {
-                program: launch.program.as_deref(),
-                args: &launch.args,
-                env: &launch.env,
-                ..PtyCommand::default()
-            },
-        )?;
-        terminal.set_term_name(pty.term_name());
-        let (handle, reader) = pty.take_reader();
-        let rx = spawn_reader_thread_with_waker(reader, crate::app::pty_event_waker());
-
-        // Get initial title from current working directory
-        let title = handle
-            .child_id()
-            .and_then(get_process_cwd)
-            .map(|cwd| dir_name_from_path(&cwd))
-            .unwrap_or_else(|| format!("Tab {}", id + 1));
-
-        Ok(Self {
-            id,
-            title,
-            user_title: None,
-            pinned: false,
-            osc_title: None,
-            terminal: Some(terminal),
-            pty: Some(handle),
-            pty_rx: Some(rx),
-            geometry,
-            has_activity: false,
-            closed: false,
-            created_at: Instant::now(),
-            closing_at: None,
-            session_id: None,
-            last_command: None,
-            tab_type: TabType::Shell,
-            live_domain: None,
-            integration: TerminalSession::default(),
-            pane_manager: None,
-            single_pane_id: crate::panes::PaneId(0),
-            pane_allocation: Default::default(),
-            single_read_only: false,
-            harvest: crate::harvest::HarvestTerminalState::default(),
-            agent_view: TabAgentView::default(),
-            shell_integration: launch.integration,
-            split_shell: shell.clone(),
-            terminal_launch: crate::workspace::WorkspaceLaunch::Shell,
-            terminal_launch_shell: shell.clone(),
-            user_notices: Vec::new(),
-            event_overflow_reported: false,
-        })
+        Self::new_with_cwd_geometry(id, geometry, shell, policy, None, None)
     }
 
     /// Create a new tab running a specific command (not a shell).
@@ -281,208 +224,87 @@ impl Tab {
         launch: &CommandLaunch,
         policy: &TerminalPolicy,
     ) -> anyhow::Result<Self> {
-        let mut terminal = Terminal::new(geometry.cols, geometry.rows);
-        terminal.set_pixel_geometry(geometry.pixel_width.into(), geometry.pixel_height.into());
-        policy.apply(&mut terminal, true);
-
-        // PWD names the working directory when one was given; the launch's
-        // own variables follow, so they may override it.
-        let env: Vec<(String, String)> = launch
-            .working_dir
-            .iter()
-            .map(|pwd| ("PWD".to_string(), pwd.clone()))
-            .chain(
-                launch
-                    .env
-                    .iter()
-                    .map(|(key, value)| (key.clone(), value.clone())),
-            )
-            .collect();
-
-        let pty = Pty::spawn(
-            geometry.pty_size(),
-            PtyCommand {
-                program: Some(&launch.program),
-                args: &launch.args,
-                env: &env,
-                policy: Some(&launch.environment_policy),
-            },
-        )?;
-        terminal.set_term_name(pty.term_name());
-        let (handle, reader) = pty.take_reader();
-        let rx = spawn_reader_thread_with_waker(reader, crate::app::pty_event_waker());
-
-        Ok(Self {
+        let single = Pane::new_command(PaneId(0), geometry, launch, policy)?;
+        Ok(Self::with_single(
             id,
-            title: launch
+            launch
                 .title
                 .clone()
                 .unwrap_or_else(|| launch.program.clone()),
-            user_title: None,
-            pinned: false,
-            osc_title: None,
-            terminal: Some(terminal),
-            pty: Some(handle),
-            pty_rx: Some(rx),
+            single,
             geometry,
-            has_activity: false,
-            closed: false,
-            created_at: Instant::now(),
-            closing_at: None,
-            session_id: None,
-            last_command: Some(launch.program.clone()),
-            tab_type: launch.tab_type.clone().unwrap_or(TabType::Shell),
-            live_domain: None,
-            integration: TerminalSession::default(),
-            pane_manager: None,
-            single_pane_id: crate::panes::PaneId(0),
-            pane_allocation: Default::default(),
-            single_read_only: false,
-            harvest: crate::harvest::HarvestTerminalState::default(),
-            agent_view: TabAgentView::default(),
-            shell_integration: ShellIntegrationSupport::Unavailable(
-                "Direct command tabs do not provide shell prompt marks".into(),
-            ),
-            split_shell: ShellConfig::default(),
-            terminal_launch: match &launch.tab_type {
-                Some(TabType::Plugin { plugin_id }) => crate::workspace::WorkspaceLaunch::Plugin {
-                    plugin_id: plugin_id.clone(),
-                    profile: None,
-                },
-                _ => crate::workspace::WorkspaceLaunch::Shell,
-            },
-            terminal_launch_shell: ShellConfig::default(),
-            user_notices: Vec::new(),
-            event_overflow_reported: false,
-        })
+            launch.tab_type.clone().unwrap_or(TabType::Shell),
+            ShellConfig::default(),
+        ))
     }
 
-    /// Poll pending PTY events, consuming protocol replies on this tab's PTY
-    /// and returning only bounded app-facing events.
-    pub fn poll_events(&mut self) -> (bool, Vec<TerminalEvent>) {
+    /// Poll the directly owned terminal, consuming its protocol replies on its
+    /// own PTY. `on_output` sees each chunk of output it reads.
+    pub(crate) fn poll_single(
+        &mut self,
+        on_output: impl FnMut(PaneId, &[u8]),
+    ) -> (bool, Vec<TerminalEvent>) {
         debug_assert!(self.pane_manager.is_none());
-        let mut had_output = self.integration.poll_notices();
-        let was_closed = self.closed;
-        let mut app_events = Vec::new();
-        let mut reader_disconnected = false;
-        let mut output_ended = false;
-
-        loop {
-            let event = match self.pty_rx.as_ref().map(Receiver::try_recv) {
-                Some(Ok(event)) => event,
-                Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
-                    reader_disconnected = true;
-                    break;
-                }
-                Some(Err(std::sync::mpsc::TryRecvError::Empty)) | None => break,
-            };
-            match event {
-                PtyEvent::Output(data) => {
-                    self.integration.observe_output(
-                        &data,
-                        matches!(
-                            self.terminal_launch,
-                            crate::workspace::WorkspaceLaunch::Plugin { .. }
-                        ),
-                    );
-                    if let Some(terminal) = &mut self.terminal {
-                        terminal.process(&data);
-                    }
-                    had_output = true;
-                    had_output |= self.drain_terminal_events(&mut app_events);
-                }
-                PtyEvent::Closed => {
-                    log::info!("Tab {} shell exited", self.id);
-                    self.closed = true;
-                    output_ended = true;
-                }
-                PtyEvent::Error(e) => {
-                    log::error!("Tab {} PTY error: {}", self.id, e);
-                    self.closed = true;
-                    output_ended = true;
-                }
-            }
-        }
-
-        // Update title when there's output (directory may have changed)
-        if had_output {
-            self.update_title();
-        }
-        if output_ended || reader_disconnected {
-            self.integration.finish_stream();
-        }
-
-        // Only use process state after the reader disconnects. A child may
-        // exit before its final output reaches this bounded channel.
-        if !self.closed
-            && reader_disconnected
-            && self.pty.as_mut().is_some_and(|pty| !pty.is_running())
-        {
-            log::info!("Tab {} child process exited (detected via wait)", self.id);
+        let Some(single) = &mut self.single else {
+            return (false, Vec::new());
+        };
+        // A relay's daemon answers protocol queries at the real PTY.
+        single.suppress_protocol_replies = self.live_domain.is_some();
+        let (changed, events) = single.poll_events(on_output);
+        let newly_closed = single.closed && !self.closed;
+        if newly_closed {
+            log::info!("Tab {} terminal exited", self.id);
             self.closed = true;
         }
-
-        had_output |= self.drain_terminal_events(&mut app_events);
-
-        (
-            had_output || self.closed != was_closed || !app_events.is_empty(),
-            app_events,
-        )
+        (changed || newly_closed, events)
     }
 
-    fn drain_terminal_events(&mut self, app_events: &mut Vec<TerminalEvent>) -> bool {
-        let (Some(terminal), Some(pty)) = (&mut self.terminal, &mut self.pty) else {
-            return false;
-        };
-        let suppress_protocol_replies = self.live_domain.is_some();
-        let result = drain_terminal_events(
-            terminal,
-            app_events,
-            MAX_FORWARDED_TERMINAL_EVENTS_PER_POLL,
-            |data| {
-                if suppress_protocol_replies {
-                    Ok(())
-                } else {
-                    pty.write_all(data)
-                }
-            },
-        );
-        if let Some(error) = result.reply_error {
-            log::error!(
-                "Tab {} failed to write terminal protocol reply: {}",
-                self.id,
-                error
-            );
-            self.closed = true;
+    /// The pane holding the focused terminal, in or out of pane mode.
+    pub(crate) fn focused_pane(&self) -> Option<&Pane> {
+        match &self.pane_manager {
+            Some(panes) => panes.focused_pane(),
+            None => self.single.as_ref(),
         }
-        if result.dropped_app_events > 0 && !self.event_overflow_reported {
-            self.event_overflow_reported = true;
-            log::warn!(
-                "Tab {} dropped {} app-facing terminal events after reaching the per-poll limit of {}",
-                self.id,
-                result.dropped_app_events,
-                MAX_FORWARDED_TERMINAL_EVENTS_PER_POLL
-            );
+    }
+
+    pub(crate) fn focused_pane_mut(&mut self) -> Option<&mut Pane> {
+        match &mut self.pane_manager {
+            Some(panes) => panes.focused_pane_mut(),
+            None => self.single.as_mut(),
         }
-        result.saw_event
+    }
+
+    /// The pane with `id`, in or out of pane mode.
+    fn pane(&self, id: PaneId) -> Option<&Pane> {
+        match &self.pane_manager {
+            Some(panes) => panes.get_pane(id),
+            None => self.single.as_ref().filter(|single| single.id == id),
+        }
+    }
+
+    fn pane_mut(&mut self, id: PaneId) -> Option<&mut Pane> {
+        match &mut self.pane_manager {
+            Some(panes) => panes.get_pane_mut(id),
+            None => self.single.as_mut().filter(|single| single.id == id),
+        }
+    }
+
+    /// Every pane the tab owns, in or out of pane mode.
+    fn panes_mut(&mut self) -> Vec<&mut Pane> {
+        match &mut self.pane_manager {
+            Some(panes) => panes.all_panes_mut().collect(),
+            None => self.single.iter_mut().collect(),
+        }
     }
 
     /// Read the terminal currently owned by this tab's focused route.
     pub fn focused_terminal(&self) -> Option<&Terminal> {
-        if let Some(panes) = &self.pane_manager {
-            panes.focused_pane().map(|pane| &pane.terminal)
-        } else {
-            self.terminal.as_ref()
-        }
+        self.focused_pane().map(|pane| &pane.terminal)
     }
 
     /// Mutably access the focused live terminal.
     pub fn focused_terminal_mut(&mut self) -> Option<&mut Terminal> {
-        if let Some(panes) = &mut self.pane_manager {
-            panes.focused_pane_mut().map(|pane| &mut pane.terminal)
-        } else {
-            self.terminal.as_mut()
-        }
+        self.focused_pane_mut().map(|pane| &mut pane.terminal)
     }
 
     /// Apply host settings to every terminal this tab owns and to those its
@@ -500,65 +322,50 @@ impl Tab {
         };
         if let Some(panes) = &mut self.pane_manager {
             panes.apply_terminal_policy(policy, apply_keyboard_type);
-        } else if let Some(terminal) = &mut self.terminal {
-            policy.apply(terminal, apply_keyboard_type);
+        } else if let Some(single) = &mut self.single {
+            policy.apply(&mut single.terminal, apply_keyboard_type);
         }
     }
 
     pub(crate) fn set_graphics_relay_snapshot_allowed(&mut self, allowed: bool) {
-        if let Some(panes) = &mut self.pane_manager {
-            for pane in panes.all_panes_mut() {
-                pane.terminal.set_graphics_relay_snapshot_allowed(allowed);
-            }
-        } else if let Some(terminal) = &mut self.terminal {
-            terminal.set_graphics_relay_snapshot_allowed(allowed);
+        for pane in self.panes_mut() {
+            pane.terminal.set_graphics_relay_snapshot_allowed(allowed);
         }
     }
 
     pub(crate) fn live_domain_focus_route(&self) -> Option<(&str, u32)> {
         let live = self.live_domain.as_ref()?;
-        let local = self
-            .pane_manager
-            .as_ref()
-            .map_or(self.single_pane_id, crate::panes::PaneManager::focused_id);
+        let local = self.focused_terminal_identity().pane_id;
         Some((live.domain_id.as_str(), *live.pane_ids.get(&local)?))
     }
 
-    pub(crate) fn single_pane_id(&self) -> crate::panes::PaneId {
-        self.single_pane_id
+    /// The directly owned terminal's pane ID, outside pane mode. Only a
+    /// transition between modes leaves the tab without one; pane zero then
+    /// stands in.
+    pub(crate) fn single_pane_id(&self) -> PaneId {
+        self.single.as_ref().map_or(PaneId(0), |single| single.id)
     }
 
     pub(crate) fn focused_terminal_identity(&self) -> super::TerminalIdentity {
         super::TerminalIdentity {
             tab_id: self.id,
-            pane_id: self
-                .pane_manager
-                .as_ref()
-                .map_or(self.single_pane_id, |panes| panes.focused_id()),
+            pane_id: match &self.pane_manager {
+                Some(panes) => panes.focused_id(),
+                None => self.single_pane_id(),
+            },
         }
     }
 
     /// Plugin identity belongs to the live owner, not its tab's presentation.
-    pub(crate) fn pane_plugin_id(&self, pane_id: crate::panes::PaneId) -> Option<&str> {
+    pub(crate) fn pane_plugin_id(&self, pane_id: PaneId) -> Option<&str> {
         self.pane_plugin_launch(pane_id).map(|(id, _)| id)
     }
 
-    pub(crate) fn pane_plugin_launch(
-        &self,
-        pane_id: crate::panes::PaneId,
-    ) -> Option<(&str, Option<&str>)> {
+    pub(crate) fn pane_plugin_launch(&self, pane_id: PaneId) -> Option<(&str, Option<&str>)> {
         if self.closed || self.is_closing() {
             return None;
         }
-        let launch = if let Some(panes) = &self.pane_manager {
-            &panes.get_pane(pane_id).filter(|pane| !pane.closed)?.launch
-        } else {
-            if pane_id != self.single_pane_id || self.terminal.is_none() {
-                return None;
-            }
-            &self.terminal_launch
-        };
-        match launch {
+        match &self.pane(pane_id).filter(|pane| !pane.closed)?.launch {
             crate::workspace::WorkspaceLaunch::Plugin { plugin_id, profile } => {
                 Some((plugin_id, profile.as_deref()))
             }
@@ -567,7 +374,7 @@ impl Tab {
     }
 
     #[cfg(test)]
-    pub(crate) fn plugin_pane_id(&self, plugin_id: &str) -> Option<crate::panes::PaneId> {
+    pub(crate) fn plugin_pane_id(&self, plugin_id: &str) -> Option<PaneId> {
         let focused = self.focused_terminal_identity().pane_id;
         if self.pane_plugin_id(focused) == Some(plugin_id) {
             return Some(focused);
@@ -579,44 +386,37 @@ impl Tab {
             .find(|pane_id| self.pane_plugin_id(*pane_id) == Some(plugin_id))
     }
 
-    pub(crate) fn set_single_pane_id(&mut self, id: crate::panes::PaneId) {
+    pub(crate) fn set_single_pane_id(&mut self, id: PaneId) {
         debug_assert!(self.pane_manager.is_none());
-        self.single_pane_id = id;
+        if let Some(single) = &mut self.single {
+            single.id = id;
+        }
         self.pane_allocation.next_pane = self.pane_allocation.next_pane.max(id.0.saturating_add(1));
     }
 
-    pub(crate) fn focused_pane_read_only(&self) -> bool {
-        self.pane_manager
-            .as_ref()
-            .map_or(self.single_read_only, |panes| {
-                panes
-                    .get_pane(panes.focused_id())
-                    .is_some_and(|pane| pane.read_only)
-            })
+    /// Restore the directly owned terminal's remembered command, as saved.
+    pub(crate) fn set_single_last_command(&mut self, command: Option<String>) {
+        if let Some(single) = &mut self.single {
+            single.last_command = command;
+        }
     }
 
-    pub(crate) fn pane_read_only(&self, pane_id: crate::panes::PaneId) -> Option<bool> {
-        if let Some(panes) = &self.pane_manager {
-            panes.get_pane(pane_id).map(|pane| pane.read_only)
-        } else {
-            (pane_id == self.single_pane_id).then_some(self.single_read_only)
-        }
+    pub(crate) fn focused_pane_read_only(&self) -> bool {
+        self.focused_pane().is_some_and(|pane| pane.read_only)
+    }
+
+    pub(crate) fn pane_read_only(&self, pane_id: PaneId) -> Option<bool> {
+        self.pane(pane_id).map(|pane| pane.read_only)
     }
 
     /// Toggle the focused pane's transient user-input lock and return its new
     /// state. The lock follows a live pane when ownership is moved or collapsed.
     pub(crate) fn toggle_focused_pane_read_only(&mut self) -> bool {
-        if let Some(panes) = &mut self.pane_manager {
-            let focused = panes.focused_id();
-            let pane = panes
-                .get_pane_mut(focused)
-                .expect("focused pane remains present");
-            pane.read_only = !pane.read_only;
-            pane.read_only
-        } else {
-            self.single_read_only = !self.single_read_only;
-            self.single_read_only
-        }
+        let pane = self
+            .focused_pane_mut()
+            .expect("focused pane remains present");
+        pane.read_only = !pane.read_only;
+        pane.read_only
     }
 
     pub(crate) fn live_domain_tab_route(&self) -> Option<(&str, u32)> {
@@ -628,68 +428,30 @@ impl Tab {
     /// callers keep per-pane Harvest state beside each pane instead.
     pub fn observe_harvest(&mut self, show_indicators: bool) -> Vec<termeric_core::CommandRegion> {
         debug_assert!(self.pane_manager.is_none());
-        let Some(terminal) = &self.terminal else {
+        let Some(single) = &mut self.single else {
             return Vec::new();
         };
-        self.harvest
-            .observe(terminal.prompt_tracker(), show_indicators)
+        single
+            .harvest
+            .observe(single.terminal.prompt_tracker(), show_indicators)
     }
 
     /// Write user input and record it only on the receiving terminal.
     pub fn write(&mut self, data: &[u8]) -> std::io::Result<()> {
-        if self.focused_pane_read_only() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                "pane is read-only",
-            ));
-        }
-        if let Some(panes) = &mut self.pane_manager {
-            panes
-                .focused_pane_mut()
-                .ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        "focused pane no longer exists",
-                    )
-                })?
-                .write(data)
-        } else {
-            self.pty
-                .as_mut()
-                .ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        "single terminal owner is detached",
-                    )
-                })?
-                .write_all(data)?;
-            self.integration.record_input(data);
-            Ok(())
-        }
+        self.focused_pane_for_write()?.write(data)
     }
 
     pub(crate) fn write_protocol_reply(&mut self, data: &[u8]) -> std::io::Result<()> {
-        if let Some(panes) = &mut self.pane_manager {
-            panes
-                .focused_pane_mut()
-                .ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        "focused pane no longer exists",
-                    )
-                })?
-                .write_protocol_reply(data)
-        } else {
-            self.pty
-                .as_mut()
-                .ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        "single terminal owner is detached",
-                    )
-                })?
-                .write_all(data)
-        }
+        self.focused_pane_for_write()?.write_protocol_reply(data)
+    }
+
+    fn focused_pane_for_write(&mut self) -> std::io::Result<&mut Pane> {
+        self.focused_pane_mut().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "focused pane no longer exists",
+            )
+        })
     }
 
     /// Resize the terminal model and PTY from one canonical geometry.
@@ -702,19 +464,10 @@ impl Tab {
         if self.geometry == geometry {
             return Ok(());
         }
-        self.terminal
+        self.single
             .as_mut()
             .context("single terminal owner is detached")?
-            .resize_with_pixel_geometry(
-                geometry.cols,
-                geometry.rows,
-                geometry.pixel_width.into(),
-                geometry.pixel_height.into(),
-            );
-        self.pty
-            .as_ref()
-            .context("single PTY owner is detached")?
-            .resize(geometry.pty_size())?;
+            .resize_geometry(geometry)?;
         self.geometry = geometry;
         Ok(())
     }
@@ -736,28 +489,12 @@ impl Tab {
             self.title = dir_name_from_path(cwd);
             return;
         }
-        let child_id = self
-            .pane_manager
-            .as_ref()
-            .and_then(|panes| panes.focused_pane())
+        if let Some(cwd) = self
+            .focused_pane()
             .and_then(|pane| pane.pty.child_id())
-            .or_else(|| {
-                self.pane_manager
-                    .is_none()
-                    .then(|| self.pty.as_ref().and_then(PtyHandle::child_id))
-                    .flatten()
-            });
-        if let Some(pid) = child_id {
-            if let Some(cwd) = get_process_cwd(pid) {
-                self.title = dir_name_from_path(&cwd);
-
-                // Track the last foreground command (preserved after it exits)
-                if self.pane_manager.is_none()
-                    && let Some(cmd) = get_foreground_process(pid)
-                {
-                    self.last_command = Some(cmd);
-                }
-            }
+            .and_then(get_process_cwd)
+        {
+            self.title = dir_name_from_path(&cwd);
         }
     }
 
@@ -808,74 +545,27 @@ impl Tab {
         working_dir: Option<&str>,
         title: Option<&str>,
     ) -> anyhow::Result<Self> {
-        let mut terminal = Terminal::new(geometry.cols, geometry.rows);
-        terminal.set_pixel_geometry(geometry.pixel_width.into(), geometry.pixel_height.into());
-        policy.apply(&mut terminal, true);
-
-        let mut launch = prepare_shell_launch(shell);
-        // Build environment variables for session restore
-        let mut env: Vec<(String, String)> = working_dir
-            .map(|pwd| vec![("PWD".to_string(), pwd.to_string())])
-            .unwrap_or_default();
-        env.append(&mut launch.env);
-
-        let pty = Pty::spawn(
-            geometry.pty_size(),
-            PtyCommand {
-                program: launch.program.as_deref(),
-                args: &launch.args,
-                env: &env,
-                ..PtyCommand::default()
-            },
-        )?;
-        terminal.set_term_name(pty.term_name());
-        let (handle, reader) = pty.take_reader();
-        let rx = spawn_reader_thread_with_waker(reader, crate::app::pty_event_waker());
-
-        // Use provided title or derive from working directory
-        let tab_title = title
-            .map(|t| t.to_string())
+        let single = Pane::new_local(PaneId(0), geometry, shell, policy, working_dir, false)?;
+        // Use the given title, else the working directory's name.
+        let title = title
+            .map(str::to_string)
             .or_else(|| working_dir.map(dir_name_from_path))
             .or_else(|| {
-                handle
+                single
+                    .pty
                     .child_id()
                     .and_then(get_process_cwd)
                     .map(|cwd| dir_name_from_path(&cwd))
             })
             .unwrap_or_else(|| format!("Tab {}", id + 1));
-
-        Ok(Self {
+        Ok(Self::with_single(
             id,
-            title: tab_title,
-            user_title: None,
-            pinned: false,
-            osc_title: None,
-            terminal: Some(terminal),
-            pty: Some(handle),
-            pty_rx: Some(rx),
+            title,
+            single,
             geometry,
-            has_activity: false,
-            closed: false,
-            created_at: Instant::now(),
-            closing_at: None,
-            session_id: None,
-            last_command: None,
-            tab_type: TabType::Shell,
-            live_domain: None,
-            integration: TerminalSession::default(),
-            pane_manager: None,
-            single_pane_id: crate::panes::PaneId(0),
-            pane_allocation: Default::default(),
-            single_read_only: false,
-            harvest: crate::harvest::HarvestTerminalState::default(),
-            agent_view: TabAgentView::default(),
-            shell_integration: launch.integration,
-            split_shell: shell.clone(),
-            terminal_launch: crate::workspace::WorkspaceLaunch::Shell,
-            terminal_launch_shell: shell.clone(),
-            user_notices: Vec::new(),
-            event_overflow_reported: false,
-        })
+            TabType::Shell,
+            shell.clone(),
+        ))
     }
 
     /// Get the current working directory of this tab's shell process
@@ -883,64 +573,40 @@ impl Tab {
         if matches!(self.tab_type, TabType::Serial { .. }) {
             return None;
         }
-        if let Some(cwd) = self.focused_terminal().and_then(terminal_working_directory) {
-            return Some(cwd);
-        }
-        let child_id = self
-            .pane_manager
-            .as_ref()
-            .and_then(|panes| panes.focused_pane())
-            .and_then(|pane| pane.pty.child_id())
-            .or_else(|| {
-                if self.pane_manager.is_none() {
-                    self.pty.as_ref().and_then(PtyHandle::child_id)
-                } else {
-                    None
-                }
-            });
-        child_id.and_then(get_process_cwd)
+        let pane = self.focused_pane()?;
+        terminal_working_directory(&pane.terminal)
+            .or_else(|| pane.pty.child_id().and_then(get_process_cwd))
     }
 
     pub(crate) fn split_shell_config(&self) -> ShellConfig {
         self.split_shell.clone()
     }
 
-    pub(crate) fn pane_working_directory(&self, pane_id: crate::panes::PaneId) -> Option<String> {
+    pub(crate) fn pane_working_directory(&self, pane_id: PaneId) -> Option<String> {
         if self.closed || self.is_closing() || matches!(self.tab_type, TabType::Serial { .. }) {
             return None;
         }
-        let (terminal, child_id) = if let Some(panes) = &self.pane_manager {
-            let pane = panes.get_pane(pane_id).filter(|pane| !pane.closed)?;
-            (&pane.terminal, pane.pty.child_id())
-        } else {
-            if self.single_pane_id != pane_id {
-                return None;
-            }
-            (
-                self.terminal.as_ref()?,
-                self.pty.as_ref().and_then(PtyHandle::child_id),
-            )
-        };
-        terminal_working_directory(terminal).or_else(|| child_id.and_then(get_process_cwd))
+        let pane = self.pane(pane_id).filter(|pane| !pane.closed)?;
+        terminal_working_directory(&pane.terminal)
+            .or_else(|| pane.pty.child_id().and_then(get_process_cwd))
     }
 
     pub(crate) fn set_split_shell_config(&mut self, shell: ShellConfig) {
-        if self.pane_manager.is_none()
-            && matches!(
-                self.terminal_launch,
-                crate::workspace::WorkspaceLaunch::Shell
-            )
+        if let Some(single) = &mut self.single
+            && matches!(single.launch, crate::workspace::WorkspaceLaunch::Shell)
         {
-            self.terminal_launch_shell = shell.clone();
+            single.launch_shell = shell.clone();
         }
         self.split_shell = shell;
     }
 
     pub(crate) fn set_terminal_profile_launch(&mut self, name: &str, shell: ShellConfig) {
-        self.terminal_launch = crate::workspace::WorkspaceLaunch::Profile {
-            name: name.to_string(),
-        };
-        self.terminal_launch_shell = shell.clone();
+        if let Some(single) = &mut self.single {
+            single.launch = crate::workspace::WorkspaceLaunch::Profile {
+                name: name.to_string(),
+            };
+            single.launch_shell = shell.clone();
+        }
         self.split_shell = shell;
     }
 
@@ -948,16 +614,18 @@ impl Tab {
         self.tab_type = TabType::Serial {
             name: name.to_string(),
         };
-        self.terminal_launch = crate::workspace::WorkspaceLaunch::Profile {
-            name: name.to_string(),
-        };
-        self.terminal_launch_shell = ShellConfig::default();
+        if let Some(single) = &mut self.single {
+            single.launch = crate::workspace::WorkspaceLaunch::Profile {
+                name: name.to_string(),
+            };
+            single.launch_shell = ShellConfig::default();
+            single.last_command = None;
+            single.shell_integration = ShellIntegrationSupport::Unavailable(
+                "Serial terminals do not provide shell prompt marks".into(),
+            );
+        }
         self.split_shell = ShellConfig::default();
-        self.last_command = None;
         self.set_user_title(Some(title));
-        self.shell_integration = ShellIntegrationSupport::Unavailable(
-            "Serial terminals do not provide shell prompt marks".into(),
-        );
     }
 
     pub(crate) fn allows_pane_splits(&self) -> bool {
@@ -968,21 +636,17 @@ impl Tab {
     /// None means automatic; every Some name (including "default") is explicit.
     pub(crate) fn set_plugin_profile_reference(
         &mut self,
-        pane_id: crate::panes::PaneId,
+        pane_id: PaneId,
         plugin_id: &str,
         profile: Option<String>,
     ) -> bool {
         if self.pane_plugin_id(pane_id) != Some(plugin_id) {
             return false;
         }
-        let launch = if let Some(panes) = &mut self.pane_manager {
-            &mut panes
-                .get_pane_mut(pane_id)
-                .expect("validated plugin pane")
-                .launch
-        } else {
-            &mut self.terminal_launch
-        };
+        let launch = &mut self
+            .pane_mut(pane_id)
+            .expect("validated plugin pane")
+            .launch;
         if let crate::workspace::WorkspaceLaunch::Plugin { profile: saved, .. } = launch {
             *saved = profile;
         }
@@ -990,62 +654,33 @@ impl Tab {
     }
 
     /// Detach the single-terminal owner exactly once before entering pane mode.
-    pub(crate) fn take_terminal_owner(&mut self) -> Option<TabTerminalOwner> {
-        if self.pane_manager.is_some()
-            || self.terminal.is_none()
-            || self.pty.is_none()
-            || self.pty_rx.is_none()
-        {
+    pub(crate) fn take_terminal_owner(&mut self) -> Option<PaneOwner> {
+        if self.pane_manager.is_some() {
             return None;
         }
-        Some(TabTerminalOwner {
-            pane_id: self.single_pane_id,
-            pane_allocation: self.pane_allocation,
-            terminal: self.terminal.take().unwrap(),
-            pty: self.pty.take().unwrap(),
-            pty_rx: self.pty_rx.take().unwrap(),
-            harvest: std::mem::take(&mut self.harvest),
-            shell_integration: std::mem::replace(
-                &mut self.shell_integration,
-                ShellIntegrationSupport::Unavailable("terminal is owned by pane mode".into()),
-            ),
-            last_command: self.last_command.take(),
-            suppress_protocol_replies: self.live_domain.is_some(),
-            read_only: self.single_read_only,
-            launch: self.terminal_launch.clone(),
-            launch_shell: self.terminal_launch_shell.clone(),
-            integration: std::mem::take(&mut self.integration),
+        let mut pane = self.single.take()?;
+        pane.suppress_protocol_replies = self.live_domain.is_some();
+        Some(PaneOwner {
+            pane,
+            allocation: self.pane_allocation,
         })
     }
 
     /// Restore the final pane as the tab's single live terminal owner.
-    pub(crate) fn restore_terminal_owner(&mut self, owner: crate::panes::CollapsedPaneOwner) {
-        assert!(self.terminal.is_none());
-        assert!(self.pty.is_none());
-        assert!(self.pty_rx.is_none());
-        let crate::panes::CollapsedPaneOwner { pane, allocation } = owner;
+    pub(crate) fn restore_terminal_owner(&mut self, owner: PaneOwner) {
+        assert!(self.single.is_none());
+        let PaneOwner { pane, allocation } = owner;
         self.pane_allocation = allocation;
-        self.single_pane_id = pane.id;
-        self.single_read_only = pane.read_only;
         self.closed = pane.closed;
         self.geometry = pane.geometry;
-        self.terminal = Some(pane.terminal);
-        self.pty = Some(pane.pty);
-        self.pty_rx = Some(pane.pty_rx);
-        self.harvest = pane.harvest;
-        self.shell_integration = pane.shell_integration;
-        self.last_command = pane.last_command;
-        self.integration = pane.integration;
-        self.terminal_launch = pane.launch;
-        self.terminal_launch_shell = pane.launch_shell;
-        match &self.terminal_launch {
+        match &pane.launch {
             crate::workspace::WorkspaceLaunch::Shell => {
                 self.tab_type = TabType::Shell;
-                self.split_shell = self.terminal_launch_shell.clone();
+                self.split_shell = pane.launch_shell.clone();
             }
             crate::workspace::WorkspaceLaunch::Profile { name } => {
                 self.tab_type = TabType::Profile { name: name.clone() };
-                self.split_shell = self.terminal_launch_shell.clone();
+                self.split_shell = pane.launch_shell.clone();
             }
             crate::workspace::WorkspaceLaunch::Plugin { plugin_id, .. } => {
                 self.tab_type = TabType::Plugin {
@@ -1053,6 +688,7 @@ impl Tab {
                 };
             }
         }
+        self.single = Some(pane);
     }
 
     /// Keep tab-level presentation and future-split policy aligned with the
@@ -1084,51 +720,38 @@ impl Tab {
 
     #[cfg(test)]
     pub(crate) fn replace_single_test_output(&mut self, receiver: Receiver<PtyEvent>) {
-        assert!(self.has_single_terminal_owner());
         assert!(self.pane_manager.is_none());
-        self.pty_rx = Some(receiver);
+        self.single
+            .as_mut()
+            .expect("tab owns its terminal directly")
+            .pty_rx = receiver;
     }
 
     #[cfg(test)]
     pub(crate) fn has_single_terminal_owner(&self) -> bool {
-        self.terminal.is_some() && self.pty.is_some() && self.pty_rx.is_some()
+        self.single.is_some()
     }
 
     #[cfg(test)]
     pub(crate) fn single_child_id(&self) -> Option<u32> {
-        self.pty.as_ref().and_then(PtyHandle::child_id)
+        self.single.as_ref()?.pty.child_id()
     }
 
     #[cfg(test)]
     pub(crate) fn single_pty_size(&self) -> Option<termeric_core::pty::PtySize> {
-        self.pty.as_ref()?.size().ok()
+        self.single.as_ref()?.pty.size().ok()
     }
 
-    pub(crate) fn pane_session(&self, id: crate::panes::PaneId) -> Option<&TerminalSession> {
-        if let Some(panes) = &self.pane_manager {
-            return Some(&panes.get_pane(id)?.integration);
-        }
-        (id == self.single_pane_id && self.terminal.is_some()).then_some(&self.integration)
+    pub(crate) fn pane_session(&self, id: PaneId) -> Option<&TerminalSession> {
+        self.pane(id).map(|pane| &pane.integration)
     }
 
-    pub(crate) fn pane_terminal(&self, id: crate::panes::PaneId) -> Option<&Terminal> {
-        if let Some(panes) = &self.pane_manager {
-            return Some(&panes.get_pane(id)?.terminal);
-        }
-        if id != self.single_pane_id {
-            return None;
-        }
-        self.terminal.as_ref()
+    pub(crate) fn pane_terminal(&self, id: PaneId) -> Option<&Terminal> {
+        self.pane(id).map(|pane| &pane.terminal)
     }
 
-    pub(crate) fn pane_session_mut(
-        &mut self,
-        id: crate::panes::PaneId,
-    ) -> Option<&mut TerminalSession> {
-        if let Some(panes) = &mut self.pane_manager {
-            return Some(&mut panes.get_pane_mut(id)?.integration);
-        }
-        (id == self.single_pane_id && self.terminal.is_some()).then_some(&mut self.integration)
+    pub(crate) fn pane_session_mut(&mut self, id: PaneId) -> Option<&mut TerminalSession> {
+        self.pane_mut(id).map(|pane| &mut pane.integration)
     }
 
     #[cfg(test)]
@@ -1220,24 +843,12 @@ impl Tab {
             changed
         }
         let mut changed = false;
-        if let Some(panes) = &mut self.pane_manager {
-            for id in panes.pane_ids() {
-                let Some(pane) = panes.get_pane_mut(id).filter(|pane| !pane.closed) else {
-                    continue;
-                };
-                changed |= observe(
-                    catalog,
-                    Some(&pane.pty),
-                    &pane.launch,
-                    &mut pane.integration,
-                );
-            }
-        } else if self.terminal.is_some() {
+        for pane in self.panes_mut().into_iter().filter(|pane| !pane.closed) {
             changed |= observe(
                 catalog,
-                self.pty.as_ref(),
-                &self.terminal_launch,
-                &mut self.integration,
+                Some(&pane.pty),
+                &pane.launch,
+                &mut pane.integration,
             );
         }
         self.track_agent_changes();
@@ -1291,61 +902,38 @@ impl Tab {
 
     #[cfg(test)]
     pub(crate) fn single_pty(&self) -> Option<&PtyHandle> {
-        self.pty.as_ref()
+        self.single.as_ref().map(|single| &single.pty)
     }
 
     /// The identity `pane_id`'s processes inherited.
     #[cfg(test)]
-    pub(crate) fn pane_terminal_id(&self, pane_id: crate::panes::PaneId) -> Option<&str> {
-        if let Some(panes) = &self.pane_manager {
-            return panes.get_pane(pane_id)?.pty.terminal_id();
-        }
-        (pane_id == self.single_pane_id)
-            .then_some(self.pty.as_ref()?)
-            .and_then(PtyHandle::terminal_id)
+    pub(crate) fn pane_terminal_id(&self, pane_id: PaneId) -> Option<&str> {
+        self.pane(pane_id)?.pty.terminal_id()
     }
 
     /// The process `pane_id`'s terminal started, such as its shell.
-    pub(crate) fn pane_child_process(&self, pane_id: crate::panes::PaneId) -> Option<u32> {
-        if let Some(panes) = &self.pane_manager {
-            return panes.get_pane(pane_id)?.pty.child_id();
-        }
-        (pane_id == self.single_pane_id)
-            .then_some(self.pty.as_ref()?)
-            .and_then(PtyHandle::child_id)
+    pub(crate) fn pane_child_process(&self, pane_id: PaneId) -> Option<u32> {
+        self.pane(pane_id)?.pty.child_id()
     }
 
     /// The process group in the foreground of `pane_id`'s terminal.
-    pub(crate) fn pane_foreground_group(&self, pane_id: crate::panes::PaneId) -> Option<i32> {
-        if let Some(panes) = &self.pane_manager {
-            return panes.get_pane(pane_id)?.pty.foreground_process_group();
-        }
-        (pane_id == self.single_pane_id)
-            .then_some(self.pty.as_ref()?)
-            .and_then(PtyHandle::foreground_process_group)
+    pub(crate) fn pane_foreground_group(&self, pane_id: PaneId) -> Option<i32> {
+        self.pane(pane_id)?.pty.foreground_process_group()
     }
 
     /// The pane whose processes inherited `terminal_id`.
-    pub(crate) fn pane_with_terminal_id(&self, terminal_id: &str) -> Option<crate::panes::PaneId> {
-        if let Some(panes) = &self.pane_manager {
-            return panes.pane_ids().into_iter().find(|id| {
-                panes
-                    .get_pane(*id)
-                    .is_some_and(|pane| !pane.closed && pane.pty.terminal_id() == Some(terminal_id))
-            });
-        }
-        (self.terminal.is_some()
-            && self
-                .pty
-                .as_ref()
-                .is_some_and(|pty| pty.terminal_id() == Some(terminal_id)))
-        .then_some(self.single_pane_id)
+    pub(crate) fn pane_with_terminal_id(&self, terminal_id: &str) -> Option<PaneId> {
+        self.owned_pane_ids().into_iter().find(|id| {
+            self.pane(*id)
+                .is_some_and(|pane| !pane.closed && pane.pty.terminal_id() == Some(terminal_id))
+        })
     }
 
-    pub(crate) fn owned_pane_ids(&self) -> Vec<crate::panes::PaneId> {
-        self.pane_manager
-            .as_ref()
-            .map_or_else(|| vec![self.single_pane_id], |panes| panes.pane_ids())
+    pub(crate) fn owned_pane_ids(&self) -> Vec<PaneId> {
+        match &self.pane_manager {
+            Some(panes) => panes.pane_ids(),
+            None => self.single.iter().map(|single| single.id).collect(),
+        }
     }
 
     pub(crate) fn unreviewed_diff_count(&self) -> usize {
@@ -1382,8 +970,8 @@ impl Tab {
                     );
                 }
             }
-        } else {
-            notices.extend(self.integration.drain_notices());
+        } else if let Some(single) = &mut self.single {
+            notices.extend(single.integration.drain_notices());
         }
         notices
     }
@@ -1446,16 +1034,7 @@ impl Tab {
     }
 
     fn focused_last_command(&self) -> Option<&String> {
-        self.pane_manager
-            .as_ref()
-            .and_then(|panes| panes.focused_pane())
-            .and_then(|pane| pane.last_command.as_ref())
-            .or_else(|| {
-                self.pane_manager
-                    .is_none()
-                    .then_some(self.last_command.as_ref())
-                    .flatten()
-            })
+        self.focused_pane()?.last_command.as_ref()
     }
 
     /// Capture every persisted field from one stable focused-terminal source.
@@ -1464,27 +1043,19 @@ impl Tab {
         &self,
         save_scrollback: bool,
     ) -> anyhow::Result<SessionCapture> {
-        let (terminal, child_id, remembered_command, scope) =
-            if let Some(panes) = &self.pane_manager {
-                let pane = panes
-                    .focused_pane()
-                    .context("focused pane no longer exists while saving session")?;
-                (
-                    &pane.terminal,
-                    pane.pty.child_id(),
-                    pane.last_command.clone(),
-                    crate::session::SessionCaptureScope::FocusedPane,
-                )
-            } else {
-                (
-                    self.terminal
-                        .as_ref()
-                        .context("single terminal owner is detached while saving session")?,
-                    self.pty.as_ref().and_then(PtyHandle::child_id),
-                    self.last_command.clone(),
-                    crate::session::SessionCaptureScope::SingleTerminal,
-                )
-            };
+        let pane = self
+            .focused_pane()
+            .context("focused pane no longer exists while saving session")?;
+        let (terminal, child_id, remembered_command) = (
+            &pane.terminal,
+            pane.pty.child_id(),
+            pane.last_command.clone(),
+        );
+        let scope = if self.pane_manager.is_some() {
+            crate::session::SessionCaptureScope::FocusedPane
+        } else {
+            crate::session::SessionCaptureScope::SingleTerminal
+        };
 
         Ok(SessionCapture {
             working_directory: terminal_working_directory(terminal)
@@ -1522,25 +1093,26 @@ impl Tab {
                     launch,
                 )
             } else {
-                let terminal = self
-                    .terminal
+                let single = self
+                    .single
                     .as_ref()
                     .context("single terminal owner is detached while saving workspace")?;
-                let child_id = self.pty.as_ref().and_then(PtyHandle::child_id);
-                let pane_id = self.single_pane_id.0;
+                let terminal = &single.terminal;
+                let child_id = single.pty.child_id();
+                let pane_id = single.id.0;
                 (
                     pane_id,
                     pane_id,
                     crate::workspace::WorkspacePaneLayout::Pane { pane: pane_id },
                     vec![crate::workspace::WorkspacePaneSnapshot {
                         id: pane_id,
-                        launch: Some(self.terminal_launch.clone()),
+                        launch: Some(single.launch.clone()),
                         title: Some(self.title.clone()),
                         working_directory: terminal_working_directory(terminal)
                             .or_else(|| child_id.and_then(get_process_cwd)),
                         last_command: child_id
                             .and_then(get_foreground_process)
-                            .or_else(|| self.last_command.clone()),
+                            .or_else(|| single.last_command.clone()),
                         scrollback_file: None,
                         scrollback_truncated: false,
                         scrollback_lines: if save_scrollback {
@@ -1549,7 +1121,7 @@ impl Tab {
                             Vec::new()
                         },
                     }],
-                    self.terminal_launch.clone(),
+                    single.launch.clone(),
                 )
             };
         Ok(crate::workspace::WorkspaceTabSnapshot {

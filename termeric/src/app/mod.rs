@@ -2339,15 +2339,10 @@ impl App {
         let Some(tab) = tabs.active_tab() else {
             return;
         };
-        let harvest_indicators: &[crate::harvest::GrowthIndicator] =
-            if let Some(panes) = &tab.pane_manager {
-                panes
-                    .focused_pane()
-                    .map(|pane| pane.harvest.indicators.as_slice())
-                    .unwrap_or_default()
-            } else {
-                &tab.harvest.indicators
-            };
+        let harvest_indicators: &[crate::harvest::GrowthIndicator] = tab
+            .focused_pane()
+            .map(|pane| pane.harvest.indicators.as_slice())
+            .unwrap_or_default();
 
         let Some(terminal) = tab.focused_terminal() else {
             return;
@@ -3562,10 +3557,8 @@ impl App {
             .tabs
             .as_ref()
             .and_then(TabManager::active_tab)
-            .and_then(|tab| match &tab.pane_manager {
-                Some(panes) => panes.focused_pane().map(|pane| &pane.shell_integration),
-                None => Some(&tab.shell_integration),
-            })
+            .and_then(|tab| tab.focused_pane())
+            .map(|pane| &pane.shell_integration)
             .is_some_and(|integration| {
                 matches!(
                     integration,
