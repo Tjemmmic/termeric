@@ -484,9 +484,9 @@ fn plugin_pane_movement_preserves_pty_and_returns_exact_destination_state() {
             &observed,
         ))
         .unwrap();
-    app.copy_mode_target = Some(CopyModeTarget {
-        tab: source_tab_id,
-        pane: Some(PaneId(0)),
+    app.copy_mode_target = Some(crate::tabs::TerminalIdentity {
+        tab_id: source_tab_id,
+        pane_id: PaneId(0),
     });
     app.broadcast = BroadcastState::Active {
         tab_id: source_tab_id,
@@ -1028,9 +1028,9 @@ fn plugin_pane_closure_is_exact_correlated_and_preserves_last_pane() {
     let active_tab_id = tabs.new_tab().unwrap();
     let mut app = App::new_headless(Config::default()).unwrap();
     app.tabs = Some(tabs);
-    app.copy_mode_target = Some(CopyModeTarget {
-        tab: target_tab_id,
-        pane: Some(PaneId(0)),
+    app.copy_mode_target = Some(crate::tabs::TerminalIdentity {
+        tab_id: target_tab_id,
+        pane_id: PaneId(0),
     });
     app.broadcast = BroadcastState::Active {
         tab_id: target_tab_id,
@@ -1406,9 +1406,9 @@ fn plugin_tab_closure_is_scheduled_exact_bounded_and_hook_suppressed() {
         .tab_mut_by_id(live_candidate)
         .unwrap()
         .live_domain = None;
-    app.copy_mode_target = Some(CopyModeTarget {
-        tab: initially_active,
-        pane: None,
+    app.copy_mode_target = Some(crate::tabs::TerminalIdentity {
+        tab_id: initially_active,
+        pane_id: PaneId(0),
     });
     let active = plugin_action_event(
         &mut app,

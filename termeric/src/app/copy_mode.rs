@@ -7,7 +7,7 @@ use winit::keyboard::{Key, NamedKey};
 use crate::config::CopyModeBindings;
 use crate::terminal::copy_mode::{CopyMotion, HintAction};
 
-use super::{App, CopyModeTarget};
+use super::App;
 
 impl App {
     pub(super) fn copy_mode_render_info(&self) -> Option<crate::renderer::CopyModeRenderInfo> {
@@ -57,15 +57,13 @@ impl App {
         })
     }
 
-    fn active_copy_target(&self) -> Option<CopyModeTarget> {
-        let tab = self.tabs.as_ref()?.active_tab()?;
-        Some(CopyModeTarget {
-            tab: tab.id,
-            pane: tab
-                .pane_manager
-                .as_ref()
-                .map(crate::panes::PaneManager::focused_id),
-        })
+    fn active_copy_target(&self) -> Option<crate::tabs::TerminalIdentity> {
+        Some(
+            self.tabs
+                .as_ref()?
+                .active_tab()?
+                .focused_terminal_identity(),
+        )
     }
 
     pub(super) fn enter_copy_mode(&mut self) {
@@ -96,12 +94,9 @@ impl App {
     pub(super) fn leave_copy_mode(&mut self, clear_selection: bool) {
         if let Some(target) = self.copy_mode_target
             && let Some(tabs) = &mut self.tabs
-            && let Some(terminal) = tabs.terminal_for_origin_mut(match target.pane {
-                Some(pane_id) => crate::tabs::TerminalEventOrigin::Pane {
-                    tab_id: target.tab,
-                    pane_id,
-                },
-                None => crate::tabs::TerminalEventOrigin::Tab { tab_id: target.tab },
+            && let Some(terminal) = tabs.terminal_for_origin_mut(crate::tabs::TerminalEventOrigin {
+                tab_id: target.tab_id,
+                pane_id: target.pane_id,
             })
         {
             if self.copy_mode.owns_navigation_cursor(terminal) {

@@ -24,13 +24,15 @@ use crate::terminal::events::MAX_FORWARDED_TERMINAL_EVENTS_PER_POLL;
 use crate::terminal::geometry::TerminalGeometry;
 use crate::terminal::policy::TerminalPolicy;
 
-/// Stable origin for an app-facing terminal event. Tab IDs are monotonic and
-/// pane IDs are stable for the lifetime of a pane, so replies never depend on
-/// whichever terminal happens to be focused when App handles the event.
+/// The exact terminal an app-facing event came from: its tab's stable ID and
+/// its tab-local pane ID. Both are stable for the terminal's lifetime, so a
+/// reply never depends on whichever terminal is focused when App handles the
+/// event. Holding one means the terminal was live when it was captured;
+/// every use resolves it again.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum TerminalEventOrigin {
-    Tab { tab_id: usize },
-    Pane { tab_id: usize, pane_id: PaneId },
+pub struct TerminalEventOrigin {
+    pub tab_id: usize,
+    pub pane_id: PaneId,
 }
 
 /// Long-lived terminal identity for UI work that can outlast a split/collapse.
@@ -1686,7 +1688,7 @@ impl TabManager {
                     let events = pane_events
                         .into_iter()
                         .map(|pane_event| RoutedTerminalEvent {
-                            origin: TerminalEventOrigin::Pane {
+                            origin: TerminalEventOrigin {
                                 tab_id,
                                 pane_id: pane_event.pane_id,
                             },
@@ -1695,11 +1697,12 @@ impl TabManager {
                         .collect();
                     (pane_changed, events)
                 } else {
+                    let pane_id = tab.single_pane_id();
                     let (single_changed, single_events) = tab.poll_single(on_output);
                     let events = single_events
                         .into_iter()
                         .map(|event| RoutedTerminalEvent {
-                            origin: TerminalEventOrigin::Tab { tab_id },
+                            origin: TerminalEventOrigin { tab_id, pane_id },
                             event,
                         })
                         .collect();
@@ -1975,38 +1978,17 @@ impl TabManager {
     /// No focused-terminal fallback is allowed: a stale/missing origin fails
     /// explicitly rather than leaking clipboard or protocol data elsewhere.
     pub fn write_to_origin(&mut self, origin: TerminalEventOrigin, data: &[u8]) -> io::Result<()> {
-        let tab_id = match origin {
-            TerminalEventOrigin::Tab { tab_id } | TerminalEventOrigin::Pane { tab_id, .. } => {
-                tab_id
-            }
-        };
-        let tab = self
-            .tabs
+        self.tabs
             .iter_mut()
-            .find(|tab| tab.id == tab_id)
+            .find(|tab| tab.id == origin.tab_id)
             .ok_or_else(|| {
                 io::Error::new(io::ErrorKind::NotFound, "terminal tab no longer exists")
-            })?;
-
-        match origin {
-            TerminalEventOrigin::Tab { .. } => {
-                if tab.pane_manager.is_some() {
-                    return Err(io::Error::new(
-                        io::ErrorKind::NotFound,
-                        "originating tab terminal is dormant in pane mode",
-                    ));
-                }
-                tab.write_protocol_reply(data)
-            }
-            TerminalEventOrigin::Pane { pane_id, .. } => tab
-                .pane_manager
-                .as_mut()
-                .and_then(|panes| panes.get_pane_mut(pane_id))
-                .ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::NotFound, "originating pane no longer exists")
-                })?
-                .write_protocol_reply(data),
-        }
+            })?
+            .pane_mut(origin.pane_id)
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotFound, "originating pane no longer exists")
+            })?
+            .write_protocol_reply(data)
     }
 
     /// Write captured user input to one exact terminal. Unlike
@@ -2016,15 +1998,10 @@ impl TabManager {
         origin: TerminalEventOrigin,
         data: &[u8],
     ) -> io::Result<()> {
-        let tab_id = match origin {
-            TerminalEventOrigin::Tab { tab_id } | TerminalEventOrigin::Pane { tab_id, .. } => {
-                tab_id
-            }
-        };
         let tab = self
             .tabs
             .iter_mut()
-            .find(|tab| tab.id == tab_id)
+            .find(|tab| tab.id == origin.tab_id)
             .ok_or_else(|| {
                 io::Error::new(io::ErrorKind::NotFound, "terminal tab no longer exists")
             })?;
@@ -2034,53 +2011,29 @@ impl TabManager {
                 "terminal tab is closed or closing",
             ));
         }
-        match origin {
-            TerminalEventOrigin::Tab { .. } => {
-                if tab.pane_manager.is_some() {
-                    return Err(io::Error::new(
-                        io::ErrorKind::NotFound,
-                        "originating tab terminal is dormant in pane mode",
-                    ));
-                }
-                tab.write(data)
-            }
-            TerminalEventOrigin::Pane { pane_id, .. } => {
-                tab.pane_manager
-                    .as_mut()
-                    .and_then(|panes| panes.get_pane_mut(pane_id))
-                    .filter(|pane| !pane.closed)
-                    .ok_or_else(|| {
-                        io::Error::new(io::ErrorKind::NotFound, "originating pane no longer exists")
-                    })?
-                    .write(data)?;
-                Ok(())
-            }
-        }
+        tab.pane_mut(origin.pane_id)
+            .filter(|pane| !pane.closed)
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotFound, "originating pane no longer exists")
+            })?
+            .write(data)
     }
 
-    /// Capture a live event route before retaining it across asynchronous work.
-    /// A tab route names the current single owner only at capture time.
+    /// The identity of `origin`'s terminal, while that terminal is still live,
+    /// for retaining it across asynchronous work.
     pub(crate) fn identity_for_origin(
         &self,
         origin: TerminalEventOrigin,
     ) -> Option<TerminalIdentity> {
-        let (tab_id, pane_id) = match origin {
-            TerminalEventOrigin::Tab { tab_id } => {
-                let tab = self.tab_by_id(tab_id)?;
-                if tab.pane_manager.is_some() {
-                    return None;
-                }
-                (tab_id, tab.single_pane_id())
-            }
-            TerminalEventOrigin::Pane { tab_id, pane_id } => (tab_id, pane_id),
-        };
-        (self.origin_for_pane(tab_id, pane_id)? == origin)
-            .then_some(TerminalIdentity { tab_id, pane_id })
+        self.origin_for_pane(origin.tab_id, origin.pane_id)
+            .map(|origin| TerminalIdentity {
+                tab_id: origin.tab_id,
+                pane_id: origin.pane_id,
+            })
     }
 
-    /// Resolve a stable tab-local pane identity to its current owner. Unlike
-    /// an event's mode-specific route, this survives split/collapse, but never
-    /// crosses tab namespaces or substitutes a different single survivor.
+    /// Resolve a stable tab-local pane identity to a route for its live
+    /// terminal. It never crosses tab namespaces or substitutes another pane.
     pub(crate) fn origin_for_pane(
         &self,
         tab_id: usize,
@@ -2090,83 +2043,31 @@ impl TabManager {
         if tab.closed || tab.is_closing() {
             return None;
         }
-        if let Some(panes) = &tab.pane_manager {
-            panes.get_pane(pane_id).filter(|pane| !pane.closed)?;
-            Some(TerminalEventOrigin::Pane { tab_id, pane_id })
-        } else if tab.single_pane_id() == pane_id && tab.focused_terminal().is_some() {
-            Some(TerminalEventOrigin::Tab { tab_id })
-        } else {
-            None
-        }
+        tab.pane(pane_id).filter(|pane| !pane.closed)?;
+        Some(TerminalEventOrigin { tab_id, pane_id })
     }
 
     pub(crate) fn origin_read_only(&self, origin: TerminalEventOrigin) -> Option<bool> {
-        let tab_id = match origin {
-            TerminalEventOrigin::Tab { tab_id } | TerminalEventOrigin::Pane { tab_id, .. } => {
-                tab_id
-            }
-        };
-        let tab = self.tabs.iter().find(|tab| tab.id == tab_id)?;
+        let tab = self.tabs.iter().find(|tab| tab.id == origin.tab_id)?;
         if tab.closed || tab.is_closing() {
             return None;
         }
-        match origin {
-            TerminalEventOrigin::Tab { .. } if tab.pane_manager.is_none() => {
-                tab.pane_read_only(tab.single_pane_id())
-            }
-            TerminalEventOrigin::Pane { pane_id, .. } => tab
-                .pane_manager
-                .as_ref()?
-                .get_pane(pane_id)
-                .filter(|pane| !pane.closed)
-                .map(|pane| pane.read_only),
-            TerminalEventOrigin::Tab { .. } => None,
-        }
+        tab.pane(origin.pane_id)
+            .filter(|pane| !pane.closed)
+            .map(|pane| pane.read_only)
     }
 
     pub(crate) fn terminal_for_origin(&self, origin: TerminalEventOrigin) -> Option<&Terminal> {
-        let tab_id = match origin {
-            TerminalEventOrigin::Tab { tab_id } | TerminalEventOrigin::Pane { tab_id, .. } => {
-                tab_id
-            }
-        };
-        let tab = self.tabs.iter().find(|tab| tab.id == tab_id)?;
-        match origin {
-            TerminalEventOrigin::Tab { .. } => tab
-                .pane_manager
-                .is_none()
-                .then_some(())
-                .and_then(|()| tab.focused_terminal()),
-            TerminalEventOrigin::Pane { pane_id, .. } => tab
-                .pane_manager
-                .as_ref()?
-                .get_pane(pane_id)
-                .map(|pane| &pane.terminal),
-        }
+        self.tab_by_id(origin.tab_id)?.pane_terminal(origin.pane_id)
     }
 
     pub(crate) fn terminal_for_origin_mut(
         &mut self,
         origin: TerminalEventOrigin,
     ) -> Option<&mut Terminal> {
-        let tab_id = match origin {
-            TerminalEventOrigin::Tab { tab_id } | TerminalEventOrigin::Pane { tab_id, .. } => {
-                tab_id
-            }
-        };
-        let tab = self.tabs.iter_mut().find(|tab| tab.id == tab_id)?;
-        match origin {
-            TerminalEventOrigin::Tab { .. } => tab
-                .pane_manager
-                .is_none()
-                .then_some(())
-                .and_then(|()| tab.focused_terminal_mut()),
-            TerminalEventOrigin::Pane { pane_id, .. } => tab
-                .pane_manager
-                .as_mut()?
-                .get_pane_mut(pane_id)
-                .map(|pane| &mut pane.terminal),
-        }
+        self.tab_mut_by_id(origin.tab_id)?
+            .pane_mut(origin.pane_id)
+            .map(|pane| &mut pane.terminal)
     }
 
     pub(crate) fn set_title_for_origin(
@@ -2174,12 +2075,7 @@ impl TabManager {
         origin: TerminalEventOrigin,
         title: String,
     ) -> bool {
-        let tab_id = match origin {
-            TerminalEventOrigin::Tab { tab_id } | TerminalEventOrigin::Pane { tab_id, .. } => {
-                tab_id
-            }
-        };
-        let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) else {
+        let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == origin.tab_id) else {
             return false;
         };
         if tab.live_domain.is_some() {
@@ -2188,15 +2084,8 @@ impl TabManager {
             // remote rename precedence and briefly diverge across windows.
             return true;
         }
-        if let TerminalEventOrigin::Pane { pane_id, .. } = origin {
-            let Some(pane) = tab
-                .pane_manager
-                .as_mut()
-                .and_then(|panes| panes.get_pane_mut(pane_id))
-            else {
-                return false;
-            };
-            pane.title = (!title.is_empty()).then(|| title.clone());
+        if !tab.set_pane_osc_title(origin.pane_id, &title) {
+            return false;
         }
         tab.set_osc_title(title);
         true
@@ -3493,9 +3382,7 @@ mod tests {
         while Instant::now() < deadline {
             let (_, events) = manager.poll_events();
             for routed in events {
-                let TerminalEventOrigin::Pane { tab_id, pane_id } = routed.origin else {
-                    continue;
-                };
+                let TerminalEventOrigin { tab_id, pane_id } = routed.origin;
                 assert_eq!(tab_id, dormant_tab_id);
                 match routed.event {
                     TerminalEvent::Bell => {

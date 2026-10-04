@@ -389,13 +389,9 @@ pub(super) fn harvest_rerun_capture_fixture_in(
         .map(|id| {
             let pid = panes.get_pane(id).unwrap().pty.child_id().unwrap();
             (
-                if split {
-                    crate::tabs::TerminalEventOrigin::Pane {
-                        tab_id,
-                        pane_id: id,
-                    }
-                } else {
-                    crate::tabs::TerminalEventOrigin::Tab { tab_id }
+                crate::tabs::TerminalEventOrigin {
+                    tab_id,
+                    pane_id: id,
                 },
                 directory.path().join(pid.to_string()),
             )
@@ -523,7 +519,7 @@ pub(super) fn current_harvest_capture_routes(
             .map(|pane_id| {
                 let pid = panes.get_pane(pane_id).unwrap().pty.child_id().unwrap();
                 (
-                    TerminalEventOrigin::Pane {
+                    TerminalEventOrigin {
                         tab_id: tab.id,
                         pane_id,
                     },
@@ -533,7 +529,10 @@ pub(super) fn current_harvest_capture_routes(
             .collect::<Vec<_>>()
     } else {
         vec![(
-            TerminalEventOrigin::Tab { tab_id: tab.id },
+            TerminalEventOrigin {
+                tab_id: tab.id,
+                pane_id: tab.single_pane_id(),
+            },
             directory.join(tab.single_child_id().unwrap().to_string()),
         )]
     };

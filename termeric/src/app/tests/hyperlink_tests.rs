@@ -7,7 +7,10 @@ fn stale_hyperlink_activation_is_rejected_before_opener_validation() {
     let mut app = App::new_headless(Config::default()).unwrap();
     // An option-shaped target makes this pre-fix reproduction side-effect-free.
     assert!(!app.activate_hyperlink(
-        Some(TerminalEventOrigin::Tab { tab_id: usize::MAX }),
+        Some(TerminalEventOrigin {
+            tab_id: usize::MAX,
+            pane_id: PaneId(0)
+        }),
         "--help",
         None,
     ));
@@ -47,8 +50,11 @@ fn hyperlink_owner_gate_rejects_closed_routes_but_allows_live_inactive_read_only
         );
         for invalid in [
             None,
-            Some(TerminalEventOrigin::Tab { tab_id: usize::MAX }),
-            Some(TerminalEventOrigin::Pane {
+            Some(TerminalEventOrigin {
+                tab_id: usize::MAX,
+                pane_id: PaneId(0),
+            }),
+            Some(TerminalEventOrigin {
                 tab_id,
                 pane_id: PaneId(u32::MAX),
             }),
@@ -62,9 +68,12 @@ fn hyperlink_owner_gate_rejects_closed_routes_but_allows_live_inactive_read_only
         }
         if split {
             assert!(
-                app.validate_hyperlink_origin(Some(TerminalEventOrigin::Tab { tab_id }))
-                    .is_err(),
-                "dormant single route is not the focused pane"
+                app.validate_hyperlink_origin(Some(TerminalEventOrigin {
+                    tab_id,
+                    pane_id: PaneId(0)
+                }))
+                .is_ok(),
+                "an unfocused live pane remains its own route"
             );
         }
         app.tabs
@@ -101,12 +110,10 @@ fn hyperlink_owner_gate_rejects_closed_routes_but_allows_live_inactive_read_only
 }
 
 #[test]
-fn hyperlink_owner_gate_rejects_closed_panes_and_obsolete_collapse_routes() {
+fn hyperlink_owner_gate_rejects_closed_and_removed_panes_but_follows_survivors() {
     let mut app = divider_owner_fixture();
     let old_origin = app.active_terminal_origin().unwrap();
-    let TerminalEventOrigin::Pane { tab_id, pane_id } = old_origin else {
-        panic!("pane fixture")
-    };
+    let TerminalEventOrigin { tab_id, pane_id } = old_origin;
     app.tabs
         .as_mut()
         .unwrap()
@@ -136,10 +143,13 @@ fn hyperlink_owner_gate_rejects_closed_panes_and_obsolete_collapse_routes() {
     let owner = panes.take_remaining_pane().unwrap();
     tab.pane_manager = None;
     tab.restore_terminal_owner(owner);
-    assert!(app.validate_hyperlink_origin(Some(old_origin)).is_err());
+    assert!(app.validate_hyperlink_origin(Some(old_origin)).is_ok());
     assert!(
-        app.validate_hyperlink_origin(Some(TerminalEventOrigin::Tab { tab_id }))
-            .is_ok()
+        app.validate_hyperlink_origin(Some(TerminalEventOrigin {
+            tab_id,
+            pane_id: other
+        }))
+        .is_err()
     );
 }
 
@@ -221,8 +231,11 @@ fn routed_hyperlink_directory_does_not_follow_focus_to_another_pane() {
         Some("/tmp/focused")
     );
     assert!(
-        app.hyperlink_open_directory(TerminalEventOrigin::Tab { tab_id: usize::MAX })
-            .is_none()
+        app.hyperlink_open_directory(TerminalEventOrigin {
+            tab_id: usize::MAX,
+            pane_id: PaneId(0)
+        })
+        .is_none()
     );
 }
 

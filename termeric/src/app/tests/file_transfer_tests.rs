@@ -216,7 +216,10 @@ fn kitty_download_consent_is_request_scoped_and_terminal_type_gated() {
     };
     let mut app = App::new_headless_with_tabs(config);
     let tab_id = app.tabs.as_ref().unwrap().active_tab_id().unwrap();
-    let origin = TerminalEventOrigin::Tab { tab_id };
+    let origin = TerminalEventOrigin {
+        tab_id,
+        pane_id: PaneId(0),
+    };
     let request = termeric_core::KittyFileTransferCommand {
         action: termeric_core::KittyFileTransferAction::Send,
         compression: termeric_core::KittyFileTransferCompression::None,
@@ -316,7 +319,10 @@ fn kitty_upload_collects_exact_paths_before_request_scoped_consent() {
     };
     let mut app = App::new_headless_with_tabs(config);
     let tab_id = app.tabs.as_ref().unwrap().active_tab_id().unwrap();
-    let origin = TerminalEventOrigin::Tab { tab_id };
+    let origin = TerminalEventOrigin {
+        tab_id,
+        pane_id: PaneId(0),
+    };
     let command =
         |action, file_id: &str, name: Option<&str>, size| termeric_core::KittyFileTransferCommand {
             action,
@@ -390,8 +396,9 @@ fn kitty_upload_collects_exact_paths_before_request_scoped_consent() {
 fn kitty_transfer_confirmation_never_replies_to_a_replacement_owner() {
     let (mut app, directory, entry, _) = harvest_rerun_capture_fixture_in(false);
     app.handle_kitty_file_transfer(
-        TerminalEventOrigin::Tab {
+        TerminalEventOrigin {
             tab_id: entry.source.tab_id,
+            pane_id: PaneId(0),
         },
         kitty_capture_command(termeric_core::KittyFileTransferAction::Send),
     );

@@ -317,14 +317,14 @@ fn path_collection_and_active_commands_match_across_split_and_collapse() {
     app.handle_kitty_file_transfer(app.kitty_transfer_origin(owner).unwrap(), receive);
     let sibling = split_harvest_capture_owner(&mut app, directory.path());
     current_harvest_capture_routes(&mut app, directory.path());
-    assert!(
-        app.tabs
-            .as_ref()
-            .unwrap()
-            .identity_for_origin(TerminalEventOrigin::Tab {
-                tab_id: owner.tab_id
-            })
-            .is_none()
+    let route = TerminalEventOrigin {
+        tab_id: owner.tab_id,
+        pane_id: owner.pane_id,
+    };
+    // The owner's route names its pane, so splitting keeps it valid.
+    assert_eq!(
+        app.tabs.as_ref().unwrap().identity_for_origin(route),
+        Some(owner)
     );
     assert!(!app.prune_stale_kitty_file_transfers());
     for index in 0..2 {
@@ -347,23 +347,8 @@ fn path_collection_and_active_commands_match_across_split_and_collapse() {
         2
     );
     assert!(app.info_overlay.is_awaiting(app.info_overlay.request_id()));
-    assert!(
-        app.tabs
-            .as_ref()
-            .unwrap()
-            .identity_for_origin(TerminalEventOrigin::Pane {
-                tab_id: owner.tab_id,
-                pane_id: owner.pane_id
-            })
-            .is_none()
-    );
     assert_eq!(
-        app.tabs
-            .as_ref()
-            .unwrap()
-            .identity_for_origin(TerminalEventOrigin::Tab {
-                tab_id: owner.tab_id
-            }),
+        app.tabs.as_ref().unwrap().identity_for_origin(route),
         Some(owner)
     );
     app.deny_pending_kitty_upload(None, "fixture cleanup");
@@ -386,7 +371,7 @@ fn path_collection_and_active_commands_match_across_split_and_collapse() {
     );
     // A sibling using the identical session ID cannot cancel the owner's transfer.
     app.handle_kitty_file_transfer(
-        TerminalEventOrigin::Pane {
+        TerminalEventOrigin {
             tab_id: owner.tab_id,
             pane_id: sibling,
         },

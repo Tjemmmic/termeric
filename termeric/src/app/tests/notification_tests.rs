@@ -17,8 +17,9 @@ fn desktop_delivery_failures_become_deduplicated_visible_toasts() {
         .set_audio_command_for_test("/definitely/missing/termeric-audio-helper", &[]);
     app.notifications
         .fail_delivery_for_test("synthetic notification service failure");
-    let origin = TerminalEventOrigin::Tab {
+    let origin = TerminalEventOrigin {
         tab_id: app.tabs.as_ref().unwrap().active_tab_id().unwrap(),
+        pane_id: PaneId(0),
     };
     let notify = |app: &mut App, body: &str| {
         app.handle_terminal_event(RoutedTerminalEvent {
@@ -87,18 +88,22 @@ fn notification_occasions_use_exact_tab_pane_zoom_focus_and_visibility_state() {
     split_tab.pane_manager = Some(panes);
     let active_tab_id = tabs.new_tab().unwrap();
 
-    let split_visible = TerminalEventOrigin::Pane {
+    let split_visible = TerminalEventOrigin {
         tab_id: split_tab_id,
         pane_id: PaneId(0),
     };
-    let split_focused = TerminalEventOrigin::Pane {
+    let split_focused = TerminalEventOrigin {
         tab_id: split_tab_id,
         pane_id: PaneId(1),
     };
-    let active_tab = TerminalEventOrigin::Tab {
+    let active_tab = TerminalEventOrigin {
         tab_id: active_tab_id,
+        pane_id: PaneId(0),
     };
-    let stale = TerminalEventOrigin::Tab { tab_id: usize::MAX };
+    let stale = TerminalEventOrigin {
+        tab_id: usize::MAX,
+        pane_id: PaneId(0),
+    };
     let mut app = App::new_headless(Config::default()).unwrap();
     app.tabs = Some(tabs);
 
@@ -142,8 +147,9 @@ fn suppressed_notification_has_no_delivery_or_tracked_worker_side_effects() {
         ..Config::default()
     };
     let mut app = App::new_headless_with_tabs(config);
-    let origin = TerminalEventOrigin::Tab {
+    let origin = TerminalEventOrigin {
         tab_id: app.tabs.as_ref().unwrap().active_tab_id().unwrap(),
+        pane_id: PaneId(0),
     };
     app.handle_terminal_event(RoutedTerminalEvent {
         origin,
@@ -162,8 +168,9 @@ fn suppressed_notification_has_no_delivery_or_tracked_worker_side_effects() {
 #[test]
 fn delayed_notification_completion_does_not_alias_a_replacement_single_owner() {
     let (mut app, directory, entry, _) = harvest_rerun_capture_fixture_in(false);
-    let origin = TerminalEventOrigin::Tab {
+    let origin = TerminalEventOrigin {
         tab_id: entry.source.tab_id,
+        pane_id: PaneId(0),
     };
     let origin = app
         .tabs

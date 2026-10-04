@@ -6,13 +6,9 @@ use super::*;
 impl App {
     pub(super) fn active_terminal_origin(&self) -> Option<crate::tabs::TerminalEventOrigin> {
         let tab = self.tabs.as_ref().and_then(TabManager::active_tab)?;
-        Some(if let Some(panes) = &tab.pane_manager {
-            crate::tabs::TerminalEventOrigin::Pane {
-                tab_id: tab.id,
-                pane_id: panes.focused_id(),
-            }
-        } else {
-            crate::tabs::TerminalEventOrigin::Tab { tab_id: tab.id }
+        Some(crate::tabs::TerminalEventOrigin {
+            tab_id: tab.id,
+            pane_id: tab.focused_terminal_identity().pane_id,
         })
     }
 

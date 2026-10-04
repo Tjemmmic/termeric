@@ -268,14 +268,14 @@ impl Tab {
     }
 
     /// The pane with `id`, in or out of pane mode.
-    fn pane(&self, id: PaneId) -> Option<&Pane> {
+    pub(crate) fn pane(&self, id: PaneId) -> Option<&Pane> {
         match &self.pane_manager {
             Some(panes) => panes.get_pane(id),
             None => self.single.as_ref().filter(|single| single.id == id),
         }
     }
 
-    fn pane_mut(&mut self, id: PaneId) -> Option<&mut Pane> {
+    pub(crate) fn pane_mut(&mut self, id: PaneId) -> Option<&mut Pane> {
         match &mut self.pane_manager {
             Some(panes) => panes.get_pane_mut(id),
             None => self.single.as_mut().filter(|single| single.id == id),
@@ -398,10 +398,6 @@ impl Tab {
         self.focused_pane().is_some_and(|pane| pane.read_only)
     }
 
-    pub(crate) fn pane_read_only(&self, pane_id: PaneId) -> Option<bool> {
-        self.pane(pane_id).map(|pane| pane.read_only)
-    }
-
     /// Toggle the focused pane's transient user-input lock and return its new
     /// state. The lock follows a live pane when ownership is moved or collapsed.
     pub(crate) fn toggle_focused_pane_read_only(&mut self) -> bool {
@@ -432,10 +428,6 @@ impl Tab {
     /// Write user input and record it only on the receiving terminal.
     pub fn write(&mut self, data: &[u8]) -> std::io::Result<()> {
         self.focused_pane_for_write()?.write(data)
-    }
-
-    pub(crate) fn write_protocol_reply(&mut self, data: &[u8]) -> std::io::Result<()> {
-        self.focused_pane_for_write()?.write_protocol_reply(data)
     }
 
     fn focused_pane_for_write(&mut self) -> std::io::Result<&mut Pane> {
@@ -489,6 +481,19 @@ impl Tab {
         {
             self.title = dir_name_from_path(&cwd);
         }
+    }
+
+    /// Record an OSC title emitted by pane `id`, which a split pane keeps
+    /// as its own. Returns false when the tab has no such pane.
+    pub(crate) fn set_pane_osc_title(&mut self, id: PaneId, title: &str) -> bool {
+        let split = self.pane_manager.is_some();
+        let Some(pane) = self.pane_mut(id) else {
+            return false;
+        };
+        if split {
+            pane.title = (!title.is_empty()).then(|| title.to_string());
+        }
+        true
     }
 
     pub(crate) fn set_osc_title(&mut self, title: String) {

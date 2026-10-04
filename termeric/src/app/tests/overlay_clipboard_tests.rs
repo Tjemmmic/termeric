@@ -88,7 +88,7 @@ fn app_mediated_clipboard_reply_returns_to_requesting_pane_not_focus() {
     app.tabs = Some(tabs);
 
     app.handle_terminal_event(RoutedTerminalEvent {
-        origin: TerminalEventOrigin::Pane {
+        origin: TerminalEventOrigin {
             tab_id,
             pane_id: requesting_pane,
         },
@@ -288,11 +288,11 @@ fn osc_titles_and_dynamic_colors_apply_to_exact_inactive_tab_and_pane_origins() 
         .unwrap();
     app.tabs = Some(tabs);
 
-    let first_origin = TerminalEventOrigin::Pane {
+    let first_origin = TerminalEventOrigin {
         tab_id: dormant_tab_id,
         pane_id: PaneId(0),
     };
-    let second_origin = TerminalEventOrigin::Pane {
+    let second_origin = TerminalEventOrigin {
         tab_id: dormant_tab_id,
         pane_id: second_pane,
     };
@@ -316,8 +316,9 @@ fn osc_titles_and_dynamic_colors_apply_to_exact_inactive_tab_and_pane_origins() 
         event: TerminalEvent::TitleChanged("pane\u{202e}-build\u{2028}".into()),
     });
     app.handle_terminal_event(RoutedTerminalEvent {
-        origin: TerminalEventOrigin::Tab {
+        origin: TerminalEventOrigin {
             tab_id: active_tab_id,
+            pane_id: PaneId(0),
         },
         event: TerminalEvent::TitleChanged("active-editor".into()),
     });
@@ -352,7 +353,7 @@ fn osc_titles_and_dynamic_colors_apply_to_exact_inactive_tab_and_pane_origins() 
 
     let tabs = app.tabs.as_mut().unwrap();
     assert!(!tabs.set_title_for_origin(
-        TerminalEventOrigin::Pane {
+        TerminalEventOrigin {
             tab_id: dormant_tab_id,
             pane_id: PaneId(u32::MAX),
         },

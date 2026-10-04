@@ -1843,9 +1843,10 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .focused_id();
-            let original_index = captures.iter().position(|(origin, _)| matches!(
-                origin, crate::tabs::TerminalEventOrigin::Pane { pane_id, .. } if *pane_id == original
-            )).unwrap();
+            let original_index = captures
+                .iter()
+                .position(|(origin, _)| origin.pane_id == original)
+                .unwrap();
             app.active_terminal_mut().unwrap().set_mode(
                 TerminalMode::MOUSE_BUTTON_EVENT | TerminalMode::MOUSE_SGR,
                 true,

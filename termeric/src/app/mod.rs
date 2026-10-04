@@ -802,12 +802,6 @@ pub(crate) fn agent_view_event_waker() -> Arc<dyn Fn() + Send + Sync> {
     })
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct CopyModeTarget {
-    tab: usize,
-    pane: Option<PaneId>,
-}
-
 #[derive(Debug, Clone)]
 struct TabRenameState {
     tab_id: usize,
@@ -1259,7 +1253,7 @@ pub struct App {
     search_cursor_pos: usize,
     /// Keyboard copy mode is bound to the pane that owned focus on entry.
     copy_mode: CopyMode,
-    copy_mode_target: Option<CopyModeTarget>,
+    copy_mode_target: Option<crate::tabs::TerminalIdentity>,
     /// Validated and precompiled semantic patterns used by quick select.
     compiled_copy_patterns: Vec<(String, regex::Regex)>,
     /// Notification manager for desktop notifications

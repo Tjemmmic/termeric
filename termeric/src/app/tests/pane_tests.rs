@@ -690,7 +690,7 @@ fn collapsed_tab_rejects_retired_pane_and_divider_requests_after_resplit() {
         .iter()
         .find(|(origin, _)| {
             *origin
-                == crate::tabs::TerminalEventOrigin::Pane {
+                == crate::tabs::TerminalEventOrigin {
                     tab_id,
                     pane_id: PaneId(0),
                 }
@@ -700,7 +700,7 @@ fn collapsed_tab_rejects_retired_pane_and_divider_requests_after_resplit() {
     let captures = vec![
         survivor_capture,
         (
-            crate::tabs::TerminalEventOrigin::Pane {
+            crate::tabs::TerminalEventOrigin {
                 tab_id,
                 pane_id: replacement,
             },
@@ -897,7 +897,12 @@ fn pane_read_only_blocks_user_routes_but_not_protocol_replies_and_follows_owners
         tab.write(b"blocked").unwrap_err().kind(),
         std::io::ErrorKind::PermissionDenied
     );
-    assert!(tab.write_protocol_reply(b"").is_ok());
+    assert!(
+        tab.focused_pane_mut()
+            .unwrap()
+            .write_protocol_reply(b"")
+            .is_ok()
+    );
 
     let owner = tab.take_terminal_owner().unwrap();
     assert!(owner.pane.read_only);

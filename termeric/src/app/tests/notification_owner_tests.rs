@@ -183,28 +183,24 @@ fn notification_show_close_and_alive_commands_capture_stable_owner_keys() {
             ("close", identity, "fixture".into()),
         ]
     };
-    let single = TerminalEventOrigin::Tab {
-        tab_id: owner.tab_id,
-    };
-    issue(&mut app, single);
-    assert_eq!(capture(), expected(owner));
-    let sibling = split_harvest_capture_owner(&mut app, directory.path());
-    current_harvest_capture_routes(&mut app, directory.path());
-    let pane_route = TerminalEventOrigin::Pane {
+    let route = TerminalEventOrigin {
         tab_id: owner.tab_id,
         pane_id: owner.pane_id,
     };
-    issue(&mut app, pane_route);
+    issue(&mut app, route);
     assert_eq!(capture(), expected(owner));
-    issue(&mut app, single); // Dormant single route must not create native work.
-    assert!(capture().is_empty());
+    // The route names pane zero, so it stays valid while the tab is split.
+    let sibling = split_harvest_capture_owner(&mut app, directory.path());
+    current_harvest_capture_routes(&mut app, directory.path());
+    issue(&mut app, route);
+    assert_eq!(capture(), expected(owner));
     let sibling_identity = TerminalIdentity {
         tab_id: owner.tab_id,
         pane_id: sibling,
     };
     issue(
         &mut app,
-        TerminalEventOrigin::Pane {
+        TerminalEventOrigin {
             tab_id: owner.tab_id,
             pane_id: sibling,
         },
@@ -212,16 +208,20 @@ fn notification_show_close_and_alive_commands_capture_stable_owner_keys() {
     assert_eq!(capture(), expected(sibling_identity));
     app.close_pane_for(Requester::Control, owner.tab_id as u64, sibling.0)
         .unwrap();
-    issue(&mut app, single);
+    issue(&mut app, route);
     assert_eq!(capture(), expected(owner));
-    issue(&mut app, pane_route); // Retired mode-specific route is invalid.
-    assert!(capture().is_empty());
-    // Removing pane zero must change even a single-tab command's owner key.
+    // Removing pane zero retires its route; the surviving pane has its own.
     let replacement = split_harvest_capture_owner(&mut app, directory.path());
     app.close_pane_for(Requester::Control, owner.tab_id as u64, owner.pane_id.0)
         .unwrap();
     current_harvest_capture_routes(&mut app, directory.path());
-    issue(&mut app, single);
+    issue(&mut app, route);
+    assert!(capture().is_empty());
+    let replacement_route = TerminalEventOrigin {
+        tab_id: owner.tab_id,
+        pane_id: replacement,
+    };
+    issue(&mut app, replacement_route);
     assert_eq!(
         capture(),
         expected(TerminalIdentity {
@@ -235,6 +235,6 @@ fn notification_show_close_and_alive_commands_capture_stable_owner_keys() {
         .active_tab_mut()
         .unwrap()
         .closing_at = Some(Instant::now());
-    issue(&mut app, single);
+    issue(&mut app, replacement_route);
     assert!(capture().is_empty());
 }

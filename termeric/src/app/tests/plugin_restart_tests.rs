@@ -209,7 +209,10 @@ fn successful_restart_retires_only_source_and_preserves_cwd_profile_and_siblings
                 .unwrap();
         }
         let captures = current_harvest_capture_routes(&mut app, directory.path());
-        let surviving = captures.into_iter().filter(|(origin, _)| matches!(origin, TerminalEventOrigin::Pane { pane_id, .. } if *pane_id != source)).collect::<Vec<_>>();
+        let surviving = captures
+            .into_iter()
+            .filter(|(origin, _)| origin.pane_id != source)
+            .collect::<Vec<_>>();
         let seen = register_restart_fixture(&mut app, directory.path(), "success");
         app.restart_plugin("synthetic-capture");
         let replacement = app.tabs.as_ref().unwrap().active_tab_id().unwrap();
@@ -224,13 +227,10 @@ fn successful_restart_retires_only_source_and_preserves_cwd_profile_and_siblings
             assert_eq!(panes.pane_count(), surviving.len(), "{mode}");
             assert!(panes.get_pane(source).is_none());
             for (origin, path) in &surviving {
-                let TerminalEventOrigin::Pane { pane_id, .. } = origin else {
-                    unreachable!()
-                };
                 assert_eq!(
                     path.file_name().unwrap().to_string_lossy(),
                     panes
-                        .get_pane(*pane_id)
+                        .get_pane(origin.pane_id)
                         .unwrap()
                         .pty
                         .child_id()

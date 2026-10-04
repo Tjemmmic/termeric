@@ -1288,7 +1288,7 @@ mod tests {
             .unwrap()
             .focused_id();
         assert!(app.tabs.as_mut().unwrap().set_title_for_origin(
-            crate::tabs::TerminalEventOrigin::Pane {
+            crate::tabs::TerminalEventOrigin {
                 tab_id: active_local_id,
                 pane_id: active_pane_id,
             },

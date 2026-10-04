@@ -504,7 +504,7 @@ impl App {
                     return Err(format!("GUI pane {pane_id} is closed in tab {tab_id}"));
                 }
                 (
-                    crate::tabs::TerminalEventOrigin::Pane {
+                    crate::tabs::TerminalEventOrigin {
                         tab_id,
                         pane_id: PaneId(pane_id),
                     },
@@ -519,7 +519,10 @@ impl App {
                     ));
                 }
                 (
-                    crate::tabs::TerminalEventOrigin::Tab { tab_id },
+                    crate::tabs::TerminalEventOrigin {
+                        tab_id,
+                        pane_id: PaneId(pane_id),
+                    },
                     tab.focused_terminal()
                         .ok_or_else(|| format!("GUI pane {pane_id} has no live terminal"))?
                         .mode(),
@@ -712,7 +715,7 @@ impl App {
         let previous_active = tabs.active_tab_id();
         let close_copy_mode = self
             .copy_mode_target
-            .is_some_and(|target| target.tab == tab_id);
+            .is_some_and(|target| target.tab_id == tab_id);
         if !self
             .tabs
             .as_mut()
@@ -789,9 +792,9 @@ impl App {
             ));
         }
         let close_copy_mode = self.copy_mode_target
-            == Some(CopyModeTarget {
-                tab: tab_id,
-                pane: Some(target),
+            == Some(crate::tabs::TerminalIdentity {
+                tab_id,
+                pane_id: target,
             });
 
         let (remaining, focused, dissolved) = {

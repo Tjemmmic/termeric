@@ -134,9 +134,7 @@ fn copy_mode_anchor_cleanup_targets_original_pane_and_screen_changes_reset_mode(
     other_term.set_navigation_cursor(Some(Point::new(0, 0)));
     app.leave_copy_mode(true);
     let tabs = app.tabs.as_ref().unwrap();
-    let origin = tabs
-        .origin_for_pane(target.tab, target.pane.unwrap())
-        .unwrap();
+    let origin = tabs.origin_for_pane(target.tab_id, target.pane_id).unwrap();
     assert!(
         tabs.terminal_for_origin(origin)
             .unwrap()

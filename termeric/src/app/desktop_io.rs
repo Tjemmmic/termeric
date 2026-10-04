@@ -15,30 +15,17 @@ impl App {
         origin: crate::tabs::TerminalEventOrigin,
     ) -> Option<NotificationOriginPresentation> {
         let tabs = self.tabs.as_ref()?;
-        tabs.terminal_for_origin(origin)?;
-        let tab_id = match origin {
-            crate::tabs::TerminalEventOrigin::Tab { tab_id }
-            | crate::tabs::TerminalEventOrigin::Pane { tab_id, .. } => tab_id,
-        };
-        let tab = tabs.tab_by_id(tab_id)?;
-        if tab.closed || tab.is_closing() {
+        let tab = tabs.tab_by_id(origin.tab_id)?;
+        if tab.closed || tab.is_closing() || tab.pane(origin.pane_id)?.closed {
             return None;
         }
-        let active = tabs.active_tab_id() == Some(tab_id);
-        let (terminal_focused, terminal_visible) = match origin {
-            crate::tabs::TerminalEventOrigin::Tab { .. } => (true, true),
-            crate::tabs::TerminalEventOrigin::Pane { pane_id, .. } => {
-                let panes = tab.pane_manager.as_ref()?;
-                let pane = panes.get_pane(pane_id)?;
-                if pane.closed {
-                    return None;
-                }
-                (
-                    panes.focused_id() == pane_id,
-                    panes.zoomed_id().is_none_or(|zoomed| zoomed == pane_id),
-                )
-            }
-        };
+        let active = tabs.active_tab_id() == Some(origin.tab_id);
+        let terminal_focused = tab.focused_terminal_identity().pane_id == origin.pane_id;
+        let terminal_visible = tab
+            .pane_manager
+            .as_ref()
+            .and_then(crate::panes::PaneManager::zoomed_id)
+            .is_none_or(|zoomed| zoomed == origin.pane_id);
         let native_interactive = self.window_focused && !self.window_occluded;
         Some(NotificationOriginPresentation {
             keyboard_focused: native_interactive && active && terminal_focused,
@@ -80,15 +67,9 @@ impl App {
             return false;
         };
 
-        let selected = match origin {
-            crate::tabs::TerminalEventOrigin::Tab { tab_id } => self
-                .select_tab_for(Requester::Control, tab_id as u64)
-                .map(|changed| (changed, false)),
-            crate::tabs::TerminalEventOrigin::Pane { tab_id, pane_id } => {
-                self.focus_pane_for(Requester::Control, tab_id as u64, pane_id.0)
-            }
-        };
-        if let Err(error) = selected {
+        if let Err(error) =
+            self.focus_pane_for(Requester::Control, origin.tab_id as u64, origin.pane_id.0)
+        {
             log::debug!("Ignored notification activation for stale origin {origin:?}: {error}");
             return false;
         }
@@ -132,8 +113,8 @@ impl App {
         true
     }
 
-    /// Validate immediately before a desktop launch. Event routes are mode-
-    /// specific: obsolete tab/pane routes cannot follow a different survivor.
+    /// Validate immediately before a desktop launch: the originating
+    /// terminal must still be live, and no other terminal stands in for it.
     pub(super) fn validate_hyperlink_origin(
         &self,
         origin: Option<crate::tabs::TerminalEventOrigin>,
