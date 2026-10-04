@@ -76,7 +76,7 @@ fn malformed_and_eof_replacements_are_persisted_and_notices_are_once_per_directi
             .filter(|entry| entry.content.contains('�'))
             .all(|entry| entry.metadata.as_ref().unwrap()["utf8_replaced"] == true)
     );
-    let markdown = crate::session::export::export_to_markdown(recorder.path()).unwrap();
+    let markdown = crate::session::export::markdown_of_file(recorder.path()).unwrap();
     assert!(markdown.contains('�'));
 }
 
@@ -125,7 +125,7 @@ fn repair_does_not_split_one_calls_redaction_boundary() {
             .count(),
         1
     );
-    let markdown = crate::session::export::export_to_markdown(recorder.path()).unwrap();
+    let markdown = crate::session::export::markdown_of_file(recorder.path()).unwrap();
     assert!(!markdown.contains("SYNTHETIC_SUFFIX"));
 }
 

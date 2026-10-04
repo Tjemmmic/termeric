@@ -42,7 +42,6 @@ pub enum EntryKind {
     Input,
     Output,
     Diff,
-    Command,
     Meta,
 }
 
@@ -922,17 +921,6 @@ pub(crate) fn benchmark_slow_transcript_enqueue() -> std::io::Result<TranscriptE
 }
 
 #[cfg(test)]
-impl TranscriptRecorder {
-    fn record_command(&mut self, command: &str, exit_code: Option<i32>) {
-        let _ = self.enqueue(
-            EntryKind::Command,
-            command,
-            Some(serde_json::json!({ "exit_code": exit_code })),
-        );
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Read;
@@ -1150,7 +1138,7 @@ mod tests {
         assert_eq!(entries[4].content, "safe subsequent output 界");
         assert!(!contents.contains("FAKE_"));
         assert_eq!(recorder.queued_bytes.load(Ordering::Acquire), 0);
-        let markdown = crate::session::export::export_to_markdown(recorder.path()).unwrap();
+        let markdown = crate::session::export::markdown_of_file(recorder.path()).unwrap();
         assert!(markdown.contains("safe subsequent output 界"));
         assert!(markdown.contains("ghp_[REDACTED]"));
         assert!(!markdown.contains("FAKE_"));
@@ -1196,14 +1184,13 @@ mod tests {
         recorder
             .record_diff("src/main.rs", "+new line\n-old line")
             .unwrap();
-        recorder.record_command("cargo test", Some(0));
 
         let contents = finish_and_read(&mut recorder);
         let entries: Vec<TranscriptEntry> = contents
             .lines()
             .map(|line| serde_json::from_str(line).unwrap())
             .collect();
-        assert_eq!(entries.len(), 5);
+        assert_eq!(entries.len(), 4);
         assert_eq!(entries[0].kind, EntryKind::Meta);
         assert_eq!(entries[1].kind, EntryKind::Input);
         assert_eq!(entries[1].content, "Hello Claude");

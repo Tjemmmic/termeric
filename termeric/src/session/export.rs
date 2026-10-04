@@ -10,10 +10,10 @@ use std::path::Path;
 
 use super::transcript::{EntryKind, MAX_TRANSCRIPT_RECORD_BYTES, TranscriptEntry};
 
-/// Compatibility helper for existing hermetic fixtures. Production exports
-/// stream into a private staged file instead of constructing a document String.
+/// Test helper: the Markdown export of a transcript file, as one String.
+/// Production exports stream into a staged file instead.
 #[cfg(test)]
-pub fn export_to_markdown(jsonl_path: &Path) -> Result<String, String> {
+pub(crate) fn markdown_of_file(jsonl_path: &Path) -> Result<String, String> {
     let mut reader = io::BufReader::new(fs::File::open(jsonl_path).map_err(|e| e.to_string())?);
     let mut output = Vec::new();
     render_markdown(&mut reader, &mut output, &|| Ok(())).map_err(|e| e.to_string())?;
@@ -21,7 +21,7 @@ pub fn export_to_markdown(jsonl_path: &Path) -> Result<String, String> {
 }
 
 /// At most one encoded record and one decoded entry are retained. Two passes
-/// preserve the legacy first-metadata-anywhere header without collecting entries.
+/// put the first metadata record's header first without collecting entries.
 pub(super) fn render_markdown(
     reader: &mut (impl BufRead + Seek),
     writer: &mut impl Write,
@@ -158,19 +158,6 @@ fn write_entry(writer: &mut impl Write, entry: &TranscriptEntry) -> io::Result<(
                 writeln!(writer)?;
             }
             writeln!(writer)?;
-        }
-        EntryKind::Command => {
-            let exit_code = entry
-                .metadata
-                .as_ref()
-                .and_then(|m| m.get("exit_code"))
-                .and_then(|value| value.as_i64());
-            let status = match exit_code {
-                Some(0) => "✅",
-                Some(_) => "❌",
-                None => "⏳",
-            };
-            write!(writer, "### {status} Command: `{}`\n\n", entry.content)?;
         }
     }
     Ok(())
@@ -316,25 +303,17 @@ mod tests {
         };
         writeln!(f, "{}", serde_json::to_string(&diff).unwrap()).unwrap();
 
-        let cmd = TranscriptEntry {
-            timestamp: 1700000004000,
-            kind: EntryKind::Command,
-            content: "cargo test".to_string(),
-            metadata: Some(serde_json::json!({"exit_code": 0})),
-        };
-        writeln!(f, "{}", serde_json::to_string(&cmd).unwrap()).unwrap();
-
         path
     }
 
     #[test]
-    fn test_export_to_markdown() {
+    fn test_markdown_of_file() {
         let dir = std::env::temp_dir().join("termeric_test_export");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
 
         let path = write_test_transcript(&dir);
-        let md = export_to_markdown(&path).unwrap();
+        let md = markdown_of_file(&path).unwrap();
 
         assert!(md.contains("# AI Session Transcript"));
         assert!(md.contains("| Repository | termeric |"));
@@ -344,7 +323,6 @@ mod tests {
         assert!(md.contains("💬 Output"));
         assert!(md.contains("📝 Diff: `src/main.rs`"));
         assert!(md.contains("```diff"));
-        assert!(md.contains("✅ Command: `cargo test`"));
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -358,7 +336,7 @@ mod tests {
         let path = dir.join("empty.jsonl");
         fs::write(&path, "").unwrap();
 
-        assert!(export_to_markdown(&path).is_err());
+        assert!(markdown_of_file(&path).is_err());
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -382,12 +360,12 @@ mod tests {
         };
         let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
         writeln!(file, "{}", serde_json::to_string(&entry).unwrap()).unwrap();
-        let md = export_to_markdown(&path).unwrap();
+        let md = markdown_of_file(&path).unwrap();
         assert!(md.contains(&large));
         assert!(!md.contains("truncated"));
 
         writeln!(file, "not-json").unwrap();
-        let error = export_to_markdown(&path).unwrap_err();
+        let error = markdown_of_file(&path).unwrap_err();
         assert!(error.contains("Malformed transcript"));
     }
 }
