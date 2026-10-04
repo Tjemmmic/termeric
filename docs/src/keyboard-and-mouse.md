@@ -144,7 +144,7 @@ action = "navigate_pane_left"
 
 Key names are case-insensitive. Use the character for letter, digit, and symbol keys (`"z"`, `"5"`, `"/"`), and these names for other keys: `enter`, `tab`, `space`, `backspace`, `escape`, `delete`, `insert`, `home`, `end`, `pageup`, `pagedown`, `up`, `down`, `left`, `right`, `f1` to `f12`.
 
-Shortcuts match the character your keyboard layout produces, not the physical key. For a symbol typed with Shift, use the shifted character, for example `key = "?"` with `shift = true`. `+` and `=` count as the same key, because they share one on most layouts: `key = "+"` with `ctrl = true` and `shift = true` is the same shortcut as `key = "="` with those modifiers.
+Shortcuts match the character your keyboard layout produces, not the physical key. On a digit or symbol key, `Shift` is part of the character rather than a separate modifier, so write the character you type and leave `shift` out: `key = "?"` with `ctrl = true` is `Ctrl+?` however your layout types `?`, and on a layout such as AZERTY, where the digits need `Shift`, `Ctrl+1` still goes to tab 1. `shift = true` on a digit or symbol key makes no difference. On letter keys `Shift` counts, so `Ctrl+Shift+C` and `Ctrl+C` are different shortcuts. `+` and `=` count as the same key, because they share one on most layouts: `Ctrl+=` also answers `Ctrl+Shift+=`, which types `+`.
 
 Giving an action a shortcut that another action already uses takes it from that action, which is left unbound, the same as recording it in Settings.
 
@@ -174,7 +174,7 @@ action = { type = "run_command", command = "make test" }
 | `run_command` | Clears the current prompt line, types `command`, and presses Enter. |
 | `plugin_command` | Runs a plugin's command by its `command_id`; see [Plugins](plugins.md). |
 
-The modifiers must match exactly. If a combination is also a built-in shortcut, the built-in shortcut wins.
+The modifiers must match exactly, and keys are matched the same way as shortcuts: `Shift` is part of the character on digit and symbol keys, and `+` and `=` are the same key. If a combination is also a built-in shortcut, the built-in shortcut wins.
 
 ### Saved commands
 

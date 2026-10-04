@@ -273,10 +273,15 @@ pub struct KeyChord {
 
 impl KeyChord {
     /// Construct from parts. Every chord is built here, so recorded,
-    /// configured, and pressed keys normalize the same way: lowercase, and
-    /// `+` as `=`, which share a physical key on most layouts.
+    /// configured, and pressed keys normalize the same way: lowercase, `+`
+    /// as `=`, which share a physical key on most layouts, and no Shift on a
+    /// character without case. Shift there is already part of the character
+    /// the layout produced (`?`, or `1` on AZERTY), so counting it again
+    /// would make the chord depend on the layout; on a letter it is the only
+    /// thing telling Ctrl+Shift+C from Ctrl+C.
     pub fn new(key: &str, ctrl: bool, alt: bool, shift: bool, super_key: bool) -> Self {
         let key = if key == "+" { "=" } else { key };
+        let shift = shift && !is_caseless_character(key);
         Self {
             key: key.to_lowercase(),
             ctrl,
@@ -323,6 +328,15 @@ impl KeyChord {
 impl fmt::Display for KeyChord {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.display_string())
+    }
+}
+
+/// A single character with no upper and lower case: a digit or a symbol.
+fn is_caseless_character(key: &str) -> bool {
+    let mut chars = key.chars();
+    match (chars.next(), chars.next()) {
+        (Some(character), None) => character.to_lowercase().eq(character.to_uppercase()),
+        _ => false,
     }
 }
 
@@ -540,15 +554,6 @@ pub struct KeyModifiers {
     pub super_key: bool,
 }
 
-impl KeyModifiers {
-    pub fn matches(&self, state: ModifiersState) -> bool {
-        self.ctrl == state.control_key()
-            && self.alt == state.alt_key()
-            && self.shift == state.shift_key()
-            && self.super_key == state.super_key()
-    }
-}
-
 /// Action to perform when a plugin/custom key binding is triggered.
 /// These are dynamic/parameterized and cannot be part of BindableAction.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -573,8 +578,9 @@ impl KeyAction {
 /// Manager for plugin/custom keybindings (SendText, RunCommand, PluginCommand).
 #[derive(Debug, Default)]
 pub struct KeyBindingManager {
-    bindings: Vec<KeyBinding>,
-    key_map: HashMap<String, Vec<usize>>,
+    /// Chord → action, keyed by the same `KeyChord` normalization as the
+    /// shortcut registry. The first binding for a chord wins.
+    key_map: HashMap<KeyChord, KeyAction>,
 }
 
 impl KeyBindingManager {
@@ -583,31 +589,22 @@ impl KeyBindingManager {
     }
 
     pub fn load(&mut self, bindings: Vec<KeyBinding>) {
-        self.bindings = bindings;
-        self.rebuild_key_map();
-    }
-
-    fn rebuild_key_map(&mut self) {
         self.key_map.clear();
-        for (idx, binding) in self.bindings.iter().enumerate() {
-            self.key_map
-                .entry(binding.key.to_lowercase())
-                .or_default()
-                .push(idx);
+        for binding in bindings {
+            let modifiers = &binding.modifiers;
+            let chord = KeyChord::new(
+                &binding.key,
+                modifiers.ctrl,
+                modifiers.alt,
+                modifiers.shift,
+                modifiers.super_key,
+            );
+            self.key_map.entry(chord).or_insert(binding.action);
         }
     }
 
     pub fn check(&self, key: &Key, modifiers: ModifiersState) -> Option<&KeyAction> {
-        let key_name = key_to_string(key)?;
-        if let Some(indices) = self.key_map.get(&key_name.to_lowercase()) {
-            for &idx in indices {
-                let binding = &self.bindings[idx];
-                if binding.modifiers.matches(modifiers) {
-                    return Some(&binding.action);
-                }
-            }
-        }
-        None
+        self.key_map.get(&KeyChord::from_key_event(key, modifiers)?)
     }
 }
 
@@ -691,6 +688,106 @@ mod tests {
             configured.check(&Key::Character("=".into()), ctrl),
             Some(BindableAction::ToggleFullscreen)
         );
+    }
+
+    #[test]
+    fn shift_is_part_of_the_character_on_symbol_and_digit_keys() {
+        let reg = ShortcutRegistry::new();
+        let ctrl = ModifiersState::CONTROL;
+        let ctrl_shift = ModifiersState::CONTROL | ModifiersState::SHIFT;
+
+        // US layout: Ctrl+Shift+= arrives as "+" with Shift still held.
+        assert_eq!(
+            reg.check(&Key::Character("+".into()), ctrl_shift),
+            Some(BindableAction::IncreaseFontSize)
+        );
+        // AZERTY: the digit row needs Shift to type "1".
+        assert_eq!(
+            reg.check(&Key::Character("1".into()), ctrl_shift),
+            Some(BindableAction::SwitchToTab1)
+        );
+        // Letters keep Shift: Ctrl+Shift+C copies, Ctrl+C is the terminal's.
+        assert_eq!(
+            reg.check(&Key::Character("C".into()), ctrl_shift),
+            Some(BindableAction::Copy)
+        );
+        assert_eq!(reg.check(&Key::Character("c".into()), ctrl), None);
+        // Named keys keep Shift too.
+        assert_eq!(
+            reg.check(&Key::Named(NamedKey::Tab), ctrl_shift),
+            Some(BindableAction::PrevTab)
+        );
+        assert_eq!(
+            KeyChord::new("?", true, false, true, false).display_string(),
+            "Ctrl+?"
+        );
+    }
+
+    #[test]
+    fn a_shifted_symbol_from_config_matches_the_recorded_chord() {
+        let question = Key::Character("?".into());
+        let ctrl_shift = ModifiersState::CONTROL | ModifiersState::SHIFT;
+        let recorded = KeyChord::from_key_event(&question, ctrl_shift).unwrap();
+        let mut configured = ShortcutRegistry::new();
+        configured.apply_overrides(&[ShortcutOverride {
+            action: BindableAction::ToggleFullscreen.meta().id.into(),
+            key: Some("?".into()),
+            ctrl: true,
+            alt: false,
+            shift: true,
+            super_key: false,
+        }]);
+        assert_eq!(
+            configured.binding_for(BindableAction::ToggleFullscreen),
+            Some(&recorded)
+        );
+        for modifiers in [ctrl_shift, ModifiersState::CONTROL] {
+            assert_eq!(
+                configured.check(&question, modifiers),
+                Some(BindableAction::ToggleFullscreen)
+            );
+        }
+    }
+
+    #[test]
+    fn custom_keybindings_share_the_shortcut_normalization() {
+        let binding = |key: &str, ctrl: bool, alt: bool, shift: bool, text: &str| KeyBinding {
+            key: key.into(),
+            modifiers: KeyModifiers {
+                ctrl,
+                alt,
+                shift,
+                super_key: false,
+            },
+            action: KeyAction::SendText { text: text.into() },
+        };
+        let mut manager = KeyBindingManager::new();
+        manager.load(vec![
+            binding("?", true, false, true, "question"),
+            binding("+", false, true, false, "plus"),
+            binding("1", true, true, false, "one"),
+            binding("K", true, false, false, "letter"),
+            // A later binding on the same chord never shadows the first.
+            binding("k", true, false, false, "shadowed"),
+        ]);
+        let sent = |key: Key, modifiers: ModifiersState| match manager.check(&key, modifiers) {
+            Some(KeyAction::SendText { text }) => Some(text.as_str()),
+            _ => None,
+        };
+        let char = |text: &str| Key::Character(text.into());
+        let ctrl = ModifiersState::CONTROL;
+        let shift = ModifiersState::SHIFT;
+        let alt = ModifiersState::ALT;
+
+        assert_eq!(sent(char("?"), ctrl | shift), Some("question"));
+        assert_eq!(sent(char("?"), ctrl), Some("question"));
+        assert_eq!(sent(char("+"), alt | shift), Some("plus"));
+        assert_eq!(sent(char("="), alt), Some("plus"));
+        // AZERTY digits need Shift.
+        assert_eq!(sent(char("1"), ctrl | alt | shift), Some("one"));
+        assert_eq!(sent(char("k"), ctrl), Some("letter"));
+        assert_eq!(sent(char("K"), ctrl | shift), None);
+        assert_eq!(sent(Key::Named(NamedKey::Enter), ctrl), None);
     }
 
     #[test]
