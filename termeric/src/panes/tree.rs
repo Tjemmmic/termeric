@@ -232,49 +232,7 @@ impl PaneNode {
                 second,
                 ..
             } => {
-                let (first_rect, second_rect) = match direction {
-                    SplitDirection::Horizontal => {
-                        // Split horizontally (top/bottom)
-                        let divider_height: f32 = 4.0; // Divider thickness
-                        let first_height = (rect.height - divider_height) * ratio;
-                        let second_height = rect.height - first_height - divider_height;
-                        (
-                            Bounds {
-                                x: rect.x,
-                                y: rect.y,
-                                width: rect.width,
-                                height: first_height,
-                            },
-                            Bounds {
-                                x: rect.x,
-                                y: rect.y + first_height + divider_height,
-                                width: rect.width,
-                                height: second_height,
-                            },
-                        )
-                    }
-                    SplitDirection::Vertical => {
-                        // Split vertically (left/right)
-                        let divider_width: f32 = 4.0; // Divider thickness
-                        let first_width = (rect.width - divider_width) * ratio;
-                        let second_width = rect.width - first_width - divider_width;
-                        (
-                            Bounds {
-                                x: rect.x,
-                                y: rect.y,
-                                width: first_width,
-                                height: rect.height,
-                            },
-                            Bounds {
-                                x: rect.x + first_width + divider_width,
-                                y: rect.y,
-                                width: second_width,
-                                height: rect.height,
-                            },
-                        )
-                    }
-                };
-
+                let (first_rect, second_rect) = split_rects(rect, *direction, *ratio);
                 first.calculate_layout(first_rect, result);
                 second.calculate_layout(second_rect, result);
             }
@@ -299,80 +257,21 @@ impl PaneNode {
         else {
             return None;
         };
-        let own_target = domain_split_id
-            .map(DividerTarget::Domain)
-            .unwrap_or(DividerTarget::Local(*local_split_id));
-        let divider_thickness = PANE_DIVIDER_THICKNESS;
-        if own_target == target {
+        if divider_target(*local_split_id, *domain_split_id) == target {
             *ratio = match direction {
                 SplitDirection::Horizontal => {
-                    ((pos_y - rect.y) / (rect.height - divider_thickness)).clamp(0.1, 0.9)
+                    ((pos_y - rect.y) / (rect.height - PANE_DIVIDER_THICKNESS)).clamp(0.1, 0.9)
                 }
                 SplitDirection::Vertical => {
-                    ((pos_x - rect.x) / (rect.width - divider_thickness)).clamp(0.1, 0.9)
+                    ((pos_x - rect.x) / (rect.width - PANE_DIVIDER_THICKNESS)).clamp(0.1, 0.9)
                 }
             };
             return Some((*ratio * 1_000.0).round() as u16);
         }
-
-        match direction {
-            SplitDirection::Horizontal => {
-                let first_height = (rect.height - divider_thickness) * *ratio;
-                first
-                    .resize_target(
-                        Bounds {
-                            x: rect.x,
-                            y: rect.y,
-                            width: rect.width,
-                            height: first_height,
-                        },
-                        pos_x,
-                        pos_y,
-                        target,
-                    )
-                    .or_else(|| {
-                        second.resize_target(
-                            Bounds {
-                                x: rect.x,
-                                y: rect.y + first_height + divider_thickness,
-                                width: rect.width,
-                                height: rect.height - first_height - divider_thickness,
-                            },
-                            pos_x,
-                            pos_y,
-                            target,
-                        )
-                    })
-            }
-            SplitDirection::Vertical => {
-                let first_width = (rect.width - divider_thickness) * *ratio;
-                first
-                    .resize_target(
-                        Bounds {
-                            x: rect.x,
-                            y: rect.y,
-                            width: first_width,
-                            height: rect.height,
-                        },
-                        pos_x,
-                        pos_y,
-                        target,
-                    )
-                    .or_else(|| {
-                        second.resize_target(
-                            Bounds {
-                                x: rect.x + first_width + divider_thickness,
-                                y: rect.y,
-                                width: rect.width - first_width - divider_thickness,
-                                height: rect.height,
-                            },
-                            pos_x,
-                            pos_y,
-                            target,
-                        )
-                    })
-            }
-        }
+        let (first_rect, second_rect) = split_rects(rect, *direction, *ratio);
+        first
+            .resize_target(first_rect, pos_x, pos_y, target)
+            .or_else(|| second.resize_target(second_rect, pos_x, pos_y, target))
     }
 
     fn set_target_ratio(&mut self, target: DividerTarget, ratio_millis: u16) -> Option<u16> {
@@ -387,10 +286,7 @@ impl PaneNode {
         else {
             return None;
         };
-        let own_target = domain_split_id
-            .map(DividerTarget::Domain)
-            .unwrap_or(DividerTarget::Local(*local_split_id));
-        if own_target == target {
+        if divider_target(*local_split_id, *domain_split_id) == target {
             let previous = (*ratio * 1_000.0).round() as u16;
             *ratio = f32::from(ratio_millis) / 1_000.0;
             return Some(previous);
@@ -402,7 +298,7 @@ impl PaneNode {
 
     /// Get dividers for rendering
     fn get_dividers(&self, rect: Bounds, result: &mut Vec<Divider>) {
-        if let PaneNode::Split {
+        let PaneNode::Split {
             local_split_id,
             domain_split_id,
             direction,
@@ -410,80 +306,77 @@ impl PaneNode {
             first,
             second,
         } = self
-        {
-            let divider_thickness = PANE_DIVIDER_THICKNESS;
-            match direction {
-                SplitDirection::Horizontal => {
-                    let divider_y = rect.y + (rect.height - divider_thickness) * ratio;
-                    result.push(Divider {
-                        start: rect.x,
-                        end: rect.x + rect.width,
-                        position: divider_y,
-                        vertical: false,
-                        ratio_millis: (*ratio * 1_000.0).round() as u16,
-                        target: domain_split_id
-                            .map(DividerTarget::Domain)
-                            .unwrap_or(DividerTarget::Local(*local_split_id)),
-                    });
+        else {
+            return;
+        };
+        let (first_rect, second_rect) = split_rects(rect, *direction, *ratio);
+        let (start, end, position, vertical) = match direction {
+            SplitDirection::Horizontal => (
+                rect.x,
+                rect.x + rect.width,
+                first_rect.y + first_rect.height,
+                false,
+            ),
+            SplitDirection::Vertical => (
+                rect.y,
+                rect.y + rect.height,
+                first_rect.x + first_rect.width,
+                true,
+            ),
+        };
+        result.push(Divider {
+            start,
+            end,
+            position,
+            vertical,
+            ratio_millis: (*ratio * 1_000.0).round() as u16,
+            target: divider_target(*local_split_id, *domain_split_id),
+        });
+        first.get_dividers(first_rect, result);
+        second.get_dividers(second_rect, result);
+    }
+}
 
-                    // Recurse into children
-                    let first_height = (rect.height - divider_thickness) * ratio;
-                    first.get_dividers(
-                        Bounds {
-                            x: rect.x,
-                            y: rect.y,
-                            width: rect.width,
-                            height: first_height,
-                        },
-                        result,
-                    );
-                    second.get_dividers(
-                        Bounds {
-                            x: rect.x,
-                            y: rect.y + first_height + divider_thickness,
-                            width: rect.width,
-                            height: rect.height - first_height - divider_thickness,
-                        },
-                        result,
-                    );
-                }
-                SplitDirection::Vertical => {
-                    let divider_x = rect.x + (rect.width - divider_thickness) * ratio;
-                    result.push(Divider {
-                        start: rect.y,
-                        end: rect.y + rect.height,
-                        position: divider_x,
-                        vertical: true,
-                        ratio_millis: (*ratio * 1_000.0).round() as u16,
-                        target: domain_split_id
-                            .map(DividerTarget::Domain)
-                            .unwrap_or(DividerTarget::Local(*local_split_id)),
-                    });
-
-                    // Recurse into children
-                    let first_width = (rect.width - divider_thickness) * ratio;
-                    first.get_dividers(
-                        Bounds {
-                            x: rect.x,
-                            y: rect.y,
-                            width: first_width,
-                            height: rect.height,
-                        },
-                        result,
-                    );
-                    second.get_dividers(
-                        Bounds {
-                            x: rect.x + first_width + divider_thickness,
-                            y: rect.y,
-                            width: rect.width - first_width - divider_thickness,
-                            height: rect.height,
-                        },
-                        result,
-                    );
-                }
-            }
+/// The rectangles of a split's two children, either side of its divider.
+fn split_rects(rect: Bounds, direction: SplitDirection, ratio: f32) -> (Bounds, Bounds) {
+    match direction {
+        SplitDirection::Horizontal => {
+            let first_height = (rect.height - PANE_DIVIDER_THICKNESS) * ratio;
+            (
+                Bounds {
+                    height: first_height,
+                    ..rect
+                },
+                Bounds {
+                    y: rect.y + first_height + PANE_DIVIDER_THICKNESS,
+                    height: rect.height - first_height - PANE_DIVIDER_THICKNESS,
+                    ..rect
+                },
+            )
+        }
+        SplitDirection::Vertical => {
+            let first_width = (rect.width - PANE_DIVIDER_THICKNESS) * ratio;
+            (
+                Bounds {
+                    width: first_width,
+                    ..rect
+                },
+                Bounds {
+                    x: rect.x + first_width + PANE_DIVIDER_THICKNESS,
+                    width: rect.width - first_width - PANE_DIVIDER_THICKNESS,
+                    ..rect
+                },
+            )
         }
     }
+}
+
+/// A split's divider identity: its daemon ID in a live domain, otherwise its
+/// tab-local one.
+fn divider_target(local_split_id: u64, domain_split_id: Option<u32>) -> DividerTarget {
+    domain_split_id
+        .map(DividerTarget::Domain)
+        .unwrap_or(DividerTarget::Local(local_split_id))
 }
 
 /// The pane tree structure

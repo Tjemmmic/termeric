@@ -3,7 +3,6 @@
 //! This module provides support for splitting a tab into multiple terminal panes,
 //! arranged in a binary tree structure for flexible horizontal and vertical splits.
 
-mod layout;
 mod tree;
 pub use termeric_core::split::PaneLayoutPreset;
 pub(crate) use tree::PaneNode;
