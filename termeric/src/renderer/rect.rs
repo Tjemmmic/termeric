@@ -270,11 +270,11 @@ impl RectPipeline {
         RectBatch { vertices, indices }
     }
 
-    pub(super) fn draw_external<'a>(
-        &'a self,
-        render_pass: &mut RenderPass<'a>,
-        vertex_buffer: &'a Buffer,
-        index_buffer: &'a Buffer,
+    pub(super) fn draw_external(
+        &self,
+        render_pass: &mut RenderPass<'_>,
+        vertex_buffer: &Buffer,
+        index_buffer: &Buffer,
         index_count: u32,
     ) {
         if index_count == 0 {
@@ -421,7 +421,7 @@ impl RectPipeline {
 
     /// Draw only the rectangles belonging to a specific layer.
     /// Layer 0 is everything before the first mark_layer() call.
-    pub fn draw_layer<'a>(&'a self, render_pass: &mut RenderPass<'a>, layer: usize) {
+    pub fn draw_layer(&self, render_pass: &mut RenderPass<'_>, layer: usize) {
         if self.indices.is_empty() {
             return;
         }

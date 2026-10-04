@@ -556,20 +556,16 @@ impl ImagePipeline {
     }
 
     /// Draw images below terminal text (negative z-index).
-    pub fn draw_below_text<'a>(&'a self, render_pass: &mut RenderPass<'a>) {
+    pub fn draw_below_text(&self, render_pass: &mut RenderPass<'_>) {
         self.draw_matching(render_pass, |z_index| z_index < 0);
     }
 
     /// Draw images above terminal text (zero or positive z-index).
-    pub fn draw_above_text<'a>(&'a self, render_pass: &mut RenderPass<'a>) {
+    pub fn draw_above_text(&self, render_pass: &mut RenderPass<'_>) {
         self.draw_matching(render_pass, |z_index| z_index >= 0);
     }
 
-    fn draw_matching<'a>(
-        &'a self,
-        render_pass: &mut RenderPass<'a>,
-        predicate: impl Fn(i32) -> bool,
-    ) {
+    fn draw_matching(&self, render_pass: &mut RenderPass<'_>, predicate: impl Fn(i32) -> bool) {
         if self.instances.is_empty() {
             return;
         }

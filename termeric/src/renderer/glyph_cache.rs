@@ -1875,6 +1875,29 @@ impl GlyphCache {
         self.deferred_ligature_cache.byte_limit = deferred;
     }
 
+    /// A cache on the system's default monospace face at `size` pixels,
+    /// with the default weights and line height.
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        device: &Device,
+        queue: &Queue,
+        size: f32,
+        ligatures: bool,
+    ) -> Result<Self> {
+        Self::new(
+            device,
+            queue,
+            size,
+            "monospace",
+            &[],
+            &[],
+            400,
+            700,
+            1.2,
+            ligatures,
+        )
+    }
+
     #[cfg(test)]
     pub(crate) fn install_test_font(&mut self, data: Vec<u8>, family: &str, queue: &Queue) {
         self.font_system.db_mut().load_font_data(data);

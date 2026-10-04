@@ -172,79 +172,16 @@ fn snapshot(
         );
     }
     rects.upload(device, queue);
-    let extent = Extent3d {
-        width: case.size.0,
-        height: case.size.1,
-        depth_or_array_layers: 1,
+    let clear = wgpu::Color {
+        r: f64::from(CLEAR[0]),
+        g: f64::from(CLEAR[1]),
+        b: f64::from(CLEAR[2]),
+        a: 1.0,
     };
-    let target = device.create_texture(&TextureDescriptor {
-        label: Some("background test target"),
-        size: extent,
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: TextureDimension::D2,
-        format: FORMAT,
-        usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let readback = device.create_buffer(&BufferDescriptor {
-        label: Some("background test readback"),
-        size: u64::from(case.size.0 * case.size.1 * 4),
-        usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-    let view = target.create_view(&TextureViewDescriptor::default());
-    let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor::default());
-    {
-        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("background test pass"),
-            color_attachments: &[Some(RenderPassColorAttachment {
-                view: &view,
-                resolve_target: None,
-                ops: Operations {
-                    load: LoadOp::Clear(wgpu::Color {
-                        r: f64::from(CLEAR[0]),
-                        g: f64::from(CLEAR[1]),
-                        b: f64::from(CLEAR[2]),
-                        a: 1.0,
-                    }),
-                    store: StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        });
-        images.draw_below_text(&mut pass);
-        rects.draw_layer(&mut pass, 0);
-    }
-    encoder.copy_texture_to_buffer(
-        TexelCopyTextureInfo {
-            texture: &target,
-            mip_level: 0,
-            origin: Origin3d::ZERO,
-            aspect: TextureAspect::All,
-        },
-        TexelCopyBufferInfo {
-            buffer: &readback,
-            layout: TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(case.size.0 * 4),
-                rows_per_image: Some(case.size.1),
-            },
-        },
-        extent,
-    );
-    let submission = queue.submit([encoder.finish()]);
-    let (send, receive) = std::sync::mpsc::channel();
-    readback.slice(..).map_async(MapMode::Read, move |result| {
-        let _ = send.send(result);
-    });
-    let _ = device.poll(Maintain::wait_for(submission));
-    receive.recv()??;
-    let pixels = readback.slice(..).get_mapped_range().to_vec();
-    readback.unmap();
-    Ok(pixels)
+    crate::renderer::render_offscreen(device, queue, FORMAT, case.size, clear, |pass| {
+        images.draw_below_text(pass);
+        rects.draw_layer(pass, 0);
+    })
 }
 
 pub(crate) fn headless_background_render_smoke(device: &Device, queue: &Queue) -> Result<()> {

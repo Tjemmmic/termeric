@@ -10,18 +10,7 @@ pub(crate) fn headless_palette_input_smoke(
     queue: &wgpu::Queue,
 ) -> anyhow::Result<()> {
     use super::{GlyphCache, TextPipeline, text::TextClip};
-    let mut glyphs = GlyphCache::new(
-        device,
-        queue,
-        16.0,
-        "monospace",
-        &[],
-        &[],
-        400,
-        700,
-        1.2,
-        false,
-    )?;
+    let mut glyphs = GlyphCache::for_test(device, queue, 16.0, false)?;
     glyphs.install_test_font(
         super::glyph_cache::deterministic_test_font_data(),
         "Fira Mono",

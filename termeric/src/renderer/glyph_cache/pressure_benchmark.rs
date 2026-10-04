@@ -51,18 +51,7 @@ fn assert_same_runs(expected: &[LigatureRun], actual: &[LigatureRun]) {
 }
 
 pub(crate) fn measure(device: &Device, queue: &Queue) -> Result<PressureBenchmark> {
-    let mut cache = GlyphCache::new(
-        device,
-        queue,
-        16.0,
-        "monospace",
-        &[],
-        &[],
-        400,
-        700,
-        1.2,
-        true,
-    )?;
+    let mut cache = GlyphCache::for_test(device, queue, 16.0, true)?;
     let font = deterministic_test_font_data();
     let font_sha256 = format!("{:x}", Sha256::digest(&font));
     // A same-named installed face must not replace the fingerprinted fixture.

@@ -125,7 +125,7 @@ impl TerminalRowCache {
         self.frame_rows.clear();
     }
 
-    pub(super) fn draw_rects<'a>(&'a self, pipeline: &'a RectPipeline, pass: &mut RenderPass<'a>) {
+    pub(super) fn draw_rects(&self, pipeline: &RectPipeline, pass: &mut RenderPass<'_>) {
         for key in &self.frame_rows {
             let Some(row) = self.rows.get(key) else {
                 continue;
@@ -139,7 +139,7 @@ impl TerminalRowCache {
         }
     }
 
-    pub(super) fn draw_text<'a>(&'a self, pipeline: &'a TextPipeline, pass: &mut RenderPass<'a>) {
+    pub(super) fn draw_text(&self, pipeline: &TextPipeline, pass: &mut RenderPass<'_>) {
         for key in &self.frame_rows {
             let Some(row) = self.rows.get(key) else {
                 continue;

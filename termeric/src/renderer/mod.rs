@@ -2263,6 +2263,92 @@ pub(crate) struct HeadlessRendererBenchmark {
     pub shaping_pressure: glyph_cache::pressure_benchmark::PressureBenchmark,
 }
 
+/// Run one render pass into a fresh `width`×`height` target cleared to
+/// `clear`, then read the target back as tightly packed rows.
+#[cfg(test)]
+fn render_offscreen(
+    device: &Device,
+    queue: &Queue,
+    format: TextureFormat,
+    (width, height): (u32, u32),
+    clear: wgpu::Color,
+    draw: impl FnOnce(&mut RenderPass<'_>),
+) -> Result<Vec<u8>> {
+    anyhow::ensure!(
+        (width * 4).is_multiple_of(COPY_BYTES_PER_ROW_ALIGNMENT),
+        "readback rows of {width} pixels are not {COPY_BYTES_PER_ROW_ALIGNMENT}-byte aligned"
+    );
+    let extent = Extent3d {
+        width,
+        height,
+        depth_or_array_layers: 1,
+    };
+    let target = device.create_texture(&TextureDescriptor {
+        label: Some("Headless test target"),
+        size: extent,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: TextureDimension::D2,
+        format,
+        usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let readback = device.create_buffer(&BufferDescriptor {
+        label: Some("Headless test readback"),
+        size: u64::from(width * height * 4),
+        usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let view = target.create_view(&TextureViewDescriptor::default());
+    let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+        label: Some("Headless test encoder"),
+    });
+    {
+        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+            label: Some("Headless test pass"),
+            color_attachments: &[Some(RenderPassColorAttachment {
+                view: &view,
+                resolve_target: None,
+                ops: Operations {
+                    load: LoadOp::Clear(clear),
+                    store: StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        draw(&mut pass);
+    }
+    encoder.copy_texture_to_buffer(
+        TexelCopyTextureInfo {
+            texture: &target,
+            mip_level: 0,
+            origin: Origin3d::ZERO,
+            aspect: TextureAspect::All,
+        },
+        TexelCopyBufferInfo {
+            buffer: &readback,
+            layout: TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 4),
+                rows_per_image: Some(height),
+            },
+        },
+        extent,
+    );
+    let submission = queue.submit([encoder.finish()]);
+    let (sender, receiver) = std::sync::mpsc::channel();
+    readback.slice(..).map_async(MapMode::Read, move |result| {
+        let _ = sender.send(result);
+    });
+    let _ = device.poll(Maintain::wait_for(submission));
+    receiver.recv()?.map_err(|error| anyhow::anyhow!(error))?;
+    let pixels = readback.slice(..).get_mapped_range().to_vec();
+    readback.unmap();
+    Ok(pixels)
+}
+
 #[cfg(test)]
 const HEADLESS_IMAGE_WIDTH: u32 = 64;
 #[cfg(test)]
@@ -2405,79 +2491,17 @@ fn render_headless_image_state(
     }
     pipeline.upload(device, queue);
 
-    let target = device.create_texture(&TextureDescriptor {
-        label: Some("Kitty multi-row graphics smoke target"),
-        size: Extent3d {
-            width: HEADLESS_IMAGE_WIDTH,
-            height: HEADLESS_IMAGE_HEIGHT,
-            depth_or_array_layers: 1,
+    render_offscreen(
+        device,
+        queue,
+        TextureFormat::Rgba8Unorm,
+        (HEADLESS_IMAGE_WIDTH, HEADLESS_IMAGE_HEIGHT),
+        wgpu::Color::BLACK,
+        |pass| {
+            pipeline.draw_below_text(pass);
+            pipeline.draw_above_text(pass);
         },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: TextureDimension::D2,
-        format: TextureFormat::Rgba8Unorm,
-        usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let readback = device.create_buffer(&BufferDescriptor {
-        label: Some("Kitty multi-row graphics smoke readback"),
-        size: u64::from(HEADLESS_IMAGE_WIDTH * HEADLESS_IMAGE_HEIGHT * 4),
-        usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-    let view = target.create_view(&TextureViewDescriptor::default());
-    let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
-        label: Some("Kitty multi-row graphics smoke encoder"),
-    });
-    {
-        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("Kitty multi-row graphics smoke pass"),
-            color_attachments: &[Some(RenderPassColorAttachment {
-                view: &view,
-                resolve_target: None,
-                ops: Operations {
-                    load: LoadOp::Clear(wgpu::Color::BLACK),
-                    store: StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        });
-        pipeline.draw_below_text(&mut pass);
-        pipeline.draw_above_text(&mut pass);
-    }
-    encoder.copy_texture_to_buffer(
-        TexelCopyTextureInfo {
-            texture: &target,
-            mip_level: 0,
-            origin: Origin3d::ZERO,
-            aspect: TextureAspect::All,
-        },
-        TexelCopyBufferInfo {
-            buffer: &readback,
-            layout: TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(HEADLESS_IMAGE_WIDTH * 4),
-                rows_per_image: Some(HEADLESS_IMAGE_HEIGHT),
-            },
-        },
-        Extent3d {
-            width: HEADLESS_IMAGE_WIDTH,
-            height: HEADLESS_IMAGE_HEIGHT,
-            depth_or_array_layers: 1,
-        },
-    );
-    let submission = queue.submit([encoder.finish()]);
-    let (sender, receiver) = std::sync::mpsc::channel();
-    readback
-        .slice(..)
-        .map_async(MapMode::Read, move |result| sender.send(result).unwrap());
-    let _ = device.poll(Maintain::wait_for(submission));
-    receiver.recv()?.map_err(|error| anyhow::anyhow!(error))?;
-    let pixels = readback.slice(..).get_mapped_range().to_vec();
-    readback.unmap();
-    Ok(pixels)
+    )
 }
 
 #[cfg(test)]
@@ -2621,7 +2645,6 @@ pub(crate) fn headless_image_render_smoke(device: &Device, queue: &Queue) -> Res
 pub(crate) fn headless_theme_color_fidelity_smoke(device: &Device, queue: &Queue) -> Result<()> {
     use crate::config::theme::Color as ThemeColor;
 
-    // Readback rows must be 256-byte aligned: 64 RGBA pixels.
     const WIDTH: u32 = 64;
     const HEIGHT: u32 = 4;
     let background = ThemeColor::hex("#18151A");
@@ -2662,75 +2685,17 @@ pub(crate) fn headless_theme_color_fidelity_smoke(device: &Device, queue: &Queue
     );
     images.upload(device, queue);
 
-    let extent = Extent3d {
-        width: WIDTH,
-        height: HEIGHT,
-        depth_or_array_layers: 1,
-    };
-    let target = device.create_texture(&TextureDescriptor {
-        label: Some("Theme color fidelity target"),
-        size: extent,
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: TextureDimension::D2,
+    let pixels = render_offscreen(
+        device,
+        queue,
         format,
-        usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let readback = device.create_buffer(&BufferDescriptor {
-        label: Some("Theme color fidelity readback"),
-        size: u64::from(WIDTH * HEIGHT * 4),
-        usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-    let view = target.create_view(&TextureViewDescriptor::default());
-    let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
-        label: Some("Theme color fidelity encoder"),
-    });
-    {
-        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("Theme color fidelity pass"),
-            color_attachments: &[Some(RenderPassColorAttachment {
-                view: &view,
-                resolve_target: None,
-                ops: Operations {
-                    load: LoadOp::Clear(background.to_wgpu()),
-                    store: StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        });
-        rects.draw_layer(&mut pass, 0);
-        images.draw_above_text(&mut pass);
-    }
-    encoder.copy_texture_to_buffer(
-        TexelCopyTextureInfo {
-            texture: &target,
-            mip_level: 0,
-            origin: Origin3d::ZERO,
-            aspect: TextureAspect::All,
+        (WIDTH, HEIGHT),
+        background.to_wgpu(),
+        |pass| {
+            rects.draw_layer(pass, 0);
+            images.draw_above_text(pass);
         },
-        TexelCopyBufferInfo {
-            buffer: &readback,
-            layout: TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(WIDTH * 4),
-                rows_per_image: Some(HEIGHT),
-            },
-        },
-        extent,
-    );
-    let submission = queue.submit([encoder.finish()]);
-    let (sender, receiver) = std::sync::mpsc::channel();
-    readback
-        .slice(..)
-        .map_async(MapMode::Read, move |result| sender.send(result).unwrap());
-    let _ = device.poll(Maintain::wait_for(submission));
-    receiver.recv()?.map_err(|error| anyhow::anyhow!(error))?;
-    let pixels = readback.slice(..).get_mapped_range().to_vec();
-    readback.unmap();
+    )?;
 
     let rect_rgb = [rect_color.r, rect_color.g, rect_color.b];
     let image_rgb = [image_pixel[0], image_pixel[1], image_pixel[2]];
@@ -2760,18 +2725,7 @@ pub(crate) fn headless_theme_color_fidelity_smoke(device: &Device, queue: &Queue
 /// measure consistently with what is drawn, and land on whole pixels.
 #[cfg(test)]
 pub(crate) fn headless_ui_text_smoke(device: &Device, queue: &Queue) -> Result<()> {
-    let mut glyph_cache = GlyphCache::new(
-        device,
-        queue,
-        16.0,
-        "monospace",
-        &[],
-        &[],
-        400,
-        700,
-        1.2,
-        false,
-    )?;
+    let mut glyph_cache = GlyphCache::for_test(device, queue, 16.0, false)?;
     let size = physical_font_size(ui_text::UI_LABEL_POINTS, 1.0);
     let metrics = glyph_cache.ui_font_metrics(size);
     anyhow::ensure!(
@@ -2821,18 +2775,7 @@ pub(crate) fn headless_unicode_render_smoke(device: &Device, queue: &Queue) -> R
     const FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
     const WIDTH: u32 = 512;
     const HEIGHT: u32 = 96;
-    let mut glyph_cache = GlyphCache::new(
-        device,
-        queue,
-        14.0,
-        "monospace",
-        &[],
-        &[],
-        400,
-        700,
-        1.2,
-        false,
-    )?;
+    let mut glyph_cache = GlyphCache::for_test(device, queue, 14.0, false)?;
     let mut text = TextPipeline::new(device, FORMAT, &glyph_cache)?;
     text.resize(queue, WIDTH, HEIGHT);
     let cases = [
@@ -2928,42 +2871,14 @@ pub(crate) fn headless_unicode_render_smoke(device: &Device, queue: &Queue) -> R
         );
     }
     text.upload(device, queue, &mut glyph_cache);
-    let target = device.create_texture(&TextureDescriptor {
-        label: Some("Termeric Unicode render smoke target"),
-        size: Extent3d {
-            width: WIDTH,
-            height: HEIGHT,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: TextureDimension::D2,
-        format: FORMAT,
-        usage: TextureUsages::RENDER_ATTACHMENT,
-        view_formats: &[],
-    });
-    let view = target.create_view(&TextureViewDescriptor::default());
-    let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
-        label: Some("Termeric Unicode render smoke encoder"),
-    });
-    {
-        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("Termeric Unicode render smoke pass"),
-            color_attachments: &[Some(RenderPassColorAttachment {
-                view: &view,
-                resolve_target: None,
-                ops: Operations {
-                    load: LoadOp::Clear(wgpu::Color::BLACK),
-                    store: StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        });
-        text.draw_layer(&mut pass, 0);
-    }
-    queue.submit([encoder.finish()]);
+    render_offscreen(
+        device,
+        queue,
+        FORMAT,
+        (WIDTH, HEIGHT),
+        wgpu::Color::BLACK,
+        |pass| text.draw_layer(pass, 0),
+    )?;
     Ok(())
 }
 
@@ -2980,18 +2895,7 @@ pub(crate) fn headless_color_emoji_render_smoke(device: &Device, queue: &Queue) 
     .find(|path| path.is_file())
     .ok_or_else(|| anyhow::anyhow!("Noto Color Emoji is required for the GPU render smoke"))?;
     let font_data = std::fs::read(font_path)?;
-    let mut glyph_cache = GlyphCache::new(
-        device,
-        queue,
-        32.0,
-        "monospace",
-        &[],
-        &[],
-        400,
-        700,
-        1.2,
-        false,
-    )?;
+    let mut glyph_cache = GlyphCache::for_test(device, queue, 32.0, false)?;
     glyph_cache.install_test_font(font_data, "Noto Color Emoji", queue);
     glyph_cache.begin_frame();
 
@@ -3023,18 +2927,7 @@ pub(crate) fn headless_color_emoji_render_smoke(device: &Device, queue: &Queue) 
 pub(crate) fn headless_glyph_atlas_stress_smoke(device: &Device, queue: &Queue) -> Result<()> {
     const FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
     const GLYPHS: usize = 2_048;
-    let mut glyph_cache = GlyphCache::new(
-        device,
-        queue,
-        18.0,
-        "monospace",
-        &[],
-        &[],
-        400,
-        700,
-        1.2,
-        false,
-    )?;
+    let mut glyph_cache = GlyphCache::for_test(device, queue, 18.0, false)?;
     glyph_cache.use_tiny_test_atlas(64, 3, queue);
     glyph_cache.begin_frame();
 
@@ -3193,42 +3086,14 @@ pub(crate) fn headless_glyph_atlas_stress_smoke(device: &Device, queue: &Queue) 
     text.resize(queue, 64, 64);
     text.push_char('W', 8.0, 8.0, [1.0; 4]);
     text.upload(device, queue, &mut glyph_cache);
-    let target = device.create_texture(&TextureDescriptor {
-        label: Some("Termeric atlas stress target"),
-        size: Extent3d {
-            width: 64,
-            height: 64,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: TextureDimension::D2,
-        format: FORMAT,
-        usage: TextureUsages::RENDER_ATTACHMENT,
-        view_formats: &[],
-    });
-    let view = target.create_view(&TextureViewDescriptor::default());
-    let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
-        label: Some("Termeric atlas stress encoder"),
-    });
-    {
-        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("Termeric atlas stress pass"),
-            color_attachments: &[Some(RenderPassColorAttachment {
-                view: &view,
-                resolve_target: None,
-                ops: Operations {
-                    load: LoadOp::Clear(wgpu::Color::BLACK),
-                    store: StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        });
-        text.draw_layer(&mut pass, 0);
-    }
-    queue.submit([encoder.finish()]);
+    render_offscreen(
+        device,
+        queue,
+        FORMAT,
+        (64, 64),
+        wgpu::Color::BLACK,
+        |pass| text.draw_layer(pass, 0),
+    )?;
     Ok(())
 }
 
@@ -3316,78 +3181,14 @@ fn render_queued_text_snapshot(
     queue_content(text, cell_width);
     text.upload(device, queue, glyph_cache);
 
-    let target = device.create_texture(&TextureDescriptor {
-        label: Some("Termeric ligature snapshot target"),
-        size: Extent3d {
-            width: WIDTH,
-            height: HEIGHT,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: TextureDimension::D2,
-        format: FORMAT,
-        usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let readback = device.create_buffer(&BufferDescriptor {
-        label: Some("Termeric ligature snapshot readback"),
-        size: u64::from(WIDTH * HEIGHT * 4),
-        usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-    let view = target.create_view(&TextureViewDescriptor::default());
-    let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
-        label: Some("Termeric ligature snapshot encoder"),
-    });
-    {
-        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("Termeric ligature snapshot pass"),
-            color_attachments: &[Some(RenderPassColorAttachment {
-                view: &view,
-                resolve_target: None,
-                ops: Operations {
-                    load: LoadOp::Clear(wgpu::Color::BLACK),
-                    store: StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        });
-        text.draw_layer(&mut pass, 0);
-    }
-    encoder.copy_texture_to_buffer(
-        TexelCopyTextureInfo {
-            texture: &target,
-            mip_level: 0,
-            origin: Origin3d::ZERO,
-            aspect: TextureAspect::All,
-        },
-        TexelCopyBufferInfo {
-            buffer: &readback,
-            layout: TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(WIDTH * 4),
-                rows_per_image: Some(HEIGHT),
-            },
-        },
-        Extent3d {
-            width: WIDTH,
-            height: HEIGHT,
-            depth_or_array_layers: 1,
-        },
-    );
-    let submission = queue.submit([encoder.finish()]);
-    let (sender, receiver) = std::sync::mpsc::channel();
-    readback
-        .slice(..)
-        .map_async(MapMode::Read, move |result| sender.send(result).unwrap());
-    let _ = device.poll(Maintain::wait_for(submission));
-    receiver.recv()?.map_err(|error| anyhow::anyhow!(error))?;
-    let pixels = readback.slice(..).get_mapped_range().to_vec();
-    readback.unmap();
-    Ok(pixels)
+    render_offscreen(
+        device,
+        queue,
+        FORMAT,
+        (WIDTH, HEIGHT),
+        wgpu::Color::BLACK,
+        |pass| text.draw_layer(pass, 0),
+    )
 }
 
 /// Produce a small, deterministic renderer snapshot for the GPU render
@@ -3402,18 +3203,7 @@ pub(crate) fn headless_gui_visual_snapshot(
     const WIDTH: u32 = 256;
     const HEIGHT: u32 = 64;
     const FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
-    let mut glyph_cache = GlyphCache::new(
-        device,
-        queue,
-        16.0,
-        "monospace",
-        &[],
-        &[],
-        400,
-        700,
-        1.2,
-        false,
-    )?;
+    let mut glyph_cache = GlyphCache::for_test(device, queue, 16.0, false)?;
     glyph_cache.install_test_font(
         glyph_cache::deterministic_test_font_data(),
         "Fira Mono",
@@ -3436,18 +3226,7 @@ pub(crate) fn headless_gui_visual_snapshot(
 #[cfg(test)]
 pub(crate) fn headless_ligature_render_smoke(device: &Device, queue: &Queue) -> Result<()> {
     const FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
-    let mut glyph_cache = GlyphCache::new(
-        device,
-        queue,
-        16.0,
-        "monospace",
-        &[],
-        &[],
-        400,
-        700,
-        1.2,
-        true,
-    )?;
+    let mut glyph_cache = GlyphCache::for_test(device, queue, 16.0, true)?;
     glyph_cache.install_test_font(
         glyph_cache::deterministic_test_font_data(),
         "Fira Mono",
@@ -3598,18 +3377,7 @@ pub(crate) fn headless_sgr_render_smoke(device: &Device, queue: &Queue) -> Resul
     let theme = Theme::load_builtin("turmeric")?;
     let palette = TerminalPalette::from_theme(&theme);
     let dynamic_colors = termeric_core::DynamicColors::default();
-    let mut glyph_cache = GlyphCache::new(
-        device,
-        queue,
-        14.0,
-        "monospace",
-        &[],
-        &[],
-        400,
-        700,
-        1.2,
-        false,
-    )?;
+    let mut glyph_cache = GlyphCache::for_test(device, queue, 14.0, false)?;
     let mut text = TextPipeline::new(device, FORMAT, &glyph_cache)?;
     let mut rects = RectPipeline::new(device, FORMAT)?;
     text.resize(queue, WIDTH, HEIGHT);
@@ -3757,43 +3525,17 @@ pub(crate) fn headless_sgr_render_smoke(device: &Device, queue: &Queue) -> Resul
     text.upload(device, queue, &mut glyph_cache);
     rects.upload(device, queue);
 
-    let target = device.create_texture(&TextureDescriptor {
-        label: Some("Termeric SGR render smoke target"),
-        size: Extent3d {
-            width: WIDTH,
-            height: HEIGHT,
-            depth_or_array_layers: 1,
+    render_offscreen(
+        device,
+        queue,
+        FORMAT,
+        (WIDTH, HEIGHT),
+        wgpu::Color::BLACK,
+        |pass| {
+            rects.draw_layer(pass, 0);
+            text.draw_layer(pass, 0);
         },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: TextureDimension::D2,
-        format: FORMAT,
-        usage: TextureUsages::RENDER_ATTACHMENT,
-        view_formats: &[],
-    });
-    let view = target.create_view(&TextureViewDescriptor::default());
-    let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
-        label: Some("Termeric SGR render smoke encoder"),
-    });
-    {
-        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("Termeric SGR render smoke pass"),
-            color_attachments: &[Some(RenderPassColorAttachment {
-                view: &view,
-                resolve_target: None,
-                ops: Operations {
-                    load: LoadOp::Clear(wgpu::Color::BLACK),
-                    store: StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        });
-        rects.draw_layer(&mut pass, 0);
-        text.draw_layer(&mut pass, 0);
-    }
-    queue.submit([encoder.finish()]);
+    )?;
     Ok(())
 }
 
@@ -3869,18 +3611,7 @@ pub(crate) fn benchmark_headless_renderer() -> Result<Option<HeadlessRendererBen
         view_formats: &[],
     });
     let view = texture.create_view(&TextureViewDescriptor::default());
-    let mut glyph_cache = GlyphCache::new(
-        &device,
-        &queue,
-        14.0,
-        "monospace",
-        &[],
-        &[],
-        400,
-        700,
-        1.2,
-        false,
-    )?;
+    let mut glyph_cache = GlyphCache::for_test(&device, &queue, 14.0, false)?;
     let mut text = TextPipeline::new(&device, FORMAT, &glyph_cache)?;
     let mut rect = RectPipeline::new(&device, FORMAT)?;
     text.resize(&queue, WIDTH, HEIGHT);

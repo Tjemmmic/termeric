@@ -669,11 +669,11 @@ impl TextPipeline {
         batch
     }
 
-    pub(super) fn draw_external<'a>(
-        &'a self,
-        render_pass: &mut RenderPass<'a>,
-        vertex_buffer: &'a Buffer,
-        index_buffer: &'a Buffer,
+    pub(super) fn draw_external(
+        &self,
+        render_pass: &mut RenderPass<'_>,
+        vertex_buffer: &Buffer,
+        index_buffer: &Buffer,
         index_count: u32,
     ) {
         if index_count == 0 {
@@ -917,7 +917,7 @@ impl TextPipeline {
 
     /// Draw the text queued in one layer; layer 0 is everything queued
     /// before the first `mark_layer()`.
-    pub fn draw_layer<'a>(&'a self, render_pass: &mut RenderPass<'a>, layer: usize) {
+    pub fn draw_layer(&self, render_pass: &mut RenderPass<'_>, layer: usize) {
         let (Some(vertex_buffer), Some(index_buffer)) =
             (self.vertex_buffer.buffer(), self.index_buffer.buffer())
         else {
