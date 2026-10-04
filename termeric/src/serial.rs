@@ -58,49 +58,48 @@ pub(crate) fn bridge_command(
     config: &SerialProfileConfig,
 ) -> anyhow::Result<(String, Vec<String>)> {
     config.validate("launch")?;
-    #[cfg(not(target_os = "linux"))]
-    anyhow::bail!("serial terminal profiles are currently supported only on Linux");
-
-    #[cfg(target_os = "linux")]
-    {
-        let executable = std::env::current_exe().context("locate the Termeric executable")?;
-        let executable = executable
-            .to_str()
-            .context("Termeric executable path must be valid UTF-8")?
-            .to_string();
-        let device = config
-            .device
-            .to_str()
-            .context("serial device path must be valid UTF-8")?;
-        Ok((
-            executable,
-            vec![
-                INTERNAL_COMMAND.into(),
-                device.into(),
-                config.baud.to_string(),
-                config.data_bits.to_string(),
-                config.parity.as_str().into(),
-                config.stop_bits.to_string(),
-                config.flow_control.as_str().into(),
-            ],
-        ))
-    }
+    let executable = std::env::current_exe().context("locate the Termeric executable")?;
+    let executable = executable
+        .to_str()
+        .context("Termeric executable path must be valid UTF-8")?
+        .to_string();
+    let device = config
+        .device
+        .to_str()
+        .context("serial device path must be valid UTF-8")?;
+    Ok((
+        executable,
+        vec![
+            INTERNAL_COMMAND.into(),
+            device.into(),
+            config.baud.to_string(),
+            config.data_bits.to_string(),
+            config.parity.as_str().into(),
+            config.stop_bits.to_string(),
+            config.flow_control.as_str().into(),
+        ],
+    ))
 }
 
 pub(crate) fn is_internal_command(argument: Option<&OsString>) -> bool {
     argument.and_then(|value| value.to_str()) == Some(INTERNAL_COMMAND)
 }
 
-#[cfg(target_os = "linux")]
 pub(crate) fn run_bridge(options: BridgeOptions) -> anyhow::Result<()> {
+    use std::os::fd::AsFd;
+
     let device = linux::ConfiguredDevice::open(&options.config)?;
     let _stdin_mode = linux::RawMode::apply(libc::STDIN_FILENO)
         .context("put the terminal side of the serial bridge into raw mode")?;
+    // Unbuffered handles on the bridge's own stdin and stdout, so a poll
+    // that reports input always finds it in the descriptor.
+    let terminal_input = std::fs::File::from(std::io::stdin().as_fd().try_clone_to_owned()?);
+    let terminal_output = std::fs::File::from(std::io::stdout().as_fd().try_clone_to_owned()?);
     linux::relay_between(
-        libc::STDIN_FILENO,
-        libc::STDOUT_FILENO,
-        device.fd(),
-        device.fd(),
+        &terminal_input,
+        &terminal_output,
+        device.file(),
+        device.file(),
     )
     .with_context(|| {
         format!(
@@ -110,16 +109,10 @@ pub(crate) fn run_bridge(options: BridgeOptions) -> anyhow::Result<()> {
     })
 }
 
-#[cfg(not(target_os = "linux"))]
-pub(crate) fn run_bridge(_options: BridgeOptions) -> anyhow::Result<()> {
-    anyhow::bail!("serial terminal profiles are currently supported only on Linux")
-}
-
-#[cfg(target_os = "linux")]
 mod linux {
     use super::*;
     use std::fs::{File, OpenOptions};
-    use std::io;
+    use std::io::{self, Read, Write};
     use std::os::fd::{AsRawFd, RawFd};
     use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
 
@@ -165,8 +158,8 @@ mod linux {
             Ok(Self { file, original })
         }
 
-        pub(super) fn fd(&self) -> RawFd {
-            self.file.as_raw_fd()
+        pub(super) fn file(&self) -> &File {
+            &self.file
         }
     }
 
@@ -314,21 +307,21 @@ mod linux {
     }
 
     pub(super) fn relay_between(
-        terminal_input_fd: RawFd,
-        terminal_output_fd: RawFd,
-        device_input_fd: RawFd,
-        device_output_fd: RawFd,
+        mut terminal_input: &File,
+        mut terminal_output: &File,
+        mut device_input: &File,
+        mut device_output: &File,
     ) -> io::Result<()> {
         let mut buffer = [0u8; RELAY_BUFFER_BYTES];
         loop {
             let mut polls = [
                 libc::pollfd {
-                    fd: terminal_input_fd,
+                    fd: terminal_input.as_raw_fd(),
                     events: libc::POLLIN,
                     revents: 0,
                 },
                 libc::pollfd {
-                    fd: device_input_fd,
+                    fd: device_input.as_raw_fd(),
                     events: libc::POLLIN,
                     revents: 0,
                 },
@@ -342,22 +335,29 @@ mod linux {
                 }
                 return Err(error);
             }
+            // An interrupted read polls again; write_all retries on its own.
             if polls[0].revents & libc::POLLIN != 0 {
-                let read = read_fd(terminal_input_fd, &mut buffer)?;
+                let read = match terminal_input.read(&mut buffer) {
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    read => read?,
+                };
                 if read == 0 {
                     return Ok(());
                 }
-                write_all_fd(device_output_fd, &buffer[..read])?;
+                device_output.write_all(&buffer[..read])?;
             }
             if polls[1].revents & libc::POLLIN != 0 {
-                let read = read_fd(device_input_fd, &mut buffer)?;
+                let read = match device_input.read(&mut buffer) {
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    read => read?,
+                };
                 if read == 0 {
                     return Err(io::Error::new(
                         io::ErrorKind::UnexpectedEof,
                         "serial device disconnected",
                     ));
                 }
-                write_all_fd(terminal_output_fd, &buffer[..read])?;
+                terminal_output.write_all(&buffer[..read])?;
             }
             if polls[0].revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
                 return Ok(());
@@ -370,46 +370,12 @@ mod linux {
             }
         }
     }
-
-    fn read_fd(fd: RawFd, buffer: &mut [u8]) -> io::Result<usize> {
-        loop {
-            // SAFETY: buffer is valid writable storage for its declared length.
-            let count = unsafe { libc::read(fd, buffer.as_mut_ptr().cast(), buffer.len()) };
-            if count >= 0 {
-                return Ok(count as usize);
-            }
-            let error = io::Error::last_os_error();
-            if error.kind() != io::ErrorKind::Interrupted {
-                return Err(error);
-            }
-        }
-    }
-
-    fn write_all_fd(fd: RawFd, mut data: &[u8]) -> io::Result<()> {
-        while !data.is_empty() {
-            // SAFETY: data is valid readable storage for its declared length.
-            let count = unsafe { libc::write(fd, data.as_ptr().cast(), data.len()) };
-            if count > 0 {
-                data = &data[count as usize..];
-                continue;
-            }
-            if count == 0 {
-                return Err(io::Error::new(io::ErrorKind::WriteZero, "zero-byte write"));
-            }
-            let error = io::Error::last_os_error();
-            if error.kind() != io::ErrorKind::Interrupted {
-                return Err(error);
-            }
-        }
-        Ok(())
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn bridge_arguments_round_trip_without_shell_parsing() {
         let config = SerialProfileConfig {
@@ -432,7 +398,6 @@ mod tests {
         assert_eq!(parsed.config, config);
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn serial_open_rejects_regular_files_before_configuration() {
         let temp = tempfile::NamedTempFile::new().unwrap();
@@ -446,7 +411,6 @@ mod tests {
         assert!(error.to_string().contains("not a character device"));
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn relay_is_binary_transparent_in_both_directions() {
         use std::io::{Read, Write};
@@ -480,10 +444,10 @@ mod tests {
         };
         let relay = std::thread::spawn(move || {
             linux::relay_between(
-                bridge_terminal_input.as_raw_fd(),
-                bridge_terminal_output.as_raw_fd(),
-                bridge_device_input.as_raw_fd(),
-                bridge_device_output.as_raw_fd(),
+                &bridge_terminal_input,
+                &bridge_terminal_output,
+                &bridge_device_input,
+                &bridge_device_output,
             )
         });
 
