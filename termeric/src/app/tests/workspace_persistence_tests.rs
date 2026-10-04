@@ -390,7 +390,7 @@ fn opening_over_running_programs_asks_first() {
 }
 
 #[test]
-fn opening_from_an_auto_saved_workspace_saves_it_back_first() {
+fn opening_from_a_named_auto_saved_workspace_saves_it_back_first() {
     let root = tempfile::tempdir().unwrap();
     let mut app = persistence_app(root.path());
     let (a, b) = two_workspaces(&mut app);
@@ -413,6 +413,43 @@ fn opening_from_an_auto_saved_workspace_saves_it_back_first() {
     assert_eq!(saved_back.tabs.len(), 2, "B holds the window as it was");
     assert_eq!(tab_count(&app), 2);
     assert_eq!(app.current_workspace_id.as_deref(), Some(a.as_str()));
+}
+
+#[test]
+fn opening_from_an_automatic_workspace_asks_like_an_unsaved_window() {
+    let root = tempfile::tempdir().unwrap();
+    let mut app = persistence_app(root.path());
+    let (a, b) = two_workspaces(&mut app);
+    // B is a "Last workspace" the window was restored from.
+    let mut automatic = crate::workspace::load_workspace(&b).unwrap().workspace;
+    automatic.automatic = true;
+    crate::workspace::save_workspace(&mut automatic).unwrap();
+    app.current_workspace_id = Some(b.clone());
+    app.automatic_persistence = true;
+    let tabs = app.tabs.as_mut().unwrap();
+    tabs.new_tab().unwrap();
+    tabs.active_tab_mut()
+        .unwrap()
+        .focused_pane_mut()
+        .unwrap()
+        .launch = crate::workspace::WorkspaceLaunch::Profile { name: "ssh".into() };
+
+    app.request_open_workspace(&a);
+    let asked = app.info_overlay.is_active();
+    let untouched = crate::workspace::load_workspace(&b).unwrap().workspace;
+    let request_id = app.info_overlay.request_id();
+    app.apply_info_overlay_action(crate::ui::info_overlay::InfoOverlayAction::Choose {
+        request_id,
+        choice_id: "workspace-cancel".into(),
+    });
+    let kept_after_cancel = tab_count(&app);
+    end_persistence_test();
+
+    assert!(asked, "an automatic workspace keeps nothing, so it asks");
+    assert_eq!(untouched.tabs.len(), 1, "B was not saved over");
+    assert!(untouched.automatic);
+    assert_eq!(kept_after_cancel, 2);
+    assert_eq!(app.current_workspace_id.as_deref(), Some(b.as_str()));
 }
 
 #[test]

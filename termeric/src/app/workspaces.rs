@@ -156,6 +156,12 @@ impl App {
     /// it does, or into a new automatic "Last workspace".
     pub(super) fn save_back_to_current_workspace(&mut self) -> anyhow::Result<()> {
         let target = self.current_save_target();
+        self.save_back_into(target)
+    }
+
+    /// [`Self::save_back_to_current_workspace`] into `target`, the window's
+    /// workspace as already read.
+    fn save_back_into(&mut self, target: Option<SaveTarget>) -> anyhow::Result<()> {
         let (name, automatic) = target.as_ref().map_or_else(
             || (AUTOMATIC_WORKSPACE_NAME.to_owned(), true),
             |target| (target.name.clone(), target.automatic),
@@ -497,9 +503,12 @@ impl App {
     }
 
     /// Open workspace `id` in place of this window's tabs. A window that
-    /// belongs to a workspace and saves itself on close is first saved back
-    /// into it, as closing it would. Otherwise, while any tab runs a program
-    /// besides an idle shell, those tabs close only once the person agrees.
+    /// belongs to a named workspace and saves itself on close is first saved
+    /// back into it, as closing it would. Otherwise, while any tab runs a
+    /// program besides an idle shell, those tabs close only once the person
+    /// agrees. An automatic "Last workspace" is no place to keep them: once
+    /// the window opens another workspace, nothing reopens it, and the next
+    /// start prunes it.
     pub(super) fn request_open_workspace(&mut self, id: &str) {
         if self.is_live_domain_window() {
             self.toasts.warning(
@@ -507,8 +516,13 @@ impl App {
             );
             return;
         }
-        if self.current_workspace_id.is_some() && self.auto_saves() {
-            if let Err(error) = self.save_back_to_current_workspace() {
+        let named_target = self
+            .auto_saves()
+            .then(|| self.current_save_target())
+            .flatten()
+            .filter(|target| !target.automatic);
+        if let Some(target) = named_target {
+            if let Err(error) = self.save_back_into(Some(target)) {
                 self.toasts.error(format!(
                     "This window could not be saved, so the workspace was not opened: {error:#}"
                 ));

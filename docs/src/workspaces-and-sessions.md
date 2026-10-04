@@ -39,8 +39,8 @@ Saving a window restored from an automatic "Last workspace" makes it yours: it t
 
 Opening a workspace replaces the tabs in the current window, and the programs in those tabs end. What happens to the window first:
 
-- If it belongs to a workspace and **Auto Save Workspace** is on, it's saved back into that workspace, as quitting would, and the other workspace opens.
-- Otherwise, if any tab runs a program besides an idle shell (a command started at the prompt, a terminal profile, or an agent), Termeric asks before closing them: choose **Close N tabs and open…** or **Cancel**.
+- If it belongs to a workspace of your own (one you saved or renamed, not an automatic "Last workspace") and **Auto Save Workspace** is on, it's saved back into that workspace, as quitting would, and the other workspace opens.
+- Otherwise, if any tab runs a program besides an idle shell (a command started at the prompt, a terminal profile, or an agent), Termeric asks before closing them: choose **Close N tabs and open…** or **Cancel**. This includes a window that belongs to an automatic "Last workspace": it isn't saved back, because once the window opens another workspace nothing would reopen that one, and Termeric deletes it the next time it starts. Save the window first (**Save Workspace** makes it a workspace of your own) to keep it.
 - A window of idle shells opens the workspace right away.
 
 When you quit, the window is saved back into the workspace it last opened or saved. Opening "Project A", working for a while, and quitting updates "Project A". A window that never opened or saved a workspace is saved as "Last workspace" instead. Termeric keeps only the "Last workspace" entries from your most recent quit, the ones it can reopen; renaming one keeps it for good.
