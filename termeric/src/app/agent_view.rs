@@ -196,17 +196,16 @@ impl App {
 
     /// An agent's program and environment from the agent catalog.
     pub(super) fn agent_view_program(&self, agent: AgentKind) -> AgentProgram {
-        let definition = self.agents.get(agent.catalog_id());
-        let program = definition.map_or_else(
-            || agent.default_program().to_owned(),
-            |definition| definition.program.clone(),
-        );
+        let definition = self
+            .agents
+            .get(agent.catalog_id())
+            .expect("every agent the agent view drives is built into the catalog");
         let env = definition
-            .and_then(|definition| definition.launch(None, false).ok())
+            .launch(None, false)
             .map(|launch| launch.env.into_iter().collect())
             .unwrap_or_default();
         AgentProgram {
-            program,
+            program: definition.program.clone(),
             args: Vec::new(),
             env,
         }

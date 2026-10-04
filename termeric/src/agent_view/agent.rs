@@ -77,15 +77,6 @@ impl AgentKind {
         }
     }
 
-    /// The program run when the catalog names none.
-    pub fn default_program(self) -> &'static str {
-        match self {
-            AgentKind::ClaudeCode => "claude",
-            AgentKind::Codex => "codex",
-            AgentKind::OpenCode => "opencode",
-        }
-    }
-
     /// The modes it runs in, until it reports its own.
     pub fn modes(self) -> Vec<ModeChoice> {
         match self {
@@ -220,4 +211,22 @@ fn opencode_modes() -> Vec<ModeChoice> {
         ),
         ModeChoice::new("plan", "Plan", "Reads and plans without editing anything").plans(),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The agent view looks each agent up in the catalog without a fallback,
+    /// so every one must be a built-in agent, under the same name.
+    #[test]
+    fn every_agent_is_a_built_in_catalog_agent() {
+        let builtins: Vec<_> = crate::agents::builtin_agent_names().collect();
+        for kind in AgentKind::ALL {
+            assert!(
+                builtins.contains(&(kind.catalog_id(), kind.name())),
+                "{kind:?}"
+            );
+        }
+    }
 }
