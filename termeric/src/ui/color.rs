@@ -62,9 +62,23 @@ pub fn contrast_ratio(first: [f32; 4], second: [f32; 4]) -> f32 {
 /// 4.58:1 on any color (the worst case, a surface whose ratio to both is the
 /// same, is the square root of 21); any tint would cost the mid grays AA.
 pub fn high_contrast_text(background: [f32; 4]) -> [f32; 4] {
+    high_contrast_text_on(&[background])
+}
+
+/// [`high_contrast_text`] for text drawn on several surfaces: black or white,
+/// whichever contrasts more with the surface it contrasts least with. Unlike
+/// one surface, several are only guaranteed AA while they are all light or
+/// all dark; callers test the surfaces they pass.
+pub fn high_contrast_text_on(surfaces: &[[f32; 4]]) -> [f32; 4] {
     let dark = [0.0, 0.0, 0.0, 1.0];
     let light = [1.0, 1.0, 1.0, 1.0];
-    if contrast_ratio(background, dark) >= contrast_ratio(background, light) {
+    let worst = |text: [f32; 4]| {
+        surfaces
+            .iter()
+            .map(|surface| contrast_ratio(text, *surface))
+            .fold(f32::INFINITY, f32::min)
+    };
+    if worst(dark) >= worst(light) {
         dark
     } else {
         light
@@ -117,6 +131,19 @@ mod tests {
             }
         }
         assert!((contrast_ratio([0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0]) - 21.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn text_for_several_surfaces_favours_the_hardest_one() {
+        let white = [1.0, 1.0, 1.0, 1.0];
+        let black = [0.0, 0.0, 0.0, 1.0];
+        let dark = [0.1, 0.1, 0.1, 1.0];
+        // Black reads best on the mid gray alone, but white is the better
+        // choice once the same text also sits on a dark surface.
+        let mid = [0.5, 0.5, 0.5, 1.0];
+        assert_eq!(high_contrast_text(mid), black);
+        assert_eq!(high_contrast_text_on(&[mid, dark]), white);
+        assert_eq!(high_contrast_text_on(&[dark]), high_contrast_text(dark));
     }
 
     #[test]

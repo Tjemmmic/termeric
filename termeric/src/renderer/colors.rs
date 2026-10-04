@@ -2,6 +2,7 @@
 //! the encoded-color surface formats frames render into.
 
 use super::*;
+use crate::ui::color::high_contrast_text_on;
 
 #[derive(Clone)]
 pub(crate) struct UiPalette {
@@ -136,14 +137,22 @@ impl UiPalette {
         self.palette_bg[3] = 1.0;
         self.palette_input_bg[3] = 1.0;
         self.palette_input_bg = self.palette_bg;
-        let palette_text = high_contrast_text(self.palette_bg);
+        // Palette text reads on cards and query fields (palette_bg) and, in
+        // the shared modal frame, on the frame (menu_bg) and its selected row
+        // (menu_highlight).
+        let palette_text =
+            high_contrast_text_on(&[self.palette_bg, self.menu_bg, self.menu_highlight]);
         self.palette_text = palette_text;
         self.palette_text_dim = palette_text;
         self.palette_border = palette_text;
         self.palette_accent = palette_text;
         // Matched characters keep their own color only while it stays
-        // readable, so a search still shows what it matched.
-        if contrast_ratio(self.palette_match_highlight, self.palette_bg) < 4.5 {
+        // readable on the rows they are drawn in, selected or not, so a
+        // search still shows what it matched.
+        if [self.menu_bg, self.menu_highlight]
+            .into_iter()
+            .any(|row| contrast_ratio(self.palette_match_highlight, row) < 4.5)
+        {
             self.palette_match_highlight = palette_text;
         }
         self.scrim[3] = self.scrim[3].max(0.65);
@@ -390,10 +399,14 @@ mod ui_palette_accessibility_tests {
                 (palette.menu_text_dim, palette.menu_bg),
                 (palette.search_error, palette.menu_bg),
                 (palette.palette_text, palette.menu_bg),
+                (palette.palette_text, palette.menu_highlight),
                 (palette.palette_text, palette.palette_bg),
                 (palette.palette_text, palette.palette_input_bg),
                 (palette.palette_text_dim, palette.palette_bg),
-                (palette.palette_match_highlight, palette.palette_bg),
+                (palette.palette_text_dim, palette.palette_input_bg),
+                // Command palette matches, on plain and selected rows.
+                (palette.palette_match_highlight, palette.menu_bg),
+                (palette.palette_match_highlight, palette.menu_highlight),
             ] {
                 assert!(
                     contrast_ratio(foreground, background) >= 4.5,
