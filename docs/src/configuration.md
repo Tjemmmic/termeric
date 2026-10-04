@@ -255,7 +255,7 @@ OSC 52 lets programs, including ones on remote hosts, use your clipboard.
 
 ### [profiles.NAME]
 
-Reusable launches that appear in the command palette and work with `termeric --terminal-profile NAME`. Names use letters, digits, `-`, `_`, and `.`, up to 64 characters. See [Profiles](profiles.md).
+Reusable launches that appear in the command palette and work with `termeric --terminal-profile NAME`. Names use letters, digits, `-`, `_`, and `.`, up to 64 characters, and can't start with `.` or contain `..`. See [Profiles](profiles.md).
 
 | Setting | Default | Description |
 | --- | --- | --- |

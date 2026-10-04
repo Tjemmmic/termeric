@@ -1,4 +1,5 @@
 use crate::panes::SplitDirection;
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -222,9 +223,8 @@ impl WorkspaceLaunch {
         match self {
             Self::Shell => {}
             Self::Profile { name } => {
-                if !is_safe_terminal_profile_name(name) {
-                    anyhow::bail!("invalid workspace terminal profile {name:?}");
-                }
+                crate::config::validate_terminal_profile_name(name)
+                    .context("invalid workspace terminal profile")?;
             }
             Self::Plugin { plugin_id, profile } => {
                 if !is_safe_identifier(plugin_id) {
@@ -398,16 +398,6 @@ fn is_safe_identifier(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-}
-
-fn is_safe_terminal_profile_name(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 64
-        && !value.starts_with('.')
-        && !value.contains("..")
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
 fn is_safe_scrollback_file(value: &str) -> bool {

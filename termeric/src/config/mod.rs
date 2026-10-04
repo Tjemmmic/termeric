@@ -450,7 +450,7 @@ impl Config {
 
     /// Resolve one validated terminal launch profile by its stable name.
     pub fn launch_profile(&self, name: &str) -> Result<&LaunchProfileConfig> {
-        validate_launch_profile_name(name)?;
+        validate_terminal_profile_name(name)?;
         self.profiles.get(name).ok_or_else(|| {
             anyhow::anyhow!("unknown terminal profile {name:?}; configure [profiles.{name}]")
         })
@@ -777,7 +777,7 @@ impl SerialFlowControl {
 
 fn validate_launch_profiles(profiles: &BTreeMap<String, LaunchProfileConfig>) -> Result<()> {
     for (name, profile) in profiles {
-        validate_launch_profile_name(name)?;
+        validate_terminal_profile_name(name)?;
         if let Some(serial) = &profile.serial {
             serial.validate(name)?;
             if !profile.program.is_empty()
@@ -823,9 +823,14 @@ fn validate_launch_profiles(profiles: &BTreeMap<String, LaunchProfileConfig>) ->
     Ok(())
 }
 
-fn validate_launch_profile_name(name: &str) -> Result<()> {
+/// The one rule for a terminal profile's name, wherever one is given: the
+/// configuration, the command line, and saved workspaces. Up to 64 ASCII
+/// letters, digits, `.`, `_`, and `-`, not starting with `.` or holding `..`.
+pub fn validate_terminal_profile_name(name: &str) -> Result<()> {
     if name.is_empty()
         || name.len() > 64
+        || name.starts_with('.')
+        || name.contains("..")
         || !name
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
@@ -1902,6 +1907,32 @@ mod tests {
         let decoded: Config = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
         assert_eq!(decoded.launch_profile("dev").unwrap(), profile);
         assert!(decoded.launch_profile("missing").is_err());
+    }
+
+    #[test]
+    fn terminal_profile_names_follow_one_rule() {
+        let longest = "a".repeat(64);
+        for name in ["dev", "dev.rust", "a-b_c.d", "trailing.", longest.as_str()] {
+            validate_terminal_profile_name(name).unwrap();
+            let config: Config =
+                toml::from_str(&format!("[profiles.'{name}']\nprogram = '/bin/sh'")).unwrap();
+            config.validate().unwrap();
+        }
+        let too_long = "a".repeat(65);
+        for name in [
+            "",
+            ".dev",
+            "a..b",
+            "..",
+            "bad name",
+            "dév",
+            too_long.as_str(),
+        ] {
+            assert!(validate_terminal_profile_name(name).is_err(), "{name:?}");
+            let config: Config =
+                toml::from_str(&format!("[profiles.'{name}']\nprogram = '/bin/sh'")).unwrap();
+            assert!(config.validate().is_err(), "accepted [profiles.{name:?}]");
+        }
     }
 
     #[test]

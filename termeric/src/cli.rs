@@ -358,7 +358,7 @@ fn parse_collected(
             }
             "--terminal-profile" => {
                 let name = next_utf8(&arguments, &mut index, "--terminal-profile")?;
-                validate_identifier("terminal profile", &name)?;
+                crate::config::validate_terminal_profile_name(&name)?;
                 let window = current_window(&mut plan);
                 reject_workspace_mix(window, "--terminal-profile")?;
                 set_target(
@@ -1028,6 +1028,9 @@ mod tests {
             vec!["--workspace", "workspace-1", "--tab"],
             vec!["--profile", "missing-colon"],
             vec!["--terminal-profile", "bad name"],
+            vec!["--terminal-profile", ".dev"],
+            vec!["--terminal-profile", "a..b"],
+            vec!["--terminal-profile", &"a".repeat(65)],
             vec!["--terminal-profile", "one", "--command", "echo"],
             vec!["--command", "echo", "--profile", "codex:review"],
             vec!["--geometry", "80x24"],
