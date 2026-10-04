@@ -366,9 +366,14 @@ impl AcpCodec {
             return exchange;
         };
         let mut changes = Vec::new();
-        if self.option("mode").is_some() {
+        if let Some(option) = self.option("mode") {
+            let offered = choices(option)
+                .iter()
+                .any(|(choice, ..)| *choice == self.mode);
             match self.change("mode", &self.mode) {
                 Some(change) => changes.push(change),
+                // The chosen mode is current or already on its way.
+                None if offered => {}
                 None => {
                     // A mode this session does not have: say which it runs in.
                     if let Some(current) = self
@@ -411,11 +416,22 @@ impl AcpCodec {
                 changes.push(change);
                 self.effort_after_model = self.effort.is_some();
             }
-            None => changes.extend(
-                self.effort
-                    .as_deref()
-                    .and_then(|effort| self.change("thought_level", effort)),
-            ),
+            None => {
+                let model_on_its_way = self
+                    .option("model")
+                    .and_then(|option| text(option, "id"))
+                    .is_some_and(|id| self.in_flight.iter().any(|(_, setting, _)| *setting == id));
+                if model_on_its_way {
+                    // The effort levels are the new model's: wait for it.
+                    self.effort_after_model |= self.effort.is_some();
+                } else {
+                    changes.extend(
+                        self.effort
+                            .as_deref()
+                            .and_then(|effort| self.change("thought_level", effort)),
+                    );
+                }
+            }
         }
         for (option, value) in changes {
             let params = json!({ "sessionId": session, "configId": option, "value": value });
@@ -1888,6 +1904,58 @@ mod tests {
             auto_approve: false,
             resume: None,
         }
+    }
+
+    #[test]
+    fn an_effort_chosen_while_a_model_change_is_on_its_way_waits_for_it() {
+        let mut codec = codec();
+        open(&mut codec, options("build", "opencode/big-pickle"));
+        let model = codec.encode(&AgentCommand::SetModel("zai/glm-5.2".into()));
+        let model_request = parse(&model.lines[0]);
+        // The old model offers no effort, so the choice waits for the new one.
+        assert!(
+            codec
+                .encode(&AgentCommand::SetEffort("max".into()))
+                .lines
+                .is_empty()
+        );
+        let exchange = decode(
+            &mut codec,
+            json!({ "jsonrpc": "2.0", "id": model_request["id"],
+                    "result": { "configOptions": options("build", "zai/glm-5.2") } }),
+        );
+        let effort = parse(&exchange.lines[0]);
+        assert_eq!(effort["params"]["configId"], "effort");
+        assert_eq!(effort["params"]["value"], "max");
+    }
+
+    #[test]
+    fn a_mode_on_its_way_survives_other_setting_changes_before_the_answer() {
+        let mut codec = codec();
+        open(&mut codec, options("build", "opencode/big-pickle"));
+        let mode = codec.encode(&AgentCommand::SetMode("plan".into()));
+        assert_eq!(parse(&mode.lines[0])["params"]["value"], "plan");
+        // The agent hasn't answered yet, so it still reports "build" as
+        // current; picking a model and an effort must not take that as the
+        // session's mode, nor send "build" back.
+        for command in [
+            AgentCommand::SetModel("zai/glm-5.2".into()),
+            AgentCommand::SetEffort("high".into()),
+        ] {
+            let exchange = codec.encode(&command);
+            assert!(
+                !exchange
+                    .events
+                    .iter()
+                    .any(|event| matches!(event, AgentEvent::ModeChanged(_))),
+                "{:?}",
+                exchange.events
+            );
+            for line in &exchange.lines {
+                assert_ne!(parse(line)["params"]["configId"], "mode", "{line}");
+            }
+        }
+        assert_eq!(codec.mode, "plan");
     }
 
     #[test]
