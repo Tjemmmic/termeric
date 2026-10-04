@@ -415,7 +415,7 @@ fn kitty_transfer_confirmation_never_replies_to_a_replacement_owner() {
         fenced_harvest_capture(&mut app, &captures)
             .iter()
             .all(Vec::is_empty),
-        "a pending transfer must never reply to the replacement single owner"
+        "a pending transfer must never reply to the surviving pane"
     );
 }
 

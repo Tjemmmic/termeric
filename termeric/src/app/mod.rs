@@ -2234,8 +2234,7 @@ impl App {
         let focus_dim = self.focus_dim();
         let text_blink = self.text_blink_phases(Instant::now());
 
-        // Get cursor target position and active tab ID from grid
-        // When tab has pane_manager, read cursor from the focused pane's terminal
+        // The cursor glides toward the focused pane's presented cursor.
         let cursor_info = self
             .tabs
             .as_ref()
