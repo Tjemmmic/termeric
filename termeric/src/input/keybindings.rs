@@ -4,6 +4,8 @@
 //! and O(1) key-chord lookup. Also retains the plugin/custom `KeyBindingManager`
 //! for dynamic bindings (SendText, RunCommand, PluginCommand).
 
+use crate::input::Action;
+use crate::panes::PaneDir;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
@@ -11,557 +13,187 @@ use winit::keyboard::{Key, ModifiersState, NamedKey};
 
 // ── BindableAction ──────────────────────────────────────────────────────────
 
-/// Every operation that can be bound to a keyboard shortcut.
-///
-/// Parameterized actions are expanded to concrete variants so each has
-/// exactly one binding slot (e.g. `SwitchToTab1` through `SwitchToTab9`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum BindableAction {
+/// Declares every bindable action once: its variant, config id, Settings
+/// label, category, default chord, and the app `Action` it runs.
+macro_rules! bindable_actions {
+    ($(
+        $variant:ident => $id:literal, $label:literal, $category:ident, $binding:expr, $action:expr;
+    )*) => {
+        /// Every operation that can be bound to a keyboard shortcut.
+        ///
+        /// Parameterized actions are expanded to concrete variants so each has
+        /// exactly one binding slot (e.g. `SwitchToTab1` through `SwitchToTab9`).
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub enum BindableAction {
+            $($variant,)*
+        }
+
+        impl BindableAction {
+            /// Every variant, in display order.
+            pub fn all() -> &'static [BindableAction] {
+                &[$(Self::$variant,)*]
+            }
+
+            /// Metadata: string id, display label, category, and default binding.
+            pub fn meta(self) -> ActionMeta {
+                match self {
+                    $(Self::$variant => ActionMeta {
+                        id: $id,
+                        label: $label,
+                        category: ShortcutCategory::$category,
+                        default_binding: $binding,
+                    },)*
+                }
+            }
+
+            /// Convert to the internal `Action` enum used by app dispatch.
+            pub fn to_action(self) -> Action {
+                match self {
+                    $(Self::$variant => $action,)*
+                }
+            }
+        }
+    };
+}
+
+const NO_MODIFIERS: ModifiersState = ModifiersState::empty();
+const CTRL: ModifiersState = ModifiersState::CONTROL;
+const ALT: ModifiersState = ModifiersState::ALT;
+const SHIFT: ModifiersState = ModifiersState::SHIFT;
+
+fn chord(key: &str, modifiers: ModifiersState) -> Option<KeyChord> {
+    Some(KeyChord::new(
+        key,
+        modifiers.control_key(),
+        modifiers.alt_key(),
+        modifiers.shift_key(),
+        modifiers.super_key(),
+    ))
+}
+
+bindable_actions! {
     // General
-    Copy,
-    Paste,
-    ToggleSearch,
-    NewAgent,
-    ToggleAgentView,
-    ToggleCopyMode,
-    QuickSelect,
-    OpenUnicodePicker,
-    ToggleCommandPalette,
-    ToggleSettings,
-    ToggleFullscreen,
-    ClearSelection,
+    Copy => "copy", "Copy Selection", General, chord("c", CTRL | SHIFT), Action::Copy;
+    Paste => "paste", "Paste", General, chord("v", CTRL | SHIFT), Action::Paste;
+    ToggleSearch => "toggle_search", "Find", General,
+        chord("f", CTRL | SHIFT), Action::ToggleSearch;
+    NewAgent => "new_agent", "New Agent", General, chord("i", CTRL | SHIFT), Action::NewAgent;
+    ToggleAgentView => "toggle_agent_view", "Agent View", General,
+        chord("a", CTRL | SHIFT), Action::ToggleAgentView;
+    ToggleCopyMode => "toggle_copy_mode", "Keyboard Copy Mode", Navigation,
+        chord("x", CTRL | SHIFT), Action::ToggleCopyMode;
+    QuickSelect => "quick_select", "Quick Select Links and Matches", Navigation,
+        chord("u", CTRL | SHIFT), Action::QuickSelect;
+    OpenUnicodePicker => "open_unicode_picker", "Insert Unicode Character", General,
+        None, Action::OpenUnicodePicker;
+    ToggleCommandPalette => "toggle_command_palette", "Command Palette", General,
+        chord("p", CTRL | SHIFT), Action::ToggleCommandPalette;
+    ToggleSettings => "toggle_settings", "Open Settings", General,
+        chord(",", CTRL), Action::ToggleSettings;
+    ToggleFullscreen => "toggle_fullscreen", "Toggle Fullscreen", General,
+        chord("F11", NO_MODIFIERS), Action::ToggleFullscreen;
+    ClearSelection => "clear_selection", "Clear Selection", General,
+        chord("Escape", NO_MODIFIERS), Action::ClearSelection;
 
     // Font
-    IncreaseFontSize,
-    DecreaseFontSize,
-    ResetFontSize,
+    IncreaseFontSize => "increase_font_size", "Increase Font Size", Font,
+        chord("=", CTRL), Action::IncreaseFontSize;
+    DecreaseFontSize => "decrease_font_size", "Decrease Font Size", Font,
+        chord("-", CTRL), Action::DecreaseFontSize;
+    ResetFontSize => "reset_font_size", "Reset Font Size", Font,
+        chord("0", CTRL), Action::ResetFontSize;
 
     // Tabs
-    NewTab,
-    CloseTab,
-    NextTab,
-    PrevTab,
-    SwitchToTab1,
-    SwitchToTab2,
-    SwitchToTab3,
-    SwitchToTab4,
-    SwitchToTab5,
-    SwitchToTab6,
-    SwitchToTab7,
-    SwitchToTab8,
-    SwitchToTab9,
+    NewTab => "new_tab", "New Tab", Tabs, chord("t", CTRL | SHIFT), Action::NewTab;
+    CloseTab => "close_tab", "Close Tab", Tabs, chord("w", CTRL | SHIFT), Action::CloseTab;
+    NextTab => "next_tab", "Next Tab", Tabs, chord("Tab", CTRL), Action::NextTab;
+    PrevTab => "prev_tab", "Previous Tab", Tabs, chord("Tab", CTRL | SHIFT), Action::PrevTab;
+    SwitchToTab1 => "switch_to_tab_1", "Switch to Tab 1", Tabs,
+        chord("1", CTRL), Action::SwitchToTab(0);
+    SwitchToTab2 => "switch_to_tab_2", "Switch to Tab 2", Tabs,
+        chord("2", CTRL), Action::SwitchToTab(1);
+    SwitchToTab3 => "switch_to_tab_3", "Switch to Tab 3", Tabs,
+        chord("3", CTRL), Action::SwitchToTab(2);
+    SwitchToTab4 => "switch_to_tab_4", "Switch to Tab 4", Tabs,
+        chord("4", CTRL), Action::SwitchToTab(3);
+    SwitchToTab5 => "switch_to_tab_5", "Switch to Tab 5", Tabs,
+        chord("5", CTRL), Action::SwitchToTab(4);
+    SwitchToTab6 => "switch_to_tab_6", "Switch to Tab 6", Tabs,
+        chord("6", CTRL), Action::SwitchToTab(5);
+    SwitchToTab7 => "switch_to_tab_7", "Switch to Tab 7", Tabs,
+        chord("7", CTRL), Action::SwitchToTab(6);
+    SwitchToTab8 => "switch_to_tab_8", "Switch to Tab 8", Tabs,
+        chord("8", CTRL), Action::SwitchToTab(7);
+    SwitchToTab9 => "switch_to_tab_9", "Switch to Tab 9", Tabs,
+        chord("9", CTRL), Action::SwitchToTab(8);
 
     // Panes
-    SplitVertical,
-    SplitHorizontal,
-    NavigatePaneUp,
-    NavigatePaneDown,
-    NavigatePaneLeft,
-    NavigatePaneRight,
-    ClosePane,
-    RenameTab,
-    MoveTabLeft,
-    MoveTabRight,
-    MoveTabToNextWindow,
-    TogglePinTab,
-    TogglePaneZoom,
-    TogglePaneReadOnly,
-    SwapPaneNext,
-    BalancePanes,
-    MovePaneToNextTab,
-    MovePaneToNextWindow,
-    LayoutColumns,
-    LayoutRows,
-    LayoutGrid,
-    LayoutTall,
-    LayoutFat,
-    CyclePaneCwdMode,
-    ToggleBroadcast,
+    SplitVertical => "split_vertical", "Split Pane Right", Panes,
+        chord("right", ALT | SHIFT), Action::SplitVertical;
+    SplitHorizontal => "split_horizontal", "Split Pane Down", Panes,
+        chord("down", ALT | SHIFT), Action::SplitHorizontal;
+    NavigatePaneUp => "navigate_pane_up", "Navigate Pane Up", Panes,
+        chord("up", ALT), Action::NavigatePane(PaneDir::Up);
+    NavigatePaneDown => "navigate_pane_down", "Navigate Pane Down", Panes,
+        chord("down", ALT), Action::NavigatePane(PaneDir::Down);
+    NavigatePaneLeft => "navigate_pane_left", "Navigate Pane Left", Panes,
+        chord("left", ALT), Action::NavigatePane(PaneDir::Left);
+    NavigatePaneRight => "navigate_pane_right", "Navigate Pane Right", Panes,
+        chord("right", ALT), Action::NavigatePane(PaneDir::Right);
+    ClosePane => "close_pane", "Close Pane", Panes, chord("w", ALT | SHIFT), Action::ClosePane;
+    RenameTab => "rename_tab", "Rename Tab", Tabs, None, Action::RenameTab;
+    MoveTabLeft => "move_tab_left", "Move Tab Left", Tabs, None, Action::MoveTabLeft;
+    MoveTabRight => "move_tab_right", "Move Tab Right", Tabs, None, Action::MoveTabRight;
+    MoveTabToNextWindow => "move_tab_to_next_window", "Move Tab to Next Window", Tabs,
+        None, Action::MoveTabToNextWindow;
+    TogglePinTab => "toggle_pin_tab", "Pin or Unpin Tab", Tabs, None, Action::TogglePinTab;
+    TogglePaneZoom => "toggle_pane_zoom", "Zoom Pane", Panes, None, Action::TogglePaneZoom;
+    TogglePaneReadOnly => "toggle_pane_read_only", "Toggle Pane Read-only", Panes,
+        None, Action::TogglePaneReadOnly;
+    SwapPaneNext => "swap_pane_next", "Swap Pane with Next", Panes, None, Action::SwapPaneNext;
+    BalancePanes => "balance_panes", "Balance Panes", Panes, None, Action::BalancePanes;
+    MovePaneToNextTab => "move_pane_to_next_tab", "Move Pane to Next Tab", Panes,
+        None, Action::MovePaneToNextTab;
+    MovePaneToNextWindow => "move_pane_to_next_window", "Move Pane to Next Window", Panes,
+        None, Action::MovePaneToNextWindow;
+    LayoutColumns => "layout_columns", "Layout: Columns", Panes, None, Action::LayoutColumns;
+    LayoutRows => "layout_rows", "Layout: Rows", Panes, None, Action::LayoutRows;
+    LayoutGrid => "layout_grid", "Layout: Grid", Panes, None, Action::LayoutGrid;
+    LayoutTall => "layout_tall", "Layout: Tall", Panes, None, Action::LayoutTall;
+    LayoutFat => "layout_fat", "Layout: Fat", Panes, None, Action::LayoutFat;
+    CyclePaneCwdMode => "cycle_pane_cwd_mode", "Cycle New Pane Directory", Panes,
+        None, Action::CyclePaneCwdMode;
+    ToggleBroadcast => "toggle_broadcast", "Toggle Broadcast Input", Panes,
+        None, Action::ToggleBroadcast;
 
     // Scrolling
-    ScrollPageUp,
-    ScrollPageDown,
-    ScrollToTop,
-    ScrollToBottom,
+    ScrollPageUp => "scroll_page_up", "Scroll Page Up", Scrolling,
+        chord("PageUp", SHIFT), Action::ScrollPageUp;
+    ScrollPageDown => "scroll_page_down", "Scroll Page Down", Scrolling,
+        chord("PageDown", SHIFT), Action::ScrollPageDown;
+    ScrollToTop => "scroll_to_top", "Scroll to Top", Scrolling,
+        chord("Home", CTRL | SHIFT), Action::ScrollToTop;
+    ScrollToBottom => "scroll_to_bottom", "Scroll to Bottom", Scrolling,
+        chord("End", CTRL | SHIFT), Action::ScrollToBottom;
 
     // Navigation
-    PreviousPrompt,
-    NextPrompt,
-    PreviousFailedCommand,
-    NextFailedCommand,
+    PreviousPrompt => "previous_prompt", "Previous Prompt", Navigation,
+        chord("Up", CTRL | SHIFT), Action::PreviousPrompt;
+    NextPrompt => "next_prompt", "Next Prompt", Navigation,
+        chord("Down", CTRL | SHIFT), Action::NextPrompt;
+    PreviousFailedCommand =>
+        "previous_failed_command", "Jump to Previous Failed Command", Navigation,
+        None, Action::PreviousFailedCommand;
+    NextFailedCommand => "next_failed_command", "Jump to Next Failed Command", Navigation,
+        None, Action::NextFailedCommand;
 
     // Terminal
-    ClearScrollback,
-    ResetTerminal,
+    ClearScrollback => "clear_scrollback", "Clear Scrollback", Terminal,
+        None, Action::ClearScrollback;
+    ResetTerminal => "reset_terminal", "Reset Terminal", Terminal, None, Action::ResetTerminal;
 }
 
 impl BindableAction {
-    /// Every variant, in display order.
-    pub fn all() -> &'static [BindableAction] {
-        use BindableAction::*;
-        static ALL: [BindableAction; 63] = [
-            // General
-            Copy,
-            Paste,
-            ToggleSearch,
-            NewAgent,
-            ToggleAgentView,
-            ToggleCopyMode,
-            QuickSelect,
-            OpenUnicodePicker,
-            ToggleCommandPalette,
-            ToggleSettings,
-            ToggleFullscreen,
-            ClearSelection,
-            // Font
-            IncreaseFontSize,
-            DecreaseFontSize,
-            ResetFontSize,
-            // Tabs
-            NewTab,
-            CloseTab,
-            NextTab,
-            PrevTab,
-            SwitchToTab1,
-            SwitchToTab2,
-            SwitchToTab3,
-            SwitchToTab4,
-            SwitchToTab5,
-            SwitchToTab6,
-            SwitchToTab7,
-            SwitchToTab8,
-            SwitchToTab9,
-            // Panes
-            SplitVertical,
-            SplitHorizontal,
-            NavigatePaneUp,
-            NavigatePaneDown,
-            NavigatePaneLeft,
-            NavigatePaneRight,
-            ClosePane,
-            RenameTab,
-            MoveTabLeft,
-            MoveTabRight,
-            MoveTabToNextWindow,
-            TogglePinTab,
-            TogglePaneZoom,
-            TogglePaneReadOnly,
-            SwapPaneNext,
-            BalancePanes,
-            MovePaneToNextTab,
-            MovePaneToNextWindow,
-            LayoutColumns,
-            LayoutRows,
-            LayoutGrid,
-            LayoutTall,
-            LayoutFat,
-            CyclePaneCwdMode,
-            ToggleBroadcast,
-            // Scrolling
-            ScrollPageUp,
-            ScrollPageDown,
-            ScrollToTop,
-            ScrollToBottom,
-            // Navigation
-            PreviousPrompt,
-            NextPrompt,
-            PreviousFailedCommand,
-            NextFailedCommand,
-            // Terminal
-            ClearScrollback,
-            ResetTerminal,
-        ];
-        ALL.as_slice()
-    }
-
-    /// Metadata: string id, display label, category, and default binding.
-    pub fn meta(self) -> ActionMeta {
-        use BindableAction::*;
-        use ShortcutCategory::*;
-        match self {
-            // ── General ──
-            Copy => ActionMeta {
-                id: "copy",
-                label: "Copy Selection",
-                category: General,
-                default_binding: Some(KeyChord::new("c", true, false, true, false)),
-            },
-            Paste => ActionMeta {
-                id: "paste",
-                label: "Paste",
-                category: General,
-                default_binding: Some(KeyChord::new("v", true, false, true, false)),
-            },
-            NewAgent => ActionMeta {
-                id: "new_agent",
-                label: "New Agent",
-                category: General,
-                default_binding: Some(KeyChord::new("i", true, false, true, false)),
-            },
-            ToggleAgentView => ActionMeta {
-                id: "toggle_agent_view",
-                label: "Agent View",
-                category: General,
-                default_binding: Some(KeyChord::new("a", true, false, true, false)),
-            },
-            ToggleSearch => ActionMeta {
-                id: "toggle_search",
-                label: "Find",
-                category: General,
-                default_binding: Some(KeyChord::new("f", true, false, true, false)),
-            },
-            ToggleCopyMode => ActionMeta {
-                id: "toggle_copy_mode",
-                label: "Keyboard Copy Mode",
-                category: Navigation,
-                default_binding: Some(KeyChord::new("x", true, false, true, false)),
-            },
-            QuickSelect => ActionMeta {
-                id: "quick_select",
-                label: "Quick Select Links and Matches",
-                category: Navigation,
-                default_binding: Some(KeyChord::new("u", true, false, true, false)),
-            },
-            OpenUnicodePicker => {
-                action_meta("open_unicode_picker", "Insert Unicode Character", General)
-            }
-            ToggleCommandPalette => ActionMeta {
-                id: "toggle_command_palette",
-                label: "Command Palette",
-                category: General,
-                default_binding: Some(KeyChord::new("p", true, false, true, false)),
-            },
-            ToggleSettings => ActionMeta {
-                id: "toggle_settings",
-                label: "Open Settings",
-                category: General,
-                default_binding: Some(KeyChord::new(",", true, false, false, false)),
-            },
-            ToggleFullscreen => ActionMeta {
-                id: "toggle_fullscreen",
-                label: "Toggle Fullscreen",
-                category: General,
-                default_binding: Some(KeyChord::new("F11", false, false, false, false)),
-            },
-            ClearSelection => ActionMeta {
-                id: "clear_selection",
-                label: "Clear Selection",
-                category: General,
-                default_binding: Some(KeyChord::new("Escape", false, false, false, false)),
-            },
-
-            // ── Font ──
-            IncreaseFontSize => ActionMeta {
-                id: "increase_font_size",
-                label: "Increase Font Size",
-                category: Font,
-                default_binding: Some(KeyChord::new("=", true, false, false, false)),
-            },
-            DecreaseFontSize => ActionMeta {
-                id: "decrease_font_size",
-                label: "Decrease Font Size",
-                category: Font,
-                default_binding: Some(KeyChord::new("-", true, false, false, false)),
-            },
-            ResetFontSize => ActionMeta {
-                id: "reset_font_size",
-                label: "Reset Font Size",
-                category: Font,
-                default_binding: Some(KeyChord::new("0", true, false, false, false)),
-            },
-
-            // ── Tabs ──
-            NewTab => ActionMeta {
-                id: "new_tab",
-                label: "New Tab",
-                category: Tabs,
-                default_binding: Some(KeyChord::new("t", true, false, true, false)),
-            },
-            CloseTab => ActionMeta {
-                id: "close_tab",
-                label: "Close Tab",
-                category: Tabs,
-                default_binding: Some(KeyChord::new("w", true, false, true, false)),
-            },
-            NextTab => ActionMeta {
-                id: "next_tab",
-                label: "Next Tab",
-                category: Tabs,
-                default_binding: Some(KeyChord::new("Tab", true, false, false, false)),
-            },
-            PrevTab => ActionMeta {
-                id: "prev_tab",
-                label: "Previous Tab",
-                category: Tabs,
-                default_binding: Some(KeyChord::new("Tab", true, false, true, false)),
-            },
-            SwitchToTab1 => ActionMeta {
-                id: "switch_to_tab_1",
-                label: "Switch to Tab 1",
-                category: Tabs,
-                default_binding: Some(KeyChord::new("1", true, false, false, false)),
-            },
-            SwitchToTab2 => ActionMeta {
-                id: "switch_to_tab_2",
-                label: "Switch to Tab 2",
-                category: Tabs,
-                default_binding: Some(KeyChord::new("2", true, false, false, false)),
-            },
-            SwitchToTab3 => ActionMeta {
-                id: "switch_to_tab_3",
-                label: "Switch to Tab 3",
-                category: Tabs,
-                default_binding: Some(KeyChord::new("3", true, false, false, false)),
-            },
-            SwitchToTab4 => ActionMeta {
-                id: "switch_to_tab_4",
-                label: "Switch to Tab 4",
-                category: Tabs,
-                default_binding: Some(KeyChord::new("4", true, false, false, false)),
-            },
-            SwitchToTab5 => ActionMeta {
-                id: "switch_to_tab_5",
-                label: "Switch to Tab 5",
-                category: Tabs,
-                default_binding: Some(KeyChord::new("5", true, false, false, false)),
-            },
-            SwitchToTab6 => ActionMeta {
-                id: "switch_to_tab_6",
-                label: "Switch to Tab 6",
-                category: Tabs,
-                default_binding: Some(KeyChord::new("6", true, false, false, false)),
-            },
-            SwitchToTab7 => ActionMeta {
-                id: "switch_to_tab_7",
-                label: "Switch to Tab 7",
-                category: Tabs,
-                default_binding: Some(KeyChord::new("7", true, false, false, false)),
-            },
-            SwitchToTab8 => ActionMeta {
-                id: "switch_to_tab_8",
-                label: "Switch to Tab 8",
-                category: Tabs,
-                default_binding: Some(KeyChord::new("8", true, false, false, false)),
-            },
-            SwitchToTab9 => ActionMeta {
-                id: "switch_to_tab_9",
-                label: "Switch to Tab 9",
-                category: Tabs,
-                default_binding: Some(KeyChord::new("9", true, false, false, false)),
-            },
-
-            // ── Panes ──
-            SplitVertical => ActionMeta {
-                id: "split_vertical",
-                label: "Split Pane Right",
-                category: Panes,
-                default_binding: Some(KeyChord::new("right", false, true, true, false)),
-            },
-            SplitHorizontal => ActionMeta {
-                id: "split_horizontal",
-                label: "Split Pane Down",
-                category: Panes,
-                default_binding: Some(KeyChord::new("down", false, true, true, false)),
-            },
-            NavigatePaneUp => ActionMeta {
-                id: "navigate_pane_up",
-                label: "Navigate Pane Up",
-                category: Panes,
-                default_binding: Some(KeyChord::new("up", false, true, false, false)),
-            },
-            NavigatePaneDown => ActionMeta {
-                id: "navigate_pane_down",
-                label: "Navigate Pane Down",
-                category: Panes,
-                default_binding: Some(KeyChord::new("down", false, true, false, false)),
-            },
-            NavigatePaneLeft => ActionMeta {
-                id: "navigate_pane_left",
-                label: "Navigate Pane Left",
-                category: Panes,
-                default_binding: Some(KeyChord::new("left", false, true, false, false)),
-            },
-            NavigatePaneRight => ActionMeta {
-                id: "navigate_pane_right",
-                label: "Navigate Pane Right",
-                category: Panes,
-                default_binding: Some(KeyChord::new("right", false, true, false, false)),
-            },
-            ClosePane => ActionMeta {
-                id: "close_pane",
-                label: "Close Pane",
-                category: Panes,
-                default_binding: Some(KeyChord::new("w", false, true, true, false)),
-            },
-            RenameTab => action_meta("rename_tab", "Rename Tab", Tabs),
-            MoveTabLeft => action_meta("move_tab_left", "Move Tab Left", Tabs),
-            MoveTabRight => action_meta("move_tab_right", "Move Tab Right", Tabs),
-            MoveTabToNextWindow => {
-                action_meta("move_tab_to_next_window", "Move Tab to Next Window", Tabs)
-            }
-            TogglePinTab => action_meta("toggle_pin_tab", "Pin or Unpin Tab", Tabs),
-            TogglePaneZoom => action_meta("toggle_pane_zoom", "Zoom Pane", Panes),
-            TogglePaneReadOnly => {
-                action_meta("toggle_pane_read_only", "Toggle Pane Read-only", Panes)
-            }
-            SwapPaneNext => action_meta("swap_pane_next", "Swap Pane with Next", Panes),
-            BalancePanes => action_meta("balance_panes", "Balance Panes", Panes),
-            MovePaneToNextTab => {
-                action_meta("move_pane_to_next_tab", "Move Pane to Next Tab", Panes)
-            }
-            MovePaneToNextWindow => action_meta(
-                "move_pane_to_next_window",
-                "Move Pane to Next Window",
-                Panes,
-            ),
-            LayoutColumns => action_meta("layout_columns", "Layout: Columns", Panes),
-            LayoutRows => action_meta("layout_rows", "Layout: Rows", Panes),
-            LayoutGrid => action_meta("layout_grid", "Layout: Grid", Panes),
-            LayoutTall => action_meta("layout_tall", "Layout: Tall", Panes),
-            LayoutFat => action_meta("layout_fat", "Layout: Fat", Panes),
-            CyclePaneCwdMode => {
-                action_meta("cycle_pane_cwd_mode", "Cycle New Pane Directory", Panes)
-            }
-            ToggleBroadcast => action_meta("toggle_broadcast", "Toggle Broadcast Input", Panes),
-
-            // ── Scrolling ──
-            ScrollPageUp => ActionMeta {
-                id: "scroll_page_up",
-                label: "Scroll Page Up",
-                category: Scrolling,
-                default_binding: Some(KeyChord::new("PageUp", false, false, true, false)),
-            },
-            ScrollPageDown => ActionMeta {
-                id: "scroll_page_down",
-                label: "Scroll Page Down",
-                category: Scrolling,
-                default_binding: Some(KeyChord::new("PageDown", false, false, true, false)),
-            },
-            ScrollToTop => ActionMeta {
-                id: "scroll_to_top",
-                label: "Scroll to Top",
-                category: Scrolling,
-                default_binding: Some(KeyChord::new("Home", true, false, true, false)),
-            },
-            ScrollToBottom => ActionMeta {
-                id: "scroll_to_bottom",
-                label: "Scroll to Bottom",
-                category: Scrolling,
-                default_binding: Some(KeyChord::new("End", true, false, true, false)),
-            },
-
-            // ── Navigation ──
-            PreviousPrompt => ActionMeta {
-                id: "previous_prompt",
-                label: "Previous Prompt",
-                category: Navigation,
-                default_binding: Some(KeyChord::new("Up", true, false, true, false)),
-            },
-            NextPrompt => ActionMeta {
-                id: "next_prompt",
-                label: "Next Prompt",
-                category: Navigation,
-                default_binding: Some(KeyChord::new("Down", true, false, true, false)),
-            },
-            PreviousFailedCommand => ActionMeta {
-                id: "previous_failed_command",
-                label: "Jump to Previous Failed Command",
-                category: Navigation,
-                default_binding: None,
-            },
-            NextFailedCommand => ActionMeta {
-                id: "next_failed_command",
-                label: "Jump to Next Failed Command",
-                category: Navigation,
-                default_binding: None,
-            },
-
-            // ── Terminal ──
-            ClearScrollback => ActionMeta {
-                id: "clear_scrollback",
-                label: "Clear Scrollback",
-                category: Terminal,
-                default_binding: None,
-            },
-            ResetTerminal => ActionMeta {
-                id: "reset_terminal",
-                label: "Reset Terminal",
-                category: Terminal,
-                default_binding: None,
-            },
-        }
-    }
-
-    /// Convert to the internal `Action` enum used by app dispatch.
-    pub fn to_action(self) -> crate::input::Action {
-        use crate::input::Action;
-        match self {
-            Self::Copy => Action::Copy,
-            Self::Paste => Action::Paste,
-            Self::ToggleSearch => Action::ToggleSearch,
-            Self::NewAgent => Action::NewAgent,
-            Self::ToggleAgentView => Action::ToggleAgentView,
-            Self::ToggleCopyMode => Action::ToggleCopyMode,
-            Self::QuickSelect => Action::QuickSelect,
-            Self::OpenUnicodePicker => Action::OpenUnicodePicker,
-            Self::ToggleCommandPalette => Action::ToggleCommandPalette,
-            Self::ToggleSettings => Action::ToggleSettings,
-            Self::ToggleFullscreen => Action::ToggleFullscreen,
-            Self::ClearSelection => Action::ClearSelection,
-            Self::IncreaseFontSize => Action::IncreaseFontSize,
-            Self::DecreaseFontSize => Action::DecreaseFontSize,
-            Self::ResetFontSize => Action::ResetFontSize,
-            Self::NewTab => Action::NewTab,
-            Self::CloseTab => Action::CloseTab,
-            Self::NextTab => Action::NextTab,
-            Self::PrevTab => Action::PrevTab,
-            Self::SwitchToTab1 => Action::SwitchToTab(0),
-            Self::SwitchToTab2 => Action::SwitchToTab(1),
-            Self::SwitchToTab3 => Action::SwitchToTab(2),
-            Self::SwitchToTab4 => Action::SwitchToTab(3),
-            Self::SwitchToTab5 => Action::SwitchToTab(4),
-            Self::SwitchToTab6 => Action::SwitchToTab(5),
-            Self::SwitchToTab7 => Action::SwitchToTab(6),
-            Self::SwitchToTab8 => Action::SwitchToTab(7),
-            Self::SwitchToTab9 => Action::SwitchToTab(8),
-            Self::SplitVertical => Action::SplitVertical,
-            Self::SplitHorizontal => Action::SplitHorizontal,
-            Self::NavigatePaneUp => Action::NavigatePane(crate::panes::PaneDir::Up),
-            Self::NavigatePaneDown => Action::NavigatePane(crate::panes::PaneDir::Down),
-            Self::NavigatePaneLeft => Action::NavigatePane(crate::panes::PaneDir::Left),
-            Self::NavigatePaneRight => Action::NavigatePane(crate::panes::PaneDir::Right),
-            Self::ClosePane => Action::ClosePane,
-            Self::RenameTab => Action::RenameTab,
-            Self::MoveTabLeft => Action::MoveTabLeft,
-            Self::MoveTabRight => Action::MoveTabRight,
-            Self::MoveTabToNextWindow => Action::MoveTabToNextWindow,
-            Self::TogglePinTab => Action::TogglePinTab,
-            Self::TogglePaneZoom => Action::TogglePaneZoom,
-            Self::TogglePaneReadOnly => Action::TogglePaneReadOnly,
-            Self::SwapPaneNext => Action::SwapPaneNext,
-            Self::BalancePanes => Action::BalancePanes,
-            Self::MovePaneToNextTab => Action::MovePaneToNextTab,
-            Self::MovePaneToNextWindow => Action::MovePaneToNextWindow,
-            Self::LayoutColumns => Action::LayoutColumns,
-            Self::LayoutRows => Action::LayoutRows,
-            Self::LayoutGrid => Action::LayoutGrid,
-            Self::LayoutTall => Action::LayoutTall,
-            Self::LayoutFat => Action::LayoutFat,
-            Self::CyclePaneCwdMode => Action::CyclePaneCwdMode,
-            Self::ToggleBroadcast => Action::ToggleBroadcast,
-            Self::ScrollPageUp => Action::ScrollPageUp,
-            Self::ScrollPageDown => Action::ScrollPageDown,
-            Self::ScrollToTop => Action::ScrollToTop,
-            Self::ScrollToBottom => Action::ScrollToBottom,
-            Self::PreviousPrompt => Action::PreviousPrompt,
-            Self::NextPrompt => Action::NextPrompt,
-            Self::PreviousFailedCommand => Action::PreviousFailedCommand,
-            Self::NextFailedCommand => Action::NextFailedCommand,
-            Self::ClearScrollback => Action::ClearScrollback,
-            Self::ResetTerminal => Action::ResetTerminal,
-        }
-    }
-
     /// Look up a `BindableAction` by its config string id.
     pub fn from_id(id: &str) -> Option<Self> {
         Self::all().iter().find(|a| a.meta().id == id).copied()
@@ -619,15 +251,6 @@ pub struct ActionMeta {
     pub category: ShortcutCategory,
     /// Default key chord (None = unset by default).
     pub default_binding: Option<KeyChord>,
-}
-
-fn action_meta(id: &'static str, label: &'static str, category: ShortcutCategory) -> ActionMeta {
-    ActionMeta {
-        id,
-        label,
-        category,
-        default_binding: None,
-    }
 }
 
 // ── KeyChord ────────────────────────────────────────────────────────────────
@@ -937,10 +560,10 @@ pub enum KeyAction {
 }
 
 impl KeyAction {
-    pub fn to_action(&self) -> Option<crate::input::Action> {
+    pub fn to_action(&self) -> Option<Action> {
         match self {
             KeyAction::PluginCommand { command_id } => {
-                Some(crate::input::Action::PluginCommand(command_id.clone()))
+                Some(Action::PluginCommand(command_id.clone()))
             }
             _ => None,
         }
