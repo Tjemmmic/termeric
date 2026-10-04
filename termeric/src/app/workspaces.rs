@@ -388,6 +388,7 @@ impl App {
                         cwd: cwd.clone(),
                         tab_count: tabs.count(),
                         active_tab: tabs.active_index(),
+                        active_tab_id: tabs.active_tab_id(),
                         terminal_size: (self.cols, self.rows),
                     };
                     self.resolve_plugin_terminal_launch(

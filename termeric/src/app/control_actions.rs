@@ -18,7 +18,7 @@ impl Requester {
     /// Whether the change dispatches its derived lifecycle hooks. A plugin's
     /// correlated action result is its only follow-up event, so it never hears
     /// its own change again as a hook, which would allow hook-driven loops.
-    fn dispatches_hooks(self) -> bool {
+    pub(super) fn dispatches_hooks(self) -> bool {
         self == Self::Control
     }
 
@@ -132,6 +132,20 @@ impl App {
         u64::try_from(id).map_err(|_| "Created tab ID does not fit the control protocol".into())
     }
 
+    /// Make one requester's change. An active-tab change made before it is
+    /// reported first, so it keeps its own event; the change itself raises
+    /// tab-switched only when the requester dispatches hooks.
+    fn as_requester<T>(&mut self, requester: Requester, change: impl FnOnce(&mut Self) -> T) -> T {
+        self.report_active_tab_switch();
+        let result = change(self);
+        if requester.dispatches_hooks() {
+            self.report_active_tab_switch();
+        } else {
+            self.absorb_active_tab_switch();
+        }
+        result
+    }
+
     /// Create one ordinary local tab synchronously. Live-domain tabs use an
     /// asynchronous topology round trip, so they are rejected until the
     /// requester can be acknowledged with the resulting stable local ID
@@ -140,6 +154,10 @@ impl App {
         &mut self,
         requester: Requester,
     ) -> std::result::Result<u64, String> {
+        self.as_requester(requester, |app| app.create_tab_as(requester))
+    }
+
+    fn create_tab_as(&mut self, requester: Requester) -> std::result::Result<u64, String> {
         if self
             .tabs
             .as_ref()
@@ -186,6 +204,10 @@ impl App {
         requester: Requester,
         tab_id: u64,
     ) -> std::result::Result<bool, String> {
+        self.as_requester(requester, |app| app.select_tab(tab_id))
+    }
+
+    fn select_tab(&mut self, tab_id: u64) -> std::result::Result<bool, String> {
         let tab_id = usize::try_from(tab_id)
             .map_err(|_| "Target tab ID does not fit this platform".to_string())?;
         let tabs = self
@@ -212,9 +234,6 @@ impl App {
                 .expect("validated tab manager disappeared")
                 .switch_to(index);
             self.refresh_focused_terminal_surfaces();
-            if requester.dispatches_hooks() {
-                self.dispatch_plugin_hook(crate::plugin::Hook::TabSwitched { from, to: index });
-            }
             self.request_redraw(RedrawReason::Action);
         }
         Ok(changed)
@@ -579,6 +598,14 @@ impl App {
         tab_id: u64,
         pane_id: u32,
     ) -> std::result::Result<(bool, bool), String> {
+        self.as_requester(requester, |app| app.focus_pane(tab_id, pane_id))
+    }
+
+    fn focus_pane(
+        &mut self,
+        tab_id: u64,
+        pane_id: u32,
+    ) -> std::result::Result<(bool, bool), String> {
         let tab_id = usize::try_from(tab_id)
             .map_err(|_| "Target tab ID does not fit this platform".to_string())?;
         let tabs = self
@@ -640,9 +667,6 @@ impl App {
         }
         if tab_changed || pane_changed {
             self.refresh_focused_terminal_surfaces();
-            if tab_changed && requester.dispatches_hooks() {
-                self.dispatch_plugin_hook(crate::plugin::Hook::TabSwitched { from, to: index });
-            }
             self.request_redraw(RedrawReason::Action);
         }
         Ok((tab_changed, pane_changed))
@@ -652,6 +676,14 @@ impl App {
     /// newly active tab (always present when the requester may not close the
     /// last tab), and whether the active tab changed.
     pub(super) fn close_tab_for(
+        &mut self,
+        requester: Requester,
+        tab_id: u64,
+    ) -> std::result::Result<(u16, Option<u64>, bool), String> {
+        self.as_requester(requester, |app| app.close_tab_as(requester, tab_id))
+    }
+
+    fn close_tab_as(
         &mut self,
         requester: Requester,
         tab_id: u64,

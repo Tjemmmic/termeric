@@ -114,6 +114,7 @@ impl App {
                 .iter()
                 .find_map(|(index, tab)| (tab.id == target.tab_id).then_some(index))
                 .expect("validated target"),
+            active_tab_id: Some(target.tab_id),
             terminal_size: (geometry.cols, geometry.rows),
         };
         let (identity, shell) = self.resolve_plugin_terminal_launch(

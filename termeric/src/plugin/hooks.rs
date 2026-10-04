@@ -15,8 +15,10 @@ pub struct PluginContext {
     pub cwd: Option<String>,
     /// Number of open tabs
     pub tab_count: usize,
-    /// Active tab index
+    /// Active tab index: its position in the tab bar
     pub active_tab: usize,
+    /// Active tab's stable ID, unique within its window
+    pub active_tab_id: Option<usize>,
     /// Terminal dimensions (cols, rows)
     pub terminal_size: (usize, usize),
 }
@@ -30,8 +32,9 @@ pub enum Hook {
     TabCreated { tab_id: usize },
     /// A tab was closed
     TabClosed { tab_id: usize },
-    /// The active tab changed
-    TabSwitched { from: usize, to: usize },
+    /// The active tab changed, named by stable tab IDs. `from` is `None`
+    /// when the window had no active tab before, as when it opens.
+    TabSwitched { from: Option<usize>, to: usize },
     /// A command was executed in the terminal (from shell integration)
     CommandExecuted {
         /// Stable terminal-local OSC 133 region identity.

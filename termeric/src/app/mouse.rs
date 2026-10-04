@@ -524,9 +524,6 @@ impl App {
                                         }
                                         if from != idx {
                                             self.refresh_focused_terminal_surfaces();
-                                            self.dispatch_plugin_hook(
-                                                crate::plugin::Hook::TabSwitched { from, to: idx },
-                                            );
                                         }
                                     }
                                     TabBarClick::SessionDropdown => {

@@ -433,12 +433,23 @@ impl Application {
         operation: &StructuredResponseAction,
         mut continuation: StructuredHandlerInvocation,
     ) -> std::result::Result<(StructuredHandlerInvocation, Option<WindowId>), String> {
-        let (event_json, close_target) = self.plugin_host_operation_event(
+        // The operation may change the active tab of any window. What changed
+        // before it is reported; what it changes answers only in its result.
+        for window in self.windows.values_mut() {
+            if !window.should_exit {
+                window.report_active_tab_switch();
+            }
+        }
+        let outcome = self.plugin_host_operation_event(
             plugin_id,
             origin,
             continuation.authority.grants(),
             operation,
-        )?;
+        );
+        for window in self.windows.values_mut() {
+            window.absorb_active_tab_switch();
+        }
+        let (event_json, close_target) = outcome?;
         continuation.authority = continuation.authority.after(operation);
         continuation.event_json = event_json;
         Ok((continuation, close_target))

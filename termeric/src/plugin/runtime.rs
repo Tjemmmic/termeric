@@ -869,6 +869,7 @@ impl DeclarativePlugin {
             active_working_directory: Option<&'a str>,
             tab_count: usize,
             active_tab_index: usize,
+            active_tab_id: Option<usize>,
             terminal: TerminalSize,
         }
         let value = serde_json::to_string(&LaunchContext {
@@ -878,6 +879,7 @@ impl DeclarativePlugin {
             active_working_directory: context.cwd.as_deref(),
             tab_count: context.tab_count,
             active_tab_index: context.active_tab,
+            active_tab_id: context.active_tab_id,
             terminal: TerminalSize {
                 columns: context.terminal_size.0,
                 rows: context.terminal_size.1,
@@ -1013,6 +1015,7 @@ impl DeclarativePlugin {
                 "active_working_directory": context.cwd,
                 "tab_count": context.tab_count,
                 "active_tab_index": context.active_tab,
+                "active_tab_id": context.active_tab_id,
                 "terminal": {
                     "columns": context.terminal_size.0,
                     "rows": context.terminal_size.1,
@@ -2101,6 +2104,7 @@ mod tests {
             cwd: None,
             tab_count: 1,
             active_tab: 0,
+            active_tab_id: Some(1),
             terminal_size: (80, 24),
         }
     }
@@ -2758,6 +2762,7 @@ events = ["command-invoked"]
             cwd: Some("/workspace/fixture".into()),
             tab_count: 4,
             active_tab: 2,
+            active_tab_id: Some(12),
             terminal_size: (132, 43),
         };
         let response = plugin.on_hook(
@@ -2778,6 +2783,7 @@ events = ["command-invoked"]
         assert_eq!(value["active_working_directory"], "/workspace/fixture");
         assert_eq!(value["tab_count"], 4);
         assert_eq!(value["active_tab_index"], 2);
+        assert_eq!(value["active_tab_id"], 12);
         assert_eq!(value["terminal"]["columns"], 132);
         assert_eq!(value["terminal"]["rows"], 43);
         assert!(context_json.len() <= MAX_STRUCTURED_CONTEXT_BYTES);
@@ -2886,12 +2892,16 @@ events = ["command-invoked"]
         let invocation = invocation_for(
             manifest,
             grants.clone(),
-            &Hook::TabSwitched { from: 2, to: 4 },
+            &Hook::TabSwitched {
+                from: Some(11),
+                to: 19,
+            },
             &PluginContext {
                 window_id: 7,
                 cwd: Some("/workspace/project".into()),
                 tab_count: 5,
                 active_tab: 4,
+                active_tab_id: Some(19),
                 terminal_size: (120, 36),
             },
         );
@@ -2903,8 +2913,10 @@ events = ["command-invoked"]
         assert_eq!(value["schema_version"], 1);
         assert_eq!(value["origin_window_id"], 7);
         assert_eq!(value["event"]["type"], "tab-switched");
-        assert_eq!(value["event"]["from"], 2);
-        assert_eq!(value["event"]["to"], 4);
+        assert_eq!(value["event"]["from"], 11);
+        assert_eq!(value["event"]["to"], 19);
+        assert_eq!(value["context"]["active_tab_index"], 4);
+        assert_eq!(value["context"]["active_tab_id"], 19);
         assert_eq!(
             value["context"]["active_working_directory"],
             "/workspace/project"
@@ -2912,6 +2924,19 @@ events = ["command-invoked"]
         assert_eq!(value["context"]["terminal"]["columns"], 120);
         assert!(invocation.event_json.len() <= MAX_PERSISTENT_SOURCE_EVENT_BYTES);
         assert!(!invocation.event_json.contains("command"));
+
+        // A window's first active tab follows no earlier one.
+        let manifest = handler_manifest(&["ui-actions"], &events);
+        let grants = manifest.permissions.clone();
+        let invocation = invocation_for(
+            manifest,
+            grants,
+            &Hook::TabSwitched { from: None, to: 1 },
+            &context(),
+        );
+        let value: serde_json::Value = serde_json::from_str(&invocation.event_json).unwrap();
+        assert!(value["event"]["from"].is_null());
+        assert_eq!(value["event"]["to"], 1);
 
         let manifest = handler_manifest(&["ui-actions"], &events);
         let grants = manifest.permissions.clone();
@@ -2994,6 +3019,7 @@ events = ["command-invoked"]
                 cwd: None,
                 tab_count: usize::MAX,
                 active_tab: usize::MAX,
+                active_tab_id: Some(usize::MAX),
                 terminal_size: (usize::MAX, usize::MAX),
             },
         );

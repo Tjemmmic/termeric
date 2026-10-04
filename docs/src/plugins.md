@@ -152,9 +152,9 @@ A profile runs in a terminal with your normal environment, plus:
 | Variable | When | Contents |
 | --- | --- | --- |
 | `TERMERIC_PLUGIN_SETTINGS_JSON` | The plugin declares settings. | `{"schema_version": 1, "plugin_id": "…", "values": {"SETTING-ID": value, …}}` |
-| `TERMERIC_PLUGIN_CONTEXT_JSON` | `workspace-query` is granted. | `{"schema_version": 1, "plugin_id": "…", "profile_id": "…", "active_working_directory": "…" or null, "tab_count": N, "active_tab_index": N, "terminal": {"columns": N, "rows": N}}` |
+| `TERMERIC_PLUGIN_CONTEXT_JSON` | `workspace-query` is granted. | `{"schema_version": 1, "plugin_id": "…", "profile_id": "…", "active_working_directory": "…" or null, "tab_count": N, "active_tab_index": N, "active_tab_id": N, "terminal": {"columns": N, "rows": N}}` |
 
-`active_tab_index` is the active tab's position in the tab bar, counting from 0.
+`active_tab_index` is the active tab's position in the tab bar, counting from 0, and `active_tab_id` is its tab ID, as in `termeric control list`.
 
 ### Commands
 
@@ -233,7 +233,7 @@ The handler also receives the results of its queries and actions. If it fails a 
 | `event` | The event, with its `type`. |
 | `request_id` | The number to echo in the response. |
 | `settings` | When the plugin declares settings: `{"SETTING-ID": value, …}`. A result carries the settings of the event that began its conversation. |
-| `context` | Event requests only, when `workspace-query` is granted: `active_working_directory`, `tab_count`, `active_tab_index`, and `terminal` (`columns`, `rows`) for the origin window. |
+| `context` | Event requests only, when `workspace-query` is granted: `active_working_directory`, `tab_count`, `active_tab_index`, `active_tab_id`, and `terminal` (`columns`, `rows`) for the origin window. |
 
 Result events (below) carry no `context`; a handler that needs it later keeps it from the event that started the conversation.
 
@@ -244,9 +244,11 @@ Result events (below) carry no `context`; a handler that needs it later keeps it
 | `app-ready` | none | A window has finished setting up its tabs. |
 | `tab-created` | `tab_id` | A tab opened. |
 | `tab-closed` | `tab_id` | A tab closed. |
-| `tab-switched` | `from`, `to` | The active tab changed. These are positions in the tab bar, counting from 0, not tab IDs. |
+| `tab-switched` | `from`, `to` | The active tab changed, however it happened: selecting a tab, opening, closing, or moving one, or opening a workspace. `from` is `null` for a window's first active tab. |
 | `command-completed` | `region_id`, `tab_id`, `pane_id`, `exit_code`, `content_available`, `command`, `output` | A shell command finished. Needs [shell integration](shell-integration.md). |
 | `command-invoked` | `command_id` | One of the plugin's commands ran. `command_id` is `PLUGIN-ID.COMMAND-ID`. |
+
+Tab IDs (`tab_id`, `from`, `to`) are unique within their window, so pair them with `origin_window_id`. One change of the active tab raises one `tab-switched`, after the action that caused it.
 
 In `command-completed`, `pane_id` is `null` in a tab that isn't split, `exit_code` is `null` when the shell didn't report one, and `command` and `output` are each `{"text", "truncated", "sanitized"}`. Command text keeps its first 2 KiB or so and output its last 8 KiB or so; `truncated` says the rest was left out, which for output means its start. Control characters other than tab and newline are replaced with `�` and `sanitized` is `true`. When `content_available` is `false`, both texts are empty.
 

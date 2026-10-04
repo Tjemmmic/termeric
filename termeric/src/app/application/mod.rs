@@ -878,6 +878,9 @@ impl ApplicationHandler<AppEvent> for Application {
                     .redraw_scheduler
                     .request(RedrawReason::TerminalOutput);
             }
+            if !window.should_exit {
+                window.report_active_tab_switch();
+            }
             if window.redraw_scheduler.has_pending()
                 && !window.surface_lost
                 && !window.window_occluded

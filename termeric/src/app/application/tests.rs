@@ -160,10 +160,20 @@ fn plugin_operation(
         native_id,
         window_id: origin_window_id,
     };
-    let (event, close_target) = application
-        .plugin_host_operation_event(plugin_id, origin, grants, &operation)
+    // The continuation path is the one the event loop takes, including how
+    // it keeps the operation's own tab changes from raising hooks.
+    let (continuation, close_target) = application
+        .plugin_host_operation_continuation(
+            plugin_id,
+            origin,
+            &operation,
+            StructuredHandlerInvocation::fixture(plugin_id, grants.clone()),
+        )
         .unwrap();
-    (serde_json::from_str(&event).unwrap(), close_target)
+    (
+        serde_json::from_str(&continuation.event_json).unwrap(),
+        close_target,
+    )
 }
 
 /// [`plugin_operation`] with every capability granted for all windows.
@@ -1615,6 +1625,8 @@ fn plugin_navigation_is_exact_atomic_non_activating_and_hook_suppressed() {
     let observed_switches = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let mut target = App::new_headless(Config::default()).unwrap();
     target.tabs = Some(tabs);
+    // The event loop has already reported the window's active tab.
+    target.report_active_tab_switch();
     target
         .plugin_manager
         .register(crate::test_support::hook_counter(
@@ -1656,6 +1668,11 @@ fn plugin_navigation_is_exact_atomic_non_activating_and_hook_suppressed() {
             .active_tab_id(),
         Some(first)
     );
+    application
+        .windows
+        .get_mut(&native_id)
+        .unwrap()
+        .report_active_tab_switch();
     assert_eq!(
         observed_switches.load(std::sync::atomic::Ordering::SeqCst),
         0
@@ -1717,6 +1734,11 @@ fn plugin_navigation_is_exact_atomic_non_activating_and_hook_suppressed() {
     assert_eq!(focused["event"]["ok"], true);
     assert_eq!(focused["event"]["tab_changed"], true);
     assert_eq!(focused["event"]["pane_changed"], false);
+    application
+        .windows
+        .get_mut(&native_id)
+        .unwrap()
+        .report_active_tab_switch();
     assert_eq!(
         observed_switches.load(std::sync::atomic::Ordering::SeqCst),
         0
@@ -3834,6 +3856,17 @@ fn plugin_tab_movement_preserves_state_and_refuses_final_source_tab() {
     application.window_order = vec![source_native, destination_native];
     application.control_window_ids.insert(source_native, 7);
     application.control_window_ids.insert(destination_native, 8);
+    let observed_switches = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    for window in application.windows.values_mut() {
+        window.report_active_tab_switch();
+        window
+            .plugin_manager
+            .register(crate::test_support::hook_counter(
+                |hook| matches!(hook, crate::plugin::Hook::TabSwitched { .. }),
+                &observed_switches,
+            ))
+            .unwrap();
+    }
 
     let action = || crate::plugin::structured::StructuredResponseAction::MoveTab {
         action_id: "move-sibling-tab".into(),
@@ -3919,11 +3952,22 @@ fn plugin_tab_movement_preserves_state_and_refuses_final_source_tab() {
         1
     );
     assert!(!application.windows[&source_native].should_exit);
+    // The move activated the tab in its new window, and the plugin hears of
+    // that only through its result. The source's new tab was activated
+    // outside the plugin, before its first move, and was reported then.
+    for window in application.windows.values_mut() {
+        window.report_active_tab_switch();
+    }
+    assert_eq!(
+        observed_switches.load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
     let destination_tabs = application.windows[&destination_native]
         .tabs
         .as_ref()
         .unwrap();
     assert_eq!(destination_tabs.count(), 2);
+    assert_eq!(destination_tabs.active_tab_id(), Some(1));
     let transferred = destination_tabs.tab_by_id(1).unwrap();
     assert!(
         transferred

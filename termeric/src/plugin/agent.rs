@@ -126,6 +126,7 @@ mod tests {
             cwd: Some("/work".into()),
             tab_count: 1,
             active_tab: 0,
+            active_tab_id: Some(1),
             terminal_size: (120, 40),
         }
     }

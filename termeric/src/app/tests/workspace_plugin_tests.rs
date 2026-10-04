@@ -501,6 +501,7 @@ fn workspace_plugin_hooks_are_targeted_and_mismatched_or_non_launch_actions_are_
             cwd: snapshot.panes[0].working_directory.clone(),
             tab_count: 1,
             active_tab: 0,
+            active_tab_id: Some(1),
             terminal_size: (40, 20),
         };
         assert!(

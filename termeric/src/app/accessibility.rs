@@ -822,7 +822,6 @@ impl App {
                 }
                 if from != index {
                     self.refresh_focused_terminal_surfaces();
-                    self.dispatch_plugin_hook(crate::plugin::Hook::TabSwitched { from, to: index });
                 }
             } else if request.action == Action::Click {
                 self.handle_action(crate::input::Action::SwitchToTab(index));

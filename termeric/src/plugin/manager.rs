@@ -84,7 +84,7 @@ impl PluginManager {
             Hook::TabCreated { tab_id } => log::trace!("Dispatching TabCreated(tab_id={})", tab_id),
             Hook::TabClosed { tab_id } => log::trace!("Dispatching TabClosed(tab_id={})", tab_id),
             Hook::TabSwitched { from, to } => {
-                log::trace!("Dispatching TabSwitched(from={}, to={})", from, to)
+                log::trace!("Dispatching TabSwitched(from={:?}, to={})", from, to)
             }
             Hook::CommandExecuted {
                 region_id,
@@ -302,6 +302,7 @@ mod tests {
             cwd: None,
             tab_count: 1,
             active_tab: 0,
+            active_tab_id: Some(1),
             terminal_size: (80, 24),
         }
     }

@@ -273,6 +273,8 @@ fn structured_workspace_query_is_current_window_bounded_and_control_safe() {
     assert_eq!(window["tabs"][0]["panes"][0]["cols"], 80);
     assert_eq!(window["tabs"][0]["panes"][0]["rows"], 24);
 
+    // The event loop has already reported the window's active tab.
+    app.report_active_tab_switch();
     let observed_switches = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     app.plugin_manager
         .register(crate::test_support::hook_counter(
@@ -321,6 +323,8 @@ fn structured_workspace_query_is_current_window_bounded_and_control_safe() {
         app.tabs.as_ref().unwrap().active_tab_id(),
         Some(first_tab_id)
     );
+    // The next pass of the event loop has nothing left to report.
+    app.report_active_tab_switch();
     assert_eq!(
         observed_switches.load(std::sync::atomic::Ordering::SeqCst),
         0
@@ -356,8 +360,110 @@ fn structured_workspace_query_is_current_window_bounded_and_control_safe() {
     assert_eq!(focused["event"]["ok"], true);
     assert_eq!(focused["event"]["tab_changed"], true);
     assert_eq!(focused["event"]["pane_changed"], false);
+    app.report_active_tab_switch();
     assert_eq!(
         observed_switches.load(std::sync::atomic::Ordering::SeqCst),
         1
     );
+}
+
+/// One tab-switched hook's `from` and `to`.
+type TabSwitch = (Option<usize>, usize);
+
+/// Records every tab-switched hook a window raises.
+#[derive(Debug)]
+struct TabSwitchRecorder(std::sync::Arc<std::sync::Mutex<Vec<TabSwitch>>>);
+
+impl crate::plugin::hooks::Plugin for TabSwitchRecorder {
+    fn id(&self) -> &str {
+        "tab-switch-recorder"
+    }
+
+    fn name(&self) -> &str {
+        "Tab Switch Recorder"
+    }
+
+    fn on_hook(
+        &mut self,
+        hook: &crate::plugin::Hook,
+        _ctx: &crate::plugin::PluginContext,
+    ) -> Option<crate::plugin::PluginAction> {
+        if let crate::plugin::Hook::TabSwitched { from, to } = hook {
+            self.0.lock().unwrap().push((*from, *to));
+        }
+        None
+    }
+}
+
+#[test]
+fn every_active_tab_change_raises_one_tab_switched_by_tab_id() {
+    let shell = crate::test_support::sleeping_shell();
+    let mut tabs = TabManager::for_test(shell);
+    let first = tabs.new_tab().unwrap();
+    let second = tabs.new_tab().unwrap();
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.tabs = Some(tabs);
+    app.plugin_manager.clear();
+    let switches = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    app.plugin_manager
+        .register(Box::new(TabSwitchRecorder(switches.clone())))
+        .unwrap();
+    let take = || std::mem::take(&mut *switches.lock().unwrap());
+    let index_of = |app: &App, id: usize| {
+        app.tabs
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find_map(|(index, tab)| (tab.id == id).then_some(index))
+            .unwrap()
+    };
+
+    // A window's first report names no earlier tab; nothing changes after.
+    app.report_active_tab_switch();
+    assert_eq!(take(), vec![(None, second)]);
+    app.report_active_tab_switch();
+    assert!(take().is_empty());
+
+    // Keyboard navigation: one event per change, in tab IDs.
+    app.handle_action(crate::input::Action::PrevTab);
+    app.report_active_tab_switch();
+    assert_eq!(take(), vec![(Some(second), first)]);
+
+    // A new tab becomes active without any explicit switch.
+    let third = app.create_local_tab_in(true, None).unwrap();
+    app.report_active_tab_switch();
+    assert_eq!(take(), vec![(Some(first), third)]);
+
+    // Closing the active tab activates another; `from` is the closed tab.
+    let third_index = index_of(&app, third);
+    assert!(app.tabs.as_mut().unwrap().close_tab(third_index));
+    let neighbour = app.tabs.as_ref().unwrap().active_tab_id().unwrap();
+    assert_ne!(neighbour, third);
+    app.report_active_tab_switch();
+    assert_eq!(take(), vec![(Some(third), neighbour)]);
+
+    // A control client's selection is reported at once.
+    let other = if neighbour == first { second } else { first };
+    assert_eq!(
+        app.select_tab_for(Requester::Control, other as u64),
+        Ok(true)
+    );
+    assert_eq!(take(), vec![(Some(neighbour), other)]);
+
+    // A plugin's own selection raises nothing, now or later, while a change
+    // made before it keeps its event.
+    let neighbour_index = index_of(&app, neighbour);
+    app.handle_action(crate::input::Action::SwitchToTab(neighbour_index));
+    assert_eq!(
+        app.select_tab_for(Requester::Plugin, other as u64),
+        Ok(true)
+    );
+    assert_eq!(take(), vec![(Some(other), neighbour)]);
+    app.report_active_tab_switch();
+    assert!(take().is_empty());
+
+    // The next change is reported from the tab the plugin selected.
+    app.handle_action(crate::input::Action::SwitchToTab(neighbour_index));
+    app.report_active_tab_switch();
+    assert_eq!(take(), vec![(Some(other), neighbour)]);
 }

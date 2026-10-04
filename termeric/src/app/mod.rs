@@ -1293,6 +1293,9 @@ pub struct App {
     plugin_runtime_generation: u64,
     /// Exact plugin result request that must finish before this window closes.
     pending_plugin_window_close: Option<PendingPluginWindowClose>,
+    /// The active tab plugins last heard about in a tab-switched event, or
+    /// that a plugin's own action selected.
+    reported_active_tab: Option<usize>,
     /// Command palette
     command_palette: CommandPalette,
     /// Searchable common-character and exact-code-point selector.
@@ -1608,6 +1611,7 @@ impl App {
                 .map_err(anyhow::Error::msg)?,
             plugin_runtime_generation: 1,
             pending_plugin_window_close: None,
+            reported_active_tab: None,
             command_palette: {
                 let mut palette = CommandPalette::new();
                 palette.set_show_category(false);
@@ -3118,7 +3122,6 @@ impl App {
                 let to = self.tabs.as_ref().map(|t| t.active_index()).unwrap_or(0);
                 if from != to {
                     self.refresh_focused_terminal_surfaces();
-                    self.dispatch_plugin_hook(crate::plugin::Hook::TabSwitched { from, to });
                 }
             }
             Action::PrevTab => {
@@ -3129,7 +3132,6 @@ impl App {
                 let to = self.tabs.as_ref().map(|t| t.active_index()).unwrap_or(0);
                 if from != to {
                     self.refresh_focused_terminal_surfaces();
-                    self.dispatch_plugin_hook(crate::plugin::Hook::TabSwitched { from, to });
                 }
             }
             Action::SwitchToTab(index) => {
@@ -3140,7 +3142,6 @@ impl App {
                 let to = self.tabs.as_ref().map(|t| t.active_index()).unwrap_or(0);
                 if from != to {
                     self.refresh_focused_terminal_surfaces();
-                    self.dispatch_plugin_hook(crate::plugin::Hook::TabSwitched { from, to });
                 }
             }
             Action::ToggleSearch => {

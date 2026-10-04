@@ -269,12 +269,14 @@ impl App {
 
         let tab_count = self.tabs.as_ref().map_or(0, |t| t.count());
         let active_tab = self.tabs.as_ref().map_or(0, |t| t.active_index());
+        let active_tab_id = self.tabs.as_ref().and_then(TabManager::active_tab_id);
 
         PluginContext {
             window_id: self.control_window_id,
             cwd,
             tab_count,
             active_tab,
+            active_tab_id,
             terminal_size: (self.cols, self.rows),
         }
     }
@@ -292,6 +294,30 @@ impl App {
         );
         for action in self.plugin_manager.dispatch(&hook, &ctx) {
             self.execute_plugin_action(action);
+        }
+    }
+
+    /// Raise tab-switched when the active tab differs from the one plugins
+    /// last heard about. Every way the active tab changes (keys, clicks,
+    /// control requests, new, closed, and moved tabs, workspaces) is
+    /// observed here rather than where it happens; a plugin's own changes are
+    /// absorbed first, so they raise no event.
+    pub(super) fn report_active_tab_switch(&mut self) {
+        let Some(to) = self.tabs.as_ref().and_then(TabManager::active_tab_id) else {
+            return;
+        };
+        if self.reported_active_tab == Some(to) {
+            return;
+        }
+        let from = self.reported_active_tab.replace(to);
+        self.dispatch_plugin_hook(crate::plugin::Hook::TabSwitched { from, to });
+    }
+
+    /// Take the current active tab as already reported: a plugin's own
+    /// change answers only through its action result.
+    pub(super) fn absorb_active_tab_switch(&mut self) {
+        if let Some(active) = self.tabs.as_ref().and_then(TabManager::active_tab_id) {
+            self.reported_active_tab = Some(active);
         }
     }
 
