@@ -1009,7 +1009,7 @@ impl ScrollbackConfig {
 /// Mouse selection. A finished selection always fills the primary
 /// selection; this table adds the clipboard.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct SelectionConfig {
     /// Also copy a finished mouse selection to the clipboard.
     pub copy_on_select: bool,
@@ -2088,6 +2088,7 @@ mod tests {
             ("[window]\npadding = 4\n\n[windwo]\nopacity = 0.9\n", 4),
             ("[font]\nsize = 13\nlineheight = 1.4\n", 3),
             ("[window.background_image]\nfti = \"cover\"\n", 2),
+            ("[selection]\ncopy_on_selct = true\n", 2),
             (
                 "[[commands]]\nname = \"db\"\ncommand = \"ssh db\"\nalais = \"d\"\n",
                 4,
