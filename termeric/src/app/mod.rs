@@ -9,9 +9,11 @@ mod agent_view_tabs;
 mod agents;
 mod agents_panel;
 mod application;
+mod broadcast;
 mod commands_input;
 mod configuration;
 mod context_picker;
+mod control_actions;
 mod copy_mode;
 mod desktop_io;
 mod diff_review;
@@ -21,9 +23,11 @@ mod font_feature_editor;
 mod font_range_editor;
 mod frame;
 mod git_completion;
+mod harvest_actions;
 mod ime;
 mod info_overlay;
 mod kitty_file_transfer;
+mod live_domain_control;
 mod modal_layer;
 mod mouse;
 mod mouse_selection;
@@ -48,6 +52,7 @@ pub mod state;
 mod supervisor;
 mod system_accessibility;
 mod tab_drag;
+mod tab_rename;
 #[cfg(test)]
 mod tests;
 mod text_field_keys;
@@ -72,9 +77,9 @@ use winit::{
 
 use termeric_core::TerminalEvent;
 
+use self::control_actions::Requester;
 use self::redraw_scheduler::{RedrawReason, RedrawScheduler};
 use self::state::AppState;
-use self::workspace_actions::Requester;
 use crate::config::theme::Theme;
 use crate::config::{Config, SplashMode};
 use crate::harvest::HarvestMode;

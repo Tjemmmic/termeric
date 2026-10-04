@@ -5789,7 +5789,7 @@ fn plugin_tab_creation_returns_stable_identity_without_lifecycle_redispatch() {
     assert_eq!(observed.load(std::sync::atomic::Ordering::SeqCst), 1);
 
     assert!(
-        super::workspace_actions::validate_ordinary_tab_creation_capacity(
+        super::control_actions::validate_ordinary_tab_creation_capacity(
             crate::control::protocol::MAX_TABS_PER_WINDOW,
         )
         .unwrap_err()
