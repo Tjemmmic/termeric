@@ -384,7 +384,7 @@ fn quick_access_launch_is_excluded_from_automatic_workspace_persistence() {
             quick_access: true,
             ..WindowLaunch::default()
         }],
-        separate_process: false,
+        ..LaunchPlan::default()
     };
     let application = Application::from_config(Config::default(), None, launch).unwrap();
     assert_eq!(application.pending.len(), 1);
@@ -1534,7 +1534,7 @@ fn live_domain_creation_completion_returns_authoritative_gui_ids_and_replays() {
 fn explicit_multi_window_plan_disables_implicit_restore_for_every_window() {
     let plan = LaunchPlan {
         windows: vec![WindowLaunch::default(), WindowLaunch::default()],
-        separate_process: false,
+        ..LaunchPlan::default()
     };
     let application = Application::from_config(Config::default(), None, plan).unwrap();
     assert_eq!(application.pending.len(), 2);
@@ -1550,7 +1550,7 @@ fn explicit_multi_window_plan_disables_implicit_restore_for_every_window() {
 fn plugin_workspace_query_inventory_is_ordered_bounded_and_excludes_closing_windows() {
     let plan = LaunchPlan {
         windows: vec![WindowLaunch::default(); super::super::PLUGIN_PROCESS_MAX_WINDOWS + 2],
-        separate_process: false,
+        ..LaunchPlan::default()
     };
     let mut application = Application::from_config(Config::default(), None, plan).unwrap();
     application.pending[1].should_exit = true;
@@ -3175,24 +3175,20 @@ fn sole_default_window_retains_automatic_restore_eligibility() {
 }
 
 #[test]
-fn cli_renderer_override_becomes_the_window_recovery_policy() {
-    let launch = WindowLaunch {
-        renderer_backend: Some(crate::config::RendererBackend::Software),
-        ..WindowLaunch::default()
-    };
+fn cli_renderer_override_becomes_every_window_recovery_policy() {
     let application = Application::from_config(
         Config::default(),
         None,
         LaunchPlan {
-            windows: vec![launch],
-            separate_process: false,
+            windows: vec![WindowLaunch::default(); 2],
+            renderer_backend: Some(crate::config::RendererBackend::Software),
+            ..LaunchPlan::default()
         },
     )
     .unwrap();
-    assert_eq!(
-        application.pending[0].config.renderer.backend,
-        crate::config::RendererBackend::Software
-    );
+    assert!(application.pending.iter().all(|window| {
+        window.config.renderer.backend == crate::config::RendererBackend::Software
+    }));
 }
 
 #[test]
@@ -3311,6 +3307,13 @@ fn non_utf8_cli_cwd_fails_before_windows_are_queued() {
     assert!(format!("{error:#}").contains("valid UTF-8"));
 }
 
+fn cli_plan(arguments: &[&str]) -> LaunchPlan {
+    match crate::cli::parse(arguments.iter().map(std::ffi::OsString::from)).unwrap() {
+        crate::cli::ParseOutcome::Run(plan) => plan,
+        other => panic!("expected a launch plan, got {other:?}"),
+    }
+}
+
 #[test]
 fn automatic_restore_expands_each_remembered_window_workspace() {
     let mut config = Config::default();
@@ -3319,10 +3322,78 @@ fn automatic_restore_expands_each_remembered_window_workspace() {
         last_workspace_ids: vec!["workspace-a".into(), "workspace-b".into()],
         ..super::super::state::AppState::default()
     };
-    let plan = expand_auto_restore_plan(&config, &state, LaunchPlan::default());
-    assert_eq!(plan.windows.len(), 2);
-    assert_eq!(plan.windows[0].workspace.as_deref(), Some("workspace-a"));
-    assert_eq!(plan.windows[1].workspace.as_deref(), Some("workspace-b"));
+    // Process-wide options change how the process runs, not what it opens.
+    for arguments in [
+        &[][..],
+        &["--separate-process"],
+        &["--renderer", "software"],
+    ] {
+        let launch = cli_plan(arguments);
+        let application =
+            Application::for_startup(config.clone(), None, &state, launch.clone()).unwrap();
+        let workspaces: Vec<_> = application
+            .pending
+            .iter()
+            .map(|window| window.launch.workspace.as_deref())
+            .collect();
+        assert_eq!(
+            workspaces,
+            [Some("workspace-a"), Some("workspace-b")],
+            "{arguments:?}"
+        );
+        assert!(application.pending.iter().all(|window| {
+            window.allow_workspace_fallback
+                && window.config.renderer.backend
+                    == launch.renderer_backend.unwrap_or(config.renderer.backend)
+        }));
+        let plan = auto_restore_plan(&config, &state, &launch).unwrap();
+        assert_eq!(plan.separate_process, launch.separate_process);
+    }
+    // A launch that asks for a window of its own opens just that.
+    let application =
+        Application::for_startup(config.clone(), None, &state, cli_plan(&["--new-window"]))
+            .unwrap();
+    assert_eq!(application.pending.len(), 1);
+    assert!(application.pending[0].launch.workspace.is_none());
+    assert!(!application.pending[0].allow_workspace_fallback);
+}
+
+#[test]
+fn a_broken_automatic_workspace_opens_a_shell_in_a_separate_process() {
+    let temp = tempfile::tempdir().unwrap();
+    crate::workspace::set_test_workspaces_base_dir(Some(temp.path().join("workspaces")));
+    super::super::state::AppState::set_test_state_path(Some(temp.path().join("state.json")));
+    let outcome = std::panic::catch_unwind(|| {
+        let workspace_id = "0123456789abcdef0123456789abcdef";
+        let archive = crate::workspace::workspace_dir(workspace_id).unwrap();
+        std::fs::create_dir_all(&archive).unwrap();
+        std::fs::write(archive.join("workspace.toml"), "not an archive").unwrap();
+        let mut state = super::super::state::AppState::default();
+        state.remember_workspace(workspace_id).unwrap();
+        let mut config = Config::default();
+        config.session.auto_restore = true;
+        config.shell.program = Some("/bin/sh".into());
+        config.shell.args = vec!["-c".into(), "sleep 5".into()];
+
+        let mut application =
+            Application::for_startup(config, None, &state, cli_plan(&["--separate-process"]))
+                .unwrap();
+        let window = &mut application.pending[0];
+        window.automatic_persistence = false;
+        window.init_tabs().unwrap();
+        assert_eq!(window.tabs.as_ref().unwrap().count(), 1, "a shell opened");
+        assert!(
+            super::super::state::AppState::load()
+                .last_workspace_ids
+                .is_empty(),
+            "the broken archive is no longer restored"
+        );
+    });
+    crate::workspace::set_test_workspaces_base_dir(None);
+    super::super::state::AppState::set_test_state_path(None);
+    if let Err(panic) = outcome {
+        std::panic::resume_unwind(panic);
+    }
 }
 
 #[test]

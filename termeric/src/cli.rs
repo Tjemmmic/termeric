@@ -16,6 +16,9 @@ pub struct LaunchPlan {
     /// Start a process of its own even when a running Termeric could open
     /// the window.
     pub separate_process: bool,
+    /// Renderer override for the whole process, which every window of a
+    /// process shares.
+    pub renderer_backend: Option<crate::config::RendererBackend>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,8 +33,6 @@ pub struct WindowLaunch {
     pub tabs: Vec<TabLaunch>,
     pub app_id: Option<String>,
     pub pixel_size: Option<(u32, u32)>,
-    /// Process-wide renderer override copied to every initial window.
-    pub renderer_backend: Option<crate::config::RendererBackend>,
     /// Launch the process-owned drop-down window, or toggle the existing one.
     pub quick_access: bool,
     /// Open with no tabs of its own, for a tab torn off another window of
@@ -81,11 +82,20 @@ impl Default for LaunchPlan {
         Self {
             windows: vec![WindowLaunch::default()],
             separate_process: false,
+            renderer_backend: None,
         }
     }
 }
 
 impl LaunchPlan {
+    /// Whether this launch asks for no windows or tabs of its own, so it
+    /// reopens the workspaces open at the last exit when automatic restore
+    /// is on. Process-wide options (`--separate-process`, `--renderer`)
+    /// change how the process runs, not what it opens.
+    pub fn restores_last_session(&self) -> bool {
+        matches!(self.windows.as_slice(), [window] if *window == WindowLaunch::default())
+    }
+
     /// The tabs to ask a running Termeric to open, when this launch is one
     /// it can open: a single window of shell or command tabs, each with at
     /// most a folder and a title. Anything a running process cannot honor
@@ -100,12 +110,12 @@ impl LaunchPlan {
             return None;
         };
         let standalone = self.separate_process
+            || self.renderer_backend.is_some()
             || window.workspace.is_some()
             || window.domain.is_some()
             || window.domain_snapshot.is_some()
             || window.app_id.is_some()
             || window.pixel_size.is_some()
-            || window.renderer_backend.is_some()
             || window.quick_access
             || window.adopts_tab;
         if standalone {
@@ -161,7 +171,6 @@ impl Default for WindowLaunch {
             tabs: vec![TabLaunch::default()],
             app_id: None,
             pixel_size: None,
-            renderer_backend: None,
             quick_access: false,
             adopts_tab: false,
         }
@@ -286,7 +295,6 @@ fn parse_collected(
         return parse_mcp(&arguments[1..]);
     }
     let mut plan = LaunchPlan::default();
-    let mut renderer_backend = None;
     let mut index = 0usize;
     while index < arguments.len() {
         let argument = arguments[index]
@@ -413,7 +421,7 @@ fn parse_collected(
                     "software" => crate::config::RendererBackend::Software,
                     _ => anyhow::bail!("--renderer expects auto, gpu, or software, got {value:?}"),
                 };
-                if renderer_backend.replace(parsed).is_some() {
+                if plan.renderer_backend.replace(parsed).is_some() {
                     anyhow::bail!("--renderer may only be specified once");
                 }
             }
@@ -452,9 +460,6 @@ fn parse_collected(
             ),
         }
         index += 1;
-    }
-    for window in &mut plan.windows {
-        window.renderer_backend = renderer_backend;
     }
     let quick_access_windows = plan
         .windows
@@ -1621,18 +1626,41 @@ mod tests {
     }
 
     #[test]
-    fn renderer_override_is_validated_and_applies_to_every_window() {
+    fn only_launches_asking_for_no_windows_restore_the_last_session() {
+        for restoring in [
+            &[][..],
+            &["--separate-process"],
+            &["--renderer", "software"],
+            &["--separate-process", "--renderer", "gpu"],
+        ] {
+            assert!(run(restoring).restores_last_session(), "{restoring:?}");
+        }
+        for explicit in [
+            &["--new-window"][..],
+            &["--working-directory", "/tmp"],
+            &["--workspace", "main"],
+            &["--title", "Logs"],
+            &["--", "htop"],
+        ] {
+            assert!(!run(explicit).restores_last_session(), "{explicit:?}");
+        }
+    }
+
+    #[test]
+    fn renderer_override_is_validated_and_belongs_to_the_process() {
         let plan = run(&["--new-window", "--renderer", "software"]);
         assert_eq!(plan.windows.len(), 1);
         assert_eq!(
-            plan.windows[0].renderer_backend,
+            plan.renderer_backend,
             Some(crate::config::RendererBackend::Software)
         );
 
-        let plan = run(&["--renderer", "gpu", "--new-window", "--new-window"]);
-        assert!(plan.windows.iter().all(|window| {
-            window.renderer_backend == Some(crate::config::RendererBackend::Gpu)
-        }));
+        let plan = run(&["--new-window", "--new-window", "--renderer", "gpu"]);
+        assert_eq!(plan.windows.len(), 2);
+        assert_eq!(
+            plan.renderer_backend,
+            Some(crate::config::RendererBackend::Gpu)
+        );
         assert!(parse([OsString::from("--renderer"), OsString::from("cpu")]).is_err());
         assert!(
             parse(

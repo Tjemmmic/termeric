@@ -41,7 +41,7 @@ When you quit, the window is saved back into the workspace it last opened or sav
 
 ## Restore windows when Termeric starts
 
-With **Auto Restore Workspace** on, starting Termeric with no arguments reopens every window that was open when you last quit, each with its own workspace. Starting with explicit options such as `--tab`, `--command`, or `--workspace` skips the automatic restore.
+With **Auto Restore Workspace** on, starting Termeric with no window or tab options reopens every window that was open when you last quit, each with its own workspace. Options that only change how the process runs, `--separate-process` and `--renderer`, still restore. Starting with options that ask for a window or tabs of their own, such as `--new-window`, `--tab`, `--command`, or `--workspace`, skips the automatic restore.
 
 If you close one window while others stay open, that window is not reopened next time, and unless it belongs to a workspace you opened or saved, nothing is saved for it. If a saved workspace can't be restored at startup, Termeric opens a normal shell and shows an error. With `--workspace`, a workspace that can't be restored stops Termeric from starting instead.
 

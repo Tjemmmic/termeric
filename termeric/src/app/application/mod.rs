@@ -321,12 +321,22 @@ impl Application {
         if pruned > 0 {
             log::info!("Pruned {pruned} automatic workspace archives no longer restorable");
         }
-        let automatic_restore = launch == LaunchPlan::default()
-            && config.session.enabled
-            && config.session.auto_restore
-            && !state.last_workspace_ids.is_empty();
-        let launch = expand_auto_restore_plan(&config, &state, launch);
-        let mut application = Self::from_config(config, warning, launch)?;
+        Self::for_startup(config, warning, &state, launch)
+    }
+
+    /// The process `launch` starts with `config` and the startup `state`:
+    /// the launch itself, or the workspaces open at the last exit.
+    fn for_startup(
+        config: Config,
+        warning: Option<String>,
+        state: &super::state::AppState,
+        launch: LaunchPlan,
+    ) -> Result<Self> {
+        let restoring = auto_restore_plan(&config, state, &launch);
+        let automatic_restore = restoring.is_some();
+        let mut application = Self::from_config(config, warning, restoring.unwrap_or(launch))?;
+        // An automatic archive that no longer opens costs a shell, never
+        // the startup the person asked for.
         if automatic_restore {
             for window in &mut application.pending {
                 window.allow_workspace_fallback = true;
@@ -336,30 +346,28 @@ impl Application {
     }
 
     fn from_config(
-        config: Config,
+        mut config: Config,
         mut warning: Option<String>,
         launch: LaunchPlan,
     ) -> Result<Self> {
         validate_cli_launches(&config, &launch)?;
-        let sole_default =
-            launch.windows.len() == 1 && launch.windows.first() == Some(&WindowLaunch::default());
+        if let Some(backend) = launch.renderer_backend {
+            config.renderer.backend = backend;
+        }
+        let restores_last_session = launch.restores_last_session();
         let plugin_host = Arc::new(crate::plugin::structured::StructuredPluginHost::default());
         let plugin_paths = crate::plugin::runtime::PluginPaths::configured();
         let mut pending = Vec::with_capacity(launch.windows.len());
         for window_launch in launch.windows {
             let quick_access = window_launch.quick_access;
-            let mut window_config = config.clone();
-            if let Some(backend) = window_launch.renderer_backend {
-                window_config.renderer.backend = backend;
-            }
             let mut window = App::from_config(
-                window_config,
+                config.clone(),
                 warning.take(),
                 true,
                 Arc::clone(&plugin_host),
             )?;
             window.launch = window_launch;
-            window.allow_auto_restore = sole_default;
+            window.allow_auto_restore = restores_last_session;
             if quick_access {
                 window.allow_auto_restore = false;
                 window.retain_workspace_on_exit = false;
@@ -639,23 +647,22 @@ fn validate_cli_launches(config: &Config, launch: &LaunchPlan) -> Result<()> {
     Ok(())
 }
 
-fn expand_auto_restore_plan(
+/// The launch that reopens the workspaces open at the last exit, one window
+/// each, when `launch` restores the last session and automatic restore is
+/// on and has something to restore.
+fn auto_restore_plan(
     config: &Config,
     state: &super::state::AppState,
-    launch: LaunchPlan,
-) -> LaunchPlan {
-    // Only the windows asked for matter; starting a process of its own
-    // still restores.
-    if launch.windows != LaunchPlan::default().windows
+    launch: &LaunchPlan,
+) -> Option<LaunchPlan> {
+    if !launch.restores_last_session()
         || !config.session.enabled
         || !config.session.auto_restore
+        || state.last_workspace_ids.is_empty()
     {
-        return launch;
+        return None;
     }
-    if state.last_workspace_ids.is_empty() {
-        return launch;
-    }
-    LaunchPlan {
+    Some(LaunchPlan {
         windows: state
             .last_workspace_ids
             .iter()
@@ -664,8 +671,8 @@ fn expand_auto_restore_plan(
                 ..WindowLaunch::default()
             })
             .collect(),
-        separate_process: launch.separate_process,
-    }
+        ..launch.clone()
+    })
 }
 
 impl ApplicationHandler<AppEvent> for Application {

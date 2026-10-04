@@ -270,7 +270,6 @@ fn cli_launch_plan_creates_ordered_shell_and_arbitrary_command_tabs() {
         ],
         app_id: None,
         pixel_size: None,
-        renderer_backend: None,
         quick_access: false,
     };
     app.init_tabs().unwrap();

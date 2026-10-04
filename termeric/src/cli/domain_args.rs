@@ -323,7 +323,7 @@ impl DomainCli {
                         app_id,
                         ..WindowLaunch::default()
                     }],
-                    separate_process: false,
+                    ..LaunchPlan::default()
                 }));
             }
             DomainArgs::ProtocolVersion { output } => {

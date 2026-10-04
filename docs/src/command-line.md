@@ -43,7 +43,7 @@ termeric --profile claude-code:review
 | `--workspace ID` | Restore one saved [workspace](workspaces-and-sessions.md), by its ID (`workspace-…`), into this window. It can't be combined with tab, directory, title, command, profile, or split options in the same window. |
 | `--geometry WIDTHxHEIGHT` | Set the window's initial size in physical pixels, from 160x120 to 16384x16384. |
 | `--class NAME`, `--app-id NAME` | Set the window's X11 class and Wayland application ID, for window manager rules. |
-| `--renderer auto\|gpu\|software` | Choose the renderer for every window: `auto` tries the GPU and falls back to software rendering; `gpu` and `software` insist on one. |
+| `--renderer auto\|gpu\|software` | Choose the renderer for the whole process, including windows opened later: `auto` tries the GPU and falls back to software rendering; `gpu` and `software` insist on one. |
 | `--quick-access` | Show or hide the quick-access drop-down terminal, starting it if needed. |
 | `--separate-process` | Start a Termeric process of its own, even when one is already running. |
 | `-h`, `--help` | Print a summary of options. |
@@ -51,7 +51,7 @@ termeric --profile claude-code:review
 
 Each tab takes one command: `--command`, `--`, `--terminal-profile`, and `--profile` can't be combined in the same tab. When a tab gives no command, it runs your configured shell.
 
-When you give no window or tab options at all and [automatic restore](workspaces-and-sessions.md) is on, Termeric reopens the workspaces that were open when it last exited.
+When you give no window or tab options at all and [automatic restore](workspaces-and-sessions.md) is on, Termeric reopens the workspaces that were open when it last exited. `--separate-process` and `--renderer` change only how the process runs, so they still restore.
 
 ### Joining the running Termeric
 
