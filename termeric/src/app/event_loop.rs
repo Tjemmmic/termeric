@@ -509,29 +509,10 @@ impl App {
             return;
         }
 
-        // Check unified shortcut registry (replaces hardcoded check_keybinding)
-        if event.state == winit::event::ElementState::Pressed {
-            if let Some(bindable) = self
-                .shortcut_registry
-                .check(&event.logical_key, self.modifiers)
-            {
-                let action = bindable.to_action();
-                if self.handle_action(action) {
-                    return;
-                }
-            }
-        }
-
-        // Check plugin/custom keybindings (SendText, RunCommand, PluginCommand)
-        if event.state == winit::event::ElementState::Pressed {
-            if let Some(key_action) = self
-                .keybinding_manager
-                .check(&event.logical_key, self.modifiers)
-            {
-                if self.handle_key_action(key_action.clone()) {
-                    return;
-                }
-            }
+        if event.state == winit::event::ElementState::Pressed
+            && self.handle_bound_key(&event.logical_key)
+        {
+            return;
         }
 
         // Convert key event to terminal input
@@ -546,6 +527,22 @@ impl App {
         if let Some(data) = data {
             self.write_to_pty(&data);
         }
+    }
+
+    /// A pressed key's bindings: an application shortcut first, then a
+    /// plugin or custom keybinding (SendText, RunCommand, PluginCommand).
+    /// Returns true when one handled the key, which then never reaches the
+    /// terminal.
+    pub(super) fn handle_bound_key(&mut self, key: &winit::keyboard::Key) -> bool {
+        if let Some(bindable) = self.shortcut_registry.check(key, self.modifiers)
+            && self.handle_action(bindable.to_action())
+        {
+            return true;
+        }
+        if let Some(key_action) = self.keybinding_manager.check(key, self.modifiers).cloned() {
+            return self.handle_key_action(key_action);
+        }
+        false
     }
 
     /// One mouse button press or release: copy-mode exit and terminal

@@ -580,3 +580,52 @@ fn unicode_picker_tracks_only_the_same_focused_owner_through_topology_changes() 
         }
     }
 }
+
+#[test]
+fn shortcuts_outrank_plugin_keybindings_and_both_outrank_the_terminal() {
+    use crate::input::keybindings::{KeyAction, KeyBinding, KeyModifiers};
+    use winit::keyboard::{Key, ModifiersState};
+    let mut app = App::new_headless_running(
+        "stty raw -echo; printf READY; dd bs=1 count=6 2>/dev/null | od -An -c; sleep 0.2",
+        "bound-key-reader",
+    );
+    app.wait_for_screen_text("READY");
+    let control_shift = KeyModifiers {
+        ctrl: true,
+        shift: true,
+        ..KeyModifiers::default()
+    };
+    app.keybinding_manager.load(vec![
+        KeyBinding {
+            key: "p".into(),
+            modifiers: control_shift.clone(),
+            action: KeyAction::SendText {
+                text: "SHADOW".into(),
+            },
+        },
+        KeyBinding {
+            key: "y".into(),
+            modifiers: control_shift,
+            action: KeyAction::SendText {
+                text: "PLUGIN".into(),
+            },
+        },
+    ]);
+    app.modifiers = ModifiersState::CONTROL | ModifiersState::SHIFT;
+
+    // Ctrl+Shift+P opens the command palette; the plugin binding on the
+    // same chord never runs.
+    assert!(app.handle_bound_key(&Key::Character("P".into())));
+    assert!(app.command_palette.is_active());
+    app.command_palette.close();
+
+    // A chord only a plugin binds runs that binding.
+    assert!(app.handle_bound_key(&Key::Character("Y".into())));
+
+    // A key bound to nothing is left for the terminal's encoder.
+    app.modifiers = ModifiersState::empty();
+    assert!(!app.handle_bound_key(&Key::Character("z".into())));
+
+    // The reader takes the first six bytes the terminal was sent.
+    app.wait_for_screen_text("P   L   U   G   I   N");
+}
