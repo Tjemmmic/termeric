@@ -1,6 +1,8 @@
 //! Incremental AccessKit tree for native screen readers.
 
+use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
+use std::hash::Hash;
 
 use accesskit::{
     Action, ActionData, ActionRequest, CustomAction, Live, Node, NodeId, Rect, Role, TextPosition,
@@ -217,56 +219,82 @@ enum HarvestSemanticTarget {
     },
 }
 
+/// Stable AccessKit nodes for one surface's semantic targets. A target keeps
+/// its node while it stays listed; nodes count up from the surface's own
+/// base, so no two surfaces share an ID.
+struct NodeRegistry<K> {
+    nodes: HashMap<K, NodeId>,
+    targets: HashMap<NodeId, K>,
+    next: u64,
+}
+
+impl<K: Clone + Eq + Hash> NodeRegistry<K> {
+    fn new(base: u64) -> Self {
+        Self {
+            nodes: HashMap::new(),
+            targets: HashMap::new(),
+            next: base,
+        }
+    }
+
+    /// The node for `target`, allocated the first time it is seen. A
+    /// borrowed key (`&str` for a `String` registry) allocates only then.
+    fn node<Q>(&mut self, target: &Q) -> NodeId
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ToOwned<Owned = K> + ?Sized,
+    {
+        if let Some(node) = self.nodes.get(target) {
+            return *node;
+        }
+        let node = NodeId(self.next);
+        self.next = self.next.saturating_add(1);
+        let target = target.to_owned();
+        self.targets.insert(node, target.clone());
+        self.nodes.insert(target, node);
+        node
+    }
+
+    fn contains(&self, node: NodeId) -> bool {
+        self.targets.contains_key(&node)
+    }
+
+    /// Forget every target `keep` rejects, so an action aimed at its node
+    /// finds nothing. A forgotten node is never handed out again.
+    fn retain(&mut self, mut keep: impl FnMut(&K) -> bool) {
+        self.nodes.retain(|target, _| keep(target));
+        let nodes = &self.nodes;
+        self.targets.retain(|_, target| nodes.contains_key(target));
+    }
+
+    fn clear(&mut self) {
+        self.nodes.clear();
+        self.targets.clear();
+    }
+}
+
 pub(super) struct AccessibilityState {
     active: bool,
     initialized: bool,
     previous: HashMap<NodeId, Node>,
     focus_override: Option<NodeId>,
     keyboard_focus: ChromeFocus,
-    palette_nodes: HashMap<String, NodeId>,
-    palette_commands: HashMap<NodeId, String>,
-    next_palette_node: u64,
-    settings_nodes: HashMap<SettingsSemanticTarget, NodeId>,
-    settings_targets: HashMap<NodeId, SettingsSemanticTarget>,
-    next_settings_node: u64,
-    commands_nodes: HashMap<CommandsSemanticTarget, NodeId>,
-    commands_targets: HashMap<NodeId, CommandsSemanticTarget>,
-    next_commands_node: u64,
+    palette: NodeRegistry<String>,
+    settings: NodeRegistry<SettingsSemanticTarget>,
+    commands: NodeRegistry<CommandsSemanticTarget>,
     /// Agent rows, by the terminal they show, so a row keeps its node as
     /// urgency reorders the list.
-    agents_nodes: HashMap<crate::ui::agents_panel::AgentOrigin, NodeId>,
-    agents_targets: HashMap<NodeId, crate::ui::agents_panel::AgentOrigin>,
-    next_agents_node: u64,
-    session_nodes: HashMap<SessionSemanticTarget, NodeId>,
-    session_targets: HashMap<NodeId, SessionSemanticTarget>,
-    next_session_node: u64,
-    shortcuts_nodes: HashMap<ShortcutsSemanticTarget, NodeId>,
-    shortcuts_targets: HashMap<NodeId, ShortcutsSemanticTarget>,
-    next_shortcuts_node: u64,
-    domain_nodes: HashMap<String, NodeId>,
-    domain_commands: HashMap<NodeId, String>,
-    next_domain_node: u64,
-    unicode_nodes: HashMap<String, NodeId>,
-    unicode_commands: HashMap<NodeId, String>,
-    next_unicode_node: u64,
-    guardrail_nodes: HashMap<GuardrailSemanticTarget, NodeId>,
-    guardrail_targets: HashMap<NodeId, GuardrailSemanticTarget>,
-    next_guardrail_node: u64,
-    info_nodes: HashMap<InfoSemanticTarget, NodeId>,
-    info_targets: HashMap<NodeId, InfoSemanticTarget>,
-    next_info_node: u64,
-    diff_nodes: HashMap<DiffSemanticTarget, NodeId>,
-    diff_targets: HashMap<NodeId, DiffSemanticTarget>,
-    next_diff_node: u64,
-    context_nodes: HashMap<ContextSemanticTarget, NodeId>,
-    context_targets: HashMap<NodeId, ContextSemanticTarget>,
-    next_context_node: u64,
-    harvest_nodes: HashMap<HarvestSemanticTarget, NodeId>,
-    harvest_targets: HashMap<NodeId, HarvestSemanticTarget>,
-    next_harvest_node: u64,
-    agent_view_nodes: HashMap<crate::ui::agent_view::scene::Target, NodeId>,
-    agent_view_targets: HashMap<NodeId, crate::ui::agent_view::scene::Target>,
-    next_agent_view_node: u64,
+    agents: NodeRegistry<crate::ui::agents_panel::AgentOrigin>,
+    session: NodeRegistry<SessionSemanticTarget>,
+    shortcuts: NodeRegistry<ShortcutsSemanticTarget>,
+    domain: NodeRegistry<String>,
+    unicode: NodeRegistry<String>,
+    guardrail: NodeRegistry<GuardrailSemanticTarget>,
+    info: NodeRegistry<InfoSemanticTarget>,
+    diff: NodeRegistry<DiffSemanticTarget>,
+    context: NodeRegistry<ContextSemanticTarget>,
+    harvest: NodeRegistry<HarvestSemanticTarget>,
+    agent_view: NodeRegistry<crate::ui::agent_view::scene::Target>,
 }
 
 impl Default for AccessibilityState {
@@ -277,48 +305,20 @@ impl Default for AccessibilityState {
             previous: HashMap::new(),
             focus_override: None,
             keyboard_focus: ChromeFocus::default(),
-            palette_nodes: HashMap::new(),
-            palette_commands: HashMap::new(),
-            next_palette_node: PALETTE_ENTRY_BASE,
-            settings_nodes: HashMap::new(),
-            settings_targets: HashMap::new(),
-            next_settings_node: SETTINGS_ENTRY_BASE,
-            commands_nodes: HashMap::new(),
-            commands_targets: HashMap::new(),
-            next_commands_node: COMMANDS_ENTRY_BASE,
-            agents_nodes: HashMap::new(),
-            agents_targets: HashMap::new(),
-            next_agents_node: AGENTS_ENTRY_BASE,
-            session_nodes: HashMap::new(),
-            session_targets: HashMap::new(),
-            next_session_node: SESSION_ENTRY_BASE,
-            shortcuts_nodes: HashMap::new(),
-            shortcuts_targets: HashMap::new(),
-            next_shortcuts_node: SHORTCUTS_ENTRY_BASE,
-            domain_nodes: HashMap::new(),
-            domain_commands: HashMap::new(),
-            next_domain_node: DOMAIN_ENTRY_BASE,
-            unicode_nodes: HashMap::new(),
-            unicode_commands: HashMap::new(),
-            next_unicode_node: UNICODE_ENTRY_BASE,
-            guardrail_nodes: HashMap::new(),
-            guardrail_targets: HashMap::new(),
-            next_guardrail_node: GUARDRAIL_ACTION_BASE,
-            info_nodes: HashMap::new(),
-            info_targets: HashMap::new(),
-            next_info_node: INFO_ACTION_BASE,
-            diff_nodes: HashMap::new(),
-            diff_targets: HashMap::new(),
-            next_diff_node: DIFF_ACTION_BASE,
-            context_nodes: HashMap::new(),
-            context_targets: HashMap::new(),
-            next_context_node: CONTEXT_ACTION_BASE,
-            harvest_nodes: HashMap::new(),
-            harvest_targets: HashMap::new(),
-            next_harvest_node: HARVEST_ACTION_BASE,
-            agent_view_nodes: HashMap::new(),
-            agent_view_targets: HashMap::new(),
-            next_agent_view_node: AGENT_VIEW_ENTRY_BASE,
+            palette: NodeRegistry::new(PALETTE_ENTRY_BASE),
+            settings: NodeRegistry::new(SETTINGS_ENTRY_BASE),
+            commands: NodeRegistry::new(COMMANDS_ENTRY_BASE),
+            agents: NodeRegistry::new(AGENTS_ENTRY_BASE),
+            session: NodeRegistry::new(SESSION_ENTRY_BASE),
+            shortcuts: NodeRegistry::new(SHORTCUTS_ENTRY_BASE),
+            domain: NodeRegistry::new(DOMAIN_ENTRY_BASE),
+            unicode: NodeRegistry::new(UNICODE_ENTRY_BASE),
+            guardrail: NodeRegistry::new(GUARDRAIL_ACTION_BASE),
+            info: NodeRegistry::new(INFO_ACTION_BASE),
+            diff: NodeRegistry::new(DIFF_ACTION_BASE),
+            context: NodeRegistry::new(CONTEXT_ACTION_BASE),
+            harvest: NodeRegistry::new(HARVEST_ACTION_BASE),
+            agent_view: NodeRegistry::new(AGENT_VIEW_ENTRY_BASE),
         }
     }
 }
@@ -385,35 +385,6 @@ impl AccessibilityState {
         self.focus_override = None;
     }
 
-    fn palette_node(&mut self, command: &str) -> NodeId {
-        if let Some(node) = self.palette_nodes.get(command) {
-            return *node;
-        }
-        let node = NodeId(self.next_palette_node);
-        self.next_palette_node = self.next_palette_node.saturating_add(1);
-        self.palette_nodes.insert(command.to_string(), node);
-        self.palette_commands.insert(node, command.to_string());
-        node
-    }
-
-    fn retain_palette_commands(&mut self, commands: &HashSet<&str>) {
-        self.palette_nodes
-            .retain(|command, _| commands.contains(command.as_str()));
-        self.palette_commands
-            .retain(|_, command| commands.contains(command.as_str()));
-    }
-
-    fn settings_node(&mut self, target: SettingsSemanticTarget) -> NodeId {
-        if let Some(node) = self.settings_nodes.get(&target) {
-            return *node;
-        }
-        let node = NodeId(self.next_settings_node);
-        self.next_settings_node = self.next_settings_node.saturating_add(1);
-        self.settings_nodes.insert(target.clone(), node);
-        self.settings_targets.insert(node, target);
-        node
-    }
-
     fn is_settings_node(&self, node: NodeId) -> bool {
         matches!(
             node,
@@ -425,62 +396,7 @@ impl AccessibilityState {
                 | SETTINGS_CLOSE
                 | SETTINGS_SAVE
                 | SETTINGS_PAGES
-        ) || self.settings_targets.contains_key(&node)
-    }
-
-    fn commands_node(&mut self, target: CommandsSemanticTarget) -> NodeId {
-        if let Some(node) = self.commands_nodes.get(&target) {
-            return *node;
-        }
-        let node = NodeId(self.next_commands_node);
-        self.next_commands_node = self.next_commands_node.saturating_add(1);
-        self.commands_nodes.insert(target.clone(), node);
-        self.commands_targets.insert(node, target);
-        node
-    }
-
-    fn retain_commands(&mut self, targets: &HashSet<CommandsSemanticTarget>) {
-        self.commands_nodes
-            .retain(|target, _| targets.contains(target));
-        self.commands_targets
-            .retain(|_, target| targets.contains(target));
-    }
-
-    fn agents_node(&mut self, identity: crate::ui::agents_panel::AgentOrigin) -> NodeId {
-        if let Some(node) = self.agents_nodes.get(&identity) {
-            return *node;
-        }
-        let node = NodeId(self.next_agents_node);
-        self.next_agents_node = self.next_agents_node.saturating_add(1);
-        self.agents_nodes.insert(identity, node);
-        self.agents_targets.insert(node, identity);
-        node
-    }
-
-    fn retain_agents(&mut self, shown: &HashSet<crate::ui::agents_panel::AgentOrigin>) {
-        self.agents_nodes
-            .retain(|identity, _| shown.contains(identity));
-        self.agents_targets
-            .retain(|_, identity| shown.contains(identity));
-    }
-
-    /// A stable node for an agent view target across frames.
-    fn agent_view_node(&mut self, target: &crate::ui::agent_view::scene::Target) -> NodeId {
-        if let Some(node) = self.agent_view_nodes.get(target) {
-            return *node;
-        }
-        let node = NodeId(self.next_agent_view_node);
-        self.next_agent_view_node = self.next_agent_view_node.saturating_add(1);
-        self.agent_view_nodes.insert(target.clone(), node);
-        self.agent_view_targets.insert(node, target.clone());
-        node
-    }
-
-    fn retain_agent_view(&mut self, shown: &HashSet<&crate::ui::agent_view::scene::Target>) {
-        self.agent_view_nodes
-            .retain(|target, _| shown.contains(target));
-        self.agent_view_targets
-            .retain(|_, target| shown.contains(target));
+        ) || self.settings.contains(node)
     }
 
     fn is_agents_node(&self, node: NodeId) -> bool {
@@ -493,7 +409,7 @@ impl AccessibilityState {
                 | AGENTS_SUPERVISOR
                 | AGENTS_SUPERVISOR_TOGGLE
                 | AGENTS_ACTIVITY
-        ) || self.agents_targets.contains_key(&node)
+        ) || self.agents.contains(node)
             || (AGENTS_ACTIVITY_BASE..AGENTS_ENTRY_BASE).contains(&node.0)
     }
 
@@ -509,25 +425,7 @@ impl AccessibilityState {
                 | COMMANDS_COMMAND
                 | COMMANDS_SAVE
                 | COMMANDS_CANCEL
-        ) || self.commands_targets.contains_key(&node)
-    }
-
-    fn session_node(&mut self, target: SessionSemanticTarget) -> NodeId {
-        if let Some(node) = self.session_nodes.get(&target) {
-            return *node;
-        }
-        let node = NodeId(self.next_session_node);
-        self.next_session_node = self.next_session_node.saturating_add(1);
-        self.session_nodes.insert(target.clone(), node);
-        self.session_targets.insert(node, target);
-        node
-    }
-
-    fn retain_sessions(&mut self, targets: &HashSet<SessionSemanticTarget>) {
-        self.session_nodes
-            .retain(|target, _| targets.contains(target));
-        self.session_targets
-            .retain(|_, target| targets.contains(target));
+        ) || self.commands.contains(node)
     }
 
     fn is_session_node(&self, node: NodeId) -> bool {
@@ -542,18 +440,7 @@ impl AccessibilityState {
                 | SESSION_RENAME_CANCEL
                 | SESSION_BACK
                 | SESSION_SNAPSHOTS
-        ) || self.session_targets.contains_key(&node)
-    }
-
-    fn shortcuts_node(&mut self, target: ShortcutsSemanticTarget) -> NodeId {
-        if let Some(node) = self.shortcuts_nodes.get(&target) {
-            return *node;
-        }
-        let node = NodeId(self.next_shortcuts_node);
-        self.next_shortcuts_node = self.next_shortcuts_node.saturating_add(1);
-        self.shortcuts_nodes.insert(target, node);
-        self.shortcuts_targets.insert(node, target);
-        node
+        ) || self.session.contains(node)
     }
 
     fn is_shortcuts_node(&self, node: NodeId) -> bool {
@@ -564,194 +451,41 @@ impl AccessibilityState {
                 | SHORTCUTS_LIST
                 | SHORTCUTS_EMPTY
                 | SHORTCUTS_STATUS
-        ) || self.shortcuts_targets.contains_key(&node)
-    }
-
-    fn domain_node(&mut self, command: &str) -> NodeId {
-        if let Some(node) = self.domain_nodes.get(command) {
-            return *node;
-        }
-        let node = NodeId(self.next_domain_node);
-        self.next_domain_node = self.next_domain_node.saturating_add(1);
-        self.domain_nodes.insert(command.to_string(), node);
-        self.domain_commands.insert(node, command.to_string());
-        node
-    }
-
-    fn retain_domain_commands(&mut self, commands: &HashSet<&str>) {
-        self.domain_nodes
-            .retain(|command, _| commands.contains(command.as_str()));
-        self.domain_commands
-            .retain(|_, command| commands.contains(command.as_str()));
+        ) || self.shortcuts.contains(node)
     }
 
     fn is_domain_node(&self, node: NodeId) -> bool {
         matches!(
             node,
             DOMAIN_DIALOG | DOMAIN_INPUT | DOMAIN_LIST | DOMAIN_EMPTY
-        ) || self.domain_commands.contains_key(&node)
-    }
-
-    fn unicode_node(&mut self, command: &str) -> NodeId {
-        if let Some(node) = self.unicode_nodes.get(command) {
-            return *node;
-        }
-        let node = NodeId(self.next_unicode_node);
-        self.next_unicode_node = self.next_unicode_node.saturating_add(1);
-        self.unicode_nodes.insert(command.to_string(), node);
-        self.unicode_commands.insert(node, command.to_string());
-        node
-    }
-
-    fn retain_unicode_commands(&mut self, commands: &HashSet<&str>) {
-        self.unicode_nodes
-            .retain(|command, _| commands.contains(command.as_str()));
-        self.unicode_commands
-            .retain(|_, command| commands.contains(command.as_str()));
-    }
-
-    /// The node for an entry of a palette-style modal, kept while the entry is.
-    fn palette_modal_node(&mut self, modal: PaletteModal, command: &str) -> NodeId {
-        match modal {
-            PaletteModal::Commands => self.palette_node(command),
-            PaletteModal::Domains => self.domain_node(command),
-            PaletteModal::Unicode => self.unicode_node(command),
-        }
-    }
-
-    fn retain_palette_modal_commands(&mut self, modal: PaletteModal, commands: &HashSet<&str>) {
-        match modal {
-            PaletteModal::Commands => self.retain_palette_commands(commands),
-            PaletteModal::Domains => self.retain_domain_commands(commands),
-            PaletteModal::Unicode => self.retain_unicode_commands(commands),
-        }
-    }
-
-    fn palette_modal_command(&self, modal: PaletteModal, node: NodeId) -> Option<String> {
-        match modal {
-            PaletteModal::Commands => &self.palette_commands,
-            PaletteModal::Domains => &self.domain_commands,
-            PaletteModal::Unicode => &self.unicode_commands,
-        }
-        .get(&node)
-        .cloned()
+        ) || self.domain.contains(node)
     }
 
     fn is_unicode_node(&self, node: NodeId) -> bool {
         matches!(
             node,
             UNICODE_DIALOG | UNICODE_INPUT | UNICODE_LIST | UNICODE_EMPTY
-        ) || self.unicode_commands.contains_key(&node)
-    }
-
-    fn guardrail_node(&mut self, target: GuardrailSemanticTarget) -> NodeId {
-        if let Some(node) = self.guardrail_nodes.get(&target) {
-            return *node;
-        }
-        let node = NodeId(self.next_guardrail_node);
-        self.next_guardrail_node = self.next_guardrail_node.saturating_add(1);
-        self.guardrail_nodes.insert(target, node);
-        self.guardrail_targets.insert(node, target);
-        node
-    }
-
-    fn retain_guardrail_targets(&mut self, targets: &HashSet<GuardrailSemanticTarget>) {
-        self.guardrail_nodes
-            .retain(|target, _| targets.contains(target));
-        self.guardrail_targets
-            .retain(|_, target| targets.contains(target));
+        ) || self.unicode.contains(node)
     }
 
     fn is_guardrail_node(&self, node: NodeId) -> bool {
         matches!(
             node,
             GUARDRAIL_DIALOG | GUARDRAIL_COMMAND | GUARDRAIL_REASON | GUARDRAIL_CONTEXT
-        ) || self.guardrail_targets.contains_key(&node)
-    }
-
-    fn info_node(&mut self, target: InfoSemanticTarget) -> NodeId {
-        if let Some(node) = self.info_nodes.get(&target) {
-            return *node;
-        }
-        let node = NodeId(self.next_info_node);
-        self.next_info_node = self.next_info_node.saturating_add(1);
-        self.info_nodes.insert(target.clone(), node);
-        self.info_targets.insert(node, target);
-        node
-    }
-
-    fn retain_info_targets(&mut self, targets: &HashSet<InfoSemanticTarget>) {
-        self.info_nodes.retain(|target, _| targets.contains(target));
-        self.info_targets
-            .retain(|_, target| targets.contains(target));
+        ) || self.guardrail.contains(node)
     }
 
     fn is_info_node(&self, node: NodeId) -> bool {
-        matches!(node, INFO_DIALOG | INFO_TITLE | INFO_STATUS)
-            || self.info_targets.contains_key(&node)
-    }
-
-    fn diff_node(&mut self, target: DiffSemanticTarget) -> NodeId {
-        if let Some(node) = self.diff_nodes.get(&target) {
-            return *node;
-        }
-        let node = NodeId(self.next_diff_node);
-        self.next_diff_node = self.next_diff_node.saturating_add(1);
-        self.diff_nodes.insert(target, node);
-        self.diff_targets.insert(node, target);
-        node
-    }
-
-    fn retain_diff_targets(&mut self, targets: &HashSet<DiffSemanticTarget>) {
-        self.diff_nodes.retain(|target, _| targets.contains(target));
-        self.diff_targets
-            .retain(|_, target| targets.contains(target));
+        matches!(node, INFO_DIALOG | INFO_TITLE | INFO_STATUS) || self.info.contains(node)
     }
 
     fn is_diff_node(&self, node: NodeId) -> bool {
-        matches!(node, DIFF_DIALOG | DIFF_TITLE | DIFF_STATUS)
-            || self.diff_targets.contains_key(&node)
-    }
-
-    fn context_node(&mut self, target: ContextSemanticTarget) -> NodeId {
-        if let Some(node) = self.context_nodes.get(&target) {
-            return *node;
-        }
-        let node = NodeId(self.next_context_node);
-        self.next_context_node = self.next_context_node.saturating_add(1);
-        self.context_nodes.insert(target, node);
-        self.context_targets.insert(node, target);
-        node
-    }
-
-    fn retain_context_targets(&mut self, targets: &HashSet<ContextSemanticTarget>) {
-        self.context_nodes
-            .retain(|target, _| targets.contains(target));
-        self.context_targets
-            .retain(|_, target| targets.contains(target));
+        matches!(node, DIFF_DIALOG | DIFF_TITLE | DIFF_STATUS) || self.diff.contains(node)
     }
 
     fn is_context_node(&self, node: NodeId) -> bool {
         matches!(node, CONTEXT_DIALOG | CONTEXT_TITLE | CONTEXT_STATUS)
-            || self.context_targets.contains_key(&node)
-    }
-
-    fn harvest_node(&mut self, target: HarvestSemanticTarget) -> NodeId {
-        if let Some(node) = self.harvest_nodes.get(&target) {
-            return *node;
-        }
-        let node = NodeId(self.next_harvest_node);
-        self.next_harvest_node = self.next_harvest_node.saturating_add(1);
-        self.harvest_nodes.insert(target, node);
-        self.harvest_targets.insert(node, target);
-        node
-    }
-
-    fn retain_harvest_targets(&mut self, targets: &HashSet<HarvestSemanticTarget>) {
-        self.harvest_nodes
-            .retain(|target, _| targets.contains(target));
-        self.harvest_targets
-            .retain(|_, target| targets.contains(target));
+            || self.context.contains(node)
     }
 
     fn is_harvest_node(&self, node: NodeId) -> bool {
@@ -764,7 +498,23 @@ impl AccessibilityState {
                 | CELLAR_CLOSE
                 | SPROUT_DIALOG
                 | SPROUT_MENU
-        ) || self.harvest_targets.contains_key(&node)
+        ) || self.harvest.contains(node)
+    }
+
+    fn palette_modal(&self, modal: PaletteModal) -> &NodeRegistry<String> {
+        match modal {
+            PaletteModal::Commands => &self.palette,
+            PaletteModal::Domains => &self.domain,
+            PaletteModal::Unicode => &self.unicode,
+        }
+    }
+
+    fn palette_modal_mut(&mut self, modal: PaletteModal) -> &mut NodeRegistry<String> {
+        match modal {
+            PaletteModal::Commands => &mut self.palette,
+            PaletteModal::Domains => &mut self.domain,
+            PaletteModal::Unicode => &mut self.unicode,
+        }
     }
 
     fn update(&mut self, snapshot: SemanticSnapshot) -> TreeUpdate {
@@ -1218,7 +968,8 @@ impl App {
     fn handle_harvest_accessibility_action(&mut self, request: ActionRequest) {
         if let Some((request_id, action)) = self
             .accessibility
-            .harvest_targets
+            .harvest
+            .targets
             .get(&request.target_node)
             .and_then(|target| match target {
                 HarvestSemanticTarget::SproutAction { request_id, action } => {
@@ -1298,7 +1049,8 @@ impl App {
         }
         let Some(id) = self
             .accessibility
-            .harvest_targets
+            .harvest
+            .targets
             .get(&request.target_node)
             .and_then(|target| match target {
                 HarvestSemanticTarget::CellarEntry(id) => Some(*id),
@@ -1358,7 +1110,10 @@ impl App {
         }
         let Some(command) = self
             .accessibility
-            .palette_modal_command(modal, request.target_node)
+            .palette_modal(modal)
+            .targets
+            .get(&request.target_node)
+            .cloned()
         else {
             return;
         };
@@ -1393,7 +1148,8 @@ impl App {
     fn handle_guardrail_accessibility_action(&mut self, request: ActionRequest) {
         let Some(target) = self
             .accessibility
-            .guardrail_targets
+            .guardrail
+            .targets
             .get(&request.target_node)
             .copied()
         else {
@@ -1431,7 +1187,8 @@ impl App {
 
         let Some(target) = self
             .accessibility
-            .info_targets
+            .info
+            .targets
             .get(&request.target_node)
             .cloned()
         else {
@@ -1531,7 +1288,8 @@ impl App {
 
         let Some(target) = self
             .accessibility
-            .diff_targets
+            .diff
+            .targets
             .get(&request.target_node)
             .copied()
         else {
@@ -1600,7 +1358,8 @@ impl App {
 
         let Some(target) = self
             .accessibility
-            .context_targets
+            .context
+            .targets
             .get(&request.target_node)
             .copied()
         else {
@@ -1777,7 +1536,8 @@ impl App {
         }
         let Some(target) = self
             .accessibility
-            .settings_targets
+            .settings
+            .targets
             .get(&request.target_node)
             .cloned()
         else {
@@ -1890,7 +1650,8 @@ impl App {
                 }
                 if let Some(node) = self
                     .accessibility
-                    .settings_nodes
+                    .settings
+                    .nodes
                     .get(&SettingsSemanticTarget::Setting { section, label })
                 {
                     self.accessibility.focus_override = Some(*node);
@@ -1928,7 +1689,8 @@ impl App {
 
         let Some(ShortcutsSemanticTarget::Action(action)) = self
             .accessibility
-            .shortcuts_targets
+            .shortcuts
+            .targets
             .get(&request.target_node)
             .copied()
         else {
@@ -2041,7 +1803,8 @@ impl App {
                 // a row whose agent has gone, stops here.
                 let Some(index) = self
                     .accessibility
-                    .agents_targets
+                    .agents
+                    .targets
                     .get(&node)
                     .and_then(|identity| self.agents_panel.shown_index(*identity))
                 else {
@@ -2086,8 +1849,7 @@ impl App {
     /// that shifted into a deleted occurrence. Fixed form/footer IDs stay live.
     pub(super) fn retire_commands_accessibility_rows(&mut self) {
         self.clear_commands_accessibility_focus();
-        self.accessibility.commands_nodes.clear();
-        self.accessibility.commands_targets.clear();
+        self.accessibility.commands.clear();
     }
 
     pub(super) fn retain_commands_accessibility_rows(
@@ -2102,18 +1864,14 @@ impl App {
         };
         if self.accessibility.focus_override.is_some_and(|id| {
             self.accessibility
-                .commands_targets
+                .commands
+                .targets
                 .get(&id)
                 .is_some_and(|target| !retained(target))
         }) {
             self.accessibility.focus_override = None;
         }
-        self.accessibility
-            .commands_nodes
-            .retain(|target, _| retained(target));
-        self.accessibility
-            .commands_targets
-            .retain(|_, target| retained(target));
+        self.accessibility.commands.retain(retained);
     }
 
     fn handle_commands_accessibility_action(&mut self, request: ActionRequest) {
@@ -2210,7 +1968,8 @@ impl App {
             _ => {
                 let Some(target) = self
                     .accessibility
-                    .commands_targets
+                    .commands
+                    .targets
                     .get(&request.target_node)
                     .cloned()
                 else {
@@ -2322,7 +2081,8 @@ impl App {
                 }
                 let Some(target) = self
                     .accessibility
-                    .session_targets
+                    .session
+                    .targets
                     .get(&request.target_node)
                     .cloned()
                 else {
@@ -2460,7 +2220,9 @@ impl App {
             return snapshot;
         };
         let shown: HashSet<&Target> = scene.hits.iter().map(|hit| &hit.target).collect();
-        self.accessibility.retain_agent_view(&shown);
+        self.accessibility
+            .agent_view
+            .retain(|target| shown.contains(target));
         let composer = self
             .agent_view
             .state
@@ -2496,7 +2258,7 @@ impl App {
                     if hit.target == Target::DismissMenu {
                         continue;
                     }
-                    let id = self.accessibility.agent_view_node(&hit.target);
+                    let id = self.accessibility.agent_view.node(&hit.target);
                     let mut control = match hit.role {
                         HitRole::Button => Node::new(Role::Button),
                         HitRole::Toggle { expanded } => {
@@ -2547,7 +2309,7 @@ impl App {
                 crate::ui::agent_view::Focus::Composer => Target::Composer,
                 crate::ui::agent_view::Focus::Target(target) => target.clone(),
             };
-            if let Some(node) = self.accessibility.agent_view_nodes.get(&focused) {
+            if let Some(node) = self.accessibility.agent_view.nodes.get(&focused) {
                 snapshot.focus = *node;
             }
         }
@@ -2560,7 +2322,8 @@ impl App {
         use crate::ui::agent_view::scene::Target;
         let Some(target) = self
             .accessibility
-            .agent_view_targets
+            .agent_view
+            .targets
             .get(&request.target_node)
             .cloned()
         else {
@@ -3126,14 +2889,17 @@ impl App {
             .iter()
             .map(|entry| HarvestSemanticTarget::CellarEntry(entry.id))
             .collect::<HashSet<_>>();
-        self.accessibility.retain_harvest_targets(&targets);
+        self.accessibility
+            .harvest
+            .retain(|target| targets.contains(target));
         let entry_nodes = entries
             .iter()
             .map(|entry| {
                 (
                     entry.id,
                     self.accessibility
-                        .harvest_node(HarvestSemanticTarget::CellarEntry(entry.id)),
+                        .harvest
+                        .node(&HarvestSemanticTarget::CellarEntry(entry.id)),
                 )
             })
             .collect::<Vec<_>>();
@@ -3315,12 +3081,15 @@ impl App {
                 action: *action,
             })
             .collect::<HashSet<_>>();
-        self.accessibility.retain_harvest_targets(&targets);
+        self.accessibility
+            .harvest
+            .retain(|target| targets.contains(target));
         let action_nodes = actions
             .iter()
             .map(|(action, _, _, _)| {
                 self.accessibility
-                    .harvest_node(HarvestSemanticTarget::SproutAction {
+                    .harvest
+                    .node(&HarvestSemanticTarget::SproutAction {
                         request_id,
                         action: *action,
                     })
@@ -3563,9 +3332,10 @@ impl App {
             .palette()
             .command_ids()
             .map(str::to_owned)
-            .collect::<Vec<_>>();
+            .collect::<HashSet<_>>();
         self.accessibility
-            .retain_palette_modal_commands(modal, &registered.iter().map(String::as_str).collect());
+            .palette_modal_mut(modal)
+            .retain(|id| registered.contains(id));
         let visible_entries = info
             .entries
             .iter()
@@ -3574,7 +3344,7 @@ impl App {
             .collect::<Vec<_>>();
         let entry_nodes = visible_entries
             .iter()
-            .map(|entry| self.accessibility.palette_modal_node(modal, &entry.id))
+            .map(|entry| self.accessibility.palette_modal_mut(modal).node(&entry.id))
             .collect::<Vec<_>>();
         let actionable = visible_entries
             .iter()
@@ -3819,13 +3589,16 @@ impl App {
                     id: choice.id.clone(),
                 }),
         );
-        self.accessibility.retain_info_targets(&targets);
-        let content_id = self.accessibility.info_node(content_target);
-        let copy_id = self.accessibility.info_node(copy_target);
-        let dismiss_id = self.accessibility.info_node(dismiss_target);
+        self.accessibility
+            .info
+            .retain(|target| targets.contains(target));
+        let content_id = self.accessibility.info.node(&content_target);
+        let copy_id = self.accessibility.info.node(&copy_target);
+        let dismiss_id = self.accessibility.info.node(&dismiss_target);
         let input_id = input_visible.then(|| {
             self.accessibility
-                .info_node(InfoSemanticTarget::Input(request_id))
+                .info
+                .node(&InfoSemanticTarget::Input(request_id))
         });
         let choice_nodes: Vec<_> = visible_choices
             .iter()
@@ -3834,7 +3607,7 @@ impl App {
                     request_id,
                     id: choice.id.clone(),
                 };
-                (choice.clone(), self.accessibility.info_node(target))
+                (choice.clone(), self.accessibility.info.node(&target))
             })
             .collect();
 
@@ -4059,20 +3832,23 @@ impl App {
             }
             ContextPickerPhase::Gathering => {}
         }
-        self.accessibility.retain_context_targets(&targets);
-        let cancel_id = self.accessibility.context_node(cancel_target);
-        let primary_id = self.accessibility.context_node(primary_target);
+        self.accessibility
+            .context
+            .retain(|target| targets.contains(target));
+        let cancel_id = self.accessibility.context.node(&cancel_target);
+        let primary_id = self.accessibility.context.node(&primary_target);
         let list_id = (snapshot.phase == ContextPickerPhase::Sources)
-            .then(|| self.accessibility.context_node(list_target));
+            .then(|| self.accessibility.context.node(&list_target));
         let input_id = (snapshot.phase == ContextPickerPhase::FilePaths)
-            .then(|| self.accessibility.context_node(input_target));
+            .then(|| self.accessibility.context.node(&input_target));
         let source_nodes: Vec<_> = if snapshot.phase == ContextPickerPhase::Sources {
             visible_sources
                 .iter()
                 .map(|source| {
                     let id = self
                         .accessibility
-                        .context_node(ContextSemanticTarget::Source {
+                        .context
+                        .node(&ContextSemanticTarget::Source {
                             request_id,
                             source: source.id,
                         });
@@ -4305,10 +4081,12 @@ impl App {
                 .filter(|(_, button)| button.is_some())
                 .map(|(target, _)| *target),
         );
-        self.accessibility.retain_diff_targets(&targets);
-        let content_id = self.accessibility.diff_node(content_target);
-        let copy_id = self.accessibility.diff_node(copy_target);
-        let dismiss_id = self.accessibility.diff_node(dismiss_target);
+        self.accessibility
+            .diff
+            .retain(|target| targets.contains(target));
+        let content_id = self.accessibility.diff.node(&content_target);
+        let copy_id = self.accessibility.diff.node(&copy_target);
+        let dismiss_id = self.accessibility.diff.node(&dismiss_target);
 
         let visible_rows: Vec<_> = self
             .diff_review
@@ -4389,7 +4167,7 @@ impl App {
                 DiffSemanticTarget::Stage(_) => ("Stage this file", "S"),
                 _ => ("Revert this file to how it was when the agent started", "R"),
             };
-            let id = self.accessibility.diff_node(target);
+            let id = self.accessibility.diff.node(&target);
             let mut node = Node::new(Role::Button);
             node.set_label(label);
             node.set_keyboard_shortcut(shortcut);
@@ -4470,9 +4248,10 @@ impl App {
         let confirm_target = GuardrailSemanticTarget::Confirm(request_id);
         let cancel_target = GuardrailSemanticTarget::Cancel(request_id);
         self.accessibility
-            .retain_guardrail_targets(&HashSet::from([confirm_target, cancel_target]));
-        let confirm_id = self.accessibility.guardrail_node(confirm_target);
-        let cancel_id = self.accessibility.guardrail_node(cancel_target);
+            .guardrail
+            .retain(|target| *target == confirm_target || *target == cancel_target);
+        let confirm_id = self.accessibility.guardrail.node(&confirm_target);
+        let cancel_id = self.accessibility.guardrail.node(&cancel_target);
 
         let mut nodes = Vec::with_capacity(7);
         let mut root = Node::new(Role::Window);
@@ -4678,7 +4457,7 @@ impl App {
             } else {
                 ShortcutsSemanticTarget::Action(entry.action)
             };
-            let node_id = self.accessibility.shortcuts_node(target);
+            let node_id = self.accessibility.shortcuts.node(&target);
             list_children.push(node_id);
             let bounds = bounds_rect(layout.row(row));
             if entry.is_header {
@@ -4860,7 +4639,7 @@ impl App {
                     label: entry.label,
                 }
             };
-            let node_id = self.accessibility.settings_node(target);
+            let node_id = self.accessibility.settings.node(&target);
             list_children.push(node_id);
             let row_rect = layout.row_rect(row);
             let bounds = bounds_rect(row_rect);
@@ -4982,7 +4761,8 @@ impl App {
         for (index, page) in crate::ui::settings::SettingsPage::all().iter().enumerate() {
             let id = self
                 .accessibility
-                .settings_node(SettingsSemanticTarget::Page(*page));
+                .settings
+                .node(&SettingsSemanticTarget::Page(*page));
             let bounds = layout.page_rect(index);
             let mut tab = Node::new(Role::Tab);
             tab.set_label(page.label());
@@ -5054,7 +4834,8 @@ impl App {
                 {
                     let option_id =
                         self.accessibility
-                            .settings_node(SettingsSemanticTarget::Option {
+                            .settings
+                            .node(&SettingsSemanticTarget::Option {
                                 section: entry.section,
                                 label: entry.label,
                                 value: value.clone(),
@@ -5143,7 +4924,9 @@ impl App {
                 ]
             })
             .collect::<HashSet<_>>();
-        self.accessibility.retain_commands(&retained);
+        self.accessibility
+            .commands
+            .retain(|target| retained.contains(target));
 
         let mut nodes = Vec::with_capacity(info.commands.len() * 3 + 12);
         let mut root = Node::new(Role::Window);
@@ -5217,13 +5000,16 @@ impl App {
         for (index, (command, key)) in info.commands.iter().zip(keys.iter()).enumerate() {
             let group_id = self
                 .accessibility
-                .commands_node(CommandsSemanticTarget::Group(key.clone()));
+                .commands
+                .node(&CommandsSemanticTarget::Group(key.clone()));
             let run_id = self
                 .accessibility
-                .commands_node(CommandsSemanticTarget::Run(key.clone()));
+                .commands
+                .node(&CommandsSemanticTarget::Run(key.clone()));
             let delete_id = self
                 .accessibility
-                .commands_node(CommandsSemanticTarget::Delete(key.clone()));
+                .commands
+                .node(&CommandsSemanticTarget::Delete(key.clone()));
             let mut run = Node::new(Role::Button);
             run.set_label(format!("Run {}", command.name));
             let mut description = command.command.clone();
@@ -5299,11 +5085,11 @@ impl App {
             EditMode::Browse => match self.commands_panel.browse_focus(&info.commands) {
                 Some(CommandControl::Close) => COMMANDS_CLOSE,
                 Some(CommandControl::Run(index)) => {
-                    self.accessibility.commands_nodes
+                    self.accessibility.commands.nodes
                         [&CommandsSemanticTarget::Run(keys[index].clone())]
                 }
                 Some(CommandControl::Delete(index)) => {
-                    self.accessibility.commands_nodes
+                    self.accessibility.commands.nodes
                         [&CommandsSemanticTarget::Delete(keys[index].clone())]
                 }
                 _ => COMMANDS_NEW,
@@ -5330,7 +5116,9 @@ impl App {
         let info = self.agents_panel_info();
         let layout = self.agents_panel_layout();
         let shown: HashSet<_> = info.rows.iter().map(|row| row.identity).collect();
-        self.accessibility.retain_agents(&shown);
+        self.accessibility
+            .agents
+            .retain(|target| shown.contains(target));
 
         let mut nodes = Vec::with_capacity(info.rows.len() + 12);
         let mut root = Node::new(Role::Window);
@@ -5348,7 +5136,7 @@ impl App {
 
         let mut row_ids = Vec::with_capacity(info.rows.len());
         for (index, row) in info.rows.iter().enumerate() {
-            let id = self.accessibility.agents_node(row.identity);
+            let id = self.accessibility.agents.node(&row.identity);
             let mut button = Node::new(Role::Button);
             button.set_label(format!("{}, {}", row.name, row.place));
             button.set_description(row.summary.clone());
@@ -5487,7 +5275,9 @@ impl App {
                 targets
             })
             .collect::<HashSet<_>>();
-        self.accessibility.retain_sessions(&retained);
+        self.accessibility
+            .session
+            .retain(|target| retained.contains(target));
 
         let mut nodes = Vec::with_capacity(layout.visible_count * 4 + 10);
         let mut root = Node::new(Role::Window);
@@ -5587,13 +5377,16 @@ impl App {
             let geometry = layout.entry(visible_index);
             let group_id = self
                 .accessibility
-                .session_node(SessionSemanticTarget::Group(key.clone()));
+                .session
+                .node(&SessionSemanticTarget::Group(key.clone()));
             let load_id = self
                 .accessibility
-                .session_node(SessionSemanticTarget::Load(key.clone()));
+                .session
+                .node(&SessionSemanticTarget::Load(key.clone()));
             let delete_id = self
                 .accessibility
-                .session_node(SessionSemanticTarget::Delete(key.clone()));
+                .session
+                .node(&SessionSemanticTarget::Delete(key.clone()));
             let mut load = Node::new(Role::Button);
             load.set_label(format!("Open {}", entry.display_name));
             load.set_description(if info.workspaces {
@@ -5614,7 +5407,8 @@ impl App {
             if info.workspaces {
                 let rename_id = self
                     .accessibility
-                    .session_node(SessionSemanticTarget::Rename(key.clone()));
+                    .session
+                    .node(&SessionSemanticTarget::Rename(key.clone()));
                 let mut rename = Node::new(Role::Button);
                 rename.set_label(format!("Rename {}", entry.display_name));
                 if rename_active {
@@ -6188,28 +5982,31 @@ mod tests {
     #[test]
     fn removed_palette_commands_release_their_semantic_identity() {
         let mut state = AccessibilityState::default();
-        let removed = state.palette_node("plugin.removed");
-        let retained = state.palette_node("core.retained");
-        state.retain_palette_commands(&HashSet::from(["core.retained"]));
-        assert!(!state.palette_commands.contains_key(&removed));
-        assert!(!state.palette_nodes.contains_key("plugin.removed"));
-        assert_eq!(state.palette_nodes.get("core.retained"), Some(&retained));
+        let removed = state.palette.node("plugin.removed");
+        let retained = state.palette.node("core.retained");
+        state.palette.retain(|id| id == "core.retained");
+        assert!(!state.palette.targets.contains_key(&removed));
+        assert!(!state.palette.nodes.contains_key("plugin.removed"));
+        assert_eq!(state.palette.nodes.get("core.retained"), Some(&retained));
     }
 
     #[test]
     fn replaced_unicode_results_release_their_semantic_identity() {
         let mut state = AccessibilityState::default();
-        let removed = state.unicode_node("unicode-picker.curated.2192");
-        let retained = state.unicode_node("unicode-picker.codepoint.3bb");
-        state.retain_unicode_commands(&HashSet::from(["unicode-picker.codepoint.3bb"]));
-        assert!(!state.unicode_commands.contains_key(&removed));
+        let removed = state.unicode.node("unicode-picker.curated.2192");
+        let retained = state.unicode.node("unicode-picker.codepoint.3bb");
+        state
+            .unicode
+            .retain(|id| id == "unicode-picker.codepoint.3bb");
+        assert!(!state.unicode.targets.contains_key(&removed));
         assert!(
             !state
-                .unicode_nodes
+                .unicode
+                .nodes
                 .contains_key("unicode-picker.curated.2192")
         );
         assert_eq!(
-            state.unicode_nodes.get("unicode-picker.codepoint.3bb"),
+            state.unicode.nodes.get("unicode-picker.codepoint.3bb"),
             Some(&retained)
         );
     }
@@ -6827,7 +6624,8 @@ mod tests {
         let selected_id = app.harvest.as_ref().unwrap().cellar.selected_id().unwrap();
         let selected_node = *app
             .accessibility
-            .harvest_nodes
+            .harvest
+            .nodes
             .get(&HarvestSemanticTarget::CellarEntry(selected_id))
             .unwrap();
         app.handle_accessibility_action(ActionRequest {
@@ -6965,7 +6763,8 @@ mod tests {
             .request_id;
         let old_copy = *app
             .accessibility
-            .harvest_nodes
+            .harvest
+            .nodes
             .get(&HarvestSemanticTarget::SproutAction {
                 request_id: first_request,
                 action: crate::harvest::sprouts::SproutAction::CopyCommand,
@@ -6973,7 +6772,8 @@ mod tests {
             .unwrap();
         let explain = *app
             .accessibility
-            .harvest_nodes
+            .harvest
+            .nodes
             .get(&HarvestSemanticTarget::SproutAction {
                 request_id: first_request,
                 action: crate::harvest::sprouts::SproutAction::Explain,
@@ -6981,7 +6781,8 @@ mod tests {
             .unwrap();
         let search = *app
             .accessibility
-            .harvest_nodes
+            .harvest
+            .nodes
             .get(&HarvestSemanticTarget::SproutAction {
                 request_id: first_request,
                 action: crate::harvest::sprouts::SproutAction::SearchOutput,
@@ -7063,7 +6864,8 @@ mod tests {
 
         let copy = *app
             .accessibility
-            .harvest_nodes
+            .harvest
+            .nodes
             .get(&HarvestSemanticTarget::SproutAction {
                 request_id: replacement_request,
                 action: crate::harvest::sprouts::SproutAction::CopyCommand,
@@ -7089,7 +6891,8 @@ mod tests {
         let first = app.accessibility_snapshot();
         let command_node = *app
             .accessibility
-            .palette_nodes
+            .palette
+            .nodes
             .get("core.toggle-fullscreen")
             .unwrap();
         assert!(first.nodes.iter().any(|(id, _)| *id == command_node));
@@ -7112,7 +6915,8 @@ mod tests {
         assert!(second.nodes.iter().any(|(id, _)| *id == command_node));
         assert_eq!(
             app.accessibility
-                .palette_nodes
+                .palette
+                .nodes
                 .get("core.toggle-fullscreen"),
             Some(&command_node),
             "semantic command identity must survive close, filter, and reopen"
@@ -7245,7 +7049,7 @@ mod tests {
         let pages = node(SETTINGS_PAGES).children();
         assert_eq!(pages.len(), SettingsPage::all().len());
         let font_tab =
-            app.accessibility.settings_nodes[&SettingsSemanticTarget::Page(SettingsPage::Font)];
+            app.accessibility.settings.nodes[&SettingsSemanticTarget::Page(SettingsPage::Font)];
         assert_eq!(node(font_tab).role(), Role::Tab);
         assert_eq!(node(font_tab).is_selected(), Some(true));
         assert_eq!(node(SETTINGS_CLOSE).label(), Some("Close settings"));
@@ -7253,7 +7057,8 @@ mod tests {
 
         let size = app
             .accessibility
-            .settings_nodes
+            .settings
+            .nodes
             .get(&SettingsSemanticTarget::Setting {
                 section: SettingsSection::Font,
                 label: "Size",
@@ -7265,7 +7070,8 @@ mod tests {
         assert_eq!(node(SETTINGS_INPUT).active_descendant(), Some(size));
         let normal_weight = app
             .accessibility
-            .settings_nodes
+            .settings
+            .nodes
             .get(&SettingsSemanticTarget::Setting {
                 section: SettingsSection::Font,
                 label: "Normal Weight",
@@ -7310,7 +7116,8 @@ mod tests {
         app.accessibility_snapshot();
         let opacity = *app
             .accessibility
-            .settings_nodes
+            .settings
+            .nodes
             .get(&SettingsSemanticTarget::Setting {
                 section: SettingsSection::Window,
                 label: "Opacity",
@@ -7335,7 +7142,8 @@ mod tests {
         app.accessibility_snapshot();
         let weight = *app
             .accessibility
-            .settings_nodes
+            .settings
+            .nodes
             .get(&SettingsSemanticTarget::Setting {
                 section: SettingsSection::Font,
                 label: "Normal Weight",
@@ -7354,7 +7162,8 @@ mod tests {
         app.accessibility_snapshot();
         let auto_save = *app
             .accessibility
-            .settings_nodes
+            .settings
+            .nodes
             .get(&SettingsSemanticTarget::Setting {
                 section: SettingsSection::Sessions,
                 label: "Auto Save Workspace",
@@ -7371,7 +7180,8 @@ mod tests {
         let value = if expected { "On" } else { "Off" };
         let option = *app
             .accessibility
-            .settings_nodes
+            .settings
+            .nodes
             .get(&SettingsSemanticTarget::Option {
                 section: SettingsSection::Sessions,
                 label: "Auto Save Workspace",
@@ -7405,7 +7215,8 @@ mod tests {
         let snapshot = app.accessibility_snapshot();
         let manager = *app
             .accessibility
-            .settings_nodes
+            .settings
+            .nodes
             .get(&SettingsSemanticTarget::Setting {
                 section: SettingsSection::Plugins,
                 label: "Manage Third-party Plugins",
@@ -7447,7 +7258,8 @@ mod tests {
         let snapshot = app.accessibility_snapshot();
         let manager = *app
             .accessibility
-            .settings_nodes
+            .settings
+            .nodes
             .get(&SettingsSemanticTarget::Setting {
                 section: SettingsSection::Font,
                 label: "Range Overrides",
@@ -7476,7 +7288,8 @@ mod tests {
         app.accessibility_snapshot();
         let inspect = *app
             .accessibility
-            .info_nodes
+            .info
+            .nodes
             .get(&InfoSemanticTarget::Choice {
                 request_id: manager_request,
                 id: "inspect".into(),
@@ -7494,12 +7307,14 @@ mod tests {
         let snapshot = app.accessibility_snapshot();
         let input = *app
             .accessibility
-            .info_nodes
+            .info
+            .nodes
             .get(&InfoSemanticTarget::Input(input_request))
             .unwrap();
         let submit = *app
             .accessibility
-            .info_nodes
+            .info
+            .nodes
             .get(&InfoSemanticTarget::Dismiss(input_request))
             .unwrap();
         let input_node = &snapshot
@@ -7541,7 +7356,8 @@ mod tests {
         let snapshot = app.accessibility_snapshot();
         let manager = *app
             .accessibility
-            .settings_nodes
+            .settings
+            .nodes
             .get(&SettingsSemanticTarget::Setting {
                 section: SettingsSection::Font,
                 label: "OpenType Features",
@@ -7566,7 +7382,8 @@ mod tests {
         app.accessibility_snapshot();
         let add = *app
             .accessibility
-            .info_nodes
+            .info
+            .nodes
             .get(&InfoSemanticTarget::Choice {
                 request_id: manager_request,
                 id: "add".into(),
@@ -7583,12 +7400,14 @@ mod tests {
         let snapshot = app.accessibility_snapshot();
         let input = *app
             .accessibility
-            .info_nodes
+            .info
+            .nodes
             .get(&InfoSemanticTarget::Input(input_request))
             .unwrap();
         let submit = *app
             .accessibility
-            .info_nodes
+            .info
+            .nodes
             .get(&InfoSemanticTarget::Dismiss(input_request))
             .unwrap();
         let input_node = &snapshot
@@ -7869,8 +7688,8 @@ mod tests {
             app.accessibility_snapshot();
             let key = custom_command_keys(&app.config.commands).remove(0);
             let stale_delete =
-                app.accessibility.commands_nodes[&CommandsSemanticTarget::Delete(key.clone())];
-            let run = app.accessibility.commands_nodes[&CommandsSemanticTarget::Run(key)];
+                app.accessibility.commands.nodes[&CommandsSemanticTarget::Delete(key.clone())];
+            let run = app.accessibility.commands.nodes[&CommandsSemanticTarget::Run(key)];
             app.handle_accessibility_action(ActionRequest {
                 action: Action::Focus,
                 target_tree: TreeId::ROOT,
@@ -7890,7 +7709,7 @@ mod tests {
             // A refused index must not revoke still-valid row actions.
             app.apply_commands_panel_action(CommandsPanelAction::Delete(usize::MAX));
             assert_eq!(app.config.commands.len(), remaining + 1);
-            assert!(app.accessibility.commands_targets.contains_key(&run));
+            assert!(app.accessibility.commands.targets.contains_key(&run));
             match route {
                 "pointer" | "pointer-last" => {
                     app.apply_commands_panel_action(CommandsPanelAction::Delete(0))
@@ -7982,8 +7801,8 @@ mod tests {
             app.commands_panel.toggle();
             app.accessibility_snapshot();
             let key = custom_command_keys(&app.config.commands).remove(0);
-            let run = app.accessibility.commands_nodes[&CommandsSemanticTarget::Run(key.clone())];
-            let delete = app.accessibility.commands_nodes[&CommandsSemanticTarget::Delete(key)];
+            let run = app.accessibility.commands.nodes[&CommandsSemanticTarget::Run(key.clone())];
+            let delete = app.accessibility.commands.nodes[&CommandsSemanticTarget::Delete(key)];
             app.handle_accessibility_action(ActionRequest {
                 action: Action::Focus,
                 target_tree: TreeId::ROOT,
@@ -8002,10 +7821,10 @@ mod tests {
             // Assert revocation before dispatch: a failing regression must never
             // invoke Delete's real configuration persistence path.
             assert!(
-                !app.accessibility.commands_targets.contains_key(&delete),
+                !app.accessibility.commands.targets.contains_key(&delete),
                 "reload retained a stale duplicate Delete identity"
             );
-            assert!(!app.accessibility.commands_targets.contains_key(&run));
+            assert!(!app.accessibility.commands.targets.contains_key(&run));
             assert_eq!(
                 app.commands_panel
                     .build_info(&app.config.commands)
@@ -8019,7 +7838,8 @@ mod tests {
                 for target_node in [run, delete] {
                     assert!(
                         !app.accessibility
-                            .commands_targets
+                            .commands
+                            .targets
                             .contains_key(&target_node)
                     );
                     for action in [Action::Click, Action::Focus] {
@@ -8071,9 +7891,9 @@ mod tests {
         app.accessibility_snapshot();
         let keys = custom_command_keys(&app.config.commands);
         let stable =
-            app.accessibility.commands_nodes[&CommandsSemanticTarget::Run(keys[2].clone())];
+            app.accessibility.commands.nodes[&CommandsSemanticTarget::Run(keys[2].clone())];
         let ambiguous =
-            app.accessibility.commands_nodes[&CommandsSemanticTarget::Run(keys[0].clone())];
+            app.accessibility.commands.nodes[&CommandsSemanticTarget::Run(keys[0].clone())];
         app.handle_accessibility_action(ActionRequest {
             action: Action::Focus,
             target_tree: TreeId::ROOT,
@@ -8087,13 +7907,13 @@ mod tests {
             app.commands_panel.browse_focus(&app.config.commands),
             Some(CommandControl::Run(0))
         );
-        assert!(app.accessibility.commands_targets.contains_key(&stable));
-        assert!(!app.accessibility.commands_targets.contains_key(&ambiguous));
+        assert!(app.accessibility.commands.targets.contains_key(&stable));
+        assert!(!app.accessibility.commands.targets.contains_key(&ambiguous));
         assert_eq!(app.accessibility_snapshot().focus, stable);
-        let nodes = app.accessibility.commands_nodes.clone();
+        let nodes = app.accessibility.commands.nodes.clone();
         app.apply_config(app.config.clone()).unwrap();
         assert_eq!(app.accessibility_snapshot().focus, stable);
-        assert_eq!(app.accessibility.commands_nodes, nodes);
+        assert_eq!(app.accessibility.commands.nodes, nodes);
     }
 
     #[test]
@@ -8109,14 +7929,14 @@ mod tests {
         app.commands_panel.toggle();
         app.accessibility_snapshot();
         let key = custom_command_keys(&app.config.commands).remove(0);
-        let run = app.accessibility.commands_nodes[&CommandsSemanticTarget::Run(key)];
+        let run = app.accessibility.commands.nodes[&CommandsSemanticTarget::Run(key)];
         app.handle_accessibility_action(ActionRequest {
             action: Action::Focus,
             target_tree: TreeId::ROOT,
             target_node: run,
             data: None,
         });
-        let nodes = app.accessibility.commands_nodes.clone();
+        let nodes = app.accessibility.commands.nodes.clone();
         let mut invalid = app.config.clone();
         invalid.commands.remove(0);
         invalid.font.size = 0.0;
@@ -8127,7 +7947,7 @@ mod tests {
             Some(CommandControl::Run(0))
         );
         assert_eq!(app.accessibility_snapshot().focus, run);
-        assert_eq!(app.accessibility.commands_nodes, nodes);
+        assert_eq!(app.accessibility.commands.nodes, nodes);
     }
 
     #[test]
@@ -8143,8 +7963,8 @@ mod tests {
         app.commands_panel.toggle();
         app.accessibility_snapshot();
         let key = custom_command_keys(&app.config.commands).remove(0);
-        let run = app.accessibility.commands_nodes[&CommandsSemanticTarget::Run(key.clone())];
-        let delete = app.accessibility.commands_nodes[&CommandsSemanticTarget::Delete(key)];
+        let run = app.accessibility.commands.nodes[&CommandsSemanticTarget::Run(key.clone())];
+        let delete = app.accessibility.commands.nodes[&CommandsSemanticTarget::Delete(key)];
         app.handle_accessibility_action(ActionRequest {
             action: Action::Focus,
             target_tree: TreeId::ROOT,
@@ -8209,7 +8029,7 @@ mod tests {
         app.commands_panel.toggle();
         let keys = custom_command_keys(&app.config.commands);
         let before = app.accessibility_snapshot();
-        let last = app.accessibility.commands_nodes[&CommandsSemanticTarget::Run(keys[99].clone())];
+        let last = app.accessibility.commands.nodes[&CommandsSemanticTarget::Run(keys[99].clone())];
         let bounds = |snapshot: &SemanticSnapshot, id| {
             snapshot
                 .nodes
@@ -8362,17 +8182,20 @@ mod tests {
         let key = custom_command_keys(&app.config.commands).remove(0);
         let group = *app
             .accessibility
-            .commands_nodes
+            .commands
+            .nodes
             .get(&CommandsSemanticTarget::Group(key.clone()))
             .unwrap();
         let run = *app
             .accessibility
-            .commands_nodes
+            .commands
+            .nodes
             .get(&CommandsSemanticTarget::Run(key.clone()))
             .unwrap();
         let delete = *app
             .accessibility
-            .commands_nodes
+            .commands
+            .nodes
             .get(&CommandsSemanticTarget::Delete(key))
             .unwrap();
         assert_eq!(node(group).role(), Role::Group);
@@ -8552,7 +8375,8 @@ mod tests {
         let first_key = custom_command_keys(&app.config.commands).remove(0);
         let stale_delete = *app
             .accessibility
-            .commands_nodes
+            .commands
+            .nodes
             .get(&CommandsSemanticTarget::Delete(first_key))
             .unwrap();
         app.config.commands.remove(0);
@@ -8568,7 +8392,8 @@ mod tests {
         app.accessibility_snapshot();
         assert!(
             !app.accessibility
-                .commands_targets
+                .commands
+                .targets
                 .contains_key(&stale_delete)
         );
     }
@@ -8625,22 +8450,26 @@ mod tests {
         };
         let group = *app
             .accessibility
-            .session_nodes
+            .session
+            .nodes
             .get(&SessionSemanticTarget::Group(key.clone()))
             .unwrap();
         let load = *app
             .accessibility
-            .session_nodes
+            .session
+            .nodes
             .get(&SessionSemanticTarget::Load(key.clone()))
             .unwrap();
         let rename = *app
             .accessibility
-            .session_nodes
+            .session
+            .nodes
             .get(&SessionSemanticTarget::Rename(key.clone()))
             .unwrap();
         let delete = *app
             .accessibility
-            .session_nodes
+            .session
+            .nodes
             .get(&SessionSemanticTarget::Delete(key))
             .unwrap();
         assert_eq!(node(group).children(), &[load, rename, delete]);
@@ -8683,7 +8512,8 @@ mod tests {
         };
         let rename = *app
             .accessibility
-            .session_nodes
+            .session
+            .nodes
             .get(&SessionSemanticTarget::Rename(key))
             .unwrap();
         app.handle_accessibility_action(ActionRequest {
@@ -8699,7 +8529,8 @@ mod tests {
         }));
         let load = *app
             .accessibility
-            .session_nodes
+            .session
+            .nodes
             .get(&SessionSemanticTarget::Load(SessionSemanticKey {
                 id: "workspace-0".into(),
                 workspaces: true,
@@ -8805,7 +8636,8 @@ mod tests {
         app.accessibility_snapshot();
         let stale_delete = *app
             .accessibility
-            .session_nodes
+            .session
+            .nodes
             .get(&SessionSemanticTarget::Delete(SessionSemanticKey {
                 id: "workspace-0".into(),
                 workspaces: true,
@@ -8824,7 +8656,8 @@ mod tests {
         app.accessibility_snapshot();
         assert!(
             !app.accessibility
-                .session_targets
+                .session
+                .targets
                 .contains_key(&stale_delete)
         );
     }
@@ -8847,10 +8680,11 @@ mod tests {
         );
         assert!(
             !app.accessibility
-                .session_targets
+                .session
+                .targets
                 .keys()
                 .any(|target| matches!(
-                    app.accessibility.session_targets.get(target),
+                    app.accessibility.session.targets.get(target),
                     Some(SessionSemanticTarget::Rename(_))
                 ))
         );
@@ -8899,7 +8733,8 @@ mod tests {
 
         let copy = *app
             .accessibility
-            .shortcuts_nodes
+            .shortcuts
+            .nodes
             .get(&ShortcutsSemanticTarget::Action(BindableAction::Copy))
             .unwrap();
         assert_eq!(node(copy).role(), Role::Button);
@@ -9002,7 +8837,8 @@ mod tests {
             let snapshot = app.accessibility_snapshot();
             let copy = *app
                 .accessibility
-                .shortcuts_nodes
+                .shortcuts
+                .nodes
                 .get(&ShortcutsSemanticTarget::Action(BindableAction::Copy))
                 .unwrap();
             assert_eq!(snapshot.focus, copy);
@@ -9116,7 +8952,8 @@ mod tests {
         app.accessibility_snapshot();
         let copy = *app
             .accessibility
-            .shortcuts_nodes
+            .shortcuts
+            .nodes
             .get(&ShortcutsSemanticTarget::Action(BindableAction::Copy))
             .unwrap();
 
@@ -9223,7 +9060,8 @@ mod tests {
 
         let local = *app
             .accessibility
-            .domain_nodes
+            .domain
+            .nodes
             .get("domain-picker.authority.local")
             .unwrap();
         assert_eq!(node(local).role(), Role::ListBoxOption);
@@ -9240,7 +9078,7 @@ mod tests {
         app.domain_picker.open(&app.config.domains);
         app.accessibility_snapshot();
         let remote_id = "domain-picker.authority.ssh.host-00";
-        let remote = *app.accessibility.domain_nodes.get(remote_id).unwrap();
+        let remote = *app.accessibility.domain.nodes.get(remote_id).unwrap();
 
         app.handle_accessibility_action(ActionRequest {
             action: Action::SetValue,
@@ -9281,7 +9119,8 @@ mod tests {
         app.accessibility_snapshot();
         let local = *app
             .accessibility
-            .domain_nodes
+            .domain
+            .nodes
             .get("domain-picker.authority.local")
             .unwrap();
         app.handle_accessibility_action(ActionRequest {
@@ -9335,7 +9174,8 @@ mod tests {
 
         let arrow = *app
             .accessibility
-            .unicode_nodes
+            .unicode
+            .nodes
             .get("unicode-picker.curated.2192")
             .unwrap();
         assert_eq!(node(arrow).role(), Role::ListBoxOption);
@@ -9354,7 +9194,8 @@ mod tests {
         app.accessibility_snapshot();
         let stale = *app
             .accessibility
-            .unicode_nodes
+            .unicode
+            .nodes
             .get("unicode-picker.curated.2192")
             .unwrap();
 
@@ -9366,8 +9207,8 @@ mod tests {
         });
         let filtered = app.accessibility_snapshot();
         let exact_id = "unicode-picker.codepoint.3bb";
-        let exact = *app.accessibility.unicode_nodes.get(exact_id).unwrap();
-        assert!(!app.accessibility.unicode_commands.contains_key(&stale));
+        let exact = *app.accessibility.unicode.nodes.get(exact_id).unwrap();
+        assert!(!app.accessibility.unicode.targets.contains_key(&stale));
         let input = &filtered
             .nodes
             .iter()
@@ -9449,7 +9290,8 @@ mod tests {
         app.accessibility_snapshot();
         let stale = *app
             .accessibility
-            .unicode_nodes
+            .unicode
+            .nodes
             .get("unicode-picker.curated.2192")
             .unwrap();
 
@@ -9463,7 +9305,7 @@ mod tests {
         assert!(pending.nodes.iter().any(|(id, node)| {
             *id == UNICODE_EMPTY && node.label() == Some("Searching characters…")
         }));
-        assert!(!app.accessibility.unicode_commands.contains_key(&stale));
+        assert!(!app.accessibility.unicode.targets.contains_key(&stale));
         app.unicode_picker.finish_search_for_test();
         let snapshot = app.accessibility_snapshot();
         let info = app.unicode_picker.build_info();
@@ -9473,7 +9315,7 @@ mod tests {
                 .iter()
                 .any(|entry| entry.id == "unicode-picker.named.2603")
         );
-        assert!(!app.accessibility.unicode_commands.contains_key(&stale));
+        assert!(!app.accessibility.unicode.targets.contains_key(&stale));
         assert!(
             snapshot
                 .nodes
@@ -9491,7 +9333,7 @@ mod tests {
         app.unicode_picker.finish_search_for_test();
         let snapshot = app.accessibility_snapshot();
         let command = "unicode-picker.cldr.1f1fa-1f1f8";
-        let node_id = *app.accessibility.unicode_nodes.get(command).unwrap();
+        let node_id = *app.accessibility.unicode.nodes.get(command).unwrap();
         let node = snapshot
             .nodes
             .iter()
@@ -9508,7 +9350,7 @@ mod tests {
         assert!(app.unicode_picker.set_query("party pinata"));
         app.unicode_picker.finish_search_for_test();
         app.accessibility_snapshot();
-        assert!(!app.accessibility.unicode_nodes.contains_key(command));
+        assert!(!app.accessibility.unicode.nodes.contains_key(command));
     }
 
     #[test]
@@ -9567,7 +9409,7 @@ mod tests {
         app.accessibility_snapshot();
         app.info_overlay.cycle_focus(request, false);
         let snapshot = app.accessibility_snapshot();
-        let choice = app.accessibility.info_nodes[&InfoSemanticTarget::Choice {
+        let choice = app.accessibility.info.nodes[&InfoSemanticTarget::Choice {
             request_id: request,
             id: "safe-choice".into(),
         }];
@@ -9594,7 +9436,7 @@ mod tests {
                 choice_id: "safe-choice".into()
             }
         );
-        let copy = app.accessibility.info_nodes[&InfoSemanticTarget::Copy(request)];
+        let copy = app.accessibility.info.nodes[&InfoSemanticTarget::Copy(request)];
         app.handle_accessibility_action(ActionRequest {
             action: Action::Focus,
             target_tree: TreeId::ROOT,
@@ -9644,22 +9486,26 @@ mod tests {
         };
         let content = *app
             .accessibility
-            .info_nodes
+            .info
+            .nodes
             .get(&InfoSemanticTarget::Content(request))
             .unwrap();
         let copy = *app
             .accessibility
-            .info_nodes
+            .info
+            .nodes
             .get(&InfoSemanticTarget::Copy(request))
             .unwrap();
         let dismiss = *app
             .accessibility
-            .info_nodes
+            .info
+            .nodes
             .get(&InfoSemanticTarget::Dismiss(request))
             .unwrap();
         let choice = *app
             .accessibility
-            .info_nodes
+            .info
+            .nodes
             .get(&InfoSemanticTarget::Choice {
                 request_id: request,
                 id: "safe-choice".into(),
@@ -9710,7 +9556,8 @@ mod tests {
         app.accessibility_snapshot();
         let stale_choice = *app
             .accessibility
-            .info_nodes
+            .info
+            .nodes
             .get(&InfoSemanticTarget::Choice {
                 request_id: stale_request,
                 id: "safe-choice".into(),
@@ -9745,7 +9592,8 @@ mod tests {
         app.accessibility_snapshot();
         let dismiss = *app
             .accessibility
-            .info_nodes
+            .info
+            .nodes
             .get(&InfoSemanticTarget::Dismiss(request))
             .unwrap();
         app.handle_accessibility_action(ActionRequest {
@@ -9782,7 +9630,8 @@ mod tests {
         let snapshot = app.accessibility_snapshot();
         let input_id = *app
             .accessibility
-            .info_nodes
+            .info
+            .nodes
             .get(&InfoSemanticTarget::Input(request))
             .unwrap();
         let input = &snapshot
@@ -9858,17 +9707,20 @@ mod tests {
         };
         let content = *app
             .accessibility
-            .diff_nodes
+            .diff
+            .nodes
             .get(&DiffSemanticTarget::Content(request))
             .unwrap();
         let copy = *app
             .accessibility
-            .diff_nodes
+            .diff
+            .nodes
             .get(&DiffSemanticTarget::Copy(request))
             .unwrap();
         let dismiss = *app
             .accessibility
-            .diff_nodes
+            .diff
+            .nodes
             .get(&DiffSemanticTarget::Dismiss(request))
             .unwrap();
 
@@ -9909,7 +9761,8 @@ mod tests {
         app.accessibility_snapshot();
         let stale_dismiss = *app
             .accessibility
-            .diff_nodes
+            .diff
+            .nodes
             .get(&DiffSemanticTarget::Dismiss(stale_request))
             .unwrap();
 
@@ -9939,7 +9792,8 @@ mod tests {
         app.accessibility_snapshot();
         let dismiss = *app
             .accessibility
-            .diff_nodes
+            .diff
+            .nodes
             .get(&DiffSemanticTarget::Dismiss(request))
             .unwrap();
         app.handle_accessibility_action(ActionRequest {
@@ -9984,12 +9838,14 @@ mod tests {
         };
         let list = *app
             .accessibility
-            .context_nodes
+            .context
+            .nodes
             .get(&ContextSemanticTarget::List(request))
             .unwrap();
         let terminal = *app
             .accessibility
-            .context_nodes
+            .context
+            .nodes
             .get(&ContextSemanticTarget::Source {
                 request_id: request,
                 source: crate::ui::context_picker::ContextSourceId::TerminalOutput,
@@ -9997,12 +9853,14 @@ mod tests {
             .unwrap();
         let cancel = *app
             .accessibility
-            .context_nodes
+            .context
+            .nodes
             .get(&ContextSemanticTarget::Cancel(request))
             .unwrap();
         let primary = *app
             .accessibility
-            .context_nodes
+            .context
+            .nodes
             .get(&ContextSemanticTarget::Primary(request))
             .unwrap();
 
@@ -10048,7 +9906,8 @@ mod tests {
         app.accessibility_snapshot();
         let files = *app
             .accessibility
-            .context_nodes
+            .context
+            .nodes
             .get(&ContextSemanticTarget::Source {
                 request_id: request,
                 source: crate::ui::context_picker::ContextSourceId::SpecificFiles,
@@ -10064,12 +9923,14 @@ mod tests {
         let form = app.accessibility_snapshot();
         let input = *app
             .accessibility
-            .context_nodes
+            .context
+            .nodes
             .get(&ContextSemanticTarget::FileInput(request))
             .unwrap();
         let primary = *app
             .accessibility
-            .context_nodes
+            .context
+            .nodes
             .get(&ContextSemanticTarget::Primary(request))
             .unwrap();
         let input_node = &form
@@ -10110,7 +9971,8 @@ mod tests {
         app.accessibility_snapshot();
         let stale_cancel = *app
             .accessibility
-            .context_nodes
+            .context
+            .nodes
             .get(&ContextSemanticTarget::Cancel(stale))
             .unwrap();
         let current = show_context_fixture(&mut app, 81, None);
@@ -10143,12 +10005,14 @@ mod tests {
         let gathering = app.accessibility_snapshot();
         let cancel = *app
             .accessibility
-            .context_nodes
+            .context
+            .nodes
             .get(&ContextSemanticTarget::Cancel(current))
             .unwrap();
         let primary = *app
             .accessibility
-            .context_nodes
+            .context
+            .nodes
             .get(&ContextSemanticTarget::Primary(current))
             .unwrap();
         assert!(
@@ -10206,12 +10070,14 @@ mod tests {
         };
         let confirm = *app
             .accessibility
-            .guardrail_nodes
+            .guardrail
+            .nodes
             .get(&GuardrailSemanticTarget::Confirm(request))
             .unwrap();
         let cancel = *app
             .accessibility
-            .guardrail_nodes
+            .guardrail
+            .nodes
             .get(&GuardrailSemanticTarget::Cancel(request))
             .unwrap();
 
@@ -10249,12 +10115,14 @@ mod tests {
         app.accessibility_snapshot();
         let stale_confirm = *app
             .accessibility
-            .guardrail_nodes
+            .guardrail
+            .nodes
             .get(&GuardrailSemanticTarget::Confirm(first))
             .unwrap();
         let cancel = *app
             .accessibility
-            .guardrail_nodes
+            .guardrail
+            .nodes
             .get(&GuardrailSemanticTarget::Cancel(first))
             .unwrap();
         app.handle_accessibility_action(ActionRequest {
@@ -10291,7 +10159,8 @@ mod tests {
         app.accessibility_snapshot();
         let confirm = *app
             .accessibility
-            .guardrail_nodes
+            .guardrail
+            .nodes
             .get(&GuardrailSemanticTarget::Confirm(request))
             .unwrap();
         app.handle_accessibility_action(ActionRequest {
