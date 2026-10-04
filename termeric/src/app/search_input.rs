@@ -59,6 +59,7 @@ impl App {
         }
         let plain = self.modifiers.is_empty() && !self.alt_graph_active;
         let alt = self.modifiers == ModifiersState::ALT && !self.alt_graph_active;
+        let shift = self.modifiers == ModifiersState::SHIFT && !self.alt_graph_active;
         match key {
             Key::Named(NamedKey::Escape) if plain => {
                 self.search.cancel();
@@ -71,6 +72,11 @@ impl App {
                 }
             }
             Key::Named(NamedKey::ArrowUp) if plain => {
+                self.search.prev();
+                self.scroll_to_current_match();
+            }
+            // As in other programs' find bars, Shift+Enter steps backwards.
+            Key::Named(NamedKey::Enter) if shift => {
                 self.search.prev();
                 self.scroll_to_current_match();
             }
@@ -248,6 +254,30 @@ mod tests {
         assert!(!app.handle_search_key(&Key::Named(NamedKey::Delete)));
         app.write_to_pty(b"Z");
         app.wait_for_screen_text("5a");
+    }
+
+    #[test]
+    fn shift_enter_goes_to_the_previous_match_and_keeps_the_query_open() {
+        let mut app = App::new_headless_running("printf 'x x x READY'; sleep 5", "search-back");
+        app.wait_for_screen_text("READY");
+        app.search.start();
+        app.with_search_and_active_grid(|search, grid| {
+            search.set_query("x", grid);
+            search.finish(grid);
+        });
+        assert_eq!(app.search.match_count(), 3);
+        let first = app.search.current_match_index();
+        assert!(app.handle_search_key(&Key::Named(NamedKey::ArrowDown)));
+        assert_ne!(app.search.current_match_index(), first);
+        app.modifiers = ModifiersState::SHIFT;
+        assert!(app.handle_search_key(&Key::Named(NamedKey::Enter)));
+        assert_eq!(app.search.current_match_index(), first);
+        assert!(app.search.is_active());
+        assert_eq!(app.search.query(), "x");
+        app.modifiers = ModifiersState::empty();
+        assert!(app.handle_search_key(&Key::Named(NamedKey::Enter)));
+        assert!(!app.search.is_active());
+        assert_eq!(app.search.current_match_index(), first);
     }
 
     #[test]

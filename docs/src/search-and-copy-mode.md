@@ -10,6 +10,7 @@ Press `Ctrl+Shift+F` to open the find box, then type. Matches are highlighted as
 | --- | --- |
 | `Down` / `Up` | Go to the next / previous match |
 | `Enter` | Close the box and keep the matches highlighted |
+| `Shift+Enter` | Go to the previous match |
 | `Escape` | Close the box and clear the highlights |
 | `Alt+C` | Toggle case-sensitive matching |
 | `Alt+R` | Toggle regular expressions |
