@@ -125,5 +125,4 @@ fn copy_input(
 }
 
 #[cfg(test)]
-#[path = "client_bridge_tests.rs"]
 mod tests;

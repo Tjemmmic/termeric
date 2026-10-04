@@ -20,7 +20,6 @@ use termeric_core::split::LayoutShape;
 use termeric_core::term::{TerminalMode, XtermKeyboardType};
 use termeric_core::{Pty, Terminal, TerminalEvent};
 
-#[path = "server_frame_io.rs"]
 mod frame_io;
 use frame_io::write_server_frame;
 
@@ -3064,15 +3063,12 @@ impl DomainRuntime {
 }
 
 #[cfg(test)]
-#[path = "server_test_support.rs"]
 mod test_support;
 
 #[cfg(test)]
-#[path = "upload_deadline_tests.rs"]
 mod upload_deadline_tests;
 
 #[cfg(test)]
-#[path = "topology_lifecycle_tests.rs"]
 mod topology_lifecycle_tests;
 
 #[cfg(test)]

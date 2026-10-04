@@ -516,5 +516,4 @@ mod tests {
 }
 
 #[cfg(test)]
-#[path = "client_relay_read_tests.rs"]
 mod read_tests;

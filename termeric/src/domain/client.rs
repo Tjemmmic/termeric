@@ -22,19 +22,12 @@ const UPLOAD_RETRY_DELAY: Duration = Duration::from_millis(100);
 /// daemon is running.
 pub(super) const NO_SERVER_RUNNING: &str = "no domain server is running";
 
-#[path = "client_attachment_snapshot.rs"]
 mod attachment_snapshot;
-#[path = "client_bridge.rs"]
 mod bridge;
-#[path = "client_relay_frame_writer.rs"]
 mod relay_frame_writer;
-#[path = "client_relay_output.rs"]
 mod relay_output;
-#[path = "client_relay_resize.rs"]
 mod relay_resize;
-#[path = "client_relay_workers.rs"]
 mod relay_workers;
-#[path = "client_relay_write.rs"]
 mod relay_write;
 
 enum UploadAttemptError {
@@ -1094,7 +1087,6 @@ fn subscribe_topology_stream(
 }
 
 #[cfg(test)]
-#[path = "client_topology_tests.rs"]
 mod topology_tests;
 
 fn read_frame_while_alive<T: serde::de::DeserializeOwned>(

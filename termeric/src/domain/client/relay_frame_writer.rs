@@ -76,5 +76,4 @@ impl Write for Writer {
 }
 
 #[cfg(test)]
-#[path = "client_relay_frame_writer_tests.rs"]
 mod tests;
