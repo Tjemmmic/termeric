@@ -9,6 +9,7 @@ use super::Renderer;
 use crate::renderer::types::{CellarRenderInfo, IndicatorRenderInfo, SproutMenuRenderInfo};
 use crate::ui::color::{scale_alpha, with_alpha};
 use crate::ui::constants::BORDER_WIDTH;
+use crate::ui::icon::Icon;
 
 /// Return the sprout action row under a pointer. Geometry intentionally uses
 /// the same padding and item-height math as `build_sprout_menu`.
@@ -95,8 +96,8 @@ impl Renderer {
             label_size,
             text_color,
         );
-        self.text_pipeline
-            .push_char('×', layout.close.x, layout.close.y, text_color);
+        let [close_x, close_y] = layout.close.center();
+        self.push_icon(Icon::Close, close_x, close_y, text_color);
 
         // Success rate badge
         let rate_text = if cellar.evicted_entries == 0 {
