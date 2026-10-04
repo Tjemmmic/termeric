@@ -2223,8 +2223,15 @@ fn decudk_definitions_are_bounded_preservable_and_reset_only_by_ris() {
     assert_eq!(term.xterm_user_defined_key(18), Some(b"!".as_slice()));
     assert_eq!(term.xterm_user_defined_key(1), Some(b"\x1b[A".as_slice()));
 
-    term.soft_reset();
+    // DECSTR, as the parser receives it, keeps every definition.
+    term.process(b"\x1b[!p");
     assert_eq!(term.xterm_user_defined_key(17), Some(b"world".as_slice()));
+    // A definition split across arbitrary chunks still arrives whole.
+    let split = b"\x1bP1;1|20/6368756e6b6564\x1b\\";
+    for chunk in split.chunks(3) {
+        term.process(chunk);
+    }
+    assert_eq!(term.xterm_user_defined_key(20), Some(b"chunked".as_slice()));
     term.process(b"\x1bc");
     assert_eq!(term.xterm_user_defined_key(17), None);
     assert_eq!(term.xterm_user_defined_key_bytes(), 0);

@@ -323,6 +323,16 @@ impl XtermKeySetting {
     }
 }
 
+// `XtermKeyResources` indexes its array by discriminant and fills it in
+// `ALL` order, so the two orders must agree.
+const _: () = {
+    let mut index = 0;
+    while index < XtermKeyResource::ALL.len() {
+        assert!(XtermKeyResource::ALL[index] as usize == index);
+        index += 1;
+    }
+};
+
 /// Every resource in [`XtermKeyResource`], each starting at its xterm
 /// default. The state applies across both screen buffers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
